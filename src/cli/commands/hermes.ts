@@ -35,7 +35,7 @@ export const HERMES_SKILL_CATEGORY = "capcomd";
  * `trust: untrusted`, so Hermes asks the user before the rest: capcomd_merge, capcomd_cancel and capcomd_approve,
  * the tools capcomd marks destructiveHint (Hermes doesn't read that hint, only readOnlyHint). Reads never ask.
  */
-export const HERMES_ALLOWED_TOOLS = ["capcomd_run_new", "capcomd_spawn", "capcomd_send", "capcomd_resume", "capcomd_grant", "capcomd_verify", "capcomd_task", "capcomd_kv", "capcomd_title", "capcomd_goal"];
+export const HERMES_ALLOWED_TOOLS = ["capcomd_run_new", "capcomd_spawn", "capcomd_send", "capcomd_resume", "capcomd_grant", "capcomd_verify", "capcomd_check", "capcomd_task", "capcomd_kv", "capcomd_title", "capcomd_goal"];
 export const hermesAllowlist = (server = HERMES_SERVER) => HERMES_ALLOWED_TOOLS.map((t) => `mcp:${server}/${t}`);
 /**
  * Hermes's timeout for a capcomd tool call (s), set when the entry has none: longer than capcomd_approve's prompt

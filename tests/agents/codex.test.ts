@@ -100,7 +100,7 @@ describe("codex adapter (fake codex exec --json)", () => {
     expect(codexAdapter.baseEnv().TZ).toBe("UTC");
   });
 
-  test("orchestrate (plugin API §16.1): the command rules are written for codex; a refused command and what it wrote anyway are in its log; nothing is pushed", async () => {
+  test("orchestrate (plugin API §16.1): the command rules are written for codex; a refused command is in its log; what it wrote anyway fails it, and nothing is pushed", async () => {
     const s = await setup("[nochange][refuse][scribble] route the work");
     const lines: string[] = [];
     const cfg = { ...s.cfg, toolMode: "orchestrate" as const, denyCommands: ["git push", "bun test"] };
@@ -110,9 +110,19 @@ describe("codex adapter (fake codex exec --json)", () => {
     const rules = readFileSync(join(s.W, "..", "home", ".codex", "rules", "capcomd-orchestrate.rules"), "utf8");
     expect(rules).toContain('prefix_rule(pattern = ["git","push"], decision = "forbidden"');
     expect(lines).toContain('refused command "git push origin HEAD:main": capcomd orchestrate mode: no pushes');
-    expect(lines).toContain("[capcomd] orchestrate: left behind changes to notes.txt; an orchestrate agent's own changes never land");
+    // The redirection codex's rules can't see wrote notes.txt: the agent fails (settled by the kernel), naming it.
+    expect(res.orchestrateWrites).toMatchObject({ files: ["notes.txt"], total: 1, commits: 0 });
+    expect(res.stopReason).toBe("orchestrate_wrote_files");
+    expect(lines).toContain("[capcomd] orchestrate: it changed notes.txt; an orchestrate agent writes nothing, so it fails (its changes are discarded, never committed or pushed)");
     const span = getFinishedSpans().find((x) => x.name === "agent.codex")!;
     expect(span.events.map((e) => e.name)).toEqual(expect.arrayContaining(["agent.refused", "agent.orchestrate_discarded"]));
+  }, 30_000);
+
+  test("orchestrate: one that wrote nothing ends as before, with no writes to report", async () => {
+    const s = await setup("[nochange] route the work");
+    const res = await runAgent(codexAdapter, s.provider, s.id, s.task, { ...s.cfg, toolMode: "orchestrate" as const, denyCommands: ["git push"] }, { apiKey: KEY });
+    expect(res).toMatchObject({ sha: "", stopReason: "success" });
+    expect(res.orchestrateWrites).toBeUndefined();
   }, 30_000);
 
   test("parse: codex JSONL shapes; config and selection", () => {

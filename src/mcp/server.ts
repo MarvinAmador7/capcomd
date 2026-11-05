@@ -75,7 +75,7 @@ const project = z.string().optional().describe("Project: a name from capcomd_pro
  * where to start. Kept short; the capcomd-orchestration skill has the rest.
  */
 export const INSTRUCTIONS = `capcomd runs a team of coding agents for you: each agent works in its own VM (or container) on its own branch, capcomd_verify runs the project's checks and reviewer on its work, and capcomd_merge lands only the verified commit. You are the driver: you choose the team and its shape.
-Team shapes: single loop (one agent: one coherent change); wide fan-out (independent parts at once); contract first, then wide (land the shared types/stubs, then start every part at once, consumers against the stubs); leads with helpers (a lead profile, spawned with children: {maxChildren: N, maxDepth: 1}, splits its part among helpers and verifies and merges their work). When the user asks for parallel work, a team or a swarm, go wide and give a lead to any part with two or more independent sub-parts. A lead or planner with toolMode orchestrate (capcomd_profiles) sees everything and runs nothing: give it no task that needs it to run code itself (its helpers write and test the code); its helpers' checks run at verify and merge, and it reads their results.
+Team shapes: single loop (one agent: one coherent change); wide fan-out (independent parts at once); contract first, then wide (land the shared types/stubs, then start every part at once, consumers against the stubs); leads with helpers (a lead profile, spawned with children: {maxChildren: N, maxDepth: 1}, splits its part among helpers and verifies and merges their work). When the user asks for parallel work, a team or a swarm, go wide and give a lead to any part with two or more independent sub-parts. A lead or planner with toolMode orchestrate (capcomd_profiles) sees everything and runs nothing: give it no task that needs it to run code itself (its helpers write and test the code); its helpers' checks run at verify and merge, and capcomd_check (capcomd check in its VM) runs them on the combined code on demand, so it reads their results instead of running anything.
 Load the capcomd-orchestration skill (its "Choose a team shape" section) before planning. Start with capcomd_setup: it says whether capcomd is ready, the project's gates and how many agents run at once here.`;
 
 /**
@@ -306,6 +306,19 @@ export function buildServer(): McpServer {
     },
     annotations: DESTRUCTIVE,
   }, routed("capcomd_merge", (a) => D.merge(a)));
+
+  server.registerTool("capcomd_check", {
+    title: "Check a branch",
+    description: "Run the run's checks on a branch's commit as it is (a goal branch, the target after merges, a child's branch; default: the run's target), in a fresh sandbox like capcomd_verify's: the full output and pass/fail (result.pass, result.text, result.checks.output). It merges, integrates and reviews nothing, and needs no work of the caller's own: it's how you know the combined code works. Identical checks of one commit share one run and one record. Long: returns {id, state: running} after timeoutMs; poll with just {runId, id}, or wait with capcomd_await {ops: [id]}.",
+    inputSchema: {
+      runId: run, ref: z.string().min(1).optional().describe("Agent id (agt-…, its pushed branch) or a branch to check; default: the run's target"),
+      id: z.string().min(1).optional().describe("chk-… id of a check to poll (from an earlier call)"),
+      check: z.string().optional().describe("One of the run's operator-named checks; default: the one pinned to the agent at spawn, else the run's checks"),
+      key: z.string().min(1).max(200).optional().describe("Check a commit already checked again (e.g. a flaky check): a new key is a new check"),
+      timeoutMs: wait, project,
+    },
+    annotations: WRITE,
+  }, routed("capcomd_check", (a) => D.check(a)));
 
   server.registerTool("capcomd_approve", {
     title: "Approve a protected merge",

@@ -82,7 +82,7 @@ describe("capcomd mcp: the driver's tools", () => {
   test("lists the primitives, with read-only and destructive annotations", async () => {
     const { tools } = await mcp.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
-      "capcomd_approve", "capcomd_await", "capcomd_budget", "capcomd_cancel", "capcomd_events", "capcomd_goal", "capcomd_grant", "capcomd_inspect", "capcomd_kv",
+      "capcomd_approve", "capcomd_await", "capcomd_budget", "capcomd_cancel", "capcomd_check", "capcomd_events", "capcomd_goal", "capcomd_grant", "capcomd_inspect", "capcomd_kv",
       "capcomd_merge", "capcomd_pr_open", "capcomd_profiles", "capcomd_projects", "capcomd_resume", "capcomd_run_new", "capcomd_runs", "capcomd_send", "capcomd_setup", "capcomd_spawn",
       "capcomd_task", "capcomd_title", "capcomd_trace", "capcomd_tree", "capcomd_verify",
     ]);
@@ -157,6 +157,17 @@ describe("capcomd mcp: the driver's tools", () => {
     const listed = (await ok("capcomd_runs")).runs.find((x: any) => x.runId === run);
     expect(listed).toMatchObject({ label: "fan-out", agents: { done: 3 } });
     expect((await ok("capcomd_tree", { runId: run })).runId).toBe(run);
+
+    // capcomd_check: the run's checks on its target as it is now (the three merges), merging nothing.
+    const c = await settle("capcomd_check", { runId: run, check: "unit" });
+    expect(c).toMatchObject({ kind: "check", state: "passed", branch: "capcomd/fanout", result: { pass: true, mergesOn: 3, checks: { passed: true } } });
+    expect(c.next).toContain("Nothing was merged");
+    // Waited for like a verify; the same check again is the same record.
+    const w = await ok("capcomd_await", { runId: run, ops: [c.id], timeoutMs: 1000 });
+    expect(w.ops[0]).toMatchObject({ id: c.id, state: "passed" });
+    expect((await ok("capcomd_check", { runId: run, ref: "capcomd/fanout", check: "unit" })).id).toBe(c.id);
+    // An agent's branch, by its id.
+    expect((await settle("capcomd_check", { runId: run, ref: ids[0], check: "unit" })).result.pass).toBe(true);
   }, 180_000);
 
   test("verify several, await any; poll by key or id without resending parameters; merge a verified commit fast", async () => {

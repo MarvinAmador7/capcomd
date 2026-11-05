@@ -158,12 +158,18 @@ export type ScopeAgent = ReturnType<typeof rowToAgent>;
 
 function opRow(r: any) {
   return {
-    id: r.op_id as string, kind: r.kind as "verify" | "merge", paramsHash: r.params_hash as string, state: r.state as string,
+    id: r.op_id as string, kind: r.kind as "verify" | "merge" | "check", paramsHash: r.params_hash as string, state: r.state as string,
     data: JSON.parse(r.data) as Record<string, any>, result: r.result ? (JSON.parse(r.result) as Record<string, any>) : null,
     createdAt: Number(r.created_at), updatedAt: Number(r.updated_at),
   };
 }
 export type ScopeOp = ReturnType<typeof opRow>;
+/** The agent an op's events are about: the one whose work it verifies or merges; for a check, the one it checks, else
+ *  the agent that asked for it (an in-VM check of a branch). */
+function opAgent(kind: string, data: Record<string, unknown>): string | null {
+  const a = typeof data.agentId === "string" ? data.agentId : null;
+  return kind === "check" ? a ?? (typeof data.askedBy === "string" ? data.askedBy : null) : a;
+}
 /** How a run ended by itself (scope.endRun), not by its agents ending. */
 export type RunEnd = { state: "failed" | "cancelled"; reason: string | null; by: string | null; at: number };
 
@@ -1078,8 +1084,9 @@ export const scopeActor = actor({
       return { cancelled, affected: order.map((a) => a.agentId) };
     },
 
-    /** verify / merge records (ADR-016 step 2): start is idempotent by id; same id + other params = conflict. */
-    async startOp(c, params: { opId: string; kind: "verify" | "merge"; paramsHash: string; data: Record<string, unknown> }) {
+    /** verify / merge / check records (ADR-016 step 2; checks: plugin API §16.1): start is idempotent by id; same id +
+     *  other params = conflict. A check's events name the agent it checked, else the agent that asked for it. */
+    async startOp(c, params: { opId: string; kind: "verify" | "merge" | "check"; paramsHash: string; data: Record<string, unknown> }) {
       const get = async () => { const r = await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId); return r.length ? opRow(r[0]) : null; };
       const have = await get();
       if (have) {
@@ -1093,7 +1100,7 @@ export const scopeActor = actor({
         const now = Date.now();
         await tx.execute("INSERT INTO ops (op_id, kind, params_hash, state, data, result, created_at, updated_at) VALUES (?, ?, ?, 'running', ?, NULL, ?, ?)",
           params.opId, params.kind, params.paramsHash, JSON.stringify(params.data), now, now);
-        await addEvent(tx, params.kind === "verify" ? "VERIFY_STARTED" : "MERGE_STARTED", (params.data.agentId as string) ?? null, { id: params.opId, ...params.data }, `start-${params.opId}`);
+        await addEvent(tx, params.kind === "verify" ? "VERIFY_STARTED" : params.kind === "check" ? "CHECK_STARTED" : "MERGE_STARTED", opAgent(params.kind, params.data), { id: params.opId, ...params.data }, `start-${params.opId}`);
         created = true;
       }, { name: "scopeStartOp" });
       if (created) opsChanged(c, params.opId);
@@ -1105,10 +1112,13 @@ export const scopeActor = actor({
       if (!r.length) fail("not_found", `${params.opId} not found`);
       const op = opRow(r[0]);
       if (op.state !== "running") return op;
-      const type = op.kind === "verify" ? (params.state === "passed" ? "VERIFY_PASSED" : "VERIFY_FAILED") : params.state === "merged" ? "MERGED" : "MERGE_FAILED";
+      const type = op.kind === "verify" ? (params.state === "passed" ? "VERIFY_PASSED" : "VERIFY_FAILED")
+        : op.kind === "check" ? (params.state === "passed" ? "CHECK_PASSED" : "CHECK_FAILED") : params.state === "merged" ? "MERGED" : "MERGE_FAILED";
+      // A check's output (up to 64 KB) stays on its record; its event says how it went.
+      const evData = op.kind === "check" ? { ...params.result, checks: { ...((params.result.checks ?? {}) as Record<string, unknown>), output: undefined } } : params.result;
       await c.db.transaction(async (tx: RawAccess) => {
         await tx.execute("UPDATE ops SET state = ?, result = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", params.state, JSON.stringify(params.result), Date.now(), params.opId);
-        await addEvent(tx, type, (op.data.agentId as string) ?? null, { id: params.opId, ...params.result }, `finish-${params.opId}`);
+        await addEvent(tx, type, opAgent(op.kind, op.data), JSON.parse(JSON.stringify({ id: params.opId, ...evData })), `finish-${params.opId}`);
       }, { name: "scopeFinishOp" });
       opsChanged(c, params.opId);
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);

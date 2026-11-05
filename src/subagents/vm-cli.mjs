@@ -78,6 +78,17 @@ async function verifyLoop(args) {
   }
 }
 
+/** check answers "running" (with its id) while the checks run: poll that id until it settles. */
+async function checkLoop(args) {
+  const deadline = Date.now() + 2 * 60 * 60000;
+  let r = await call("check", args);
+  while (r.ok && r.result?.state === "running" && r.result.id && Date.now() <= deadline) {
+    await sleep(Math.max(AWAIT_POLL, 2000));
+    r = await call("check", { id: r.result.id });
+  }
+  return r;
+}
+
 async function followEvents(args, emit) {
   let after = Number(args.after ?? 0);
   const deadline = Date.now() + Number(args.timeoutMs ?? 10 * 60000);
@@ -126,6 +137,8 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
   kv get <k> | put <k> <json> [--key K] | cas <k> <json> --expect V | del <k> [--expect V] | list [--prefix P]
   verify --ref <agt> [--acceptance JSON] [--key K]  (uses the check pinned at spawn)   merge --ref <agt> --require <vfy> [--key K]
   fetch [branch…]   the latest branches into your checkout as origin/<branch> (e.g. the target after a merge), to read with git log/show/diff
+  check [agt|branch] [--check NAME]   the run's checks on that branch's commit as it is, in a sandbox (default: the run's
+        target, i.e. the combined code after the merges); prints pass/fail and the output. Merges nothing.
   mcp   (serve these as MCP tools over stdio)`;
 
 export function toCall(argv) {
@@ -188,6 +201,11 @@ export function toCall(argv) {
     }
     case "merge": if (!fl.ref || !fl.require) usage("merge needs --ref <agt> --require <vfy>"); return { op: "merge", args: { ref: fl.ref, require: fl.require, key } };
     case "fetch": return { op: "fetch", args: { refs: pos, dir: checkout() } };
+    case "check": {
+      const ref = fl.ref ?? pos[0];
+      // --checks is forwarded so the orchestrator refuses it loudly.
+      return { op: "check", args: { ...(ref ? { ref } : {}), ...(fl.id ? { id: fl.id } : {}), ...(fl.check !== undefined ? { check: fl.check } : {}), ...(fl.checks !== undefined ? { checks: fl.checks } : {}), ...(key !== undefined ? { key } : {}) }, checkLoop: true };
+    }
   }
   return usage(cmd ? `unknown command ${cmd}` : "no command");
 }
@@ -222,6 +240,7 @@ export const TOOLS = [
   ["verify", "Run the run's checks on a child's branch (never self-reported); a child pinned with spawn check uses that check.", S({ ref: str, check: str, acceptance: {}, key: str }, ["ref"])],
   ["merge", "Merge a child's verified commit (needs require=vfy id). Its result says whether the checks ran on the combined code (result.combined).", S({ ref: str, require: str, key: str }, ["ref", "require"])],
   ["fetch", "Fetch the latest branches (all, or `branches`) into your checkout as origin/<branch>, e.g. the target after a merge; read them with git log/show/diff, or `git switch --detach origin/<branch>` and the file tools. Changes no code.", S({ branches: ids })],
+  ["check", "Run the run's checks on a branch's commit as it is (ref: a branch or a child's agent id; default: the run's target, i.e. the combined code after the merges), in a sandbox: the full output and pass/fail (result.pass, result.text, result.checks.output). Merges and reviews nothing; how you know the combined code works without running it yourself. Identical checks of one commit are shared.", S({ ref: str, check: str, key: str })],
   ["inspect", "Everything about one agent: record, children, awaits, VM, logs, events.", S({ agent: str, tail: num }, ["agent"])],
   ["logs", "Tail an agent's logs (fenced).", S({ agent: str, tail: num }, ["agent"])],
   ["heartbeat", "Report progress (keeps you from being flagged stuck).", S({ note: str })],
@@ -246,7 +265,7 @@ async function mcp() {
         const name = String(m.params?.name ?? "").replace(/^capcomd_/, "").replace("wait_any", "wait-any");
         const a0 = m.params?.arguments ?? {};
         const args = name === "fetch" ? { refs: [].concat(a0.branches ?? []), dir: checkout() } : a0;
-        const r = name === "await" || name === "wait-any" ? await awaitLoop(name, args) : name === "verify" ? await verifyLoop({ ...args, key: args.key ?? `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }) : await call(name, args);
+        const r = name === "await" || name === "wait-any" ? await awaitLoop(name, args) : name === "verify" ? await verifyLoop({ ...args, key: args.key ?? `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }) : name === "check" ? await checkLoop(args) : await call(name, args);
         send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: JSON.stringify(r.ok ? r.result : r.error) }], isError: !r.ok } });
       } else if (m.method === "ping") send({ jsonrpc: "2.0", id: m.id, result: {} });
       else send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: `unknown method ${m.method}` } });
@@ -262,7 +281,7 @@ async function main() {
   try { c = toCall(argv); } catch (e) { console.log(JSON.stringify({ ok: false, error: { code: "usage", message: e.message } })); return 2; }
   let r;
   if (c.events) r = await followEvents(c.args, (e) => console.log(JSON.stringify({ event: e })));
-  else r = c.loop ? await awaitLoop(c.op, c.args) : c.verifyLoop ? await verifyLoop(c.args) : await call(c.op, c.args);
+  else r = c.loop ? await awaitLoop(c.op, c.args) : c.verifyLoop ? await verifyLoop(c.args) : c.checkLoop ? await checkLoop(c.args) : await call(c.op, c.args);
   console.log(JSON.stringify(r.ok ? { ok: true, ...(r.result && typeof r.result === "object" ? r.result : { result: r.result }) } : { ok: false, error: r.error }));
   return exitFor(r);
 }

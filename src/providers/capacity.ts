@@ -83,6 +83,11 @@ export class AgentSlots {
     this.waiting.delete(name);
   }
 
+  /** Still in use (a machine that isn't an agent's, so never among the running ones: a check's): its grace starts again. */
+  renew(name: string): void {
+    if (this.admitted.has(name)) this.admitted.set(name, (this.o.now ?? Date.now)());
+  }
+
   /** Whether `name` holds a slot here now (admitted, not yet released): tests and the release on a workflow's end. */
   holds(name: string): boolean { return this.admitted.has(name); }
 }
@@ -142,6 +147,29 @@ function fakeSlots(): AgentSlots | null {
 export function releaseSlot(name: string): void {
   docker?.release(name);
   fakes?.slots.release(name);
+}
+
+/**
+ * A slot on `place` for a machine that isn't an agent's (a check's sandbox, `capcomd check`): where the place has a cap
+ * it waits its turn with the agents (oldest ask first, every `pollMs`), holds the slot until `release()` (renewed meanwhile,
+ * so the grace for a machine that never shows up among the agents' doesn't drop it), and gives up after `waitMs` with an
+ * error that says so. No cap (the cloud), nothing to wait for.
+ */
+export async function holdSlot(place: string | null | undefined, name: string, o: { pollMs?: number; waitMs?: number } = {}): Promise<{ waitedMs: number; release: () => void }> {
+  const slots = slotsFor(place);
+  if (!slots) return { waitedMs: 0, release: () => {} };
+  const since = Date.now();
+  for (;;) {
+    const r = await slots.request(name, since);
+    if (r.admitted) break;
+    if (Date.now() - since > (o.waitMs ?? 20 * 60_000)) {
+      slots.release(name);
+      throw new Error(`no machine slot came free on ${place} in ${Math.max(1, Math.round((Date.now() - since) / 60_000))} minute(s) (${r.used} of ${r.slots} in use)`);
+    }
+    await new Promise((res) => setTimeout(res, o.pollMs ?? 2000));
+  }
+  const renew = setInterval(() => slots.renew(name), 60_000);
+  return { waitedMs: Date.now() - since, release: () => { clearInterval(renew); slots.release(name); } };
 }
 
 /** The slots of a place, or null when it has no cap (the cloud, the test fakes). */

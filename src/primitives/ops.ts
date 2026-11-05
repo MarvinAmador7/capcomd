@@ -909,6 +909,17 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   await w.taskDone({ workerId: agentId });
   await w.drainWorker({ workerId: agentId });
   if (await cancelled()) return (await s.getAgent({ agentId }))!;
+  // Plugin API §16.1: an orchestrate agent writes nothing. One whose checkout had changed files or new commits at the end
+  // of a turn or of its run fails, naming them; nothing it wrote was committed or pushed (its children's work stands).
+  const ow = rec.orchestrateWrites as import("../agents/runner").OrchestrateWrites | undefined;
+  if (ow && (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate") {
+    const { orchestrateWritesText } = await import("../agents/runner");
+    const declared = await resultOf(runId, agentId);
+    const said = typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
+    const error = `${agentId} is an orchestrate agent and it ${orchestrateWritesText(ow)} in its checkout${ow.at === "turn" ? " (stopped at the end of that turn)" : ""}. An orchestrate agent writes nothing, so it failed; its changes were discarded, never committed or pushed. Give that work to a worker it spawns.`;
+    const fin = await s.finish({ agentId, status: "failed", spent, result: { ...declared, ...(!declared.summary && said ? { summary: said } : {}), error, errorKind: "orchestrate_wrote_files", wrote: { files: ow.files, total: ow.total, commits: ow.commits, at: ow.at }, verification: null, branch: null, commit: null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}) } });
+    return fin.agent;
+  }
   // ADR-019 §6: the provider's usage limit is a pause, not a failure. Its login waits for the reset too.
   if (rec.limit === "quota") {
     const until = Number(rec.resetAt) || Date.now() + quotaRetryMs();
@@ -1156,11 +1167,11 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       const op = await s.getOp({ opId: id });
       // Started here a moment ago and not recorded yet (a verify answers with its id before it has resolved its ref).
       if (!op && inflightOps.has(id)) {
-        opsLatest.set(id, { id, kind: id.startsWith("vfy-") ? "verify" : "merge", state: "running" } as any);
+        opsLatest.set(id, { id, kind: id.startsWith("vfy-") ? "verify" : id.startsWith("chk-") ? "check" : "merge", state: "running" } as any);
         if (feed) void inflightOps.get(id)!.then(feed.poke, feed.poke);
         continue;
       }
-      if (!op || (op.kind !== "verify" && op.kind !== "merge")) throw new RelayError("not_found", `${id} not found in ${runId}`, "Pass the vfy-… / mrg-… ids capcomd verify and capcomd merge returned.");
+      if (!op || (op.kind !== "verify" && op.kind !== "merge" && op.kind !== "check")) throw new RelayError("not_found", `${id} not found in ${runId}`, "Pass the vfy-… / mrg-… / chk-… ids capcomd verify, merge and check returned.");
       const v = opView(op);
       opsLatest.set(id, v);
       if (op.state !== "running") { opsDone.set(id, v); continue; }
@@ -1168,7 +1179,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       if (mine) { if (feed) void mine.then(feed.poke, feed.poke); }
       else if (!resumed.has(id)) {
         resumed.add(id);
-        const p = op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id }) : mergeRef({ runId, ref: op.data.ref as string, id });
+        const p = op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id }) : op.kind === "check" ? checkRef({ runId, id }) : mergeRef({ runId, ref: op.data.ref as string, id });
         p.catch(() => {}); // its record says how it ended; the next look reads it
         if (feed) void p.then(feed.poke, feed.poke);
       }
@@ -1637,6 +1648,120 @@ async function refusedVerify(runId: string, op: import("../actors/scope").ScopeO
   const agentId = (op.data.agentId as string | null) ?? null;
   if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: op.id, pass: false, commit: null, checks: { passed: false, status: "refused", reason } } } }).catch(() => {});
   return fin;
+}
+
+// ── capcomd check <ref> (plugin API §16.1) ──────────────────────────────────────────────────────────
+
+export interface CheckOpts {
+  runId: string;
+  /** An agent id (its pushed branch) or a branch name; default: the run's target (its goal branch, when it has one). */
+  ref?: string;
+  /** One of the run's operator-named checks; default: the one pinned to the agent at spawn, else `checks`, else the
+   *  repository's test command. */
+  check?: string;
+  /** A command (the operator's and a driver's checks only; never from an agent's VM). */
+  checks?: string;
+  /** Mixed into the id: checks a commit again that was checked already with the same command (a flaky check). */
+  key?: string;
+  /** A check's id (chk-…) to poll: its record, or, while it runs, the run (shared; never a second one). */
+  id?: string;
+  /** The agent that asked (an in-VM `capcomd check`): its events go on that agent's column. Not a parameter of the check. */
+  askedBy?: string;
+}
+
+/** A check's id: one per (run, commit, command, key), so identical checks of the same commit share one run and one record. */
+export const checkIdFor = (runId: string, sha: string, command: string, key?: string) => `chk-c${paramsHash({ runId, sha, command, key: key ?? null })}`;
+
+/**
+ * `capcomd check <ref>`: the run's checks on a ref's commit as it is (the goal branch, the target, a child's branch), in
+ * a sandbox as verify's run, with the full output (its last 64 KB) and pass/fail. It integrates, merges and reviews
+ * nothing and needs no work of the caller's own, so an orchestrate agent (a planner, a lead) may ask for it from its VM:
+ * it is how a router knows the state of the combined code without running anything itself. The commit is the branch's
+ * tip when asked; identical checks of one commit (same command, same key) are one: a second call while it runs shares
+ * it, one after it ended gets its record. Recorded on the run (check.started, check.passed/failed) and in the trace.
+ */
+export async function checkRef(o: CheckOpts): Promise<any> {
+  return (await startCheck(o)).done;
+}
+
+/** A check started (or found: identical ones share): its id at once, and its record when it ends. */
+export async function startCheck(o: CheckOpts): Promise<{ id: string; done: Promise<any> }> {
+  await assertEngine();
+  const s = client().scope.getOrCreate([o.runId]);
+  if (o.id && !o.ref) {
+    const id = o.id;
+    if (!/^chk-[A-Za-z0-9]+$/.test(id)) throw new RelayError("usage", `${id} isn't a check id`, "Pass the chk-… id capcomd check returned.");
+    const op = await s.getOp({ opId: id });
+    if (!op || op.kind !== "check") throw new RelayError("not_found", `check ${id} not found in ${o.runId}`, "Pass the chk-… id capcomd check returned, or a ref to check.");
+    if (op.state !== "running") return { id, done: Promise.resolve(opView(op)) };
+    return { id, done: inflightOps.get(id) ?? track(id, () => runCheck(o.runId, op)) };
+  }
+  const r = await resolveCheck(o);
+  const id = checkIdFor(o.runId, r.sha, r.spec, o.key);
+  const live = inflightOps.get(id);
+  if (live) return { id, done: live };
+  return { id, done: track(id, async () => {
+    const data = { ref: r.ref, branch: r.branch, sha: r.sha, agentId: r.agentId, ...(r.check !== undefined ? { check: r.check } : {}), checks: r.checks, ...(o.key ? { key: o.key } : {}) };
+    // Who asked is kept beside the check, not in its parameters: two agents asking for the same check share it.
+    const st = await s.startOp({ opId: id, kind: "check", paramsHash: paramsHash({ sha: r.sha, command: r.spec, key: o.key ?? null }), data: o.askedBy ? { ...data, askedBy: o.askedBy } : data }).catch(asRelay);
+    if (st.op.state !== "running") return opView(st.op);
+    return runCheck(o.runId, st.op);
+  }) };
+}
+
+/** What a check is of: the branch and its commit now, and the command (named, given, pinned, or the repository's). */
+async function resolveCheck(o: CheckOpts): Promise<{ ref: string; branch: string; sha: string; agentId: string | null; check?: string; checks: string | null; spec: string }> {
+  if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
+  const ref = o.ref?.trim() || (await mergeTargetOf(o.runId));
+  let branch = ref, agentId: string | null = null, pinned: string | undefined;
+  if (ref.startsWith("agt-")) {
+    const a = await getAgentOrThrow(o.runId, ref);
+    if ((a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate")
+      throw new RelayError("usage", `agent ${ref} is an orchestrate agent: it has no branch of its own`, "Check the branch its helpers' work lands on (capcomd check with no ref checks the run's target), or one of its helpers.", { code: "invalid" });
+    const b = a.result?.branch;
+    if (typeof b !== "string" || !b) throw new RelayError("conflict", `agent ${ref} has no pushed branch yet (it is ${a.status})`, `Wait with \`capcomd await ${o.runId} ${ref}\`, or check a branch.`);
+    branch = b; agentId = ref;
+    if (typeof a.contract?.check === "string") pinned = a.contract.check;
+  } else if (!BRANCH_NAME.test(ref)) throw new RelayError("usage", `not a branch name: ${JSON.stringify(ref).slice(0, 200)}`, "Pass an agent id (agt-…) or a branch, e.g. capcomd check <runId> main.");
+  const check = o.check ?? (o.checks ? undefined : pinned);
+  const checks = check !== undefined ? await namedCheck(o.runId, check) : o.checks ?? null;
+  const cfg = await (await import("../merge/run-config")).mergeConfigFor(o.runId);
+  let sha = "";
+  if (cfg) {
+    const heads = await (await import("../merge/repo")).remoteHeads(cfg, [branch])
+      .catch((e) => { throw new RelayError("conflict", `couldn't read ${branch} on ${cfg.remote}: ${String((e as Error)?.message ?? e).slice(0, 300)}`, "Try again in a moment.", { code: "unavailable", retryable: true }); });
+    sha = heads[branch] ?? "";
+    if (!sha) throw new RelayError("not_found", `branch ${branch} isn't on ${cfg.remote}`, "Pass a branch the run's repository has (capcomd fetch lists them), or an agent id.");
+  }
+  return { ref, branch, sha, agentId, ...(check !== undefined ? { check } : {}), checks, spec: check !== undefined ? `check:${check}` : checks !== null ? `cmd:${checks}` : "repo" };
+}
+
+/** Run (or rejoin: the verifier actor runs each check once in the engine) a recorded check, and record how it went. */
+async function runCheck(runId: string, op: import("../actors/scope").ScopeOp) {
+  const t0 = Date.now();
+  const s = client().scope.getOrCreate([runId]);
+  const d = op.data as { ref: string; branch: string; sha: string; agentId: string | null; checks: string | null };
+  const res = await client().verifier.getOrCreate([runId, op.id]).check({ checkId: op.id, runId, branch: d.branch, sha: d.sha, ...(d.checks ? { testCommand: d.checks } : {}) }) as import("../actors/verifier").CheckResult;
+  const o = res.outcome;
+  const ran = o.status === "passed" || o.status === "failed";
+  const pass = o.status === "passed";
+  const where = ran ? o.where : null;
+  const reason = o.status === "failed" ? (o.stage === "setup" ? "checks couldn't run: setting up the checks sandbox failed (not the code's tests)" : o.stage === "deps" ? "installing dependencies failed" : "the checks failed")
+    : "reason" in o ? o.reason : null;
+  const at = `${d.branch}${d.sha ? ` at ${d.sha.slice(0, 12)}` : ""}`;
+  // What's on it from this run: its merges into that branch up to that commit (the combined code).
+  const merges = d.sha ? await earlierMergesOf(runId, d.branch, { on: d.sha }).catch(() => 0) : 0;
+  const withMerges = merges ? ` (with ${merges} merge${merges === 1 ? "" : "s"} from this run)` : "";
+  const text = !ran ? `the checks didn't run on ${at}: ${reason}`
+    : where === "none" ? `no checks are configured, so nothing ran on ${at}${withMerges}`
+    : where === "reused" ? `${at}${withMerges} is a tree that already passed these checks in this run: pass`
+    : `checks ran on ${at}${withMerges}: ${pass ? "pass" : `fail (${reason})`}`;
+  const result = {
+    pass, ref: d.ref, branch: d.branch, commit: d.sha, mergesOn: merges, text,
+    checks: { passed: pass, status: o.status, ...(where ? { where } : {}), ...(ran && o.command ? { command: o.command } : {}), ...(reason ? { reason } : {}), output: ran ? o.output : null },
+    timings: { totalMs: Date.now() - t0, slotWaitMs: res.slotWaitMs, fetchMs: o.fetchMs, ...(ran ? { checksMs: o.checksMs } : {}) },
+  };
+  return opView(await s.finishOp({ opId: op.id, state: pass ? "passed" : "failed", result }));
 }
 
 export interface MergeOpts {

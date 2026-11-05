@@ -279,6 +279,25 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       return held ?? { id: O.verifyIdFor(run, ref, key), kind: "verify", state: "running", ref };
     }
     case "fetch": return fetchInto(ctx, args);
+    case "check": {
+      // Plugin API §16.1: the run's checks on any ref's commit as it is (the target, a goal branch, a child's branch),
+      // in a sandbox; it lands nothing, so any agent that may spawn may ask, orchestrate agents included. The command is
+      // never the VM's: an operator-named check, else the one pinned to the agent checked, else the run's own.
+      if (args.checks !== undefined) deny("in-VM check cannot set --checks: check commands come only from the operator", "Name one of the run's operator-named checks with --check NAME (`capcomd kv get _checks` lists them), or none for the run's own checks.");
+      if (args.id !== undefined && args.ref === undefined) {
+        const { id, done } = await O.startCheck({ runId: run, id: String(args.id) });
+        return holdCheck(id, done);
+      }
+      const ref = args.ref !== undefined && String(args.ref).trim() ? String(args.ref).trim() : undefined;
+      let pinned = false;
+      if (ref?.startsWith("agt-")) { await assertReadable(c, [ref]); pinned = typeof (await O.getAgentOrThrow(run, ref)).contract?.check === "string"; }
+      const oc = args.check === undefined && !pinned ? await operatorChecks(c) : undefined;
+      const { id, done } = await O.startCheck({
+        runId: run, ...(ref ? { ref } : {}), ...(args.check !== undefined ? { check: String(args.check) } : oc ? { checks: oc } : {}),
+        ...(args.key !== undefined ? { key: String(args.key) } : {}), askedBy: c.sub,
+      });
+      return holdCheck(id, done);
+    }
     case "merge": {
       const ref = String(args.ref ?? "");
       if (!ref.startsWith("agt-")) deny("in-VM merge takes a child agent id, not a branch");
@@ -289,6 +308,13 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     }
   }
   throw new RelayError("usage", `unknown op ${op}`, "See `capcomd help` inside the VM.");
+}
+
+/** A check takes as long as the checks: answer "running" (with its id, which the CLI polls) after VERIFY_HOLD_MS. */
+async function holdCheck(id: string, done: Promise<any>) {
+  done.catch(() => {}); // a later poll gets the error
+  const held = await Promise.race([done, new Promise((r) => setTimeout(() => r(null), VERIFY_HOLD_MS))]);
+  return held ?? { id, kind: "check", state: "running" };
 }
 
 const FETCH_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;

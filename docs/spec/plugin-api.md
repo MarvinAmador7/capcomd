@@ -1246,9 +1246,8 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
      an approval is refused). Its sandbox stays the agent's: `--sandbox read-only` blocks `git fetch` (a write to
      `.git`, and no network) and can't start in a container at all (bubblewrap needs user namespaces, which Docker
      doesn't allow), so every command failed, reads included. Codex's rules see the commands of a simple shell line
-     (`cd x && bun test` is refused) but not a redirection (`echo x > f` runs): what an orchestrate agent writes anyway
-     stays in its checkout and never lands (item 3), and the runner reports it in the agent's log and trace
-     (`agent.orchestrate_discarded`).
+     (`cd x && bun test` is refused) but not a redirection (`echo x > f` runs), `sh -c` or option tricks: so the kernel
+     doesn't rely on any CLI's rules for writes (item 3).
    The kernel applies them on top of the profile's own lists when it builds the agent's config, after
    `agent.preparing`: `allowed` replaces the profile's allowlist or narrows it, `disallowed` joins its denylist,
    `denyCommands` joins `AgentConfig.denyCommands`, `sandbox` is the loosest the CLI runs in. A profile cannot widen
@@ -1263,10 +1262,35 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    was put on and `earlierMerges` the run's merges into that target already on it; `text` says it plainly ("checks ran
    on the combined code (this change on main with 1 earlier merge from this run): pass"). The CLI prints the text; the
    MCP tools' `next` carries it.
+   **`capcomd check [<ref>]`** (`capcomd_check` for the driver and in the VM; an in-VM op, `check`; host
+   `capcomd check <runId> [<ref>] [--check NAME | --checks CMD] [--key K] [--id chk-…]`; harness.v1 has no verify
+   route, so none for it either): the run's checks on a ref's commit **as it is** (a goal branch, the target after
+   merges, a child's branch; an agent id means its pushed branch; default: the run's target), in a sandbox as a verify's
+   run (`src/merge/check.ts`, through the verifier actor), with pass/fail and the full output (its last 64 KB,
+   `result.checks.output`; `result.text` says it plainly, e.g. "trunk at 4f2c… (with 2 merges from this run) is a tree
+   that already passed these checks in this run: pass"). It integrates, merges and reviews nothing and needs no work of
+   the caller's own, so an orchestrate agent may ask for it from its VM: it is how a router knows the state of the
+   combined code without executing anything itself (in-VM `verify` takes only a child, and a host verify of the goal
+   branch onto itself runs no checks). Rules: the commit is the branch's tip when asked (`result.commit`); the command is
+   an operator-named check (`--check`), else the one pinned to the agent checked, else the run's (an in-VM call can't
+   pass `--checks`); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
+   run once and a later one gets the record (`--key` checks a commit again); a tree that already passed the same
+   command in the run isn't run again (`checks.where: "reused"`); the check's sandbox takes a machine slot where the
+   run's place has a cap (§16.2 rule 3; `src/providers/capacity.ts` `holdSlot`), waiting with the agents, and gives up
+   after 20 minutes; it can't check an orchestrate agent (`invalid`: no branch of its own). Recorded on the run as the
+   scope events `check.started`, `check.passed`, `check.failed` (capcomd.v1 `CHECK_*`, additive; on the agent checked,
+   else the agent that asked; the output stays on the record) and in the trace (`git.check`, `check.run`). A check
+   is an op of the scope (`kind: "check"`): `capcomd await`/`capcomd_await {ops}` wait for it as for a verify.
 2. `children.allowSpawn` MUST be true (an orchestrator with no children can do nothing; `validate` refuses it).
 3. The kernel refuses `verify` and `merge` of such an agent's **own** ref (`ops.verifyRef`, `mergeRef`: `invalid`,
    relay.v1 code `usage` with reason `invalid`, "an orchestrate agent has no work of its own"), and the runner never
-   commits or pushes its work. An orchestrate agent that finishes having spawned no agents (its tools refused, or it
+   commits or pushes its work, not even as a checkpoint (its supervisor makes none). **Writes fail it**, in the kernel
+   for every provider (the owner's call, 2026-11-05, as a CLI's rules can be got past): the runner looks at the agent's
+   checkout when a turn ends (the CLI's `result` / `turn.completed`) and when it ends; changed files (untracked
+   included) or commits on no remote branch stop it there, and it ends `failed` with `result.errorKind:
+   "orchestrate_wrote_files"`, `result.wrote: {files, total, commits, at: "turn" | "end"}` and an `error` naming the
+   files. Nothing it wrote is committed or pushed; its log says so and its trace has `agent.orchestrate_discarded`
+   (`agent.orchestrate_failed: true`). An orchestrate agent that finishes having spawned no agents (its tools refused, or it
    gave up) ends `failed` (`result.errorKind: "orchestrate_no_children"`, with its last words), never a silent `done`:
    nothing it did can land, so a run whose planner did that doesn't report ok. Its final message is its `summary` when
    it declared none.
@@ -1504,6 +1528,8 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.4 | 2026-11-05 | With the gates (§17.2 step 5): the built-in gates in a process that isn't the daemon (§6.1); `merge --operator` asks every landing gate (§6.5); `verify.judging`'s `tested.commit`, judges in order, a judge's `review` report, the kernel's same-tree and no-review rules, stopped reviewers (§6.6.13); the built-in reviewer gate (§15.3); the gate events as scope events, a plugin's own run events not yet (§13.1). |
 | 1.0.5 | 2026-11-05 | With the forges (§17.2 step 6): `LandRequest.branchSha`/`leaseBranch`, `PullRequestRef.mergeSha`, a conflict's `detail` and unknown `targetSha` (all additive); a pr land merges at the checked head (`branchSha`), not a pushed integrated commit; `merge.forge` from `CAPCOMD_MERGE_FORGE` (not `.capcomd.json`), `CAPCOMD_GITHUB_REPO` naming `github`; `forge-git` is `order: post`; `forge-fake` lives in `tests/merge/forge-fake`. |
 | 1.0.6 | 2026-11-05 | Orchestrate means full read visibility and no execution (§16.1, the owner's call after a live run whose planner and lead couldn't `git fetch`): read-only git with fetch and a detached checkout, every capcomd read; edits, git writes, installs, builds and tests refused. Claude Code's lists gain the read-only commands and the refused prefixes (plus three option wildcards); Codex's policy is `denyCommands` as execpolicy rules with its sandbox the agent's (`read-only` can't fetch and can't start in Docker) and its capcomd MCP tools approved; `toolPolicies.orchestrate.denyCommands`, `AgentConfig.denyCommands` and the optional `refusal(line)` (§7.3; all additive); the agent suite accepts `denyCommands` that refuse commits and pushes in place of a read-only sandbox. `capcomd fetch`; a verify's and a merge's `result.combined`; an orchestrate agent that spawned nothing ends failed; the mode is explained to everyone who briefs one; `capcomd logs` shows every agent's tool calls and refusals. |
+
+| 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

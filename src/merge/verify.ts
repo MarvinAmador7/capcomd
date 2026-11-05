@@ -16,24 +16,32 @@ export function checksMode(source: Record<string, string | undefined> = process.
   return realSandbox(source) ? "vm" : "host";
 }
 
-/** Run the repo's test command in the merged worktree. No command configured = pass (reported). */
-export async function runTests(git: Git, command: string, env: Record<string, string>): Promise<{ passed: boolean; output: string; where?: ChecksMode | "reused"; stage?: ChecksStage }> {
+/** Run the repo's test command in the merged worktree. No command configured = pass (reported). `outputChars`: how much
+ *  of the output's end is kept (default 4000). `beforeRun`: called just before the command really runs (not when a
+ *  passing result is reused, nor with no command), with where it will run; it may wait (`capcomd check` takes a machine
+ *  slot there) and returns what to call after. */
+export async function runTests(git: Git, command: string, env: Record<string, string>, o: { outputChars?: number; beforeRun?: (where: ChecksMode, source: Record<string, string | undefined>) => Promise<() => void> } = {}): Promise<{ passed: boolean; output: string; where?: ChecksMode | "reused"; stage?: ChecksStage }> {
   if (!command.trim()) return { passed: true, output: "(no test command configured)" };
+  const keep = o.outputChars ?? 4000;
   // The same tree already passed the same command (verify, then a merge onto a target that hasn't moved): its result
   // is known, so no second run, and no second checks VM. Only passes are kept; CAPCOMD_CHECKS_REUSE=0 turns it off.
   const key = process.env.CAPCOMD_CHECKS_REUSE === "0" ? null : await passKey(git, command);
   const cache = key ? await passFile(git) : null;
   const prior = key && cache ? passes(cache).get(key) : undefined;
-  if (prior) return { passed: true, output: `(this tree passed \`${command}\` at ${new Date(prior.at).toISOString()}; not run again)\n${prior.output}`.slice(-4000), where: "reused" };
+  if (prior) return { passed: true, output: `(this tree passed \`${command}\` at ${new Date(prior.at).toISOString()}; not run again)\n${prior.output}`.slice(-keep), where: "reused" };
   let r: { passed: boolean; output: string; where: ChecksMode; stage?: ChecksStage };
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
   const source = await (await import("../providers/run-sandbox")).runSandboxEnv(env.CAPCOMD_RUN_ID);
-  if (checksMode(source) === "vm") r = { ...(await runInVm(git, command, env, source)), where: "vm" };
-  else {
-    const proc = Bun.spawn(["sh", "-c", command], { cwd: git.cwd, env: { ...hostCheckEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    r = { passed: code === 0, output: (out + err).slice(-4000), where: "host" };
-  }
+  const where = checksMode(source);
+  const after = o.beforeRun ? await o.beforeRun(where, source) : () => {};
+  try {
+    if (where === "vm") r = { ...(await runInVm(git, command, env, source, keep)), where: "vm" };
+    else {
+      const proc = Bun.spawn(["sh", "-c", command], { cwd: git.cwd, env: { ...hostCheckEnv(), ...env }, stdout: "pipe", stderr: "pipe" });
+      const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      r = { passed: code === 0, output: (out + err).slice(-keep), where: "host" };
+    }
+  } finally { after(); }
   if (r.passed && key && cache) recordPass(cache, key, r.output);
   return r;
 }
@@ -85,7 +93,7 @@ const CHECKS_TIMEOUT_MS = () => Number(process.env.CAPCOMD_CHECKS_TIMEOUT_MS ?? 
  *  upload), or the branch's dependencies didn't install (`deps`). Absent: the command ran and failed. */
 export type ChecksStage = "setup" | "deps";
 
-async function runInVm(git: Git, command: string, env: Record<string, string>, source: Record<string, string | undefined> = process.env): Promise<{ passed: boolean; output: string; stage?: ChecksStage }> {
+async function runInVm(git: Git, command: string, env: Record<string, string>, source: Record<string, string | undefined> = process.env, keep = 4000): Promise<{ passed: boolean; output: string; stage?: ChecksStage }> {
   const { providerNamed } = await import("../dependencies");
   const { loadAgentConfig, BASE_EGRESS } = await import("../agents/config");
   const { agentHome, agentPath, templateDir, sq } = await import("../agents/runner");
@@ -142,7 +150,7 @@ echo "deps: install $F"`);
     }
     const ids = Object.entries(env).map(([k, v]) => `${k}=${sq(v)}`).join(" ");
     const run = await sh(`cd ${sq(W)} && env ${ids} sh -c ${sq(command)}`, CHECKS_TIMEOUT_MS());
-    return { passed: run.code === 0, output: (run.stdout + run.stderr).slice(-4000) };
+    return { passed: run.code === 0, output: (run.stdout + run.stderr).slice(-keep) };
   } finally {
     await provider.destroy(id).catch(() => {});
     release();

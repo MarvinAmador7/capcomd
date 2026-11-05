@@ -80,6 +80,9 @@ Usage:
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
                                        (checks, then the reviewer agent: the run's --reviewer or --review-profile; both must pass)
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
+  capcomd check <runId> [<agt|branch>] [--check NAME | --checks CMD] [--key K]  → chk-…  the run's checks on that branch's
+                                       commit as it is (default: the run's target), in a sandbox like verify's; merges and
+                                       reviews nothing; prints pass/fail and the output (--id chk-… shows a check again)
   ADR-017 sub-agents (agents allowed to spawn get the same verbs in their VM as \`capcomd\` + MCP tools):
   capcomd spawn … [--children.maxChildren=N --children.maxDepth=N --children.maxTotalDescendants=N --children.allowedChildProfiles=a,b --children.budgetShare=F]
                                        (the parent sets the child's fan-out; narrow-only, refused above the ceiling)
@@ -263,6 +266,7 @@ async function main(argv: string[]): Promise<number> {
         "no-goal-branch": { type: "boolean" },
         conformance: { type: "boolean" },
         ref: { type: "string" },
+        id: { type: "string" },
         checks: { type: "string" },
         check: { type: "string" },
         "checks-set": { type: "string", multiple: true },
@@ -681,6 +685,21 @@ async function main(argv: string[]): Promise<number> {
         });
         if (json) out(r);
         else console.log(`${r.id}: ${r.state}${r.result?.commit ? ` (${String(r.result.commit).slice(0, 12)})` : ""}${r.result?.checks?.reason ? ` ${r.result.checks.reason}` : ""}${r.result?.combined?.text ? `\n  ${r.result.combined.text}` : ""}`);
+        return r.state === "passed" ? EXIT.ok : EXIT.run_failed;
+      }
+
+      case "check": {
+        const runId = positionals[1] ?? usage("runId required: capcomd check <runId> [<agt|branch>] [--check NAME | --checks CMD] [--key K]");
+        const ref = (values.ref as string | undefined) ?? positionals[2];
+        const r: any = await (await import("../primitives/ops")).checkRef({
+          runId, ...(ref ? { ref } : {}), ...(values.id ? { id: values.id as string } : {}), checks: values.checks as string | undefined, check: values.check as string | undefined, key: values.key as string | undefined,
+        });
+        if (json) out(r);
+        else {
+          const output = typeof r.result?.checks?.output === "string" ? r.result.checks.output.trimEnd() : "";
+          if (output) console.log(output);
+          console.log(`${r.id}: ${r.state}${r.result?.text ? `\n  ${r.result.text}` : ""}`);
+        }
         return r.state === "passed" ? EXIT.ok : EXIT.run_failed;
       }
 

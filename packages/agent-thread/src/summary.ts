@@ -22,6 +22,7 @@ export function capcomdSummary(op: string, input: Record<string, any>): string |
 		case "message": return "Send a message";
 		case "verify": return "Verify work";
 		case "merge": return "Merge work";
+		case "check": return `Run the checks on ${typeof input.ref === "string" && input.ref ? oneLine(input.ref, 80) : "the combined code"}`;
 		case "report": return "Report the result";
 		case "plan": return "Update the task board";
 		default: return null;

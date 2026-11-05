@@ -192,8 +192,8 @@ export async function awaitAgents(a: { runId: string; agents?: string[]; ops?: s
   const agents = a.agents ?? [];
   const ops = a.ops ?? [];
   if (!agents.length && !ops.length) throw new RelayError("usage", "agents or ops required", "Pass the agent ids capcomd_spawn returned, and/or the vfy-…/mrg-… ids capcomd_verify and capcomd_merge returned.");
-  const bad = ops.find((x) => !/^(vfy|mrg)-/.test(x));
-  if (bad) throw new RelayError("usage", `${bad} isn't a verify or merge id`, "ops takes the vfy-… / mrg-… ids capcomd_verify and capcomd_merge returned; agent ids go in agents.");
+  const bad = ops.find((x) => !/^(vfy|mrg|chk)-/.test(x));
+  if (bad) throw new RelayError("usage", `${bad} isn't a verify, merge or check id`, "ops takes the vfy-… / mrg-… / chk-… ids capcomd_verify, capcomd_merge and capcomd_check returned; agent ids go in agents.");
   const r: any = await O.awaitAgents(a.runId, agents, { timeoutMs: waitMs(a.timeoutMs), any: a.mode === "any", notices: true, ops });
   const rows: any[] = r.agents ?? [];
   const pendingAgents = rows.filter((x) => !TERMINAL_AGENT.has(x.status)).map((x) => x.agentId);
@@ -255,8 +255,13 @@ async function bounded<T>(work: Promise<T>, ms: number): Promise<{ done: true; v
   return Promise.race([work.then((value) => ({ done: true as const, value })), timer]);
 }
 
-/** What to do with a finished verify or merge. */
+/** What to do with a finished verify, merge or check. */
 function opNext(runId: string, v: any): string {
+  if (v.kind === "check") {
+    const said = typeof v.result?.text === "string" ? `${v.result.text[0]!.toUpperCase()}${v.result.text.slice(1)}.` : `The check ${v.state}.`;
+    return v.state === "passed" ? `${said} Nothing was merged; the output is in result.checks.output.`
+      : `${said} Nothing was merged. Read result.checks.output, then send the failure to the agent whose work broke it (capcomd_send) or spawn a fix with it in the task.`;
+  }
   if (v.kind === "verify") {
     if (v.state === "passed") return `${v.result?.combined?.text ? `${v.result.combined.text[0]!.toUpperCase()}${v.result.combined.text.slice(1)}. ` : ""}Merge with capcomd_merge {runId: "${runId}", ref: "${v.ref}", require: "${v.id}"}.`;
     const setupFailed = typeof v.result?.checks?.reason === "string" && v.result.checks.reason.startsWith("checks couldn't run")
@@ -271,7 +276,17 @@ function opNext(runId: string, v: any): string {
 }
 
 const still = (runId: string, id: string, what: string) =>
-  `${what} still running. Wait for it with capcomd_await {runId: "${runId}", ops: ["${id}"]} (put other verifies, merges and agents in the same call: the first to finish ends the wait), or poll it with capcomd_${id.startsWith("vfy-") ? "verify" : "merge"} {runId: "${runId}", id: "${id}"}.`;
+  `${what} still running. Wait for it with capcomd_await {runId: "${runId}", ops: ["${id}"]} (put other verifies, merges and agents in the same call: the first to finish ends the wait), or poll it with capcomd_${id.startsWith("vfy-") ? "verify" : id.startsWith("chk-") ? "check" : "merge"} {runId: "${runId}", id: "${id}"}.`;
+
+export async function check(a: { runId: string; ref?: string; id?: string; check?: string; key?: string; timeoutMs?: number }) {
+  // A driver picks one of the operator's named checks, never writes a command.
+  const { id, done } = await O.startCheck({ runId: a.runId, ...(a.ref ? { ref: a.ref } : {}), ...(a.id ? { id: a.id } : {}), ...(a.check ? { check: a.check } : {}), ...(a.key ? { key: a.key } : {}) });
+  done.catch(() => {}); // a timed-out call leaves it running; its error reaches the next call
+  const r = await bounded(done, waitMs(a.timeoutMs));
+  if (!r.done) return { id, state: "running", next: still(a.runId, id, "The checks are") };
+  const v: any = r.value;
+  return { ...v, next: opNext(a.runId, v) };
+}
 
 export async function verify(a: { runId: string; ref?: string; id?: string; check?: string; acceptance?: unknown; key?: string; timeoutMs?: number }) {
   if (!a.ref && !a.id) throw new RelayError("usage", "ref or id required", "Pass the agent to verify (ref), or the vfy-… id of a verification to poll.");
