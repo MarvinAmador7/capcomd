@@ -38,21 +38,25 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
-      - name: Unit, CLI, setup and config, state machines, TUI
-        run: |
-          bun run test:fast
-          (cd apps/tui && bun test)
+      - name: Unit, CLI, setup and config, state machines, plugins, packages
+        run: bun run test:fast
 
-  # ADR-017 regression gate: agentic scenarios (scripted agents driving in-VM capcomd), tokens, MCP, skill gating.
-  # About 30 minutes on one runner, so it runs as six shards balanced by tests/scenario-timings.json (per-file times
-  # measured on this runner; refresh with `bun run test:scenarios:timings`). A file missing from it gets an estimate.
+      - name: The canvas and the TUI (apps/canvas, apps/tui)
+        run: bun run test:apps
+
+  # The regression gate: agentic scenarios (scripted agents driving in-VM capcomd), tokens, MCP, skill gating, the
+  # sub-agents, the primitives, the agent adapters (fake CLIs) and the merge paths (local bare repos, a fake GitHub
+  # and forge): `bun run test:scenarios`. Over 35 minutes on one runner, so it runs as seven shards balanced by
+  # tests/scenario-timings.json (per-file times measured on this runner; a file missing from it gets an estimate).
+  # Each shard uploads the times it measured (scenario-timings-N): `bun scripts/scenario-timings.ts <run id>` merges
+  # a run's into the file. `--isolate` (in the script) gives every file a fresh global, environment and preload.
   scenarios:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
 
@@ -64,8 +68,42 @@ jobs:
       - name: Install dependencies (CLI/engine, apps/canvas, apps/tui)
         run: bun run setup
 
-      - name: Sub-agent scenario suite, shard ${{ matrix.shard }} of 6 (regression gate)
-        run: bun test --shard=${{ matrix.shard }}/6 --timings=tests/scenario-timings.json tests/scenarios tests/subagents tests/primitives/policy.test.ts
+      - name: Scenario suite, shard ${{ matrix.shard }} of 7 (regression gate)
+        run: |
+          cp tests/scenario-timings.json "$RUNNER_TEMP/scenario-timings.json"
+          bun run test:scenarios --shard=${{ matrix.shard }}/7 --timings="$RUNNER_TEMP/scenario-timings.json" --update-timings
+
+      - name: Upload the times this shard measured
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-timings-${{ matrix.shard }}
+          path: ${{ runner.temp }}/scenario-timings.json
+          retention-days: 14
+
+  # The deterministic evals (fakes: no VMs, no models): the primitives' recipes (correctness; their latency against
+  # evals/primitives/baseline.json, a developer machine's, is printed but doesn't fail on a shared runner), and
+  # `capcomd run --recipe` against `--legacy` on the same goals.
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CAPCOMD_NO_CONFIG: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install --frozen-lockfile
+
+      - name: Primitives eval
+        run: bun evals/primitives/run.ts --report-latency
+
+      - name: Recipe parity eval
+        run: bun evals/recipe-parity/run.ts
 
   # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
   # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that

@@ -1,5 +1,5 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { bareRepo } from "./gitfixture";
+import { bareRepo, withoutEngine } from "./gitfixture";
 import { mergeTask } from "../../src/merge/service";
 import { directMerge, testHooks } from "../../src/merge/direct";
 import { produceFakeWork } from "../../src/merge/fakework";
@@ -17,6 +17,7 @@ async function sub(env: Record<string, string>, req: unknown) {
 
 const req = (runId: string, taskId: string, extra: object = {}) => ({ runId, taskId, branch: taskBranch(runId, taskId), target: "main", ...extra });
 
+withoutEngine();
 afterEach(() => { testHooks.beforePush = undefined; });
 
 describe("direct merge against a local bare repo", () => {
@@ -84,7 +85,7 @@ describe("direct merge against a local bare repo", () => {
     expect(results.every((x) => x.status === "merged")).toBe(true);
     expect(results.some((x) => (x as any).attempts > 1)).toBe(true); // someone lost the lease race
     for (const id of ids) expect(await r.landings(taskKey("run5", id))).toBe(1);
-  });
+  }, 30_000); // four clones racing, and the losers rebase and verify again: ~3 s on a laptop
 
   test("real conflict: reported with the files, target untouched; rework after re-cut lands", async () => {
     const r = await bareRepo();

@@ -5,6 +5,9 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { Git } from "../../src/merge/git";
 import { hostCheckEnv, runTests } from "../../src/merge/verify";
+import { withoutEngine } from "./gitfixture";
+
+withoutEngine();
 
 test("hostCheckEnv drops capcomd settings, keys, tokens, git credential config and the SSH agent; keeps the toolchain", () => {
   const env = hostCheckEnv({
