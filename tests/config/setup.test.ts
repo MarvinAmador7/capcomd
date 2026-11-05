@@ -99,8 +99,8 @@ describe("setup steps (non-interactive)", () => {
     const agents = JSON.parse(readFileSync(join(repo, ".capcomd", "agents.json"), "utf8")).agents;
     expect(Object.keys(agents).sort()).toEqual(["codex-worker", "lead", "planner", "reviewer", "worker"]);
     expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead"]);
-    // A module lead: the worker's settings (every tool, so it runs any check itself), up to 3 worker helpers, one level.
-    expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
+    // A module lead: the worker's provider and login, orchestrating (plugin API §16.1) up to 3 worker helpers, one level.
+    expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
     // The reviewer runs the check and the package manager's test runner (bun test as well as bun run).
     expect(agents.reviewer.allowedTools).toEqual(expect.arrayContaining(["Bash(bun run:*)", "Bash(bun test:*)"]));
     expect(agents.reviewer.allowedTools).not.toContain("Edit");

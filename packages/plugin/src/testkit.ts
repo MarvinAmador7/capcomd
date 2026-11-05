@@ -1,7 +1,8 @@
 // The test kit (spec §14.5): `@capcomd/plugin/testkit`. The fake context is the host's own context (host/context.ts)
 // over an in-memory hook registry, so a plugin is held to the same manifest, scope and dispatch rules it meets in the
-// daemon. `bootWith` and the agent and forge conformance suites need a daemon and the kernel's seams; they land with
-// spec §17.2 steps 2-6 and refuse with `unsupported` until then. The sandbox suite is ./conformance.ts (step 3).
+// daemon. `bootWith` and the forge conformance suite need a daemon and the kernel's seams; they land with spec §17.2
+// steps 2-6 and refuse with `unsupported` until then. The sandbox suite is ./conformance.ts (step 3), the agent suite
+// ./agent-conformance.ts (step 4).
 import { PluginError } from "./errors";
 import { HOOKS, type HookCall, type HookName, type HookPayload, type HookResult } from "./hooks";
 import { readManifest } from "./load";
@@ -13,6 +14,7 @@ import { ContributionStore, createContext, type ContextOptions, type PluginRunti
 import { configDefaults } from "./host/host";
 import { HookRegistry, type HostEvent } from "./host/registry";
 import { sandboxCases, type SandboxConformanceOptions } from "./conformance";
+import { agentCases, type AgentConformanceOptions } from "./agent-conformance";
 
 /** A recorded registration, so a test can assert that disposing the plugin removed every one (§14.1). */
 export type Registration =
@@ -54,7 +56,7 @@ export interface TestKit {
   /** §14.2: the seam conformance suites. */
   conformance: {
     sandbox(make: () => SandboxProvider, opts?: SandboxConformanceOptions): void;
-    agent(make: () => AgentProvider, fixtures: { streams: string[] }): void;
+    agent(make: () => AgentProvider, fixtures?: AgentConformanceOptions): void;
     forge(make: () => Forge, fixtureRepo: string): void;
   };
   /** A HookCall for a unit test of a listener, with a real AbortSignal and a deadline `timeoutMs` ahead. */
@@ -248,7 +250,13 @@ export const testkit: TestKit = {
         for (const c of cases) (c.skip ? test.skip : test)(c.name, c.run, (opts.readyMs ?? 120_000) + 60_000);
       });
     },
-    agent() { throw new PluginError("unsupported", "the agent conformance suite lands with agent providers as plugins (spec §17.2 step 4)"); },
+    agent(make, fixtures = {}) {
+      // Pure methods only: no CLI runs, so every case is a plain test.
+      const { describe, test } = require("bun:test") as typeof import("bun:test");
+      describe(`agent seam conformance (§14.2)${fixtures.name ? `: ${fixtures.name}` : ""}`, () => {
+        for (const c of agentCases(make(), fixtures)) test(c.name, c.run);
+      });
+    },
     forge() { throw new PluginError("unsupported", "the forge conformance suite lands with forges as plugins (spec §17.2 step 6)"); },
   },
   call(hook, payload, opts = {}) {

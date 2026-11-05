@@ -11,3 +11,4 @@ export * from "./load";
 export * from "./semver";
 export * from "./testkit";
 export * from "./conformance";
+export * from "./agent-conformance";

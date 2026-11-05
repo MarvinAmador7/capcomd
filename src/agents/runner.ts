@@ -872,6 +872,12 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.report ? 8000 : 4000)) };
     }
 
+    // Plugin API §16.1: an orchestrate agent's work is its children's branches; it has none of its own to push.
+    if (cfg.toolMode === "orchestrate") {
+      setSpanAttributes(span, { "agent.no_changes": true, "agent.tool_mode": "orchestrate" });
+      return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
+    }
+
     // 5. Commit with capcomd trailers and push the task branch.
     must(await git(["add", "-A"], repo), "git add");
     const status = await git(["status", "--porcelain"], repo);

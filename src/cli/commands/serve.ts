@@ -290,6 +290,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // A place that doesn't delete idle machines by itself (Docker, ADR-020): its seam sweeps capcomd's expired ones, now
   // and every 5 minutes.
   try { SB.keepTidy((await import("../../providers/registry")).sandboxName()); } catch { /* an unknown CAPCOMD_SANDBOX fails the first run instead */ }
+  // And the agent providers are the ones its plugins registered (§7.3, §17.2 step 4); a host that didn't start leaves
+  // the built-ins.
+  if (started) (await import("../../plugins/agents")).useAgentSeams(host.contributions);
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {

@@ -1,8 +1,14 @@
 import { env as envVar } from "../utils/env";
 import { OPEN_EGRESS } from "../providers/sandbox";
+import { agentSeam, orchestrateConfig, providerOfKind } from "../plugins/agents";
+import { CLAUDE_CODE_VERSION } from "../plugins/agent-claude";
+import { CODEX_VERSION } from "../plugins/agent-codex";
+export { CLAUDE_USD_PER_MTOK, claudeCostUsd, type ClaudeUsage } from "../plugins/agent-claude";
+export { CLAUDE_CODE_VERSION, CODEX_VERSION };
 
-export type AgentKind = "fake" | "claude-code" | "codex";
-export type RealAgent = Exclude<AgentKind, "fake">;
+/** A real agent's kind: an active agent provider's (docs/spec/plugin-api.md §7.3), `claude-code` for Claude Code. */
+export type RealAgent = string;
+export type AgentKind = "fake" | RealAgent;
 
 /** CAPCOMD_AGENT=claude-code|codex selects a real worker; default (unset/"fake") keeps the local fake work. */
 // `pinned`: the spec recorded with the agent (profiles.ts pinnedAgent), which wins over a lookup by name.
@@ -13,19 +19,21 @@ export function agentFromEnv(source: Record<string, string | undefined> = proces
 }
 export const isRealAgent = (k: AgentKind): k is RealAgent => k !== "fake";
 
-/** Pinned versions, installed only when the VM image/snapshot does not already have the CLI. */
-export const CLAUDE_CODE_VERSION = "2.1.303";
-export const CODEX_VERSION = "0.163.0";
+/** Pinned node, installed only when the VM image/snapshot does not already have it (the CLIs' pins are their providers'). */
 export const NODE_VERSION = "22.23.3";
 
 /** Hosts every agent VM needs (clone/push, bootstrap registries). */
 export const BASE_EGRESS = ["github.com", "registry.npmjs.org", "nodejs.org"];
-/** Each agent's API host; boxd host-bound secrets are bound to exactly this host. */
-export const AGENT_API_HOST: Record<RealAgent, string> = { "claude-code": "api.anthropic.com", codex: "api.openai.com" };
+/** An agent's API host (its provider's `describe().apiHost`); boxd host-bound secrets are bound to exactly this host. */
+export function agentApiHost(kind: RealAgent): string {
+  const p = agentSeam(providerOfKind(kind));
+  if (!p) throw new Error(`no active agent provider for ${kind}`);
+  return p.describe().apiHost;
+}
 /** claude-code allowlist (kept for compatibility). */
 export const AGENT_EGRESS = ["github.com", "api.anthropic.com", "registry.npmjs.org", "nodejs.org"];
 export function agentEgress(kind: RealAgent): string[] {
-  return [...BASE_EGRESS.slice(0, 1), AGENT_API_HOST[kind], ...BASE_EGRESS.slice(1)];
+  return [...BASE_EGRESS.slice(0, 1), agentApiHost(kind), ...BASE_EGRESS.slice(1)];
 }
 
 /**
@@ -40,13 +48,13 @@ export type EgressAuth = "apikey" | "subscription";
  * Provider + auth egress sets (beyond BASE_EGRESS). One table so runs, doctor and login agree.
  * claude subscription uses a setup-token (long-lived OAuth token) against api.anthropic.com.
  */
-export const PROVIDER_EGRESS: Record<RealAgent, Record<EgressAuth, string[]>> = {
+export const PROVIDER_EGRESS: Record<"claude-code" | "codex", Record<EgressAuth, string[]>> = {
   "claude-code": { apikey: ["api.anthropic.com"], subscription: ["api.anthropic.com"] },
   codex: { apikey: ["api.openai.com"], subscription: ["api.openai.com", ...CODEX_SUBSCRIPTION_HOSTS] },
 };
-/** Full VM allowlist for one agent and auth mode: base hosts + that provider's set. */
+/** Full VM allowlist for one agent and auth mode: base hosts + that provider's set (another provider: its API host). */
 export function egressFor(kind: RealAgent, auth: EgressAuth): string[] {
-  return [...new Set([...BASE_EGRESS.slice(0, 1), ...PROVIDER_EGRESS[kind][auth], ...BASE_EGRESS.slice(1)])];
+  return [...new Set([...BASE_EGRESS.slice(0, 1), ...((PROVIDER_EGRESS as Record<RealAgent, Record<EgressAuth, string[]> | undefined>)[kind]?.[auth] ?? [agentApiHost(kind)]), ...BASE_EGRESS.slice(1)])];
 }
 
 /**
@@ -68,10 +76,11 @@ export function credentialModeFor(kind: AgentKind, source: Record<string, string
     return a === "subscription" ? "subscription" : "auto";
   }
   const { profileFor } = require("../auth/profiles") as typeof import("../auth/profiles");
-  const keyName = kind === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const provider = providerOfKind(kind);
+  const keyName = agentSeam(provider)?.describe().secretName ?? `${provider.toUpperCase()}_API_KEY`;
   const hasKey = !!source[keyName]?.trim(), hasSub = !!profileFor(kind, source);
   if (hasKey && hasSub) throw new Error(`${kind}: both ${keyName} and a subscription login are configured; choose one (agent profile auth, or CAPCOMD_AUTH=apikey|subscription)`);
-  if (!hasKey && !hasSub) throw new Error(`${kind}: no credentials configured; set auth (agent profile or CAPCOMD_AUTH) and either ${keyName} or \`capcomd auth login ${kind === "codex" ? "codex" : "claude"}\``);
+  if (!hasKey && !hasSub) throw new Error(`${kind}: no credentials configured; set auth (agent profile or CAPCOMD_AUTH) and either ${keyName} or \`capcomd auth login ${provider}\``);
   return hasSub ? "subscription" : "auto";
 }
 
@@ -126,28 +135,9 @@ export interface AgentConfig {
    * Default: subscription when an auth profile exists for the agent, else auto.
    */
   credentialMode: "auto" | "secret" | "env" | "subscription";
-}
-
-/**
- * USD per million tokens, for Claude's spend while it runs (claude reports a cost only when it finishes; that total
- * replaces the estimate). Matched against the model in each message, first match wins; cache writes cost 1.25×
- * input, cache reads `cacheRead` (else 0.1× input). Anthropic list prices, 2026-10. An unknown model is priced as
- * the dearer older Opus, so a budget errs towards stopping early.
- */
-export const CLAUDE_USD_PER_MTOK: Array<[RegExp, { in: number; out: number; cacheRead?: number }]> = [
-  [/fable-5-1|mythos-5-1/, { in: 10, out: 50, cacheRead: 0.25 }],
-  [/fable|mythos/, { in: 10, out: 50 }],
-  [/opus-5-5/, { in: 4, out: 20, cacheRead: 0.2 }],
-  [/sonnet-5/, { in: 2, out: 10, cacheRead: 0.2 }],
-  [/haiku-5-5/, { in: 0.1, out: 0.5 }],
-  [/sonnet/, { in: 3, out: 15 }],
-  [/haiku/, { in: 1, out: 5 }],
-  [/.*/, { in: 5, out: 25 }],
-];
-export interface ClaudeUsage { model?: string; input: number; cacheWrite: number; cacheRead: number; output: number }
-export function claudeCostUsd(u: ClaudeUsage): number {
-  const p = CLAUDE_USD_PER_MTOK.find(([re]) => re.test(u.model ?? ""))![1];
-  return (u.input * p.in + u.cacheWrite * p.in * 1.25 + u.cacheRead * (p.cacheRead ?? p.in * 0.1) + u.output * p.out) / 1e6;
+  /** The profile's `toolMode` (docs/spec/plugin-api.md §16.1), when `orchestrate`: the agent reads, spawns and decides,
+   *  with its provider's tool policy applied to the lists above, and never commits or pushes. Unset: `execute`. */
+  toolMode?: "orchestrate";
 }
 
 /** The reasoning effort an agent runs with: CAPCOMD_AGENT_EFFORT, else its profile's; undefined means the CLI's default. */
@@ -179,7 +169,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "danger-full-access") as AgentConfig["codexSandbox"];
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) throw new Error(`CAPCOMD_CODEX_SANDBOX=${sandbox} is invalid`);
   const cred = credentialModeFor(kind, source, spec?.auth);
-  return {
+  const cfg: AgentConfig = {
     version: envVar("CLAUDE_CODE_VERSION", source) ?? CLAUDE_CODE_VERSION,
     codexVersion: envVar("CODEX_VERSION", source) ?? CODEX_VERSION,
     nodeVersion: envVar("AGENT_NODE_VERSION", source) ?? NODE_VERSION,
@@ -209,4 +199,9 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
     credentialMode: cred,
   };
+  if (spec?.toolMode !== "orchestrate" || !isRealAgent(kind)) return cfg;
+  // §16.1: the provider's policy on top of the profile's lists and the env's; nothing here widens it.
+  const provider = agentSeam(spec.provider);
+  if (!provider) throw new Error(`agent provider ${spec.provider} isn't active`);
+  return { ...orchestrateConfig(cfg, provider), toolMode: "orchestrate" };
 }

@@ -94,7 +94,11 @@ export interface AgentConfig {
   allowedTools?: string[];
   disallowedTools?: string[];
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
-  credentialMode: "secret" | "env" | "subscription" | "none";
+  /** `auto`: the sandbox's host-bound secret placeholder when it has one, else the key in the agent's environment. */
+  credentialMode: "auto" | "secret" | "env" | "subscription" | "none";
+  /** USD per million tokens, for a CLI that reports tokens and not cost: the provider's budget guard estimates from
+   *  them (codex: CAPCOMD_CODEX_USD_PER_MTOK_IN, _OUT). */
+  usdPerMtok?: { in: number; out: number };
 }
 
 /** `src/agents/types.ts` AgentCommandCtx. */
@@ -113,6 +117,8 @@ export interface AgentCommandCtx {
 }
 
 export interface AgentEvent { type: string; subtype?: string; tool?: string; text?: string; calls?: string[]; results?: Array<{ call: string; error?: string }>; raw: Record<string, unknown> }
+/** One run's accumulated state. The kernel keeps the same object for the whole run, so a provider may keep fields of
+ *  its own on it between `parse` calls (Claude Code's per-message usage, its tool-use ids). */
 export interface AgentRunState {
   events: number; turns: number; inputTokens: number; outputTokens: number; costUsd: number;
   resultText?: string; done: boolean; error?: string; stopReason?: string;
@@ -139,8 +145,10 @@ export interface AgentProvider {
     streamInput: boolean;
     loginEgress: readonly string[];
     /** The tool lists that make an `orchestrate` agent (ADR-024 `tools.mode`, §16.1): only reading and the capcomd
-     *  command; no file edits, no work shell. The kernel applies them on top of the profile's own lists. */
-    toolPolicies: { orchestrate: { allowed: readonly string[]; disallowed: readonly string[] } };
+     *  command; no file edits, no work shell. The kernel applies them on top of the profile's own lists: `allowed`
+     *  replaces the profile's allowlist (or narrows it to these), `disallowed` joins its denylist, and `sandbox`, for
+     *  a CLI whose own sandbox is the limit (codex `--sandbox`), is the loosest mode the agent runs in. */
+    toolPolicies: { orchestrate: { allowed: readonly string[]; disallowed: readonly string[]; sandbox?: "read-only" | "workspace-write" } };
   };
   /** Is this provider usable here now (its CLI pinned in the environment, a login or key present)? */
   available(input: { sandbox: string; auth: "apikey" | "subscription" }, c: SeamCall): Promise<{ ok: true } | { ok: false; reason: string; fix: string | null }>;
@@ -158,6 +166,22 @@ export interface AgentProvider {
   loginCommand(bin: string): string[];
   verifyCommand(bin: string, q: (s: string) => string): string;
   outcome(state: AgentRunState, exitCode: number): { ok: boolean; stopReason: string };
+}
+
+const CREDENTIAL_KEY = /api[_-]?key|token|secret|password|authorization/i;
+
+/** What `parse` does with a parsed JSON line before reading it (§7.3): every string through `redact`, and a string
+ *  under a key that names a credential (`api_key`, `token`, `secret`, `password`, `authorization`) replaced whole.
+ *  The kernel's own rule (`src/agents/redact.ts` `Redactor.value`), so a provider redacts as the built-ins do. */
+export function redactJson<T>(v: T, redact: (s: string) => string): T {
+  if (typeof v === "string") return redact(v) as unknown as T;
+  if (Array.isArray(v)) return v.map((x) => redactJson(x, redact)) as unknown as T;
+  if (v && typeof v === "object") {
+    const o: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) o[k] = CREDENTIAL_KEY.test(k) && typeof x === "string" ? "[REDACTED]" : redactJson(x, redact);
+    return o as T;
+  }
+  return v;
 }
 
 // ---- forge -------------------------------------------------------------------------------------------------------
