@@ -9,8 +9,10 @@ export type HookMode = "observe" | "veto" | "modify";
 export type Deny = { decision: "deny"; reason: string; reasons?: string[] };
 export type VetoResult = { decision: "allow" } | Deny;
 export type ModifyResult<Patch> = { decision: "allow"; patch?: Patch } | Deny;
-/** `merge.landing` only: `hold` parks the merge for a human approval (§6.6.15). */
-export type MergeGateResult = VetoResult | { decision: "hold"; reason: string };
+/** `merge.landing` only: `hold` parks the merge for a human approval (§6.6.15). `holdId` (optional, 1-200 characters)
+ *  names the hold across calls: a person's approval satisfies a later hold of this plugin with the same `holdId`, so a
+ *  plugin whose `reason` changes per call isn't asked about again. Without one, the hold is matched by its `reason`. */
+export type MergeGateResult = VetoResult | { decision: "hold"; reason: string; holdId?: string };
 /** `verify.judging` only (§6.6.13): what a judge that ran the run's reviewer profile (`payload.reviewer`) read and found.
  *  The kernel records it as the verification's `review`, and counts it only for the tree the checks tested
  *  (`sha` = `tested.commit`, `targetSha` = `tested.targetSha`). */

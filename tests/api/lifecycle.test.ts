@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { addClient, loadClients } from "../../src/api/clients";
 import { EventData } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
+import { isEventType } from "../../packages/plugin/src/event-type";
 import { LIFECYCLE_TYPES, lifecycleEvents, runPhase } from "../../src/api/lifecycle";
 import { strictEventData } from "../../src/api/legacy-events";
 import { harnessApp } from "../../src/api/server";
@@ -64,7 +65,7 @@ describe("lifecycle_events", () => {
 	});
 
 	test("decision 9 names: every lifecycle type is a published dotted past-tense type", () => {
-		for (const t of LIFECYCLE_TYPES) { expect(t in EventData).toBe(true); expect(t).toMatch(/^[a-z]+\.[a-z_]+$/); expect(t.split(".").at(-1)!).toMatch(/(ed|done|kept)$/); }
+		for (const t of LIFECYCLE_TYPES) { expect(t in EventData).toBe(true); expect(isEventType(t)).toBe(true); expect(t.split(".")).toHaveLength(2); expect(t.split(".").at(-1)!).toMatch(/(ed|done|kept)$/); }
 	});
 
 	test("run.failed when the last live agent ends and one failed; run.cancelled when all were cancelled", () => {

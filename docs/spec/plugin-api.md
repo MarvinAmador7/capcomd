@@ -554,15 +554,19 @@ without a review (no reviewer gate active) fails closed. Review-mode agents a ju
 
 #### 6.6.15 `merge.landing` · veto (+ `hold`) · gate · `ops.mergeRef`, under the target lock, after the `--require` check and the fast-path decision, before the forge's `land`
 `MergeLanding {merge, verification, target: {branch, protected, sha}, sha, fastPath, operator, requestedBy}`. Results:
-`allow`; `deny{reason}` (the merge fails with `plugin:<name>`); `hold{reason}` parks the merge for a **human** approval
+`allow`; `deny{reason}` (the merge fails with `plugin:<name>`); `hold{reason, holdId?}` parks the merge for a **human** approval
 of kind `merge` exactly as a protected target does (`parkOp`): a plugin may add a requirement, never decide one (§11.3).
 When `operator` is true the decisions are recorded and bypassed (§6.5). Once per merge attempt. Replaces ADR-023's
 `merge.requested` + `merge.gating` pair (decision: one gate under the lock; a cheap policy denial a few hundred ms
 later costs nothing that matters). It fires before the forge's path is chosen: `fastPath` says the merge has a verified
 commit to try the fast path with, and `sha` and `target.sha` are that commit and the target it was verified on (empty
-without one). A held merge carries the hold (`heldBy {plugin, reason}`) on its record and its approval (the question
-and `subject.heldBy`, the park event, the elicitation prompt), so the person sees the plugin's reason. A person's
-approval of that hold satisfies **only that hold** (the same plugin and reason): the approved merge fires again as a
+without one). A held merge carries the hold (`heldBy {plugin, reason, holdId?}`) on its record and its approval (the
+question and `subject.heldBy`, the park event, the elicitation prompt), so the person sees the plugin's reason, and the
+files the merge changes (`subject.files`, `filesTotal`, `added`, `removed`), read as a protected target's park reads
+them. A person's approval of that hold satisfies **only that hold**: the same plugin and, when the hold carries a
+`holdId` (a non-empty string of at most 200 characters, the plugin's own stable name for it), the same `holdId`, else
+the same `reason` text; a hold with a `holdId` never matches one without. So a plugin whose reason changes per call
+(a count, a timestamp, a link) names its hold, and the person isn't asked again for it. The approved merge fires again as a
 new attempt (`idempotencyKey` `merge.landing:<mrg>:<n>`, one more per approved hold; a replay keeps its key), every
 listener is asked (`askAll`), and the first veto that isn't an approved hold stops it as it would have (a deny fails
 it, a new hold parks it again). An approval of anything else (a protected target's) satisfies no hold. A person's deny
@@ -1518,6 +1522,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.5 | 2026-11-05 | With the forges (§17.2 step 6): `LandRequest.branchSha`/`leaseBranch`, `PullRequestRef.mergeSha`, a conflict's `detail` and unknown `targetSha` (all additive); a pr land merges at the checked head (`branchSha`), not a pushed integrated commit; `merge.forge` from `CAPCOMD_MERGE_FORGE` (not `.capcomd.json`), `CAPCOMD_GITHUB_REPO` naming `github`; `forge-git` is `order: post`; `forge-fake` lives in `tests/merge/forge-fake`. |
 | 1.0.6 | 2026-11-05 | Orchestrate means full read visibility and no execution (§16.1, the owner's call after a live run whose planner and lead couldn't `git fetch`): read-only git with fetch and a detached checkout, every capcomd read; edits, git writes, installs, builds and tests refused. Claude Code's lists gain the read-only commands and the refused prefixes (plus three option wildcards); Codex's policy is `denyCommands` as execpolicy rules with its sandbox the agent's (`read-only` can't fetch and can't start in Docker) and its capcomd MCP tools approved; `toolPolicies.orchestrate.denyCommands`, `AgentConfig.denyCommands` and the optional `refusal(line)` (§7.3; all additive); the agent suite accepts `denyCommands` that refuse commits and pushes in place of a read-only sandbox. `capcomd fetch`; a verify's and a merge's `result.combined`; an orchestrate agent that spawned nothing ends failed; the mode is explained to everyone who briefs one; `capcomd logs` shows every agent's tool calls and refusals. |
 | 1.0.7 | 2026-11-05 | The rest of the forge's logic in the forge (§7.4): `listBranches` (replacing the unused `defaultBranch`) for a run's base and the setup screen's branches; `login` (`ForgeLogin`, `ForgeAccount`, `ForgeLoginUse`) for the logins the app shows and who you publish as; `describe().publish` choosing the forge that creates repositories; "pr mode" and "isn't on GitHub" said in the active forges' words. An inactive `merge.forge` is refused at `POST /v1/runs`, `capcomd run` and `capcomd_run_new` (§7.1); every forge method goes through the kernel's wrapper (§7.1); one local host for the gates and the forges. |
+| 1.0.8 | 2026-11-05 | `merge.landing`'s `hold` takes an optional `holdId` (§6.6.15; additive): an approved hold is matched by plugin and `holdId`, falling back to the reason text without one; `heldBy.holdId` on the record and the approval. A plugin-held merge's approval carries the changed files, as a protected target's does. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
