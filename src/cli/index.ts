@@ -693,6 +693,7 @@ async function main(argv: string[]): Promise<number> {
         });
         if (json) out(r);
         else console.log(`${r.id}: ${r.state}${r.result?.sha ? ` ${String(r.result.sha).slice(0, 12)}` : ""}${r.result?.reason ? ` ${r.result.reason}` : ""}${r.result?.combined?.text ? `\n  ${r.result.combined.text}` : ""}`);
+        if (!json && r.state === "awaiting_approval" && r.heldBy) console.log((await import("./status-text")).heldMergeText(runId, r.id, r).join("\n"));
         // The merged agent's checkpoint refs are deleted after the merge's record: finish that before this process ends.
         await (await import("../primitives/ops")).settleCleanups();
         return r.state === "merged" ? EXIT.ok : EXIT.run_failed;
@@ -1055,7 +1056,7 @@ async function main(argv: string[]): Promise<number> {
           const m: any = await P.decideMerge(runId, taskId, { approve: !values.deny, by: (values.by as string | undefined) ?? "cli", ...(values.reason ? { reason: String(values.reason) } : {}) });
           if (json) out(m); else console.log(`${taskId}: ${m.state}${m.result?.sha ? ` (${String(m.result.sha).slice(0, 12)})` : ""}${m.result?.reason ? ` ${m.result.reason}` : ""}`);
           // Approved, then held by a plugin (merge.landing): it waits for a second approval, of that plugin's hold.
-          if (!json && m.state === "awaiting_approval" && m.heldBy) console.log(`  held by the ${m.heldBy.plugin} plugin: ${m.heldBy.reason}\n  approve it again to land it: capcomd approve ${runId} ${taskId}`);
+          if (!json && m.state === "awaiting_approval" && m.heldBy) console.log((await import("./status-text")).heldMergeText(runId, taskId, m, { again: true }).join("\n"));
           await P.settleCleanups();
           return m.state === "merged" || (values.deny && m.state === "failed") ? EXIT.ok : EXIT.run_failed;
         }

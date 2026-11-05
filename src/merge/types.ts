@@ -27,11 +27,13 @@ export interface MergeRequest {
   gate?: MergeGate;
 }
 
-/** A plugin's hold on a merge (merge.landing `hold`, §6.6.15): who held it and the reason the approver is shown. */
-export interface PluginHold { plugin: string; reason: string }
+/** A plugin's hold on a merge (merge.landing `hold`, §6.6.15): who held it, the reason the approver is shown, and the
+ *  plugin's own name for the hold (`holdId`) when it gave one. */
+export interface PluginHold { plugin: string; reason: string; holdId?: string }
 
 /** A merge as merge.landing's plugins see it. `approvedHolds`: the holds a person approved this merge after (each the
- *  plugin and the reason they were shown); the same hold again lets it land, any other veto still stops it. `attempt`:
+ *  plugin, the reason they were shown and its holdId); the same hold again (`sameHold`) lets it land, any other veto
+ *  still stops it. `attempt`:
  *  which landing this is (1, then one more per approved hold), for the idempotency key (§6.7). `operator`: `merge
  *  --operator`, whose plugin vetoes are recorded and bypassed (§6.5). */
 export interface MergeGate {
@@ -70,7 +72,15 @@ export type MergeOutcome =
   | { status: "verified"; sha: string; output: string; taskSha?: string; targetSha?: string; how?: string; timings?: MergeTimings }
   | { status: "conflict"; files: string[]; targetSha: string; taskSha: string; timings?: MergeTimings }
   /** `held`: a merge.landing plugin held it for a person's approval; nothing landed and the merge is parked (§6.6.15). */
-  | { status: "failed"; reason: string; output?: string; timings?: MergeTimings; held?: { plugin: string } };
+  | { status: "failed"; reason: string; output?: string; timings?: MergeTimings; held?: { plugin: string; holdId?: string } };
+
+/** Whether a hold a plugin answers now is one a person already approved (§6.6.15): the same plugin, and the same
+ *  `holdId` when the plugin names its holds, else the same reason text. A named hold never matches an unnamed one. */
+export function sameHold(approved: PluginHold, now: { plugin: string; text: string; holdId?: string }): boolean {
+  if (approved.plugin !== now.plugin) return false;
+  if (approved.holdId !== undefined || now.holdId !== undefined) return approved.holdId === now.holdId;
+  return approved.reason === now.text;
+}
 
 export class MergeRetryableError extends Error {
   constructor(message: string) { super(message); this.name = "MergeRetryableError"; }
