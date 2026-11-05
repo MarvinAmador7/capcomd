@@ -198,6 +198,15 @@ describe("the user's own login is the forge's (§7.4 login)", () => {
   });
 });
 
+describe("a goal branch's pull request names the forge it is on", () => {
+  test("its description says where to merge it: the forge's label, GitHub when none is given", async () => {
+    const { pullRequestBody } = await import("../../src/primitives/goal");
+    const o = { runId: "run-f", branch: "capcomd/x", summary: null, landed: [], notLanded: [] };
+    expect(pullRequestBody({ ...o, forge: "Fake forge" }).endsWith("capcomd never merges this pull request: review and merge it on Fake forge.")).toBe(true);
+    expect(pullRequestBody(o).endsWith("review and merge it on GitHub.")).toBe(true);
+  });
+});
+
 describe("every forge call goes through the kernel's wrapper (§7.1)", () => {
   test("a forge that ignores its SeamCall still answers timeout at the deadline", async () => {
     const forge = (await forgeFor({ remote: "/x", forge: "fake" }))!;

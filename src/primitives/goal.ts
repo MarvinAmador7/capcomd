@@ -227,7 +227,8 @@ const workLabel = (w: { title?: string | null; task: string }) => w.title || w.t
 const carriesOn = (w: { continues?: string[] }) => w.continues?.length ? `, carries on ${w.continues.join(", ")}'s work` : "";
 
 /** The pull request's body: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. */
-export function pullRequestBody(o: { runId: string; branch: string; summary: string | null; landed: LandedWork[]; notLanded: NotLandedWork[]; stopped?: string | null }): string {
+/** `forge`: the label of the forge the pull request is opened on (its `describe().label`), where the person merges it. */
+export function pullRequestBody(o: { runId: string; branch: string; summary: string | null; landed: LandedWork[]; notLanded: NotLandedWork[]; stopped?: string | null; forge?: string }): string {
   const lines: string[] = [];
   // A stopped run says so first: the person opened it knowing the planner didn't finish.
   const total = o.landed.length + o.notLanded.length;
@@ -245,7 +246,7 @@ export function pullRequestBody(o: { runId: string; branch: string; summary: str
     lines.push("", "## Not landed", "");
     for (const n of o.notLanded) lines.push(`- ${workLabel(n)} (${n.agentId}${carriesOn(n)}): ${n.reason.replace(/_/g, " ")}${n.detail ? `: ${firstLine(n.detail, 300)}` : ""}`);
   }
-  lines.push("", "---", `Opened by capcomd from run ${o.runId}. capcomd never merges this pull request: review and merge it on GitHub.`);
+  lines.push("", "---", `Opened by capcomd from run ${o.runId}. capcomd never merges this pull request: review and merge it on ${o.forge ?? "GitHub"}.`);
   // GitHub caps a body at 65536 characters.
   return lines.join("\n").slice(0, 60_000);
 }
@@ -297,7 +298,7 @@ export async function openGoalPullRequest(runId: string, o: { by: string; stoppe
   const goal = (meta.goal as string | null) ?? (meta.label as string | null) ?? g.branch;
   const title = firstLine(goal, 120) || g.branch;
   const stopped = !ask ? null : planner?.status === "failed" ? "the planner failed" : planner?.status === "cancelled" ? "the planner was cancelled" : "the run ended first";
-  const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : g.ready?.summary ?? null, landed, notLanded, stopped });
+  const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : g.ready?.summary ?? null, landed, notLanded, stopped, forge: label });
   const pr = await call((c) => forge.openPullRequest({ ...head, title, body }, c)).catch((e) => { throw noLogin(e) ?? new RelayError("conflict", `${label} refused the pull request: ${(e as Error).message}`, `Check the branch on ${label} and your access to the repository.`, { code: "github" }); });
   return record(view(pr, true));
 }
@@ -307,8 +308,13 @@ export async function keepGoalBranch(runId: string, o: { by: string }) {
   await assertEngine();
   const { s, g } = await scopeOf(runId);
   assertDecidable((await s.listAgents({})) as ScopeAgent[], g);
-  const r = (await s.goalDecision({ choice: "keep", by: o.by }).catch((e: any) => {
-    if (e?.code === "conflict") throw new RelayError("conflict", String(e.message), "The pull request is open on GitHub: close it there if you don't want it.", { code: "pr_open" });
+  const r = (await s.goalDecision({ choice: "keep", by: o.by }).catch(async (e: any) => {
+    if (e?.code === "conflict") {
+      // Where it is open: the run's forge's words (docs/spec/plugin-api.md §7.4).
+      const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
+      const label = cfg ? (await (await import("../plugins/forges")).forgeFor(cfg).catch(() => null))?.describe().label : null;
+      throw new RelayError("conflict", String(e.message), `The pull request is open on ${label ?? "GitHub"}: close it there if you don't want it.`, { code: "pr_open" });
+    }
     throw e;
   })) as { changed: boolean; decision: GoalDecision };
   return { runId, branch: g.branch, base: g.base, kept: true, changed: r.changed };
