@@ -3,7 +3,7 @@
 // turn (its CLI's result) or of its run end it, with the files named, for every provider (here Claude Code; codex in
 // codex.test.ts). Nothing it wrote is committed or pushed, not even as a checkpoint.
 import { beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { bareRepo } from "../merge/gitfixture";
@@ -59,6 +59,24 @@ test("a local commit counts too; an orchestrate agent that wrote nothing ends as
   const ok = await runClaudeCode(n.provider, n.id, n.task, n.cfg, { apiKey: KEY });
   expect(ok).toMatchObject({ sha: "", stopReason: "success" });
   expect(ok.orchestrateWrites).toBeUndefined();
+}, 60_000);
+
+test("reading a commit no remote branch has (a helper's checkpoint, fetched and checked out detached) isn't a commit of its own", async () => {
+  const p = await setup("[nochange][peek:refs/capcomd/checkpoints/agt-w1] route the work");
+  // A helper's checkpoint: a commit on the repository, but under no branch.
+  writeFileSync(join(p.r.root, "seed", "wip.txt"), "work in progress\n");
+  await p.r.seed.ok(["add", "wip.txt"]);
+  await p.r.seed.ok(["commit", "-q", "-m", "checkpoint"]);
+  await p.r.seed.ok(["push", "-q", "origin", "HEAD:refs/capcomd/checkpoints/agt-w1"]);
+  const res = await runClaudeCode(p.provider, p.id, p.task, p.cfg, { apiKey: KEY });
+  expect(res.orchestrateWrites).toBeUndefined();
+  expect(res).toMatchObject({ sha: "", stopReason: "success" });
+
+  // A commit made on top of it is its own (the checkpoint under it isn't).
+  const q = await setup("[peek:refs/capcomd/checkpoints/agt-w1][commit] route the work");
+  await p.r.seed.ok(["push", "-q", q.r.bare, "HEAD:refs/capcomd/checkpoints/agt-w1"]);
+  const wrote = await runClaudeCode(q.provider, q.id, q.task, q.cfg, { apiKey: KEY });
+  expect(wrote.orchestrateWrites).toMatchObject({ files: [], total: 0, commits: 1 });
 }, 60_000);
 
 test("what it wrote, in words", () => {

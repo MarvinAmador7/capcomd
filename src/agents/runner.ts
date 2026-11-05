@@ -713,8 +713,21 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     const orchestrateChanges = async (at: OrchestrateWrites["at"]): Promise<OrchestrateWrites | null> => {
       const st = await git(["status", "--porcelain", "--untracked-files=all"], repo).catch(() => null);
       const files = st?.code === 0 ? st.stdout.split("\n").filter((l) => l.trim()).map((l) => l.slice(3).replace(/^"(.*)"$/, "$1")) : [];
-      const rl = await git(["rev-list", "--count", "HEAD", "--not", "--remotes"], repo).catch(() => null);
-      const commits = rl?.code === 0 ? Number(rl.stdout.trim()) || 0 : 0;
+      const rl = await git(["rev-list", "HEAD", "--not", "--remotes"], repo).catch(() => null);
+      const ahead = rl?.code === 0 ? rl.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+      let commits = ahead.length;
+      if (commits) {
+        // Only commits made here count, not one it checked out to read (a helper's checkpoint it fetched, a branch pruned
+        // since): the HEAD reflog shows each commit made here (commit, merge, reset, …) and one that came by a checkout
+        // alone as `checkout:`. A HEAD the reflog doesn't explain (none kept, or written by hand) counts as before.
+        const lg = await git(["reflog", "show", "--format=%H%x09%gs", "HEAD"], repo).catch(() => null);
+        const entries = lg?.code === 0 ? lg.stdout.split("\n").filter((l) => l.includes("\t")).map((l) => [l.slice(0, l.indexOf("\t")), l.slice(l.indexOf("\t") + 1)] as const) : [];
+        const head = (await git(["rev-parse", "HEAD"], repo).catch(() => null))?.stdout.trim();
+        if (head && entries[0]?.[0] === head) {
+          const made = new Set(entries.filter(([, s]) => !s.startsWith("checkout: ")).map(([h]) => h));
+          commits = ahead.filter((h) => made.has(h)).length;
+        }
+      }
       return files.length || commits ? { files: files.slice(0, 50).map((f) => r.text(f).slice(0, 300)), total: files.length, commits, at } : null;
     };
     const startedAt = now();

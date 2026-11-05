@@ -20,6 +20,7 @@
 #           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
 #   [linger] after its result (its turn ended), keep running ~6s before it exits, as a CLI still open for a next turn
 #   [commit] commit its edit locally (git commit), as an agent that commits its own work does
+#   [peek:REF] fetch REF (a ref outside refs/heads, e.g. a helper's checkpoint) and check it out detached, to read it
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
 # result it answers further messages until stdin closes, as claude does.
 prompt=""; stream=0; args=("$@")
@@ -144,6 +145,10 @@ result="fixed sum"
 if [[ "$prompt" == *"[review-check]"* ]]; then
   if sh ./check.sh >/dev/null 2>&1; then result='{\"passed\":true,\"reasons\":[\"check.sh passes\"]}'; else result='{\"passed\":false,\"reasons\":[\"check.sh fails\"]}'; fi
 fi
+case "$prompt" in *"[peek:"*)
+  ref=$(printf '%s' "$prompt" | sed -n 's/.*\[peek:\([^]]*\)\].*/\1/p')
+  git fetch -q origin "$ref" >/dev/null 2>&1 && git checkout -q --detach FETCH_HEAD >/dev/null 2>&1;;
+esac
 case "$prompt" in *"[commit]"*) git add -A >/dev/null 2>&1 && git -c user.name=fake -c user.email=fake@x commit -qm "fake commit" >/dev/null 2>&1;; esac
 emit "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":3,\"total_cost_usd\":0.123,\"result\":\"$result\"}"
 case "$prompt" in *"[hold:"*) echo finished >> ../hold.log;; esac
