@@ -1,6 +1,7 @@
 // The gates (docs/spec/plugin-api.md §17.2 step 5): a judge's review report (§6.6.13) and the operator's ask-everyone
 // fire (§6.5) in the registry, the built-in reviewer gate's manifest and its answer with no reviewer, and the gates a
-// process that isn't the daemon starts for its verifies (§6.1). The kernel's side end to end: tests/scenarios/gates.test.ts.
+// process that isn't the daemon starts for its verifies (§6.1), and what it waits for before it exits. The kernel's side
+// end to end: tests/scenarios/gates.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import type { HostEvent } from "../../packages/plugin/src/host/registry";
 import type { PluginContext, PluginModule } from "../../packages/plugin/src/context";
 import { samplePayload } from "../../packages/plugin/src/testkit";
 import { BUILTINS } from "../../src/plugins/builtins";
-import { gates, hooks, useHooks } from "../../src/plugins/hooks";
+import { gates, hooks, inBackground, settled, useHooks } from "../../src/plugins/hooks";
 import { VERSION } from "../../src/utils/self";
 
 const OPERATOR = { kind: "operator" as const, clientId: null };
@@ -104,6 +105,21 @@ describe("the reviewer gate (§15.3)", () => {
     expect(starting).toMatchObject({ decision: "allow", patches: [] });
   });
 
+  test("it fails closed with its own deny, never by failing: its breaker never trips (a suspended gate denies every verify)", async () => {
+    const b = BUILTINS.find((x) => (x.manifest as { name: string }).name === "gate-reviewer")!;
+    const { host, events } = await hostWith({ source: "builtin", manifest: b.manifest, module: b.module });
+    // A reviewer, and a call it cannot judge (here: no tested tree): a deny with the error as its review, every time.
+    const sample = samplePayload("verify.judging");
+    const payload = { ...sample, reviewer: "reviewer", verification: { ...sample.verification, tested: undefined } } as never;
+    for (let i = 0; i < 4; i++) {
+      const out = await host.hooks.fire("verify.judging", "veto", payload, at("vfy-1"));
+      expect(out).toMatchObject({ decision: "deny", plugin: "gate-reviewer", failure: null });
+      expect(out.reviews?.[0]?.review).toMatchObject({ profile: "reviewer", agentId: null, passed: false, error: expect.stringContaining("review failed") });
+    }
+    expect(events.filter((e) => e.type === "plugin.hook_failed" || e.type === "plugin.suspended")).toEqual([]);
+    expect(host.hooks.suspended("gate-reviewer")).toBe(false);
+  });
+
   test("outside the daemon a verify starts the built-in gates first (§6.1); the daemon's own wait for its host", async () => {
     expect(hooks.listening("verify.judging")).toBe(false);
     await gates();
@@ -113,5 +129,17 @@ describe("the reviewer gate (§15.3)", () => {
     for (const h of ["run.changed", "agent.spawning", "merge.landing", "verify.changed"] as const) expect(hooks.listening(h)).toBe(false);
     useHooks(null);
     expect(hooks.listening("verify.judging")).toBe(false);
+  });
+
+  test("what the gates leave going is waited for before a CLI exits (settled), bounded", async () => {
+    const done: string[] = [];
+    inBackground(Bun.sleep(30).then(() => { done.push("stop the reviewer"); inBackground(Bun.sleep(30).then(() => done.push("its follow-up"))); }));
+    inBackground(Promise.reject(new Error("a write that failed")));
+    await settled();
+    expect(done).toEqual(["stop the reviewer", "its follow-up"]);
+    inBackground(new Promise(() => {}));   // never settles
+    const t = Date.now();
+    await settled(100);
+    expect(Date.now() - t).toBeLessThan(1000);
   });
 });

@@ -31,7 +31,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 export { startDriver };
 
@@ -1487,10 +1487,10 @@ function reviewOfJudges(profile: string | undefined, judges: { passed: boolean; 
 /** Review-mode agents a judge started for this verification (contract.review.vfyId) that are still running when it
  *  ends (its checks failed, the work had landed, another judge denied it): stopped, best effort. */
 function stopReviewers(runId: string, vfyId: string, why: string) {
-  void (async () => {
+  inBackground((async () => {
     const all: ScopeAgent[] = await client().scope.getOrCreate([runId]).listAgents({});
     for (const a of all) if ((a.contract as any)?.review?.vfyId === vfyId && !TERMINAL_AGENT.has(a.status)) await cancelAgents(runId, a.agentId, why).catch(() => {});
-  })().catch(() => {});
+  })());
 }
 
 async function verifyOnce(o: VerifyOpts, vfyId: string) {

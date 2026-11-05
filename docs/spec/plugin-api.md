@@ -1158,7 +1158,9 @@ the reviewer alongside the checks in the background (`CAPCOMD_REVIEW_PARALLEL=0`
 takes up or replaces when it read another tree; the reviewer spawned under the verify's caller (who pays for it) through
 the kernel's own agent primitives, not `ctx.agents` (a plugin's spawn has no parent or review mode); the answer carries
 the `review` report (§6.6.13) instead of a `verdict` event (the verdict is on the reviewer's result and in the
-verification's record). Its `verify.judging` deadline is the maximum, 60 min.
+verification's record). Its `verify.judging` deadline is the maximum, 60 min. It fails closed with its own `deny` (the
+error in its `review`), never by failing the call: three failed calls would suspend it, and a suspended gate denies every
+verify (§6.5). A CLI that ran a verify waits (bounded) for the reviewer it started or stops before it exits.
 
 ### 15.4 A Slack notifier (`slack-notifier`, out of process)
 

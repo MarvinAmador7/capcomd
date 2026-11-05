@@ -83,6 +83,23 @@ export async function recordGateEvent(runId: string, e: { type: "plugin.gate_den
   await client().scope.getOrCreate([runId]).recordGateEvent({ type: e.type === "plugin.gate_denied" ? "PLUGIN_GATE_DENIED" : "PLUGIN_GATE_BYPASSED", data: e.data, ...(e.key ? { key: e.key } : {}) });
 }
 
+/** What a gate left going after its answer: a reviewer it started or stops, a gate event it writes. */
+const pending = new Set<Promise<void>>();
+export function inBackground(p: Promise<unknown>): void {
+  const q: Promise<void> = p.then(() => {}, () => {}).finally(() => { pending.delete(q); });
+  pending.add(q);
+}
+/** A process that exits right after its command (the CLI) waits for that work first, bounded: else a reviewer started
+ *  alongside checks that failed fast would be left running, and a denial would go unrecorded. */
+export async function settled(maxMs = 30_000): Promise<void> {
+  const until = Date.now() + maxMs;
+  while (pending.size && Date.now() < until) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.all([...pending]), new Promise<void>((r) => { timer = setTimeout(r, until - Date.now()); })]);
+    clearTimeout(timer);
+  }
+}
+
 export const iso = (ms: number = Date.now()): Timestamp => new Date(ms).toISOString();
 /** Agent-written text as a hook payload carries it (§11.5). */
 export const untrusted = (text: string, by: string): Untrusted => ({ text, untrusted: true, by });

@@ -10,10 +10,11 @@
 // No reviewer → allow (the checks decide alone). No verdict → deny (fail closed). A reviewer the verify doesn't need in
 // the end (the checks failed, the work had landed) is stopped by the kernel when the verify finishes.
 import { definePlugin } from "../../../packages/plugin/src/context";
-import type { JudgeResult, ReviewReport } from "../../../packages/plugin/src/hooks";
+import type { HookCall, JudgeResult, ReviewReport } from "../../../packages/plugin/src/hooks";
 import type { Principal } from "../../../packages/plugin/src/shapes";
 import type { Budget } from "../../primitives/policy";
 import { env } from "../../utils/env";
+import { inBackground } from "../hooks";
 import { reviewBrief } from "./review";
 
 const kernel = () => import("../../primitives/ops");
@@ -90,7 +91,7 @@ async function finishReview(o: ReviewTarget, started: Reviewing, waitMs: number)
 
 /** A reviewer that turned out not to be needed (it read another tree): stop it, best effort. */
 function dropReview(runId: string, started: Reviewing | null, why: string) {
-  if (started && !("failed" in started)) void kernel().then((O) => O.cancelAgents(runId, started.agentId, why)).catch(() => {});
+  if (started && !("failed" in started)) inBackground(kernel().then((O) => O.cancelAgents(runId, started.agentId, why)));
 }
 
 /** The key of a reviewer that replaces one that read another tree: the tested commit, and the target when it moved. */
@@ -144,28 +145,40 @@ export const plugin = definePlugin({
             return r;
           }).catch(() => null);
         early.set(v.vfyId, p);
+        inBackground(p);
         if (early.size > EARLY_MAX) early.delete(early.keys().next().value!);
       }
       return { decision: "allow" };
     });
 
     ctx.hooks.on("verify.judging", async (call): Promise<JudgeResult> => {
-      const { verification: v, acceptance, reviewer } = call.payload;
+      const { verification: v, reviewer } = call.payload;
       // No reviewer for this verification: this judge has nothing to say. The checks (and the other judges) decide.
       if (!reviewer) return { decision: "allow" };
-      const first = (await early.get(v.vfyId)) ?? null;
-      early.delete(v.vfyId);
-      const { branch, agentId } = await opOf(v.runId, v.vfyId);
-      const tested = { taskSha: v.tested.commit, targetSha: v.tested.targetSha };
-      const parent = parentOf(call.principal);
-      const of = (key?: string): ReviewTarget => ({ runId: v.runId, vfyId: v.vfyId, profile: reviewer, branch, sha: tested.taskSha, target: v.target, targetSha: tested.targetSha, agentId, acceptance: acceptance ?? undefined, ...(parent ? { parent } : {}), ...(key ? { key } : {}) });
-      // The reviewer must have read the tree the checks tested; one that read another (the branch or the target moved
-      // between the reviewer's start and the checks' integration) is replaced by one for the tested tree.
-      const O = await kernel();
-      let started = first && !("failed" in first) && !O.reviewFits(first, tested) ? (dropReview(v.runId, first, first.sha !== tested.taskSha ? "replaced: it read another commit than the one the checks tested" : "replaced: the target moved before the checks put the change on it"), null) : first;
-      started ??= await startReview(of(first ? replacementKey(v.vfyId, first, tested) : undefined));
-      const review = await finishReview(of(), started, Math.max(1000, Date.parse(call.deadline) - Date.now() - 5_000));
-      return answer(review, "failed" in started ? { sha: tested.taskSha, targetSha: tested.targetSha } : started, "failed" in started ? null : started.startedAt);
+      // Fails closed with its own answer, never by throwing: three failed calls in a row would suspend this plugin, and a
+      // suspended gate denies every verify, with a reviewer or not (§6.5).
+      try { return await judge(call); } catch (e) {
+        return answer({ profile: reviewer, agentId: null, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` }, { sha: v.tested?.commit || "unknown", ...(v.tested?.targetSha ? { targetSha: v.tested.targetSha } : {}) }, null);
+      }
     });
   },
 });
+
+/** verify.judging with a reviewer: take up the early reviewer, or start one for the tested tree, and await its verdict. */
+async function judge(call: HookCall<"verify.judging">): Promise<JudgeResult> {
+  const { verification: v, acceptance } = call.payload;
+  const reviewer = call.payload.reviewer!;
+  const tested = { taskSha: v.tested.commit, targetSha: v.tested.targetSha };
+  const first = (await early.get(v.vfyId)) ?? null;
+  early.delete(v.vfyId);
+  const { branch, agentId } = await opOf(v.runId, v.vfyId);
+  const parent = parentOf(call.principal);
+  const of = (key?: string): ReviewTarget => ({ runId: v.runId, vfyId: v.vfyId, profile: reviewer, branch, sha: tested.taskSha, target: v.target, targetSha: tested.targetSha, agentId, acceptance: acceptance ?? undefined, ...(parent ? { parent } : {}), ...(key ? { key } : {}) });
+  // The reviewer must have read the tree the checks tested; one that read another (the branch or the target moved
+  // between the reviewer's start and the checks' integration) is replaced by one for the tested tree.
+  const O = await kernel();
+  let started = first && !("failed" in first) && !O.reviewFits(first, tested) ? (dropReview(v.runId, first, first.sha !== tested.taskSha ? "replaced: it read another commit than the one the checks tested" : "replaced: the target moved before the checks put the change on it"), null) : first;
+  started ??= await startReview(of(first ? replacementKey(v.vfyId, first, tested) : undefined));
+  const review = await finishReview(of(), started, Math.max(1000, Date.parse(call.deadline) - Date.now() - 5_000));
+  return answer(review, "failed" in started ? { sha: tested.taskSha, targetSha: tested.targetSha } : started, "failed" in started ? null : started.startedAt);
+}

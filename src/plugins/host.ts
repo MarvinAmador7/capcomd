@@ -13,7 +13,7 @@ import { Redactor } from "../agents/redact";
 import { stateDir } from "../utils/home";
 import { VERSION } from "../utils/self";
 import { BUILTINS } from "./builtins";
-import { recordGateEvent } from "./hooks";
+import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
@@ -72,7 +72,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
     emit: (e) => {
       // A gate's audit goes on the run's stream (§13.1), from whichever process ran the gate.
       if (e.type === "plugin.gate_denied" && e.stream !== "daemon") {
-        void recordGateEvent(e.stream, { type: e.type, data: e.data }).catch((err) => console.error(`[plugins] ${e.stream}: recording ${e.type}: ${(err as Error)?.message ?? err}`));
+        inBackground(recordGateEvent(e.stream, { type: e.type, data: e.data }).catch((err) => console.error(`[plugins] ${e.stream}: recording ${e.type}: ${(err as Error)?.message ?? err}`)));
         return;
       }
       try { record(e); } catch { /* not a daemon-stream event */ }
