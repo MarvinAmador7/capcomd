@@ -1,7 +1,7 @@
 // The test kit (spec §14.5): `@capcomd/plugin/testkit`. The fake context is the host's own context (host/context.ts)
 // over an in-memory hook registry, so a plugin is held to the same manifest, scope and dispatch rules it meets in the
-// daemon. `bootWith` and the seam conformance suites need a daemon and the kernel's seams; they land with spec §17.2
-// steps 2-6 and refuse with `unsupported` until then.
+// daemon. `bootWith` and the agent and forge conformance suites need a daemon and the kernel's seams; they land with
+// spec §17.2 steps 2-6 and refuse with `unsupported` until then. The sandbox suite is ./conformance.ts (step 3).
 import { PluginError } from "./errors";
 import { HOOKS, type HookCall, type HookName, type HookPayload, type HookResult } from "./hooks";
 import { readManifest } from "./load";
@@ -12,6 +12,7 @@ import type { Agent, Approval, Job, Merge, PinnedSpec, Principal, Run, Trigger, 
 import { ContributionStore, createContext, type ContextOptions, type PluginRuntime } from "./host/context";
 import { configDefaults } from "./host/host";
 import { HookRegistry, type HostEvent } from "./host/registry";
+import { sandboxCases, type SandboxConformanceOptions } from "./conformance";
 
 /** A recorded registration, so a test can assert that disposing the plugin removed every one (§14.1). */
 export type Registration =
@@ -30,6 +31,8 @@ export interface FakeContext<C = Record<string, unknown>> {
   logs(): Array<{ level: string; message: string; fields: Record<string, unknown> }>;
   /** Dispose the plugin and return what was still registered afterwards (must be empty). */
   dispose(): Promise<Registration[]>;
+  /** The seam implementation the plugin registered for `kind`, if any (what the conformance suites run against). */
+  seam<K extends "sandbox" | "agent" | "forge">(kind: K): (K extends "sandbox" ? SandboxProvider : K extends "agent" ? AgentProvider : Forge) | undefined;
 }
 
 export interface TestKit {
@@ -50,7 +53,7 @@ export interface TestKit {
   hookContract<C>(manifest: PluginManifest, module: PluginModule<C>, config?: C): Promise<void>;
   /** §14.2: the seam conformance suites. */
   conformance: {
-    sandbox(make: () => SandboxProvider, opts?: { skipSnapshots?: boolean }): void;
+    sandbox(make: () => SandboxProvider, opts?: SandboxConformanceOptions): void;
     agent(make: () => AgentProvider, fixtures: { streams: string[] }): void;
     forge(make: () => Forge, fixtureRepo: string): void;
   };
@@ -164,6 +167,9 @@ class Fake<C> implements FakeContext<C> {
   /** The host's own events about this plugin (plugin.hook_failed, plugin.suspended, …). */
   hostEvents() { return [...this.host]; }
   async dispose() { return (await this.runtime.dispose()).remaining; }
+  seam<K extends "sandbox" | "agent" | "forge">(kind: K) {
+    return this.store.list("seam").find((e) => e.value.seam === kind)?.value.impl as (K extends "sandbox" ? SandboxProvider : K extends "agent" ? AgentProvider : Forge) | undefined;
+  }
 }
 
 const fail = (message: string): never => { throw new Error(message); };
@@ -233,7 +239,15 @@ export const testkit: TestKit = {
     } finally { await fake.dispose(); }
   },
   conformance: {
-    sandbox() { throw new PluginError("unsupported", "the sandbox conformance suite lands with sandbox providers as plugins (spec §17.2 step 3)"); },
+    sandbox(make, opts = {}) {
+      // Registered as bun tests (bun:test is loaded only when a suite is): one test per case, one shared run.
+      const { afterAll, describe, test } = require("bun:test") as typeof import("bun:test");
+      describe(`sandbox seam conformance (§14.2)${opts.name ? `: ${opts.name}` : ""}`, () => {
+        const { cases, cleanup } = sandboxCases(make(), opts);
+        afterAll(cleanup);
+        for (const c of cases) (c.skip ? test.skip : test)(c.name, c.run, (opts.readyMs ?? 120_000) + 60_000);
+      });
+    },
     agent() { throw new PluginError("unsupported", "the agent conformance suite lands with agent providers as plugins (spec §17.2 step 4)"); },
     forge() { throw new PluginError("unsupported", "the forge conformance suite lands with forges as plugins (spec §17.2 step 6)"); },
   },

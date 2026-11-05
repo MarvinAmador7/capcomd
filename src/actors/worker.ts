@@ -5,7 +5,8 @@ import { redactShapes } from "../agents/redact";
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor, UserError } from "rivetkit";
-import { isBoxdAuthError, isSandboxUnreachable, isTransientSandboxError, SandboxError } from "../providers/boxd-errors";
+import { isSandboxUnreachable, isTransientSandboxError, SandboxError } from "../providers/boxd-errors";
+import { sandboxAuthError } from "../plugins/sandboxes";
 import { backoffMs, minutes, withOutageListener, type Outage } from "../providers/resilient";
 import { db } from "rivetkit/db";
 import { workerMachine, type WorkerContext } from "../machines/worker";
@@ -336,7 +337,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     ...setup.snapshot,
     labels: { workerId, taskId, epoch: String(epoch) },
   }).catch((error) => {
-    if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
+    if (sandboxAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
     throw error;
   });
   await provider.waitReady(vmId, 90_000);
@@ -651,7 +652,7 @@ export const workerActor = actor({
         }, { name: "vmFailed" });
 
         // Cross the actor boundary with a readable, typed error (plain errors are masked as "internal error").
-        if (isBoxdAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
+        if (sandboxAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
         throw sandboxUserError(error);
       }
       });

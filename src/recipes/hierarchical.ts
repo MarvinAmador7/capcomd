@@ -5,7 +5,7 @@
 // task ids, so running it again with the same runId resumes where a crash left off.
 import { client, assertEngine, isNoopGoal, reapSandboxes, teardownRun, type RunOptions, type RunResult } from "../core/relay";
 import { withSpan } from "../utils/tracing-simple";
-import { isBoxdAuthError, BOXD_AUTH_HINT } from "../providers/boxd-errors";
+import { sandboxAuthError } from "../plugins/sandboxes";
 import { preflightNeeded, runPreflight } from "../core/preflight";
 import { RelayError } from "../core/errors";
 import { decodeAgentRef, parseAgentDirective } from "../agents/profiles";
@@ -34,8 +34,10 @@ export async function runHierarchicalRecipe(opts: RunOptions & { budgetUsd?: num
     // Same span shape as the legacy path (relay.run → cli.run → actor/transition/model/sandbox/git).
     result = await withSpan("cli.run", { "relay.run_id": runId, "relay.goal": opts.goal, "relay.recipe": "hierarchical" }, () => recipeInner({ ...opts, runId }));
   } catch (error) {
-    if (!isBoxdAuthError(error)) throw error;
-    const reason = `boxd rejected BOXD_API_KEY (invalid or expired). ${BOXD_AUTH_HINT}`;
+    // A rejected sandbox credential (the sandbox plugin's classifyError says `auth`) fails the run as config.
+    const auth = sandboxAuthError(error);
+    if (!auth) throw error;
+    const reason = auth.hint;
     await client().run.getOrCreate([runId]).configFail({ runId, reason });
     opts.emit("run.failed", { state: "failed", reason, kind: "config", retryable: false }, `\n✗ Run failed (config): ${reason}`);
     result = { runId, state: "failed", ok: false, feedback: reason };
@@ -148,7 +150,7 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
         emit("task.paused", { taskId: t.id, agentId: p.agentId, until }, `  ⏸ ${t.id}: ${p.agentId} is paused by its provider's usage limit${until ? ` until ${until}` : ""}; waiting (capcomd resume ${runId} to run it now)`);
       } });
       const ag = done.agents[0];
-      if (ag.status === "failed" && isBoxdAuthError(String(ag.result?.error ?? ""))) throw new Error(String(ag.result.error)); // non-retryable: fail the run as config
+      if (ag.status === "failed" && sandboxAuthError(String(ag.result?.error ?? ""))) throw new Error(String(ag.result.error)); // non-retryable: fail the run as config
       if (lt.state === "running") { await ledger.handoffTask({ taskId: t.id, epoch, branch: ag.result?.branch ?? "", commitSha: ag.result?.commit ?? "" }); lt = await ledger.getTask({ taskId: t.id }); }
       if (lt.state === "handed_off") { await ledger.startVerify({ taskId: t.id }); lt = await ledger.getTask({ taskId: t.id }); }
       if (ag.status !== "done") {

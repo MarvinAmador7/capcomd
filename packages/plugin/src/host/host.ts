@@ -60,6 +60,8 @@ export interface HostOptions {
   /** The kernel's primitive implementations for a plugin (absent: `unsupported`). */
   services?(manifest: PluginManifest): ContextOptions<unknown>["services"];
   sinks?: HostSinks;
+  /** A plugin's own secret (§10.3): the value its `x-secret` property `key` references, for that plugin only. */
+  secret?(manifest: PluginManifest, key: string): Promise<string>;
   /** An operator's `allow-version` exemption (§4.4). */
   exempt?(name: string, version: string): boolean;
   /** Called after every state change, with the new listing. */
@@ -272,6 +274,7 @@ export class PluginHost {
     const runtime = createContext({
       manifest: m, runtime: m.entry.runtime, root: r.dir ?? "", dataDir: this.o.dataDir(r.name),
       hooks: this.hooks, store: this.contributions, config, ...(this.o.services ? { services: this.o.services(m) } : {}), ...this.o.sinks,
+      ...(this.o.secret ? { secret: (key: string) => this.o.secret!(m, key) } : {}),
     });
     r.runtime = runtime;
     this.hooks.attach(r.name, runtime.ctx.signal);

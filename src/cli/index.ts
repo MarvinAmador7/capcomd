@@ -129,6 +129,10 @@ Usage:
   capcomd sandbox shell --sandbox docker|boxd --machine <id>   can change its work), or in a machine capcomd left behind
   capcomd plugins list [--json]          The plugins the running daemon has (or would load, when none runs): each
                                        one's state, why it failed, its hooks and seams (GET /v1/plugins)
+  capcomd plugins validate [<dir>|<name>] [--conformance] [--json]
+                                       Check a plugin's manifest (a directory, or a built-in by name; all
+                                       built-ins with neither); --conformance also loads it and runs its
+                                       seam's conformance suite against the real backend
   capcomd ui                             Launch the web UI
 
 Options:
@@ -257,6 +261,7 @@ async function main(argv: string[]): Promise<number> {
         base: { type: "string" },
         "goal-branch": { type: "string" },
         "no-goal-branch": { type: "boolean" },
+        conformance: { type: "boolean" },
         ref: { type: "string" },
         checks: { type: "string" },
         check: { type: "string" },
@@ -366,7 +371,7 @@ async function main(argv: string[]): Promise<number> {
       }
       case "plugins": {
         const { pluginsCommand } = await import("./commands/plugins");
-        return await pluginsCommand(positionals, { json });
+        return await pluginsCommand(positionals, { json, conformance: !!values.conformance });
       }
       case "sandbox": {
         if (positionals[1] !== "shell") usage("usage: capcomd sandbox shell <runId> <agentId> | capcomd sandbox shell --sandbox <name> --machine <id>");

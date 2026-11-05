@@ -6,6 +6,7 @@ import { traceMethods } from "./utils/tracing-simple";
 import { sandboxName } from "./providers/registry";
 import { resilientProvider } from "./providers/resilient";
 import { hookedProvider } from "./plugins/sandbox";
+import { keepTidy, sandboxProvider } from "./plugins/sandboxes";
 
 interface Dependencies {
   model: ModelClient;
@@ -64,25 +65,9 @@ export function providerFromEnv(env: Record<string, string | undefined> = proces
   return hookedProvider(resilientProvider(rawProviderFromEnv(env, kind), { name: kind }), kind);
 }
 
+/** The sandbox plugin's provider (src/plugins/sandboxes.ts): the kernel asks for a place by name (§7.1). */
 function rawProviderFromEnv(env: Record<string, string | undefined>, kind: ReturnType<typeof sandboxName>): SandboxProvider {
-  if (kind === "boxd") {
-    const { BoxdProvider } = require("./providers/boxd") as typeof import("./providers/boxd");
-    // Agents push from the VM: give git network execs a short-lived GitHub credential (env of that exec only).
-    // Always on for boxd: the agent kind now comes from per-agent profiles, not CAPCOMD_AGENT, so gating on
-    // agentFromEnv() left profile-driven (spawn/recipe) agents with no credential for private repos.
-    const { githubGitCredentials } = require("./agents/credentials") as typeof import("./agents/credentials");
-    return new BoxdProvider({ gitCredentials: githubGitCredentials() });
-  }
-  if (kind === "docker") {
-    const { DockerProvider } = require("./providers/docker") as typeof import("./providers/docker");
-    const { githubGitCredentials } = require("./agents/credentials") as typeof import("./agents/credentials");
-    return new DockerProvider({ gitCredentials: githubGitCredentials() });
-  }
-  // Test sandbox: exec runs on this host (agent adapter e2e with a fake claude binary).
-  // Test knob: CAPCOMD_FAKE_OUTAGE_FILE holds an injected outage (FakeFault), read at every call.
-  const faultFile = env.CAPCOMD_FAKE_OUTAGE_FILE ? { faultFile: env.CAPCOMD_FAKE_OUTAGE_FILE } : {};
-  if (kind === "fake-host") return new FakeProvider({ hostExec: true, ...faultFile });
-  return new FakeProvider({ ...(env.CAPCOMD_FAKE_ENSURE_ERROR === "auth" ? { failEnsure: "auth" as const } : {}), ...faultFile });
+  return sandboxProvider(kind, env);
 }
 
 export function initDependencies(config?: { model?: ModelClient; provider?: SandboxProvider }) {
@@ -113,12 +98,9 @@ export function providerNamed(name: string | null | undefined): SandboxProvider 
   let p = bySandbox.get(name);
   if (!p) {
     const raw = providerFromEnv({ ...process.env, CAPCOMD_SANDBOX: name, RELAY_SANDBOX: undefined });
-    // Docker doesn't delete containers by itself (ADR-020): `capcomd serve` sweeps its own sandbox's; this one's too.
-    if (name === "docker" && typeof (raw as any).sweep === "function") {
-      const sweep = () => { (raw as any).sweep().catch(() => {}); };
-      sweep();
-      setInterval(sweep, 5 * 60_000).unref?.();
-    }
+    // A place that doesn't delete idle machines by itself (Docker, ADR-020): `capcomd serve` sweeps its own sandbox's;
+    // this one's too.
+    keepTidy(name);
     p = tracedProvider(raw, raw.constructor?.name === "FakeProvider" ? "fake" : raw.constructor?.name ?? "provider");
     bySandbox.set(name, p);
   }

@@ -534,7 +534,7 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
     expect(((await (await app.request("/v1/health")).json()) as { capabilities: string[] }).capabilities).toContain("plugins");
   });
 
-  test("capcomd plugins list: the running daemon's listing, else what one would load (none ship yet)", async () => {
+  test("capcomd plugins list: the running daemon's listing, else what one would load (the built-ins)", async () => {
     const home = mkdtempSync(join(tmpdir(), "capcomd-plugins-cli-"));
     const cli = (...args: string[]) => {
       const p = Bun.spawnSync([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", ...args], { env: { ...process.env, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, stdout: "pipe", stderr: "pipe" });
@@ -542,8 +542,11 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
     };
     const none = cli("list", "--json");
     expect(none.code).toBe(0);
-    expect(JSON.parse(none.out)).toEqual({ schema: "relay.v1", ok: true, plugins: [], daemon: null });
-    expect(cli("list").out).toContain("No plugins (no daemon is running");
+    // No daemon: the built-ins, resolved, never run (§17.2 step 3 ships the sandbox providers; later steps add more).
+    const would = JSON.parse(none.out) as { schema: string; ok: boolean; daemon: null; plugins: Array<{ name: string; state: string }> };
+    expect(would).toMatchObject({ schema: "relay.v1", ok: true, daemon: null });
+    expect(would.plugins.filter((p) => p.name.startsWith("sandbox-")).map((p) => [p.name, p.state])).toEqual([["sandbox-docker", "resolved"], ["sandbox-boxd", "resolved"], ["sandbox-fake", "resolved"], ["sandbox-fake-host", "resolved"]]);
+    expect(cli("list").out).toMatch(/^Plugins \(no daemon is running; this is what one would load\):\n(.|\n)*sandbox-boxd\s+\S+\s+builtin\s+resolved\s+sandbox boxd/);
     // A daemon's listing (this process stands in for the daemon: its pid is alive).
     const { host } = makeHost();
     await host.start([builtin(manifest("shown"), (ctx) => { ctx.hooks.on("run.changed", () => {}); })]);
