@@ -1,5 +1,5 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { bareRepo } from "./gitfixture";
+import { bareRepo, withoutEngine } from "./gitfixture";
 import { fakeGitHub } from "./fake-github";
 import { mergeTask, setGitHubApi } from "../../src/merge/service";
 import { HttpGitHub } from "../../src/merge/github";
@@ -13,6 +13,7 @@ const servers: Array<{ stop(): void }> = [];
 async function until(what: string, ok: () => boolean, timeoutMs = 15_000) {
   for (const deadline = Date.now() + timeoutMs; !ok(); await Bun.sleep(50)) if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
 }
+withoutEngine();
 afterEach(() => { setGitHubApi(null); while (servers.length) servers.pop()!.stop(); });
 
 async function setup(opts: Parameters<typeof fakeGitHub>[1] = {}, strategy: "squash" | "rebase" | "merge" = "squash") {

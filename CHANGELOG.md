@@ -145,6 +145,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: `capcomd service install` from a Homebrew install runs capcomd through Homebrew's stable `opt` path, so the
   service keeps working after `brew upgrade` (before, it pointed at the old version's folder, which Homebrew removes).
   Run `capcomd service install` once more to update an existing service.
+- Fix: a merge or verify whose checks run without a capcomd engine to ask (`capcomd merge` with no daemon running)
+  no longer waits about 3 seconds per check looking up the run's sandbox: with no engine listening, it uses the
+  sandbox capcomd is set up with straight away.
 
 ## 0.9.0 (2026-11-03)
 

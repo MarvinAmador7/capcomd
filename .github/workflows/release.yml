@@ -74,7 +74,7 @@ jobs:
     name: Tests (${{ matrix.os }})
     needs: prepare
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 55
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
@@ -94,14 +94,15 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
-      - name: Unit, CLI, setup and config, state machines, TUI
-        run: |
-          bun run test:fast
-          (cd apps/tui && bun test)
+      - name: Unit, CLI, setup and config, state machines, plugins, packages
+        run: bun run test:fast
 
-      - name: Sub-agent scenario suite
+      - name: The canvas and the TUI
+        run: bun run test:apps
+
+      - name: Scenario suite (scenarios, sub-agents, primitives, agent adapters, merges)
         run: bun run test:scenarios
-        timeout-minutes: 40   # as in ci.yml: ~22 min on macOS, over 25 on ubuntu-latest
+        timeout-minutes: 50   # one runner here (ci.yml shards it): ~27 min on macOS, over 35 on ubuntu-latest
 
   package:
     name: Package

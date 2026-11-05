@@ -117,12 +117,40 @@ docs/           - design documents and ADRs
 
 ```bash
 bun run typecheck
-bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP (~1 min)
-bun run test:scenarios         # sub-agent scenarios, primitives policy (the CI regression suite, six shards in CI)
-bun run test:scenarios:timings # the same, then refresh tests/scenario-timings.json (per-file times that balance the shards)
-bun test tests/agents tests/primitives tests/merge
-(cd apps/tui && bun test)
+bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages/*
+bun run test:apps              # apps/canvas and apps/tui
+bun run test:scenarios         # the regression suite: scenarios, sub-agents, primitives, agent adapters, merges
+bun run test:scenarios:timings # the same, then refresh tests/scenario-timings.json from this machine's times
+bun evals/primitives/run.ts    # deterministic evals (fakes): the primitives' recipes against their latency baseline
+bun evals/recipe-parity/run.ts #   and `capcomd run --recipe` against `--legacy`
 ```
+
+What CI runs, and where (`.github/workflows/`):
+
+| Job | Runs |
+|---|---|
+| `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
+| `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
+| `ci.yml` evals | both evals above |
+| `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
+| `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
+| `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
+
+Every `*.test.ts` in the repository is in one of them. Gated off by default, because they need real accounts or VMs:
+`tests/merge/github-live.test.ts` (`CAPCOMD_GH_LIVE=1`: a throwaway private GitHub repo through `gh`) and
+`tests/agents/egress.live.test.ts` (`CAPCOMD_BOXD_LIVE=1` and `BOXD_API_KEY`: a boxd VM's egress allowlist), and the
+live scripts below. A new test file goes in a directory one of the scripts lists (or the script gets the directory).
+
+Each scenarios shard uploads the per-file times it measured (artifact `scenario-timings-N`);
+`bun scripts/scenario-timings.ts <run id>` merges a CI run's into `tests/scenario-timings.json`, so the shards are
+balanced by the runner's times (a file without one gets an estimate; `--check` lists those).
+
+Both scripts run with `bun test --isolate`: every file gets a fresh global, module registry and environment, and the
+preload (`tests/helpers/isolate-config.ts`) runs again for it, so nothing one file sets leaks into the next. The tests
+isolate themselves without a `CAPCOMD_HOME` (temp dirs, the checkout's `.relay/`, their own ports), as CI runs them; a
+`CAPCOMD_HOME` in the environment that runs them is replaced by a fresh temp dir per file, never shared. Engine-free
+tests that reach the merge checks point `CAPCOMD_ENDPOINT` at a closed port (`withoutEngine()` in
+`tests/merge/gitfixture.ts`), so they never ask a developer's daemon on :6420.
 
 `packages/agent-thread` has no install of its own: its dependencies are the root's (one zod for the daemon's contract
 and the package), and `bun run typecheck` / `test:fast` cover it. Its golden files
@@ -133,8 +161,7 @@ sessions next to them; after an intended change to the thread output, refresh th
 `bun packages/bot-avatar/scripts/golden.ts`; a change to any golden bot means existing agents get a new face.
 
 The engine-backed tests run on macOS and Linux (Linux reads `/proc`; macOS uses `ps`/`lsof`). On a Mac, run long
-suites under `caffeinate -i`: a sleeping machine times tests out and can leave an orphaned `rivet-engine`. Run
-test files one per `bun test` process when in doubt; a few still interfere when they share one.
+suites under `caffeinate -i`: a sleeping machine times tests out and can leave an orphaned `rivet-engine`.
 
 ### Live end-to-end
 
@@ -201,7 +228,7 @@ the changelog, what never to do by hand). By hand, before tagging:
 3. Merge to `main`, let CI pass, then tag that commit: `git tag -a vX.Y.Z -m "capcomd X.Y.Z" <sha> && git push origin vX.Y.Z`.
 
 The tag runs the release workflow: it checks the tag is on `main`, matches `package.json` and has a changelog
-section; runs typecheck, `test:fast`, the TUI tests and `test:scenarios` on Linux and macOS; packs the package and
+section; runs typecheck, `test:fast`, the canvas and TUI tests and `test:scenarios` on Linux and macOS; packs the package and
 installs it with a fresh `HOME` on both (`scripts/release-smoke.sh`: `setup demo`, a run
 with fake agents, `setup check`, the service definition, state only in `~/.capcomd`); then publishes that package
 to npm and the GitHub release with `capcomd-X.Y.Z.tgz`, the four binaries, their `.sha256` files and the changelog

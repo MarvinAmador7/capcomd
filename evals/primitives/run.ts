@@ -60,8 +60,11 @@ await run("best-of-3 + cancel rest", async () => {
 await run("nested supervisor + cancel propagation", async () => {
   const { runId } = await P.runNew({ budget: { usd: 8 }, key: `nest-${tag}` });
   const root = await P.spawnAgent({ runId, profile: "sup", task: "plan", key: "root", budget: { usd: 8 }, start: false });
-  const mid = await P.spawnAgent({ runId, parent: root.agentId, profile: "sup", task: "sub", key: "mid", start: false });
-  const leaf = await P.spawnAgent({ runId, parent: mid.agentId, profile: "coder", task: "leaf", key: "leaf", start: false });
+  // budgetShare caps what a child may ask for (ADR-019 §7: nothing is carved unless asked): sup's 0.5 of $8, then of $4.
+  const mid = await P.spawnAgent({ runId, parent: root.agentId, profile: "sup", task: "sub", key: "mid", budget: { usd: 4 }, start: false });
+  const greedy = await P.spawnAgent({ runId, parent: mid.agentId, profile: "coder", task: "leaf", key: "greedy", budget: { usd: 3 }, start: false }).then(() => "accepted", () => null);
+  if (greedy) return "budgetShare cap not enforced";
+  const leaf = await P.spawnAgent({ runId, parent: mid.agentId, profile: "coder", task: "leaf", key: "leaf", budget: { usd: 2 }, start: false });
   if (mid.budget.usd !== 4 || leaf.budget.usd !== 2) return `carve ${mid.budget.usd}/${leaf.budget.usd}`;
   const deep = await P.spawnAgent({ runId, parent: leaf.agentId, profile: "coder", task: "too deep", start: false }).then(() => "accepted", () => null);
   if (deep) return "depth limit not enforced";
