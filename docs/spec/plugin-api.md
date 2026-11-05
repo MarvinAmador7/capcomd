@@ -1273,7 +1273,7 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
 4. Everyone who hands an orchestrate agent work is told what the mode means: the profile's `description` and `does`
    (`capcomd_profiles`, `capcomd agents list`, which also show `toolMode`), the MCP server's instructions, the driver
    skill, the planner's brief and the orchestration skill an orchestrate agent gets. They say: it sees everything and
-   runs nothing; give it no task that needs running code; checks happen at verify and merge, and their results are
+   runs nothing; give it no task that needs it to run code itself (its helpers write and test the code); checks happen at verify and merge, and their results are
    readable.
 5. `capcomd logs <agt>` shows every agent's tool calls and refusals (`tool …`, `error …`, `refused <call>: <reason>`)
    next to the `[capcomd] <op> → …` lines, planners and leads included. A provider whose CLI reports refusals only on

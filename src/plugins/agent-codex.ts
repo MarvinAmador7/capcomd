@@ -78,7 +78,9 @@ export const codex: AgentProvider = {
   command: (ctx, q) =>
     // §16.1: the denied commands as codex's own rules, written where codex reads user rules before it starts.
     (ctx.cfg.denyCommands?.length ? `mkdir -p ${CODEX_RULES} && printf '%s' ${q(codexDenyRules(ctx.cfg.denyCommands))} > ${CODEX_RULES}/capcomd-orchestrate.rules && ` : "") +
-    `${q(ctx.bin)} exec --json --color never --ephemeral --sandbox ${ctx.cfg.sandbox ?? "danger-full-access"} -C ${q(ctx.repo)}` +
+    // allow_login_shell=false: codex runs its commands as `bash -c`, not `bash -lc`, whose /etc/profile (Debian's, in the
+    // Docker env image) resets PATH, so the agent's own tools (node, bun, capcomd) were "command not found".
+    `${q(ctx.bin)} exec --json --color never --ephemeral --sandbox ${ctx.cfg.sandbox ?? "danger-full-access"} -C ${q(ctx.repo)} -c allow_login_shell=false` +
     (ctx.cfg.model ? ` -m ${q(ctx.cfg.model)}` : "") +
     (ctx.cfg.effort ? ` -c ${q(`model_reasoning_effort="${ctx.cfg.effort}"`)}` : "") +
     // capcomd's tools are approved up front: `codex exec` asks for nothing (its approval policy is never), so a tool

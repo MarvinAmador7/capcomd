@@ -71,6 +71,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `refused <call>: <reason>` (Claude Code's permission denials, Codex's command rules).
 - Codex agents that spawn now get the capcomd MCP tools approved up front; before, an orchestrate Codex agent's
   `capcomd_*` tool calls were refused ("MCP tool call requires approval, but approval policy is never").
+- Fix: Codex agents in Docker could not find `bun`, `node` or `capcomd` in their shell ("command not found"): Codex
+  ran each command in a login shell, whose `/etc/profile` reset `PATH`. Codex now runs them in a plain shell.
 - Merges, goal-branch pull requests and **Publish** now go through forges, built-in plugins too:
   `forge-github` (pull requests, `gh repo create`) and `forge-git` (a compare-and-swap push to any remote). Merges land
   as before; `capcomd plugins list` now lists both. Name a project's forge with `CAPCOMD_MERGE_FORGE` (for example

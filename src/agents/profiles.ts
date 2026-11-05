@@ -217,7 +217,7 @@ export function leadText(s: Pick<AgentSpec, "children">): string | null {
  * What `toolMode: orchestrate` means for whoever gives the agent a task (plugin API §16.1), in plain words: the
  * profile descriptions (capcomd_profiles, `capcomd agents list`), the planner's brief and the orchestration skill say it.
  */
-export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, git history and any branch, every agent's logs, verify and merge reports with their full check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs running code. Checks run at verify and merge, and their results are readable";
+export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, git history and any branch, every agent's logs, verify and merge reports with their full check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs it to run code itself (its helpers write and test the code). Checks run at verify and merge, and their results are readable";
 
 /** What a profile is for, in plain words (capcomd_profiles, `capcomd agents list`). */
 export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & { toolMode?: string }): string {

@@ -62,9 +62,10 @@ effect, so the spawn is refused (`reason: "cannot_spawn"`): spawn a lead instead
 
 The `lead` and `planner` profiles `capcomd setup` writes **orchestrate** (`toolMode: "orchestrate"` in
 `capcomd_profiles`): they see everything (the code, git history and any branch, every agent's logs, the verify and
-merge reports with their full check output) and run nothing (no edits, commits, installs, builds or tests). So give a
-lead no task that needs running code, and don't ask it to "run the tests" or "try the CLI": its helpers' checks run at
-verify and merge, and it reads the results. A merge's result says whether the checks ran on the combined code
+merge reports with their full check output) and run nothing themselves (no edits, commits, installs, builds or tests).
+A lead still takes a part as before: its helpers write and test the code. Just give it no task that needs it to run code
+itself, and don't ask it to "run the tests" or "try the CLI": its helpers' checks run at verify and merge, and it reads
+the results. A merge's result says whether the checks ran on the combined code
 (`result.combined.text`, e.g. "checks ran on the combined code (… with 1 earlier merge from this run): pass"). Work
 that must run code (a smoke test of the whole, an end-to-end check) is a worker's task: spawn one, or pin a check.
 

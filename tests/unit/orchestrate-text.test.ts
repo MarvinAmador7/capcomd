@@ -1,5 +1,5 @@
 // Plugin API §16.1: everyone who briefs an orchestrate agent is told what the mode means (it sees everything and runs
-// nothing; give it no task that needs running code; checks run at verify and merge, and their results are readable),
+// nothing; give it no task that needs it to run code itself (its helpers write and test the code); checks run at verify and merge, and their results are readable),
 // and `capcomd logs` shows a refused tool call as `refused <call>: <reason>`.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
@@ -52,19 +52,19 @@ describe("the mode, explained", () => {
     expect(by.lead!.description).toBe(LEAD_DESCRIPTION);
     expect(by.planner!.description).toBe(PLANNER_DESCRIPTION);
     for (const d of [LEAD_DESCRIPTION, PLANNER_DESCRIPTION]) { expect(d).toContain("sees everything"); expect(d).toContain("runs nothing (no edits, commits, installs, builds or tests)"); expect(d).toContain("checks run at verify and merge"); }
-    expect(LEAD_DESCRIPTION).toContain("give it no task that needs running code");
+    expect(LEAD_DESCRIPTION).toContain("give it no task that needs it to run code itself (its helpers write and test the code)");
     const lead = abilityText(by.lead as any);
     expect(lead).toContain("leads a part: spawns up to 3 worker helpers, one level");
     expect(lead).toContain(ORCHESTRATE_TEXT);
-    expect(ORCHESTRATE_TEXT).toContain("give it no task that needs running code. Checks run at verify and merge, and their results are readable");
+    expect(ORCHESTRATE_TEXT).toContain("give it no task that needs it to run code itself (its helpers write and test the code). Checks run at verify and merge, and their results are readable");
     expect(abilityText(by.worker as any)).not.toContain("orchestrates");
   });
 
   test("the driver: the MCP server's instructions and the orchestration skill", () => {
-    expect(INSTRUCTIONS).toContain("A lead or planner with toolMode orchestrate (capcomd_profiles) sees everything and runs nothing: give it no task that needs running code");
+    expect(INSTRUCTIONS).toContain("A lead or planner with toolMode orchestrate (capcomd_profiles) sees everything and runs nothing: give it no task that needs it to run code itself (its helpers write and test the code)");
     const skill = readFileSync(join(ROOT, "plugins", "capcomd", "skills", "capcomd-orchestration", "SKILL.md"), "utf8");
     expect(skill).toContain("they see everything");
-    expect(skill).toContain("and run nothing (no edits, commits, installs, builds or tests). So give a\nlead no task that needs running code");
+    expect(skill).toContain("and run nothing themselves (no edits, commits, installs, builds or tests).\nA lead still takes a part as before: its helpers write and test the code.");
     expect(skill).toContain("`result.combined.text`");
   });
 });

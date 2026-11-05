@@ -302,6 +302,8 @@ describe("toolMode: orchestrate (§16.1)", () => {
     expect(cmd.indexOf("capcomd-orchestrate.rules")).toBeLessThan(cmd.indexOf(" exec --json"));
     expect(cmd).toContain(`mkdir -p "\${CODEX_HOME:-$HOME/.codex}/rules"`);
     expect(cmd).toContain(`'mcp_servers.capcomd.default_tools_approval_mode="approve"'`);
+    // `bash -c`, not `bash -lc`: a login shell's /etc/profile resets PATH (capcomd, bun: "command not found" in Docker).
+    expect(cmd).toContain(" -c allow_login_shell=false");
     // An execute codex agent gets no rules.
     const exec = loadAgentConfig({ CAPCOMD_AGENTS_FILE: agentsFile({ w: { provider: "codex", auth: "apikey" } }), OPENAI_API_KEY: "k" }, "w");
     expect(codexAdapter.command(ctx(exec), q)).not.toContain("rules");
