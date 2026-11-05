@@ -11,7 +11,7 @@ import { env } from "../utils/env";
 
 export const ALL_OPS = [
   "spawn", "await", "wait-any", "status", "tree", "cancel", "send", "inbox", "handoff", "events",
-  "budget", "task", "kv", "verify", "merge", "inspect", "logs", "heartbeat", "result", "grant", "title",
+  "budget", "task", "kv", "verify", "merge", "inspect", "logs", "heartbeat", "result", "grant", "title", "fetch",
 ] as const;
 export type Op = (typeof ALL_OPS)[number];
 

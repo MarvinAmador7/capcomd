@@ -45,12 +45,32 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   validated (`capcomd agents validate`, reading the agents file), with the providers you can use. In
   `capcomd agents schema`, `provider` and `effort` are strings checked against the provider rather than fixed lists.
   `capcomd plugins validate <plugin> --conformance` now runs the agent provider suite too (no agent CLI is started).
-- New profile field `toolMode: "orchestrate"` (default `"execute"`) for agents that plan and spawn but never change
-  files: Claude Code runs with only `Read, Glob, Grep, LS, Bash(capcomd:*)` and the edit tools denied, Codex with
-  `--sandbox read-only`; capcomd never commits or pushes its work, and refuses to verify or merge its own ref ("an
-  orchestrate agent has no work of its own"). It needs `children.allowSpawn`, and an override can't turn it back to
-  `execute` without `--operator`. `capcomd setup project` now writes it on the `planner` and `lead` profiles; profiles
-  you already have are kept as they are.
+- New profile field `toolMode: "orchestrate"` (default `"execute"`) for agents that plan and route but never code: an
+  orchestrate agent sees everything and runs nothing. It can read and search every file, use read-only git (`fetch`,
+  `log`, `show`, `diff`, `status`, `branch -a`, `ls-tree`, `blame`, `grep`, `git switch --detach origin/<branch>` to
+  read a branch) and every capcomd read (status, tree, events, logs, inspect, verify and merge reports with their full
+  check output). It can't edit files, commit, merge, rebase, push, install packages, or run builds, tests or the
+  program: checks run at verify and merge, and it reads their results. Claude Code enforces it with allow and deny
+  lists, Codex with command rules (its own read-only sandbox can't fetch and can't start in Docker); anything an
+  orchestrate agent writes anyway is never committed or pushed, and its log says so. capcomd refuses to verify or merge
+  its own ref ("an orchestrate agent has no work of its own"), and one that finishes without spawning any agent now
+  ends failed ("spawned no agents, so nothing it did can land"), so a run whose planner was blocked no longer reports
+  success. It needs `children.allowSpawn`, and an override can't turn it back to `execute` without `--operator`.
+  `capcomd setup project` writes it on the `planner` and `lead` profiles, with a `description` saying what it means;
+  `capcomd agents list` and the `capcomd_profiles` tool show each profile's `toolMode`, and the planner's brief, the
+  orchestration skill and the MCP server's instructions tell whoever briefs a lead or planner not to give it work that
+  needs running code. Profiles you already have are kept as they are.
+- New in-agent command `capcomd fetch [branch…]` (and the `capcomd_fetch` tool): fetches the latest branches into the
+  agent's checkout as `origin/<branch>`, using capcomd's git credentials (so it works for private repositories, which
+  an agent's own `git fetch` can't reach), for example to read the target after a merge.
+- A verify's and a merge's result now say plainly whether the checks ran on the combined code: `result.combined`, with
+  a line such as "checks ran on the combined code (this change on main with 1 earlier merge from this run): pass".
+  `capcomd verify` and `capcomd merge` print the line, and the `capcomd_verify`/`capcomd_merge` tools put it in `next`.
+- `capcomd logs <agent>` now shows the tool calls of every agent, planners and leads included (before, an agent that
+  could spawn showed only its `[capcomd] <op> → ok` lines), and a call the agent's CLI refused shows as
+  `refused <call>: <reason>` (Claude Code's permission denials, Codex's command rules).
+- Codex agents that spawn now get the capcomd MCP tools approved up front; before, an orchestrate Codex agent's
+  `capcomd_*` tool calls were refused ("MCP tool call requires approval, but approval policy is never").
 - Merges, goal-branch pull requests and **Publish** now go through forges, built-in plugins too:
   `forge-github` (pull requests, `gh repo create`) and `forge-git` (a compare-and-swap push to any remote). Merges land
   as before; `capcomd plugins list` now lists both. Name a project's forge with `CAPCOMD_MERGE_FORGE` (for example

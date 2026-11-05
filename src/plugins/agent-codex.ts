@@ -3,7 +3,7 @@
 // the seam (src/plugins/agents.ts).
 import { definePlugin } from "../../packages/plugin/src/context";
 import type { AgentEvent, AgentProvider } from "../../packages/plugin/src/seams";
-import { agentManifest, classifyAgentError, parseJson, toolCall } from "./agent-common";
+import { agentManifest, classifyAgentError, ORCHESTRATE_DENIED_COMMANDS, parseJson, toolCall } from "./agent-common";
 
 /** Pinned version, installed only when the VM image/snapshot does not already have the CLI. */
 export const CODEX_VERSION = "0.163.0";
@@ -40,10 +40,21 @@ const DESCRIPTION = {
   efforts: ["minimal", "low", "medium", "high"], defaultEffort: "medium",
   streamInput: false,
   loginEgress: ["auth.openai.com", "chatgpt.com", "api.openai.com"],
-  // §16.1: codex has no per-tool lists for its shell; its sandbox is the limit. `read-only` lets the shell read and
-  // run commands that write nothing, and the capcomd MCP server (which codex starts outside its sandbox) still answers.
-  toolPolicies: { orchestrate: { allowed: [], disallowed: [], sandbox: "read-only" } },
+  // §16.1: codex has no per-tool allowlist for its shell, and its own sandbox can't be the limit: `read-only` blocks
+  // `git fetch` (it writes .git, and the sandbox has no network) and, in a container, can't start at all (bwrap needs
+  // user namespaces, which Docker doesn't allow), so every command fails, reads included. So the sandbox stays the
+  // agent's (the VM or container is the boundary, as for every agent) and the limit is codex's command rules
+  // (execpolicy): the commands that change or run code are forbidden by prefix. Whatever an orchestrate agent writes
+  // anyway never lands: the kernel never commits or pushes its checkout, and reports what it discarded.
+  toolPolicies: { orchestrate: { allowed: [], disallowed: [], denyCommands: ORCHESTRATE_DENIED_COMMANDS } },
 } as const;
+
+/** The codex execpolicy rules (`$CODEX_HOME/rules/*.rules`, Starlark) that forbid `denyCommands`. */
+export function codexDenyRules(denyCommands: readonly string[]): string {
+  const why = "capcomd orchestrate mode: this agent sees everything and runs nothing that changes or runs code. Spawn a worker for it; checks run at capcomd verify and merge, and their output is readable.";
+  return denyCommands.map((c) => `prefix_rule(pattern = ${JSON.stringify(c.split(/\s+/))}, decision = "forbidden", justification = ${JSON.stringify(why)})`).join("\n") + "\n";
+}
+const CODEX_RULES = '"${CODEX_HOME:-$HOME/.codex}/rules"';
 
 /**
  * Codex `codex exec --json` (JSONL: thread.started, turn.started, turn.completed{usage}, turn.failed,
@@ -53,7 +64,7 @@ const DESCRIPTION = {
  * (command_execution/file_change/mcp_tool_call/web_search items), cost = tokens × configured rates.
  */
 export const codex: AgentProvider = {
-  describe: () => ({ ...DESCRIPTION, efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress], toolPolicies: { orchestrate: { ...DESCRIPTION.toolPolicies.orchestrate, allowed: [], disallowed: [] } } }),
+  describe: () => ({ ...DESCRIPTION, efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress], toolPolicies: { orchestrate: { allowed: [], disallowed: [], denyCommands: [...DESCRIPTION.toolPolicies.orchestrate.denyCommands] } } }),
   async available(input) {
     const { credentialReady } = await import("../agents/run-driver");
     const r = credentialReady("codex", input.auth);
@@ -65,10 +76,14 @@ export const codex: AgentProvider = {
   // TZ=UTC: codex prints a usage limit's reset as local clock time (codexResetAt).
   baseEnv: () => ({ CI: "1", NO_COLOR: "1", TZ: "UTC" }),
   command: (ctx, q) =>
+    // §16.1: the denied commands as codex's own rules, written where codex reads user rules before it starts.
+    (ctx.cfg.denyCommands?.length ? `mkdir -p ${CODEX_RULES} && printf '%s' ${q(codexDenyRules(ctx.cfg.denyCommands))} > ${CODEX_RULES}/capcomd-orchestrate.rules && ` : "") +
     `${q(ctx.bin)} exec --json --color never --ephemeral --sandbox ${ctx.cfg.sandbox ?? "danger-full-access"} -C ${q(ctx.repo)}` +
     (ctx.cfg.model ? ` -m ${q(ctx.cfg.model)}` : "") +
     (ctx.cfg.effort ? ` -c ${q(`model_reasoning_effort="${ctx.cfg.effort}"`)}` : "") +
-    (ctx.capcomd ? ` -c ${q('mcp_servers.capcomd.command="node"')} -c ${q(`mcp_servers.capcomd.args=["${ctx.capcomd.cli}","mcp"]`)}` : "") +
+    // capcomd's tools are approved up front: `codex exec` asks for nothing (its approval policy is never), so a tool
+    // that needs an approval is refused; what an agent may do with them is its capcomd token's limits.
+    (ctx.capcomd ? ` -c ${q('mcp_servers.capcomd.command="node"')} -c ${q(`mcp_servers.capcomd.args=["${ctx.capcomd.cli}","mcp"]`)} -c ${q('mcp_servers.capcomd.default_tools_approval_mode="approve"')}` : "") +
     ` -o ${q(`${ctx.dir}/last-message.txt`)} "$(cat ${q(ctx.promptFile)})"` +
     ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)} < /dev/null`,
   parse(line, redact, state, cfg) {
@@ -128,6 +143,15 @@ export const codex: AgentProvider = {
     if (exitCode === 124) return { ok: false, stopReason: "timeout" };
     if (exitCode !== 0 || state.error || !state.done) return { ok: false, stopReason: state.stopReason ?? `exit_${exitCode}` };
     return { ok: true, stopReason: "success" };
+  },
+  // codex 0.163 leaves a command its rules forbid out of `--json`; its log line on stderr is the only trace:
+  //   … ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\"`/bin/bash -lc 'git push'` rejected: <why>\")" }
+  refusal(line, redact) {
+    const m = /Rejected\(\\?"`(.+?)` rejected: (.*?)\\?"\)/.exec(line);
+    if (!m) return null;
+    const shell = /^\/bin\/(?:ba)?sh -lc '(.*)'$/s.exec(m[1]!);
+    const cmd = (shell ? shell[1]!.replace(/'\\''/g, "'") : m[1]!).replace(/\\"/g, '"');
+    return { call: toolCall("command", redact(cmd)), reason: redact(m[2]!.replace(/\\"/g, '"')).slice(0, 500) };
   },
 };
 

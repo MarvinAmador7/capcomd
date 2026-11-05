@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "os";
 import { join } from "path";
 import { githubRepoOf, httpsRemote, projectStep, suggestCheck } from "../../src/cli/commands/setup";
+import { LEAD_DESCRIPTION } from "../../src/config/project-setup";
 
 // The test projects' remotes are made-up GitHub ones: setup asks them for their default branch (`git ls-remote`), which
 // must fail at once here rather than try a real SSH connection (seconds on a machine with an SSH key).
@@ -100,7 +101,7 @@ describe("setup steps (non-interactive)", () => {
     expect(Object.keys(agents).sort()).toEqual(["codex-worker", "lead", "planner", "reviewer", "worker"]);
     expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead"]);
     // A module lead: the worker's provider and login, orchestrating (plugin API §16.1) up to 3 worker helpers, one level.
-    expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
+    expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
     // The reviewer runs the check and the package manager's test runner (bun test as well as bun run).
     expect(agents.reviewer.allowedTools).toEqual(expect.arrayContaining(["Bash(bun run:*)", "Bash(bun test:*)"]));
     expect(agents.reviewer.allowedTools).not.toContain("Edit");

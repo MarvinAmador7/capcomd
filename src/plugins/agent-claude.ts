@@ -3,7 +3,7 @@
 // through the seam (src/plugins/agents.ts).
 import { definePlugin } from "../../packages/plugin/src/context";
 import type { AgentEvent, AgentProvider, AgentRunState } from "../../packages/plugin/src/seams";
-import { agentManifest, classifyAgentError, contentText, parseJson, toolCall } from "./agent-common";
+import { agentManifest, classifyAgentError, contentText, ORCHESTRATE_DENIED_COMMANDS, ORCHESTRATE_READ_COMMANDS, ORCHESTRATE_READ_EXACT, parseJson, toolCall } from "./agent-common";
 
 /** Pinned version, installed only when the VM image/snapshot does not already have the CLI. */
 export const CLAUDE_CODE_VERSION = "2.1.303";
@@ -46,6 +46,16 @@ type ClaudeState = AgentRunState & {
   toolCalls?: Record<string, string>;
 };
 
+/** §16.1's orchestrate commands as Claude Code permission rules: `Bash(<prefix>:*)`, `Bash(<exact command>)`. */
+export const ORCHESTRATE_ALLOWED: readonly string[] = ["Read", "Glob", "Grep", "LS", ...ORCHESTRATE_READ_COMMANDS.map((c) => `Bash(${c}:*)`), ...ORCHESTRATE_READ_EXACT.map((c) => `Bash(${c})`)];
+export const ORCHESTRATE_DISALLOWED: readonly string[] = [
+  "Edit", "Write", "MultiEdit", "NotebookEdit", ...ORCHESTRATE_DENIED_COMMANDS.map((c) => `Bash(${c}:*)`),
+  // Options of allowed git commands that run a command or write a file, anywhere on the line (claude 2.1.303 matches
+  // `*` in a rule as any text): `fetch --upload-pack=<cmd>` runs it, `grep -O<cmd>` opens results in it, `--output=<f>`
+  // writes the log or diff to a file.
+  "Bash(git fetch *--upload-pack*)", "Bash(git grep *-O*)", "Bash(git grep *--open-files-in-pager*)", "Bash(git * --output*)",
+];
+
 const DESCRIPTION = {
   name: "claude", label: "Claude Code", bin: "claude", npmPackage: "@anthropic-ai/claude-code", pinnedVersion: CLAUDE_CODE_VERSION,
   secretName: "ANTHROPIC_API_KEY", apiHost: "api.anthropic.com",
@@ -54,11 +64,14 @@ const DESCRIPTION = {
   // Messages written to stdin while it works are read at its next model call; it exits when stdin closes.
   streamInput: true,
   loginEgress: ["api.anthropic.com", "console.anthropic.com", "platform.claude.com", "claude.ai", "claude.com"],
-  // §16.1: reading and the capcomd command only. With an allowlist claude runs without bypassPermissions, so a tool
-  // (or a Bash command) the list doesn't name is refused headless; the edit tools are denied outright. Bash itself is
-  // not denied: a deny rule outranks every allow, so it would take `Bash(capcomd:*)` with it.
-  toolPolicies: { orchestrate: { allowed: ["Read", "Glob", "Grep", "LS", "Bash(capcomd:*)"], disallowed: ["Edit", "Write", "MultiEdit", "NotebookEdit"] } },
-} as const;
+  // §16.1: an orchestrate agent sees everything and runs nothing. With an allowlist claude runs without
+  // bypassPermissions, so a tool (or a Bash command) the list doesn't name is refused headless. The allowlist is the
+  // read tools, capcomd and the read-only commands (git's among them: fetch, log, show, diff, a detached checkout to read
+  // a branch); the denylist names the edit tools and the commands that change or run code, so they are refused by name.
+  // No denied prefix starts an allowed one: a deny rule outranks every allow (a bare `Bash` deny would take
+  // `Bash(capcomd:*)` with it).
+  toolPolicies: { orchestrate: { allowed: ORCHESTRATE_ALLOWED, disallowed: ORCHESTRATE_DISALLOWED } },
+};
 
 /** Claude Code `--output-format stream-json`: system/assistant/user/result events. */
 export const claude: AgentProvider = {

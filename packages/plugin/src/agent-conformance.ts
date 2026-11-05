@@ -71,8 +71,12 @@ export const AGENT_CASES: readonly Case[] = [
     if (!o || !Array.isArray(o.allowed) || !Array.isArray(o.disallowed)) fail("describe().toolPolicies.orchestrate must have allowed and disallowed lists");
     const editing = o!.allowed.filter((t) => EDIT_TOOLS.includes(t));
     if (editing.length) fail(`the orchestrate allowlist names ${editing.join(", ")}`);
-    // With no allowlist the CLI's own sandbox is the only limit: it must not let the agent write.
-    if (!o!.allowed.length && o!.sandbox !== "read-only") fail(`an orchestrate policy with no allowlist needs sandbox "read-only" (got ${JSON.stringify(o!.sandbox ?? null)})`);
+    // With no allowlist the limit is the CLI's own: a read-only sandbox, or command rules that refuse at least the
+    // commands that land code (commits and pushes).
+    if (o!.denyCommands !== undefined && (!Array.isArray(o!.denyCommands) || o!.denyCommands.some((c) => typeof c !== "string" || !c.trim()))) fail("toolPolicies.orchestrate.denyCommands must be a list of command prefixes");
+    const denies = (c: string) => (o!.denyCommands ?? []).some((d) => c === d || c.startsWith(`${d} `));
+    if (!o!.allowed.length && o!.sandbox !== "read-only" && !(denies("git commit") && denies("git push")))
+      fail(`an orchestrate policy with no allowlist needs sandbox "read-only" or denyCommands that refuse git commit and git push (got sandbox ${JSON.stringify(o!.sandbox ?? null)})`);
   } },
   { name: "command sends stdout to ctx.jsonl (§7.3)", run(p) {
     const c = ctx();

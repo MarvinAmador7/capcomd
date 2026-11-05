@@ -100,9 +100,13 @@ skills:
     hash: sha256:…                # pinned; a changed hash raises a notice, never a silent change
 
 tools:
-  mode: execute                   # execute | orchestrate (spec §16.1): an orchestrate agent routes, plans, spawns and
-                                  # decides; it never edits files, runs work commands or pushes a branch. The agent
-                                  # provider's tool lists enforce it in the sandbox; the kernel refuses to land its ref
+  mode: execute                   # execute | orchestrate (spec §16.1): an orchestrate agent sees everything and runs
+                                  # nothing: it reads any file, branch and history (read-only git, `capcomd fetch`)
+                                  # and every capcomd report (logs, events, verify and merge results with their full
+                                  # check output), routes, spawns and decides; it never edits, commits, merges,
+                                  # pushes, installs, builds or runs tests (checks run at verify and merge). The agent
+                                  # provider's tool policy enforces it in the sandbox (Claude Code: allow/deny lists;
+                                  # Codex: command rules); the kernel refuses to land its ref and never pushes it
   allowed: [Read, Glob, Grep, LS, "Bash(git diff:*)", "Bash(bun test:*)"]
   disallowed: []
   mcp:                            # MCP servers the agent CLI gets inside the sandbox (ADR-023 §4.5 wires them)
@@ -368,7 +372,7 @@ Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons
 
 | Decision | Spec |
 |---|---|
-| **`tools.mode: execute \| orchestrate`**: the planner never executes, as a profile capability. The agent provider's `describe().toolPolicies.orchestrate` gives the CLI's tool lists; `children.allowSpawn` must be true; the kernel refuses `verify`/`merge` of the agent's own ref and skips its push; `planner` and `lead` from `capcomd setup project` get it; `plannerBrief`'s "don't change files yourself" stays as explanation | §16.1 |
+| **`tools.mode: execute \| orchestrate`**: the planner never executes, as a profile capability: it sees everything (read-only git with fetch, files, every capcomd read) and runs nothing (no edits, commits, merges, pushes, installs, builds or tests). The agent provider's `describe().toolPolicies.orchestrate` gives the CLI's tool lists (and, for a CLI with command rules of its own, `denyCommands`); `children.allowSpawn` must be true; the kernel refuses `verify`/`merge` of the agent's own ref and skips its push; `planner` and `lead` from `capcomd setup project` get it; `plannerBrief`'s "don't change files yourself" stays as explanation | §16.1 |
 | **A `jobs` block** (`foregroundMs`, `max`, `afterTurnMs`) with `foregroundMs` defaulting to 5 000 for orchestrate agents and 60 000 otherwise | §16.2 |
 | **`lifecycle.onStart`/`onEnd` name plugins that must be active**, which listen to `agent.changed` for that profile; there is no per-profile hook | §6.6.8 |
 | **`harness.provider` and `sandbox.provider` are seam names**, validated against the active plugins at `validate` | §7.1 |

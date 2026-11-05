@@ -95,4 +95,6 @@ export interface AgentAdapter {
   verifyCommand(bin: string, q: (s: string) => string): string;
   /** Interpret the finished run. */
   outcome(state: AgentRunState, exitCode: number): { ok: boolean; stopReason: string };
+  /** A tool call the CLI refused, from one stderr line (a CLI that reports refusals only there: codex). */
+  refusal?(line: string, r: Redactor): { call: string; reason: string } | null;
 }

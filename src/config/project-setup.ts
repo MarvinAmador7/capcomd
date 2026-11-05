@@ -134,6 +134,10 @@ export interface ProjectPlan {
   profiles: Array<[string, Record<string, unknown>]>;
 }
 
+/** What the orchestrate profiles `capcomd setup` writes are for (their `description`; plugin API §16.1). */
+export const LEAD_DESCRIPTION = "Leads a part: splits it among its worker helpers, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs running code; its helpers' checks run at verify and merge, and it reads their results.";
+export const PLANNER_DESCRIPTION = "Plans a goal: splits it among workers and leads, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests); checks run at verify and merge, and it reads their results.";
+
 /** The two files' contents for these answers. No turn, time or money limits on the profiles (ADR-019). */
 export function planProject(a: ProjectAnswers): ProjectPlan {
   const gh = githubRepoOf(a.repo);
@@ -145,11 +149,11 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
     ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...testTools(a.check, a.dir)] }],
     // A module lead: up to 3 worker helpers at once, one level down. The driver spawns it for a part with two or more
     // independent sub-parts; it verifies and merges its helpers' work itself (capcomd verify runs the checks). It
-    // orchestrates (plugin API §16.1): it reads and spawns, and changes no file itself.
-    ["lead", { provider, auth, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
+    // orchestrates (plugin API §16.1): it sees everything and runs nothing; its helpers do and check the work.
+    ["lead", { provider, auth, description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
     // No fan-out limits either: the planner may spawn workers, and leads for parts that split further, as it sees fit
     // (set children.* to bound it). It orchestrates too: every change is a worker's.
-    ["planner", { provider, auth, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead"] } }],
+    ["planner", { provider, auth, description: PLANNER_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead"] } }],
   ];
   return {
     dir: a.dir, configPath: join(a.dir, ".capcomd", "config.json"), agentsPath: join(a.dir, ".capcomd", "agents.json"), cap: a.cap, profiles,

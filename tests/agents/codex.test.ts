@@ -100,6 +100,21 @@ describe("codex adapter (fake codex exec --json)", () => {
     expect(codexAdapter.baseEnv().TZ).toBe("UTC");
   });
 
+  test("orchestrate (plugin API §16.1): the command rules are written for codex; a refused command and what it wrote anyway are in its log; nothing is pushed", async () => {
+    const s = await setup("[nochange][refuse][scribble] route the work");
+    const lines: string[] = [];
+    const cfg = { ...s.cfg, toolMode: "orchestrate" as const, denyCommands: ["git push", "bun test"] };
+    const res = await runAgent(codexAdapter, s.provider, s.id, s.task, cfg, { apiKey: KEY, onLog: (l) => lines.push(...l) });
+    expect(res.sha).toBe("");
+    expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull();
+    const rules = readFileSync(join(s.W, "..", "home", ".codex", "rules", "capcomd-orchestrate.rules"), "utf8");
+    expect(rules).toContain('prefix_rule(pattern = ["git","push"], decision = "forbidden"');
+    expect(lines).toContain('refused command "git push origin HEAD:main": capcomd orchestrate mode: no pushes');
+    expect(lines).toContain("[capcomd] orchestrate: left behind changes to notes.txt; an orchestrate agent's own changes never land");
+    const span = getFinishedSpans().find((x) => x.name === "agent.codex")!;
+    expect(span.events.map((e) => e.name)).toEqual(expect.arrayContaining(["agent.refused", "agent.orchestrate_discarded"]));
+  }, 30_000);
+
   test("parse: codex JSONL shapes; config and selection", () => {
     const st = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     const cfg = loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AUTH: "apikey" });

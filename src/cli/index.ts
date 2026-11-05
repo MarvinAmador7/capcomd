@@ -680,7 +680,7 @@ async function main(argv: string[]): Promise<number> {
           target: values.target as string | undefined, key: values.key as string | undefined,
         });
         if (json) out(r);
-        else console.log(`${r.id}: ${r.state}${r.result?.commit ? ` (${String(r.result.commit).slice(0, 12)})` : ""}${r.result?.checks?.reason ? ` ${r.result.checks.reason}` : ""}`);
+        else console.log(`${r.id}: ${r.state}${r.result?.commit ? ` (${String(r.result.commit).slice(0, 12)})` : ""}${r.result?.checks?.reason ? ` ${r.result.checks.reason}` : ""}${r.result?.combined?.text ? `\n  ${r.result.combined.text}` : ""}`);
         return r.state === "passed" ? EXIT.ok : EXIT.run_failed;
       }
 
@@ -692,7 +692,7 @@ async function main(argv: string[]): Promise<number> {
           operator: !!values.operator, key: values.key as string | undefined,
         });
         if (json) out(r);
-        else console.log(`${r.id}: ${r.state}${r.result?.sha ? ` ${String(r.result.sha).slice(0, 12)}` : ""}${r.result?.reason ? ` ${r.result.reason}` : ""}`);
+        else console.log(`${r.id}: ${r.state}${r.result?.sha ? ` ${String(r.result.sha).slice(0, 12)}` : ""}${r.result?.reason ? ` ${r.result.reason}` : ""}${r.result?.combined?.text ? `\n  ${r.result.combined.text}` : ""}`);
         // The merged agent's checkpoint refs are deleted after the merge's record: finish that before this process ends.
         await (await import("../primitives/ops")).settleCleanups();
         return r.state === "merged" ? EXIT.ok : EXIT.run_failed;

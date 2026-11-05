@@ -213,10 +213,17 @@ export function leadText(s: Pick<AgentSpec, "children">): string | null {
   return `${many}, ${depth}`;
 }
 
+/**
+ * What `toolMode: orchestrate` means for whoever gives the agent a task (plugin API §16.1), in plain words: the
+ * profile descriptions (capcomd_profiles, `capcomd agents list`), the planner's brief and the orchestration skill say it.
+ */
+export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, git history and any branch, every agent's logs, verify and merge reports with their full check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs running code. Checks run at verify and merge, and their results are readable";
+
 /** What a profile is for, in plain words (capcomd_profiles, `capcomd agents list`). */
-export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools">): string {
+export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & { toolMode?: string }): string {
   const lead = leadText(s);
-  if (lead) return `leads a part: spawns ${lead}, and verifies and merges their work (spawn it with children: {maxChildren, maxDepth} to size it)`;
+  const mode = s.toolMode === "orchestrate" ? `. ${ORCHESTRATE_TEXT}` : "";
+  if (lead) return `leads a part: spawns ${lead}, and verifies and merges their work (spawn it with children: {maxChildren, maxDepth} to size it)${mode}`;
   const ro = s.allowedTools?.length && !s.allowedTools.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t));
   return ro ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
 }

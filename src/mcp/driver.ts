@@ -258,14 +258,14 @@ async function bounded<T>(work: Promise<T>, ms: number): Promise<{ done: true; v
 /** What to do with a finished verify or merge. */
 function opNext(runId: string, v: any): string {
   if (v.kind === "verify") {
-    if (v.state === "passed") return `Merge with capcomd_merge {runId: "${runId}", ref: "${v.ref}", require: "${v.id}"}.`;
+    if (v.state === "passed") return `${v.result?.combined?.text ? `${v.result.combined.text[0]!.toUpperCase()}${v.result.combined.text.slice(1)}. ` : ""}Merge with capcomd_merge {runId: "${runId}", ref: "${v.ref}", require: "${v.id}"}.`;
     const setupFailed = typeof v.result?.checks?.reason === "string" && v.result.checks.reason.startsWith("checks couldn't run")
       || typeof v.checks?.reason === "string" && v.checks.reason.startsWith("checks couldn't run");
     return setupFailed
       ? "Not the agent's fault: the checks sandbox couldn't be set up (checks.output says why, usually `capcomd env build --sandbox …`). Tell the user, run what it says once they agree, then call capcomd_verify again with a new key."
       : "Not merged: send the failure to the agent (capcomd_send) or spawn a fix with it in the task.";
   }
-  if (v.state === "merged") return `Merged into ${v.target}.`;
+  if (v.state === "merged") return `Merged into ${v.target}${v.result?.combined?.text ? `; ${v.result.combined.text}` : ""}.`;
   if (v.state === "awaiting_approval") return `${v.target ?? "The target"} is protected: it waits for a person's approval (capcomd_approve, or \`capcomd approve ${runId} ${v.id}\`).`;
   return `Not merged (${v.result?.status ?? v.state}${v.result?.reason ? `: ${v.result.reason}` : ""}).`;
 }
@@ -301,7 +301,8 @@ export async function merge(a: { runId: string; ref?: string; require?: string; 
       ? `${m.target ?? "The target"} is protected: tell the user what's waiting, then call capcomd_approve {runId: "${a.runId}", merge: "${m.id}"} once: capcomd asks them itself, and only their accept approves. Or ${how}.`
       : `${m.target ?? "The target"} is protected: ${how}. Tell the user; check later with capcomd_tree.` };
   }
-  return m;
+  // Said plainly, next to the record (result.combined): whether the checks ran on the combined code.
+  return m.result?.combined?.text ? { ...m, next: opNext(a.runId, m) } : m;
 }
 
 /** What capcomd_approve needs from the MCP session to ask the person itself (elicitation, `driver.approvals: "elicit"`). */
@@ -508,7 +509,7 @@ export async function profiles() {
   const { agentsFilePath, readAgentsFile, leadText, abilityText } = await import("../agents/profiles");
   const { readiness } = await import("../cli/commands/agents");
   const f = readAgentsFile(agentsFilePath());
-  const profiles = Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, canLead: leadText(s), does: abilityText(s), ...readiness(name, s) }));
+  const profiles = Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...readiness(name, s) }));
   const leads = profiles.filter((p) => p.canLead).map((p) => p.name);
   return {
     default: f.default ?? null, profiles,

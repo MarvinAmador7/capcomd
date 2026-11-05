@@ -29,14 +29,19 @@ const deny = (message: string, hint = "Your token only covers your own subtree a
   throw new RelayError("conflict", message, hint, { code: "forbidden" });
 };
 
-export interface RpcContext { runId: string; agentId: string; onCall?: (op: string, ok: boolean) => void }
+export interface RpcContext {
+  runId: string; agentId: string; onCall?: (op: string, ok: boolean) => void;
+  /** A command in the caller's own VM, run by the host with the sandbox's git credentials (which the agent never
+   *  holds): `fetch`. Unset where there is no VM (a local spool). */
+  exec?: (cmd: string[], opts: { cwd?: string; timeoutMs?: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
+}
 
 export async function handleRpc(req: RpcRequest, ctx: RpcContext): Promise<RpcResponse> {
   const id = String(req?.id ?? "?");
   try {
     const claims = await authorize(req, ctx);
     // Never store a capability token (or other known secret shapes) an agent pasted into its args.
-    let result = await dispatch(claims, req.op as Op, redactShapes(req.args ?? {}), id);
+    let result = await dispatch(claims, req.op as Op, redactShapes(req.args ?? {}), id, ctx);
     const js = JSON.stringify(result ?? null);
     if (Buffer.byteLength(js) > RESPONSE_MAX_BYTES) result = { truncated: [{ field: "response", bytes: Buffer.byteLength(js), kept: 0 }], hint: "Response too large; narrow the query (e.g. --tail, --limit, a subtree root)." };
     ctx.onCall?.(req.op, true);
@@ -103,7 +108,7 @@ function ids(args: Record<string, any>, key = "agents"): string[] {
   return list.map(String);
 }
 
-async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string): Promise<unknown> {
+async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string, ctx: RpcContext): Promise<unknown> {
   const run = c.run;
   // Writes are idempotent per request: the CLI retries a transient failure with the same id.
   if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title"].includes(op)) args = { ...args, key: `r:${reqId}` };
@@ -273,6 +278,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       const held = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), VERIFY_HOLD_MS))]);
       return held ?? { id: O.verifyIdFor(run, ref, key), kind: "verify", state: "running", ref };
     }
+    case "fetch": return fetchInto(ctx, args);
     case "merge": {
       const ref = String(args.ref ?? "");
       if (!ref.startsWith("agt-")) deny("in-VM merge takes a child agent id, not a branch");
@@ -283,6 +289,37 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     }
   }
   throw new RelayError("usage", `unknown op ${op}`, "See `capcomd help` inside the VM.");
+}
+
+const FETCH_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+/**
+ * `capcomd fetch [branch…]` (plugin API §16.1: an orchestrate agent sees everything): the host fetches `origin` into
+ * the caller's checkout (`dir`, which the in-VM CLI finds), with the sandbox's git credentials, which the agent's own
+ * shell never has; a CLI sandbox that blocks a fetch (codex) doesn't stop it either. Read-only for code: it moves only
+ * `refs/remotes/origin/*`. Answers each fetched branch's commit, for `git log` / `git show origin/<branch>:<path>`.
+ */
+async function fetchInto(ctx: RpcContext, args: Record<string, any>) {
+  if (!ctx.exec) throw new RelayError("usage", "capcomd fetch works only in an agent's VM", "Run `git fetch` yourself here.");
+  const dir = String(args.dir ?? "");
+  if (!dir.startsWith("/") || !/^[A-Za-z0-9._/-]+$/.test(dir) || dir.split("/").includes("..")) throw new RelayError("usage", `fetch needs your checkout's absolute path (got ${JSON.stringify(dir).slice(0, 200)})`, "Run it from inside your checkout.");
+  const refs = (Array.isArray(args.refs) ? args.refs : args.ref !== undefined ? [args.ref] : []).map(String);
+  for (const r of refs) if (!FETCH_REF.test(r) || r.includes("..") || r.endsWith(".lock")) throw new RelayError("usage", `not a branch name: ${JSON.stringify(r).slice(0, 200)}`, "Pass branch names, e.g. capcomd fetch main.");
+  // The run's repository by its URL, not the checkout's `origin` (whose settings the agent could have changed): the
+  // fetch carries the sandbox's git credentials. Settings that would send them elsewhere or run a command are refused.
+  const cfg = (await import("../merge/config")).loadMergeConfig(await (await import("../merge/run-config")).runEnv(ctx.runId));
+  if (!cfg?.remote) throw new RelayError("usage", "this run has no repository to fetch from", "Runs with a repository (CAPCOMD_REPO) can fetch.");
+  const local = await ctx.exec(["git", "config", "--list", "--show-scope", "--includes"], { cwd: dir, timeoutMs: 60_000 });
+  if (local.code !== 0) throw new RelayError("usage", `${dir} isn't a git checkout`, "Run it from inside your checkout.");
+  const risky = local.stdout.split("\n").filter((l) => /^(local|worktree)\t/.test(l)).map((l) => l.split("\t")[1]!.split("=")[0]!.toLowerCase())
+    .filter((k) => /^(url\.|credential|http\.|https\.|include|protocol\.|core\.(sshcommand|askpass|gitproxy|fsmonitor|hookspath)$|remote\.[^.]+\.(uploadpack|proxy|vcs)$)/.test(k));
+  if (risky.length) throw new RelayError("conflict", `your checkout's git settings ${[...new Set(risky)].join(", ")} could send capcomd's git credentials elsewhere or run a command, so capcomd won't fetch into it`, "Remove them (git config --unset …), or fetch with git yourself.", { code: "forbidden" });
+  const specs = refs.length ? refs.map((r) => `+refs/heads/${r}:refs/remotes/origin/${r}`) : ["+refs/heads/*:refs/remotes/origin/*"];
+  const f = await ctx.exec(["git", "fetch", "--quiet", "--no-tags", cfg.remote, ...specs], { cwd: dir, timeoutMs: 300_000 });
+  if (f.code !== 0) throw new RelayError("conflict", `git fetch failed: ${(f.stderr || f.stdout).trim().slice(-500)}`, "Check the branch names (capcomd fetch with none fetches every branch).", { code: "failed" });
+  const l = await ctx.exec(["git", "for-each-ref", "--sort=-committerdate", "--count=50", "--format=%(refname:lstrip=3)%09%(objectname)%09%(subject)", ...(refs.length ? refs.map((r) => `refs/remotes/origin/${r}`) : ["refs/remotes/origin"])], { cwd: dir, timeoutMs: 60_000 });
+  const branches = l.stdout.split("\n").filter((x) => x.trim()).map((x) => { const [branch, sha, ...s] = x.split("\t"); return { branch: branch!, ref: `origin/${branch}`, sha: sha!, subject: s.join("\t").slice(0, 200) }; }).filter((b) => b.branch !== "HEAD");
+  return { fetched: true, branches, hint: "Read a branch without changing anything: git log origin/<branch>, git show origin/<branch>:<path>, git diff <a> <b>; or git switch --detach origin/<branch> to read it with the file tools." };
 }
 
 /** The checks command an operator set on the caller's top-level ancestor (RPC spawns strip it). */

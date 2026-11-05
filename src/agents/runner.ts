@@ -171,13 +171,24 @@ export function messageText(m: { from: string; body: string; skills?: AttachedSk
   return `Message from ${who}, sent while you work (capcomd send):\n\n${withSkills(m.body, m.skills)}`;
 }
 
-/** An event as `capcomd logs` lines: its tool calls, failed results, text and final result. */
+const cutLine = (x: string, n: number) => (x.length > n ? `${x.slice(0, n)}…` : x).replace(/\s+/g, " ");
+
+/**
+ * A failed tool result that is the CLI's permission system refusing the call, not the call failing: Claude Code's
+ * denials ("Permission to use Bash with command … has been denied.", "This command requires approval", "… needs
+ * approval", "… can't be checked before it runs", a disabled tool) and codex's (an MCP tool "requires approval, but
+ * approval policy is never", a command its rules reject).
+ */
+export const REFUSAL = /has been denied|requires approval|needs approval|can't be checked before it runs|No such tool available|is disabled for this session|approval policy is `?never|\brejected: /i;
+
+/** An event as `capcomd logs` lines: its tool calls, failed results (`refused …` when the CLI refused the call), text
+ *  and final result. */
 export function logLinesOf(ev: AgentEvent): string[] {
   const out: string[] = [];
-  const cut = (x: string, n: number) => (x.length > n ? `${x.slice(0, n)}…` : x).replace(/\s+/g, " ");
+  const cut = cutLine;
   const failed = (ev.results ?? []).filter((x) => x.error !== undefined);
   for (const c of ev.calls ?? []) if (!failed.some((f) => f.call === c)) out.push(`tool ${cut(c, 300)}`);
-  for (const f of failed) out.push(`error ${cut(f.call, 200)}: ${cut(f.error ?? "", 300)}`);
+  for (const f of failed) out.push(`${REFUSAL.test(f.error ?? "") ? "refused" : "error"} ${cut(f.call, 200)}: ${cut(f.error ?? "", 300)}`);
   if (ev.text) out.push(`${ev.type === "result" ? "result" : "say"} ${cut(ev.text, 500)}`);
   else if (ev.type === "result") out.push(`result ${ev.subtype ?? ""}`.trim());
   return out;
@@ -582,7 +593,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     if (opts.subagents) {
       const sa = opts.subagents;
       const cli = `${sa.rpcDir}/bin/capcomd`;
-      const src = sa.cliSource.replace(/^#!.*\n/, `#!/usr/bin/env node\nprocess.env.CAPCOMD_RPC_DIR ||= ${JSON.stringify(sa.rpcDir)};\n`);
+      // CAPCOMD_CHECKOUT: the agent's checkout, where `capcomd fetch` has the host fetch into.
+      const src = sa.cliSource.replace(/^#!.*\n/, `#!/usr/bin/env node\nprocess.env.CAPCOMD_RPC_DIR ||= ${JSON.stringify(sa.rpcDir)};\nprocess.env.CAPCOMD_CHECKOUT ||= ${JSON.stringify(repo)};\n`);
       // boxd's file upload does not create parent dirs (fakes did, hiding this): make them first.
       must(await sh(`mkdir -p ${sq(`${sa.rpcDir}/bin`)} && chmod 700 ${sq(sa.rpcDir)}`), "mkdir capcomd rpc dir", "install");
       await provider.upload(vmId, cli, new TextEncoder().encode(src));
@@ -662,7 +674,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     const flushItems = () => { if (items.size || images.length) { opts.onItems?.([...items.values()], images.splice(0)); items.clear(); } };
     const namedCalls = new Set<string>();
     let lastTitle: string | null = null;
-    let consumed = 0, outConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
+    let consumed = 0, outConsumed = 0, errConsumed = 0, beatEvents = 0, exitCode: number | null = null, renewedAt = 0, spendAt = now();
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck, noChangeAfterMs: cfg.noChangeAfterMs }, now());
     let noticed: string | null = null, grantSeen = 0, spendStep = 0, inboxSeq = 0;
@@ -681,9 +693,24 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       if (!res.code) opts.onReport?.({ type: "checkpoint", sha: c.sha, ref: ckptRef, reason: c.reason, files: c.files });
     };
     const drain = async (final: boolean) => {
-      const res = await sh(`tail -n +${consumed + 1} ${sq(jsonl)} 2>/dev/null; printf '\\n__CAPCOMD_OUTBOX__\\n'; tail -n +${outConsumed + 1} ${sq(outbox)} 2>/dev/null; printf '\\n__CAPCOMD_EXIT__%s' "$(cat ${sq(exitFile)} 2>/dev/null)"`);
-      const [rest, exitPart] = res.stdout.split("\n__CAPCOMD_EXIT__");
+      // A CLI that reports refusals only on stderr (adapter.refusal): its new stderr lines too.
+      const errTail = adapter.refusal ? `printf '\\n__CAPCOMD_ERR__\\n'; tail -n +${errConsumed + 1} ${sq(errFile)} 2>/dev/null | head -n 2000; ` : "";
+      const res = await sh(`tail -n +${consumed + 1} ${sq(jsonl)} 2>/dev/null; printf '\\n__CAPCOMD_OUTBOX__\\n'; tail -n +${outConsumed + 1} ${sq(outbox)} 2>/dev/null; ${errTail}printf '\\n__CAPCOMD_EXIT__%s' "$(cat ${sq(exitFile)} 2>/dev/null)"`);
+      const [rest0, exitPart] = res.stdout.split("\n__CAPCOMD_EXIT__");
+      const [rest, errPart] = adapter.refusal ? (rest0 ?? "").split("\n__CAPCOMD_ERR__\n") : [rest0, undefined];
       const [body, outPart] = (rest ?? "").split("\n__CAPCOMD_OUTBOX__\n");
+      if (errPart !== undefined) {
+        const errLines = errPart.split("\n");
+        // Complete lines only: the last one may still be being written (read next time), unless the run is over.
+        if (!final && !errPart.endsWith("\n")) errLines.pop(); else if (errLines[errLines.length - 1] === "") errLines.pop();
+        errConsumed += errLines.length;
+        for (const l of errLines) {
+          const ref = adapter.refusal!(l, r);
+          if (!ref) continue;
+          addSpanEvent(span, "agent.refused", { "agent.tool": ref.call.slice(0, 300), "agent.text": ref.reason });
+          logLines.push(`refused ${cutLine(ref.call, 300)}: ${cutLine(ref.reason, 300)}`);
+        }
+      }
       // The supervisor's reports: complete lines only (a line still being written is read next time).
       let ckpt: { sha: string; reason: string; files: number } | null = null;
       for (const line of (outPart ?? "").split("\n")) {
@@ -875,7 +902,17 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Plugin API §16.1: an orchestrate agent's work is its children's branches; it has none of its own to push.
     if (cfg.toolMode === "orchestrate") {
       setSpanAttributes(span, { "agent.no_changes": true, "agent.tool_mode": "orchestrate" });
-      return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
+      // What it changed anyway (a CLI whose rules can't see a shell redirection: codex) is left in its checkout, never
+      // committed or pushed; said in its log and trace, so nobody takes it for work that landed.
+      const changed = (await git(["status", "--porcelain"], repo).catch(() => null))?.stdout.split("\n").filter((l) => l.trim()).map((l) => l.slice(3)) ?? [];
+      const commits = Number((await git(["rev-list", "--count", "HEAD", "--not", "--remotes"], repo).catch(() => null))?.stdout.trim() || 0);
+      if (changed.length || commits > 0) {
+        const what = [changed.length ? `changes to ${changed.slice(0, 10).join(", ")}${changed.length > 10 ? ` and ${changed.length - 10} more` : ""}` : "", commits > 0 ? `${commits} local commit${commits === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+        addSpanEvent(span, "agent.orchestrate_discarded", { "agent.text": r.text(what), "agent.discarded_files": changed.length, "agent.discarded_commits": commits });
+        opts.onLog?.([`[capcomd] orchestrate: left behind ${what}; an orchestrate agent's own changes never land`]);
+      }
+      const resultText = r.text(state.resultText ?? "").slice(-4000);
+      return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...resetAt };
     }
 
     // 5. Commit with capcomd trailers and push the task branch.

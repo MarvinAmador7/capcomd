@@ -930,7 +930,14 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const limit = typeof rec.limit === "string" ? rec.limit : null;
   const limitOf = limit ? { limit, error: `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
   const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
-  const fin = await s.finish({ agentId, status: limit ? "failed" : "done", spent, result: { ...declared, ...verdictOf, ...reportOf, ...limitOf, verification: null, branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+  // Plugin API §16.1: an orchestrate agent's work is the agents it spawns. One that spawned none (its tools refused,
+  // or it gave up) did nothing that can land: it failed, with its own last words, never a silent "done".
+  const orchestrate = (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate";
+  const lastWords = orchestrate && typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
+  const blocked = orchestrate && !limit && !(await s.listAgents({})).some((x: ScopeAgent) => x.parent === agentId)
+    ? { error: `${agentId} is an orchestrate agent and spawned no agents, so nothing it did can land${lastWords ? `. It said: ${lastWords.slice(0, 500)}` : ""}`, errorKind: "orchestrate_no_children" } : {};
+  const said = orchestrate && !declared.summary && lastWords ? { summary: lastWords } : {};
+  const fin = await s.finish({ agentId, status: limit || "error" in blocked ? "failed" : "done", spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, verification: null, branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
   return fin.agent;
 }
 
@@ -1092,7 +1099,7 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
   // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.
   const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
   const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
-  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent }), kind, rpcDir };
+  const params = { skill: orchestrationSkill({ agentId, limits: a.limits, budget: a.budget, mcp: true, goal: goal ?? null, root: !a.parent, orchestrate: (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate" }), kind, rpcDir };
   return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
 }
 
@@ -1567,8 +1574,18 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
     ...(g.checksMs !== undefined ? { checksRunMs: g.checksMs, checksWhere: g.checksWhere } : {}),
     ...(review && reviewStarted ? { reviewMs: end - reviewStarted, reviewWith: reviewStarted < c0 + checksMs ? "checks" : "after_checks" } : {}),
   };
+  // Said plainly: the checks ran on this change put on the target as it is now, the run's earlier merges included.
+  const ranChecks = out.status === "verified" || (out.status === "failed" && g.checksMs !== undefined);
+  const combinedOn = out.status === "verified" ? (out.targetSha ?? null) : null;
+  const none = g.checksWhere === "none";
+  const combined: CombinedChecks | null = ranChecks ? await earlierMergesOf(runId, target, { on: combinedOn, before: Date.now() })
+    .then((n) => none
+      ? { checked: false, passed: null, at: "verify" as const, on: combinedOn, earlierMerges: n, text: `no checks are configured, so nothing ran on the combined code (this change on ${target} as it is now, with ${mergesText(n)})` }
+      : { checked: true, passed: checksPassed, at: "verify" as const, on: combinedOn, earlierMerges: n, text: `checks ran on the combined code (this change on ${target} as it is now, with ${mergesText(n)}): ${checksPassed ? "pass" : "fail"}` })
+    .catch(() => null) : null;
   const result = {
     pass, branch, target, commit: out.status === "verified" ? (out.taskSha ?? null) : null, ...(alreadyMerged ? { alreadyMerged: true, mergedSha: out.sha } : {}),
+    ...(combined ? { combined } : {}),
     // What the checks ran on: the branch put on the target (`sha`, the commit a merge pushes when the target is still `targetSha`).
     ...(out.status === "verified" && out.sha && out.targetSha ? { tested: { sha: out.sha, targetSha: out.targetSha, ...(out.how ? { how: out.how } : {}) } } : {}),
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
@@ -1752,9 +1769,10 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   const merged = out.status === "merged";
   const g = out.timings ?? {};
   const timings = { totalMs: Date.now() - t0, queueMs: g.lockWaitMs ?? 0, ...Object.fromEntries(Object.entries(g).filter(([k]) => k !== "lockWaitMs")) };
+  const combined = await combinedOfMerge(runId, op, d.target, out, (v?.result?.timings as { checksWhere?: string } | undefined)?.checksWhere);
   const result = merged
-    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}), ...(out.bypassedVetoes?.length ? { bypassedVetoes: out.bypassedVetoes } : {}), timings }
-    : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), timings };
+    ? { merged: true, sha: out.sha, how: out.how, already: out.already, mode: out.mode, ...(out.pr ? { pr: out.pr } : {}), ...(out.targetBefore ? { targetBefore: out.targetBefore } : {}), ...(out.bypassedVetoes?.length ? { bypassedVetoes: out.bypassedVetoes } : {}), ...(combined ? { combined } : {}), timings }
+    : { merged: false, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), ...(combined ? { combined } : {}), timings };
   const fin = opView(await s.finishOp({ opId: op.id, state: merged ? "merged" : "failed", result }));
   if (d.agentId) await s.annotateResult({ agentId: d.agentId, patch: { merge: { id: op.id, target: d.target, state: merged ? "merged" : "failed", ...(merged ? { sha: out.sha, ...(out.pr ? { pr: out.pr } : {}) } : { status: out.status }) } } }).catch(() => {});
   // Its checkpoints were only for continuing the work, which has landed now: deleted after the record, off its path
@@ -1764,6 +1782,57 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
     cleanups.add(p);
   }
   return fin;
+}
+
+/**
+ * Whether a verify's or a merge's checks ran on the combined code, said plainly (`result.combined`, additive): the
+ * change put on the target as it was then, with the run's earlier merges into that target already on it. Every merge
+ * that lands in direct mode lands a tree that passed: the one its verify checked (the fast path: the target hadn't
+ * moved), or the change put on the target again and checked again (the full path).
+ */
+export interface CombinedChecks {
+  /** The checks ran on this change combined with the target (false: nothing new was checked, e.g. already merged). */
+  checked: boolean;
+  passed: boolean | null;
+  /** When they ran: at the verify (a fast-path merge lands that very tree) or at the merge. */
+  at: "verify" | "merge";
+  /** The target commit the change was put on, when known. */
+  on: string | null;
+  /** The run's merges into this target already on `on` (or, without it, merged before this one). */
+  earlierMerges: number;
+  text: string;
+}
+
+/** How many of the run's merges into `target` the commit `on` holds (the merges landed up to it), else all merged before `before`. */
+async function earlierMergesOf(runId: string, target: string, o: { on?: string | null; before?: number; except?: string }): Promise<number> {
+  const ops = (await client().scope.getOrCreate([runId]).listOps({ kind: "merge", state: "merged" }) as import("../actors/scope").ScopeOp[])
+    .filter((m) => m.id !== o.except && m.data.target === target && m.result?.merged && !m.result.already && typeof m.result.sha === "string")
+    .sort((a, b) => a.updatedAt - b.updatedAt);
+  const at = o.on ? ops.findIndex((m) => m.result!.sha === o.on) : -1;
+  if (at >= 0) return at + 1;
+  return o.before !== undefined ? ops.filter((m) => m.updatedAt <= o.before!).length : 0;
+}
+const mergesText = (n: number) => `${n} earlier merge${n === 1 ? "" : "s"} from this run`;
+
+async function combinedOfMerge(runId: string, op: import("../actors/scope").ScopeOp, target: string, out: import("../merge/types").MergeOutcome, verifiedWhere?: string): Promise<CombinedChecks | null> {
+  const g = out.timings ?? {};
+  try {
+    if (out.status === "merged") {
+      if (out.already) return { checked: false, passed: null, at: "merge", on: null, earlierMerges: await earlierMergesOf(runId, target, { before: Date.now(), except: op.id }), text: `already on ${target}: nothing new landed, so no checks ran` };
+      const on = out.targetBefore ?? null;
+      const n = await earlierMergesOf(runId, target, { on, before: op.createdAt, except: op.id });
+      // No check command configured: nothing ran, on any tree.
+      if ((g.path === "fast" ? verifiedWhere : g.checksWhere) === "none") return { checked: false, passed: null, at: g.path === "fast" ? "verify" : "merge", on, earlierMerges: n, text: `no checks are configured, so nothing ran on the combined code (this change on ${target} with ${mergesText(n)})` };
+      if (g.path === "fast") return { checked: true, passed: true, at: "verify", on, earlierMerges: n, text: `checks ran on the combined code (this change on ${target} with ${mergesText(n)}) at its verify, and ${target} hadn't moved since, so what landed is the tree that passed: pass` };
+      if (g.checksWhere === "reused") return { checked: true, passed: true, at: "merge", on, earlierMerges: n, text: `the combined code (this change on ${target} with ${mergesText(n)}) is a tree that already passed the checks: pass` };
+      if (g.checksMs !== undefined) return { checked: true, passed: true, at: "merge", on, earlierMerges: n, text: `checks ran on the combined code (this change on ${target} with ${mergesText(n)}): pass` };
+      return null;
+    }
+    const n = await earlierMergesOf(runId, target, { before: Date.now(), except: op.id });
+    if (out.status === "conflict") return { checked: false, passed: null, at: "merge", on: out.targetSha || null, earlierMerges: n, text: `this change doesn't combine with ${target} (${mergesText(n)}): conflicts in ${out.files.slice(0, 5).join(", ")}; no checks ran` };
+    if (out.status === "failed" && g.checksMs !== undefined && g.pushMs === undefined && !out.held) return { checked: true, passed: false, at: "merge", on: null, earlierMerges: n, text: `checks ran on the combined code (this change on ${target} with ${mergesText(n)}): fail` };
+  } catch { /* best effort: the merge's record stands without it */ }
+  return null;
 }
 
 /** The last lines of a check's output that name the failure ("expected …", "1 fail"), at most 3 of 160 characters, or else

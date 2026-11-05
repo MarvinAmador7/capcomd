@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { planProject, testTools } from "../../src/config/project-setup";
+import { LEAD_DESCRIPTION, PLANNER_DESCRIPTION, planProject, testTools } from "../../src/config/project-setup";
 import { abilityText, leadText, validateFile, widenings, type AgentsFile } from "../../src/agents/profiles";
 import { applyGrant, childLimits, rootLimits } from "../../src/primitives/policy";
 import { placeCapacity, teamShapeHint } from "../../src/providers/capacity";
@@ -20,7 +20,7 @@ describe("the profiles setup writes", () => {
     const by = Object.fromEntries(plan.profiles);
     expect(plan.profiles.map(([n]) => n)).toEqual(["worker", "reviewer", "lead", "planner"]);
     // Plugin API §16.1: the lead and the planner orchestrate; their workers do the work.
-    expect(by.lead).toEqual({ ...by.worker, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });
+    expect(by.lead).toEqual({ ...by.worker, description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });
     expect(by.planner!.toolMode).toBe("orchestrate");
     expect(by.worker!.toolMode).toBeUndefined();
     const file: AgentsFile = { schema: "capcomd.agents/v1", default: "worker", agents: by as any };

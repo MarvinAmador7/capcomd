@@ -94,6 +94,9 @@ export interface AgentConfig {
   allowedTools?: string[];
   disallowedTools?: string[];
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Command prefixes (a command's first words, e.g. `git push`) the CLI must refuse: an `orchestrate` agent's
+   *  `toolPolicies.orchestrate.denyCommands` (§16.1), for a CLI that takes command rules of its own (codex execpolicy). */
+  denyCommands?: string[];
   /** `auto`: the sandbox's host-bound secret placeholder when it has one, else the key in the agent's environment. */
   credentialMode: "auto" | "secret" | "env" | "subscription" | "none";
   /** USD per million tokens, for a CLI that reports tokens and not cost: the provider's budget guard estimates from
@@ -144,11 +147,14 @@ export interface AgentProvider {
     /** The CLI reads user messages on stdin while it runs (`send` reaches it mid-run). */
     streamInput: boolean;
     loginEgress: readonly string[];
-    /** The tool lists that make an `orchestrate` agent (ADR-024 `tools.mode`, §16.1): only reading and the capcomd
-     *  command; no file edits, no work shell. The kernel applies them on top of the profile's own lists: `allowed`
-     *  replaces the profile's allowlist (or narrows it to these), `disallowed` joins its denylist, and `sandbox`, for
-     *  a CLI whose own sandbox is the limit (codex `--sandbox`), is the loosest mode the agent runs in. */
-    toolPolicies: { orchestrate: { allowed: readonly string[]; disallowed: readonly string[]; sandbox?: "read-only" | "workspace-write" } };
+    /** The tool lists that make an `orchestrate` agent (ADR-024 `tools.mode`, §16.1): it sees everything (reading and
+     *  searching files, read-only git with fetch, every capcomd read) and runs nothing that changes or runs code (no
+     *  edits, commits, merges, pushes, installs, builds or tests: those are its children's, checked at verify and
+     *  merge). The kernel applies them on top of the profile's own lists: `allowed` replaces the profile's allowlist
+     *  (or narrows it to these), `disallowed` joins its denylist, `denyCommands` (command prefixes, for a CLI with
+     *  command rules of its own and no per-tool allowlist: codex execpolicy) joins `AgentConfig.denyCommands`, and
+     *  `sandbox`, for a CLI whose own sandbox is the limit (codex `--sandbox`), is the loosest mode the agent runs in. */
+    toolPolicies: { orchestrate: { allowed: readonly string[]; disallowed: readonly string[]; denyCommands?: readonly string[]; sandbox?: "read-only" | "workspace-write" } };
   };
   /** Is this provider usable here now (its CLI pinned in the environment, a login or key present)? */
   available(input: { sandbox: string; auth: "apikey" | "subscription" }, c: SeamCall): Promise<{ ok: true } | { ok: false; reason: string; fix: string | null }>;
@@ -166,6 +172,10 @@ export interface AgentProvider {
   loginCommand(bin: string): string[];
   verifyCommand(bin: string, q: (s: string) => string): string;
   outcome(state: AgentRunState, exitCode: number): { ok: boolean; stopReason: string };
+  /** Optional, pure: a tool call the CLI refused, from one line of its stderr (`ctx.errFile`), for a CLI that reports
+   *  refusals only there (codex 0.163 logs a command its rules forbid and leaves it out of `--json`); null otherwise.
+   *  `reason` must pass `redact`. The kernel shows it in the agent's log as `refused <call>: <reason>`. */
+  refusal?(line: string, redact: (s: string) => string): { call: string; reason: string } | null;
 }
 
 const CREDENTIAL_KEY = /api[_-]?key|token|secret|password|authorization/i;
