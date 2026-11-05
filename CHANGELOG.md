@@ -5,6 +5,22 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `capcomd check <runId> [<branch|agt>]` runs the run's checks on that branch's commit as it is (default: the
+  run's target, so the combined code after its merges), in a fresh sandbox like `capcomd verify`, and prints the full
+  output and pass or fail. It merges, integrates and reviews nothing. Pick one of the run's named checks with
+  `--check NAME` (or a command of your own with `--checks CMD`); show an earlier check again with `--id chk-…`. The
+  driver gets it as `capcomd_check`, and agents that lead or plan get it in their VM (`capcomd check`, or the
+  `capcomd_check` tool), so a planner or lead that runs nothing itself can see whether the combined code works. The
+  same commit checked with the same command is one check (asking again, or two agents asking at once, gets that
+  check); `--key` checks it again. On Docker a check waits for a free agent slot like an agent does. Each check is on
+  the run's stream as `check.started` and `check.passed` or `check.failed` (`CHECK_*` in `capcomd events`), and
+  `capcomd await` / `capcomd_await {ops}` take its `chk-…` id.
+- **Breaking:** a planner or lead in orchestrate mode that changes files or commits in its checkout now fails, naming
+  the files (`result.errorKind: "orchestrate_wrote_files"`, `result.wrote`), on every provider: Claude Code's rules
+  already refused its edits, but Codex's could be got past (`echo x > f`, `sh -c`). It is stopped when the turn in
+  which it wrote ends. Before, what it wrote was dropped and only logged, and it could still end done. Its changes
+  are still never committed or pushed, and its checkout is no longer checkpointed. If one fails this way, give that
+  work to a worker it spawns.
 - A merge a plugin holds for your approval now shows the files it changes, as a merge into a protected branch does:
   on the approval card in the apps (`subject.files`), on the `merge.approval_requested` event, and in `capcomd merge`
   and `capcomd approve`, which also print the plugin's reason. For plugin authors, a `merge.landing` hold can carry an

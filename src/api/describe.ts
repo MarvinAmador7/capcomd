@@ -56,6 +56,10 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "merge.approval_requested": return "A merge is waiting for your approval.";
 		case "merge.approved": return "The merge was approved.";
 		case "merge.denied": return "The merge was denied.";
+		// Branch names are ref-safe (letters, digits, . _ - /), checked when the check was asked for.
+		case "check.started": return `${agentId && d.askedBy === agentId ? `${a} asked for the checks on` : "Checking"} ${typeof d.branch === "string" ? d.branch : "a branch"}.`;
+		case "check.passed": return `The checks passed on ${typeof d.branch === "string" ? d.branch : "the branch"}.`;
+		case "check.failed": return d.checks?.status === "missing" ? `Couldn't check ${typeof d.branch === "string" ? d.branch : "the branch"}: it isn't on the repository.` : `The checks failed on ${typeof d.branch === "string" ? d.branch : "the branch"}.`;
 		case "approval.requested": return `Waiting for your approval (${d.kind ?? "request"}).`;
 		case "approval.decided": return `Approval ${d.status ?? "decided"}.`;
 		case "task.added": return "A task was added.";

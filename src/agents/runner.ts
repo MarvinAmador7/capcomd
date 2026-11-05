@@ -71,6 +71,23 @@ export interface AgentResult {
   limit?: string;
   /** limit "quota": when the provider's usage limit resets (ms epoch), if it said. */
   resetAt?: number;
+  /**
+   * Plugin API §16.1: an orchestrate agent whose checkout had changed files or new commits at the end of a turn or of
+   * its run (a CLI whose rules a shell trick gets past: `echo x > f`, `sh -c`). The agent fails; nothing it wrote is
+   * committed or pushed. `files`: the changed paths (at most 50), `total`: how many, `commits`: its local commits.
+   */
+  orchestrateWrites?: OrchestrateWrites;
+}
+
+/** What an orchestrate agent wrote although it may not (AgentResult.orchestrateWrites). */
+export interface OrchestrateWrites { files: string[]; total: number; commits: number; at: "turn" | "end" }
+
+/** "changed notes.txt, src/a.ts and 3 more, and made 1 commit": what an orchestrate agent wrote, in words. */
+export function orchestrateWritesText(w: { files: string[]; total: number; commits: number }): string {
+  const shown = w.files.slice(0, 10);
+  const files = w.total ? `changed ${shown.join(", ")}${w.total > shown.length ? ` and ${w.total - shown.length} more` : ""}` : "";
+  const commits = w.commits ? `made ${w.commits} local commit${w.commits === 1 ? "" : "s"}` : "";
+  return [files, commits].filter(Boolean).join(", and ");
 }
 
 export interface AgentRunOptions {
@@ -156,6 +173,9 @@ const STUCK_STOPS: Record<string, string> = {
 export const stoppedAt = (limit: string) => STUCK_STOPS[limit] ?? `stopped at its ${limit} limit`;
 /** The CLI's own stop reasons that mean "out of budget", not "broken" (claude result subtypes; `timeout` exit 124). */
 const LIMIT_STOPS: Record<string, string> = { timeout: "timeout", error_max_turns: "max_turns", error_max_budget_usd: "max_budget_usd" };
+/** The events that end an agent CLI's turn (Claude Code's `result`, codex's `turn.completed`): an orchestrate agent's
+ *  checkout is looked at then. A provider whose turns end otherwise is looked at when it ends. */
+const TURN_ENDS = new Set(["result", "turn_completed"]);
 
 /** The supervisor program, uploaded into each VM next to the agent. */
 
@@ -632,6 +652,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     const supervised = (await sh(`node -e 'process.stdout.write(+process.versions.node.split(".")[0] >= 16 ? "yes" : "no")' 2>/dev/null; true`)).stdout.trim() === "yes";
     // Messages sent to it while it runs reach it through the supervisor, when its CLI reads input as it goes.
     const streaming = supervised && !!adapter.streamInput && !task.review;
+    // Plugin API §16.1: a planner or lead that sees everything and runs nothing; whatever it writes is never committed.
+    const orchestrate = cfg.toolMode === "orchestrate";
     const inboxFile = `${W}/inbox.jsonl`;
     const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}) }, sq)}`;
     if (supervised) {
@@ -639,7 +661,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       await provider.upload(vmId, `${W}/supervisor.mjs`, new TextEncoder().encode(SUPERVISOR_SOURCE));
       await provider.upload(vmId, `${W}/supervisor.json`, new TextEncoder().encode(JSON.stringify({
         script: `${W}/agent.sh`, dir: W, repo, jsonl, outbox, ref: ckptRef, agentId: task.agentId ?? task.taskId,
-        heartbeatMs: opts.heartbeatMs ?? 30_000, checkpointEveryMs: task.review || task.report ? 0 : cfg.checkpointEveryMs,
+        heartbeatMs: opts.heartbeatMs ?? 30_000, checkpointEveryMs: task.review || task.report || orchestrate ? 0 : cfg.checkpointEveryMs,
+        // §16.1: an orchestrate agent's checkout is never snapshotted (a checkpoint is a commit, pushed to its ref).
+        ...(orchestrate ? { checkpoints: false } : {}),
         ...(cfg.noChangeAfterMs ? { reportTree: true } : {}),
         ...(streaming ? { input: { prompt: `${W}/prompt.txt`, inbox: inboxFile } } : {}),
       })));
@@ -680,7 +704,31 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     let noticed: string | null = null, grantSeen = 0, spendStep = 0, inboxSeq = 0;
     // The supervisor takes it at its next heartbeat; reviewers and reporting agents don't checkpoint.
     const requestCheckpoint = async (reason: string) => {
-      if (supervised && !task.review && !task.report) await sh(`printf %s ${sq(reason)} > ${sq(`${W}/checkpoint.request`)}`).catch(() => {});
+      if (supervised && !task.review && !task.report && !orchestrate) await sh(`printf %s ${sq(reason)} > ${sq(`${W}/checkpoint.request`)}`).catch(() => {});
+    };
+    // Plugin API §16.1: what an orchestrate agent changed in its checkout (it may change nothing): files, and commits on
+    // no remote branch. Looked at when a turn ends (its CLI's result) and when it ends.
+    let turnEnded = false;
+    let wrote: OrchestrateWrites | null = null;
+    const orchestrateChanges = async (at: OrchestrateWrites["at"]): Promise<OrchestrateWrites | null> => {
+      const st = await git(["status", "--porcelain", "--untracked-files=all"], repo).catch(() => null);
+      const files = st?.code === 0 ? st.stdout.split("\n").filter((l) => l.trim()).map((l) => l.slice(3).replace(/^"(.*)"$/, "$1")) : [];
+      const rl = await git(["rev-list", "HEAD", "--not", "--remotes"], repo).catch(() => null);
+      const ahead = rl?.code === 0 ? rl.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+      let commits = ahead.length;
+      if (commits) {
+        // Only commits made here count, not one it checked out to read (a helper's checkpoint it fetched, a branch pruned
+        // since): the HEAD reflog shows each commit made here (commit, merge, reset, …) and one that came by a checkout
+        // alone as `checkout:`. A HEAD the reflog doesn't explain (none kept, or written by hand) counts as before.
+        const lg = await git(["reflog", "show", "--format=%H%x09%gs", "HEAD"], repo).catch(() => null);
+        const entries = lg?.code === 0 ? lg.stdout.split("\n").filter((l) => l.includes("\t")).map((l) => [l.slice(0, l.indexOf("\t")), l.slice(l.indexOf("\t") + 1)] as const) : [];
+        const head = (await git(["rev-parse", "HEAD"], repo).catch(() => null))?.stdout.trim();
+        if (head && entries[0]?.[0] === head) {
+          const made = new Set(entries.filter(([, s]) => !s.startsWith("checkout: ")).map(([h]) => h));
+          commits = ahead.filter((h) => made.has(h)).length;
+        }
+      }
+      return files.length || commits ? { files: files.slice(0, 50).map((f) => r.text(f).slice(0, 300)), total: files.length, commits, at } : null;
     };
     const startedAt = now();
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
@@ -688,6 +736,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     let limit: string | null = null;
     // A checkpoint the supervisor made in the VM is pushed from here: the agent holds no push credentials.
     const pushCheckpoint = async (c: { sha: string; reason: string; files: number }) => {
+      if (orchestrate) return; // never pushed (the supervisor makes none for it either)
       const res = await git(["push", "--force", "--porcelain", "origin", `${c.sha}:${ckptRef}`], repo, 300_000).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
       addSpanEvent(span, "agent.checkpoint", { "git.sha": c.sha, "agent.checkpoint_reason": c.reason, "agent.checkpoint_files": c.files, ...(res.code ? { "agent.checkpoint_error": r.text(res.stderr).slice(-300) } : {}) });
       if (!res.code) opts.onReport?.({ type: "checkpoint", sha: c.sha, ref: ckptRef, reason: c.reason, files: c.files });
@@ -743,6 +792,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         for (const n of namingCalls(ev.raw)) if (!namedCalls.has(n.callId)) { namedCalls.add(n.callId); lastTitle = n.title; opts.onTitle?.(n); }
         logLines.push(...logLinesOf(ev));
         if (thread) for (const d of thread.event(ev.raw)) items.set(d.id, d);
+        if (orchestrate && TURN_ENDS.has(ev.type)) turnEnded = true;
       }
       if (logLines.length) { opts.onLog?.(logLines.splice(0)); }
       if (thread && final) for (const d of thread.finish()) items.set(d.id, d);
@@ -787,6 +837,12 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         continue;
       }
       if (exitCode !== null) break;
+      // §16.1: an orchestrate agent that wrote something in the turn that just ended is stopped there (it fails below).
+      if (turnEnded) {
+        turnEnded = false;
+        wrote = await orchestrateChanges("turn");
+        if (wrote) { await kill(); await drain(true); break; }
+      }
       // The provider's usage limit: retrying now only hits it again, so stop and keep the work (the agent is paused).
       if (state.quota) {
         await kill(); await drain(true);
@@ -886,7 +942,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     setSpanAttributes(span, { "agent.billing": billing, "agent.notional_cost_usd": notionalCostUsd });
     setSpanAttributes(span, { "agent.exit_code": exitCode, "agent.cost_usd": costUsd, "agent.turns": turns, "agent.stop_reason": limit ?? out.stopReason, "agent.events": state.events, "gen_ai.response.cost": costUsd, "gen_ai.usage.input_tokens": state.inputTokens, "gen_ai.usage.output_tokens": state.outputTokens });
     if (limit) addSpanEvent(span, "agent.limit", { reason: limit });
-    if (!limit && !out.ok) {
+    // §16.1: what an orchestrate agent wrote ends it failed whatever else happened (stopped at a turn's end, a limit, an
+    // error of its CLI): that is the reason it gives.
+    if (orchestrate) wrote ??= await orchestrateChanges("end");
+    if (!limit && !out.ok && !wrote) {
       const err = await sh(`tail -c 2000 ${sq(errFile)} 2>/dev/null`);
       throw new AgentError("failed", `${name} stopped (${out.stopReason}, exit ${exitCode}) for ${key}: ${r.text(state.error ?? "")} ${r.text(err.stdout).slice(-800)}`.trim());
     }
@@ -902,16 +961,17 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Plugin API §16.1: an orchestrate agent's work is its children's branches; it has none of its own to push.
     if (cfg.toolMode === "orchestrate") {
       setSpanAttributes(span, { "agent.no_changes": true, "agent.tool_mode": "orchestrate" });
-      // What it changed anyway (a CLI whose rules can't see a shell redirection: codex) is left in its checkout, never
-      // committed or pushed; said in its log and trace, so nobody takes it for work that landed.
-      const changed = (await git(["status", "--porcelain"], repo).catch(() => null))?.stdout.split("\n").filter((l) => l.trim()).map((l) => l.slice(3)) ?? [];
-      const commits = Number((await git(["rev-list", "--count", "HEAD", "--not", "--remotes"], repo).catch(() => null))?.stdout.trim() || 0);
-      if (changed.length || commits > 0) {
-        const what = [changed.length ? `changes to ${changed.slice(0, 10).join(", ")}${changed.length > 10 ? ` and ${changed.length - 10} more` : ""}` : "", commits > 0 ? `${commits} local commit${commits === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
-        addSpanEvent(span, "agent.orchestrate_discarded", { "agent.text": r.text(what), "agent.discarded_files": changed.length, "agent.discarded_commits": commits });
-        opts.onLog?.([`[capcomd] orchestrate: left behind ${what}; an orchestrate agent's own changes never land`]);
-      }
+      // What it changed anyway (a CLI whose rules a shell trick gets past: codex and `echo x > f`) fails it: the agent
+      // is told nothing landed and why, its changes stay in its checkout, never committed or pushed, and its log and
+      // trace say which files.
       const resultText = r.text(state.resultText ?? "").slice(-4000);
+      if (wrote) {
+        const what = orchestrateWritesText(wrote);
+        addSpanEvent(span, "agent.orchestrate_discarded", { "agent.text": r.text(what), "agent.discarded_files": wrote.total, "agent.discarded_commits": wrote.commits, "agent.orchestrate_failed": true, "agent.orchestrate_at": wrote.at });
+        setSpanAttributes(span, { "agent.orchestrate_wrote": true });
+        opts.onLog?.([`[capcomd] orchestrate: it ${what}${wrote.at === "turn" ? " in a turn, so it was stopped there" : ""}; an orchestrate agent writes nothing, so it fails (its changes are discarded, never committed or pushed)`]);
+        return { sha: "", already: false, costUsd, turns, stopReason: "orchestrate_wrote_files", events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(resultText ? { resultText } : {}), orchestrateWrites: wrote };
+      }
       return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...resetAt };
     }
 

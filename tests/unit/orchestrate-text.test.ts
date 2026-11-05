@@ -30,6 +30,9 @@ describe("the mode, explained", () => {
     expect(b).toContain("A lead orchestrates as you do: it runs nothing, so never ask it to run tests, builds or the program");
     expect(b).toContain("result.combined");
     expect(b).toContain("a shell variable like `id=$(capcomd spawn …)` can't be checked");
+    // capcomd check: how it knows the combined code works, running nothing itself; and what writing costs it.
+    expect(b).toContain("`capcomd check` runs the run's checks on capcomd/goal as it is");
+    expect(b).toContain("Anything you write fails you");
     expect(b).not.toMatch(RUNS_CODE);
     // A planner that executes isn't told it orchestrates.
     const exec = plannerBrief("build textstat", gates);
@@ -42,7 +45,10 @@ describe("the mode, explained", () => {
     expect(s).toContain("## You orchestrate: you see everything and run nothing");
     expect(s).toContain("`capcomd fetch` (capcomd_fetch) brings in the latest branches");
     expect(s).toContain("install packages, or run builds, tests or the program: those are refused");
-    expect(s).toContain("Report those results; don't try to re-run them.");
+    expect(s).toContain("Report those results; don't try to re-run them yourself.");
+    expect(s).toContain("`capcomd check` (capcomd_check) runs the run's checks on your target as it is");
+    expect(s).toContain("capcomd check [branch|agt]");
+    expect(s).toContain("Anything you write fails you");
     expect(s).not.toMatch(RUNS_CODE);
     expect(orchestrationSkill({ agentId: "agt-1", limits, budget: {}, mcp: true })).not.toContain("You orchestrate");
   });
@@ -51,7 +57,8 @@ describe("the mode, explained", () => {
     const by = Object.fromEntries(planProject({ dir: mkdtempSync(join(tmpdir(), "capcomd-ot-")), repo: "https://github.com/a/b.git", mode: "direct", target: "main", check: "bun test", agents: ["claude"], authOf: () => "subscription", cap: null }).profiles);
     expect(by.lead!.description).toBe(LEAD_DESCRIPTION);
     expect(by.planner!.description).toBe(PLANNER_DESCRIPTION);
-    for (const d of [LEAD_DESCRIPTION, PLANNER_DESCRIPTION]) { expect(d).toContain("sees everything"); expect(d).toContain("runs nothing (no edits, commits, installs, builds or tests)"); expect(d).toContain("checks run at verify and merge"); }
+    for (const d of [LEAD_DESCRIPTION, PLANNER_DESCRIPTION]) { expect(d).toContain("sees everything"); expect(d).toContain("runs nothing (no edits, commits, installs, builds or tests)"); expect(d).toContain("checks run at verify and merge"); expect(d).toContain("on the combined code with capcomd check"); }
+    expect(ORCHESTRATE_TEXT).toContain("capcomd check runs them on the combined code when it asks");
     expect(LEAD_DESCRIPTION).toContain("give it no task that needs it to run code itself (its helpers write and test the code)");
     const lead = abilityText(by.lead as any);
     expect(lead).toContain("leads a part: spawns up to 3 worker helpers, one level");
@@ -66,6 +73,9 @@ describe("the mode, explained", () => {
     expect(skill).toContain("they see everything");
     expect(skill).toContain("and run nothing themselves (no edits, commits, installs, builds or tests).\nA lead still takes a part as before: its helpers write and test the code.");
     expect(skill).toContain("`result.combined.text`");
+    expect(INSTRUCTIONS).toContain("capcomd_check (capcomd check in its VM) runs them on the combined code on demand");
+    expect(skill).toContain("`capcomd_check` (`capcomd check` in its VM) runs the run's checks on the combined code as it is");
+    expect(skill).toContain("An orchestrate agent that writes a file or commits anyway fails");
   });
 });
 
