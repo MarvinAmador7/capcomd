@@ -777,12 +777,14 @@ final class ReelView: NSView, ReelColumnViews {
 }
 
 /// The reel's scroll view: it follows the fingers during a swipe and hands the landing to the reel instead of the
-/// system's momentum, so it always comes to rest on a column edge.
+/// system's momentum (and ends AppKit's own deceleration, ReelRelease), so it always comes to rest on a column edge.
 final class SnapScrollView: NSScrollView {
   weak var reel: ReelView?
   private var swallowMomentum = false
   private var samples: [(t: TimeInterval, dx: CGFloat)] = []
   private var wheelTimer: Timer?
+  /// `reel.release` (DeskKnobs): whether the reel ends AppKit's own deceleration when the fingers lift.
+  private let endsAppKitDeceleration = DeskKnobs.reelRelease.value == .land
 
   override func scrollWheel(with e: NSEvent) {
     GestureTap.scrollWheel(e)   // nil unless a gesture recording was asked for (GestureTap.swift)
@@ -810,8 +812,37 @@ final class SnapScrollView: NSScrollView {
       let v = samples.isEmpty ? 0 : samples.reduce(0) { $0 + $1.dx } / CGFloat(max(span, 1.0 / 120))
       samples = []
       swallowMomentum = true
+      // AppKit begins a deceleration of its own here, from the release velocity, and it would carry the reel past
+      // the column it lands on (ReelRelease). The reel lands; AppKit's deceleration ends now.
+      if endsAppKitDeceleration, let end = ReelRelease.momentumEnded(after: e) { super.scrollWheel(with: end) }
       reel.gestureEnded(velocity: v)
     }
+  }
+}
+
+/// What the reel's scroll view hands AppKit when the fingers lift.
+///
+/// When a swipe's fingers lift (phase ended or cancelled), NSScrollView starts a deceleration of its own from the
+/// release velocity it read in the events' timestamps. It doesn't wait for the system's momentum events (the reel
+/// swallows those) and it follows the clip view wherever the reel's slide puts it, so it carried the reel past the
+/// column the reel had chosen: a slow drag by hand came to rest 25–31 pt off a column edge, a replayed flick up to
+/// ~200 pt (2026-11-04, DESKBENCH.md, Recorded gestures). A momentum-ended event with no deltas ends that deceleration at
+/// once, as the end of the system's own momentum would, and AppKit's live scroll ends with it.
+package enum ReelRelease {
+  /// The momentum-ended event that ends AppKit's deceleration after `release`: its time, place and window, no phase,
+  /// momentum ended, every delta 0. Nil if `release` has no CGEvent to copy.
+  package static func momentumEnded(after release: NSEvent) -> NSEvent? {
+    guard release.type == .scrollWheel, let c = release.cgEvent?.copy() else { return nil }
+    c.setIntegerValueField(.scrollWheelEventScrollPhase, value: 0)
+    c.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(CGMomentumScrollPhase.end.rawValue))
+    for f: CGEventField in [.scrollWheelEventDeltaAxis1, .scrollWheelEventDeltaAxis2, .scrollWheelEventDeltaAxis3,
+                            .scrollWheelEventPointDeltaAxis1, .scrollWheelEventPointDeltaAxis2, .scrollWheelEventPointDeltaAxis3] {
+      c.setIntegerValueField(f, value: 0)
+    }
+    for f: CGEventField in [.scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis3] {
+      c.setDoubleValueField(f, value: 0)
+    }
+    return NSEvent(cgEvent: c)
   }
 }
 

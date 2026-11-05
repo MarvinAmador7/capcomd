@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- In the Mac app's window, the agents' columns now always come to rest on a column edge after a slow drag with two
+  fingers. Before, a slow drag could leave them 25–30 pt off the edge, with a sliver of the next column showing.
 - The Mac app welcomes you the first time you open it: the capcomd bot comes on the air on your desktop, his crew pours
   out of his laptop, and the window opens around him. Then, in five short steps, it finds the capcomd command line
   tool, starts capcomd (at every login, or only now: your choice), pairs this Mac, signs in Claude Code and Codex,
