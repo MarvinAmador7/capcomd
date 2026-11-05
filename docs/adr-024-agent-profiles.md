@@ -1,6 +1,9 @@
 # ADR-024: Agent profiles v2, a composable unit on the plugin core
 
-Status: **Proposed** (draft, 2026-11-04). Builds on ADR-015 §6–7 (profiles and children policy), ADR-016 (primitives),
+Status: **Accepted, spec in [docs/spec/plugin-api.md](spec/plugin-api.md)** (2026-11-04): the plugin core this builds on
+is specified there (seams §7, `profile.resolved` and `agent.preparing` §6.6, `tools.mode` and the `jobs` block §16.1–16.2);
+§9 below records the owner's decisions and the judgment calls the spec made on the profile side. Proposed 2026-11-04.
+Builds on ADR-015 §6–7 (profiles and children policy), ADR-016 (primitives),
 ADR-017 (sub-agents), ADR-019 (optional limits) and ADR-023 (the plugin core). Research:
 [docs/research/plugin-architecture.md](research/plugin-architecture.md) §3 (Hermes profiles) and §5.
 
@@ -97,6 +100,9 @@ skills:
     hash: sha256:…                # pinned; a changed hash raises a notice, never a silent change
 
 tools:
+  mode: execute                   # execute | orchestrate (spec §16.1): an orchestrate agent routes, plans, spawns and
+                                  # decides; it never edits files, runs work commands or pushes a branch. The agent
+                                  # provider's tool lists enforce it in the sandbox; the kernel refuses to land its ref
   allowed: [Read, Glob, Grep, LS, "Bash(git diff:*)", "Bash(bun test:*)"]
   disallowed: []
   mcp:                            # MCP servers the agent CLI gets inside the sandbox (ADR-023 §4.5 wires them)
@@ -124,26 +130,31 @@ limits:                           # v1 names kept; all optional (ADR-019)
   stuckRepeats: 8
   noChangeAfterMs: null
 
+jobs:                             # background work (spec §16.2); all optional
+  foregroundMs: 60000             # a command run through capcomd's in-VM job wrapper returns "started" after this;
+                                  # default 5000 for tools.mode orchestrate, 60000 otherwise
+  max: 8                          # running jobs per agent
+  afterTurnMs: 1800000            # jobs are killed this long after the agent's last step, and when the agent ends
+
 lifecycle:
   checkpointEveryMs: 600000
-  onStart: []                     # hook plugins to run at agent.started for this profile (ADR-023 §5)
+  onStart: []                     # plugins that must be active for this profile; they listen to agent.changed (spec §6.6.8)
   onEnd: [post-review-summary]
 
 children:                         # v1 block, unchanged semantics (narrow-only)
   allowSpawn: false
 
 permissions:
-  approve: []                     # approval kinds an agent of this profile may decide for its subtree
-                                  # (budget, spawn_widen); never merge-to-protected, secret, egress (harness-architecture §5.3)
   report: true                    # may be spawned with --report (read-only, result is its final message)
+                                  # (`approve` is deferred, decision 3 in §9: approvals stay human; not in the v1 schema)
 
 sharing:
   source: github:acme/capcomd-profiles#security-critic   # written by `capcomd profiles install`
   license: MIT
 ```
 
-What is new against v1, by block: `identity`, `skills`, `tools.mcp`, `memory`, `sandbox.provider|environment|size`,
-`lifecycle.onStart|onEnd`, `permissions`, `sharing`, `version`, `extends`, `tags`. Everything in v1 has a home:
+What is new against v1, by block: `identity`, `skills`, `tools.mode`, `tools.mcp`, `memory`, `sandbox.provider|environment|size`,
+`jobs`, `lifecycle.onStart|onEnd`, `permissions`, `sharing`, `version`, `extends`, `tags`. Everything in v1 has a home:
 `provider/auth/model/effort` → `harness`; `systemPrompt/appendSystemPrompt` → `prompt`; `allowedTools/disallowedTools`
 → `tools`; `sandbox` (codex level) → `sandbox.codex`; `egress` → `sandbox.egress`; the limits and stuck windows →
 `limits`; `checkpointEveryMs` → `lifecycle`; `children` and `description` keep their names.
@@ -330,18 +341,36 @@ Each step ships alone, with tests, and leaves every existing test green.
 9. **`capcomd profiles migrate`** and the `setup project` templates in v2 form; `agents.json` v1 stays readable for two
    minor releases, then `validate` warns and a later release stops reading it (breaking, changelog).
 
-## 8. Risks and open questions
+## 8. Risks
 
 - **Two sources of truth during the overlap.** Mitigated by "directory wins, validate warns", and by `show` printing
   where every value came from.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
   environment is a readiness problem shown before the run (`GET /v1/run-options`), not a spawn failure.
-- **Persona text is prompt text.** It is agent-facing data; the fencing rules for agent-written text don't apply to a
-  file the operator installed, but an installed persona is as trusted as an installed skill: show the hash, ask once per
-  hash (harness-architecture.md §13.8 is still open on this).
-- **`permissions.approve`** extends what an ancestor agent may decide; the human-only kinds stay human. Whether to ship
-  it at all is the owner's call (harness-architecture.md §13.7).
-- **Open:** YAML or JSON as the written form (YAML proposed for packages because personas and prompts are multi-line;
-  JSON stays accepted); whether `extends` may cross projects (proposed: no, only user and bundled); whether a profile
-  may set `harness.provider` to a model-API provider without an agent CLI (ADR-023 §4.2 says a provider plugin may
-  supply its own adapter, so yes, later).
+- **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
+  per hash (decision 4 below).
+- A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam
+  implementation may supply its own runner parts (spec §7.3); not in this version.
+
+## 9. Decisions
+
+Decided by the owner on 2026-11-04:
+
+3. **`permissions.approve` is deferred.** Approvals stay human. It is out of the v1 schema; adding it later is a new
+   optional block, which never bumps the schema id (§2.4), and a `policy.ts` rule on the `agent` principal, which the
+   plugin core does not touch (spec §11.1).
+4. **Profile packages are YAML** (`profile.yaml`; JSON stays accepted). **`extends` cannot cross projects**: a parent is
+   found in the same project, the user's profiles or the bundled ones, never in another project's. **A project's skills
+   and personas get a one-time trust prompt per content hash** (`capcomd profiles trust`, the same mechanism as a
+   project plugin's, spec §4.8).
+
+Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
+
+| Decision | Spec |
+|---|---|
+| **`tools.mode: execute \| orchestrate`**: the planner never executes, as a profile capability. The agent provider's `describe().toolPolicies.orchestrate` gives the CLI's tool lists; `children.allowSpawn` must be true; the kernel refuses `verify`/`merge` of the agent's own ref and skips its push; `planner` and `lead` from `capcomd setup project` get it; `plannerBrief`'s "don't change files yourself" stays as explanation | §16.1 |
+| **A `jobs` block** (`foregroundMs`, `max`, `afterTurnMs`) with `foregroundMs` defaulting to 5 000 for orchestrate agents and 60 000 otherwise | §16.2 |
+| **`lifecycle.onStart`/`onEnd` name plugins that must be active**, which listen to `agent.changed` for that profile; there is no per-profile hook | §6.6.8 |
+| **`harness.provider` and `sandbox.provider` are seam names**, validated against the active plugins at `validate` | §7.1 |
+| **`identity.persona` and `skills` reach the prompt through `agent.preparing`**, the one place a plugin adds prompt text | §6.6.7 |
+| **`profile.resolved` patches are narrow-only through `widenings()`**, and must be pure (it fires on every resolution) | §6.6.5 |

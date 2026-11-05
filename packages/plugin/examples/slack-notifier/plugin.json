@@ -1,0 +1,31 @@
+{
+  "schema": "capcomd.plugin/v1",
+  "name": "slack-notifier",
+  "version": "1.0.0",
+  "description": "Posts a Slack message when a run ends, an agent fails or needs attention, and when work lands.",
+  "apiVersion": 1,
+  "engines": { "capcomd": ">=0.9.0 <1.0.0" },
+  "entry": { "runtime": "process", "command": ["bun", "${PLUGIN_ROOT}/index.ts"] },
+  "scopes": ["read"],
+  "order": "post",
+  "contributes": {
+    "hooks": {
+      "run.changed": {},
+      "agent.changed": {},
+      "merge.changed": {}
+    },
+    "events": ["posted"]
+  },
+  "config": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["webhook"],
+    "properties": {
+      "webhook": { "type": "string", "x-secret": true, "description": "The incoming-webhook URL. A secret reference ({\"$secret\": \"keychain:slack-webhook\"}), never the URL itself" },
+      "channel": { "type": "string", "default": "#capcomd" },
+      "quiet": { "type": "boolean", "default": false, "x-per-run": true, "description": "Post only failures and landed work for this run" }
+    }
+  },
+  "homepage": "https://github.com/acme/capcomd-slack",
+  "license": "MIT"
+}

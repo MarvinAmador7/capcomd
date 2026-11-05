@@ -1,0 +1,424 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capcomd.dev/schema/plugin-manifest.schema.json",
+  "title": "capcomd plugin manifest (capcomd.plugin/v1)",
+  "description": "plugin.json: docs/spec/plugin-api.md §4. Generated from packages/plugin/src/manifest.ts; do not edit.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "capcomd.plugin/v1",
+      "description": "The manifest schema id. A different id is refused (§12.2)"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "description": "Plugin name: lowercase letters, digits and hyphens, 1-63 characters. Every contribution is namespaced by it"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$",
+      "description": "The plugin's own version. Built-ins use the capcomd package version"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "apiVersion": {
+      "type": "number",
+      "const": 1,
+      "description": "The plugin API major this plugin codes against (§12.1). The kernel refuses a major it doesn't serve"
+    },
+    "engines": {
+      "type": "object",
+      "properties": {
+        "capcomd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A semver range of capcomd versions this plugin was tested with (§4.4). `*` is refused"
+        }
+      },
+      "required": [
+        "capcomd"
+      ],
+      "additionalProperties": false
+    },
+    "entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "runtime": {
+              "type": "string",
+              "const": "in-process"
+            },
+            "module": {
+              "type": "string",
+              "pattern": "^\\.\\/[^\\0]+\\.(js|mjs|ts)$",
+              "description": "A module path relative to the manifest, exporting `plugin: PluginModule` (§5.1). Built-ins only (§5.2)"
+            }
+          },
+          "required": [
+            "runtime",
+            "module"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "runtime": {
+              "type": "string",
+              "const": "process"
+            },
+            "command": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "argv the host starts, cwd = the plugin's root. `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` are substituted (§9.2)"
+            },
+            "env": {
+              "description": "Extra environment, added to the filtered base (§9.2). Never a secret",
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "runtime",
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "scopes": {
+      "description": "harness.v1 scopes the plugin's own principal holds (§11.1). Default: none (the plugin can only answer hooks). `approve` is not grantable",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "read",
+          "steer",
+          "configure"
+        ]
+      }
+    },
+    "provides": {
+      "description": "Capabilities this plugin provides: each `seam:` entry must match a `contributes.seams` entry (§4.6)",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(seam:(sandbox|agent|forge)\\/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$",
+        "description": "seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)"
+      }
+    },
+    "requires": {
+      "description": "Capabilities that must be present and active before this plugin loads; a missing one fails resolution (§4.6)",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(seam:(sandbox|agent|forge)\\/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$",
+        "description": "seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)"
+      }
+    },
+    "order": {
+      "description": "Placement among plugins (§6.3). Default normal",
+      "type": "string",
+      "enum": [
+        "pre",
+        "normal",
+        "post"
+      ]
+    },
+    "after": {
+      "description": "Plugins this one runs after, within its order (§6.3). An unknown name is ignored; a cycle fails resolution",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+        "description": "Plugin name: lowercase letters, digits and hyphens, 1-63 characters. Every contribution is namespaced by it"
+      }
+    },
+    "contributes": {
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "description": "Hook listeners by hook name (§6). One listener per hook per plugin",
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "daemon.started",
+              "daemon.stopping",
+              "run.creating",
+              "run.changed",
+              "profile.resolved",
+              "agent.spawning",
+              "agent.preparing",
+              "agent.changed",
+              "agent.item",
+              "sandbox.ensuring",
+              "sandbox.changed",
+              "verify.starting",
+              "verify.judging",
+              "verify.changed",
+              "merge.landing",
+              "merge.changed",
+              "approval.deciding",
+              "approval.changed",
+              "job.changed",
+              "trigger.admitting",
+              "trigger.changed"
+            ]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "timeoutMs": {
+                "description": "The listener's deadline. May lower the hook's default; may never exceed the hook's maximum (§6.4). Default: the hook's default",
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 9007199254740991
+              },
+              "failure": {
+                "description": "What a timeout, throw, crash or invalid result means: closed denies the operation (naming this plugin), open skips this listener. Gate hooks are always closed (declaring open is a validation error); other veto/modify hooks default to open; observe hooks are always open",
+                "type": "string",
+                "enum": [
+                  "closed",
+                  "open"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "seams": {
+          "description": "Seam implementations (§7). At most one per kind",
+          "maxItems": 3,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "sandbox",
+                  "agent",
+                  "forge"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "description": "The implementation's name: what a run's `sandbox`, a profile's `harness.provider` or a repository's `merge.forge` selects (§7)"
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "description": "Trigger sources this plugin feeds (§16.3); each must be listed in provides as source:<name>",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "description": "The source's name (`github`, `slack`): what `ctx.triggers.emit` must name and what `triggers.sources.<name>` in config keys (§16.3)"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "name",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "cli": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "description": "The command group's first word, e.g. `slack`. Must not collide with a kernel command (§4.7.1)"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "name",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mcp": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "description": "Tool name without the prefix: registered as `capcomd_<plugin>_<name>` (§4.7.2)"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "name",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "api": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^\\/[a-z0-9{}/_.-]*$",
+                "description": "Relative to `/v1/x/<plugin>` (§4.7.3), e.g. `/digest`"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "steer",
+                  "configure"
+                ],
+                "description": "The caller's scope the route needs (not the plugin's)"
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "scope"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "ui": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "settings",
+                  "info",
+                  "action",
+                  "card",
+                  "profile-field"
+                ],
+                "description": "Descriptor kinds the app renders generically (§4.7.5; ADR-021's settings rows generalised)"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-zA-Z0-9]*$"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "events": {
+          "description": "Event types the plugin emits, without the prefix: emitted as `plugin.<name>.<type>` (§4.7.4)",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "config": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "$ref": {
+              "type": "string",
+              "pattern": "^\\.\\/[^\\0]+\\.json$"
+            }
+          },
+          "required": [
+            "$ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      ],
+      "description": "A JSON Schema (draft 2020-12) for `plugins.<name>` in config, inline or `{\"$ref\": \"./config.schema.json\"}`. Properties marked `\"x-secret\": true` take secret references, never values (§10.3). Properties marked `\"x-per-run\": true` may be overridden per run (§10.2)"
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri"
+    },
+    "license": {
+      "type": "string",
+      "maxLength": 100
+    }
+  },
+  "required": [
+    "schema",
+    "name",
+    "version",
+    "description",
+    "apiVersion",
+    "engines",
+    "entry"
+  ],
+  "additionalProperties": false
+}
