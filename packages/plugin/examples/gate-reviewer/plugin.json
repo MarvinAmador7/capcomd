@@ -1,0 +1,26 @@
+{
+  "schema": "capcomd.plugin/v1",
+  "name": "gate-reviewer",
+  "version": "0.9.0",
+  "description": "The reviewer gate: a verify spawns the run's reviewer profile on the change and the verify passes only if the checks and the reviewer's verdict both pass for the same tree.",
+  "apiVersion": 1,
+  "engines": { "capcomd": ">=0.9.0 <1.0.0" },
+  "entry": { "runtime": "in-process", "module": "./index.ts" },
+  "scopes": ["read", "steer"],
+  "order": "normal",
+  "contributes": {
+    "hooks": {
+      "verify.judging": { "timeoutMs": 1800000 },
+      "verify.changed": {}
+    },
+    "events": ["verdict"]
+  },
+  "config": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxReasons": { "type": "integer", "minimum": 1, "maximum": 20, "default": 20 },
+      "maxReasonChars": { "type": "integer", "minimum": 50, "maximum": 500, "default": 500 }
+    }
+  }
+}

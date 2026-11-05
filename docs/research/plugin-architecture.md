@@ -474,3 +474,68 @@ spool/token code; the rest is candidates.
 | Virtual-module `\0` prefix for host resources | Rollup | **Adapt** | capcomd already has reserved kv prefixes (`_`, `approval/`, `recipe/`, `handoff/`); `plugin/<name>/` joins them. ADR-023 §4 |
 | Immutable plugin root vs durable data dir | Claude Code `PLUGIN_ROOT`/`PLUGIN_DATA` | **Adopt** | `~/.capcomd/plugins/<name>/` (code, replaced on update) and `~/.capcomd/state/plugins/<name>/` (data). ADR-023 §4 `host.storage` |
 | Async observers with a concurrency cap | Codex `async: true` | **Adopt** | `observe` hooks never block the runner; a bounded queue. ADR-023 §9 |
+
+## 7. Super-agent (added 2026-11-04)
+
+Read for the four requirements the owner added to the spec (docs/spec/plugin-api.md §16): the planner never executes,
+background jobs, triggers, a watchdog, and the attention-budget rule. Same method as §1: a shallow clone into the
+scratchpad, read and never run; secondary articles fetched the same day and used only where the primary sources are
+silent.
+
+| Source | Read at | What it is |
+|---|---|---|
+| [deepseek-ai/dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) | [`8c32a9dc`](https://github.com/deepseek-ai/dsh-superagent-prototype/tree/8c32a9dc5d72c033816c6a8110b37f40cf94fba4) (2026-10-31, MIT, "research prototype for reference only") | A proactive coding agent for one GitHub repository, packaged as a dsh bundle: Sources (GitHub, Feishu) → Triggers → Eval → Tickets → Executor Sessions, with a panel. Read: `README.md`, `docs/000-philosophy.md`, `001-domain.md`, `002-authorization.md`, `003-execution.md`, `007-architecture.md` |
+| deepseek-harness `packages/core/agent/README.md`, `packages/jobs/jobs/README.md`, `packages/jobs/tool-jobs/README.md` | `fcc0ad46` (§2) | The agent loop's inbox and the `ctx.jobs` registry: "background subagents run via `ctx.jobs` + `dsh-tool-subagent`" |
+| [deepseekdocs.com: agent loop](https://deepseekdocs.com/en/docs/learn/core/agent-loop) | 2026-11-04 | Turns, steps, the inbox (`followup`/`steer`/`inject`), cancellation and resume |
+| The essay *Exploring Super-agent Design: Towards a More Autonomous Agent System* (DeepSeek Harness team, Yujia Qiao, 2026-10-31; WeChat) | via the secondary coverage below; not read directly | Router/Workers/Triggers/Watchdog; "the Router may not even get a shell"; "three to five active sessions" per person; synthetic ablation (p50 12.4 / p95 15.7 min vs 20.4 / 29.5 single-session) |
+| Secondary: [mindstudio.ai](https://www.mindstudio.ai/blog/deepseek-super-agent-harness-design), [explainx.ai](https://explainx.ai/blog/deepseek-super-agent-architecture-router-worker-triggers-watchdog-2026), [cellcog.ai](https://cellcog.ai/blog/deepseek-super-agent/), [redreamality.com](https://redreamality.com/blog/deepseek-super-agent-router-worker-architecture/), [help.apiyi.com](https://help.apiyi.com/en/deepseek-super-agent-event-driven-architecture-en.html) | 2026-11-04 | Consistent on the architecture; they add no numbers the primary sources lack except the essay's ablation. [devops.com](https://devops.com/deepseek-wants-coding-agents-to-stop-waiting-for-instructions) answered 403 and [logicstack.org](https://logicstack.org/blog/deepseek-super-agent-attention-budget) served no body; neither was used |
+
+Where the secondary articles and the prototype differ, the prototype was preferred: the articles describe the essay's
+Watchdog and the "async ReAct loop" as features, while the prototype's README says "some designs discussed in the
+article are directions for future development and are not implemented in this prototype"; the background-job thresholds
+and lifetimes below are the prototype's, not the essay's.
+
+### 7.1 What the prototype does
+
+- **"Router never executes."** The main Session (`orchestrator`) evaluates Triggers, accepts and dispatches Tickets and
+  replies; each Ticket gets an Executor Session (`worker-<ticket id>`) and a directory. The router preset has "a smaller
+  tool set for routing" and the same 5-second shell limit as the worker preset (`003-execution.md`, "The Executor").
+- **Background jobs.** Worker and router presets "move foreground shell commands to background jobs after 5 seconds";
+  dsh's `standard` preset "after 60 seconds". "When a turn ends with shell jobs or subagents still running, the Ticket
+  keeps its worker slot and stays working"; "after each turn, background work has at most 30 minutes to finish", then
+  jobs are killed and the Ticket is reported waiting; at handoff "subagents stop" while shell jobs "may continue until
+  the Assignment ends"; when an Assignment ends "its shell jobs are killed without waking the Session"; a process
+  restart "ends that work outright" after a 10 s wait (`003-execution.md`, "Background work and worker slots"). dsh's
+  `ctx.jobs` gives each job a `<kind>-<short-uuid>` id owned by its agent session, a bounded output ring, `wait` with a
+  timeout, `kill`, and settlement "as an in-session notice without polling" (`packages/jobs/jobs/README.md`); busy
+  agents get it next step, idle agents are woken (`tool-jobs/README.md`).
+- **Triggers.** A Source "defines what counts as an event", "drops the bot's own messages" and "holds its read position"
+  so "a restart must not replay events"; a Trigger is "the unit of audit and of idempotence": "accepting a Trigger
+  twice creates one Ticket" (`001-domain.md`). The gate records `mention`/`direct` addressing and checks the sender
+  against the Source's allowed list; "anyone in a conversation the team opened to requests" may ask
+  (`000-philosophy.md`, `002-authorization.md`). Accept mode `off | observe | auto`, `observe` the default: "a positive
+  assessment is recorded as ignore marked 'would accept', and nothing is accepted"; "start in `observe` and switch to
+  `auto` after reviewing the recorded Decisions". Subscriptions fan later Triggers on a Thread to the Ticket "with no
+  check of who sent it"; bots and CI do not resume ended Tickets; Sources poll subscribed Threads "for two weeks after"
+  the Ticket's end. Identities "on different Sources are never mapped to each other".
+- **Watchdog.** Not in the prototype. The essay (per every secondary source) describes a separate, timer-driven session
+  that "uses the model to judge whether each Worker is making real progress", for failures where "the process is still
+  running" but the model loops or drifts.
+- **Attention budget.** "Take as little human attention as possible, and give as much value as possible"; the agent
+  "speaks only when a person must act or can use a result", "asks one concrete question at a time", "stops by impact,
+  not by effort"; "a healthy state takes no space"; start with proactive work "only recorded" (`000-philosophy.md`).
+  The essay's figure: a person "can usually follow only three to five active sessions"; chat replies kept under 100 words.
+
+### 7.2 What capcomd adopts, adapts or rejects
+
+| Idea | Verdict | Where |
+|---|---|---|
+| Router never executes | **Adopt** as a profile capability (`tools.mode: orchestrate`) enforced by the agent provider's tool lists and the kernel's refusal to land an orchestrator's branch; not a planner special case | spec §16.1, ADR-024 §2.2 |
+| Background jobs: start returns at once, result as an event, slots held, bounded lifetime | **Adopt** as `ctx.jobs` with `exec` and `timer` kinds, `foregroundMs` 60 s / 5 s for orchestrators, `afterTurnMs` 30 min, killed with the agent's machine | spec §16.2 |
+| Auto-backgrounding inside the agent's own shell tool | **Adapt**: capcomd does not own the agent CLI's tool loop (ADR-023 §5.3); the threshold applies to commands run through capcomd's in-VM `job` wrapper | spec §16.2 rule 1 |
+| Sources, Triggers, a deterministic gate, accept modes with `observe` default, subscriptions for two weeks, source-scoped identities | **Adopt** as the `sources` contribution, `ctx.triggers`, the kernel intake and `triggers.sources.<name>` config | spec §16.3 |
+| Eval: a model judging inferred Triggers in the router | **Adapt**: the kernel gate is deterministic; content judgement belongs to the planner once a run exists (ADR-024 §4's position) | spec §16.3.2 |
+| Tickets, Mandates, Assignments as domain objects | **Reject**: a run with a goal branch, its planner and its subscriptions cover the need; no new entities | spec §16.3.6 |
+| Watchdog as a separate scheduled session | **Adopt** as an ordinary plugin on `agent.changed` plus a `timer` job and `ctx.agents.notice("stalled")`; progress signals (`step`, `checkpointed`) come from the kernel | spec §16.4 |
+| Attention budget | **Adopt** as a design rule for plugins that talk to people | spec §16.5 |
+| One scheduler for jobs, polls and the watchdog | **Adopt**: `timer` jobs are the only clock a plugin gets | spec §16.2 |

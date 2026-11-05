@@ -1,6 +1,8 @@
 # ADR-023: Everything is a plugin: a lean core with primitives and lifecycle hooks
 
-Status: **Proposed** (draft, 2026-11-04). Builds on ADR-016 (primitives), ADR-017 (sub-agents, capability tokens),
+Status: **Accepted, spec in [docs/spec/plugin-api.md](spec/plugin-api.md)** (2026-11-04). The spec is normative; where this
+ADR and the spec differ, the spec wins, and §10 below lists what the spec decided and why. Types:
+[`packages/plugin`](../packages/plugin). Proposed 2026-11-04. Builds on ADR-016 (primitives), ADR-017 (sub-agents, capability tokens),
 ADR-018 (capcomd as a plugin for the user's agent), ADR-020/021 (sandbox providers and their descriptors), ADR-022
 (the agent workflow) and docs/harness-architecture.md (the harness.v1 API, scopes, capabilities). Research:
 [docs/research/plugin-architecture.md](research/plugin-architecture.md), mainly deepseek-harness at
@@ -81,6 +83,8 @@ and is not enabled by default once `planner-agent.ts` is the only path users tak
 
 ## 4. The primitive set (the host API a plugin receives)
 
+*Superseded by spec §8 (the context, 22 services, 77 primitives) and §7 (the seams); kept as the proposal's shape.*
+
 A plugin gets one object, `host`, typed per permission (§6.4). Names are nouns with verbs; every mutating call takes
 `key` for idempotency as the CLI and MCP do today. These are not new behaviours: each is a function that already exists
 in `src/primitives/ops.ts`, `state.ts`, `src/api/*` or an actor, re-exposed with a principal attached.
@@ -139,6 +143,8 @@ forges and removes the two places that still branch on a name (`dependencies.ts`
   agent's phases), `server.ts` (approvals), the plugin host (daemon start/stop). A plugin cannot fire a kernel hook.
 
 ### 5.2 The hooks
+
+*Superseded by the catalog in spec §6.6 (21 hooks); the differences are listed in §10 below.*
 
 | Hook | Mode | Payload (beyond `{runId, agentId?, principal, at}`) | Fires |
 |---|---|---|---|
@@ -209,6 +215,8 @@ modes rather than dsh's five (`serial` and `bail` collapse into `veto`; `paralle
 `agent.item` as the turn/tool surface.
 
 ## 6. Manifest, discovery, loading, isolation, config, versioning
+
+*Superseded by spec §4 (manifest), §5 (lifecycle), §9 (protocol), §10 (config), §11 (security), §12 (versioning).*
 
 ### 6.1 Manifest (`capcomd.plugin/v1`)
 
@@ -387,6 +395,8 @@ kernel rules. `tests/scenarios/review.test.ts` is the regression gate.
 
 ## 8. Migration plan
 
+*Refined in spec §17.2 (13 steps, with jobs, triggers and the watchdog interleaved); this is the original plan.*
+
 Small, shippable steps; each leaves `bun run typecheck`, `test:fast` and `test:scenarios` green and adds its own tests.
 No step changes the `relay.v1`/`capcomd.v1` CLI output or the `harness.v1` contract except by adding a capability.
 Every step that turns a built-in into a plugin keeps a **real-composition test**: the daemon booted with that plugin
@@ -431,25 +441,68 @@ user-visible output (dsh's rule for product-visible plugins, research §2.10; `t
 Steps 1–2 are pure additions. Steps 3–7 are refactors behind unchanged tests. Steps 8–10 are the third-party surface,
 and the first point at which the owner's trust decisions (§9) must be final.
 
-## 9. Risks and open questions
+## 9. Risks and decisions
 
-- **Untrusted code in the process that holds tokens.** harness-architecture.md §2 rejected pi-style TS extensions for
-  v1 for exactly this reason. This ADR keeps that line: third-party code runs out of process by default with a scoped
-  client token; in-process is for built-ins and explicitly trusted plugins. **Owner decision:** is `trusted: true` an
-  option at all, or built-ins only?
-- **Latency on the hot path.** `agent.item` fires per thread item; `observe` hooks run in parallel and are never awaited
-  by the runner (a bounded queue, dropped with a count when full, as the activity line is coalesced today). `veto` hooks
-  are on spawn/verify/merge/approval only, which are seconds-scale already.
-- **Fail-closed gates can wedge a run.** A broken gate plugin denies every merge. The breaker disables it after three
-  failures and the daemon stream says so; `capcomd plugins disable <name>` is the manual path. **Owner decision:**
-  should an operator `--operator` merge bypass plugin vetoes as it bypasses `--require` today?
+Decided by the owner on 2026-11-04 (recorded in the spec where cited):
+
+1. **In-process third-party plugins: no `trusted: true` for now.** Only built-ins run in-process; third-party plugins
+   run out of process as harness.v1 clients. The loader is the same for both, so the option can be added later; the
+   spec does not specify it (spec §5.2).
+2. **Operator merges bypass plugin vetoes** the way `--operator` bypasses `--require`. The bypass is always recorded in
+   the run's event log as `plugin.gate_bypassed`, naming each vetoing plugin and its reason, and `merge.changed`
+   `landed` carries the same list (spec §6.5, §6.6.15).
+3. **`permissions.approve` on profiles is deferred.** Approvals stay human. `approve` is not grantable to a plugin and
+   there is no decide primitive; nothing in the design forecloses an ancestor-agent rule later (spec §11.1; ADR-024).
+4. **Profile packages are YAML; `extends` cannot cross projects; project skills and personas get a one-time trust prompt
+   per content hash** (ADR-024 §2.3, §2.5, §8).
+5. **`recipes/hierarchical.ts` becomes a disabled built-in plugin**, kept for the parity eval (spec §17.1).
+6. **`@capcomd/plugin` is a private workspace package**, not published to npm yet; its types are typechecked and its
+   examples tested in `test:fast` (`packages/plugin`).
+
+Risks that stay:
+
+- **Latency on the hot path.** `agent.item` fires per thread item; `observe` hooks run concurrently on a bounded queue
+  and are never awaited by the runner. Gates are on spawn/verify/merge/approval/trigger intake only.
+- **Fail-closed gates can wedge a run.** The breaker suspends a plugin's listeners after three failures and the daemon
+  stream says so; a suspended gate still denies, safely; `capcomd plugins enable` resets it; the operator merge is the
+  audited escape (decision 2).
 - **Two plugin systems with the same word.** `plugins/capcomd/` is capcomd *as* a plugin for Claude Code and Codex
-  (ADR-018); this ADR is plugins *for* capcomd. Docs must say "capcomd plugin (host)" and "agent plugin" consistently.
-- **The single executable.** Built-in plugins must be bundled (`assets.ts` rule); out-of-process plugins need a runtime
-  on the user's machine (the launcher pattern in `plugins/capcomd/mcp/launch.mjs` solves the same problem: Bun, else
-  Node).
-- **Scope creep.** The temptation is to make everything a hook. The list in §5.2 is the proposal; anything else needs a
-  consumer first.
-- **Open:** whether `recipes/hierarchical.ts` is kept as a disabled plugin or deleted; whether the TUI and canvas
-  (`apps/tui`, `apps/canvas`) count as front-door plugins (proposed: no, they are clients); how a plugin ships Swift UI
-  (proposed: never; it ships descriptors the app renders, as ADR-021).
+  (ADR-018); this ADR is plugins *for* capcomd. Docs say "capcomd plugin (host)" and "agent plugin".
+- **The single executable.** Built-in plugins are bundled (`assets.ts` rule); out-of-process plugins bring their own
+  runtime (the launcher pattern in `plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
+- **Scope creep.** Spec §6.8 says what is deliberately not a hook; anything new needs a consumer first.
+- The TUI and canvas (`apps/tui`, `apps/canvas`) are clients, not front-door plugins. A plugin never ships Swift: it
+  ships descriptors the app renders (ADR-021; spec §4.7.5).
+
+## 10. Decisions made in the spec
+
+Judgment calls made while writing [docs/spec/plugin-api.md](spec/plugin-api.md), each with its reason. They supersede
+the corresponding text above.
+
+| Decision | Reason | Spec |
+|---|---|---|
+| The plugin receives a **context** (`PluginContext`, `ctx`), and "host" means only the loader | §4 above used `host` for both; one idea, one name | §2, §8 |
+| **18 → 21 hooks, grouped as `noun.changed` with a discriminated `change`** (`run.changed`, `agent.changed`, `verify.changed`, `merge.changed`, `approval.changed`, `sandbox.changed`, `job.changed`, `trigger.changed`) instead of one hook per past-tense verb | fewer hooks; a new kind of change is a union member, not a new name; listeners switch on `change.kind` | §6.6 |
+| **One mode per hook; `modify` ⊇ `veto`** (a modify listener may deny; a veto listener may not patch) | "veto, modify" on one hook was two modes; the result types say everything | §6.2 |
+| `merge.requested` + `merge.gating` → **one `merge.landing`** under the target lock, with `allow \| deny \| hold` | one gate, one place; `hold` is "add a human requirement", the only way a plugin touches approvals | §6.6.15 |
+| `verify.reviewing` → **`verify.judging`**: every listener is a judge returning allow/deny; the kernel ANDs them with the checks | the reviewer, a scanner and a coverage gate are the same shape; 30 min deadline because a judge may run an agent | §6.6.13 |
+| **Dropped `daemon.starting`, `agent.pushing`, `message.sending`, `message.delivered`** | no listener can exist before plugins load; trailers belong to the forge's `LandRequest`; skills attach at `agent.preparing`; messages are events | §6.8 |
+| **Per-listener `failure: closed \| open`** in the manifest, with gates always closed | a policy plugin on `agent.spawning` wants fail-closed; the kernel keeps the floor | §6.5 |
+| **The breaker suspends listeners, not the plugin**; a suspended gate denies | disposing a sandbox provider mid-run because a hook threw would be worse than a denied merge | §6.5 |
+| `permissions` → **`scopes`**: the manifest names harness.v1 scopes directly; kernel abilities (be a provider) are `provides`, registrations are `contributes` | one permission model; §6.4 above had a second vocabulary mapped onto the first | §4.5, §4.6, §4.7, §11.1 |
+| **`provides`/`requires` capability ids** (`seam:…`, `source:…`, `plugin:…`, `kernel:…`) drive resolution and order | dependencies between plugins are the seams and sources; a typed id is enough, no DI container | §4.6, §6.3 |
+| **Secrets are `x-secret` config properties holding references** (`env:`, `keychain:`), resolved by the kernel, readable only by the declaring plugin; built-ins follow the same rule | one mechanism for boxd's key, GitHub's token and a Slack webhook; no `secrets:read` permission | §10.3 |
+| **Config is constant for the plugin's life**; per-run overrides (`x-per-run`) are run data in storage; no file watching | every listener stays a pure function of its call plus one read; reload is `disable`/`enable` | §10.2, §5.4 |
+| **No hot reload of code** | a changed in-process module needs a daemon restart; out of process, `disable`/`enable` runs new code | §5.4 |
+| **The forge seam owns direct pushes too** (`forge-git`), and is selected by `matches(remote)`; the kernel keeps lock, CAS, integration and checks | goal branches need `openPullRequest` even in direct mode; "direct" is a `LandRequest.mode`, not a second seam | §7.4 |
+| **`classifyError` on every seam** | removes the last places the kernel names an implementation (`isBoxdAuthError`) | §7.2.3 |
+| **Protocol v1 exposes only the primitives with routes**; spawn, gates, board, kv, jobs and triggers are in-process until the next protocol version | the first third-party plugins are notifiers and sources; the routes land with the kernel features they wrap | §9.6 |
+| **Secrets reach a process once, in the handshake response**, never in env or argv | env is readable by `ps e`; the 0600 socket is already the trust channel | §9.3 |
+| **Gate calls to one process are one at a time; observe frames are dropped when 1 000 queue** | the modify chain needs order; observers must never block a gate | §9.4, §9.5 |
+| **Ordering is `order`, then `after`/`requires` topology, then name; built-ins hold no reserved positions** | deterministic and explainable; Vite's `enforce` without numeric priorities | §6.3 |
+| **Load one plugin at a time; dispose in reverse** | determinism over startup speed with a dozen plugins | §5.5 |
+| **Replays re-ask gates; observers are at-least-once; `idempotencyKey` is on every call** | the kernel's workflows replay (ADR-022); listeners key their side effects | §6.7 |
+| **The watchdog, sources' polls, the Docker sweep and background shell share one primitive: a job** (`exec` or `timer`) | "work that reports back later" is one thing; one durable record, one owner rule | §16.2 |
+| **The trigger intake's gate is deterministic**; content judgement is the planner's | auditable record-only mode; a model in the intake would be a plugin later | §16.3.2 |
+| **`tools.mode: orchestrate` is a profile capability** enforced by the agent provider's tool lists and the kernel's refusal to land an orchestrator's branch | a property of the agent for its life, not a hook; no planner special case | §16.1 |
+| **The attention budget is a design rule** with a `--strict` validation warning for notifier-shaped plugins without a quiet option | the kernel can only enforce the structural parts | §16.5 |

@@ -1,0 +1,21 @@
+{
+  "name": "@capcomd/plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The capcomd plugin API: manifest schema, context and primitive interfaces, the typed hook registry, the seam interfaces, the out-of-process protocol and the test-kit interfaces. Types only; the normative spec is docs/spec/plugin-api.md. Not published yet.",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./schema/plugin-manifest.schema.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "schema": "bun scripts/schema.ts",
+    "schema:check": "bun scripts/schema.ts --check"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

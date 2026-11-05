@@ -96,6 +96,8 @@ packages/
                   blocks/1 tree; pure functions (no imports from src/), own tsconfig, tests and golden fixtures
   bot-avatar/   - (proposal) deterministic pixel bot avatars: agent id + role + size → SVG, from a parts catalog;
                   pure, no dependencies; catalog.json and golden bots for the Swift renderer
+  plugin/       - @capcomd/plugin (private, types only): the plugin API's manifest schema, context, hook registry,
+                  seams, protocol and test kit, with worked examples; normative spec in docs/spec/plugin-api.md
 tests/          - unit, scenario, agent and merge suites
 scripts/        - live e2e scripts (boxd + GitHub) and helpers
 docs/           - design documents and ADRs
