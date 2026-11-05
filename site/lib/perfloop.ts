@@ -1,6 +1,6 @@
 // The PerfLoop page's facts. Every number is from design/perf-loop/JOURNEY.md and apps/menubar/app/LAYOUT.md (main,
-// 30–31 Oct 2026); what JOURNEY §7 says not to claim (a speed-up from the loop itself, trusted dedicated hardware, a
-// real recorded gesture) is not claimed here.
+// 30–31 Oct 2026, the swipe finding as corrected on 4 Nov); what JOURNEY §7 says not to claim (a speed-up from the
+// loop itself, trusted dedicated hardware, replays of the hand-recorded gestures) is not claimed here.
 
 export type Sense = "see" | "feel" | "check";
 export type Verdict = "same" | "rejected" | "lost" | "needs review" | "finding" | "queued";
@@ -17,7 +17,7 @@ export const NIGHT: Array<{ at: string; sense: Sense; what: string; knob?: strin
   { at: "04:15", sense: "see", what: "Keep only nearby columns in the document", knob: "reel.columns=park", verdict: "lost", why: "+16 %: moving views between parents costs more than it saves." },
   { at: "04:52", sense: "see", what: "Fixed slots, reconfigured in place", knob: "reel.columns=reuse", verdict: "rejected", why: "+38 % on 17 agents, but the cost of each extra agent fell from 3.28 to 2.40 ms. Worth it once a column is cheap to configure." },
   { at: "05:33", sense: "feel", what: "Slide cached bitmaps of the columns", knob: "reel.cache=bitmap", verdict: "rejected", why: "The longest stall went from 50 to 872 ms: rasterising one column takes 100–150 ms." },
-  { at: "05:58", sense: "feel", what: "Replay a swipe with real timestamps", verdict: "finding", why: "The reel coasted up to about 200 pt past the column edge and didn't snap back. The old synthetic fling sent none, which hid it. Reported to the owner: behaviour is theirs to call." },
+  { at: "05:58", sense: "feel", what: "Replay a swipe with real timestamps", verdict: "finding", why: "After the fingers lifted, the reel coasted on past the column edge and didn't snap back. The old synthetic fling sent no timestamps, which hid it. Reported to the owner; their own slow drags later rested 25–31 pt off the edge the same way, and it's fixed." },
   { at: "06:21", sense: "see", what: "Sweep: 4 to 64 agents, three column builds", verdict: "finding", why: "The cost grows with the views SwiftUI makes for the threads, about 1,100, not with layout. That's what to fix next." },
   { at: "06:58", sense: "see", what: "Thread rows drawn natively with Core Text, measured once and cached", verdict: "queued", why: "The idea the data points to, queued for the next night." },
 ];
