@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Security: your git credentials never reach an agent's sandbox any more. Before, capcomd's own git commands in an
+  agent's VM or container (cloning its checkout, pushing its branch and checkpoints, `capcomd fetch`) ran with your
+  GitHub token, so an agent could take it by planting git settings, a hook or a `git` program in its sandbox. Now
+  capcomd fetches and pushes for the agent from your machine, by the repository's URL, and moves the commits in and
+  out of the sandbox as files; nothing in the agent's checkout decides where a push goes. On your machine capcomd runs
+  git with credentials only in repositories it made itself (a mirror per repository next to its clones, under
+  `~/.capcomd/work`), and refuses one whose git settings or hooks something else changed; the first merge after
+  upgrading makes its clones again. Pushes use your own git credentials first (your credential helper or ssh key), then
+  your GitHub login for github.com. `capcomd fetch` no longer refuses a checkout because of its git settings. A check
+  that runs on your machine (`CAPCOMD_CHECKS=host`) and changes capcomd's clone's git settings now fails the merge.
+  See docs/spec/plugin-api.md §11.7.
 - When a plugin holds a merge for your approval, the approval now says which plugin held it and why: in the question
   and `subject.heldBy` the apps show, in `capcomd approve`'s output, in the prompt `capcomd_approve` asks under
   `driver.approvals: "elicit"`, and as `heldBy` on the `merge.approval_requested` event. Approving satisfies only that

@@ -3,7 +3,7 @@
 // file holds what decides the names: the suggested branch for a goal, the checks a name must pass, and the origin's
 // branches and default branch (GitHub first, with the user's own gh login; else `git ls-remote`). Never a made-up
 // "main": a base nobody named and the remote doesn't report is unknown, and callers ask the user.
-import { Git } from "./git";
+import { lsRemote } from "./host-git";
 import { isProtectedBranch } from "../utils/protected";
 
 type Env = Record<string, string | undefined>;
@@ -105,9 +105,9 @@ async function fromGitHub(repo: string, gh: { api: string; token: string }, max:
 }
 
 /** `git ls-remote`: the remote's HEAD (its default branch) and heads. Throws when the remote can't be read. */
-async function fromGit(remote: string, cwd: string, timeoutMs: number) {
-  const git = new Git(cwd);
-  const heads = await git.run(["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"], { timeoutMs });
+async function fromGit(remote: string, _cwd: string, timeoutMs: number) {
+  // Outside any repository (src/merge/host-git.ts): the checkout's own git settings play no part.
+  const heads = await lsRemote(remote, ["--symref", "HEAD", "refs/heads/*"], { timeoutMs });
   if (heads.code !== 0) throw new Error(heads.timedOut ? "git ls-remote timed out" : `git ls-remote failed: ${heads.stderr.trim().split("\n")[0]?.slice(0, 200) ?? ""}`);
   let defaultBranch: string | null = null;
   const branches: string[] = [];

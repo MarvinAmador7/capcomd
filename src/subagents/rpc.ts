@@ -31,9 +31,10 @@ const deny = (message: string, hint = "Your token only covers your own subtree a
 
 export interface RpcContext {
   runId: string; agentId: string; onCall?: (op: string, ok: boolean) => void;
-  /** A command in the caller's own VM, run by the host with the sandbox's git credentials (which the agent never
-   *  holds): `fetch`. Unset where there is no VM (a local spool). */
+  /** A command in the caller's own machine (its VM, or this host for a scripted agent), without credentials, and a
+   *  file put there: `fetch` brings the host's fetch in as a bundle (plugin API §11.7). */
   exec?: (cmd: string[], opts: { cwd?: string; timeoutMs?: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
+  upload?: (path: string, data: Uint8Array) => Promise<void>;
 }
 
 export async function handleRpc(req: RpcRequest, ctx: RpcContext): Promise<RpcResponse> {
@@ -294,29 +295,32 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
 const FETCH_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
- * `capcomd fetch [branch…]` (plugin API §16.1: an orchestrate agent sees everything): the host fetches `origin` into
- * the caller's checkout (`dir`, which the in-VM CLI finds), with the sandbox's git credentials, which the agent's own
- * shell never has; a CLI sandbox that blocks a fetch (codex) doesn't stop it either. Read-only for code: it moves only
- * `refs/remotes/origin/*`. Answers each fetched branch's commit, for `git log` / `git show origin/<branch>:<path>`.
+ * `capcomd fetch [branch…]` (plugin API §16.1: an orchestrate agent sees everything): the host fetches the run's
+ * repository (by its URL, with the host's git credentials) into its own mirror and hands the caller's checkout (`dir`,
+ * which the in-VM CLI finds) the new commits as a bundle (§11.7): no credential reaches the VM, and nothing in the
+ * checkout (its git settings, hooks or remotes) takes part in the fetch from the remote. A CLI sandbox that blocks a
+ * fetch (codex) doesn't stop it either. Read-only for code: it moves only `refs/remotes/origin/*`. Answers each
+ * fetched branch's commit, for `git log` / `git show origin/<branch>:<path>`.
  */
 async function fetchInto(ctx: RpcContext, args: Record<string, any>) {
-  if (!ctx.exec) throw new RelayError("usage", "capcomd fetch works only in an agent's VM", "Run `git fetch` yourself here.");
+  if (!ctx.exec || !ctx.upload) throw new RelayError("usage", "capcomd fetch works only in an agent's VM", "Run `git fetch` yourself here.");
   const dir = String(args.dir ?? "");
   if (!dir.startsWith("/") || !/^[A-Za-z0-9._/-]+$/.test(dir) || dir.split("/").includes("..")) throw new RelayError("usage", `fetch needs your checkout's absolute path (got ${JSON.stringify(dir).slice(0, 200)})`, "Run it from inside your checkout.");
   const refs = (Array.isArray(args.refs) ? args.refs : args.ref !== undefined ? [args.ref] : []).map(String);
   for (const r of refs) if (!FETCH_REF.test(r) || r.includes("..") || r.endsWith(".lock")) throw new RelayError("usage", `not a branch name: ${JSON.stringify(r).slice(0, 200)}`, "Pass branch names, e.g. capcomd fetch main.");
-  // The run's repository by its URL, not the checkout's `origin` (whose settings the agent could have changed): the
-  // fetch carries the sandbox's git credentials. Settings that would send them elsewhere or run a command are refused.
+  // The run's repository by its URL, fetched by the host into its mirror; the checkout gets a bundle. The fetch from
+  // the remote never runs in the checkout, so its settings (a credential helper, url.*.insteadOf, hooks, …) can't
+  // redirect it or see a credential.
   const cfg = (await import("../merge/config")).loadMergeConfig(await (await import("../merge/run-config")).runEnv(ctx.runId));
   if (!cfg?.remote) throw new RelayError("usage", "this run has no repository to fetch from", "Runs with a repository (CAPCOMD_REPO) can fetch.");
-  const local = await ctx.exec(["git", "config", "--list", "--show-scope", "--includes"], { cwd: dir, timeoutMs: 60_000 });
-  if (local.code !== 0) throw new RelayError("usage", `${dir} isn't a git checkout`, "Run it from inside your checkout.");
-  const risky = local.stdout.split("\n").filter((l) => /^(local|worktree)\t/.test(l)).map((l) => l.split("\t")[1]!.split("=")[0]!.toLowerCase())
-    .filter((k) => /^(url\.|credential|http\.|https\.|include|protocol\.|core\.(sshcommand|askpass|gitproxy|fsmonitor|hookspath)$|remote\.[^.]+\.(uploadpack|proxy|vcs)$)/.test(k));
-  if (risky.length) throw new RelayError("conflict", `your checkout's git settings ${[...new Set(risky)].join(", ")} could send capcomd's git credentials elsewhere or run a command, so capcomd won't fetch into it`, "Remove them (git config --unset …), or fetch with git yourself.", { code: "forbidden" });
-  const specs = refs.length ? refs.map((r) => `+refs/heads/${r}:refs/remotes/origin/${r}`) : ["+refs/heads/*:refs/remotes/origin/*"];
-  const f = await ctx.exec(["git", "fetch", "--quiet", "--no-tags", cfg.remote, ...specs], { cwd: dir, timeoutMs: 300_000 });
-  if (f.code !== 0) throw new RelayError("conflict", `git fetch failed: ${(f.stderr || f.stdout).trim().slice(-500)}`, "Check the branch names (capcomd fetch with none fetches every branch).", { code: "failed" });
+  const T = await import("../merge/transfer");
+  try {
+    await T.sendToSandbox({ remote: cfg.remote, workdir: cfg.workdir }, { exec: ctx.exec, upload: ctx.upload }, dir, { branches: refs.length ? refs : "all", timeoutMs: 300_000 });
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    if (e instanceof T.TransferError && e.kind === "sandbox" && /isn't a git checkout/.test(msg)) throw new RelayError("usage", `${dir} isn't a git checkout`, "Run it from inside your checkout.");
+    throw new RelayError("conflict", `git fetch failed: ${msg.slice(-500)}`, "Check the branch names (capcomd fetch with none fetches every branch).", { code: "failed" });
+  }
   const l = await ctx.exec(["git", "for-each-ref", "--sort=-committerdate", "--count=50", "--format=%(refname:lstrip=3)%09%(objectname)%09%(subject)", ...(refs.length ? refs.map((r) => `refs/remotes/origin/${r}`) : ["refs/remotes/origin"])], { cwd: dir, timeoutMs: 60_000 });
   const branches = l.stdout.split("\n").filter((x) => x.trim()).map((x) => { const [branch, sha, ...s] = x.split("\t"); return { branch: branch!, ref: `origin/${branch}`, sha: sha!, subject: s.join("\t").slice(0, 200) }; }).filter((b) => b.branch !== "HEAD");
   return { fetched: true, branches, hint: "Read a branch without changing anything: git log origin/<branch>, git show origin/<branch>:<path>, git diff <a> <b>; or git switch --detach origin/<branch> to read it with the file tools." };

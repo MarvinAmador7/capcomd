@@ -8,7 +8,7 @@ import { runClaudeCode, AgentError, parseStreamLine, buildPrompt, installScript 
 import type { SupervisorReport } from "../../src/agents/runner";
 import { loadAgentConfig, agentFromEnv, AGENT_EGRESS, CLAUDE_CODE_VERSION } from "../../src/agents/config";
 import { Redactor, REDACTED } from "../../src/agents/redact";
-import { githubGitCredentials } from "../../src/agents/credentials";
+import { hostCredentialEnv } from "../../src/merge/host-git";
 import { getFinishedSpans, resetSpans } from "../../src/utils/tracing-simple";
 import { taskBranch } from "../../src/merge/config";
 import { Git } from "../../src/merge/git";
@@ -133,7 +133,7 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     const rework = await runClaudeCode(s.provider, s.id, { ...s.task, epoch: 2, rework: true }, s.cfg, { apiKey: KEY });
     expect(rework.already).toBe(false);
     expect(rework.sha).not.toBe(first.sha);
-  });
+  }, 20_000);
 
   test("limits a profile sets reach the CLI: --max-turns, --max-budget-usd, the timeout wrapper and its tool lists", async () => {
     const s = await setup("make the failing test pass", { CAPCOMD_AGENT_MAX_TURNS: "30", CAPCOMD_AGENT_MAX_BUDGET_USD: "2", CAPCOMD_AGENT_TIMEOUT_MS: "60000", CAPCOMD_AGENT_ALLOWED_TOOLS: "Read,Edit,Bash(npm test:*)", CAPCOMD_AGENT_DISALLOWED_TOOLS: "WebFetch" });
@@ -415,12 +415,24 @@ describe("agent config, redaction, credentials, egress", () => {
     expect(p).toContain("Do not commit, push");
   });
 
-  test("git credential hook: token only in the env of network git execs, via an inline helper", async () => {
-    const hook = githubGitCredentials(async () => "ghs_shortlived0123456789abcdef");
-    const env = await hook({ vmId: "v", labels: {}, cmd: ["git", "push", "origin", "HEAD:refs/heads/x"] });
-    expect(env!.CAPCOMD_GIT_TOKEN).toBe("ghs_shortlived0123456789abcdef");
-    expect(env!.GIT_CONFIG_VALUE_1).not.toContain("ghs_");
-    expect(env!.GIT_CONFIG_VALUE_1).toContain("$CAPCOMD_GIT_TOKEN");
-    expect(await hook({ vmId: "v", labels: {}, cmd: ["git", "commit", "-m", "x"] })).toBeNull();
+  test("host git credentials: the GitHub token only for https://github.com, via an inline helper, never in the helper's text", async () => {
+    const saved = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "ghs_shortlived0123456789abcdef";
+    try {
+      const env = await hostCredentialEnv("https://github.com/o/r.git", {});
+      expect(env.CAPCOMD_GIT_TOKEN).toBe("ghs_shortlived0123456789abcdef");
+      expect(env.GIT_CONFIG_KEY_0).toBe("credential.https://github.com.helper");
+      expect(env.GIT_CONFIG_VALUE_0).not.toContain("ghs_");
+      expect(env.GIT_CONFIG_VALUE_0).toContain("$CAPCOMD_GIT_TOKEN");
+      // No `ext::` (it runs a command), no prompts.
+      expect(env.GIT_ALLOW_PROTOCOL).toBe("file:git:http:https:ssh");
+      expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+      // Another host never gets the GitHub token.
+      for (const u of ["https://gitlab.com/o/r.git", "https://github.com.evil.example/o/r", "/srv/git/r.git", "git@github.com:o/r.git"]) {
+        const other = await hostCredentialEnv(u, {});
+        expect(other.CAPCOMD_GIT_TOKEN).toBeUndefined();
+        expect(JSON.stringify(other)).not.toContain("ghs_");
+      }
+    } finally { if (saved === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = saved; }
   });
 });

@@ -158,19 +158,19 @@ describe("BoxdProvider (mocked SDK)", () => {
     expect(sdk.calls.slice(after).some((c) => c[0] === "exec")).toBe(false);
   });
 
-  test("git execs get per-task credentials from the hook; other execs do not", async () => {
-    const seen: any[] = [];
-    const q = new BoxdProvider({
-      client: sdk, dbPath: ":memory:", keepaliveMs: 0,
-      gitCredentials: async (ctx) => { seen.push(ctx); return { GIT_ASKPASS_TOKEN: "short-lived" }; },
-    });
-    const { id } = await q.ensure(spec());
-    await q.exec(id, ["git", "push", "origin", "b"]);
-    await q.exec(id, ["ls"]);
-    const execs = sdk.calls.filter((c) => c[0] === "exec");
-    expect(execs[0]![2].env).toEqual({ GIT_ASKPASS_TOKEN: "short-lived" });
-    expect(execs[1]![2].env).toBeUndefined();
-    expect(seen[0].labels).toEqual({ taskId: "task-1" });
+  test("git execs get no credentials: exactly the env they were given (plugin API §11.7)", async () => {
+    const saved = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "ghs_mustnotreachthevm0123456789";
+    try {
+      const q = new BoxdProvider({ client: sdk, dbPath: ":memory:", keepaliveMs: 0 });
+      const { id } = await q.ensure(spec());
+      await q.exec(id, ["git", "push", "origin", "b"]);
+      await q.exec(id, ["git", "fetch", "origin"], { env: { HOME: "/home/agent" } });
+      const execs = sdk.calls.filter((c) => c[0] === "exec");
+      expect(execs[0]![2].env).toBeUndefined();
+      expect(execs[1]![2].env).toEqual({ HOME: "/home/agent" });
+      expect(JSON.stringify(execs)).not.toContain("ghs_");
+    } finally { if (saved === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = saved; }
   });
 
   test("typed errors: quota, timeout, hibernated, not found", async () => {

@@ -42,7 +42,8 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
       driverKillpoint(`rpc.${req.op}.before`);
       // The agent's machine: its VM, or this host for a scripted agent on a local spool.
       const exec = spool instanceof VmSpool ? (cmd: string[], o: { cwd?: string; timeoutMs?: number }) => spool.provider.exec(spool.vmId, cmd, o) : localExec;
-      const r = await handleRpc(req, { runId, agentId: a.agentId, exec });
+      const upload = spool instanceof VmSpool ? (path: string, data: Uint8Array) => spool.provider.upload(spool.vmId, path, data) : localUpload;
+      const r = await handleRpc(req, { runId, agentId: a.agentId, exec, upload });
       // Counted by request: each spawn/send/verify/merge is one more; polls of await are the same wait.
       if (r.ok) activity.op(req.op, ["spawn", "send", "verify", "merge"].includes(req.op) ? String(req.id) : "");
       driverKillpoint(`rpc.${req.op}.before_reply`); // handled (e.g. child spawned) but the VM never got the answer
@@ -61,10 +62,17 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   };
 }
 
-/** A command on this host (a scripted agent's machine), as a sandbox's exec answers. */
+/** A file on this host (a scripted agent's machine), as a sandbox's upload writes it. */
+async function localUpload(path: string, data: Uint8Array): Promise<void> {
+  (await import("fs")).writeFileSync(path, data);
+}
+
+/** A command on this host (a scripted agent's machine), as a sandbox's exec answers. Without git credentials: the
+ *  host's own fetches and pushes run in its host repos (src/merge/host-git.ts), never here. */
 async function localExec(cmd: string[], o: { cwd?: string; timeoutMs?: number }): Promise<{ code: number; stdout: string; stderr: string }> {
   const { execFile } = await import("child_process");
-  return new Promise((done) => execFile(cmd[0]!, cmd.slice(1), { cwd: o.cwd, timeout: o.timeoutMs, encoding: "utf8", maxBuffer: 16 << 20, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+  const { hostCheckEnv } = await import("../merge/verify");
+  return new Promise((done) => execFile(cmd[0]!, cmd.slice(1), { cwd: o.cwd, timeout: o.timeoutMs, encoding: "utf8", maxBuffer: 16 << 20, env: { ...hostCheckEnv(), GIT_TERMINAL_PROMPT: "0" } },
     (e, stdout, stderr) => done({ code: e ? (typeof (e as { code?: unknown }).code === "number" ? (e as { code: number }).code : 1) : 0, stdout: stdout ?? "", stderr: stderr || (e ? String(e.message) : "") })));
 }
 

@@ -68,10 +68,10 @@ async function workerDeadline(db: RawAccess, workerId: string, ctx: Record<strin
 }
 
 async function remoteBranchSha(remote: string, branch: string): Promise<string | null> {
-  const p = Bun.spawn(["git", "ls-remote", remote, `refs/heads/${branch}`], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
-  const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
-  if (code !== 0) throw new Error(`git ls-remote ${branch} failed (exit ${code})`);
-  const sha = out.trim().split(/\s+/)[0];
+  const { lsRemote } = await import("../merge/host-git");
+  const r = await lsRemote(remote, [`refs/heads/${branch}`], { timeoutMs: 60_000 });
+  if (r.code !== 0) throw new Error(`git ls-remote ${branch} failed (exit ${r.code})`);
+  const sha = r.stdout.trim().split(/\s+/)[0];
   return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
 /**
@@ -390,6 +390,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
     }, setup.config!, {
       apiKey,
+      // The host fetches and pushes the agent's checkout through its mirror of the run's repository (§11.7).
+      hostGit: { workdir: cfg.workdir },
       // A container per agent (Docker): the env image's warm template can be its workspace, used in place.
       warmTemplate: sandboxCaps(runSource).isolation === "container",
       heartbeatMs: beatEvery,
@@ -448,7 +450,10 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   } else {
     if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
     if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
-    await provider.exec(vmId, ["git", "push", "origin", branch]);
+    // The fake sandbox's push step: one exec that answers (or doesn't, in an injected outage). No git runs in a
+    // sandbox with credentials (plugin API §11.7); the task's commit is made on this host below.
+    const { gitSpan } = await import("../merge/transfer");
+    await gitSpan("push", branch, () => provider.exec(vmId, ["sh", "-c", `: push ${branch}`]));
   }
 
   // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host

@@ -7,6 +7,7 @@ import { PluginError } from "../../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../../packages/plugin/src/manifest";
 import type { ErrorClass, Forge, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
 import { Git } from "../../merge/git";
+import { remoteDefaultBranch, remoteGit } from "../../merge/host-git";
 import { VERSION } from "../../utils/self";
 
 /** A push git refused because a lease didn't hold: someone moved the ref since the kernel looked. */
@@ -16,17 +17,25 @@ const NETWORK = /could not resolve host|connection (?:timed out|refused|reset)|t
 /**
  * The CAS push (ADR-013), from the kernel's clone: `req.sha` onto `req.target`, leased at `req.targetSha`; with
  * `req.leaseBranch`, the branch leased at `req.branchSha` in the same atomic push. Any forge that lands by push uses it.
+ * To `req.remote` by its URL, from a host repo only (src/merge/host-git.ts): a clone whose settings or hooks changed
+ * since capcomd made it is refused, not pushed from.
  */
 export async function casPush(req: LandRequest, c: SeamCall): Promise<LandOutcome> {
   const target = `refs/heads/${req.target}`, branch = `refs/heads/${req.branch}`;
   const lease = req.leaseBranch && req.branchSha;
-  const push = await new Git(req.workdir).run(lease
-    ? ["push", "--porcelain", "--atomic", `--force-with-lease=${target}:${req.targetSha}`, `--force-with-lease=${branch}:${req.branchSha}`, "origin", `${req.sha}:${target}`, `${req.branchSha}:${branch}`]
-    : ["push", "--porcelain", `--force-with-lease=${target}:${req.targetSha}`, "origin", `${req.sha}:${target}`], { signal: c.signal });
+  if (c.signal.aborted) throw new PluginError("timeout", `git push to ${req.target} was cancelled`, undefined, true);
+  const git = new Git(req.workdir);
+  const push = await remoteGit(git, lease
+    ? ["push", "--porcelain", "--atomic", `--force-with-lease=${target}:${req.targetSha}`, `--force-with-lease=${branch}:${req.branchSha}`, req.remote, `${req.sha}:${target}`, `${req.branchSha}:${branch}`]
+    : ["push", "--porcelain", `--force-with-lease=${target}:${req.targetSha}`, req.remote, `${req.sha}:${target}`], req.remote, { signal: c.signal });
   if (c.signal.aborted) throw new PluginError("timeout", `git push to ${req.target} was cancelled`, undefined, true);
   if (push.code === 0) {
     // "=" for the target: it was there already (a replay after a crash between the push and its record).
     const already = push.stdout.split("\n").some((l) => l.startsWith("=") && l.includes(`:${target}\t`));
+    // A push by URL leaves the clone's remote-tracking refs alone: moved here, as a push to `origin` did, so the clone's
+    // view of the target is this push (the next merge's fast path reads it).
+    const moved = [`update refs/remotes/origin/${req.target} ${req.sha}`, ...(lease ? [`update refs/remotes/origin/${req.branch} ${req.branchSha}`] : [])];
+    await git.run(["update-ref", "--stdin"], { input: moved.join("\n") + "\n" }).catch(() => {});
     return { status: "merged", sha: req.sha, already, how: "push", pr: null };
   }
   const text = (push.stdout + push.stderr).trim();
@@ -35,11 +44,9 @@ export async function casPush(req: LandRequest, c: SeamCall): Promise<LandOutcom
   return { status: "failed", reason: text || `git push exited ${push.code}`, retryable: !!lease && /atomic/i.test(text) };
 }
 
-/** The remote's default branch (`git ls-remote --symref <remote> HEAD`), or null when it doesn't say. */
-export async function lsRemoteDefault(remote: string, c: SeamCall, cwd = process.cwd()): Promise<string | null> {
-  const r = await new Git(cwd).run(["ls-remote", "--symref", remote, "HEAD"], { signal: c.signal, timeoutMs: Math.max(1, Date.parse(c.deadline) - Date.now()) });
-  if (r.code !== 0) return null;
-  return /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.stdout)?.[1] ?? null;
+/** The remote's default branch (`git ls-remote --symref <remote> HEAD`, outside any repository), or null when it doesn't say. */
+export async function lsRemoteDefault(remote: string, c: SeamCall): Promise<string | null> {
+  return remoteDefaultBranch(remote, { signal: c.signal, timeoutMs: Math.max(1, Date.parse(c.deadline) - Date.now()) });
 }
 
 /** The classification every push-based forge shares (§7.2.3). */

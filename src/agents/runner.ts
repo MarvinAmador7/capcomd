@@ -7,6 +7,10 @@ import type { AgentConfig } from "./config";
 import type { AgentAdapter, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
+import { gitSpan, pushFromSandbox, sendToSandbox, type HostRemote, type SandboxGit } from "../merge/transfer";
+import { lsRemote } from "../merge/host-git";
+import { stateDir } from "../utils/home";
+import { join as joinPath } from "path";
 import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
 import { readFileSync } from "fs";
 import { StuckWatch, type Stuck } from "./stuck";
@@ -34,7 +38,8 @@ export interface AgentTask {
   epoch: number;
   branch: string;
   target: string;
-  /** Clone URL (token-free). Credentials come from the provider's git credential hook. */
+  /** Clone URL (token-free). The host fetches and pushes it (src/merge/transfer.ts): the sandbox never holds a git
+   *  credential. */
   repoUrl: string;
   goal: string;
   /** Its title as it starts (the driver's `--title`, its parent's or the user's): a commit subject before the brief. */
@@ -76,6 +81,9 @@ export interface AgentResult {
 export interface AgentRunOptions {
   /** Real API key for env-injection fallback. Unused when the VM carries a bxds_ placeholder. */
   apiKey?: string;
+  /** Where the host keeps its git repos for the run's repository (MergeConfig.workdir): every fetch and push of the
+   *  agent's checkout goes through the host's mirror there (src/merge/transfer.ts). Default: <state>/host-git. */
+  hostGit?: { workdir: string };
   isCancelled?: () => Promise<boolean>;
   /** The operator asked to pause the agent: stop it like a limit ("paused"), keeping its work on the branch. */
   isPaused?: () => Promise<boolean>;
@@ -429,6 +437,20 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     if (res.code !== 0) throw new AgentError(kind, `${what} failed (exit ${res.code}): ${r.text(res.stderr || res.stdout).slice(-800)}`);
     return res;
   };
+  // Plugin API §11.7: no git command in the sandbox carries a credential. The host fetches and pushes for it, by the
+  // repository's URL, through its mirror; the sandbox only makes and reads bundles.
+  const host: HostRemote = { remote: task.repoUrl, workdir: opts.hostGit?.workdir ?? joinPath(stateDir(), "host-git") };
+  const box: SandboxGit = {
+    exec: (cmd, o) => provider.exec(vmId, cmd, { env: { ...baseEnv }, ...(o?.timeoutMs ? { timeoutMs: o.timeoutMs } : {}), ...(o?.cwd ? { cwd: o.cwd } : {}) }),
+    upload: (path, data) => provider.upload(vmId, path, data),
+    download: (path) => provider.download(vmId, path),
+  };
+  const viaHost = async <T>(what: string, fn: () => Promise<T>): Promise<T> => {
+    try { return await fn(); } catch (e) {
+      if (e instanceof AgentError) throw e;
+      throw new AgentError("git", `${what} failed: ${r.text(String((e as Error)?.message ?? e)).slice(-800)}`);
+    }
+  };
   const key = taskKey(task.runId, task.taskId);
   const attrs = {
     "agent.kind": name, "agent.profile": cfg.profile ?? "", "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
@@ -447,12 +469,19 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     //    branch and tree the agent starts from are the same.
     const wsStarted = now();
     // A reviewer reads one commit and never pushes: its own branch doesn't matter, so no round trip to ask for it.
-    const existing = task.review ? null : await git(["ls-remote", "--heads", task.repoUrl, `refs/heads/${task.branch}`]);
-    if (existing) must(existing, "git ls-remote");
-    const branchExists = !!existing && existing.stdout.trim().length > 0;
+    const existing = task.review ? null : await viaHost("git ls-remote", () => gitSpan("ls-remote", undefined, async () => {
+      const l = await lsRemote(task.repoUrl, ["--heads", `refs/heads/${task.branch}`], { timeoutMs: 120_000 });
+      if (l.code !== 0) throw new Error(`exit ${l.code}: ${(l.stderr || l.stdout).trim()}`);
+      return /^([0-9a-f]{40,64})\s/m.exec(l.stdout)?.[1] ?? "";
+    }));
+    const branchExists = !!existing;
     const T = templateDir(cfg);
     // A continuation starts from the stopped agent's work, until its own branch exists.
     const startFrom = task.from && !branchExists && !task.report ? "FETCH_HEAD" : null;
+    // The stopped agent's work, as the host fetched it (startRef's FETCH_HEAD).
+    let fromSha: string | null = null;
+    const start = (ref: string) => ref === "FETCH_HEAD" && fromSha ? fromSha : ref;
+    const bringFrom = async (dir: string) => { fromSha = (await sendToSandbox(host, box, dir, { branches: [], ref: task.from!.ref })).ref ?? null; };
     // The warm template fits when chooseWorkspace says so from what's in the sandbox: its record and claim, then (only if
     // those fit) the fetches a fresh clone would make, the target's history and the start tree's lockfile.
     const warmWorkspace = async (): Promise<WorkspaceChoice> => {
@@ -463,10 +492,9 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
       const early = chooseWorkspace({ ...facts, fetched: true, ancestor: true, startFound: true, startLockHash: facts.marker?.lockHash ?? "none" });
       if (early.path === "clone" || !facts.marker) return early;
       // The refs a fresh clone has (every branch, as remote-tracking refs), and the continued agent's work.
-      const fetched = (await git(["fetch", "--no-tags", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"], T, 300_000)).code === 0
-        && (!startFrom || (await git(["fetch", "origin", task.from!.ref], T, 300_000)).code === 0);
+      const fetched = await sendToSandbox(host, box, T, { branches: "all" }).then(async () => { if (startFrom) await bringFrom(T); return true; }, () => false);
       if (!fetched) return chooseWorkspace({ ...facts, fetched });
-      const ref = startRef(task, branchExists);
+      const ref = start(startRef(task, branchExists));
       const look = await sh(`cd ${sq(T)} || exit 1
 git merge-base --is-ancestor ${sq(facts.marker.commit)} ${sq(`origin/${task.target}`)} 2>/dev/null && echo ancestor=yes || echo ancestor=no
 if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=none
@@ -484,8 +512,9 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
     if (inPlace) repo = T;
     else {
       must(await sh(`rm -rf ${sq(repo)}`), "clean");
-      must(await git(["clone", "--no-tags", "--branch", task.target, task.repoUrl, repo], undefined, 300_000), "git clone");
-      if (branchExists) must(await git(["fetch", "origin", `+refs/heads/${task.branch}:refs/remotes/origin/${task.branch}`], repo), "git fetch branch");
+      // What `git clone --no-tags --branch <target>` made, from the host's mirror: every branch as origin/*, the
+      // target checked out tracking origin/<target>, origin's URL without credentials.
+      await viaHost("git clone", () => sendToSandbox(host, box, repo, { branches: "all", checkout: task.target }, { fresh: true }));
     }
 
     if (task.review) {
@@ -494,7 +523,7 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
       // clone has, or else fetched). A conflict fails the review: the checks report it too, and the verify fails on them.
       const on = task.review.targetSha;
       if (on) {
-        if ((await git(["cat-file", "-e", `${on}^{commit}`], repo)).code !== 0) must(await git(["fetch", "--no-tags", "origin", on], repo, 300_000), "git fetch (review target)");
+        if ((await git(["cat-file", "-e", `${on}^{commit}`], repo)).code !== 0) await viaHost("git fetch (review target)", () => sendToSandbox(host, box, repo, { branches: [], ref: on }));
         const m = await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "-c", "commit.gpgsign=false", "merge", "-q", "--no-edit", "-m", `capcomd review: ${task.review.branch} merged onto ${task.target}`, on], repo);
         if (m.code !== 0) {
           await git(["merge", "--abort"], repo).catch(() => {});
@@ -512,8 +541,8 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
         return { sha, already: true, costUsd: 0, turns: 0, stopReason: "already_pushed", events: 0, ...(stop?.trim() ? { limit: stop.trim() } : {}) };
       }
     }
-    if (startFrom) must(await git(["fetch", "origin", task.from!.ref], repo), "git fetch (continue)");
-    if (!task.review) must(await git(["checkout", "-B", task.branch, startRef(task, branchExists)], repo), "git checkout");
+    if (startFrom) await viaHost("git fetch (continue)", () => bringFrom(repo));
+    if (!task.review) must(await git(["checkout", "-B", task.branch, start(startRef(task, branchExists))], repo), "git checkout");
     // In place, the local branches are what a fresh clone has: the target at its tip, and the task branch. Its
     // dependencies are already there (env build installed them for this lockfile).
     const local = inPlace ? must(await sh(`cd ${sq(repo)} && git branch -f --track ${sq(task.target)} ${sq(`origin/${task.target}`)} >/dev/null && git for-each-ref --format='%(refname:short)' refs/heads/ | while read -r b; do [ "$b" = ${sq(task.target)} ] || [ "$b" = ${sq(task.branch)} ] || git branch -D -q "$b"; done; [ -d node_modules ] && echo reused; true`), "git branch (target)") : null;
@@ -686,9 +715,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // A limit ends the run but keeps the work: it is committed and pushed below (Capcomd-Stop trailer) and the
     // caller stops the agent instead of retrying it, so hours of work aren't redone or lost at a cap.
     let limit: string | null = null;
-    // A checkpoint the supervisor made in the VM is pushed from here: the agent holds no push credentials.
+    // A checkpoint the supervisor made in the VM is pushed by the host (from its mirror, after the sandbox bundles it):
+    // the agent holds no push credentials, and nothing in its checkout decides where the push goes.
     const pushCheckpoint = async (c: { sha: string; reason: string; files: number }) => {
-      const res = await git(["push", "--force", "--porcelain", "origin", `${c.sha}:${ckptRef}`], repo, 300_000).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+      const res = await pushFromSandbox(host, box, repo, { sha: c.sha, ref: ckptRef, force: true, near: [task.target, task.branch], timeoutMs: 300_000 })
+        .then(() => ({ code: 0, stderr: "" }), (e) => ({ code: 1, stderr: String((e as Error)?.message ?? e) }));
       addSpanEvent(span, "agent.checkpoint", { "git.sha": c.sha, "agent.checkpoint_reason": c.reason, "agent.checkpoint_files": c.files, ...(res.code ? { "agent.checkpoint_error": r.text(res.stderr).slice(-300) } : {}) });
       if (!res.code) opts.onReport?.({ type: "checkpoint", sha: c.sha, ref: ckptRef, reason: c.reason, files: c.files });
     };
@@ -936,8 +967,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       must(await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", ...(limit ? ["--allow-empty"] : []), "-F", `${W}/commit-msg.txt`], repo), "git commit");
     }
     const sha = must(await git(["rev-parse", "HEAD"], repo), "rev-parse").stdout.trim();
-    const lease = branchExists ? `--force-with-lease=refs/heads/${task.branch}` : `--force-with-lease=refs/heads/${task.branch}:`;
-    must(await git(["push", "--porcelain", lease, "origin", `HEAD:refs/heads/${task.branch}`], repo, 300_000), "git push");
+    // The host pushes it (from its mirror, leased at where the branch was when the agent started: there, or absent).
+    await viaHost("git push", () => pushFromSandbox(host, box, repo, { sha, ref: `refs/heads/${task.branch}`, expect: branchExists ? existing : null, near: [task.target, task.branch], timeoutMs: 300_000, spanRef: `HEAD:refs/heads/${task.branch}` }));
     setSpanAttributes(span, { "git.sha": sha });
     return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
   } catch (err) {

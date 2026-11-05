@@ -3,9 +3,10 @@
 // `capcomd env build` (no automatic rebuilds): `env status` and `doctor` say when one is due. Read on this host from
 // a capcomd-owned mirror of commits and trees only (no file contents), next to the merge clones.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Git } from "../merge/git";
+import { hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
 import type { MergeConfig } from "../merge/config";
 import { LOCKFILES } from "../agents/workspace";
 import type { EnvManifest, EnvRecord } from "./resolve";
@@ -57,13 +58,14 @@ export async function templateDriftFacts(m: EnvManifest, cfg: MergeConfig, o: { 
   const commit = m.template?.commit ?? "";
   const timeoutMs = o.timeoutMs ?? 60_000;
   const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_envdrift");
-  const g = new Git(dir);
+  let g = new Git(dir);
   try {
-    if (!existsSync(join(dir, "HEAD"))) { mkdirSync(dir, { recursive: true }); await g.ok(["init", "-q", "--bare"]); }
-    const fetched = await g.run(["fetch", "-q", "--no-tags", "--filter=blob:none", cfg.remote, `+refs/heads/${target}:refs/remotes/origin/${target}`], { timeoutMs });
+    // A host repo (src/merge/host-git.ts), started over when it isn't one or fails the check.
+    if (!existsSync(join(dir, "HEAD")) || !isHostRepo(dir) || (await hostRepoProblems(g)).length) { rmSync(dir, { recursive: true, force: true }); g = await initHostRepo(dir, { bare: true }); }
+    const fetched = await remoteGit(g, ["fetch", "-q", "--no-tags", "--filter=blob:none", cfg.remote, `+refs/heads/${target}:refs/remotes/origin/${target}`], cfg.remote, { timeoutMs });
     if (fetched.code !== 0) return { target, tip: null, ancestor: null, behind: null, lockChanged: null, error: `git fetch failed: ${(fetched.stderr || fetched.stdout).trim().slice(-200)}` };
     const tip = (await g.ok(["rev-parse", `refs/remotes/origin/${target}`])).trim();
-    if ((await g.run(["cat-file", "-e", `${commit}^{commit}`])).code !== 0) await g.run(["fetch", "-q", "--no-tags", "--filter=blob:none", cfg.remote, commit], { timeoutMs });
+    if ((await g.run(["cat-file", "-e", `${commit}^{commit}`])).code !== 0) await remoteGit(g, ["fetch", "-q", "--no-tags", "--filter=blob:none", cfg.remote, commit], cfg.remote, { timeoutMs });
     if ((await g.run(["cat-file", "-e", `${commit}^{commit}`])).code !== 0) return { target, tip, ancestor: false, behind: null, lockChanged: null };
     const ancestor = (await g.run(["merge-base", "--is-ancestor", commit, tip])).code === 0;
     const behind = ancestor ? Number((await g.ok(["rev-list", "--count", `${commit}..${tip}`])).trim()) : null;
