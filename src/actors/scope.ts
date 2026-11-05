@@ -17,6 +17,8 @@ import { killpoint } from "../utils/killpoint";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { startDriver } from "../primitives/drivers";
 import { agentWorkflowOn } from "../utils/agent-workflow-flag";
+import { changedHooks } from "../plugins/changes";
+import { hooks, principalOf } from "../plugins/hooks";
 
 /**
  * ADR-022: tell connected awaiters that agents changed (status, notice), so they look again instead of polling. (With
@@ -370,7 +372,8 @@ export const scopeActor = actor({
     },
   }),
 
-  actions: {
+  // Plugins hear what each action changed (the `*.changed` hooks, src/plugins/changes.ts) only while one listens.
+  actions: changedHooks({
   ...traceActions("scope", {
     async init(c, params: { runId: string; budget: Budget; label?: string; goal?: string; paramsHash: string }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
@@ -974,14 +977,21 @@ export const scopeActor = actor({
     async putItems(c, params: { agentId: string; items: ItemDraft[]; attachments?: ThreadAttachment[] }) {
       if (!params.items.length && !params.attachments?.length) return { seq: null };
       let last: number | null = null;
+      const written: ItemDraft[] = [];
       await c.db.transaction(async (tx: RawAccess) => {
         for (const a of params.attachments ?? []) {
           if (!/^att-[0-9a-f]{24}$/.test(a.id) || !IMAGE_TYPES.includes(a.mime as any) || a.bytes > IMAGE_MAX_BYTES) continue;
           await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", a.id, a.sha256, a.bytes, `${a.mime};base64`, a.base64, Date.now());
         }
-        for (const it of params.items) last = (await putItemTx(tx, params.agentId, it)) ?? last;
+        for (const it of params.items) { const seq = await putItemTx(tx, params.agentId, it); if (seq !== null) { last = seq; written.push(it); } }
         await tx.execute("UPDATE agents_v2 SET heartbeat_at = ? WHERE agent_id = ?", Date.now(), params.agentId);
       }, { name: "scopeItems" });
+      // agent.item (plugin API §6.6.9): each item written, after the commit, for transcript exporters and cost observers.
+      if (written.length && hooks.listening("agent.item")) {
+        const r = (await c.db.execute("SELECT run_id, profile FROM agents_v2 WHERE agent_id = ?", params.agentId))[0];
+        const agent = { id: params.agentId, runId: String(r?.run_id ?? runIdOf(c) ?? ""), profile: (r?.profile as string | null) ?? null };
+        for (const it of written) hooks.fire("agent.item", "observe", { agent, item: { ...redactShapes(it), agentId: params.agentId, untrusted: true } as any }, { principal: principalOf(null), entity: `${it.id}@${it.rev}`, runId: agent.runId, agentId: params.agentId });
+      }
       return { seq: last };
     },
     /** Thread items after `after` (seq), oldest write first; one agent's, or the whole run's. */
@@ -1320,5 +1330,5 @@ export const scopeActor = actor({
     }, { name: "scopeStep" });
     return { recorded };
   },
-  },
+  }, { agent: rowToAgent, op: opRow }),
 });

@@ -89,7 +89,9 @@ export type PreparePatch = { prompt?: { append?: string; skills?: AttachedSkill[
 
 export type AgentChange =
   | { kind: "spawned" }
-  | { kind: "started"; machine: { id: string; provider: string }; attempt: number }
+  /** The agent was claimed to run. `machine` is null when it isn't known yet (it is ensured after the start:
+   *  `sandbox.changed` `ready` names it). */
+  | { kind: "started"; machine: { id: string; provider: string } | null; attempt: number }
   | { kind: "step"; step: AgentStep }
   /** A checkpoint the in-VM supervisor took (ADR-019 §3): the progress signal a watchdog reads (§16.4). */
   | { kind: "checkpointed"; files: number; commit: string | null; at: Timestamp }

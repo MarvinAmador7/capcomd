@@ -23,6 +23,18 @@ export interface MergeRequest {
   /** The branch's commit the caller expects (a done agent's pushed commit): a verify may then use a fetch another verify
    *  just made, when it has that commit, instead of a fetch of its own. */
   branchSha?: string;
+  /** A merge (not a verify): what merge.landing's plugins are asked under the target's lock (plugin API §6.6.15). */
+  gate?: MergeGate;
+}
+
+/** A merge as merge.landing's plugins see it. `holdSatisfied`: a person approved this merge after a plugin held it, so
+ *  a hold now lets it land. `operator`: `merge --operator`, whose plugin vetoes are recorded and bypassed (§6.5). */
+export interface MergeGate {
+  merge: import("../../packages/plugin/src/shapes").Merge;
+  verification: import("../../packages/plugin/src/shapes").Verification | null;
+  operator: boolean;
+  requestedBy: import("../../packages/plugin/src/shapes").Principal;
+  holdSatisfied?: boolean;
 }
 
 /** Where a verify's or a merge's time went (ms). Absent parts didn't happen. */
@@ -46,10 +58,13 @@ export interface MergeTimings {
 }
 
 export type MergeOutcome =
-  | { status: "merged"; sha: string; already: boolean; how: string; strategy: MergeStrategy | "none"; mode: "pr" | "direct" | "none"; attempts: number; pr?: number; targetBefore?: string; timings?: MergeTimings }
+  | { status: "merged"; sha: string; already: boolean; how: string; strategy: MergeStrategy | "none"; mode: "pr" | "direct" | "none"; attempts: number; pr?: number; targetBefore?: string; timings?: MergeTimings;
+      /** `merge --operator` landed although these plugins vetoed it (§6.5). */
+      bypassedVetoes?: Array<{ plugin: string; reason: string }> }
   | { status: "verified"; sha: string; output: string; taskSha?: string; targetSha?: string; how?: string; timings?: MergeTimings }
   | { status: "conflict"; files: string[]; targetSha: string; taskSha: string; timings?: MergeTimings }
-  | { status: "failed"; reason: string; output?: string; timings?: MergeTimings };
+  /** `held`: a merge.landing plugin held it for a person's approval; nothing landed and the merge is parked (§6.6.15). */
+  | { status: "failed"; reason: string; output?: string; timings?: MergeTimings; held?: { plugin: string } };
 
 export class MergeRetryableError extends Error {
   constructor(message: string) { super(message); this.name = "MergeRetryableError"; }

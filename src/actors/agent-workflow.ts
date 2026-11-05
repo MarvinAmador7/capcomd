@@ -205,7 +205,9 @@ export async function workflowStats(c: any): Promise<{ rows: number; bytes: numb
  *  the sandbox provider didn't answer (an outage): tried again without counting against the attempts. */
 interface AttemptError { kind: string; message: string; exitCode?: number; final: boolean; transient?: boolean }
 /** `outages`: attempts so far that failed only because the provider didn't answer (not counted as attempts). */
-type Drive = { phase: "ensure" | "start" | "watch" | "failed"; n: number; error?: AttemptError; outages?: number };
+type Drive = { phase: "ensure" | "start" | "watch" | "failed"; n: number; error?: AttemptError; outages?: number;
+  /** The spec agent.preparing's plugins made for this attempt (absent: the agent's own; nothing listened). */
+  prepared?: Record<string, unknown> };
 type Poll = { state: "running" } | { state: "lost" } | { state: "done"; outcome: unknown } | { state: "failed"; error: AttemptError } | { state: "ended" };
 /** Runs alive in this process, by actor and attempt: a row "running" without one here was lost with its process or actor. */
 const liveRuns = new Map<string, Promise<void>>();
@@ -235,7 +237,7 @@ async function classifyOrThrow(e: unknown): Promise<AttemptError> {
  * telling the workflow (`attempt`). Called from a step; it must not touch the step's context after the step returns, so
  * it keeps the actor's own db, key and client.
  */
-async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started" | "running" | "settled"> {
+async function startAttempt(c: any, p: StartAgent, n: number, prepared: Record<string, unknown> | null = null): Promise<"started" | "running" | "settled"> {
   const db: RawAccess = c.db;
   const key: string[] = c.key;
   const cl = c.client();
@@ -255,7 +257,7 @@ async function startAttempt(c: any, p: StartAgent, n: number): Promise<"started"
       const a = await o.getAgentOrThrow(p.runId, p.agentId);
       const shim = { db, key, client: () => cl };
       const push = await tracedPush();
-      value = await o.runAttempt(p.runId, a, w, (params: any) => push(shim, params));
+      value = await o.runAttempt(p.runId, a, w, (params: any) => push(shim, params), prepared);
       state = "done"; col = "outcome";
     } catch (e) {
       value = await classify(e);
@@ -385,7 +387,7 @@ async function lifecycleOf(ctx: any, p: StartAgent): Promise<void> {
             // (Re)claim: a recorded failure releases the lease.
             const claim: any = await (await scopeOf(p.runId)).claimDriver({ agentId: p.agentId, driver, ttlMs: WF_LEASE_MS });
             if (!claim.ok) return { kind: "ended" };
-            return await (await ops()).ensureMachine(p.runId, p.agentId, p.epoch);
+            return await (await ops()).ensureMachine(p.runId, p.agentId, p.epoch, n);
           } catch (e) {
             const err = await classify(e);
             if (err.final) return { kind: "fail", error: err };
@@ -395,11 +397,11 @@ async function lifecycleOf(ctx: any, p: StartAgent): Promise<void> {
         if (!r.ok) return failed(r);
         if (r.value.kind === "fail") return Loop.continue({ phase: "failed", n, outages, error: r.value.error });
         if (r.value.kind === "ended") return Loop.break({ state: "ended" } as Poll);
-        return Loop.continue({ phase: "start", n, outages });
+        return Loop.continue({ phase: "start", n, outages, ...(r.value.prepared ? { prepared: r.value.prepared } : {}) });
       }
       if (st.phase === "start") {
-        const r = await lstep("start-agent", (c) => startAttempt(c, p, n));
-        return r.ok ? Loop.continue({ phase: "watch", n, outages }) : failed(r);
+        const r = await lstep("start-agent", (c) => startAttempt(c, p, n, st.prepared ?? null));
+        return r.ok ? Loop.continue({ phase: "watch", n, outages, ...(st.prepared ? { prepared: st.prepared } : {}) }) : failed(r);
       }
       if (st.phase === "watch") {
         // Woken by the run's `attempt` message when it ends; else it looks every WATCH_MS (a cancel, a lost run).
@@ -409,7 +411,7 @@ async function lifecycleOf(ctx: any, p: StartAgent): Promise<void> {
         const v: Poll = r.value;
         if (v.state === "running") return Loop.continue(st);
         // The run is gone (the daemon or the actor went away under it): run it again, not a failure of the agent.
-        if (v.state === "lost") { const s2 = await lstep("restart-agent", (c) => startAttempt(c, p, n)); return s2.ok ? Loop.continue(st) : failed(s2); }
+        if (v.state === "lost") { const s2 = await lstep("restart-agent", (c) => startAttempt(c, p, n, st.prepared ?? null)); return s2.ok ? Loop.continue(st) : failed(s2); }
         if (v.state === "failed") return Loop.continue({ phase: "failed", n, outages, error: v.error });
         return Loop.break(v);
       }

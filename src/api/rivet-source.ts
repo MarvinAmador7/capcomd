@@ -11,7 +11,9 @@ import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
 import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, mergeApprovalText, parseApprovalId, projectIdOf, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
+import { approvalIdFor, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
+import { applyRunPatch, hooks, principalOf, untrusted } from "../plugins/hooks";
+import { PluginError } from "../../packages/plugin/src/errors";
 import { goalSummary } from "../primitives/goal";
 import { RelayError } from "../core/errors";
 import { startDetachedRun } from "./create-run";
@@ -185,6 +187,25 @@ export function recordedMachines(env: Record<string, string | undefined> = proce
 // One provider per place for the resources routes (list, and an orphan's Delete): the daemon's own (getDependencies)
 // for its sandbox; for another, a provider made once here (a DockerProvider has no side effects until asked; boxd
 // shares the daemon's per-sandbox one).
+/**
+ * run.creating (plugin API §6.6.3) for a run an app starts (POST /v1/runs), here in the daemon before `capcomd run`
+ * starts it. Only `sandbox` applies at this site (the request carries no label or budget to lower); a refusal is the
+ * request's 422 with the plugin's reason.
+ */
+async function runCreating(runId: string, input: CreateRunInput): Promise<CreateRunInput> {
+	const { isListedProvider } = await import("../providers/registry");
+	const options = { runId, label: input.goal.slice(0, 200), goal: untrusted(input.goal, "operator"), budget: {}, checks: {}, reviewer: null, target: input.targetBranch ?? null,
+		goalBranch: typeof input.goalBranch === "string" && input.base ? { branch: input.goalBranch, base: input.base } : null, sandbox: input.sandbox ?? null, profile: input.profile ?? null, driver: input.driver ?? null, repo: input.repo ?? null };
+	const out = await hooks.fire("run.creating", "modify", { options }, { principal: principalOf(null), entity: runId, runId,
+		apply: (p, patch) => {
+			if (patch.label !== undefined || patch.budget !== undefined) throw new PluginError("invalid", "a run started from POST /v1/runs takes only a sandbox patch here");
+			return applyRunPatch(p, patch, isListedProvider);
+		} });
+	if (out.decision === "deny") throw new CreateRunError(`refused by ${out.plugin ? `the ${out.plugin} plugin` : "capcomd (the daemon is stopping)"}: ${out.text}`);
+	const sandbox = out.payload.options.sandbox;
+	return sandbox && sandbox !== input.sandbox ? { ...input, sandbox: sandbox as ListedProvider } : input;
+}
+
 const listers = new Map<string, SandboxProvider>();
 async function lister(name: ListedProvider): Promise<SandboxProvider> {
 	let p = listers.get(name);
@@ -352,6 +373,7 @@ export function rivetSource(): HarnessSource {
 		},
 		createRun: async (input) => {
 			const runId = generateRunId();
+			if (hooks.listening("run.creating")) input = await runCreating(runId, input);
 			const { repo } = await startDetachedRun({ ...input, runId });
 			// What GET /v1/runs/{runId} shows once the run's process has registered it, but for the state.
 			return { id: runId, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, ...runTitle({ label: input.goal, goal: input.goal }), repo, createdAt: isoTs(Date.now()) };

@@ -177,7 +177,15 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // The plugin host, once it has started (below): plugins dispose in reverse load order before the engine stops (§5.5).
   let plugins: { stop(): Promise<void> } | null = null;
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, async () => {
-    if (plugins) await plugins.stop().catch((e: Error) => console.error(`capcomd serve: stopping plugins: ${e.message}`));
+    if (plugins) {
+      // §5.5 stop step 1: daemon.stopping, with 5 s for its listeners to finish, then the plugins dispose.
+      const { hooks } = await import("../../plugins/hooks");
+      if (hooks.listening("daemon.stopping")) {
+        hooks.fire("daemon.stopping", "observe", { reason: "signal", deadline: new Date(Date.now() + 5000).toISOString() }, { principal: { kind: "operator", clientId: null }, entity: "daemon" });
+        await Promise.race([hooks.idle(), new Promise((r) => setTimeout(r, 5000))]);
+      }
+      await plugins.stop().catch((e: Error) => console.error(`capcomd serve: stopping plugins: ${e.message}`));
+    }
     console.log("\nStopping engine...");
     await stopEngine();
     process.exit(0);
@@ -280,6 +288,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   process.on("exit", () => P.releaseSnapshot());
   try { await host.start(P.builtinCandidates()); } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
   plugins = host;
+  // The kernel's hook sites fire through this host's registry from now on (§17.2 step 2).
+  const H = await import("../../plugins/hooks");
+  H.useHooks(host.hooks);
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {
@@ -298,6 +309,14 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   } catch (e) {
     if (e instanceof HarnessSocketInUseError) { console.error(`capcomd serve: ${e.message}`); process.exit(1); }
     console.error(`capcomd serve: harness API failed to start: ${(e as Error).message}`);
+  }
+  // §5.5 start step 5: the daemon is up, with its final plugin list.
+  if (H.hooks.listening("daemon.started")) {
+    const { CAPABILITY_NAMES } = await import("../../api/contract");
+    const { LISTED_PROVIDERS } = await import("../../providers/registry");
+    const listed = (s: string) => (s === "active" || s === "failed" || s === "disposed" ? s : "validated");
+    H.hooks.fire("daemon.started", "observe", { version: (await import("../../utils/self")).VERSION, api: { socket: sock, capabilities: [...CAPABILITY_NAMES] }, plugins: host.list().map((p) => ({ name: p.name, version: p.version, runtime: p.runtime, state: listed(p.state) })), sandboxes: [...LISTED_PROVIDERS] },
+      { principal: { kind: "operator", clientId: null }, entity: "daemon" });
   }
   console.log("  Press Ctrl+C to stop");
   await new Promise(() => {});
