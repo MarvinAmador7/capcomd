@@ -24,6 +24,7 @@ export const HARNESS_MODELS: Record<Provider, readonly HarnessModel[]> = {
 		{ id: "claude-haiku-5-5", name: "Haiku 5.5", note: "Fastest" },
 	],
 	codex: [
+		// Unverified: the id follows the approved prototype's "GPT-5.6"; check it against `codex -m` before relying on it.
 		{ id: "gpt-5.6", name: "GPT-5.6", note: "Codex" },
 	],
 };

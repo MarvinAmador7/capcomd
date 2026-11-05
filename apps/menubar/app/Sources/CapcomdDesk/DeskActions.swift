@@ -57,6 +57,15 @@ extension DeskModel {
     }
   }
 
+  /// A key typed while Home holds the keyboard (nothing focused): it starts (or continues) the goal, and the goal field
+  /// takes the keyboard for the rest.
+  package func typeIntoComposer(_ text: String) {
+    guard let np = newProject, np.form.phase == .editing else { return }
+    np.modelMenuOpen = false
+    typeGoal(np.form.goal + text)
+    np.focusSerial += 1
+  }
+
   /// Home's button (⌘0): Home, or back to the project under it.
   package func toggleHome() { if homeShown { closeNewProject() } else { openHome(focus: false) } }
 

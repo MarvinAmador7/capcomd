@@ -206,6 +206,16 @@ final class HomeTests: XCTestCase {
     XCTAssertNil(try JSONDecoder().decode(RunOptions.self, from: Data(old.utf8)).drivers.first?.models)
   }
 
+  /// Keys typed while Home holds the keyboard: text starts the goal; everything with its own meaning keeps it.
+  func testTypingOnHomeIsTextOnly() {
+    func t(_ c: String, cmd: Bool = false, ctrl: Bool = false, opt: Bool = false) -> String? { HomeTyping.text(c, command: cmd, control: ctrl, option: opt) }
+    XCTAssertEqual(t("h"), "h"); XCTAssertEqual(t("H"), "H"); XCTAssertEqual(t(" "), " "); XCTAssertEqual(t("é"), "é"); XCTAssertEqual(t("7"), "7")
+    XCTAssertNil(t("\r")); XCTAssertNil(t("\t")); XCTAssertNil(t("\u{1B}")); XCTAssertNil(t("\u{7F}"))     // Return, Tab, Esc, Delete
+    XCTAssertNil(t("\u{F700}")); XCTAssertNil(t("\u{F704}"))                                             // ↑, F1
+    XCTAssertNil(t("k", cmd: true)); XCTAssertNil(t("a", ctrl: true)); XCTAssertNil(t("π", opt: true))
+    XCTAssertNil(t(""))
+  }
+
   func testModelNames() {
     XCTAssertEqual(ModelMenu.displayName(model: "claude-opus-5-5"), "Opus 5.5")
     XCTAssertEqual(ModelMenu.displayName(model: "claude-sonnet-4-5-20250929"), "Sonnet 4.5")

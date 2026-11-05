@@ -98,6 +98,21 @@ public enum EffortWords {
   }
 }
 
+// MARK: typing on Home
+
+/// Home opens with nothing focused (no blue ring) and holds the keyboard itself; typing there starts the goal. This
+/// says which key presses are text for the composer: printable characters with no modifier but Shift. Return, Tab,
+/// Esc, arrows and function keys (Unicode's private-use F700–F8FF) and anything with ⌘, ⌃ or ⌥ keep their own meaning.
+public enum HomeTyping {
+  public static func text(_ characters: String, command: Bool, control: Bool, option: Bool) -> String? {
+    guard !command, !control, !option, !characters.isEmpty else { return nil }
+    let printable = characters.unicodeScalars.allSatisfy { s in
+      !CharacterSet.controlCharacters.contains(s) && !(0xF700...0xF8FF).contains(s.value) && s.value != 0x7F
+    }
+    return printable ? characters : nil
+  }
+}
+
 // MARK: Running
 
 /// One Running card on Home: a project with an active run, as one 48 pt line (its place, its title, a few words on what

@@ -1,6 +1,8 @@
 import XCTest
 @testable import CapcomdStore
 #if canImport(SwiftUI) && os(macOS)
+import AppKit
+import SwiftUI
 @testable import CapcomdDesk
 #endif
 
@@ -74,6 +76,63 @@ final class HomeModelTests: XCTestCase {
     // With nothing open, ⌘0, ⌘W and Esc keep Home: it is the window's screen then.
     m.toggleHome(); m.foldShortcut(); m.newProjectEscape()
     XCTAssertTrue(m.homeShown)
+  }
+
+  /// Home opens with nothing focused; a key typed there starts the goal and hands the keyboard to the goal field.
+  @MainActor func testTypingOnHomeStartsTheGoal() {
+    let (m, _) = app()
+    let np = m.newProject!
+    XCTAssertEqual(np.focusSerial, 0)
+    m.toggleModelMenu()
+    m.typeIntoComposer("A")
+    XCTAssertEqual(np.form.goal, "A")
+    XCTAssertEqual(np.focusSerial, 1)
+    XCTAssertFalse(np.modelMenuOpen)
+    m.typeIntoComposer("dd")                                     // keys that arrive before the field has the keyboard
+    XCTAssertEqual(np.form.goal, "Add")
+    XCTAssertTrue(np.form.smiling)
+  }
+
+  /// A window that counts as key without the test process becoming the active app (activating it would take the
+  /// keyboard from whoever is at the Mac). SwiftUI applies focus changes only in the active app, so the handoff to the
+  /// goal field here is the AppKit path HomeComposer takes when SwiftUI did not move it.
+  final class KeyWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var isKeyWindow: Bool { true }
+  }
+
+  /// The real window, hosted off screen: Home opens with no text field holding the keyboard (Home's own focus has it,
+  /// so no blue ring); a letter typed then lands in the goal and the goal field takes over; + gives it to the goal too.
+  @MainActor func testTheWindowOpensWithNothingFocused() throws {
+    let (m, _) = app()
+    _ = NSApplication.shared
+    let w = KeyWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 1200, height: 800), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+    w.isReleasedWhenClosed = false
+    w.contentView = NSHostingView(rootView: DeskWindowContent(model: m))
+    w.orderFrontRegardless()
+    NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: w)
+    defer { w.orderOut(nil) }
+    func spin(_ s: Double = 0.4) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+    func field() -> Bool { w.firstResponder is NSTextView }
+    spin(0.8)
+    XCTAssertTrue(m.homeShown)
+    XCTAssertEqual(m.newProject?.focusSerial, 0)
+    XCTAssertFalse(field(), "the goal field took the keyboard at launch: \(String(describing: w.firstResponder))")
+    XCTAssertNotNil(HomeComposer.goalField(in: w.contentView), "the goal field's AppKit view isn't found")
+    // A letter typed now goes to the goal.
+    let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: w.windowNumber, context: nil,
+                                             characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11))
+    w.sendEvent(key)
+    spin()
+    XCTAssertEqual(m.newProject?.form.goal, "b")
+    XCTAssertTrue(field(), "typing on Home didn't hand the keyboard to the goal field: \(String(describing: w.firstResponder))")
+    // Leave the field, then + : the goal field takes it again.
+    w.makeFirstResponder(nil)
+    spin()
+    XCTAssertFalse(field())
+    m.openNewProject()
+    spin()
+    XCTAssertTrue(field(), "+ didn't focus the goal field: \(String(describing: w.firstResponder))")
   }
 
   @MainActor func testPlusIsHomeWithTheComposerFocused() {

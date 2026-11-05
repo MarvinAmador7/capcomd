@@ -1,7 +1,7 @@
 import XCTest
 @testable import CapcomdStore
 
-/// The desktop's actions as data (design/desktop ReelNew, ReelMenu, ⌘K): the new project column's form, the project
+/// The desktop's actions as data (design/desktop Home, ReelMenu, ⌘K): Home's composer form, the project
 /// menu's items per capability and run state, and the palette's entries and filtering.
 @MainActor
 final class DeskActionsTests: XCTestCase {

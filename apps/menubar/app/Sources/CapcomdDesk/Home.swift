@@ -13,6 +13,9 @@ import CapcomdOnboarding
 struct HomeView: View {
   @Environment(DeskModel.self) private var model
   let np: NewProjectModel
+  /// Home itself holds the keyboard when it opens (no field focused, no ring): AppKit would otherwise hand it to the
+  /// goal field, the window's first text field. Typing here goes to the composer.
+  @FocusState private var resting: Bool
   var body: some View {
     DeskProbe.body("HomeView")
     return ScrollView(.vertical) {
@@ -36,6 +39,17 @@ struct HomeView: View {
       .frame(maxWidth: .infinity)
     }
     .scrollIndicators(.automatic)
+    .focusable()
+    .focusEffectDisabled()
+    .focused($resting)
+    .defaultFocus($resting, true)
+    .onKeyPress(phases: .down) { press in
+      guard resting, let text = HomeTyping.text(press.characters, command: press.modifiers.contains(.command),
+                                                control: press.modifiers.contains(.control), option: press.modifiers.contains(.option)) else { return .ignored }
+      model.typeIntoComposer(text)
+      return .handled
+    }
+    .onAppear { if np.focusSerial == 0 { resting = true } }
     // The model menu floats over the window (a click outside closes it), from the button's bounds.
     .overlayPreferenceValue(ModelButtonBounds.self) { anchor in
       if np.modelMenuOpen, let anchor {
@@ -158,10 +172,34 @@ struct HomeComposer: View {
     .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: focused)
     .animation(Theme.Motion.fast, value: setup == nil)
     .accessibilityElement(children: .contain).accessibilityLabel("New project")
-    .onAppear { goal = form.goal; if np.focusSerial > 0 { focused = true } }
+    .onAppear { goal = form.goal; if np.focusSerial > 0 { takeFocus() } }
     .onChange(of: goal) { _, g in model.typeGoal(g) }
-    .onChange(of: np.focusSerial) { _, _ in focused = true }
+    .onChange(of: np.focusSerial) { _, _ in takeFocus() }
     .onChange(of: form.goal) { _, g in if g != goal { goal = g } }   // the debug control file types into the model
+  }
+
+  /// + / ⇧⌘N, typing on Home, Set Up done: the goal takes the keyboard with the caret after what's there (a field that
+  /// takes focus selects all its text, and the next key would replace what was just typed). SwiftUI applies a focus
+  /// change only while the app is active; when it didn't (a window driven without activating the app), AppKit hands the
+  /// field the keyboard directly, as the bench does.
+  private func takeFocus() {
+    focused = true
+    DispatchQueue.main.async {
+      let w = NSApp.keyWindow ?? NSApp.windows.first { $0.isVisible && $0.firstResponder != nil && Self.goalField(in: $0.contentView) != nil }
+      guard let w else { return }
+      if !(w.firstResponder is NSTextView), let f = Self.goalField(in: w.contentView) { w.makeFirstResponder(f) }
+      guard let tv = w.firstResponder as? NSTextView else { return }
+      tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+    }
+  }
+
+  /// The goal field's AppKit view: Home's one editable field that wraps (the goal grows to 8 lines; the goal branch
+  /// field and the setup's fields are single-line).
+  static func goalField(in v: NSView?) -> NSTextField? {
+    guard let v else { return nil }
+    if let f = v as? NSTextField, f.isEditable, f.cell?.wraps == true || !f.usesSingleLineMode, !f.isHiddenOrHasHiddenAncestor { return f }
+    for s in v.subviews { if let f = goalField(in: s) { return f } }
+    return nil
   }
 
   private func toolRow(busy: Bool) -> some View {

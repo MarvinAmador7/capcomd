@@ -1,6 +1,6 @@
 import Foundation
 
-// The desktop window's actions (design/desktop/SPEC.md §2, boards ReelNew and ReelMenu): the new project column, the
+// The desktop window's actions (design/desktop/SPEC.md §2, boards Home and ReelMenu): Home's composer, the
 // open project's menu and the ⌘K palette, as data. Each offers only what this daemon and app can do; the views draw it.
 
 extension Capability {
@@ -10,7 +10,7 @@ extension Capability {
 
 // MARK: the new project column
 
-/// Home's composer (Home.dc.html; before, the new project column, ReelNew): the goal, the planner-to-be's face (named in
+/// Home's composer (Home.dc.html; before, the new project column): the goal, the planner-to-be's face (named in
 /// the debug state), and where Start stands. The goal branch row is
 /// the store's `GoalBranchSetup`; the folder's inline setup is `ProjectSetupFlow`.
 public struct NewProjectForm: Sendable, Hashable {

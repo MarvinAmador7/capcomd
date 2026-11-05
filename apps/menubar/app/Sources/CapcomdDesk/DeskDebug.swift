@@ -436,6 +436,7 @@ import CapcomdStore
     if let np = model.newProject {
       let f = np.form, g = f.goalSetup
       let mm = s.modelMenu
+      out.append("home responder \(deskWindow?.firstResponder.map { String(describing: Swift.type(of: $0)) } ?? "-") textField \(deskWindow?.firstResponder is NSTextView)")
       out.append("home shown focus \(np.focusSerial) modelMenu \(np.modelMenuOpen) chip \"\(mm.chip)\" bars \(mm.bars.map(String.init) ?? "-") enabled \(mm.enabled) label \"\(mm.label)\"")
       for sec in mm.sections {
         out.append("home models \(sec.provider) reason \(sec.reason ?? "-"): " + sec.options.map { "\($0.checked ? "✓" : "")\($0.name)[\($0.model ?? "-")]\($0.enabled ? "" : " off")" }.joined(separator: ", "))

@@ -69,12 +69,14 @@ One window, two parts.
   decision at its column's foot (View diff · Deny · Approve ↩) instead of the box.
 - **Swarms** (`ReelSwarm`): leads' subtrees fold into stacks in the title bar; only the subtree on screen is fanned
   out. An asking agent always steps out of its stack. A strip at the foot shows one cell per agent, grouped by lead.
-- **Home** (`Home.dc.html`, the owner's approved clickable prototype; it replaced `ReelNew`, the new project column).
+- **Home** (`Home.dc.html`, the owner's approved clickable prototype; it replaced the new project column).
   It shows when the window opens with no project focused, whenever no project is open (the last one folded or
   removed), from the title bar's Home (⌘0), and from + (⇧⌘N), which means "Home, with the composer focused". While it
   shows, Home stays pressed and every project is a deck; the reel stays built underneath, so leaving Home (Home again,
   ⌘W, Esc with nothing typed, or any deck, card, ⌘1–9) shows the project at once, and a goal that didn't start is kept
-  for next time. With no project open, Home is the window's screen: Home, ⌘W and Esc leave it up.
+  for next time. With no project open, Home is the window's screen: Home, ⌘W and Esc leave it up. Home opens with
+  nothing focused (no blue ring): Home itself holds the keyboard, and a character typed there starts the goal and
+  hands the goal field the keyboard (caret at the end); + / ⇧⌘N and a click on the composer focus the goal.
   - Centred, 680 pt wide, 96 pt from the top: the mark (the onboarding bot's head, rows 0–11 of its 16 × 16 sprite,
     in greys, 6 pt cells, 84 × 72 pt, a 1-pixel checker dither, 42 % opacity), "What are we building?" (SF Pro
     Display 30 pt semibold, tracking −0.022 em), and under it, tertiary 14 pt, "Describe it once. The planner splits
