@@ -24,7 +24,8 @@ const span = <T>(name: string, req: MergeRequest, fn: () => Promise<T>) =>
   withSpan(name, { "relay.run_id": req.runId, "git.ref": req.branch, "git.target": req.target }, fn);
 
 /** The forge's direct land of `sha` onto the target (docs/spec/plugin-api.md §7.4): a CAS on `targetSha`, and with
- *  `branchSha` the branch leased at it in the same atomic push. Serialized with the clone's other git work. */
+ *  `branchSha` the branch leased at it in the same atomic push. Serialized with the clone's other git work. A land that
+ *  rejects (cancelled at its deadline, or a forge's error) is a failed push, as a push git refused was before. */
 async function landDirect(forge: Forge, cfg: MergeConfig, req: MergeRequest, cloneName: string, git: Git, o: { sha: string; targetSha: string; branchSha?: string; subject?: string }): Promise<LandOutcome> {
   const key = taskKey(req.runId, req.taskId);
   const r: LandRequest = {
@@ -32,7 +33,8 @@ async function landDirect(forge: Forge, cfg: MergeConfig, req: MergeRequest, clo
     sha: o.sha, targetSha: o.targetSha, ...(o.branchSha ? { branchSha: o.branchSha, leaseBranch: true } : {}), mode: "direct", strategy: cfg.strategy,
     subject: o.subject ?? `capcomd ${key}`, body: "", trailers: { "Capcomd-Task": key }, workdir: git.cwd,
   };
-  return withCloneLock(cfg, cloneName, () => span("merge.push", req, () => land(forge, r, { merge: cfg }, LAND_MS)));
+  return withCloneLock(cfg, cloneName, () => span("merge.push", req, () => land(forge, r, { merge: cfg }, LAND_MS)
+    .catch((e): LandOutcome => ({ status: "failed", reason: (e as Error)?.message ?? String(e), retryable: false }))));
 }
 
 /**

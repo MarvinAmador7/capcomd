@@ -24,12 +24,19 @@ const req = (runId: string, taskId: string, extra: object = {}) => ({ runId, tas
 const withFake = (cfg: MergeConfig, extra: Partial<MergeConfig> = {}): MergeConfig => ({ ...cfg, forge: "fake", ...extra });
 
 let host: PluginHost;
+// The checks look up the run's sandbox in the engine: a closed port, so these tests never ask a running daemon.
+const endpoint = process.env.CAPCOMD_ENDPOINT;
 beforeAll(async () => {
+  process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9";
   host = new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: () => "/nonexistent" });
   await host.start([{ source: "builtin", dir: FAKE }, ...BUILTINS.map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module }))]);
   useForges(host);
 });
-afterAll(async () => { useForges(null); await host.stop(); });
+afterAll(async () => {
+  useForges(null);
+  await host.stop();
+  if (endpoint === undefined) delete process.env.CAPCOMD_ENDPOINT; else process.env.CAPCOMD_ENDPOINT = endpoint;
+});
 afterEach(() => fake.reset());
 
 describe("the forges and how one is chosen (§7.1)", () => {
@@ -48,9 +55,10 @@ describe("the forges and how one is chosen (§7.1)", () => {
     await expect(forgeFor({ remote: "/srv/repo.git", forge: "gitea" })).rejects.toBeInstanceOf(ForgeNotActive);
   });
 
-  test("config: CAPCOMD_MERGE_FORGE or merge.forge names it; a GitHub repository named outright names github", () => {
+  test("config: CAPCOMD_MERGE_FORGE names it; a GitHub repository named outright names github; never .capcomd.json", () => {
     expect(loadMergeConfig({ CAPCOMD_REPO: "/x", CAPCOMD_MERGE_FORGE: "fake" })!.forge).toBe("fake");
-    expect(loadMergeConfig({ CAPCOMD_REPO: "/x" }, { merge: { forge: "gitea" } })!.forge).toBe("gitea");
+    // The target tree's .capcomd.json is read only after the forge is chosen, so it can't name one.
+    expect(loadMergeConfig({ CAPCOMD_REPO: "/x" }, { merge: { forge: "gitea", github: "acme/w" } })!.forge).toBeNull();
     expect(loadMergeConfig({ CAPCOMD_REPO: "/x", CAPCOMD_GITHUB_REPO: "acme/w" })!.forge).toBe("github");
     expect(loadMergeConfig({ CAPCOMD_REPO: "https://github.com/acme/w.git" })!.forge).toBeNull();
   });
@@ -111,6 +119,10 @@ describe("direct mode: the forge lands the checked commit under the target's loc
     await produceFakeWork(r.cfg, { ...req("f4", "t"), epoch: 1 });
     fake.failNext = { status: "failed", reason: "the forge said no", retryable: false };
     expect(await mergeTask(req("f4", "t"), withFake(r.cfg))).toMatchObject({ status: "failed", reason: "push failed: the forge said no" });
+    expect(await r.sha("main")).toBe(before);
+    // A land that rejects (its SeamCall cancelled, or the forge's own error) is a failed push too, not a thrown merge.
+    fake.beforeLand = async () => { throw new PluginError("timeout", "git push to main was cancelled"); };
+    expect(await mergeTask(req("f4", "t"), withFake(r.cfg))).toMatchObject({ status: "failed", reason: "push failed: git push to main was cancelled" });
     expect(await r.sha("main")).toBe(before);
   });
 
