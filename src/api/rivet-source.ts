@@ -449,8 +449,8 @@ async function goalAction<T>(f: () => Promise<T>): Promise<GoalOutcome<T>> {
 	}
 }
 
-/** Project setup runs in the daemon's own environment, with its logins and its `gh`. */
+/** Project setup runs in the daemon's own environment, with its logins and its forges (plugin API §7.4). */
 async function projectDeps(): Promise<import("./projects").ProjectDeps> {
 	const P = await import("./projects");
-	return { env: process.env, logins: async () => (await import("./settings")).logins(), ghReady: () => P.ghReady() };
+	return { env: process.env, logins: async () => (await import("./settings")).logins(), ghReady: () => P.publishLogin() };
 }

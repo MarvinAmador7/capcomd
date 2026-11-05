@@ -93,8 +93,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `forge-github` (pull requests, `gh repo create`) and `forge-git` (a compare-and-swap push to any remote). Merges land
   as before; `capcomd plugins list` now lists both. Name a project's forge with `CAPCOMD_MERGE_FORGE` (for example
   `CAPCOMD_MERGE_FORGE=git` in your environment or in the project's `.capcomd/config.json` `env`); without one, a
-  github.com remote or `CAPCOMD_GITHUB_REPO` uses GitHub and any other remote uses git. A forge that isn't active
-  fails the merge with "merge.forge names …".
+  github.com remote or `CAPCOMD_GITHUB_REPO` uses GitHub and any other remote uses git. A forge that isn't active is
+  refused when you start the run, not at its first merge: `capcomd run`, `capcomd run new` and `capcomd_run_new` say
+  "merge.forge names …, which no active plugin provides" with the forges you can name, and `POST /v1/runs` answers
+  422. The forge also reads a run's branches when you give no base: for a GitHub repository with your GitHub login,
+  the default branch is GitHub's (else `git ls-remote`, as before), the same list the run setup screen shows. Your
+  GitHub login (setup, **Publish**, the accounts you can publish as, opening a goal branch's pull request) is the
+  forge's answer too, so it reads as before; `capcomd setup project` now also suggests pull requests when only
+  `GITHUB_TOKEN` is set. In pr mode with no forge that has pull requests (for example with `forge-github` disabled), a
+  merge now says that no active forge supports pull requests instead of asking for a GitHub repo.
 - The plugin host now hears what capcomd does: runs, agents, sandboxes, verifies, merges and approvals each tell it
   their steps at the points the plugin API names (docs/spec/plugin-api.md §6.6), so a plugin will be able to watch
   them, narrow them or refuse them. Only the reviewer gate listens so far (the built-in sandboxes, agent providers and

@@ -1,21 +1,27 @@
 // forge-github (docs/spec/plugin-api.md §15.2, §17.1): GitHub as the forge. What src/merge/pr.ts did once the work was
 // integrated and checked (find or open the pull request, merge it at the checked head, hand it to auto-merge and wait),
 // the pull requests of a run's goal branch (POST /v1/runs/{runId}/pull-request, capcomd_pr_open, `capcomd pr open`),
-// `gh repo create` for POST /v1/projects/publish, and a remote's default branch. A direct land is the same CAS push as
-// forge-git's. The REST adapter stays src/merge/github.ts (tests inject a fake one with setGitHubApi); the project's
-// settings (CAPCOMD_GITHUB_API, _POLL_MS, _TIMEOUT_MS, _REPO) reach it through the kernel's forge scope.
+// `gh repo create` for POST /v1/projects/publish, a remote's branches and default branch (the GitHub API with the
+// user's own login, else `git ls-remote`), and whether that login is on this machine (`gh auth status` for the GitHub
+// CLI, a token for the API; `gh api user` for who it is). A direct land is the same CAS push as forge-git's. The REST
+// adapter is ./github-rest.ts (tests inject a fake one with setGitHubApi); the project's settings (CAPCOMD_GITHUB_API,
+// _POLL_MS, _TIMEOUT_MS, _REPO) and the caller's environment (CAPCOMD_GH_CLI, GITHUB_TOKEN) reach it through the
+// kernel's forge scope.
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import { definePlugin, type PluginModule } from "../../../packages/plugin/src/context";
 import { PluginError } from "../../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../../packages/plugin/src/manifest";
-import type { ErrorClass, Forge, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
+import type { ErrorClass, Forge, ForgeAccount, ForgeBranches, ForgeLogin, ForgeLoginUse, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
 import type { Untrusted } from "../../../packages/plugin/src/shapes";
 import { githubRepoFromRemote } from "../../merge/config";
-import { GitHubHttpError, githubAt, type GitHubApi, type PullRequest } from "../../merge/github";
+import { GitHubHttpError, githubAt, hasGitHubOverride, type GitHubApi, type PullRequest } from "./github-rest";
 import { killpoint } from "../../utils/killpoint";
 import { VERSION } from "../../utils/self";
-import { casPush, lsRemoteDefault } from "./git";
-import { scoped } from "./scope";
+import { casPush, lsRemoteBranches, readMs } from "./git";
+import { scoped, scopedEnv } from "./scope";
+
+type Env = Record<string, string | undefined>;
 
 export interface GitHubForgeConfig { api: string; pollMs: number; timeoutMs: number }
 const DEFAULTS: GitHubForgeConfig = { api: "https://api.github.com", pollMs: 5000, timeoutMs: 30 * 60_000 };
@@ -34,7 +40,7 @@ const firstLine = (s: string) => (s.split("\n").map((l) => l.trim()).find(Boolea
 export class GitHubForge implements Forge {
   constructor(private readonly cfg: GitHubForgeConfig = DEFAULTS) {}
 
-  describe() { return { name: "github", label: "GitHub", pullRequests: true }; }
+  describe() { return { name: "github", label: "GitHub", pullRequests: true, publish: true }; }
   matches(remote: string) { return githubRepoFromRemote(remote) !== null; }
   classifyError(e: unknown): ErrorClass {
     if (e instanceof GitHubHttpError) {
@@ -44,7 +50,7 @@ export class GitHubForge implements Forge {
       if (e.status >= 500) return { kind: "transient", retryable: true };
     }
     if (e instanceof PluginError) {
-      if (e.code === "unavailable") return { kind: "auth", retryable: false, hint: e.hint ?? "Set GITHUB_TOKEN or run `gh auth login`." };
+      if (e.code === "unavailable") return { kind: "auth", retryable: false, hint: e.hint ?? "Run `gh auth login` (or set GITHUB_TOKEN)." };
       if (e.code === "timeout") return { kind: "timeout", retryable: true };
       if (e.code === "invalid" || e.code === "unsupported") return { kind: "config", retryable: false, hint: e.hint ?? e.message };
     }
@@ -64,7 +70,7 @@ export class GitHubForge implements Forge {
   }
   private async api(): Promise<GitHubApi> {
     try { return await githubAt(this.settings().api); }
-    catch (e) { throw new PluginError("unavailable", (e as Error).message, "Set GITHUB_TOKEN or run `gh auth login`."); }
+    catch (e) { throw new PluginError("unavailable", (e as Error).message, "Run `gh auth login` (or set GITHUB_TOKEN)."); }
   }
   private ref(p: PullRequest, repo: string, input: { head: string; base: string }): PullRequestRef {
     const web = this.settings().api.replace(/\/$/, "") === "https://api.github.com" ? `https://github.com/${repo}/pull/${p.number}` : null;
@@ -135,17 +141,118 @@ export class GitHubForge implements Forge {
     return { remote: `https://github.com/${full}.git`, url: `https://github.com/${full}` };
   }
 
-  async defaultBranch(remote: string, c: SeamCall): Promise<string | null> {
-    const repo = scoped().merge?.github.repo ?? githubRepoFromRemote(remote);
+  /**
+   * GitHub first (owner/name named outright, the project's CAPCOMD_GITHUB_REPO, or the remote's; with the user's own
+   * login: GITHUB_TOKEN, GH_TOKEN or `gh auth token`): the default branch and every page of branches. Else, or when
+   * GitHub doesn't answer, `git ls-remote`, with the reason in `note`. Neither: rejected with both reasons.
+   */
+  async listBranches(input: { remote: string; cwd: string; max: number }, c: SeamCall): Promise<ForgeBranches> {
+    const s = scoped();
+    const repo = s.repo ?? s.merge?.github.repo ?? githubRepoFromRemote(input.remote);
+    const notes: string[] = [];
     if (repo) {
-      try {
-        const token = await (await import("../../merge/github")).githubToken();
-        const r = await fetch(`${this.settings().api.replace(/\/$/, "")}/repos/${repo}`, { signal: c.signal, headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "x-github-api-version": "2022-11-28", "user-agent": "capcomd" } });
-        if (r.status === 200) { const b = (await r.json()) as { default_branch?: unknown }; if (typeof b.default_branch === "string" && b.default_branch) return b.default_branch; }
-      } catch { /* no login or no answer: ask git */ }
+      const login = await (s.stubs?.login ?? (() => this.apiLogin(scopedEnv())))()?.catch(() => null);
+      if (login) {
+        try { return { ...(await fromGitHub(repo, login, input.max, s.stubs?.fetch ?? fetch, c)), source: "service", note: null }; }
+        catch (e) { notes.push(`GitHub: ${(e as Error).message}`); }
+      } else notes.push("GitHub: no login (GITHUB_TOKEN, GH_TOKEN or `gh auth login`)");
     }
-    return lsRemoteDefault(remote, c);
+    try { return { ...(await lsRemoteBranches(input, c)), note: notes.join("; ") || null }; }
+    catch (e) { throw new PluginError("unavailable", [...notes, (e as Error).message].join("; "), undefined, true); }
   }
+
+  /** The API (CAPCOMD_GITHUB_API, the project's when the kernel gave it) and the user's token for it; null without one. */
+  private async apiLogin(env: Env): Promise<{ api: string; token: string } | null> {
+    const api = scoped().merge?.github.api ?? env.CAPCOMD_GITHUB_API ?? env.RELAY_GITHUB_API ?? this.cfg.api;
+    const token = await userToken(env);
+    return token ? { api, token } : null;
+  }
+
+  /**
+   * pullRequests: a token for the API (GITHUB_TOKEN, GH_TOKEN or `gh auth token`; a test's injected API needs none).
+   * publish: the GitHub CLI logged in (`gh auth status`, which `gh repo create` needs); with `accounts`, who it is and
+   * its organizations (`gh api user`, `gh api user/orgs`). Each asked at most every 30 s per gh binary.
+   */
+  async login(input: { use: ForgeLoginUse; accounts?: boolean }, _c: SeamCall): Promise<ForgeLogin> {
+    const env = scopedEnv();
+    if (input.use === "pullRequests") {
+      if (hasGitHubOverride() || (await userToken(env))) return { ok: true, accounts: [] };
+      return { ok: false, reason: "there is no GitHub login on this machine", fix: "run `gh auth login` (or set GITHUB_TOKEN)" };
+    }
+    if (input.accounts) {
+      const accounts = await ghAccounts(env).catch(() => null);
+      if (accounts) return { ok: true, accounts };
+    } else if (await ghAuthStatus(env)) return { ok: true, accounts: [] };
+    return { ok: false, reason: "the GitHub CLI isn't logged in on this machine", fix: "run `gh auth login` in Terminal" };
+  }
+}
+
+/** GitHub: the repository's default branch and its branches (up to `max`, 100 per page). Throws on any failure. */
+async function fromGitHub(repo: string, login: { api: string; token: string }, max: number, f: typeof fetch, c: SeamCall) {
+  const api = login.api.replace(/\/$/, "");
+  const headers = { accept: "application/vnd.github+json", authorization: `Bearer ${login.token}`, "x-github-api-version": "2022-11-28", "user-agent": "capcomd" };
+  const get = async (path: string) => {
+    const r = await f(`${api}${path}`, { headers, signal: AbortSignal.any([c.signal, AbortSignal.timeout(readMs(c))]) });
+    if (r.status !== 200) throw new Error(`GitHub answered ${r.status} for ${path.split("?")[0]}`);
+    return r.json() as Promise<any>;
+  };
+  const info = await get(`/repos/${repo}`);
+  const branches: string[] = [];
+  for (let page = 1; branches.length < max && page <= 10; page++) {
+    const rows = (await get(`/repos/${repo}/branches?per_page=100&page=${page}`)) as Array<{ name?: string }>;
+    for (const b of rows) if (typeof b?.name === "string") branches.push(b.name);
+    if (rows.length < 100) break;
+  }
+  return { defaultBranch: typeof info?.default_branch === "string" && info.default_branch ? info.default_branch : null, branches: [...new Set(branches)].sort().slice(0, max) };
+}
+
+// ---- the user's own login (asked at most every 30 s per gh binary) ----
+const LOGIN_TTL_MS = 30_000;
+const ghBin = (env: Env) => env.CAPCOMD_GH_CLI || "gh";
+const cache = new Map<string, { at: number; result: Promise<unknown> }>();
+function cached<T>(key: string, make: () => Promise<T>, keepFailures = true): Promise<T> {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < LOGIN_TTL_MS) return hit.result as Promise<T>;
+  const result = make();
+  cache.set(key, { at: Date.now(), result });
+  if (!keepFailures) result.catch(() => cache.delete(key));
+  return result;
+}
+/** Forget what was asked (tests). */
+export function resetGitHubLogins() { cache.clear(); }
+const never = new AbortController().signal;
+
+/** The user's API token: GITHUB_TOKEN or GH_TOKEN, else `gh auth token` (within 5 s); null without one. Never logged. */
+async function userToken(env: Env): Promise<string | null> {
+  const t = env.GITHUB_TOKEN ?? env.GH_TOKEN;
+  if (t) return t;
+  const bin = ghBin(env);
+  return cached(`token:${bin}`, async () => {
+    const r = await gh(bin, ["auth", "token"], { cwd: homedir(), env, timeoutMs: 5_000, signal: never });
+    const out = r.out.trim();
+    return r.code === 0 && out ? out : null;
+  });
+}
+
+/** `gh auth status` exits 0 within 5 s. */
+function ghAuthStatus(env: Env): Promise<boolean> {
+  const bin = ghBin(env);
+  return cached(`status:${bin}`, async () => (await gh(bin, ["auth", "status"], { cwd: homedir(), env, timeoutMs: 5_000, signal: never })).code === 0);
+}
+
+/** The gh user, then the organizations they belong to (`gh api user`, `gh api user/orgs`). A failure isn't kept. */
+function ghAccounts(env: Env): Promise<ForgeAccount[]> {
+  const bin = ghBin(env);
+  return cached(`accounts:${bin}`, async () => {
+    const u = await gh(bin, ["api", "user"], { cwd: homedir(), env, timeoutMs: 10_000, signal: never });
+    if (u.code !== 0) throw new Error(firstLine(u.err) || "gh api user failed");
+    const login = String(JSON.parse(u.out)?.login ?? "");
+    if (!login) throw new Error("gh api user named no login");
+    const o = await gh(bin, ["api", "user/orgs"], { cwd: homedir(), env, timeoutMs: 10_000, signal: never });
+    let orgs: string[] = [];
+    try { orgs = o.code === 0 ? (JSON.parse(o.out) as Array<{ login?: unknown }>).map((x) => String(x?.login ?? "")).filter(Boolean) : []; } catch { /* none */ }
+    return [{ login, kind: "user" as const }, ...[...new Set(orgs)].filter((x) => x !== login).map((x) => ({ login: x, kind: "org" as const }))];
+  }, false);
 }
 
 /** Run the GitHub CLI without blocking: exit code, stdout, stderr (each capped); 127 when it can't start. */

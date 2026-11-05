@@ -67,7 +67,7 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
     const cfg = (await import("../merge/config")).loadMergeConfig();
     const { env: envVar } = await import("../utils/env");
     const r = await (await import("../merge/goal")).resolveGoalBranch({ goal: a.label ?? "goal", base: a.base ?? null, goalBranch: a.goalBranch ?? null, projectTarget: d.target ?? envVar("MERGE_TARGET") ?? null,
-      remote: cfg?.remote ?? null, cwd: process.cwd(),
+      remote: cfg?.remote ?? null, merge: cfg, cwd: process.cwd(),
       // A goal branch that exists is decided when it's cut (O.runNew): a leftover of an ended run with nothing on it is used.
       reuse: a.goalBranch ?? null });
     goal = { branch: r.goalBranch, base: r.base };

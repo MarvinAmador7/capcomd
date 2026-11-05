@@ -633,12 +633,18 @@ Selection, per use:
 |---|---|---|
 | sandbox | the run's `sandbox` (`POST /v1/runs`, `capcomd run --sandbox`, kv `RUN_SANDBOX_KV`), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForRun` |
 | agent | the resolved profile's `provider` (`PinnedSpec.provider`; ADR-024 `harness.provider`) | `src/agents/adapters.ts` `adapterFor` on the closed union `claude \| codex` |
-| forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`) | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request and `POST /v1/projects/publish` |
+| forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`); creating a repository asks the first active forge whose `describe().publish` | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request, a run's base (`listBranches`), the logins the app shows (`login`); `publishForge` for `POST /v1/projects/publish` |
 
 A profile or run naming an implementation that is not active fails at **validation** (`capcomd profiles validate`,
-`POST /v1/runs` 422), not at spawn. The kernel wraps every seam object in its traced, resilient wrappers
-(`src/providers/resilient.ts`, `tracedProvider`) and hands the wrapper to consumers and to `ctx.sandboxes.provider`;
-no plugin ever receives another plugin's raw object. A seam object held by a running operation stays valid until that
+`POST /v1/runs` 422), not at spawn. For a forge that is the run's `merge.forge`: `POST /v1/runs` refuses it (422
+`invalid`, "merge.forge names <name>, which no active plugin provides" and the active forges), and so do `capcomd run`
+and `capcomd_run_new` (relay.v1 `config`, reason `forge`), before any merge. The kernel wraps every seam object in its
+traced, resilient wrappers (`src/providers/resilient.ts`, `tracedProvider`; for a forge, `src/plugins/forges`
+`kernelForge`: each SeamCall method in a `forge.<method>` span whose trace the forge is handed, the signal enforced at
+the deadline even for a forge that ignores it (except `land`, which the kernel waits for under its lock), rejections
+classified by the forge's `classifyError` and the reads `findPullRequest`, `openPullRequest` and `listBranches` tried
+again while that says `retryable`, `login` never rejecting) and hands the wrapper to consumers and to
+`ctx.sandboxes.provider`; no plugin ever receives another plugin's raw object. A seam object held by a running operation stays valid until that
 operation ends even if the plugin disposes meanwhile; a new operation then fails `not_found` for the name.
 
 Every seam method takes a `SeamCall {signal, deadline, trace}` as its last argument and MUST honour the signal: work in
@@ -709,21 +715,28 @@ fetch and integrate (`src/merge/integrate.ts`), the checks (`src/merge/verify.ts
 
 | Method | Contract |
 |---|---|
-| `describe()` | `{name, label, pullRequests}` |
+| `describe()` | `{name, label, pullRequests, publish?}`; `publish`: `publishRepository` creates repositories (absent is false) |
 | `matches(remote)` | pure; the default selection rule (§7.1) |
 | `classifyError(e)` | §7.2.3 |
 | `land(req, c)` | Called **under the kernel's target lock**. `mode: "direct"`: push `req.sha` to `req.target` as a compare-and-swap on `req.targetSha` (with `req.leaseBranch`, the branch leased at `req.branchSha` in the same atomic push; a remote that refuses atomic pushes is `{status: "failed", retryable: true}`); a moved target is `{status: "conflict", targetSha}` (`""` when the forge doesn't know it) and the kernel fetches and re-integrates. `mode: "pr"`: the branch is pushed already; find or open the pull request and merge it with `req.strategy` at exactly `req.branchSha`, the head the kernel integrated as `req.sha` and checked (the hosting service makes the merge commit, so the outcome's `sha` is the service's); a pull request the service can't merge is `conflict`, a wait past the deadline `{status: "failed", retryable: true}`. **Idempotent by `req.mrgId`**: a replay after a crash finds the existing PR or the pushed commit and reports `already: true`. MUST reject `unsupported` for `pr` when `pullRequests` is false. |
 | `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)`. A merged pull request carries `mergeSha`, so a pr-mode merge that finds one records it without integrating again |
-| `publishRepository` | `POST /v1/projects/publish` (the forge that matches the repository it would create); today's `gh repo create` in `src/api/project-git.ts`. A name the service has already is `conflict` |
-| `defaultBranch(remote)` | for `POST /v1/runs` base resolution |
+| `publishRepository` | `POST /v1/projects/publish`, asked of the first active forge whose `describe().publish` (forge-github: `gh repo create`); the event names where it went by the returned `url`. A name the service has already is `conflict` |
+| `listBranches({remote, cwd, max}, c)` | `POST /v1/runs` base resolution (`capcomd run`, `capcomd_run_new`) and `GET /v1/projects/branches`: `{defaultBranch, branches, source, note}`, from the service's API (`source: "service"`; the kernel reports the forge's name, `github`) when it can, else from the remote itself (`"git"`: `git ls-remote`, its `HEAD` the default branch, never guessed), with `note` saying why the service wasn't used. Rejects, saying why, when the remote can't be read at all; the kernel then reads the checkout's own refs (`local`) |
+| `login({use, accounts?}, c)` | Whether the user's own login at the service is on this machine for `use`: `pullRequests` (the goal branch's `openPullRequest.available`, the setup wizard's suggestion; forge-github: a token, `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`) or `publish` (`GET /v1/projects/inspect` and `publish-options` `ghReady`, publishing; forge-github: `gh auth status`); with `accounts`, as whom (`publish-options` `accounts`: the user, then its organizations; forge-github: `gh api user`, `gh api user/orgs`). Shaped like `available`: `{ok: true, accounts}` or `{ok: false, reason, fix}`, sentences the kernel puts in its own ("capcomd opens pull requests with your GitHub login, and there is none on this machine: <fix>, then try again"). Cheap (the forge may cache it; forge-github asks at most every 30 s) and never rejects |
+
+When the chosen forge has no pull requests in pr mode, or a goal branch's repository is on one, the kernel says so in
+the words of the active forges that have them ("pr mode needs a GitHub repo", "isn't on GitHub"); with none active,
+that no active forge supports pull requests.
 
 Built-ins: `forge-github` (§15.2) and `forge-git` (direct pushes to any remote; `pullRequests: false`). A GitLab or
 Gitea forge is one plugin and no API change. `tests/merge/fake-github.ts` stays the fake GitHub REST service that
 `forge-github`'s tests run against; `tests/merge/forge-fake` is the `forge-fake` test plugin, which lands what the kernel
-hands it without a hosting service. Every process that lands work has the forges: the daemon's host, else a host of the
-forge plugins alone (the CLI, `capcomd mcp`, tests). Until a project's layer of a plugin's config exists (§10.2), the
+hands it without a hosting service, reads branches with `git ls-remote` unless a test hands it a listing, and logs in as
+a test says. Every process that lands work has the forges: the daemon's host, else the process's one local host
+(`src/plugins/host.ts` `localHost`: the built-ins marked `everyProcess`, the gates and the forges, and in tests
+`CAPCOMD_TEST_PLUGINS`; the CLI, `capcomd mcp`, tests). Until a project's layer of a plugin's config exists (§10.2), the
 built-in forges read a run's recorded merge settings (`CAPCOMD_GITHUB_API`, `_POLL_MS`, `_TIMEOUT_MS`, `_REPO`) and the
-caller's environment (`CAPCOMD_GH_CLI`) from the kernel for the call they serve.
+caller's environment (`CAPCOMD_GH_CLI`, `GITHUB_TOKEN`) from the kernel for the call they serve.
 
 ## 8. Primitives: the context
 
@@ -1169,7 +1182,7 @@ third-party plugin MAY do). Config: `bin`, `image`, `agentMemoryMb` (the `agentM
 ### 15.2 The GitHub forge (`forge-github`, in-process)
 
 `examples/forge-github`. `HttpGitHub`, `prMerge`'s poll loop and the `gh` calls become `land`, `openPullRequest`,
-`findPullRequest`, `publishRepository`, `defaultBranch`. The token is an `x-secret` config property with `gh auth token`
+`findPullRequest`, `publishRepository`, `listBranches`, `login`. The token is an `x-secret` config property with `gh auth token`
 as the fallback; `classifyError` maps rate limits to `quota` and 401/403 to `auth`. The kernel keeps the lock, the CAS,
 integration and the checks.
 
@@ -1528,6 +1541,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.4 | 2026-11-05 | With the gates (§17.2 step 5): the built-in gates in a process that isn't the daemon (§6.1); `merge --operator` asks every landing gate (§6.5); `verify.judging`'s `tested.commit`, judges in order, a judge's `review` report, the kernel's same-tree and no-review rules, stopped reviewers (§6.6.13); the built-in reviewer gate (§15.3); the gate events as scope events, a plugin's own run events not yet (§13.1). |
 | 1.0.5 | 2026-11-05 | With the forges (§17.2 step 6): `LandRequest.branchSha`/`leaseBranch`, `PullRequestRef.mergeSha`, a conflict's `detail` and unknown `targetSha` (all additive); a pr land merges at the checked head (`branchSha`), not a pushed integrated commit; `merge.forge` from `CAPCOMD_MERGE_FORGE` (not `.capcomd.json`), `CAPCOMD_GITHUB_REPO` naming `github`; `forge-git` is `order: post`; `forge-fake` lives in `tests/merge/forge-fake`. |
 | 1.0.6 | 2026-11-05 | Orchestrate means full read visibility and no execution (§16.1, the owner's call after a live run whose planner and lead couldn't `git fetch`): read-only git with fetch and a detached checkout, every capcomd read; edits, git writes, installs, builds and tests refused. Claude Code's lists gain the read-only commands and the refused prefixes (plus three option wildcards); Codex's policy is `denyCommands` as execpolicy rules with its sandbox the agent's (`read-only` can't fetch and can't start in Docker) and its capcomd MCP tools approved; `toolPolicies.orchestrate.denyCommands`, `AgentConfig.denyCommands` and the optional `refusal(line)` (§7.3; all additive); the agent suite accepts `denyCommands` that refuse commits and pushes in place of a read-only sandbox. `capcomd fetch`; a verify's and a merge's `result.combined`; an orchestrate agent that spawned nothing ends failed; the mode is explained to everyone who briefs one; `capcomd logs` shows every agent's tool calls and refusals. |
+| 1.0.7 | 2026-11-05 | The rest of the forge's logic in the forge (§7.4): `listBranches` (replacing the unused `defaultBranch`) for a run's base and the setup screen's branches; `login` (`ForgeLogin`, `ForgeAccount`, `ForgeLoginUse`) for the logins the app shows and who you publish as; `describe().publish` choosing the forge that creates repositories; "pr mode" and "isn't on GitHub" said in the active forges' words. An inactive `merge.forge` is refused at `POST /v1/runs`, `capcomd run` and `capcomd_run_new` (§7.1); every forge method goes through the kernel's wrapper (§7.1); one local host for the gates and the forges. |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 

@@ -1,11 +1,12 @@
 // forge-git (docs/spec/plugin-api.md §7.4, §17.1): the built-in forge for any remote, loaded last (`order: post`) so
 // it is the default only when no other forge claims the remote. It lands by push alone: the compare-and-swap of the
 // integrated, checked commit onto the target that src/merge/direct.ts made itself before. The kernel keeps the target
-// lock, the fetch, the integration, the checks and the retries; no pull requests (`pullRequests: false`).
+// lock, the fetch, the integration, the checks and the retries; no pull requests (`pullRequests: false`). A remote's
+// branches and default branch come from `git ls-remote`.
 import { definePlugin, type PluginModule } from "../../../packages/plugin/src/context";
 import { PluginError } from "../../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../../packages/plugin/src/manifest";
-import type { ErrorClass, Forge, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
+import type { ErrorClass, Forge, ForgeBranches, ForgeLogin, ForgeLoginUse, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
 import { Git } from "../../merge/git";
 import { VERSION } from "../../utils/self";
 
@@ -35,11 +36,27 @@ export async function casPush(req: LandRequest, c: SeamCall): Promise<LandOutcom
   return { status: "failed", reason: text || `git push exited ${push.code}`, retryable: !!lease && /atomic/i.test(text) };
 }
 
-/** The remote's default branch (`git ls-remote --symref <remote> HEAD`), or null when it doesn't say. */
-export async function lsRemoteDefault(remote: string, c: SeamCall, cwd = process.cwd()): Promise<string | null> {
-  const r = await new Git(cwd).run(["ls-remote", "--symref", remote, "HEAD"], { signal: c.signal, timeoutMs: Math.max(1, Date.parse(c.deadline) - Date.now()) });
-  if (r.code !== 0) return null;
-  return /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.stdout)?.[1] ?? null;
+/** How long one read of a remote or a service may take, within the call's own deadline. */
+export const READ_MS = 15_000;
+export const readMs = (c: SeamCall) => Math.max(1, Math.min(READ_MS, Date.parse(c.deadline) - Date.now()));
+
+/**
+ * The remote's branches and default branch from the remote itself (`git ls-remote --symref <remote> HEAD
+ * refs/heads/*`): its HEAD, when it points at a branch, is the default (never guessed). Rejects `unavailable` when the
+ * remote can't be read, saying why. Any forge reads a remote this way.
+ */
+export async function lsRemoteBranches(input: { remote: string; cwd: string; max: number }, c: SeamCall): Promise<ForgeBranches> {
+  const heads = await new Git(input.cwd).run(["ls-remote", "--symref", input.remote, "HEAD", "refs/heads/*"], { signal: c.signal, timeoutMs: readMs(c) });
+  if (heads.code !== 0) throw new PluginError("unavailable", heads.timedOut ? "git ls-remote timed out" : `git ls-remote failed: ${heads.stderr.trim().split("\n")[0]?.slice(0, 200) ?? ""}`, undefined, true);
+  let defaultBranch: string | null = null;
+  const branches: string[] = [];
+  for (const line of heads.stdout.split("\n")) {
+    const sym = /^ref: refs\/heads\/(\S+)\tHEAD$/.exec(line);
+    if (sym) { defaultBranch = sym[1]!; continue; }
+    const h = /^[0-9a-f]{40,64}\trefs\/heads\/(\S+)$/.exec(line);
+    if (h) branches.push(h[1]!);
+  }
+  return { defaultBranch, branches: [...new Set(branches)].sort().slice(0, input.max), source: "git", note: null };
 }
 
 /** The classification every push-based forge shares (§7.2.3). */
@@ -68,7 +85,13 @@ export class GitForge implements Forge {
   async publishRepository(): Promise<{ remote: string; url: string | null }> {
     throw new PluginError("unsupported", "the git forge can't create repositories", "Create the repository where it is hosted, then add it as origin.");
   }
-  defaultBranch(remote: string, c: SeamCall) { return lsRemoteDefault(remote, c); }
+  listBranches(input: { remote: string; cwd: string; max: number }, c: SeamCall) { return lsRemoteBranches(input, c); }
+  /** git has no login of its own: the remote's credentials are git's (the kernel configures them into its clones). */
+  async login(input: { use: ForgeLoginUse }): Promise<ForgeLogin> {
+    return input.use === "pullRequests"
+      ? { ok: false, reason: "the git forge lands by push only: it has no pull requests", fix: "Set the merge mode to direct, or name a forge that has pull requests (merge.forge)." }
+      : { ok: false, reason: "the git forge can't create repositories", fix: "Create the repository where it is hosted, then add it as origin." };
+  }
 }
 
 export const manifest = {
