@@ -1,5 +1,6 @@
 // Where the harness.v1 server reads from. The server only speaks this interface: the Rivet-backed source reads the
 // scope actors (src/primitives/ops.ts); tests use memorySource so tests/api stays fast and engine-free.
+import { HARNESS_MODELS } from "../config/models";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Agent, AgentStatus, Attachment, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
@@ -24,6 +25,8 @@ type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
 export type CreateRunInput = { goal: string; repo?: string; profile?: string; targetBranch?: string; driver?: "claude" | "codex"; effort?: string; sandbox?: ListedProvider;
+	/** Capability runs.options.models: the planner's model, one of its driver's `models`. */
+	model?: string;
 	/** Capability runs.goal_branch: the base the goal branch is cut from, and its name (false: no goal branch). */
 	base?: string; goalBranch?: string | false };
 /** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message,
@@ -242,8 +245,8 @@ export function memorySource(seed: Partial<{
 	const loginsOf = async () => seed.logins ?? (["claude", "codex"] as const).flatMap((provider) => LISTED_PROVIDERS.map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` })));
 	const optionsOf = async () => seed.runOptions ?? {
 		drivers: [
-			{ provider: "claude" as const, label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
-			{ provider: "codex" as const, label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
+			{ provider: "claude" as const, label: "Claude Code", model: null, models: [...HARNESS_MODELS.claude], efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
+			{ provider: "codex" as const, label: "Codex", model: null, models: [...HARNESS_MODELS.codex], efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
 		],
 		sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
 	};

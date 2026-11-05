@@ -79,6 +79,7 @@ const REFUSALS = new Set(["usage", "config", "not_found", "conflict"]);
 export async function startDetachedRun(input: CreateRunInput & { runId: string }, o: { env?: Env; cwd?: string; timeoutMs?: number; sandboxCheck?: typeof sandboxAvailable; spawn?: typeof spawn } = {}): Promise<{ repo: string; log: string | null }> {
 	if (input.profile && input.driver) throw new CreateRunError("profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
 	if (input.profile && input.effort) throw new CreateRunError("profile and effort can't be combined: effort is the planner agent's (the driver's), and profile picks the worker of a run without one");
+	if (input.profile && input.model) throw new CreateRunError("profile and model can't be combined: model is the planner agent's (the driver's), and profile picks the worker of a run without one");
 	const ctx = launchContext(input.repo, o.env ?? process.env, o.cwd ?? process.cwd(), { ...(input.sandbox ? { sandbox: input.sandbox } : {}) });
 	if (input.sandbox) {
 		const s = await (o.sandboxCheck ?? sandboxAvailable)(input.sandbox, ctx.env);
@@ -86,7 +87,7 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 	}
 	const [cmd, ...args] = selfArgv("run", "--detach", "--json", "--run-id", input.runId,
 		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []),
-		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []),
+		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.model ? [`--planner-model=${input.model}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []),
 		...(input.base !== undefined ? [`--base=${input.base}`] : []), ...(input.goalBranch === false ? ["--no-goal-branch"] : input.goalBranch !== undefined ? [`--goal-branch=${input.goalBranch}`] : []), "--", input.goal);
 	const child = (o.spawn ?? spawn)(cmd!, args, { cwd: ctx.cwd, env: ctx.env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "", stderr = "";

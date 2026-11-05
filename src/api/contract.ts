@@ -387,6 +387,7 @@ export const CAPABILITIES = {
 	"runs.options": "POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available",
 	"runs.options.repo": "GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles",
 	"runs.options.sandbox": "GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422)",
+	"runs.options.models": "GET /v1/run-options `drivers[].models`: the models each driver's planner can run on (an id, a display name and a one-line note); POST /v1/runs takes `model`, one of them",
 	"agent.steps": "agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams",
 	logins: "GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in",
 	environments: "GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it",
@@ -428,6 +429,7 @@ export const CreateRunBody = z.object({
 	goalBranch: z.union([BranchName, z.literal(false)]).optional().describe("Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (capcomd/<goal-slug>, never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"),
 	driver: AgentProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
+	model: z.string().min(1).max(100).regex(/^[A-Za-z0-9._:\/-]+$/, "model must be a model id").optional().describe("Capability runs.options.models. The model the run's planner (the driver) runs on (`capcomd run --planner-model`): one of that driver's `models[].id` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Passed to the agent CLI as a profile's model is (Claude Code `--model`, Codex `-m`). Omitted: the driver's `model` there (the planner profile's, else the CLI's default)."),
 	sandbox: SandboxName.optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): a listed place's name (GET /v1/run-options `sandboxes`), today docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't one, or isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox."),
 });
 export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; " +
@@ -446,6 +448,11 @@ export const DriverOption = z.object({
 	provider: AgentProvider,
 	label: z.string().describe("What to call it: \"Claude Code\" or \"Codex\""),
 	model: z.string().nullable().describe("The model the planner would run with on this provider; null: the provider CLI's default"),
+	models: z.array(z.object({
+		id: z.string().describe("What POST /v1/runs `model` takes, and the CLI's `--model` / `-m`"),
+		name: z.string().describe("What to call it in a menu, e.g. \"Opus 5.5\""),
+		note: z.string().describe("One short line beside the name, e.g. \"Most capable\""),
+	})).describe("Capability runs.options.models. The models this provider's planner can run on, in menu order: capcomd's own list, then any other model the project's profiles on this provider name"),
 	efforts: z.array(z.string()).describe("Reasoning effort levels this provider takes, lowest to highest (POST /v1/runs `effort`); empty when the daemon can't set its effort"),
 	effort: z.string().nullable().describe("The level a run gets when none is chosen: the planner profile's, else the provider's default; null: the provider CLI decides (claude: by model)"),
 	available: z.boolean(),
