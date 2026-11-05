@@ -51,18 +51,46 @@ extension Theme {
     static let question = Font.system(size: 15, weight: .semibold)
     static let goalTitle = Font.system(size: 13, weight: .semibold, design: .monospaced)
 
-    // The new project column (ReelNew): the planner-to-be, the composer card, the dashed space for the crew.
-    static let crewDash = Color.white.opacity(0.12)
-    enum NewProject {
-      static let botCell: CGFloat = 3.5                  // the full bot (32 cells) at 112 pt
-      static let greetingGap: CGFloat = 12, greetingBottom: CGFloat = 36, shadowLift: CGFloat = 14
-      static let dither = Color(red: 0x2C / 255, green: 0x2C / 255, blue: 0x31 / 255)
-      static let cardMargin: CGFloat = 10, cardRadius: CGFloat = 14, cardGap: CGFloat = 6
-      static let cardPadding = EdgeInsets(top: 10, leading: 10, bottom: 8, trailing: 10)
-      static let cardFill = Color(red: 0x1D / 255, green: 0x1D / 255, blue: 0x21 / 255), cardStroke = Color.white.opacity(0.14)
-      static let goalFont = Font.system(size: 14)
+    // Home (Home.dc.html): the mark, the title, the composer with its lift, the model menu, the Running cards.
+    enum Home {
+      static func hex(_ v: UInt32, _ a: Double = 1) -> Color {
+        Color(.sRGB, red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255, opacity: a)
+      }
+      static let width: CGFloat = 680, top: CGFloat = 96, bottom: CGFloat = 48, gutter: CGFloat = 16
+      static let markGap: CGFloat = 22, titleGap: CGFloat = 22, subtitleGap: CGFloat = 8
+      static let title = Font.system(size: 30, weight: .semibold), titleTracking: CGFloat = -0.022 * 30, titleColor = hex(0xF5F5F7)
+      static let subtitle = Font.system(size: 14)
+      // The composer: 16 pt corners, a .5 pt ring, a soft drop shadow, the blue focus ring.
+      static let cardRadius: CGFloat = 16, cardGap: CGFloat = 6
+      static let cardPadding = EdgeInsets(top: 12, leading: 12, bottom: 10, trailing: 12)
+      static let cardFill = hex(0x1B1B1F), cardRing = Color.white.opacity(0.16), cardHighlight = Color.white.opacity(0.04)
+      static let focusRing = hex(0x0A84FF, 0.22), focusWidth: CGFloat = 3
+      static let goalFont = Font.system(size: 15), goalTracking: CGFloat = -0.005 * 15
       static let chipFont = Font.system(size: 11.5)
-      static let segmentOn = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3F / 255)
+      static let segmentOn = hex(0x3A3A3F)
+      static let toolRow: CGFloat = 32
+      // The model button and its menu.
+      static let drvHeight: CGFloat = 28, drvFont = Font.system(size: 12), drvHover = Color.white.opacity(0.07)
+      static let barOff = Color.white.opacity(0.18)
+      static let menuFill = hex(0x1F1F23), menuRing = Color.white.opacity(0.14), menuRadius: CGFloat = 10, menuPadding: CGFloat = 5
+      static let menuWidth: CGFloat = 260, menuGap: CGFloat = 6
+      static let menuHeader = Font.system(size: 11, weight: .semibold), menuItem = Font.system(size: 12.5), menuNote = Font.system(size: 11.5)
+      static let itemHeight: CGFloat = 28, itemRadius: CGFloat = 6, itemHighlight = hex(0x0A84FF, 0.9)
+      static let separator = Color.white.opacity(0.10)
+      // Start and the mic.
+      static let go: CGFloat = 30, goFill = hex(0xF2F2F7), goArrow = hex(0x1D1D1F)
+      // Running.
+      static let runningTop: CGFloat = 56, runningGap: CGFloat = 8
+      static let runHeight: CGFloat = 48, runRadius: CGFloat = 11, runHover = hex(0x18181C), runRing = Color.white.opacity(0.09)
+      static let askRing = hex(0xFFB020, 0.6)
+      static let placeTint = hex(0xC7C7CE)
+      static let runTitle = Font.system(size: 13, weight: .semibold), runPhrase = Font.system(size: 12.5)
+      static let runClock = Font.system(size: 12, design: .monospaced)
+      static let head: CGFloat = 22, headOverlap: CGFloat = 14, headFill = hex(0x26262A)
+      static let question = Font.system(size: 13, weight: .medium)
+      static let button = Font.system(size: 12.5, weight: .medium), buttonHeight: CGFloat = 28, buttonRadius: CGFloat = 7
+      static let buttonRing = Color.white.opacity(0.2), approveFill = hex(0xF2F2F7), approveText = hex(0x1D1D1F)
+      static let header = Font.system(size: 12.5, weight: .semibold), count = Font.system(size: 12)
     }
 
     // The project menu (ReelMenu) and the ⌘K palette: one surface.

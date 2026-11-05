@@ -4,14 +4,15 @@ import CapcomdStore
 import CapcomdBot
 import CapcomdUI
 
-/// The title bar (ReelStack, ReelTabs): the open project as one group with its crew tabs, every other project folded
-/// into a deck, and on the right Follow, Actions (⌘K) and + (a new project). While the new project column is open
-/// every project is a deck and the + stays held down. Each piece reads only its own slice.
+/// The title bar (ReelStack, ReelTabs, Home): Home, then the open project as one group with its crew tabs, every other
+/// project folded into a deck, and on the right Follow, Actions (⌘K) and + (Home with the composer focused). While Home
+/// shows every project is a deck and Home stays pressed. Each piece reads only its own slice.
 struct TitleBar: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
     DeskProbe.body("TitleBar")
     return HStack(spacing: 8) {
+      HomeButton()
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 8) {
           ForEach(model.decks) { deck in
@@ -257,21 +258,51 @@ struct ActionsButton: View {
   }
 }
 
-/// + (⇧⌘N): the new project column. Held down while it's open; a second click closes it (its draft stays).
+/// + (⇧⌘N): Home, with the composer focused.
 struct NewProjectButton: View {
   @Environment(DeskModel.self) private var model
   var body: some View {
-    let held = model.newProject != nil
-    Button { model.toggleNewProject() } label: {
+    Button { model.openNewProject() } label: {
       Image(systemName: "plus").font(.system(size: 13, weight: .regular))
-        .foregroundStyle(held ? Theme.Desk.text : Theme.Desk.tertiary)
+        .foregroundStyle(Theme.Desk.tertiary)
         .frame(width: Theme.Desk.iconButton, height: Theme.Desk.iconButton)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(held ? Color.white.opacity(0.10) : .clear))
         .contentShape(Rectangle())
     }
     .buttonStyle(PressableStyle())
     .help("New project (⇧⌘N)")
-    .accessibilityLabel("New project").accessibilityAddTraits(held ? .isSelected : [])
+    .accessibilityLabel("New project")
+  }
+}
+
+/// Home (⌘0), before the projects: pressed while Home shows; pressed again, back to the open project.
+struct HomeButton: View {
+  @Environment(DeskModel.self) private var model
+  var body: some View {
+    let on = model.homeShown
+    Button { model.toggleHome() } label: {
+      HouseGlyph().stroke(style: StrokeStyle(lineWidth: 1.3, lineJoin: .round))
+        .frame(width: 15, height: 15)
+        .foregroundStyle(on ? Theme.Desk.text : Theme.Desk.tertiary)
+        .frame(width: Theme.Desk.iconButton, height: Theme.Desk.iconButton)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Color.white.opacity(0.10) : .clear))
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(PressableStyle())
+    .help("Home (⌘0)")
+    .accessibilityLabel("Home").accessibilityAddTraits(on ? .isSelected : [])
+  }
+}
+
+/// The prototype's house (a 16-unit path: roof, walls and door).
+struct HouseGlyph: Shape {
+  func path(in r: CGRect) -> Path {
+    let s = r.width / 16
+    func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * s, y: r.minY + y * s) }
+    var path = Path()
+    path.move(to: p(2.5, 7.2)); path.addLine(to: p(8, 2.8)); path.addLine(to: p(13.5, 7.2)); path.addLine(to: p(13.5, 13.5))
+    path.addLine(to: p(9.6, 13.5)); path.addLine(to: p(9.6, 10)); path.addLine(to: p(6.4, 10)); path.addLine(to: p(6.4, 13.5))
+    path.addLine(to: p(2.5, 13.5)); path.closeSubpath()
+    return path
   }
 }
 #endif

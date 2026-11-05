@@ -21,9 +21,10 @@ package struct DeskWindowContent: View {
   }
 }
 
-/// Keyboard (SPEC §4): ⌘1–9 projects, ⌃1–9 agents, ⌃← ⌃→ the neighbour column, ⇧⌘N a new project, ⌘K actions, and the
-/// project menu's ⌘L, ⌥⌘P and ⌘W. None of these animate. An item whose action the open project doesn't have does nothing
-/// (⌘W also closes the new project column, and removes a finished project from the title bar).
+/// Keyboard (SPEC §4): ⌘0 Home, ⌘1–9 projects, ⌃1–9 agents, ⌃← ⌃→ the neighbour column, ⇧⌘N Home with the composer
+/// focused, ⌘K actions, and the project menu's ⌘L, ⌥⌘P and ⌘W. None of these animate. An item whose action the open
+/// project doesn't have does nothing (⌘W also leaves Home for the open project, and removes a finished project from the
+/// title bar).
 package struct DeskCommands: Commands {
   let model: DeskModel
   package init(model: DeskModel) { self.model = model }
@@ -46,6 +47,8 @@ package struct DeskCommands: Commands {
       Button("Copy Run ID") { if let i = model.menuItem("copy") { model.perform(i) } }
     }
     CommandMenu("Go") {
+      Button("Home") { model.toggleHome() }.keyboardShortcut("0", modifiers: .command)
+      Divider()
       ForEach(1..<10) { n in
         Button("Project \(n)") { model.goToProject(n - 1) }.keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
       }

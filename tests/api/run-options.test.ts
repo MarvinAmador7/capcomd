@@ -1,5 +1,6 @@
 // Capability runs.options: POST /v1/runs `driver` and `sandbox`, GET /v1/run-options, and how they reach `capcomd run`
 // (args and env of the launched command). Engine-free; tests/scenarios/run-sandbox.test.ts covers the engine side.
+import { HARNESS_MODELS } from "../../src/config/models";
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -49,8 +50,8 @@ function world(o: { profiles?: unknown; logins?: string[]; env?: Record<string, 
 /** Run options where everything can be used (memorySource's default has no planner, so a sandbox would be refused). */
 const FITS = { docker: { available: true, reason: null }, boxd: { available: true, reason: null } };
 const READY = { drivers: [
-	{ provider: "claude" as const, label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: false, sandboxes: FITS },
-	{ provider: "codex" as const, label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: FITS },
+	{ provider: "claude" as const, label: "Claude Code", model: null, models: [...HARNESS_MODELS.claude], efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: false, sandboxes: FITS },
+	{ provider: "codex" as const, label: "Codex", model: null, models: [...HARNESS_MODELS.codex], efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: FITS },
 ], sandboxes: [{ name: "docker" as const, label: "Local", available: true, reason: null, default: false }, { name: "boxd" as const, label: "Cloud", available: true, reason: null, default: false }] };
 const dockerUp = async () => ({ ok: true, reason: null });
 const dockerDown = async () => ({ ok: false, reason: "Docker isn't running" });
@@ -73,7 +74,9 @@ describe("CreateRunBody", () => {
 		expect(CAPABILITY_NAMES).toContain("runs.options");
 		const out = (spec as any).paths["/v1/run-options"].get.responses["200"].content["application/json"].schema;
 		expect(out.required).toEqual(["drivers", "sandboxes"]);
-		expect(out.properties.drivers.items.required).toEqual(["provider", "label", "model", "efforts", "effort", "available", "reason", "default", "sandboxes"]);
+		expect(out.properties.drivers.items.required).toEqual(["provider", "label", "model", "models", "efforts", "effort", "available", "reason", "default", "sandboxes"]);
+		expect(out.properties.drivers.items.properties.models.items.required).toEqual(["id", "name", "note"]);
+		expect(body.properties.model.type).toBe("string");
 		expect(body.properties.effort.type).toBe("string");
 		expect(out.properties.sandboxes.items.required).toEqual(["name", "label", "available", "reason", "default"]);
 	});
@@ -153,8 +156,8 @@ describe("GET /v1/run-options", () => {
 		const fits = { docker: { available: true, reason: null }, boxd: { available: true, reason: null } };
 		expect(o).toEqual({
 			drivers: [
-				{ provider: "claude", label: "Claude Code", model: "claude-opus-5-5", efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: true, sandboxes: fits },
-				{ provider: "codex", label: "Codex", model: "gpt-5-codex", efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: fits },
+				{ provider: "claude", label: "Claude Code", model: "claude-opus-5-5", models: [...HARNESS_MODELS.claude], efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: true, sandboxes: fits },
+				{ provider: "codex", label: "Codex", model: "gpt-5-codex", models: [...HARNESS_MODELS.codex, { id: "gpt-5-codex", name: "gpt-5-codex", note: "From the codex-worker profile" }], efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: fits },
 			],
 			sandboxes: [
 				{ name: "docker", label: "Local", available: true, reason: null, default: false },
@@ -166,7 +169,7 @@ describe("GET /v1/run-options", () => {
 	test("unavailable: no login, no planner profile, Docker down, no boxd key; a fake sandbox is no default", async () => {
 		resetDockerCheck();
 		const noCodex = await runOptions(world({ logins: ["claude-code"], env: { CAPCOMD_SANDBOX: "fake" } }), dockerDown);
-		expect(noCodex.drivers[1]).toEqual({ provider: "codex", label: "Codex", model: "gpt-5-codex", efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "Not logged in to Codex (run capcomd auth login codex)", default: false, sandboxes: {
+		expect(noCodex.drivers[1]).toEqual({ provider: "codex", label: "Codex", model: "gpt-5-codex", models: [...HARNESS_MODELS.codex, { id: "gpt-5-codex", name: "gpt-5-codex", note: "From the codex-worker profile" }], efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: false, reason: "Not logged in to Codex (run capcomd auth login codex)", default: false, sandboxes: {
 			docker: { available: false, reason: "Not logged in to Codex for Local (run `capcomd auth login codex --sandbox docker`)" },
 			boxd: { available: false, reason: "Not logged in to Codex for Cloud (run `capcomd auth login codex --sandbox boxd`)" },
 		} });
@@ -391,8 +394,8 @@ describe("effort (the driver's reasoning effort)", () => {
 	});
 	test("POST /v1/runs effort: one of the chosen (or default) driver's levels, else 422 naming them; part of the body for idempotency", async () => {
 		const options = { drivers: [
-			{ provider: "claude" as const, label: "Claude Code", model: null, efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: true, sandboxes: FITS },
-			{ provider: "codex" as const, label: "Codex", model: null, efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: FITS },
+			{ provider: "claude" as const, label: "Claude Code", model: null, models: [...HARNESS_MODELS.claude], efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: true, reason: null, default: true, sandboxes: FITS },
+			{ provider: "codex" as const, label: "Codex", model: null, models: [...HARNESS_MODELS.codex], efforts: ["minimal", "low", "medium", "high"], effort: "medium", available: true, reason: null, default: false, sandboxes: FITS },
 		], sandboxes: [{ name: "docker" as const, label: "Local", available: true, reason: null, default: true }, { name: "boxd" as const, label: "Cloud", available: true, reason: null, default: false }] };
 		const src = memorySource({ runOptions: options });
 		const app = harnessApp({ source: src, clients: () => loadClients(cpath), state: harnessState(null) });
@@ -579,4 +582,117 @@ describe("GET /v1/run-options?repo= (capability runs.options.repo)", () => {
 		writeFileSync(join(d, ".capcomd", "config.json"), JSON.stringify({ env: { CAPCOMD_REPO: "/srv/git/app.git" } }));
 		return d;
 	};
+});
+
+describe("the planner's model (capability runs.options.models)", () => {
+	const { claudeAdapter, codexAdapter } = require("../../src/agents/adapters") as typeof import("../../src/agents/adapters");
+	const { loadAgentConfig } = require("../../src/agents/config") as typeof import("../../src/agents/config");
+	const { harnessModels, modelProblem } = require("../../src/config/models") as typeof import("../../src/config/models");
+	const ctx = (cfg: any) => ({ bin: "x", repo: "/r", promptFile: "/p", jsonl: "/j", errFile: "/e", dir: "/w", cfg });
+	const q = (s: string) => `'${s}'`;
+
+	test("the curated table: each harness's models with a name and a note, ids unique; the project's profiles add theirs", () => {
+		for (const [provider, list] of Object.entries(HARNESS_MODELS)) {
+			expect({ provider, n: list.length > 0 }).toEqual({ provider, n: true });
+			expect(new Set(list.map((m) => m.id)).size).toBe(list.length);
+			for (const m of list) expect(m.id && m.name && m.note).toBeTruthy();
+		}
+		expect(HARNESS_MODELS.claude.map((m) => [m.id, m.name, m.note])).toEqual([
+			["claude-opus-5-5", "Opus 5.5", "Most capable"], ["claude-sonnet-5-5", "Sonnet 5.5", "Balanced"], ["claude-haiku-5-5", "Haiku 5.5", "Fastest"],
+		]);
+		expect(HARNESS_MODELS.codex.map((m) => [m.id, m.name, m.note])).toEqual([["gpt-5.6", "GPT-5.6", "Codex"]]);
+		const env = world();
+		// The planner names claude-opus-5-5, already listed; codex-worker names gpt-5-codex, which isn't.
+		expect(harnessModels("claude", env)).toEqual([...HARNESS_MODELS.claude]);
+		expect(harnessModels("codex", env)).toEqual([...HARNESS_MODELS.codex, { id: "gpt-5-codex", name: "gpt-5-codex", note: "From the codex-worker profile" }]);
+		expect(harnessModels("codex", { CAPCOMD_AGENTS_FILE: "/nonexistent/agents.json" })).toEqual([...HARNESS_MODELS.codex]);
+	});
+
+	test("validation: a model the harness offers; another harness's model or an unknown id is refused, naming the choices", () => {
+		const env = world();
+		expect(modelProblem("claude", "claude-sonnet-5-5", env)).toBeNull();
+		expect(modelProblem("codex", "gpt-5-codex", env)).toBeNull();   // from the project's profile
+		expect(modelProblem("codex", "claude-opus-5-5", env)).toBe('model "claude-opus-5-5" isn\'t a Codex model capcomd offers: use one of gpt-5.6, gpt-5-codex');
+		expect(modelProblem("claude", "opus", env)).toContain("isn't a Claude Code model capcomd offers: use one of claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5");
+	});
+
+	test("plannerDriver: a chosen model overrides the planner profile's (with or without a provider swap, beside an effort); a bad one is refused", () => {
+		const env = world({ logins: ["claude-code", "codex"] });
+		const same = plannerDriver("claude", undefined, env, undefined, undefined, "claude-haiku-5-5");
+		expect(same).toMatchObject({ ok: true, model: "claude-haiku-5-5", swapped: false });
+		expect(decodeAgentRef((same as any).ref)).toEqual({ name: "planner", overrides: { set: { model: "claude-haiku-5-5" }, operator: false } });
+		expect(resolveAgent((same as any).ref, env).spec).toMatchObject({ provider: "claude", model: "claude-haiku-5-5" });
+		const both = plannerDriver("claude", undefined, env, "high", undefined, "claude-sonnet-5-5");
+		expect(decodeAgentRef((both as any).ref).overrides?.set).toEqual({ effort: "high", model: "claude-sonnet-5-5" });
+		const swap = plannerDriver("codex", undefined, env, undefined, undefined, "gpt-5.6");
+		expect(swap).toMatchObject({ ok: true, model: "gpt-5.6", swapped: true });
+		expect(resolveAgent((swap as any).ref, env)).toMatchObject({ kind: "codex", spec: { provider: "codex", model: "gpt-5.6" } });
+		expect(plannerDriver("codex", undefined, env, undefined, undefined, "claude-opus-5-5")).toMatchObject({ ok: false, code: "model", reason: expect.stringContaining("isn't a Codex model") });
+		// Without a chosen model the planner keeps its profile's.
+		expect(plannerDriver("claude", undefined, env)).toMatchObject({ ok: true, ref: "planner", model: "claude-opus-5-5" });
+	});
+
+	test("the agent CLI gets it the way each harness takes a model: Claude Code --model, Codex -m", () => {
+		const env = { ...world({ logins: ["claude-code", "codex"] }), ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "" };
+		const c = plannerDriver("claude", undefined, env, undefined, undefined, "claude-sonnet-5-5") as any;
+		const x = plannerDriver("codex", undefined, env, undefined, undefined, "gpt-5.6") as any;
+		const cc = loadAgentConfig(env, c.ref), xc = loadAgentConfig(env, x.ref);
+		expect([cc.model, xc.model]).toEqual(["claude-sonnet-5-5", "gpt-5.6"]);
+		expect(claudeAdapter.command(ctx(cc), q)).toContain(" --model 'claude-sonnet-5-5'");
+		expect(codexAdapter.command(ctx(xc), q)).toContain(" -m 'gpt-5.6'");
+		expect(claudeAdapter.command(ctx(cc), q)).not.toContain("claude-opus-5-5");   // the profile's model is replaced, not added
+	});
+
+	test("GET /v1/run-options lists each driver's models; the contract parses them", async () => {
+		resetDockerCheck();
+		const o = await runOptions(world({ logins: ["claude-code", "codex"] }), dockerUp);
+		expect(RunOptions.parse(o)).toEqual(o);
+		expect(o.drivers.map((d) => [d.provider, d.models.map((m) => m.id)])).toEqual([["claude", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]], ["codex", ["gpt-5.6", "gpt-5-codex"]]]);
+		expect(CAPABILITY_NAMES).toContain("runs.options.models");
+		expect(CreateRunBody.safeParse({ goal: "go", model: "claude-opus-5-5" }).success).toBe(true);
+		expect(CreateRunBody.safeParse({ goal: "go", model: "rm -rf /" }).success).toBe(false);
+		resetDockerCheck();
+	});
+
+	test("POST /v1/runs model: one of the chosen (or default) driver's models, else 422 with field model; part of the body for idempotency", async () => {
+		const options = { ...READY, drivers: [{ ...READY.drivers[0]!, default: true }, READY.drivers[1]!] };
+		const src = memorySource({ runOptions: options });
+		const app = harnessApp({ source: src, clients: () => loadClients(cpath), state: harnessState(null) });
+		const post = (body: unknown, key: string) => app.request("/v1/runs", { method: "POST", headers: { authorization: `Bearer ${steer}`, "content-type": "application/json", "idempotency-key": key }, body: JSON.stringify(body) });
+		expect((await post({ goal: "go", model: "claude-haiku-5-5" }, "key-model-01")).status).toBe(201);   // the default driver (claude)
+		expect((await post({ goal: "go", driver: "codex", model: "gpt-5.6", effort: "high" }, "key-model-02")).status).toBe(201);
+		expect(src.created).toEqual([{ goal: "go", model: "claude-haiku-5-5" }, { goal: "go", driver: "codex", effort: "high", model: "gpt-5.6" }]);
+		const wrong = await post({ goal: "go", driver: "codex", model: "claude-opus-5-5" }, "key-model-03");
+		expect(wrong.status).toBe(422);
+		expect(await wrong.json()).toEqual({ code: "invalid", field: "model", message: 'model "claude-opus-5-5" isn\'t a Codex model capcomd offers: use one of gpt-5.6' });
+		const withProfile = await post({ goal: "go", profile: "worker", model: "claude-opus-5-5" }, "key-model-04");
+		expect(((await withProfile.json()) as any).message).toContain("profile and model can't be combined");
+		expect((await post({ goal: "go", model: "claude-opus-5-5" }, "key-model-01")).status).toBe(409);
+		expect((await post({ goal: "go" }, "key-model-01")).status).toBe(409);
+		expect((await post({ goal: "go", model: "claude-haiku-5-5" }, "key-model-01")).headers.get("idempotent-replayed")).toBe("true");
+		const none = memorySource();
+		const app2 = harnessApp({ source: none, clients: () => loadClients(cpath), state: harnessState(null) });
+		const r = await app2.request("/v1/runs", { method: "POST", headers: { authorization: `Bearer ${steer}`, "content-type": "application/json", "idempotency-key": "key-model-05" }, body: JSON.stringify({ goal: "go", model: "claude-opus-5-5" }) });
+		expect(((await r.json()) as any).message).toContain("model needs a driver");
+	});
+
+	test("the launched command gets --planner-model; capcomd run --planner-model checks it against the provider's models", async () => {
+		const calls: string[][] = [];
+		const spawn = ((cmd: string, args: string[]) => {
+			calls.push(args);
+			const child: any = new EventEmitter();
+			child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
+			setTimeout(() => { child.stdout.write(JSON.stringify({ ok: true, runId: "run-m1", detached: true, log: null }) + "\n"); child.stdout.end(); child.stderr.end(); child.emit("exit", 0); }, 5);
+			return child;
+		}) as any;
+		await startDetachedRun({ goal: "go", runId: "run-m1", driver: "codex", model: "gpt-5.6" }, { env: { CAPCOMD_REPO: "/r" }, cwd: dir, spawn });
+		expect(calls[0]).toEqual(expect.arrayContaining(["--planner-provider=codex", "--planner-model=gpt-5.6"]));
+		await expect(startDetachedRun({ goal: "go", runId: "run-m2", profile: "worker", model: "gpt-5.6" }, { env: { CAPCOMD_REPO: "/r" }, cwd: dir, spawn })).rejects.toBeInstanceOf(CreateRunError);
+		const { capcomd } = require("../helpers/engine") as typeof import("../helpers/engine");
+		const env = { ...world({ logins: ["claude-code", "codex"] }), CAPCOMD_ENDPOINT: "http://127.0.0.1:6499" };
+		const err = async (args: string[]) => JSON.parse((await capcomd(["run", "fix it", "--json", ...args], env)).stdout.trim().split("\n").pop()!).error;
+		expect(await err(["--planner-provider", "codex", "--planner-model", "claude-opus-5-5"])).toMatchObject({ code: "usage", message: expect.stringContaining("isn't a Codex model capcomd offers") });
+		expect(await err(["--planner-model", "claude-opus-5-5", "--recipe"])).toMatchObject({ code: "usage" });
+		expect(await err(["--planner-model", "claude-haiku-5-5"])).toMatchObject({ code: "engine_unreachable" });   // the default planner (claude) takes it
+	}, 30_000);
 });

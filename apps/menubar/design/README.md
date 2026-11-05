@@ -79,3 +79,8 @@ Rejected/superseded variants are intentionally not committed — don't reintrodu
 The approved boards for the full-size window are in `desktop/` (`*.dc.html` from the design canvas, rendered `*.png`,
 `canvas.json`, the bots they use in `desktop/bots/`). `desktop/SPEC.md` is the written spec, with the performance
 budgets every desktop PR has to meet.
+
+| Screen / state | Board | Swift view |
+|---|---|---|
+| Home: the window's first screen (the mark, "What are we building?", the composer with its model menu, the Running cards with their asks); it replaced the new project column | `desktop/Home.dc.html` (the approved clickable prototype; it renders only inside the design canvas runtime, so read it as source: its `<style>` holds every token, its script the copy and states) | `CapcomdDesk/Home.swift`, `ComposerChips.swift`, `TitleBar.swift` (`HomeButton`); state in `DeskModel` (`homeShown`, `HomeSlice`) and `CapcomdStore/Home.swift` (`HomeRun`, `ModelMenu`); the mark in `CapcomdOnboarding/Sprite.swift` (`Sprite.mark`, checked against the prototype by `HomeMarkTests`) |
+| The reel, the title bar, the project menu, ⌘K | `desktop/Reel*.dc.html` | `CapcomdDesk/` |

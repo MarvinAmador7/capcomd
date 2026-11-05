@@ -95,8 +95,23 @@ public enum Sprite {
   }
 
   /// A mini head for the pour: the top twelve rows, columns 1–14.
-  public static func head(_ c: Colorway) -> PixelGrid {
-    let pal = palette(c)
+  public static func head(_ c: Colorway) -> PixelGrid { head(palette: palette(c)) }
+
+  /// The window's Home mark (design/desktop/Home.dc.html, `.mark`): the same head in greys, drawn quiet (6 pt cells,
+  /// 84 × 72 pt, a 1-pixel checker dither at about 42 % opacity). Every letter of the sprite has its grey.
+  public static let markPalette: [Character: RGB] = [
+    "A": RGB(hex: "#A4A4AC"), "b": RGB(hex: "#5E5E66"), "B": RGB(hex: "#8E8E96"), "H": RGB(hex: "#B8B8C0"), "V": RGB(hex: "#141417"),
+    "E": RGB(hex: "#E4E4EA"), "M": RGB(hex: "#E4E4EA"), "K": RGB(hex: "#7A7A82"), "G": RGB(hex: "#6E6E76"),
+  ]
+  public static func mark() -> PixelGrid { head(palette: markPalette) }
+  /// The mark's cell size, opacity and dither: points per cell, the whole mark's opacity, and the checker's two alphas
+  /// (the prototype's mask: full on one diagonal of each 2 × 2 pixels, 0.55 on the other).
+  public static let markCell = 6, markOpacity = 0.42, markDither = (on: 1.0, off: 0.55)
+  /// The checker's alpha at pixel (x, y) of the drawn mark: the CSS mask `repeating-conic-gradient(#000 0 25%,
+  /// rgba(0,0,0,.55) 0 50%)` in 2 × 2 px tiles is full at the tile's top right and bottom left.
+  public static func markAlpha(x: Int, y: Int) -> Double { (x + y) % 2 == 1 ? markDither.on : markDither.off }
+
+  static func head(palette pal: [Character: RGB]) -> PixelGrid {
     var cells: [Cell] = []
     for (y, r) in rows.prefix(12).enumerated() {
       for (x, k) in r.enumerated() where x >= 1 && x <= 14 { if let col = pal[k] { cells.append(Cell(x: x - 1, y: y, color: col)) } }

@@ -1,6 +1,6 @@
 import Foundation
 
-// The desktop window's actions (design/desktop/SPEC.md §2, boards ReelNew and ReelMenu): the new project column, the
+// The desktop window's actions (design/desktop/SPEC.md §2, boards Home and ReelMenu): Home's composer, the
 // open project's menu and the ⌘K palette, as data. Each offers only what this daemon and app can do; the views draw it.
 
 extension Capability {
@@ -10,7 +10,8 @@ extension Capability {
 
 // MARK: the new project column
 
-/// The new project column (ReelNew): the goal, the planner-to-be's face, and where Start stands. The goal branch row is
+/// Home's composer (Home.dc.html; before, the new project column): the goal, the planner-to-be's face (named in
+/// the debug state), and where Start stands. The goal branch row is
 /// the store's `GoalBranchSetup`; the folder's inline setup is `ProjectSetupFlow`.
 public struct NewProjectForm: Sendable, Hashable {
   public enum Phase: Sendable, Hashable {
@@ -173,6 +174,8 @@ public enum PaletteAction: Sendable, Hashable {
   /// Open that project (a deck's id).
   case project(String)
   case newProject
+  /// Home (⌘0).
+  case home
   case follow(Bool)
   /// Bring that agent's column on screen and focus it.
   case agent(String)
@@ -198,6 +201,7 @@ public enum Palette {
       let detail: String? = if case .copyRunId(let s) = item { s } else { nil }
       out.append(PaletteEntry(id: "menu.\(item.name)", title: item.title, detail: detail, shortcut: item.shortcut, action: .menu(item)))
     }
+    out.append(PaletteEntry(id: "home", title: "Home", shortcut: "⌘0", action: .home))
     out.append(PaletteEntry(id: "new", title: "New project", shortcut: "⇧⌘N", action: .newProject))
     out.append(PaletteEntry(id: "follow", title: follow ? "Turn Follow off" : "Turn Follow on", shortcut: "⇧⌘F", action: .follow(!follow)))
     for (n, d) in decks.enumerated() where d.id != openProjectId {

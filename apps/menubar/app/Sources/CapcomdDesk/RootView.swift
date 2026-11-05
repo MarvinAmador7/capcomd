@@ -19,15 +19,12 @@ package struct RootView: View {
       case .connecting, .needsToken: ConnectView()
       case .ready:
         ZStack {
-          // The reel stays built under the new project column, so closing the column shows it at once (SPEC §1).
+          // The reel stays built under Home, so leaving Home for the open project shows it at once (SPEC §1).
           if model.openRunId != nil {
             ReelHost().opacity(np == nil ? 1 : 0).allowsHitTesting(np == nil).accessibilityHidden(np != nil)
-          } else if np == nil {
-            if model.unreachable { Unreachable() }
-            else if model.loaded { if model.decks.isEmpty { EmptyReel() } else { FoldedReel() } }
-            else { Color.clear }   // the daemon's first snapshot is on its way: nothing to say yet
           }
-          if let np { NewProjectStage(np: np).transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))) }
+          if model.openRunId == nil && model.unreachable && model.decks.isEmpty { Unreachable() }
+          else if let np { HomeView(np: np).transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))) }
         }
         .animation(reduceMotion ? Theme.Motion.reduced : .spring(duration: 0.3, bounce: 0), value: np == nil)
       }
@@ -48,25 +45,5 @@ package struct RootView: View {
   }
 }
 
-/// Every project is folded into the title bar (⌘W): nothing is open until one is picked.
-struct FoldedReel: View {
-  var body: some View {
-    Text("Your projects are in the title bar. Pick one, or press ⌘1.")
-      .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-}
-
-/// No projects yet: the brand moment, nothing to load.
-struct EmptyReel: View {
-  var body: some View {
-    VStack(spacing: 14) {
-      PixelWordmark()
-      Text("Nothing running. Start a project with + (⇧⌘N).")
-        .font(Theme.Desk.label).foregroundStyle(Theme.Desk.secondary)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-}
 
 #endif

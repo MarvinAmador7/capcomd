@@ -109,12 +109,12 @@ final class DeskActionsModelTests: XCTestCase {
     XCTAssertTrue(m.newProjectCanStart)
   }
 
-  /// Esc closes only an empty column; a goal typed and closed with + stays for next time.
+  /// A goal typed on Home and left (⌘W, or Esc on an empty one) stays for next time.
   @MainActor func testClosingKeepsTheDraft() throws {
     let (m, _) = model()
     m.openNewProject()
     m.typeGoal("Half a thought")
-    m.toggleNewProject()
+    m.closeNewProject()                                  // ⌘W or Esc: back to the open project
     XCTAssertNil(m.newProject)
     m.openNewProject()
     XCTAssertEqual(m.newProject?.form.goal, "Half a thought")

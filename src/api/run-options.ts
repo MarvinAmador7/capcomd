@@ -11,6 +11,7 @@ import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } fr
 import { withSandbox } from "../providers/run-sandbox";
 import { envSnapshotProblem } from "../primitives/ops";
 import { capcomdHome } from "../utils/home";
+import { harnessModels, type HarnessModel } from "../config/models";
 
 type Env = Record<string, string | undefined>;
 /** Where a run can go: the listed providers (src/providers/registry.ts), docker then boxd. */
@@ -19,7 +20,7 @@ export type RunSandbox = ListedProvider;
 export const SANDBOX_LABEL: Record<RunSandbox, string> = PROVIDER_LABEL;
 
 export interface DriverFit { available: boolean; reason: string | null }
-export interface DriverOption { provider: "claude" | "codex"; label: string; model: string | null; efforts: string[]; effort: string | null; available: boolean; reason: string | null; default: boolean; sandboxes: Record<RunSandbox, DriverFit> }
+export interface DriverOption { provider: "claude" | "codex"; label: string; model: string | null; models: HarnessModel[]; efforts: string[]; effort: string | null; available: boolean; reason: string | null; default: boolean; sandboxes: Record<RunSandbox, DriverFit> }
 export interface SandboxOption { name: RunSandbox; label: string; available: boolean; reason: string | null; default: boolean }
 
 // ---- Docker: is a daemon reachable? (`docker version`, cached) ----
@@ -101,7 +102,7 @@ export async function runOptions(source: Env = process.env, ask?: Parameters<typ
 		let d: ReturnType<typeof plannerDriver>;
 		try { d = plannerDriver(provider, undefined, source); } catch (e) { d = { ok: false, code: "planner", reason: (e as Error).message, model: null, defaultEffort: PROVIDER_DEFAULT_EFFORT[provider] }; }
 		const sandboxes = Object.fromEntries(RUN_SANDBOXES.map((n) => [n, driverFit(provider, n, source)])) as Record<RunSandbox, DriverFit>;
-		return { provider, label: DRIVER_LABEL[provider], model: d.model, efforts: [...PROVIDER_EFFORTS[provider]], effort: d.defaultEffort, available: d.ok, reason: d.ok ? null : d.reason, default: defaultProvider === provider, sandboxes };
+		return { provider, label: DRIVER_LABEL[provider], model: d.model, models: harnessModels(provider, source), efforts: [...PROVIDER_EFFORTS[provider]], effort: d.defaultEffort, available: d.ok, reason: d.ok ? null : d.reason, default: defaultProvider === provider, sandboxes };
 	});
 	return { drivers, sandboxes };
 }

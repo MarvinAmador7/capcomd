@@ -32,7 +32,8 @@ let package = Package(
     .target(name: "CapcomdUI", dependencies: ["CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdLive", .product(name: "CapcomdClient", package: "client")]),
     // The desktop window (design/desktop) as a library: its model, reel and title bar, so the app and the bench both
     // host the same views. macOS only (an empty module on Linux).
-    .target(name: "CapcomdDesk", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", .product(name: "CapcomdClient", package: "client"),
+    // CapcomdOnboarding: Home's mark is the onboarding bot's head.
+    .target(name: "CapcomdDesk", dependencies: ["CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", "CapcomdOnboarding", .product(name: "CapcomdClient", package: "client"),
                                                 .product(name: "PerfLoopProbe", package: "perfloop")]),
     // The app: the window (CapcomdDesk) with the menu bar item and its panel, and Settings, in one Dock app. Every view
     // is behind `#if canImport(SwiftUI)`; on Linux this builds to a stub.
