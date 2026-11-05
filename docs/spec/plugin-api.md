@@ -223,8 +223,9 @@ plugin publishes events instead).
 `plugin.<name>.<type>` on the `daemon` stream or a run's. Durable, so they are replayed by `GET /v1/events` and the
 SSE stream like any kernel event; `ephemeral` is refused (`unsupported`) until the host can send events live only. The
 envelope's `entity` is the one the plugin names, else `plugin:<name>`; a run that doesn't exist is `not_found`. `data` is redacted (§11.5) and capped at 64 KB.
-`text` is the plugin's own sentence; the kernel does not write it for plugin events and marks the envelope's text as
-untrusted for clients (`x-untrusted` on `plugin.*` event text in the contract).
+`text` is the plugin's own sentence; the kernel does not write it for plugin events, and the envelope's `text`
+description in the contract tells clients to render a plugin's own event text as plain text, never markdown, links or
+actions (the type alone says it is a plugin's: three parts under `plugin.`, `eventTypeOwner`).
 
 #### 4.7.5 UI surfaces
 
