@@ -61,7 +61,7 @@
    "y": 2640,
    "w": 1440,
    "h": 900,
-   "title": "Reel \u00b7 starting a new project"
+   "title": "Reel \u00b7 starting a new project (superseded by Home)"
   },
   "Expand.dc.html": {
    "x": 0,
@@ -69,6 +69,15 @@
    "w": 1440,
    "h": 900,
    "title": "Menu bar \u2192 window"
+  },
+  "Home.dc.html": {
+   "x": 1520,
+   "y": 3960,
+   "w": 1440,
+   "h": 900,
+   "title": "Home \u00b7 what are we building, and what's running",
+   "expand": "fill",
+   "radius": 12
   }
  },
  "order": [
@@ -79,6 +88,7 @@
   "ReelMenu.dc.html",
   "ReelSwarm.dc.html",
   "ReelNew.dc.html",
+  "Home.dc.html",
   "Expand.dc.html"
  ],
  "notes": {},

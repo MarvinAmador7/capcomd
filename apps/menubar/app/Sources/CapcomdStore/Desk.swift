@@ -108,6 +108,7 @@ extension CapcomdStore {
   /// both start runs this way.
   public func newRunChoice(goalSetup: GoalBranchSetup?) -> RunChoice {
     var c = RunChoice(repo: prefs.startRepo, driver: startDriver?.provider, sandbox: startSandbox?.name, effort: startEffort)
+    c.model = startModel?.id
     if goalBranchesOffered, let g = goalSetup, g.path == c.repo { (c.base, c.goalBranch) = g.choice }
     return c
   }

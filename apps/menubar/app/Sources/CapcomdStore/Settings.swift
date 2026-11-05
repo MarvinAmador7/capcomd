@@ -153,6 +153,23 @@ extension CapcomdStore {
     prefs.setStartEffort(effort ?? UIPreferences.autoEffort, for: d.provider); changed()
   }
 
+  /// The planner model new runs are sent with (capability `runs.options.models`): the one last picked for the driver
+  /// while it still offers it. nil: nothing is sent, and the run gets the driver's `model` (its profile's).
+  public var startModel: ModelInfo? {
+    guard capabilities.contains(Capability.runsOptionsModels), let d = startDriver, let picked = prefs.startModel(d.provider) else { return nil }
+    return d.models?.first { $0.id == picked }
+  }
+  /// The model a new run's planner runs on, picked or not: the pick, else the driver's own model as its list names it.
+  public var startModelShown: ModelInfo? {
+    guard let d = startDriver else { return nil }
+    return startModel ?? d.model.flatMap { m in d.models?.first { $0.id == m } }
+  }
+  /// The model menu's pick: that driver, on that model (nil: its default).
+  public func pickModel(_ model: String?, driver provider: String) {
+    prefs.startDriver = provider
+    prefs.setStartModel(model, for: provider); changed()
+  }
+
   /// The menu bar mark's face: a raised mitt when an approval waits, open eyes while anything runs, else sleepy. With
   /// bot faces off (Settings › General) it is always the plain mark.
   public var markFace: MarkFace {

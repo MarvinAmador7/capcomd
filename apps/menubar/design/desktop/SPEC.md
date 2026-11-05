@@ -17,7 +17,7 @@ same PR. Behaviour conflicts go to the owner.
 
 | What | Budget | How |
 |---|---|---|
-| Open the window | first frame ≤ 100 ms after launch | Nothing is fetched to show the window; the store fills it as frames arrive. Data that isn't there yet shows as an empty column, never a spinner over the window. |
+| Open the window | first frame ≤ 100 ms after launch | Nothing is fetched to show the window: it opens on Home, and the store fills it (the Running cards, the model menu) as frames arrive. Data that isn't there yet shows as an empty column, never a spinner over the window. |
 | Switch project (click or ⌘1–9) | first frame ≤ 50 ms | The decks are already in memory; the reel shows headers at once, thread pages fill in. Keyboard switches don't animate. |
 | Reel scroll | no dropped frames at 120 Hz with 17 agents | The reel is an AppKit scroll view with one hosting view per column, so a scroll frame moves a layer and runs no SwiftUI (in a SwiftUI ScrollView every frame dirtied all 16 columns' views). Columns stay built while the run is open (a lazy stack rebuilt every column it scrolled past). Threads are built ahead of time, nearest first while the reel stands still, at most 32 kept. A swipe lands on the column edge nearest where its momentum would stop, at most a screen away; the leading column is reported once per column crossed. A jump of more than a screen cuts to one column short and slides the last. |
 | A thread item arrives | re-renders its own column only | Keyed change notifications (§6), not the menu bar's global `revision`. |
@@ -34,8 +34,9 @@ PR is called done, and put the numbers in the PR.
 
 One window, two parts.
 
-- **Title bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content): traffic lights, then the **projects**, then on the
-  right **Follow**, **Actions ⌘K**, **+**. Boards: `ReelStack`, `ReelTabs`.
+- **Title bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content): traffic lights, then **Home** (a 30 pt
+  icon button, the prototype's house; pressed while Home shows; ⌘0), then the **projects**, then on the right **Follow**, **Actions ⌘K**, **+**. Boards:
+  `ReelStack`, `ReelTabs`, `Home`.
   - The **open project** is one group: Local/Cloud glyph (`laptopcomputer` / `cloud`), name (no clock or
     status line), then its crew tabs in tree order, with a bracket around the tabs whose columns are on screen. A tab
     is the agent's bot and its title (`Agent.title`, capability `agents.title`; 1–4 lowercase words the agent, its
@@ -61,57 +62,80 @@ One window, two parts.
   - **Actions ⌘K** (the ⌘ button): a small palette over the window, the menu's surface: type to filter (every word
     typed starts a word of the entry; entries that start with it come first), ↑ ↓ move, Return runs, Esc or a click
     outside closes. Entries: the open project's menu items, New project, Follow on/off, switch to each other project
-    (⌘1–9 shown), focus each agent by its title (⌃1–9 shown).
+    (⌘1–9 shown), focus each agent by its title (⌃1–9 shown), Home (⌘0).
 - **Reel**: the open project's agents as full-height columns in tree order (`Reel`). Three columns at 1440 pt, two at
   1100, one under 760; the neighbours peek 44 pt at both edges. A column is header (bot, then "profile · title · state"
   (a double-click on the title renames it, as the tab does; the bot's name isn't repeated), place, elapsed) · thread (the menu bar's thread renderer) · its own message box. An agent that asks docks the
   decision at its column's foot (View diff · Deny · Approve ↩) instead of the box.
 - **Swarms** (`ReelSwarm`): leads' subtrees fold into stacks in the title bar; only the subtree on screen is fanned
   out. An asking agent always steps out of its stack. A strip at the foot shows one cell per agent, grouped by lead.
-- **New project** (`ReelNew`): + (⇧⌘N), at the right end of the title bar, opens one plain column where the planner's
-  column will stand (the reel's first column), no agent header, and the dashed space where the crew will. While it's
-  open the + stays held down and every project shows as a deck; the reel stays built underneath, so closing the column
-  (+ again, ⌘W, or Esc with nothing typed) shows it at once, and a goal that didn't start is kept for next time.
-  - The planner-to-be (112 pt) waits sleepy over "Hi, I'm <Name>. What are we building?", smiles once you type (one
-    change, no loop), and on Start moves into the column's header.
-  - The composer card at its foot (#1D1D21, 14 pt corners, 1 pt stroke, the blue ring while focused): the folder chip
-    (the remembered project checkout, × back to the default project; Default project chooses a folder), then with
-    `runs.goal_branch` and a project folder the base menu beside it (the repository's branches,
-    the daemon's `suggestedBase` preselected; never a guessed main: with no suggestion nothing is picked, Start waits
-    and "Pick the branch this work starts from" shows), and on a line of its own under them the goal branch's name (the
-    daemon's suggestion for the goal until edited), with the daemon's sentences under it. Older daemons: no branch row. Then the goal (14 pt), then
-    one tool row: + (Choose Project Folder…, Use the Default Project), Local / Cloud, the model with its effort bars
-    (the run options the menu bar's composer uses), Start. No mic until voice input (phase 3). Return starts.
+- **Home** (`Home.dc.html`, the owner's approved clickable prototype; it replaced `ReelNew`, the new project column).
+  It shows when the window opens with no project focused, whenever no project is open (the last one folded or
+  removed), from the title bar's Home (⌘0), and from + (⇧⌘N), which means "Home, with the composer focused". While it
+  shows, Home stays pressed and every project is a deck; the reel stays built underneath, so leaving Home (Home again,
+  ⌘W, Esc with nothing typed, or any deck, card, ⌘1–9) shows the project at once, and a goal that didn't start is kept
+  for next time. With no project open, Home is the window's screen: Home, ⌘W and Esc leave it up.
+  - Centred, 680 pt wide, 96 pt from the top: the mark (the onboarding bot's head, rows 0–11 of its 16 × 16 sprite,
+    in greys, 6 pt cells, 84 × 72 pt, a 1-pixel checker dither, 42 % opacity), "What are we building?" (SF Pro
+    Display 30 pt semibold, tracking −0.022 em), and under it, tertiary 14 pt, "Describe it once. The planner splits
+    it up and brings in a crew."
+  - The composer (#1B1B1F, 16 pt corners, a .5 pt ring, a soft drop shadow, the blue 3 pt ring while the goal has the
+    keyboard): the folder chip (the remembered project checkout, × back to the default project; Default project
+    chooses a folder), then with `runs.goal_branch` and a project folder the base menu beside it (the repository's
+    branches, the daemon's `suggestedBase` preselected; never a guessed main: with no suggestion nothing is picked,
+    Start waits and "Pick the branch this work starts from" shows), and on a line of its own under them the goal
+    branch's name (the daemon's suggestion for the goal until edited), with the daemon's sentences under it. Older
+    daemons: no branch row. Then the goal (15 pt), then one tool row: + (Choose Project Folder…, Use the Default
+    Project), Local / Cloud, the **model** button (the model's name and the effort as three bars), the mic (macOS
+    dictation into the goal until the app has voice input), Start (white, 30 pt; 30 % while there's nothing to start).
+    Return starts.
+  - The model menu (260 pt, #1F1F23, 10 pt corners, 28 pt rows): "Claude Code" and its models, "Codex" and its, each
+    with its note (`GET /v1/run-options` `drivers[].models`, capability `runs.options.models`; an older daemon lists
+    each driver once, on its profile's model), a check on the one new runs get, then Effort as a segmented control
+    (Auto for a driver without a fixed default, then the driver's levels). A harness that can't run where the run would
+    go stays listed, its models dimmed, with the daemon's reason under its name (the #110 rule: always a menu). ↑ ↓
+    move, Return picks, ← → change the effort, Esc or a click outside closes it. The pick is remembered per driver and
+    goes with Start as `model`.
   - A folder that isn't set up swaps the tool row for the menu bar's inline setup (the same views, on
     `ProjectSetupFlow`); Esc cancels it, Return presses Set Up (and Start).
-  - Start is the menu bar's start (`POST /v1/runs` with the store's run choice: project, driver, place, effort, base
-    and goal branch). Started, the column shows the planner's header with the goal as its first message; once the
-    feed lists the run with its planner, the project opens on the planner's column, takes its tab after the others,
-    and the crew's columns fill in as the planner spawns them. A refused start keeps the column and shows the
-    daemon's sentence under the field it names (the base, the goal branch, else the goal).
+  - Start is the menu bar's start (`POST /v1/runs` with the store's run choice: project, driver, model, place, effort,
+    base and goal branch). Started, the composer waits; once the feed lists the run with its planner, its project opens
+    in the reel on the planner's column. A refused start keeps Home and shows the daemon's sentence under the field it
+    names (the base, the goal branch, else the goal).
+  - **Running** (56 pt under the composer; absent with nothing running): "Running" and the count, then one 48 pt card
+    per project with an active run, in the store's live order (the menu bar's): the Local or Cloud icon, the title in
+    semibold, " · " and a few words on what the crew is doing (the menu bar's direction-B sentence without who, cut at
+    its first clause and after six words: never other words), the crew's heads stacked (the catalog bots, as on the
+    decks) and the elapsed time (mono, tertiary). A card that asks has the 1 pt amber ring and a second line: the
+    question (the menu bar card's words), the files with their +/− ("3 files, +73 −5", else the branch line), Deny and
+    Approve ↩ (the approval card's path; Return approves while the card has focus, Esc never denies). A click (or Space,
+    or Return on one that doesn't ask) opens the project in the reel. The cards follow `.run` changes only while Home
+    shows (`HomeSlice`).
 
 # 3. Follow, overview, zoom
 
 `ReelStates`. Follow (on by default) moves the reel only for an ask or a failure in the open project, 0.35 s spring
-without bounce; scrolling yourself turns it off. ⌘0 overview (every agent as a card); ⇧⌘↩ zoom one column.
+without bounce; scrolling yourself turns it off. Overview (every agent as a card; not built yet: ⌘0 is Home now, the
+overview gets its key when it's built); ⇧⌘↩ zoom one column.
 
 # 4. Keyboard
 
-⌘1–9 projects · ⌃1–9 agents · ⌃← ⌃→ focus the neighbour column (the reel scrolls only when the focused column would
-leave the window, 180 ms ease-out) · ⌘0 overview · ⇧⌘↩ zoom · ⌘K actions · ⇧⌘N new project · ⌘L message the planner ·
-⌥⌘P pause / resume the project · ⌘W fold the project into the title bar (a finished one: remove it; the new project
-column: close it; the window's own Close is replaced) · ⇧⌘F Follow. ⌘T (Trace) is bound once the desktop has a trace
+⌘0 Home (again: back to the project) · ⌘1–9 projects · ⌃1–9 agents · ⌃← ⌃→ focus the neighbour column (the reel scrolls
+only when the focused column would leave the window, 180 ms ease-out) · ⇧⌘↩ zoom · ⌘K actions · ⇧⌘N Home with the
+composer focused · ⌘L message the planner · ⌥⌘P pause / resume the project · ⌘W fold the project into the title bar (a
+finished one: remove it; Home: back to the open project; the window's own Close is replaced) · ⇧⌘F Follow. ⌘T (Trace) is bound once the desktop has a trace
 view. Each is in the app's menus (File, Project, Go). Return approves while an ask has focus and nothing else takes
 Return: never while a text field has the keyboard (a column's message box, a rename field, the new project column's
-composer, the palette), nor while the menu or the Stop question is up. Esc never denies; it closes the palette and the
-menu, cancels a folder's setup, and closes the new project column while nothing is typed. Keyboard actions never
-animate otherwise.
+composer, the palette), nor while the menu or the Stop question is up; on Home it approves only the focused card's ask.
+Esc never denies; it closes the palette, the menu and the model menu, cancels a folder's setup, and leaves Home for the
+open project while nothing is typed. Keyboard actions never animate otherwise.
 
 # 5. Motion
 
 Transform and opacity only, ≤ 300 ms, interruptible springs without bounce, Reduce Motion → 150 ms crossfades. Deck
-fan-out spring 0.3 s, names fade in over the last 120 ms. The new project column comes in and goes with a 0.3 s spring
-(opacity, 8 pt rise); the bot's face crossfades once (150 ms); on Start the bot moves into the header (0.3 s spring).
+fan-out spring 0.3 s, names fade in over the last 120 ms. Home comes in and goes with a 0.3 s spring (opacity, 8 pt
+rise); a Running card arrives with a 0.35 s spring (opacity, from 6 pt above); the model menu pops in 0.14 s (opacity,
+3 pt); the composer's focus ring fades in 0.18 s. Reduce Motion: crossfades only.
 The menu and the palette: 0.2 s spring, opacity with a 0.98 scale from the top. Menu bar → window: one shape grows from the menu bar icon,
 300 ms (0.32, 0.72, 0, 1), pointer only (`Expand`). Bots: no loops; the menu bar's approved moments only.
 
@@ -129,5 +153,5 @@ The menu and the palette: 0.2 s spring, opacity with a 0.98 scale from the top. 
 1. The window in the `CapcomdApp` app (a regular Dock app with the menu bar item; the shared pieces live in the `CapcomdUI` library), title bar with
    projects and crew tabs, the reel with real threads, message boxes and decisions, Follow, keyboard. Keyed changes
    and many threads in the store.
-2. New project column, project menu and ⌘K actions (built), then overview and zoom.
-3. Swarm folding and the strip, menu bar → window motion, voice input (the new project column's mic).
+2. New project column (now Home), project menu and ⌘K actions (built), then overview and zoom.
+3. Swarm folding and the strip, menu bar → window motion, voice input of the app's own (Home's mic dictates for now).

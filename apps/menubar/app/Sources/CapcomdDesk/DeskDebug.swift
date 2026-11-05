@@ -83,7 +83,10 @@ import CapcomdStore
   /// this app's own window and menu, never posted to the system), `rename <N|agentId> tab|header` (a double-click on
   /// that agent's tab or header: its rename field opens), `type <text>` (the text typed into the focused field, as key
   /// events handed to this window; select it all first with `key a cmd`).
-  /// The new project column (ReelNew): `new` (as + or ⇧⌘N), `new close`, `draft <text>` (the goal field's text),
+  /// Home: `home` (its title bar button, ⌘0), `card <N>` (a click on the Nth Running card), `model` (the model button:
+  /// its menu opens or closes), `model <id>` (that model picked in the menu; `model <provider> -` the driver's own),
+  /// `effort <level|auto>` (the menu's Effort control).
+  /// Home's composer: `new` (as + or ⇧⌘N), `new close`, `draft <text>` (the goal field's text),
   /// `folder <path>|default` (a folder picked, as Choose Project Folder… would, or Use the Default Project),
   /// `base <branch>`, `branch <name>` (the goal branch field), `setup <setUp|setUpAndStart|initializeGit|publish|
   /// tryAgain|cancel>` (a button of the folder's setup), `escape` (Esc in the goal field), `start` (Return). The project
@@ -122,6 +125,16 @@ import CapcomdStore
           model.beginRename(id, at: w.dropFirst(2).first == "header" ? .header : .tab)
         case "type": type(String(line.dropFirst(5)))
         case "new": if w.dropFirst().first == "close" { model.closeNewProject() } else { model.openNewProject() }
+        case "home": model.toggleHome()
+        case "card": if let n = w.dropFirst().first.flatMap(Int.init), model.home.runs.indices.contains(n - 1) { model.openCard(model.home.runs[n - 1].id) }
+        case "model":
+          if w.count == 1 { model.toggleModelMenu() }
+          else {
+            let opts = model.store.modelMenu.sections.flatMap(\.options)
+            let o = w.count > 2 && w[2] == "-" ? opts.first { $0.provider == w[1] && $0.model == nil } ?? opts.first { $0.provider == w[1] } : opts.first { $0.model == w[1] }
+            if let o { model.pickModel(o) }
+          }
+        case "effort": if w.count > 1 { model.pickEffort(w[1] == "auto" ? nil : w[1]) }
         case "draft": model.typeGoal(String(line.dropFirst(6)))
         case "folder":
           let path = String(line.dropFirst(7))
@@ -422,6 +435,14 @@ import CapcomdStore
     out.append("folded \(model.folded) hidden \(model.hidden.keys.sorted().joined(separator: ",")) returnApproves \(model.returnApproves) typing \(model.typingIn ?? "-") stopAsked \(model.stopAsked)")
     if let np = model.newProject {
       let f = np.form, g = f.goalSetup
+      let mm = s.modelMenu
+      out.append("home shown focus \(np.focusSerial) modelMenu \(np.modelMenuOpen) chip \"\(mm.chip)\" bars \(mm.bars.map(String.init) ?? "-") enabled \(mm.enabled) label \"\(mm.label)\"")
+      for sec in mm.sections {
+        out.append("home models \(sec.provider) reason \(sec.reason ?? "-"): " + sec.options.map { "\($0.checked ? "✓" : "")\($0.name)[\($0.model ?? "-")]\($0.enabled ? "" : " off")" }.joined(separator: ", "))
+      }
+      for (n, r) in model.home.runs.enumerated() {
+        out.append("home run \(n + 1) \(r.runId) \"\(r.title)\" · \"\(r.phrase)\" place \(r.sandbox ?? "-") heads \(r.agentIds.count) ask \(r.ask.map { "\($0.approvalId) \"\($0.question)\" \($0.evidence ?? "-")" } ?? "-")")
+      }
       out.append("new \(f.phase) bot \(np.name) smiling \(f.smiling) goal \"\(f.goal)\" canStart \(model.newProjectCanStart) escCloses \(f.escCloses) refusal \(f.refusal ?? "-") field \(f.refusedField ?? "-")")
       out.append("new repo \(s.prefs.startRepo ?? "-") branches \(model.newProjectBranches) base \(g.base ?? "-") goalBranch \(g.goalBranch.isEmpty ? "-" : g.goalBranch) baseLine \(f.baseLine?.text ?? "-") branchLine \(f.branchLine?.text ?? "-")")
       out.append("new place \(s.startSandbox?.name ?? "-") driver \(s.startDriver?.provider ?? "-") effort \(s.startEffort ?? "-") setup \(model.newProjectSetup().map { "\($0.phase) \($0.header)" } ?? (model.setupFlow.isOpen ? "loading" : "-"))")

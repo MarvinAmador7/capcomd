@@ -7,18 +7,20 @@ import CapcomdBot
 import CapcomdUI
 import PerfLoopProbe
 
-// The desktop's own actions (SPEC §2, §4; boards ReelNew and ReelMenu): starting a project from the new project column,
+// The desktop's own actions (SPEC §2, §4; boards Home and ReelMenu): Home and starting a project from its composer,
 // the open project's menu, the ⌘K palette, and folding projects into the title bar. What each offers is decided in the
 // store (NewProjectForm, ProjectMenu, Palette); this is the model's side: state, and the calls the views make.
 
-/// The new project column while it's open (ReelNew): its form, and the planner-to-be who waits in it.
+/// Home's composer while Home shows (Home.dc.html): its form, and the planner-to-be (named in the debug state).
 @Observable @MainActor
 package final class NewProjectModel {
   package internal(set) var form = NewProjectForm() { didSet { Mutations.record("NewProject.form") } }
-  /// Bumped when what the column shows from the store changes (run options, branches, the folder's setup).
+  /// Bumped when what the composer shows from the store changes (run options, branches, the folder's setup, runs).
   package internal(set) var revision = 0 { didSet { Mutations.record("NewProject.revision") } }
-  /// Bumped to put the focus back in the goal field (⇧⌘N while it's open, Set Up done).
+  /// Bumped to put the focus in the goal field (+ and ⇧⌘N, Set Up done); 0: Home showed without taking it.
   package internal(set) var focusSerial = 0
+  /// The model menu is open (it closes on a pick of a model, Esc or a click outside).
+  package internal(set) var modelMenuOpen = false { didSet { Mutations.record("NewProject.modelMenuOpen") } }
   /// The planner-to-be: a bot of its own, sleepy until something is typed, then smiling (one change, no loop).
   @ObservationIgnored package let sleepy: BotTraits
   @ObservationIgnored package let happy: BotTraits
@@ -33,16 +35,21 @@ package final class NewProjectModel {
 }
 
 extension DeskModel {
-  // MARK: the new project column
+  // MARK: Home and its composer
 
-  /// + (or ⇧⌘N): the column opens with the goal focused; the other projects show as decks while it's open. Open already:
-  /// the focus goes back to the goal.
-  package func openNewProject() {
+  /// + (or ⇧⌘N): Home, with the composer focused. On Home already: the focus goes to the goal.
+  package func openNewProject() { openHome(focus: true) }
+
+  /// The title bar's Home (⌘0), and the window with nothing open: Home shows, the reel stays built under it, every
+  /// project shows as a deck. `focus`: the goal field takes the keyboard.
+  package func openHome(focus: Bool) {
     menuOpen = false; paletteOpen = false; stopAsked = false
-    if let np = newProject { np.focusSerial += 1; return }
+    if let np = newProject { if focus { np.focusSerial += 1 }; return }
     let np = newProjectDraft ?? NewProjectModel()
     newProjectDraft = nil
+    if focus { np.focusSerial += 1 }
     newProject = np
+    home.set(store.homeRuns())
     syncBranches()
     Task { [weak self] in
       await self?.store.refreshDaemonInfo()   // capabilities and run options, for the branch row and the tool row
@@ -50,22 +57,58 @@ extension DeskModel {
     }
   }
 
-  /// Esc (with nothing typed), ⌘W, the held-down +, or opening a project: the column closes. A goal that didn't start
-  /// is kept for next time.
+  /// Home's button (⌘0): Home, or back to the project under it.
+  package func toggleHome() { if homeShown { closeNewProject() } else { openHome(focus: false) } }
+
+  /// Esc (with nothing typed), ⌘W or the pressed Home button: back to the open project. With none open, Home stays:
+  /// it is the window's screen then. A goal that didn't start is kept for next time.
   package func closeNewProject() {
+    guard openRunId != nil else { return }
+    leaveHome()
+  }
+
+  /// A project opens (a deck, a card, ⌘1–9, a run that started from Home): Home goes, keeping a draft.
+  func leaveHome() {
     guard let np = newProject else { return }
+    np.modelMenuOpen = false
     if case .started = np.form.phase { newProjectDraft = nil } else { newProjectDraft = np }
     newProject = nil
   }
 
-  /// Esc in the goal field: a folder's setup is cancelled first (the goal stays); else an empty column closes. A typed
-  /// goal is never thrown away by Esc.
+  /// Esc in the goal field: the model menu closes first, then a folder's setup is cancelled (the goal stays); else an
+  /// empty composer goes back to the open project. A typed goal is never thrown away by Esc.
   package func newProjectEscape() {
+    if newProject?.modelMenuOpen == true { newProject?.modelMenuOpen = false; return }
     if setupFlow.isOpen { cancelSetup(); return }
     if newProject?.form.escCloses == true { closeNewProject() }
   }
 
-  package func toggleNewProject() { if newProject == nil { openNewProject() } else { closeNewProject() } }
+  // MARK: the model menu
+
+  package func toggleModelMenu() { if let np = newProject { np.modelMenuOpen.toggle(); if np.modelMenuOpen { menuOpen = false; paletteOpen = false } } }
+  package func closeModelMenu() { newProject?.modelMenuOpen = false }
+  /// A model in the menu: its driver drives new runs, on that model (nil: the driver's own). The menu closes.
+  package func pickModel(_ o: ModelMenu.Option) {
+    guard o.enabled else { return }
+    store.pickModel(o.model, driver: o.provider)
+    newProject?.modelMenuOpen = false
+    newProjectChanged()
+  }
+  /// The menu's Effort control (nil: Auto). The menu stays open.
+  package func pickEffort(_ e: String?) {
+    store.pickEffort(e)
+    newProjectChanged()
+  }
+
+  // MARK: Running (Home's cards)
+
+  /// A Running card: its project opens in the reel (at its ask, if it asks).
+  package func openCard(_ projectId: String) { open(project: projectId) }
+  /// The bots of a Running card's crew, as its deck stacks them (cached per run until its agents change).
+  package func heads(run runId: String, agents ids: [String]) -> [BotTraits] {
+    let t = team(runId)
+    return ids.compactMap { t[$0] }
+  }
 
   /// The goal field changed: the bot wakes up at the first word, and the goal branch suggestion follows the goal.
   package func typeGoal(_ g: String) {
@@ -146,8 +189,7 @@ extension DeskModel {
     return false
   }
 
-  /// The run started from the column is listed with its planner: its project opens on the planner's column, which
-  /// takes the new column's place.
+  /// The run started from Home is listed with its planner: its project opens in the reel on the planner's column.
   func adoptStartedRun() {
     guard let np = newProject, case .started(let runId) = np.form.phase,
           let deck = decks.first(where: { $0.runId == runId }), !store.reelColumns(runId: runId).isEmpty else { return }
@@ -249,8 +291,8 @@ extension DeskModel {
   /// The menu's item by name, if the menu has it now (the shortcuts and the debug control file).
   package func menuItem(_ name: String) -> ProjectMenu.Item? { projectMenu?.items.first { $0.name == name } }
 
-  /// ⌘W: the new project column closes; else the open project folds into its deck (it keeps running), or a finished
-  /// one is removed from the title bar.
+  /// ⌘W: Home goes back to the open project; else the open project folds into its deck (it keeps running), or a
+  /// finished one is removed from the title bar.
   package func foldShortcut() {
     if newProject != nil { closeNewProject(); return }
     if let i = menuItem("fold") ?? menuItem("remove") { perform(i) }
@@ -336,6 +378,7 @@ extension DeskModel {
     case .menu(let item): perform(item)
     case .project(let id): open(project: id)
     case .newProject: openNewProject()
+    case .home: openHome(focus: false)
     case .follow(let on): follow = on
     case .agent(let id): scroll(to: id, animated: false)
     }

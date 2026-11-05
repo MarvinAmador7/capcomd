@@ -76,6 +76,14 @@ package final class ThreadSlice {
   }
 }
 
+/// Home's Running cards (HomeRun), refreshed only while Home shows and only when a run, an approval or the projects
+/// changed; assigned only when they differ.
+@Observable @MainActor
+package final class HomeSlice {
+  package private(set) var runs: [HomeRun] = [] { didSet { Mutations.record("HomeSlice.runs") } }
+  func set(_ r: [HomeRun]) { if runs != r { runs = r } }
+}
+
 /// Media bytes loaded through the daemon; rare, so one observed dictionary is enough.
 @Observable @MainActor
 package final class MediaSlice { package var items: [MediaKey: Fetched<Data>] = [:] { didSet { Mutations.record("MediaSlice.items") } } }
@@ -118,8 +126,13 @@ package final class DeskModel {
   package var follow = true { didSet { Mutations.record("DeskModel.follow") } }
   /// Columns across the window (3, 2 or 1), set by the reel when its width crosses a step.
   package var across = 3 { didSet { Mutations.record("DeskModel.across"); if across != oldValue { syncFlags() } } }
-  /// The new project column (ReelNew) while it's open; nil: closed. A draft that didn't start is kept for the next open.
+  /// Home (design/desktop/Home.dc.html) while it shows: its composer's model; nil: the reel shows. A draft that didn't
+  /// start is kept for the next time Home shows. Home shows whenever no project is open.
   package internal(set) var newProject: NewProjectModel? { didSet { Mutations.record("DeskModel.newProject") } }
+  package var homeShown: Bool { newProject != nil }
+  /// With nothing open, the window opens the project that asks, else the first (the bench and older tests); false (the
+  /// app): it shows Home, and a project opens only when it's picked.
+  @ObservationIgnored let autoOpens: Bool
   @ObservationIgnored var newProjectDraft: NewProjectModel?
   /// The open project's menu (ReelMenu) and the ⌘K palette are open; Stop project… is asking first.
   package internal(set) var menuOpen = false { didSet { Mutations.record("DeskModel.menuOpen") } }
@@ -174,6 +187,7 @@ package final class DeskModel {
   @ObservationIgnored private var agents: [String: AgentSlice] = [:]
   @ObservationIgnored private var threads: [String: ThreadSlice] = [:]
   @ObservationIgnored let mediaSlice = MediaSlice()
+  @ObservationIgnored package let home = HomeSlice()
   @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
   @ObservationIgnored private var knownAsks: Set<String> = []
   /// The open run's failed agents, once its columns were first read (nil: not yet).
@@ -183,6 +197,7 @@ package final class DeskModel {
   /// `CAPCOMD_TOKEN`): the same store the menu bar panel reads. Notifications are the menu bar's (one banner per notice).
   package init(session: AppSession) {
     self.session = session
+    autoOpens = false
     store = session.store
     setupFlow = ProjectSetupFlow(store: store)
     restoreHidden(from: .standard)
@@ -191,8 +206,8 @@ package final class DeskModel {
 
   /// A model on a store that is already filled and needs no socket (the bench's fixtures, previews, tests): ready at
   /// once, following the store's keyed changes exactly as the connected model does.
-  package init(store s: CapcomdStore, defaults d: UserDefaults? = nil) {
-    store = s; session = nil
+  package init(store s: CapcomdStore, defaults d: UserDefaults? = nil, autoOpens a: Bool = true) {
+    store = s; session = nil; autoOpens = a
     setupFlow = ProjectSetupFlow(store: s)
     if let d { restoreHidden(from: d) }
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
@@ -258,10 +273,22 @@ package final class DeskModel {
       actionsRevision &+= 1
       let d = shown(store.decks())
       if decks != d { decks = d }
-      if openProjectId == nil ? !folded : !d.contains(where: { $0.id == openProjectId }) {
-        select(d.first(where: { $0.askingAgentId != nil })?.id ?? d.first?.id)
+      let opens = autoOpens && !folded
+      if openProjectId == nil ? opens : !d.contains(where: { $0.id == openProjectId }) {
+        let pick = opens ? d.first(where: { $0.askingAgentId != nil })?.id ?? d.first?.id : nil
+        if pick != nil { leaveHome() }
+        select(pick)
       }
       else if let deck = d.first(where: { $0.id == openProjectId }), deck.runId != openRunId { select(deck.id) }
+      // Nothing open: Home (the window's first screen, and where folding the last project leaves you).
+      if openProjectId == nil, newProject == nil { openHome(focus: false) }
+    }
+    // Home: its cards follow the runs; its composer redraws on general changes, and a run it started takes over once the
+    // run's planner is listed (which may arrive as that run's own change).
+    if homeShown {
+      let runTouched = keys.contains { if case .run = $0 { return true }; return false }
+      if all || runTouched { home.set(store.homeRuns()) }
+      if all { newProjectChanged() } else if runTouched { adoptStartedRun() }
     }
     guard let runId = openRunId else { return }
     let touchesRun = all || keys.contains(.run(runId))
@@ -297,7 +324,6 @@ package final class DeskModel {
             top: store.threadTop(agentId: id), loadingEarlier: store.threadLoadingEarlier.contains(id))
     }
     if all { for (k, v) in store.media where mediaSlice.items[k] != v { mediaSlice.items[k] = v } }
-    if all { newProjectChanged() }
   }
 
   /// The goal card goes on the planner's column (the root, first in tree order); its view is read once a decision is up
@@ -344,7 +370,7 @@ package final class DeskModel {
 
   /// Bots for every agent of the run, made distinct as a team; recomputed only when the run's agents change, so a
   /// newcomer never changes an earlier agent's bot.
-  private func team(_ runId: String) -> [String: BotTraits] {
+  func team(_ runId: String) -> [String: BotTraits] {
     guard let run = store.runs[runId] else { return [:] }
     let list = run.agents.values.sorted { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) }
     let sig = list.map { "\($0.id):\($0.kind.rawValue)" }.joined(separator: ",")
@@ -360,7 +386,7 @@ package final class DeskModel {
   /// Show a project (a deck click, ⌘1–9). Keyboard switches don't animate; the reel starts at its ask, if any.
   package func open(project id: String?) {
     menuOpen = false; stopAsked = false
-    if newProject != nil { closeNewProject() }
+    if newProject != nil, id != nil { leaveHome() }
     if id != nil { folded = false }
     guard select(id) else { return }
     apply([.all])

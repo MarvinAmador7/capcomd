@@ -202,11 +202,13 @@ final class DeskActionsTests: XCTestCase {
                            agents: [header("pl", "planner", title: "plan the backfill"), header("w1", "worker", title: "login redirect")], follow: true)
   }
 
-  /// The menu's actions, new project, Follow, the other projects (not the open one) and the agents by title.
+  /// The menu's actions, Home, new project, Follow, the other projects (not the open one) and the agents by title.
   func testThePalettesEntries() {
     let e = entries()
     XCTAssertEqual(e.map(\.title), ["Message the planner…", "Pause project", "Stop project…", "Fold into the title bar", "Copy run ID",
-                                    "New project", "Turn Follow off", "Switch to Fix proration", "Focus plan the backfill", "Focus login redirect"])
+                                    "Home", "New project", "Turn Follow off", "Switch to Fix proration", "Focus plan the backfill", "Focus login redirect"])
+    XCTAssertEqual(e.first { $0.id == "home" }?.shortcut, "⌘0")
+    XCTAssertEqual(e.first { $0.id == "home" }?.action, .home)
     XCTAssertEqual(e.first { $0.id == "project.p2" }?.shortcut, "⌘2")
     XCTAssertEqual(e.first { $0.id == "agent.w1" }?.action, .agent("w1"))
     XCTAssertEqual(e.first { $0.id == "follow" }?.action, .follow(false))

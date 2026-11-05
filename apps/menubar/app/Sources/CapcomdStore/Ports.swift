@@ -95,6 +95,9 @@ public final class UIPreferences {
   /// The effort last picked for a driver ("high"); nil: the driver's default.
   public func startEffort(_ driver: String) -> String? { store.string(forKey: "startEffort.\(driver)") }
   public func setStartEffort(_ effort: String?, for driver: String) { store.set(effort, forKey: "startEffort.\(driver)") }
+  /// The planner model last picked for a driver ("claude-sonnet-5-5"); nil: the driver's default (its profile's).
+  public func startModel(_ driver: String) -> String? { store.string(forKey: "startModel.\(driver)") }
+  public func setStartModel(_ model: String?, for driver: String) { store.set(model, forKey: "startModel.\(driver)") }
   /// Settings › General › Notifications (both on unless turned off).
   public var notifyApprovals: Bool {
     get { store.string(forKey: "notifyApprovals") != "0" }
@@ -178,6 +181,7 @@ public enum StartWire {
     var body: [String: Any] = ["goal": goal]
     if let v = c.repo { body["repo"] = v }; if let v = c.driver { body["driver"] = v }
     if let v = c.sandbox { body["sandbox"] = v }; if let v = c.effort { body["effort"] = v }
+    if let v = c.model { body["model"] = v }
     if let v = c.base { body["base"] = v }
     if c.noGoalBranch { body["goalBranch"] = false } else if let v = c.goalBranch { body["goalBranch"] = v }
     return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -189,16 +193,20 @@ public protocol RunStarting: Sendable {
 
 /// How a new run starts, beside its goal; nil fields keep the project's settings. `repo`: the project checkout;
 /// `driver`: the AI that drives it as its planner ("claude", "codex"); `sandbox`: where its agents run ("docker" on
-/// this machine, "boxd" VMs); `effort`: the driver's reasoning effort, one of its `DriverInfo.efforts`.
+/// this machine, "boxd" VMs); `effort`: the driver's reasoning effort, one of its `DriverInfo.efforts`; `model`
+/// (capability `runs.options.models`): the planner's model, one of its `DriverInfo.models` (nil: the profile's).
 public struct RunChoice: Sendable, Hashable {
   public var repo: String?, driver: String?, sandbox: String?, effort: String?
+  public var model: String?
   /// `runs.goal_branch`: the origin branch the run starts from and its pull request goes into (the setup screen's base
   /// menu; nil: the daemon picks the project's target, else the default branch, or refuses with field "base"), and
   /// the goal branch's name (nil: the daemon's suggestion). `noGoalBranch`: merge into the target as before.
   public var base: String?, goalBranch: String?
   public var noGoalBranch: Bool
-  public init(repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil, base: String? = nil, goalBranch: String? = nil, noGoalBranch: Bool = false) {
+  public init(repo: String? = nil, driver: String? = nil, sandbox: String? = nil, effort: String? = nil, base: String? = nil, goalBranch: String? = nil, noGoalBranch: Bool = false,
+              model: String? = nil) {
     self.repo = repo; self.driver = driver; self.sandbox = sandbox; self.effort = effort; self.base = base; self.goalBranch = goalBranch; self.noGoalBranch = noGoalBranch
+    self.model = model
   }
 }
 
@@ -235,9 +243,20 @@ public struct DriverAvailability: Codable, Sendable, Hashable {
   public init(available: Bool, reason: String? = nil) { self.available = available; self.reason = reason }
 }
 
+/// A model a driver's planner can run on (`GET /v1/run-options` `drivers[].models`, capability `runs.options.models`).
+public struct ModelInfo: Codable, Sendable, Hashable, Identifiable {
+  /// What `POST /v1/runs` `model` takes.
+  public var id: String
+  /// "Opus 5.5"; and one short line beside it, "Most capable".
+  public var name: String; public var note: String
+  public init(id: String, name: String, note: String) { self.id = id; self.name = name; self.note = note }
+}
+
 /// One AI that can drive a run as its planner (`GET /v1/run-options`).
 public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
   public var provider: String; public var label: String; public var model: String?
+  /// The models its planner can run on, in menu order (nil: an older daemon, which runs the profile's).
+  public var models: [ModelInfo]?
   /// False when its CLI isn't installed or logged in on the daemon's machine; `reason` says which.
   public var available: Bool; public var reason: String?
   /// The project's planner as configured runs on this one.
@@ -248,11 +267,11 @@ public struct DriverInfo: Codable, Sendable, Hashable, Identifiable {
   /// Per sandbox (docker, boxd): whether it can drive a run there; `available` above is for the daemon's own sandbox.
   public var sandboxes: [String: DriverAvailability]?
   public var id: String { provider }
-  enum CodingKeys: String, CodingKey { case provider, label, model, available, reason, isDefault = "default", efforts, effort, sandboxes }
+  enum CodingKeys: String, CodingKey { case provider, label, model, models, available, reason, isDefault = "default", efforts, effort, sandboxes }
   public init(provider: String, label: String, model: String? = nil, available: Bool = true, reason: String? = nil, isDefault: Bool? = nil,
-              efforts: [String]? = nil, effort: String? = nil, sandboxes: [String: DriverAvailability]? = nil) {
+              efforts: [String]? = nil, effort: String? = nil, sandboxes: [String: DriverAvailability]? = nil, models: [ModelInfo]? = nil) {
     self.provider = provider; self.label = label; self.model = model; self.available = available; self.reason = reason; self.isDefault = isDefault
-    self.efforts = efforts; self.effort = effort; self.sandboxes = sandboxes
+    self.efforts = efforts; self.effort = effort; self.sandboxes = sandboxes; self.models = models
   }
 }
 

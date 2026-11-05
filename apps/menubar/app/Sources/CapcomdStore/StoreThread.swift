@@ -23,6 +23,8 @@ public enum Capability {
   public static let runsOptionsRepo = "runs.options.repo"
   /// `GET /v1/run-options` `drivers[].sandboxes`: whether each driver can run in each place.
   public static let runsOptionsSandbox = "runs.options.sandbox"
+  /// `GET /v1/run-options` `drivers[].models` and `POST /v1/runs` `model`: the planner's model.
+  public static let runsOptionsModels = "runs.options.models"
   /// `GET /v1/logins`: each AI's login in each place agents run (Settings › Accounts).
   public static let logins = "logins"
   /// `GET /v1/environments`: each place's agent environment (Settings › Runs).

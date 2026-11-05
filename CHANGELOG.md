@@ -5,6 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- The window opens on **Home**: "What are we building?", the composer, and every run that's running, one line each
+  (where it runs, its title, a few words on what its crew is doing, the crew's heads and how long it's been going). A
+  run that asks shows its question, the files it would land with their +/−, and **Deny** / **Approve ↩** right there.
+  Click a run to open it. The **Home** button at the left of the title bar (⌘0) brings Home back and takes you back
+  to the project; **+** (⇧⌘N) now opens Home with the composer ready to type, and Start opens the new run on its
+  planner. Home replaces the new project column. The mic in the composer starts macOS dictation into the goal.
+- Choose the model the planner runs on. In the window's composer, the model button lists Claude Code's and Codex's
+  models, each with a note, and the effort; a provider that isn't logged in where the run would go stays listed,
+  dimmed, with why. On the command line: `capcomd run <goal> --planner-model <id>` (for example
+  `claude-sonnet-5-5`, or `gpt-5.6` with `--planner-provider codex`); a model its provider doesn't offer is refused
+  with the list.
+- `GET /v1/run-options` lists each driver's models (`drivers[].models`, capability `runs.options.models`), and
+  `POST /v1/runs` takes `model`.
 - The Mac app welcomes you the first time you open it: the capcomd bot comes on the air on your desktop, his crew pours
   out of his laptop, and the window opens around him. Then, in five short steps, it finds the capcomd command line
   tool, starts capcomd (at every login, or only now: your choice), pairs this Mac, signs in Claude Code and Codex,

@@ -263,6 +263,7 @@ struct PaletteView: View {
     case .menu(let i): ProjectMenuView.icon(i)
     case .project: "square.stack"
     case .newProject: "plus"
+    case .home: "house"
     case .follow: "eye"
     case .agent: "rectangle.portrait"
     }
