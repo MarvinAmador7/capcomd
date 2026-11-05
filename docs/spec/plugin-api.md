@@ -359,6 +359,10 @@ changes (every `*.changed` hook), the sandbox calls, the agent's phases, `merge.
 everything an agent asks from its VM run in the daemon. An operation a CLI or the MCP server runs against the engine
 itself (`capcomd run new`, `spawn`, `verify`, `merge`, `approve` from the host shell or `capcomd mcp`) fires its
 `ops.ts` gates in that process, where nothing listens, until those front doors go through the daemon (§17.2 step 8).
+The exception is the built-in gates the kernel's own contract depends on (the reviewer gate, §15.3): before a verify
+runs, a process that isn't the daemon starts them in a local host of its own (`src/plugins/hooks.ts` `gates()`; in
+tests also `CAPCOMD_TEST_PLUGINS`), so a run's reviewer judges every verify wherever it runs; the daemon's verifies wait
+for its host to start instead. Such a local host writes no daemon-stream events; its gate events go on the run's stream.
 With no listener a site builds no payload and awaits nothing (`HookRegistry.listening`).
 
 Every call is a `HookCall<N>`:
@@ -434,8 +438,8 @@ enable <name>` (or `POST /v1/plugins/{name}/enable`) resets the breaker (`plugin
 The count resets on any successful call.
 
 **Operator bypass** (ADR-023 decision 2). `capcomd merge --operator` lands without a passing verify and **without plugin
-vetoes**: `merge.landing` still fires (so the listeners run and their decisions are known), but a `deny` or `hold` does
-not stop the merge. The kernel records `plugin.gate_bypassed {hook, entity, by, plugins: [{plugin, reason}]}` on the
+vetoes**: `merge.landing` still fires and every listener is asked, a deny or hold not stopping the chain (the
+registry's `askAll`), so all their decisions are known; but a `deny` or `hold` does not stop the merge. The kernel records `plugin.gate_bypassed {hook, entity, by, plugins: [{plugin, reason}]}` on the
 run's stream, naming each vetoing plugin, and `merge.changed` `landed` carries the same list as `bypassedVetoes`. No
 other gate has a bypass. A plugin cannot bypass (`ctx.gates.merge` has no `operator`).
 
@@ -511,14 +515,22 @@ grow. Cost caps on machine size, labelling for a provider's billing.
 `{acceptance?}` only: **never `checks`** (checks come only from the operator, ADR-017 §2). Deny fails the verify closed.
 Once per verification.
 
-#### 6.6.13 `verify.judging` · veto · gate · `verifyOnce`, after the branch is put on the target, concurrently with the checks run
-`VerifyJudging {verification (with tested: {sha, targetSha}), acceptance, task, reviewer}`. Each listener is a **judge**:
-`allow` passes, `deny{reason, reasons[]}` fails. The kernel ANDs the checks result and every judge; the reasons are
-capped at 20 × 500 chars (`src/primitives/review.ts`). Fail-closed: no answer is a fail. The reviewer gate (§15.3) is one
-judge; a security scanner or a coverage threshold is another of the same shape. The kernel keeps "both must pass for
-the same tree" (`reviewFits`): a judge's verdict counts only for the `tested.sha` it was asked about. 30 min default.
+#### 6.6.13 `verify.judging` · veto · gate · `verifyOnce`, once the checks passed on the branch put on the target
+`VerifyJudging {verification (with tested: {sha, targetSha, commit}), acceptance, task, reviewer}`; `tested.commit` is
+the agent's commit the checks put on the target (`tested.sha` is the result). Each listener is a **judge**: `allow`
+passes, `deny{reason, reasons[]}` fails. The kernel ANDs the checks result and every judge, asked in order (§6.3) until
+the first deny; the reasons are capped at 20 × 500 chars. Fail-closed: no answer is a fail. The reviewer gate (§15.3) is
+one judge; a security scanner or a coverage threshold is another of the same shape. 30 min default.
 The checker puts the branch on the target and runs the checks in one call, so the judges are asked once the checks
-passed (the tree they passed is `tested`), concurrently with the reviewer; checks that fail ask no judge.
+passed (the tree they passed is `tested`); checks that fail ask no judge.
+
+A judge that ran the run's reviewer profile (`reviewer`) adds `review: ReviewReport {profile, agentId, passed, reasons,
+error?, sha, targetSha?, startedAt?}` to its answer (any decision; a malformed one, or one on another hook, is
+`invalid_result`). The kernel records it as the verification's `review` (capcomd.v1's `result.review`, `judge`, the
+review timings) and keeps "both must pass for the same tree" (`reviewFits`): a review counts only when its `sha` and
+`targetSha` are `tested.commit` and `tested.targetSha`. A verification with a reviewer whose judges all allowed it
+without a review (no reviewer gate active) fails closed. Review-mode agents a judge spawned for it (their contract's
+`review.vfyId`) that still run when it finishes are stopped by the kernel.
 
 #### 6.6.14 `verify.changed` · observe
 `VerifyChanged {verification, change: started|checked{passed, where, excerpt}|judged{by, passed, reasons}|finished{passed}}`.
@@ -1029,8 +1041,9 @@ On the `daemon` stream: `plugin.loaded`, `plugin.failed`, `plugin.disposed`, `pl
 `plugin.gate_bypassed`. Jobs: `job.started`, `job.ended`. Triggers: `trigger.received`, `trigger.subscribed`,
 `trigger.unsubscribed`. Data shapes: `packages/plugin/src/events.ts` and the fragment's `x-events`. All durable, written
 by the host, with daemon-written `text`; a plugin's `reason` inside them is untrusted. The run-stream ones are written from
-§17.2 step 5 (the gates), which brings the first plugin that can deny; until then a refusal reaches its caller as
-`plugin:<name>` (§6.2) and `plugin.hook_failed` is on the daemon stream.
+§17.2 step 5 (the gates), as scope events (`PLUGIN_GATE_DENIED`, `PLUGIN_GATE_BYPASSED` in capcomd.v1) by whichever
+process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin's own run-stream events
+(`plugin.<name>.<type>`, §4.7.4) are not written yet.
 
 ### 13.2 `GET /v1/plugins`
 
@@ -1138,6 +1151,16 @@ listener: spawn the run's reviewer profile with `review: true`, keyed by the ver
 await it until the call's deadline, parse the verdict from structured result data first, emit a `verdict` event, answer
 `allow` or `deny{reasons}`. No reviewer configured → `allow` (the checks decide alone). No verdict → `deny` (fail
 closed). Scopes `read`, `steer`.
+
+The built-in (`src/plugins/gate-reviewer`, §17.2 step 5) is that listener with today's behavior kept: `order: post`
+(the last judge, and it sees every `verify.starting` patch); a `verify.starting` listener that answers at once and starts
+the reviewer alongside the checks in the background (`CAPCOMD_REVIEW_PARALLEL=0` turns it off), which `verify.judging`
+takes up or replaces when it read another tree; the reviewer spawned under the verify's caller (who pays for it) through
+the kernel's own agent primitives, not `ctx.agents` (a plugin's spawn has no parent or review mode); the answer carries
+the `review` report (§6.6.13) instead of a `verdict` event (the verdict is on the reviewer's result and in the
+verification's record). Its `verify.judging` deadline is the maximum, 60 min. It fails closed with its own `deny` (the
+error in its `review`), never by failing the call: three failed calls would suspend it, and a suspended gate denies every
+verify (§6.5). A CLI that ran a verify waits (bounded) for the reviewer it started or stops before it exits.
 
 ### 15.4 A Slack notifier (`slack-notifier`, out of process)
 
@@ -1404,6 +1427,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.1 | 2026-11-05 | With the kernel's hook sites (§17.2 step 2): which process a hook fires in (§6.1); no listener, no stop-time denial (§5.5); `run.creating` at `POST /v1/runs` takes only `sandbox`; `agent.preparing`'s site, and `skills`/`env` refused until step 8; `agent.changed` `started` has a null `machine`; `verify.judging` after the checks pass; `merge.landing`'s `fastPath`/`sha`, a satisfied hold, no dry-run gate; run-stream plugin events from step 5. |
 | 1.0.2 | 2026-11-05 | With sandbox providers as plugins (§17.2 step 3): the sandbox conformance suite's home (§7.2); the Docker sweep is the seam's `sweep`, called by the kernel (§15.1). |
 | 1.0.3 | 2026-11-05 | With the agent providers as plugins (§17.2 step 4): §7.3's `AgentConfig` gains `auto` and `usdPerMtok`, `toolPolicies.orchestrate` gains `sandbox`, `redactJson`, where the active providers come from, the runner's kind; §16.1's Claude Code policy denies no bare `Bash`, Codex's is its sandbox, v1 profiles spell the mode `toolMode`, the refusal's relay.v1 code, and the policy applied as the config is built; §14.2's agent suite: the turn limit may be the CLI's, `parse`'s null and redaction, a read-only sandbox for a policy with no allowlist, where it lives. |
+| 1.0.4 | 2026-11-05 | With the gates (§17.2 step 5): the built-in gates in a process that isn't the daemon (§6.1); `merge --operator` asks every landing gate (§6.5); `verify.judging`'s `tested.commit`, judges in order, a judge's `review` report, the kernel's same-tree and no-review rules, stopped reviewers (§6.6.13); the built-in reviewer gate (§15.3); the gate events as scope events, a plugin's own run events not yet (§13.1). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

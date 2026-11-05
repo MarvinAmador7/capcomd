@@ -1,16 +1,19 @@
 // The kernel's plugin host (ADR-023 step 1; docs/spec/plugin-api.md §5, §6, §13): packages/plugin's host with what only
 // the kernel knows: the running version, the kernel's feature flags, where plugin data lives, the redactor, and where
-// the host's events go (the daemon stream, `harnessState().recordDaemonEvent`). `capcomd serve` starts it after the
-// actors answer and before the harness.v1 socket opens (§5.5); the kernel fires its hooks through its registry (src/plugins/hooks.ts).
+// the host's events go (the daemon stream, `harnessState().recordDaemonEvent`; a gate's on the run's). `capcomd serve`
+// starts it after the actors answer and before the harness.v1 socket opens (§5.5); the kernel fires its hooks through
+// its registry (src/plugins/hooks.ts). Another process that runs a gate starts a local one with the built-in gates.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { PluginHost, type Candidate, type PluginSummary } from "../../packages/plugin/src/host/host";
 import { PluginError } from "../../packages/plugin/src/errors";
+import type { HookRegistry } from "../../packages/plugin/src/host/registry";
 import { CAPABILITY_NAMES } from "../api/contract";
 import { Redactor } from "../agents/redact";
 import { stateDir } from "../utils/home";
 import { VERSION } from "../utils/self";
 import { BUILTINS } from "./builtins";
+import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
@@ -57,25 +60,42 @@ export function releaseSnapshot(path = pluginsSnapshotPath()) {
   try { if ((JSON.parse(readFileSync(path, "utf8")) as PluginsSnapshot).pid === process.pid) rmSync(path, { force: true }); } catch { /* gone already */ }
 }
 
-export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null } = {}): PluginHost {
+export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
-    // Run streams (plugin.gate_denied, a plugin's own run events) get these with the gates (§17.2 step 5).
-    if (e.stream !== "daemon") throw new PluginError("unsupported", `events on run streams are not written yet (${e.type})`);
+    if (e.stream !== "daemon") throw new PluginError("unsupported", `a plugin's own events on run streams are not written yet (${e.type})`);
     return o.record?.({ type: e.type, entity: e.entity, text: e.text, data: e.data }) ?? { seq: 0 };
   };
   return new PluginHost({
     capcomd: VERSION,
     kernel: CAPABILITY_NAMES.map((n) => `kernel:${n}`),
-    emit: (e) => { try { record(e); } catch { /* a run-stream host event (a gate denied): written from step 5 */ } },
+    emit: (e) => {
+      // A gate's audit goes on the run's stream (§13.1), from whichever process ran the gate.
+      if (e.type === "plugin.gate_denied" && e.stream !== "daemon") {
+        inBackground(recordGateEvent(e.stream, { type: e.type, data: e.data }).catch((err) => console.error(`[plugins] ${e.stream}: recording ${e.type}: ${(err as Error)?.message ?? err}`)));
+        return;
+      }
+      try { record(e); } catch { /* not a daemon-stream event */ }
+    },
     dataDir: (name) => join(stateDir(), "plugins", name),
     secret: async (m, key) => resolveSecret(m, key),
     sinks: {
       redact: (t) => redactor.text(t),
-      // §13.3: one JSON line per log call in the daemon's log, never an event.
-      log: (l) => console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })),
+      // §13.3: one JSON line per log call in the daemon's log, never an event. A CLI's local host keeps its output clean.
+      log: (l) => { if (o.log !== false) console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })); },
       emit: async (e) => record({ ...e, entity: e.entity || `plugin:${e.type}` }),
     },
     ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins) } : {}),
   });
+}
+
+/**
+ * The gates of a process that isn't the daemon (src/plugins/hooks.ts `gates`): the built-ins marked `everyProcess`
+ * (the reviewer gate), and in tests CAPCOMD_TEST_PLUGINS, in a host of its own. It writes no daemon-stream events (that
+ * stream is the daemon's) and no listing; its gate events go on the run's stream like the daemon's.
+ */
+export async function localHost(env: Record<string, string | undefined> = process.env): Promise<HookRegistry> {
+  const host = kernelHost({ log: false });
+  await host.start([...BUILTINS.filter((b) => b.everyProcess).map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module })), ...testPlugins(env)]);
+  return host.hooks;
 }

@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- The reviewer is now a built-in plugin, `gate-reviewer` (listed by `capcomd plugins list`), one judge of a verify
+  beside the checks: a verify passes only when the checks, the run's reviewer and every other plugin judge pass, for
+  the same tree. Reviews work as before (`run new --reviewer`, `verify --review-profile`), from the CLI, the MCP
+  server and agents alike; a verify's result gains `judges` (each judge asked, and which one refused it). A reviewer
+  now gets at most an hour for its verdict (before, a reviewer profile without `timeoutMs` could be waited on forever).
+  `capcomd merge --operator` still lands past plugin vetoes, now asking every landing plugin and recording each one
+  that vetoed as a `plugin.gate_bypassed` event on the run (`PLUGIN_GATE_BYPASSED` in `capcomd events`); a plugin that
+  denies or holds a verify or a merge is recorded as `plugin.gate_denied` (`PLUGIN_GATE_DENIED`).
 - capcomd's sandboxes are now its first built-in plugins: `sandbox-docker`, `sandbox-boxd` and the test fakes
   (`sandbox-fake`, `sandbox-fake-host`, never shown to apps). Runs, logins and environments work as before, and
   `capcomd plugins list` shows the four. New: `capcomd plugins validate [<dir>|<name>] [--conformance] [--json]` checks
@@ -26,8 +34,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   you already have are kept as they are.
 - The plugin host now hears what capcomd does: runs, agents, sandboxes, verifies, merges and approvals each tell it
   their steps at the points the plugin API names (docs/spec/plugin-api.md §6.6), so a plugin will be able to watch
-  them, narrow them or refuse them. No plugin listens yet (the built-in sandboxes and agent providers have no hooks), so nothing changes,
-  and with none listening capcomd does no extra work.
+  them, narrow them or refuse them. Only the reviewer gate listens so far (the built-in sandboxes and agent providers
+  have no hooks), and for a hook no plugin listens to capcomd does no extra work.
 - capcomd has a plugin host, the first step of making its providers, forges, gates and front doors plugins
   (docs/spec/plugin-api.md). `capcomd plugins list [--json]` shows the
   plugins the running daemon has (or would load, when none runs): each one's state, why it failed, its hooks and

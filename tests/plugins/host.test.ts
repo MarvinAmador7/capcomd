@@ -547,6 +547,9 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
     expect(would).toMatchObject({ schema: "relay.v1", ok: true, daemon: null });
     expect(would.plugins.filter((p) => p.name.startsWith("sandbox-")).map((p) => [p.name, p.state])).toEqual([["sandbox-docker", "resolved"], ["sandbox-boxd", "resolved"], ["sandbox-fake", "resolved"], ["sandbox-fake-host", "resolved"]]);
     expect(cli("list").out).toMatch(/^Plugins \(no daemon is running; this is what one would load\):\n(.|\n)*sandbox-boxd\s+\S+\s+builtin\s+resolved\s+sandbox boxd/);
+    // Step 5 adds the reviewer gate.
+    expect(would.plugins.find((p) => p.name === "gate-reviewer")).toMatchObject({ source: "builtin", state: "resolved", hooks: ["verify.starting", "verify.judging"] });
+    expect(cli("list").out).toMatch(/no daemon is running; this is what one would load[\s\S]*gate-reviewer/);
     // A daemon's listing (this process stands in for the daemon: its pid is alive).
     const { host } = makeHost();
     await host.start([builtin(manifest("shown"), (ctx) => { ctx.hooks.on("run.changed", () => {}); })]);

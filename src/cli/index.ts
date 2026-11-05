@@ -1083,4 +1083,6 @@ async function runTraceAt(runId: string) {
 }
 
 const code = await main(process.argv.slice(2));
+// What a verify's gates left going (a reviewer to stop, a denial to record) finishes before this process does.
+await (await import("../plugins/hooks")).settled();
 if (code !== 0 || !["serve", "ui", "mcp"].includes(process.argv[2] ?? "")) process.exit(code);

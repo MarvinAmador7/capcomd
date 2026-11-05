@@ -68,6 +68,7 @@ export const SCOPE_EVENT_TYPES = [
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
 	"MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED",
+	"PLUGIN_GATE_DENIED", "PLUGIN_GATE_BYPASSED",
 	"TASK_ADDED", "TASK_CLAIMED", "TASK_LEASE_EXPIRED", "TASK_DONE", "TASK_RELEASED",
 	"KV_PUT", "KV_DELETE", "KV_CAS",
 ] as const;
@@ -127,6 +128,15 @@ export const LegacyEventShapes = {
 	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read"), askedBy: S.optional().describe("The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge") },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
+	"plugin.gate_denied": {
+		plugin: S.describe("The plugin that denied or held it"), hook: S.describe("The gate: verify.starting, verify.judging, merge.landing, approval.deciding or trigger.admitting"),
+		entity: S.describe("What it was about: the verification (vfy-…) or merge (mrg-…) id"), decision: z.enum(["deny", "hold"]).describe("deny refused it; hold parked a merge for a person's approval"),
+		reason: T.describe("Agent-written text (here the plugin's own words): render as plain text"),
+	},
+	"plugin.gate_bypassed": {
+		hook: z.literal("merge.landing"), entity: S.describe("The merge (mrg-…)"), by: S.describe("Who bypassed them: operator (`capcomd merge --operator`)"),
+		plugins: z.array(z.object({ plugin: S, reason: T.describe("Agent-written text (here the plugin's own words): render as plain text") })).describe("Every plugin that denied or held the merge, in the order they were asked"),
+	},
 	"task.added": { taskId: S, title: T, after: z.array(S).optional() },
 	"task.claimed": { ...task, leaseUntil: N, takeoverFrom: S.optional() },
 	"task.lease_expired": task,

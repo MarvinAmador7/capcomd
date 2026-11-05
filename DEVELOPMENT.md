@@ -82,13 +82,14 @@ src/
   mcp/          - MCP server
   merge/        - git: direct and PR merge modes, verification runs (checks in a VM with boxd)
   models/       - model client (fake only, see STATUS.md)
-  plugins/      - the kernel's plugin host (ADR-023): the built-in list (builtin/: the sandbox providers so far), what `capcomd serve` starts
-                  before the API opens, and the listing `capcomd plugins list` reads; hooks.ts, what the kernel's
-                  hook sites share (silent unless a plugin listens); changes.ts, the `*.changed` hooks from the scope
-                  actor's events; sandbox.ts, the sandbox hooks around every provider. Tests load a plugin directory
-                  as a built-in with CAPCOMD_TEST_PLUGINS (only under `bun test`); sandboxes.ts, the sandbox seams the
-                  kernel asks for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite)
-  primitives/   - ADR-016 operations, policy, task board, kv, the reviewer
+  plugins/      - the kernel's plugin host (ADR-023): the built-in list (builtin/: the sandbox providers; gate-reviewer/,
+                  the reviewer gate), what `capcomd serve` starts before the API opens, and the listing `capcomd plugins
+                  list` reads; hooks.ts, what the kernel's hook sites share (silent unless a plugin listens); changes.ts,
+                  the `*.changed` hooks from the scope actor's events; sandbox.ts, the sandbox hooks around every
+                  provider. Tests load a plugin directory as a built-in with CAPCOMD_TEST_PLUGINS (only under `bun test`;
+                  a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
+                  for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite)
+  primitives/   - ADR-016 operations, policy, task board, kv
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

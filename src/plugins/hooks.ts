@@ -1,8 +1,9 @@
 // The kernel's side of the hooks (docs/spec/plugin-api.md §6, ADR-023 step 2): the daemon's hook registry, set by
 // `capcomd serve` once its plugin host has started, and what the kernel's hook sites share (who caused an operation,
-// how a refusal reaches the caller, the patch rules of §6.6). Only the daemon has a registry: in every other process
-// (the CLI, the MCP server, a driver, an in-VM capcomd), and in a daemon no plugin listens to, `hooks.listening(h)` is
-// false, so a site builds no payload and awaits nothing, and the kernel does exactly what it did before (§17.2 step 2).
+// how a refusal reaches the caller, the patch rules of §6.6). Only the daemon has a full registry; another process that
+// runs a verify or a merge (the CLI, the MCP server, a run's driver) has only the built-in gates, started by `gates()`
+// before it. Elsewhere, and for a hook no plugin listens to, `hooks.listening(h)` is false, so a site builds no payload
+// and awaits nothing, and the kernel does exactly what it did before (§17.2 step 2).
 // Each site names the hook and its mode as string literals (scripts/check-hook-modes.ts checks them).
 import type { HookRegistry, Refusal } from "../../packages/plugin/src/host/registry";
 import { PluginError } from "../../packages/plugin/src/errors";
@@ -11,27 +12,93 @@ import type { Budget, Principal, Timestamp, Untrusted } from "../../packages/plu
 import { RelayError, type ErrorCode } from "../core/errors";
 
 let registry: HookRegistry | null = null;
+/** This process is the daemon (`capcomd serve`): its gates wait for its own registry, never start a local one. */
+let daemon: { ready: Promise<void>; set(): void } | null = null;
+/** A process that isn't the daemon: the gates it runs itself (`gates()`), started once. */
+type Local = { registry: HookRegistry | null; started: Promise<void> };
+let local: Local | null = null;
 
-/** The daemon's registry (`capcomd serve`), or null (stopping, tests). */
-export function useHooks(r: HookRegistry | null): void { registry = r; }
+/** The daemon's registry (`capcomd serve`), or null (stopping, tests). Null also forgets a local one (tests). */
+export function useHooks(r: HookRegistry | null): void {
+  registry = r;
+  if (r) daemon?.set(); else local = null;
+}
+
+/** `capcomd serve`, before its engine starts: a verify it runs before its plugins have loaded (an agent's, resumed)
+ *  waits for them (a reviewer configured for the run must judge it) instead of starting gates of its own. */
+export function daemonHooks(): void {
+  if (daemon) return;
+  let set!: () => void;
+  const ready = new Promise<void>((r) => { set = r; });
+  daemon = { ready, set };
+}
+
+/**
+ * Before a verify runs: the plugins that judge it are listening in this process. The daemon's are its host's. A
+ * process that runs a verify against the engine itself (the CLI, the MCP server, a run's driver) starts the built-in
+ * gates in a local host of its own (src/plugins/host.ts `localHost`), so the run's reviewer judges every verify wherever
+ * it runs, until those front doors go through the daemon (plugin API §6.1, §17.2 step 8). (A merge's gate,
+ * merge.landing, fires in the engine host, the daemon, where the merge runs.) Gates that fail to start leave a verify
+ * with a reviewer failing closed (src/primitives/ops.ts reviewOfJudges).
+ */
+export async function gates(): Promise<void> {
+  if (registry) return;
+  if (daemon) return daemon.ready;
+  if (!local) {
+    const l: Local = { registry: null, started: Promise.resolve() };
+    l.started = import("./host").then(async (h) => { l.registry = await h.localHost(); })
+      .catch((e) => console.error(`capcomd: the built-in gates did not start: ${(e as Error)?.message ?? e}`));
+    local = l;
+  }
+  await local.started;
+}
+
+const current = (): HookRegistry | null => registry ?? local?.registry ?? null;
 
 const fire = ((hook: HookName, mode: "observe" | "veto" | "modify", payload: unknown, o: unknown) => {
-  const r = registry;
+  const r = current();
   if (!r) return mode === "observe" ? undefined : Promise.resolve(mode === "modify" ? { decision: "allow", payload, patches: [] } : { decision: "allow" });
   return (r.fire as (...a: unknown[]) => unknown)(hook, mode, payload, o);
 }) as HookRegistry["fire"];
 
 export const hooks = {
   /** Whether a plugin listens to `hook` in this process. Synchronous: guard every site with it. */
-  listening: (hook: HookName): boolean => registry?.listening(hook) ?? false,
+  listening: (hook: HookName): boolean => current()?.listening(hook) ?? false,
   /** Any of `names`: the scope's change tap asks once for all the `*.changed` hooks. */
-  listeningAny: (names: readonly HookName[]): boolean => !!registry && names.some((n) => registry!.listening(n)),
+  listeningAny: (names: readonly HookName[]): boolean => { const r = current(); return !!r && names.some((n) => r.listening(n)); },
   fire,
   /** The plugins listening to `hook`, in the order their listeners run (§6.3). */
-  order: (hook: HookName): string[] => registry?.order(hook) ?? [],
+  order: (hook: HookName): string[] => current()?.order(hook) ?? [],
   /** Resolves once every queued observe call has run (the daemon's stop, tests). */
-  idle: (): Promise<void> => registry?.idle() ?? Promise.resolve(),
+  idle: (): Promise<void> => current()?.idle() ?? Promise.resolve(),
 };
+
+/**
+ * A gate's audit event on the run's stream (plugin API §13.1): `plugin.gate_denied` (the registry's, through the host)
+ * and `plugin.gate_bypassed` (`merge --operator`, §6.5). Written to the run's scope like its other events, from any
+ * process that runs the gate.
+ */
+export async function recordGateEvent(runId: string, e: { type: "plugin.gate_denied" | "plugin.gate_bypassed"; data: Record<string, unknown>; key?: string }): Promise<void> {
+  const { client } = await import("../core/relay");
+  await client().scope.getOrCreate([runId]).recordGateEvent({ type: e.type === "plugin.gate_denied" ? "PLUGIN_GATE_DENIED" : "PLUGIN_GATE_BYPASSED", data: e.data, ...(e.key ? { key: e.key } : {}) });
+}
+
+/** What a gate left going after its answer: a reviewer it started or stops, a gate event it writes. */
+const pending = new Set<Promise<void>>();
+export function inBackground(p: Promise<unknown>): void {
+  const q: Promise<void> = p.then(() => {}, () => {}).finally(() => { pending.delete(q); });
+  pending.add(q);
+}
+/** A process that exits right after its command (the CLI) waits for that work first, bounded: else a reviewer started
+ *  alongside checks that failed fast would be left running, and a denial would go unrecorded. */
+export async function settled(maxMs = 30_000): Promise<void> {
+  const until = Date.now() + maxMs;
+  while (pending.size && Date.now() < until) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.all([...pending]), new Promise<void>((r) => { timer = setTimeout(r, until - Date.now()); })]);
+    clearTimeout(timer);
+  }
+}
 
 export const iso = (ms: number = Date.now()): Timestamp => new Date(ms).toISOString();
 /** Agent-written text as a hook payload carries it (§11.5). */

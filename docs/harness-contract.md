@@ -1225,6 +1225,8 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 - [`merge.approval_requested`](events.md#mergeapproval_requested)
 - [`merge.approved`](events.md#mergeapproved)
 - [`merge.denied`](events.md#mergedenied)
+- [`plugin.gate_denied`](events.md#plugingate_denied)
+- [`plugin.gate_bypassed`](events.md#plugingate_bypassed)
 - [`task.added`](events.md#taskadded)
 - [`task.claimed`](events.md#taskclaimed)
 - [`task.lease_expired`](events.md#tasklease_expired)

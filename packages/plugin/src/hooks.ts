@@ -11,6 +11,25 @@ export type VetoResult = { decision: "allow" } | Deny;
 export type ModifyResult<Patch> = { decision: "allow"; patch?: Patch } | Deny;
 /** `merge.landing` only: `hold` parks the merge for a human approval (§6.6.15). */
 export type MergeGateResult = VetoResult | { decision: "hold"; reason: string };
+/** `verify.judging` only (§6.6.13): what a judge that ran the run's reviewer profile (`payload.reviewer`) read and found.
+ *  The kernel records it as the verification's `review`, and counts it only for the tree the checks tested
+ *  (`sha` = `tested.commit`, `targetSha` = `tested.targetSha`). */
+export interface ReviewReport {
+  profile: string;
+  /** The reviewer agent, when one was started. */
+  agentId: string | null;
+  passed: boolean;
+  /** Agent-written; the kernel keeps at most 20 of 500 characters. */
+  reasons: string[];
+  /** Why there is no verdict (the reviewer ended without one, or couldn't start). */
+  error?: string;
+  /** The agent commit it read, and the target commit it read it on. */
+  sha: string;
+  targetSha?: string;
+  /** When the reviewer started (with the checks, when it started at `verify.starting`). */
+  startedAt?: Timestamp;
+}
+export type JudgeResult = ({ decision: "allow" } | Deny) & { review?: ReviewReport };
 
 /** A spawn grant, as `src/primitives/policy.ts` Grant: what a parent lets a child's subtree do. Narrow-only. */
 export interface Grant { allowSpawn?: boolean; maxDepth?: number; maxChildren?: number; maxTotalDescendants?: number; allowedChildProfiles?: string[]; budgetShare?: number }
@@ -124,7 +143,8 @@ export interface VerifyStarting {
 export type VerifyPatch = { acceptance?: unknown };
 
 export interface VerifyJudging {
-  verification: Verification & { tested: NonNullable<Verification["tested"]> };
+  /** `tested.commit`: the agent's commit the checks put on the target (what a reviewer reads, on `tested.targetSha`). */
+  verification: Verification & { tested: NonNullable<Verification["tested"]> & { commit: string } };
   acceptance: unknown;
   /** The task the change was made for (the verified agent's), when known. */
   task: Untrusted | null;
@@ -190,7 +210,7 @@ export interface HookTable {
   "sandbox.ensuring": { mode: "modify"; payload: SandboxEnsuring; patch: SandboxPatch; result: ModifyResult<SandboxPatch> };
   "sandbox.changed": { mode: "observe"; payload: SandboxChanged; patch: never; result: void };
   "verify.starting": { mode: "modify"; payload: VerifyStarting; patch: VerifyPatch; result: ModifyResult<VerifyPatch> };
-  "verify.judging": { mode: "veto"; payload: VerifyJudging; patch: never; result: VetoResult };
+  "verify.judging": { mode: "veto"; payload: VerifyJudging; patch: never; result: JudgeResult };
   "verify.changed": { mode: "observe"; payload: VerifyChanged; patch: never; result: void };
   "merge.landing": { mode: "veto"; payload: MergeLanding; patch: never; result: MergeGateResult };
   "merge.changed": { mode: "observe"; payload: MergeChanged; patch: never; result: void };

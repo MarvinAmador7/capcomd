@@ -90,7 +90,7 @@ const SAMPLES: { [N in HookName]: HookPayload<N> } = {
   "sandbox.ensuring": { runId: RUN.id, agentId: AGENT.id, purpose: "agent", provider: "fake", spec: { idemKey: "relay-test1", egressAllow: [], isolated: true, ttlSeconds: 3600, labels: {} } },
   "sandbox.changed": { provider: "fake", machine: { id: "m-1" }, runId: RUN.id, agentId: AGENT.id, change: { kind: "ready", createdMs: 10 } },
   "verify.starting": { verification: { vfyId: VERIFICATION.vfyId, runId: RUN.id, ref: AGENT.id, target: "main", check: "test" }, acceptance: null, reviewer: null, requestedBy: OPERATOR },
-  "verify.judging": { verification: { ...VERIFICATION, tested: VERIFICATION.tested! }, acceptance: null, task: said("Add a test"), reviewer: null },
+  "verify.judging": { verification: { ...VERIFICATION, tested: { ...VERIFICATION.tested!, commit: "c".repeat(40) } }, acceptance: null, task: said("Add a test"), reviewer: null },
   "verify.changed": { verification: VERIFICATION, change: { kind: "started" } },
   "merge.landing": { merge: MERGE, verification: VERIFICATION, target: { branch: "main", protected: false, sha: "b".repeat(40) }, sha: "a".repeat(40), fastPath: false, operator: false, requestedBy: OPERATOR },
   "merge.changed": { merge: MERGE, change: { kind: "requested" } },
