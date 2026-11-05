@@ -13,6 +13,7 @@ import { adapterFor, claudeAdapter, codexAdapter } from "../../src/agents/adapte
 import { CLAUDE_CODE_VERSION, CODEX_VERSION, loadAgentConfig } from "../../src/agents/config";
 import { AGENTS_SCHEMA, applyOverrides, providerDefaultEffort, providerEfforts, resolveAgent, validateFile, validateSpec, type AgentSpec } from "../../src/agents/profiles";
 import { Redactor } from "../../src/agents/redact";
+import { logins } from "../../src/api/settings";
 import { claude } from "../../src/plugins/agent-claude";
 import { codex } from "../../src/plugins/agent-codex";
 import { agentProviderNames, agentSeam, useAgentSeams } from "../../src/plugins/agents";
@@ -81,6 +82,9 @@ describe("a profile's provider is an active seam's name (§7.1)", () => {
     expect(validateSpec("cx", { provider: "codex", auth: "apikey" }).join()).toContain(`provider "codex" isn't an active agent provider (one of claude;`);
     expect(() => resolveAgent("cx", {}, { provider: "codex", auth: "apikey", kind: "codex" })).toThrow(`provider "codex" isn't an active agent provider`);
     expect(() => adapterFor("codex")).toThrow("isn't an active agent provider");
+    // The Settings logins still list the built-in's login, bound to its API host.
+    const scratch = mkdtempSync(join(tmpdir(), "capcomd-agent-seams-home-"));
+    expect(logins({ CAPCOMD_HOME: scratch, CAPCOMD_CREDENTIALS: "secret" }, "boxd").find((l) => l.provider === "codex")).toMatchObject({ loggedIn: true, boundTo: "api.openai.com" });
     await h.enable("agent-codex");
     expect(agentProviderNames()).toEqual(["claude", "codex"]);
     await h.stop();

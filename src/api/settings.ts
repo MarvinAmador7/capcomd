@@ -4,8 +4,8 @@
 // written here from what kind of login it is, not from what the ledger holds.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { agentApiHost } from "../agents/config";
 import { providerKind } from "../agents/profiles";
+import { BUILTIN_AGENTS } from "../plugins/agents";
 import { profileFor } from "../auth/profiles";
 import { env as envVar } from "../utils/env";
 import { withSandbox } from "../providers/run-sandbox";
@@ -20,6 +20,8 @@ export const SETTINGS_SANDBOXES = LISTED_PROVIDERS;
 export type SettingsSandbox = ListedProvider;
 const PROVIDERS = ["claude", "codex"] as const;
 const API_KEY: Record<(typeof PROVIDERS)[number], string> = { claude: "ANTHROPIC_API_KEY", codex: "OPENAI_API_KEY" };
+/** Where each built-in's host-bound secret goes: its plugin's API host, whether or not the daemon has it active. */
+const API_HOST = (provider: (typeof PROVIDERS)[number]) => BUILTIN_AGENTS.find((p) => p.describe().name === provider)!.describe().apiHost;
 
 export interface LoginState { provider: "claude" | "codex"; sandbox: SettingsSandbox; loggedIn: boolean; how: "plan" | "api_key" | null; detail: string | null; hostBound: boolean; boundTo: string | null; command: string }
 export interface EnvironmentState { sandbox: SettingsSandbox; status: "ready" | "missing" | "building" | "failed"; name: string | null; versions: Record<string, string>; builtAt: string | null; command: string }
@@ -36,7 +38,7 @@ export function logins(source: Env = process.env, only?: SettingsSandbox): Login
 	return PROVIDERS.flatMap((provider) => SETTINGS_SANDBOXES.filter((x) => !only || x === only).map((sandbox): LoginState => {
 		const s = withSandbox(source, sandbox);
 		const command = `capcomd auth login ${provider} --sandbox ${sandbox}`;
-		const host = agentApiHost(providerKind(provider));
+		const host = API_HOST(provider);
 		const unbound = { hostBound: false, boundTo: null };
 		const plan = profileFor(providerKind(provider), s);
 		if (plan) {
