@@ -13,7 +13,8 @@ import * as forgeGit from "./forges/git";
 import * as forgeGithub from "./forges/github";
 
 export type Builtin = Required<Pick<Candidate, "manifest" | "module">> & {
-  /** A gate the kernel needs wherever a verify or a merge runs, not only in the daemon (src/plugins/hooks.ts `gates`). */
+  /** A plugin the kernel needs in every process, not only the daemon: a gate wherever a verify runs (src/plugins/hooks.ts
+   *  `gates`), a forge wherever work lands or a pull request opens (src/plugins/forges). See host.ts `localHost`. */
   everyProcess?: boolean;
 };
 
@@ -26,6 +27,6 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   { manifest: agentCodex.manifest, module: agentCodex.plugin },
   { manifest: shipped(gateReviewerManifest), module: gateReviewer as Builtin["module"], everyProcess: true },
   // Forges (§7.4, step 6).
-  { manifest: forgeGithub.manifest, module: forgeGithub.plugin },
-  { manifest: forgeGit.manifest, module: forgeGit.plugin },
+  { manifest: forgeGithub.manifest, module: forgeGithub.plugin, everyProcess: true },
+  { manifest: forgeGit.manifest, module: forgeGit.plugin, everyProcess: true },
 ];

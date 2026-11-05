@@ -317,10 +317,11 @@ describe("POST /v1/projects/publish", () => {
 			const d = local({ "a.txt": "a\n" }, { commit: true });
 			const r = await w.publish({ path: d, owner: "acme", name: "forged" });
 			expect(r.status).toBe(200);
-			expect(fake.calls).toEqual(["publish acme/forged"]);
+			// Who you publish as is the forge's answer too (its login, with accounts), then it publishes.
+			expect(fake.calls).toEqual(["login publish accounts", "publish acme/forged"]);
 			expect(fake.published).toMatchObject([{ path: d, owner: "acme", name: "forged", visibility: "private" }]);
 			expect(sh(["git", "log", "--format=%s", "main"], fake.published[0]!.bare)).toBe("work");
-			// gh was asked who you are (publish-options' accounts), never to create the repository.
+			// gh was never asked: not who you are, not to create the repository.
 			expect(existsSync(join(w.gh.root, "calls")) ? read(join(w.gh.root, "calls")) : "").not.toContain("repo create");
 		} finally { fake.reset(); useForges(null); await host.stop(); }
 	});
