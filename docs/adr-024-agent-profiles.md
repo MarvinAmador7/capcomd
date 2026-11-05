@@ -1,0 +1,347 @@
+# ADR-024: Agent profiles v2, a composable unit on the plugin core
+
+Status: **Proposed** (draft, 2026-11-04). Builds on ADR-015 §6–7 (profiles and children policy), ADR-016 (primitives),
+ADR-017 (sub-agents), ADR-019 (optional limits) and ADR-023 (the plugin core). Research:
+[docs/research/plugin-architecture.md](research/plugin-architecture.md) §3 (Hermes profiles) and §5.
+
+The ADR numbers the owner asked for (019, 020) were taken by the time this was written (agents report up, sandbox
+providers), so this is 024 and the plugin core is 023.
+
+## 1. Context
+
+A capcomd profile today is one object in `.capcomd/agents.json` (schema `capcomd.agents/v1`, `src/agents/profiles.ts`
+`AgentSpec`): a provider (`claude | codex`), exactly one auth mode, an optional model and effort, optional limits
+(`maxTurns`, `maxBudgetUsd`, `timeoutMs`, the stuck windows), a Codex sandbox level, an egress list, a system prompt
+and append, tool allow/deny lists, and a `children` block that caps spawning. `capcomd setup project` writes four of
+them (`src/config/project-setup.ts` `planProject`: `worker` per agent, `reviewer`, `lead`, `planner`), the app shows
+them as four kinds (`apps/menubar/app/Sources/CapcomdStore/Model.swift` `ProfileKind`: planner, lead, worker, critic,
+other), the MCP driver reads them through `capcomd_profiles` (`abilityText`, `leadText`), and every spawn pins the
+resolved spec on the agent record (`src/primitives/ops.ts` `spawnAgent` → `spec`, `pinSpec`), so the engine never needs
+the file.
+
+That is a good base: validation is strict (unknown fields refused), narrowing is enforced (`widenings()`), and the spec
+travels with the agent. It is also narrow. A profile cannot say who the agent is (a persona, an avatar), what it knows
+(skills, memory), which tools beyond the agent CLI's own it gets (MCP servers), where it runs (the profile can't pick a
+sandbox or an environment image), how it is reviewed (approval kinds), or where it came from (no version, no source,
+nothing to share or install). Composition is by hand: `lead` repeats `worker`'s settings because there is no `extends`.
+
+Hermes (Nous Research's hermes-agent, read at `ed1afb0`) went the other way: a profile is a whole home directory
+(`~/.hermes/profiles/<name>/`: `config.yaml`, `.env`, `SOUL.md`, `skills/`, `memories/`, `sessions/` and `state.db`,
+`cron/`, `plugins/`, `hooks/`, `profile.yaml` metadata), selected with `hermes -p <name>` or a sticky
+`active_profile` file, cloned as a one-time copy (`--clone`, `--clone-all`; "independent islands" afterwards, no
+inheritance), exported and imported as a tarball with credentials stripped, and installed from a git repository as a
+"distribution" whose `distribution.yaml` says which paths the distributor owns (`SOUL.md`, `config.yaml`, `skills`,
+`cron`) and which the user owns (`memories`, `sessions`) so `profile update` replaces one and never the other
+(research §3). Its orchestrator routes kanban tasks by each profile's `describe` text. The owner wants capcomd's
+profiles to be first-class in that sense, while keeping what capcomd adds that Hermes doesn't have: a VM per agent,
+narrow-only limits down a tree, and gates (Hermes is explicit that profiles are not sandboxes).
+
+## 2. Decision
+
+### 2.1 A profile is a package, resolved to a pinned spec
+
+A **profile** is a directory (or a single YAML/JSON file for the small case) with a manifest and the files it refers
+to. Resolving it produces exactly the thing the engine already understands: a flat, validated spec pinned on the agent
+at spawn (`pinSpec`). So the engine, the policy (`src/primitives/policy.ts`), the runner and the pinning path do not
+change shape; what changes is how the spec is written, composed, versioned and shown.
+
+```
+.capcomd/profiles/
+  worker/profile.yaml
+  reviewer/profile.yaml
+  lead/profile.yaml                 # extends: worker
+  planner/profile.yaml              # extends: lead
+  security-critic/                  # an installed profile package
+    profile.yaml
+    SOUL.md
+    skills/threat-model/SKILL.md
+    LOCK                            # source, commit, content hash (written on install)
+.capcomd/agents.json                # v1, still read; v2 wins on a name collision (§6)
+~/.capcomd/profiles/<name>/         # the user's profiles, below the project's
+```
+
+### 2.2 The schema (`capcomd.profile/v2`)
+
+Every block is optional except `name` and `harness.provider`/`harness.auth` (the two fields v1 requires). A block a
+profile doesn't set is the harness default, exactly as unset limits mean none today (ADR-019).
+
+```yaml
+schema: capcomd.profile/v2
+name: security-critic             # ^[a-z0-9][a-z0-9_-]{0,62}$, as today (lowercase stays: decided 2026-10-25)
+version: 3                        # bumps on every edit; agents record name@version (harness-architecture.md §5.1)
+extends: reviewer                 # one parent, by name; resolved before validation (§2.3)
+description: Reviews a change for security regressions and reports a verdict.
+tags: [review, security, read-only]   # what the planner matches on (§4)
+
+identity:
+  title: Security critic          # what the app shows; the agent's tab title still comes from title rules
+  persona: SOUL.md                # a file next to the manifest; goes first in the system prompt (Hermes slot 1)
+  avatar: { seed: security-critic }   # packages/bot-avatar input; absent: derived from the agent id as today
+
+harness:
+  provider: claude                # claude | codex | <a provider plugin's name> (ADR-023 §4.2)
+  auth: subscription              # exactly one, as v1
+  model: claude-opus-4-1
+  effort: high
+  cliVersion: ">=2.1"             # optional pin on the agent CLI the environment must have
+
+prompt:
+  system: null                    # replaces the CLI's system prompt (claude --system-prompt); rare
+  append: prompt.md               # appended (claude --append-system-prompt; codex: appended to the prompt)
+
+skills:
+  - name: capcomd-orchestration   # bundled; only for profiles that may spawn (today's gating stays)
+  - name: threat-model            # from this package's skills/ (hashed on install)
+  - name: owasp-top-10
+    source: user                  # ~/.claude/skills or ~/.capcomd/skills
+    hash: sha256:…                # pinned; a changed hash raises a notice, never a silent change
+
+tools:
+  allowed: [Read, Glob, Grep, LS, "Bash(git diff:*)", "Bash(bun test:*)"]
+  disallowed: []
+  mcp:                            # MCP servers the agent CLI gets inside the sandbox (ADR-023 §4.5 wires them)
+    - name: semgrep
+      command: [semgrep-mcp]
+      trust: untrusted
+
+memory:
+  scope: project                  # none | profile | project | user: which memory dir is mounted read/write
+  files: [MEMORY.md]              # read into the prompt at start; written back by the agent through the supervisor
+  retain: 30d
+
+sandbox:
+  provider: docker                # a sandbox plugin's name (ADR-020/021 descriptor); absent: the run's, else the daemon's
+  environment: default            # the env snapshot / image to boot from (capcomd env build --name)
+  egress: [github.com, api.anthropic.com]   # as v1; absent: open (ADR-019 §7)
+  codex: workspace-write          # v1 `sandbox` (codex --sandbox)
+  size: { vcpu: 2 }
+
+limits:                           # v1 names kept; all optional (ADR-019)
+  maxTurns: 40
+  maxBudgetUsd: 3
+  timeoutMs: 1800000
+  idleAfterMs: 1800000
+  stuckRepeats: 8
+  noChangeAfterMs: null
+
+lifecycle:
+  checkpointEveryMs: 600000
+  onStart: []                     # hook plugins to run at agent.started for this profile (ADR-023 §5)
+  onEnd: [post-review-summary]
+
+children:                         # v1 block, unchanged semantics (narrow-only)
+  allowSpawn: false
+
+permissions:
+  approve: []                     # approval kinds an agent of this profile may decide for its subtree
+                                  # (budget, spawn_widen); never merge-to-protected, secret, egress (harness-architecture §5.3)
+  report: true                    # may be spawned with --report (read-only, result is its final message)
+
+sharing:
+  source: github:acme/capcomd-profiles#security-critic   # written by `capcomd profiles install`
+  license: MIT
+```
+
+What is new against v1, by block: `identity`, `skills`, `tools.mcp`, `memory`, `sandbox.provider|environment|size`,
+`lifecycle.onStart|onEnd`, `permissions`, `sharing`, `version`, `extends`, `tags`. Everything in v1 has a home:
+`provider/auth/model/effort` → `harness`; `systemPrompt/appendSystemPrompt` → `prompt`; `allowedTools/disallowedTools`
+→ `tools`; `sandbox` (codex level) → `sandbox.codex`; `egress` → `sandbox.egress`; the limits and stuck windows →
+`limits`; `checkpointEveryMs` → `lifecycle`; `children` and `description` keep their names.
+
+**Judgment calls here:** the block names; putting `persona` under `identity` rather than `prompt` (it is who the
+agent is, and the app shows it); `memory.scope` as an enum rather than a path (paths leak host layout into a
+shareable file); `extends` at all (Hermes has none: a clone is a copy; capcomd's four setup profiles repeat each
+other today, which is the case for it). **From the research:** a persona file first in the prompt (Hermes `SOUL.md`
+is "identity slot #1" of its system prompt, `agent/prompt_builder.py`), skills and memory as parts of the profile
+(Hermes), a per-profile plugin and MCP list (Hermes `plugins/`, `mcp_servers`), hashed pins on skills
+(harness-architecture §8.4), one credential per profile (ADR-015), an installed persona scanned as untrusted (Hermes
+treats a distribution-owned `SOUL.md` that way).
+
+### 2.3 Inheritance and composition
+
+- **`extends: <name>`**, one level at a time, any depth, no cycles. The child's blocks are merged onto the parent's:
+  scalars replace, lists replace (not append; `skills` and `tools.allowed` are the two places a reader must see the
+  whole list), maps merge one level. `null` removes a key, as `applyOverrides` already does for v1 overrides.
+- **Narrowing is checked on the resolved spec, not the file.** Today `validateFile` checks that each
+  `allowedChildProfiles` entry is no wider than its parent (`widenings`). That stays, on resolved specs. A profile
+  that `extends` another may widen it (a lead is a worker that can also spawn) because `extends` is authoring, not
+  delegation; only the parent → child spawn relation is narrow-only. This distinction is the main thing to get right
+  in review.
+- **Per-run and per-spawn overrides** keep today's mechanism: `--set k=v` and `--overrides` produce an `Overrides`
+  that `applyOverrides` merges and checks (`profiles.ts`); the ref encoding `name;ov=…[;op=1]` is unchanged, so the
+  planner → worker carry (`encodeAgentRef`/`decodeAgentRef`) needs no change. Keys use the v2 paths
+  (`limits.maxTurns`), with the v1 names accepted as aliases for one release.
+- **Project over user over bundled.** A name is looked up in the project's `.capcomd/profiles/`, then
+  `~/.capcomd/profiles/`, then the profiles bundled with capcomd (the four `setup` writes, shipped as data so a project
+  without an agents file still has `worker` and `planner`). The first hit wins; `capcomd profiles show <name>` says
+  where it came from.
+
+### 2.4 Versioning
+
+- `version` is an integer the tooling bumps on every write (`capcomd profiles set`, the app, `PUT /v1/profiles/{name}`).
+  A hand edit without a bump is detected by a content hash in `LOCK` (installed packages) or in the agents index (local
+  ones) and treated as a bump with a notice.
+- An agent records `profile: name`, `profileVersion`, and the resolved spec (the pin), so a run that outlives an edit
+  shows what it actually ran with (`harness.v1` `Agent.profile`, `Agent.profileVersion`; both already planned in
+  harness-architecture.md §5.1).
+- The schema id bumps only on a breaking change (`capcomd.profile/v3`); additions never bump. Unknown keys are refused,
+  as today, except under `x-` (vendor extensions a plugin may read: `x-perfloop.gestures`).
+
+### 2.5 Sharing and installing
+
+- A profile package is a directory with `profile.yaml` and the files it names. It can live in any git repository;
+  `capcomd profiles install <owner/repo>[#<name>][@<ref>]` copies it into `~/.capcomd/profiles/<name>/` (or
+  `--project`), writes `LOCK` (source, commit, per-file sha256), and refuses a package whose manifest names a file
+  outside its directory or any executable. **Profiles are data**: a `persona`, `prompt.append` and skills are text the
+  agent reads; `tools.mcp` names a command the *sandbox* runs, never the host (ADR-017 §1); `lifecycle.onStart|onEnd`
+  name hook plugins that must already be installed and enabled on the host (ADR-023 §6), so a profile can't smuggle code.
+- `capcomd profiles export <name>` writes the package (resolved or with `extends` kept, `--flat`). Nothing from
+  `~/.capcomd` state goes in it, and a profile never holds a credential (ADR-015: `auth` is a mode), so there is
+  nothing to strip, unlike Hermes's export.
+- `capcomd profiles update <name>` re-fetches at the locked source and replaces only the **package-owned** files
+  (`profile.yaml`, `SOUL.md`, `prompt.md`, `skills/`); a project's `override.yaml` and the profile's memory (§2.2
+  `memory`) are user-owned and never touched. A changed hash on a pinned skill or persona is shown before it is applied.
+  **From the research:** Hermes's `distribution_owned` list is exactly this split; adopted as is.
+- Discovery of shareable profiles uses the same marketplace files as the plugin (ADR-018 §1): a repository's
+  `.claude-plugin/marketplace.json` may list `profiles` beside `plugins`. **Judgment call:** reuse the marketplace file
+  rather than a new registry; cheap and already indexed by the agent platforms.
+
+### 2.6 Per-project overrides
+
+A project may **override** an installed or user profile without copying it: `.capcomd/profiles/<name>/override.yaml`
+with the same schema and no `name`; it is applied last, as `extends` would be. This is how a project pins its own
+`sandbox.environment` or `limits` on a shared `security-critic`. `capcomd profiles show` prints the three layers
+(source, user override, project override) and the result.
+
+## 3. How it is built on the plugin core (ADR-023)
+
+- **Resolution is a core primitive**, `profiles.resolve(name, {project, overrides}) → PinnedSpec`, replacing the direct
+  `readAgentsFile` calls in `resolveAgent`, `spawnChecks`, `reviewerSpec`, `plannerDriver` and `run-options.ts`. The
+  pin keeps the v1 flat shape plus `profile {name, version, source}` so every consumer of `spec` in the scope actor and
+  the runner is untouched.
+- Profiles name **plugins by the names they register**: `harness.provider` is an agent-provider plugin
+  (`claude`, `codex` are the built-ins), `sandbox.provider` is a sandbox plugin (`docker`, `boxd`), `tools.mcp[]` are
+  MCP server declarations the sandbox-side runner wires (today only capcomd's own in-VM MCP is wired, `runner.ts`
+  `capcomd?: {cli, mcpConfig}` in `AgentCommandCtx`), `lifecycle.onStart|onEnd` are hook plugins. Validation asks the
+  core's registry whether each name exists and is enabled, so a profile for a provider that isn't installed fails at
+  `validate`, not at spawn.
+- The **`profile.resolved`** hook (ADR-023 §5, modify) lets a plugin adjust the resolved spec narrow-only (a cost
+  plugin lowering `limits.maxBudgetUsd` for a project; PerfLoop attaching its skill to every `worker`). Widening from a
+  hook is refused with the same `widenings()` message.
+- **UI surfaces**: the app renders a profile from a descriptor the daemon serves (`GET /v1/profiles/{name}` with
+  `fields[]` typed like the sandbox settings rows of ADR-021, each with `editable` and `source`), so a new block or a
+  plugin's `x-` fields show up without a Swift release, as ADR-021 did for places.
+
+## 4. How the planner chooses profiles
+
+The planner (a Claude Code or Codex session driving `capcomd mcp`, or the `planner` profile in its VM) chooses by
+reading, not by magic. Today `capcomd_profiles` returns `{name, provider, auth, model, canSpawn, canLead, ready, does}`
+(`src/cli/commands/agents.ts` `list`, `abilityText`), and the orchestration skill says "any profile whose entry has
+`canLead` can lead". v2 adds, per profile:
+
+- `tags` and `description` as written;
+- `fit`: a sentence the daemon writes from structured fields ("read-only; reviews; Claude, high effort; can't spawn"),
+  never agent text;
+- `capacity`: how many of this profile can run at once right now (from `src/providers/capacity.ts` and the login
+  quota ledger), so the planner sizes fan-out from facts (the team-shape eval in DEVELOPMENT.md measures exactly this);
+- `cost`: the model's list price tier (`low | medium | high`), so a planner can pick the cheap worker for mechanical
+  parts.
+
+`children.allowedChildProfiles` stays the hard rule: the planner may only spawn what its own profile allows, narrowed
+by its ancestors (`childLimits`). A planner that wants a profile outside that list is refused today and stays refused.
+
+**Judgment call:** no automatic matching of tags to tasks in the daemon. The planner is a model; give it the facts and
+the orchestration skill's guidance, and measure with the eval. A matcher would be a plugin later if the eval shows a gap.
+**From the research:** Hermes's kanban dispatcher routes tasks on each profile's `describe` text (an
+auto-generated description, `hermes_cli/profile_describer.py`), which is the same bet: a good description, read by a
+model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it can't be poisoned by a shared package.
+
+## 5. How the app and the CLI show and edit profiles
+
+- **CLI.** `capcomd profiles list|show|add|set|rm|validate|schema` replaces `capcomd agents …` (kept as an alias for one
+  minor release, printing the new name). `show` prints the three layers and the resolved spec with the source of every
+  value. `add` takes `--extends`, `--from <owner/repo#name>` and the v2 flags (`--skill`, `--tag`, `--persona FILE`,
+  `--memory project`, `--sandbox-provider docker`). `--json` keeps the `capcomd.cli/v1` envelope.
+- **API.** `GET /v1/profiles`, `GET/PUT/DELETE /v1/profiles/{name}` (the `configure` scope for writes, as project setup
+  has), `POST /v1/profiles/install`, each with `Idempotency-Key`. A write is a `profile.changed` event on the `daemon`
+  stream (entity `profile:<name>`, text daemon-written: "Profile reviewer changed: limits.maxTurns 20 → 40."). This is
+  capability `profiles` in `/v1/health`.
+- **App.** Settings › Crew (the owner's word for the team) lists profiles grouped by project, each with its avatar,
+  title, provider mark, tags and readiness (login present, environment built, sandbox up), with the resolved values
+  and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
+  setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
+  profile that can plan, not only the one named `planner`.
+- **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
+  across runs of the same profile (bot-avatar memory: "agent id + role + size → SVG"; the seed becomes the profile's
+  when it sets one).
+
+## 6. Mapping today's profiles onto v2
+
+| v1 (`.capcomd/agents.json`) | v2 | Notes |
+|---|---|---|
+| `provider`, `auth`, `model`, `effort` | `harness.*` | same values; `provider` may now be a plugin name |
+| `description` | `description` | |
+| `systemPrompt`, `appendSystemPrompt` | `prompt.system`, `prompt.append` | may be a file name in a package |
+| `allowedTools`, `disallowedTools` | `tools.allowed`, `tools.disallowed` | |
+| `sandbox` (codex level) | `sandbox.codex` | |
+| `egress` | `sandbox.egress` | |
+| `maxTurns`, `maxBudgetUsd`, `timeoutMs`, `idleAfterMs`, `stuckRepeats`, `noChangeAfterMs` | `limits.*` | |
+| `checkpointEveryMs` | `lifecycle.checkpointEveryMs` | |
+| `children` | `children` | unchanged |
+| `default` (file level) | `default: true` on one profile, or the project config's `run.profile` | |
+| (none) | `identity`, `skills`, `tools.mcp`, `memory`, `sandbox.provider/environment/size`, `lifecycle.onStart/onEnd`, `permissions`, `sharing`, `version`, `extends`, `tags` | new |
+
+The four profiles `capcomd setup project` writes become: `worker` (harness + nothing else), `reviewer` (`extends:
+worker`, read-only tools from `testTools()`, `permissions.report: true`, tag `review`), `lead` (`extends: worker`,
+`children` as today), `planner` (`extends: lead`, `children.allowedChildProfiles: [worker, lead]`, tag `plan`). The
+app's `ProfileKind` keeps working: it reads the name; v2 adds `tags` so a `security-critic` can render as a critic
+without being named `critic`.
+
+`agents.json` v1 keeps being read. The loader converts each v1 entry to a v2 spec in memory; `capcomd profiles migrate`
+writes the directory form and leaves the file in place with a comment. A name in both places: the v2 directory wins and
+`validate` warns.
+
+## 7. Migration plan
+
+Each step ships alone, with tests, and leaves every existing test green.
+
+1. **Loader and schema** (`src/agents/profiles.ts` → `src/profiles/`): parse v2 YAML/JSON, `extends`, overrides,
+   layers, resolution to the v1 flat pin; `validateFile` runs on resolved specs. Tests: `tests/agents/profiles.test.ts`
+   grows golden resolutions (a package, a user override, a project override, a cycle, a widening child, a `null`
+   removal). No behaviour change for v1 files (the existing suite is the regression gate).
+2. **`capcomd profiles` CLI and `GET /v1/profiles`** (read-only), with `show` printing sources. `capcomd agents` becomes
+   an alias. Tests: `tests/cli`, `tests/api/contract.test.ts` (new capability `profiles`), the generated
+   `docs/harness-contract.md`.
+3. **Pin the version**: `agent.spawned` and `Agent` carry `profileVersion` and `source`. Tests:
+   `tests/scenarios/contract.test.ts`, `tests/api/agent-provider.test.ts`.
+4. **New blocks that need no new runtime**: `identity.title`, `tags`, `prompt.*` as files, `permissions.report`,
+   `sharing`. `capcomd_profiles` returns `tags`, `fit`, `capacity`, `cost`. Test: `scripts/eval-team-shape.ts` before and
+   after (DEVELOPMENT.md), to see the planner's choices move or hold.
+5. **Skills in the profile**: resolved and sent the way `send --skill` sends them today (`src/agents/skills.ts`
+   `withSkills`), pinned by hash, at the agent's start. Tests: `tests/api/steer-skills-agent-pause.test.ts` pattern, a
+   scenario that asserts the prompt file has the skill once.
+6. **Writes**: `PUT /v1/profiles/{name}`, `capcomd profiles set`, `profile.changed` events, the app's Crew screen.
+   Tests: `tests/api` idempotency and scope tests as for `PATCH /v1/sandboxes`.
+7. **Install/export/update** with `LOCK`. Tests: a local git fixture repository (the `tests/merge/gitfixture.ts`
+   pattern), a package that names a file outside its directory is refused, a hash change is reported.
+8. **`memory`, `tools.mcp`, `sandbox.provider|environment|size`, `lifecycle.onStart|onEnd`**: each needs the plugin
+   core's hook or wiring (ADR-023 §4.5, §5) and ships after that step of ADR-023 lands. Tests: the scenarios suite with
+   scripted agents (`CAPCOMD_SPAWN_EXEC=script`), one per block.
+9. **`capcomd profiles migrate`** and the `setup project` templates in v2 form; `agents.json` v1 stays readable for two
+   minor releases, then `validate` warns and a later release stops reading it (breaking, changelog).
+
+## 8. Risks and open questions
+
+- **Two sources of truth during the overlap.** Mitigated by "directory wins, validate warns", and by `show` printing
+  where every value came from.
+- **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
+  environment is a readiness problem shown before the run (`GET /v1/run-options`), not a spawn failure.
+- **Persona text is prompt text.** It is agent-facing data; the fencing rules for agent-written text don't apply to a
+  file the operator installed, but an installed persona is as trusted as an installed skill: show the hash, ask once per
+  hash (harness-architecture.md §13.8 is still open on this).
+- **`permissions.approve`** extends what an ancestor agent may decide; the human-only kinds stay human. Whether to ship
+  it at all is the owner's call (harness-architecture.md §13.7).
+- **Open:** YAML or JSON as the written form (YAML proposed for packages because personas and prompts are multi-line;
+  JSON stays accepted); whether `extends` may cross projects (proposed: no, only user and bundled); whether a profile
+  may set `harness.provider` to a model-API provider without an agent CLI (ADR-023 §4.2 says a provider plugin may
+  supply its own adapter, so yes, later).

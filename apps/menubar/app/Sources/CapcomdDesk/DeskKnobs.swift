@@ -89,8 +89,21 @@ package enum DeskKnobs {
                                       summary: "off = the live columns slide (today); bitmap = cached bitmaps of the columns slide in an overlay, the live reel moves once at rest",
                                       since: "0.7")
 
+  package enum Release: String, KnobValue, CaseIterable {
+    /// The reel lands on the column it chose, and AppKit's own deceleration ends when the fingers lift (ReelRelease).
+    case land
+    /// AppKit's deceleration is left running, as before 2026-11-04: it carries the reel past the column it chose
+    /// (a slow drag rested 25–31 pt off a column edge).
+    case appkit
+  }
+
+  /// What happens to AppKit's own deceleration when a swipe's fingers lift.
+  package static let reelRelease = Knob("reel.release", default: Release.land, choices: Release.allCases,
+                                        summary: "land = the reel ends AppKit's own deceleration when the fingers lift, so it rests on the column it chose; appkit = left running (before 2026-11-04: it carried the reel off the column edge)",
+                                        since: "0.10")
+
   /// Every knob of the window. A new knob goes here too, or `describe` won't list it.
-  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns, reelCache] }
+  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns, reelCache, reelRelease] }
   /// What `describe` lists, by name.
   package static var all: [KnobInfo] { knobs.map(\.info).sorted { $0.name < $1.name } }
   /// The full knob vector this process runs with, defaults included (a result's `knobs`).

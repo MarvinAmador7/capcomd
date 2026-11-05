@@ -58,10 +58,15 @@ import PerfLoopProbe
     let cols = h.model.columns
     if !cols.isEmpty { h.model.scroll(to: cols[max(0, (cols.count - h.model.across) / 2)], animated: false); _ = await h.nextCommit() }
 
+    AppKitScrollTrace.installIfAsked()
     var written: [(URL, Gesture)] = [], failures: [String] = []
     GestureTap.record(to: dest, name: name, device: args.one("device")) { r in
       switch r {
-      case .success(let x): written.append(x); err("recorded \(Gestures.line(x.1)) → \(x.0.path)")
+      case .success(let x):
+        written.append(x); err("recorded \(Gestures.line(x.1)) → \(x.0.path)")
+        // Enough: stop recording now. The wait below for where the reel came to rest must not record a swipe made
+        // meanwhile (--count 3 wrote 4 when the last two came in quick succession).
+        if written.count >= count { GestureTap.recorder = nil }
       case .failure(let e): failures.append("\(e)"); err("deskbench: couldn't write the gesture: \(e)")
       }
     }
@@ -71,13 +76,20 @@ import PerfLoopProbe
     while (written.count < count || rests.count < written.count) && failures.isEmpty && h.now() < deadline {
       await h.sleep(ms: 50)
       // Where the reel came to rest after each gesture: it should be a column edge (the reel snaps).
-      if rests.count < written.count, !h.model.reelMoving, let off = restOffset(h) {
-        await h.sleep(ms: 300)
-        if !h.model.reelMoving { rests.append(off); err("  the reel came to rest \(Stats.round(off, 1)) pt from a column edge\(off < 2 ? "" : " (it should snap to one)")") }
+      // At rest is when the clip view's offset stopped changing for 150 ms: AppKit's own deceleration can carry it on
+      // after the reel's slide ended (DESKBENCH.md, Recorded gestures).
+      if rests.count < written.count, !h.model.reelMoving, let sv = h.reelScrollView() {
+        var lastX = sv.contentView.bounds.origin.x, lastMove = h.now()
+        let since = h.now()
+        while h.now() - lastMove < 150, h.now() - since < 2000 {
+          await h.sleep(ms: 16)
+          if sv.contentView.bounds.origin.x != lastX { lastX = sv.contentView.bounds.origin.x; lastMove = h.now() }
+        }
+        if !h.model.reelMoving, let off = restOffset(h) { rests.append(off); err("  the reel came to rest \(Stats.round(off, 1)) pt from a column edge\(off < 2 ? "" : " (it should snap to one)")") }
       }
     }
-    // Enough: drop whatever started since (a half gesture is no recording). Out of time: keep the one in flight.
-    if written.count >= count { GestureTap.recorder = nil } else { GestureTap.stop() }
+    // Enough: the recorder is already detached. Out of time: keep the one in flight.
+    if written.count < count { GestureTap.stop() }
     h.closeWindow()
     if args.has("json") {
       struct R: Codable { var schema = "deskbench.recorded/1"; var files: [String]; var gestures: [Gesture] }

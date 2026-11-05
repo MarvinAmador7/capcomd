@@ -10,7 +10,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   run that asks shows its question, the files it would land with their +/−, and **Deny** / **Approve ↩** right there.
   Click a run to open it. The **Home** button at the left of the title bar (⌘0) brings Home back and takes you back
   to the project; **+** (⇧⌘N) now opens Home with the composer ready to type, and so does just typing on Home. Start
-  opens the new run on its planner. Home replaces the new project column. The mic in the composer starts macOS dictation into the goal.
+  opens the new run on its planner. Home replaces the new project column. The mic in the composer starts macOS
+  dictation into the goal.
 - Choose the model the planner runs on. In the window's composer, the model button lists Claude Code's and Codex's
   models, each with a note, and the effort; a provider that isn't logged in where the run would go stays listed,
   dimmed, with why. On the command line: `capcomd run <goal> --planner-model <id>` (for example
@@ -18,6 +19,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   with the list.
 - `GET /v1/run-options` lists each driver's models (`drivers[].models`, capability `runs.options.models`), and
   `POST /v1/runs` takes `model`.
+- In the Mac app's window, the agents' columns now always come to rest on a column edge after a slow drag with two
+  fingers. Before, a slow drag could leave them 25–30 pt off the edge, with a sliver of the next column showing.
 - The Mac app welcomes you the first time you open it: the capcomd bot comes on the air on your desktop, his crew pours
   out of his laptop, and the window opens around him. Then, in five short steps, it finds the capcomd command line
   tool, starts capcomd (at every login, or only now: your choice), pairs this Mac, signs in Claude Code and Codex,

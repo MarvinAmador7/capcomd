@@ -272,6 +272,7 @@ can measure it again without a rebuild. The window's knobs are in `CapcomdDesk/D
 | `desk.column` | `swiftui`, `native` | `swiftui` | a column as one hosting view of `Column`, or an AppKit column (layer frame and stroke) placing a head and a body hosting view |
 | `reel.columns` | `keep`, `park`, `reuse` | `keep` | every built column in the scrolling document; only those near the screen (the rest parked, still and hidden); or a fixed set of native column slots configured in place as the reel moves |
 | `reel.cache` | `off`, `bitmap` | `off` | the live columns slide, or cached bitmaps of them slide in an overlay and the reel moves under it at rest |
+| `reel.release` | `land`, `appkit` | `land` | when a swipe's fingers lift, the reel ends AppKit's own deceleration (`ReelRelease`) and rests on the column it chose; `appkit` leaves it running, as before 2026-11-04 (it carried the reel off the column edge: see *Recorded gestures*) |
 
 ```sh
 $B run step --knob reel.slide=clip                    # or --set knob:reel.slide=clip; several: --knob a=1,b=2
@@ -428,10 +429,13 @@ per step per node), `gains` (b faster) and `losses` (b slower) with each item's 
   the bench's: 4 % a frame from the release velocity). Its events carry timestamp 0, which hides AppKit's own
   deceleration after release (see *Recorded gestures*): `swipe` is the closer one. Good for "does scrolling by hand
   drop frames"; not for comparing deceleration feel.
-- **Swipe**: a recording's events, at its times and with real timestamps, built and delivered the same way as
-  `fling`'s; real are AppKit's gesture handling (its queueing of deltas to the next refresh, its deceleration), the
-  reel's snapping and the per-frame work. Not real: the WindowServer and hit-testing; a recorded momentum curve is the
-  recording machine's (what A/B wants, not "feel").
+- **Swipe**: a recording's events, at its times, each stamped with its recorded time, built as `fling`'s are and handed
+  to the application for the reel's window (`NSApp.sendEvent`), so the reel's own routing (its local event monitor)
+  decides where they go, as under a hand. Real are that routing, AppKit's gesture handling (its queueing of deltas to the
+  next refresh, its own deceleration after release), the reel's snapping and the per-frame work. Not real: the
+  WindowServer, the trackpad driver and anything else a hand's event stream carries beyond the recorded numbers; a
+  recorded momentum curve is the recording machine's (what A/B wants, not "feel"). Where a hand's flick lands with the
+  old reel varies from flick to flick (see *Recorded gestures*), so a replay can't be held to one landing.
 - **Typing**: `NSEvent.keyEvent` pairs sent with `window.sendEvent` to the composer made first responder: the real
   field editor path, minus the input method.
 - **Frames**: a `CADisplayLink` callback on the main run loop, not Core Animation's commit log. A late tick means the
@@ -470,8 +474,13 @@ synthetic ones are in `Gestures/` (`gestures --write Gestures` regenerates them,
 
 **Replay**: `run swipe --gesture FILE` (repeat `--gesture` for several, taken in turn; `--set swipes=N`, `from=I`
 for the start column). Deltas go out in whole points (a CGEvent's point delta is an integer; the remainder is carried,
-so the sum stays within half a point) with the recorded phases and real timestamps. The `gesture` check fails when an
-event didn't go out as recorded; `snapped` when the reel didn't rest on a column edge.
+so the sum stays within half a point) with the recorded phases, at their recorded times. Each event's timestamp is
+its recorded time (the replay's start plus `t`), as a trackpad's events carry the time the hardware saw them however
+late the main thread takes them: AppKit reads the release velocity from them. The events go to the application for
+the reel's window, at the middle of the reel, so the reel's local event monitor routes them as it routes a hand's
+(`deliver=window`; it falls back to `view` where macOS can't place an event in a window, and the step's notes say
+which route the events took). The `gesture` check fails when an event didn't go out as recorded; `snapped` when the
+reel didn't rest on a column edge.
 
 **Smoothness** (`reps[].steps[].smoothness`, the rep's in `reps[].smoothness`, medians in `summary.smoothness`; the
 meter is PerfLoop's PerfLoopProbe `SmoothnessMeter`). A display link on the scroll view reads the document
@@ -496,9 +505,15 @@ both sit at 0 on a main thread that keeps up, and content that stops following t
 once. `jerkP95` is information: it differentiates three times, swings with the display link's jitter, and its band
 isn't known until real recordings give one.
 
-`--set timestamps=zero` sends every event with timestamp 0, as `fling` does. `DESKBENCH_SWIPE_TRACE=FILE` appends every
-event (due, delivered, the clip view's offset before and after) and tick (time, last commit, shown, clip offset) as
-JSON lines: what AppKit did with them.
+`--set timestamps=zero` sends every event with timestamp 0, as `fling` does; `timestamps=delivery` stamps each with the
+time it went out, as the replay did before 2026-11-04 (a late timer then hands two events over together and AppKit
+reads a release velocity of the main thread's jitter: one flick read 820 to 7,000 pt/s across replays of one file).
+`--set deliver=view` hands the events straight to the scroll view's `scrollWheel(with:)`, skipping the reel's routing,
+as before 2026-11-04. `DESKBENCH_SWIPE_TRACE=FILE` appends every event (due, delivered, the clip view's offset before
+and after) and tick (time, last commit, shown, clip offset) as JSON lines: what AppKit did with them.
+`DESKBENCH_APPKIT_TRACE=1` (`swipe` and `record-gesture`) prints a line each time AppKit's private scrolling animator
+begins a deceleration of its own (the velocity it read, where it means to stop) and each time one is stopped: under a
+hand, it says whether AppKit decelerated after the fingers lifted.
 
 What the first replays showed (2026-10-31, ce66497's reel, release, crew17, 3 reps × 4 swipes a gesture; `untrusted`:
 the idle check saw most idle frames late, so absolute frame numbers are high; the comparisons ran back to back):
@@ -518,11 +533,72 @@ the idle check saw most idle frames late, so absolute frame numbers are high; th
   all. The trace shows why: when the fingers lift the reel sets the offset to its target and slides, then NSScrollView
   runs its own deceleration from the release velocity it read in the events' timestamps (+127 pt over 0.5 s in one
   flick) and carries the reel past the edge. The reel swallows the system's momentum, not this. With timestamps 0
-  (`fling`, `--set timestamps=zero`) it snaps.
+  (`fling`, `--set timestamps=zero`) it snaps. *Corrected 2026-11-04 (below):* the deceleration is real and was a bug
+  under a hand too (flicks 204 and 126 pt off, slow drags 25–31 pt); how much the sizes here varied (up to 212 pt,
+  different every replay) was the replay's, which stamped events with the time it sent them. Fixed: the reel now ends that deceleration.
 - That deceleration is also the dear part: `swipe` costs about twice the main-thread CPU and 2–3× the late frame time
   of the same gesture with timestamps 0, or of `fling`. `fling` understates what a hand's swipe costs.
 - A delta queued when the fingers lift can be dropped: the reel's slide starts from the offset AppKit has applied so
   far and overwrites the one still queued (20 pt in one replay).
+
+What the owner's recordings showed (2026-11-04, MacBook Pro at 120 Hz, crew17, the machine in use: `untrusted`
+throughout, so frame and CPU numbers are comparisons between runs taken in turn, never absolutes). Six gestures
+recorded by hand with `record-gesture`: four quick flicks (two each way, released at 1,800–4,400 pt/s) and two slow
+drags (360 and 920 pt/s over the last 80 ms, with ±111 pt of vertical travel). The hand's rests are what
+`record-gesture` printed; each replay row is 3 replays (3 runs, the configurations taken in turn). These four flicks
+happened to land; that evening, with `DESKBENCH_APPKIT_TRACE=1`, two more flicks by hand on the old reel
+(`--knob reel.release=appkit`) stopped 204 and 126 pt off an edge and two slow drags 28 pt off, AppKit's deceleration
+logged on every gesture; on the fixed reel, four by hand (two flicks, two drags) rested 0.0–0.2 pt off.
+
+| rest off a column edge, pt | hand | replay before (delivery stamps, to the view) | replay now, old reel | replay now, reel fixed |
+|---|---|---|---|---|
+| `hand` (flick) | 0.0–0.5 | 184, 223, 184 | 29.3 ×3 | 0.2 ×3 |
+| `hand-2` (flick) | 0.0–0.5 | 132, 113, 12 | 213.5, 213.3, 213.5 | 0.0, 0.2, 0.0 |
+| `hand-3` (flick) | 0.0–0.5 | 188, 48, 169 | 58.0 ×3 | 0.2 ×3 |
+| `hand-4` (flick) | 0.0–0.5 | 0.0, 104, 143 | 16.5 ×3 | 0.2 ×3 |
+| `drag` | 25.3 | 30, 13, 41 | 25.5 ×3 | 0.0 ×3 |
+| `drag-2` | 31.3 | 116, 107, 100 | 90.7 ×3 | 0.2 ×3 |
+| `synthetic:flick-forward` (4 replays) | – | 150, 148, 45, 200 | 32.7–32.8 | 0.0–0.2 |
+| `synthetic:flick-back` | – | 64, 69, 164, 199 | 32.2 ×4 | 0.0–0.2 |
+| `synthetic:drag-forward` | – | 3.8–6.0 | 10.0 ×4 | 0.0–0.2 |
+
+- **Why the reel missed.** When the fingers lift, AppKit's scrolling animator (private, `NSScrollingAnimator`) starts
+  a deceleration of its own from the last event's velocity (`DESKBENCH_APPKIT_TRACE=1`: `beginMomentumWithVelocity` at
+  the release), whatever the scroll view does with the system's momentum events, and when the reel's slide moves the
+  clip view it starts again from there (a second call, aimed past the new offset). Swallowing the system's momentum
+  doesn't stop it; a momentum-ended event does (`_stopAnimating`, and the live scroll ends:
+  `NSScrollView.didEndLiveScrollNotification`, which `ReelReleaseTests` checks). That is the fix (`ReelRelease`,
+  knob `reel.release`, `appkit` for the old reel): all six recordings and the three synthetic gestures now rest within
+  0.2 pt, `snapped` passes in every rep.
+- **Why the replay was unfaithful, part one: its timestamps.** It stamped each event with the time it sent it. On a
+  busy main thread the timer hands events over in pairs, and AppKit's release velocity is then the jitter's: replays of
+  `hand-2` read 820 to 7,000 pt/s, so every replay rested somewhere else. Stamped with their recorded times, the
+  replays are the same every time (the third column), and AppKit reads the velocity the hand's events give
+  (2,250–4,380 pt/s for the flicks, 250 and 1,850 for the drags).
+- **Part two: the path.** The events now go to the application for the window, so the reel's local monitor routes
+  them as it routes a hand's. That changed no rest offset: replays sent to the view, to the application, and posted to
+  the bench's own process (so they come through its event queue like a hand's) all decelerated the same way, as did
+  ones with the app made to report itself active and the pointer over the reel.
+- **Still not reproduced: the flicks' landing under the old reel.** The hand's four flicks rested on an edge; their
+  replays rest 16–214 pt off, because AppKit decelerates after them. The `drag` replay matches the hand (25.5 against
+  25.3 pt), `drag-2` doesn't (90.7 against 31.3). AppKit's animator reads only the event's type, phases, deltas,
+  precision and timestamp (traced with lldb), all of which the replay sends as recorded, so whatever kept it from
+  decelerating after the hand's flicks is outside what a recording holds (another kind of event a trackpad sends, or
+  something the window server marks). Not found yet. `record-gesture --knob reel.release=appkit` with
+  `DESKBENCH_APPKIT_TRACE=1` under a hand says whether AppKit decelerated there. With the fix both end the same way,
+  so this gap no longer changes where the reel rests.
+- **Following the fingers** is unchanged by the fix: position error p95 0 pt in 21 of 24 flick replays now (8, 9
+  and 32 pt in three, one with the fix and two without), 6–8 pt on `drag` and 15–20 pt on `drag-2` with either reel
+  (the drags move vertically too), latency 1 frame (3 on `drag-2`) with either. The fix makes a flick much cheaper:
+  AppKit's deceleration scrolled the clip view every frame for 0.8 s, and a flick's replay cost 630–900 ms of
+  main-thread CPU with it, 150–300 ms without. `stalls` on the two recorded drags read 80–98 with the fix and 7–22
+  without in the runs above, but 71–77 without (`drag`) in two later runs: it counts a missed vsync against the median tick
+  interval of the whole replay, which AppKit's slow frames after the release raised to 19–20 ms in some runs and the
+  fix brings to 8.5 ms. While the fingers were down the replays drew as many frames with the fix as without (46–66
+  ticks against 27–58). Compare `stalls` only between replays whose frames after the release are alike.
+- **`record-gesture --count N` wrote N+1** when a swipe came while it waited to see where the last one came to rest
+  (`hand-3` and `hand-4` were written in the same second): it now stops recording as soon as N are written. It also
+  waits until the clip view stops moving before it says where the reel came to rest.
 
 ## A worked example
 
