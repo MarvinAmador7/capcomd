@@ -46,9 +46,13 @@ export async function runSandboxRecord(runId: string | null | undefined): Promis
   if (!runId) return null;
   if (known.has(runId)) return known.get(runId)!;
   try {
-    const { client } = await import("../core/relay");
+    const { client, endpoint } = await import("../core/relay");
+    // No engine listening (a merge or check run from the CLI or a test without one): the client would retry its
+    // metadata fetch until the 3 s cap below, on every call. A refused connection fails in milliseconds instead.
+    const deadline = Date.now() + 3000;
+    if (!(await fetch(endpoint() + "/", { signal: AbortSignal.timeout(3000) }).then(() => true, () => false))) return undefined;
     const look = (async () => (await (client().scope as any).get([runId]).kvGet({ k: RUN_SANDBOX_KV })))();
-    const r: any = await Promise.race([look, new Promise((ok) => setTimeout(() => ok(undefined), 3000))]);
+    const r: any = await Promise.race([look, new Promise((ok) => setTimeout(() => ok(undefined), Math.max(0, deadline - Date.now())))]);
     if (r === undefined) return undefined; // no answer: don't cache
     const rec = r && !r.deleted ? parseRunSandbox(r.value) : null;
     known.set(runId, rec);

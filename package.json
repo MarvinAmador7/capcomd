@@ -47,9 +47,10 @@
     "setup": "bun install && cd apps/canvas && bun install && cd ../tui && bun install",
     "typecheck": "tsc --noEmit && tsc --noEmit -p apps/canvas && tsc --noEmit -p apps/tui && tsc --noEmit -p packages/agent-thread && tsc --noEmit -p packages/bot-avatar && tsc --noEmit -p packages/plugin",
     "test": "bun test",
-    "test:fast": "bun test packages/agent-thread packages/bot-avatar packages/plugin tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers tests/plugins",
-    "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts",
-    "test:scenarios:timings": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts --timings=tests/scenario-timings.json --update-timings"
+    "test:fast": "bun test --isolate packages/agent-thread packages/bot-avatar packages/plugin tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers tests/plugins",
+    "test:scenarios": "bun test --isolate tests/scenarios tests/subagents tests/primitives tests/agents tests/merge",
+    "test:scenarios:timings": "bun run test:scenarios --timings=tests/scenario-timings.json --update-timings",
+    "test:apps": "cd apps/canvas && bun test && cd ../tui && bun test"
   },
   "devDependencies": {
     "@types/bun": "latest",

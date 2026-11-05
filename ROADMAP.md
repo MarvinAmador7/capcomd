@@ -112,8 +112,10 @@ rework.
   removes.
 - **VM-ledger reconciliation** (S): no reaper reconciles `.relay/boxd.sqlite` rows whose VMs are gone (stale
   `created` rows were found on 2026-10-21; their VMs no longer existed).
-- **CI coverage** (M): CI runs the typecheck, `test:fast` and the scenario suite (six parallel shards). The chaos suite was
-  removed on 2026-11-02. CI doesn't run the live e2e, `tests/agents`, `tests/env` or `tests/merge`; add those suites.
+- **CI coverage** (M): CI runs every test suite (DEVELOPMENT.md → Testing): the typecheck, `test:fast`, the apps, the
+  scenario suite with the agent adapters, primitives and merges (seven parallel shards), the deterministic evals and the
+  Swift tests. The chaos suite was removed on 2026-11-02. Still manual: the live e2e scripts and the two live tests
+  gated on GitHub and boxd credentials.
 
 ## 6. Known issues and test debt
 
