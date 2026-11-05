@@ -1363,6 +1363,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "string",
           "x-untrusted": true,
           "description": "Agent-written text (here the plugin's own words): render as plain text"
+        },
+        "holdId": {
+          "description": "The plugin's own name for this hold, when it gave one: approving satisfies a later hold of this plugin with the same holdId, whatever its reason says then; absent when the plugin named none (the reason identifies the hold). Plugin-written: render as plain text",
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [
@@ -2012,6 +2017,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
               "type": "string",
               "x-untrusted": true,
               "description": "Agent-written text (here the plugin's own words): render as plain text"
+            },
+            "holdId": {
+              "description": "The plugin's own name for this hold, when it gave one: approving satisfies a later hold of this plugin with the same holdId, whatever its reason says then; absent when the plugin named none (the reason identifies the hold). Plugin-written: render as plain text",
+              "type": "string",
+              "x-untrusted": true
             }
           },
           "required": [
@@ -3915,6 +3925,11 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                     "type": "string",
                     "x-untrusted": true,
                     "description": "Agent-written text (here the plugin's own words): render as plain text"
+                  },
+                  "holdId": {
+                    "description": "The plugin's own name for this hold, when it gave one: approving satisfies a later hold of this plugin with the same holdId, whatever its reason says then; absent when the plugin named none (the reason identifies the hold). Plugin-written: render as plain text",
+                    "type": "string",
+                    "x-untrusted": true
                   }
                 },
                 "required": [

@@ -4,7 +4,7 @@ import { loadMergeConfig, type MergeConfig } from "./config";
 import { withTargetLock } from "./lock";
 import { directMerge, directVerify } from "./direct";
 import { prMerge } from "./pr";
-import type { MergeGate, MergeOutcome, MergeRequest, MergeTimings } from "./types";
+import { sameHold, type MergeGate, type MergeOutcome, type MergeRequest, type MergeTimings } from "./types";
 import { hooks, recordGateEvent, refusedText } from "../plugins/hooks";
 import { ForgeNotActive, forgeFor, orList, pullRequestLabels } from "../plugins/forges";
 
@@ -56,9 +56,11 @@ export async function mergeTask(req: MergeRequest, cfg: MergeConfig | null = loa
  * merge.landing (plugin API §6.6.15): under the target's lock, before anything is pushed. A deny fails the merge
  * (`plugin:<name>`); a hold parks it for a person's approval (a plugin adds a requirement, never decides one). For
  * `merge --operator` both are recorded and bypassed. After a person approved a plugin's hold, that same hold (the plugin
- * and the reason they were shown) lets it land; every listener is asked then, so a later plugin's deny or new hold
+ * and its holdId, else the reason they were shown: `sameHold`) lets it land; every listener is asked then, so a later plugin's deny or new hold
  * still stops it.
  */
+const heldOf = (h: { plugin: string; holdId?: string }) => ({ plugin: h.plugin, ...(h.holdId !== undefined ? { holdId: h.holdId } : {}) });
+
 async function mergeLanding(req: MergeRequest, g: MergeGate): Promise<MergeOutcome | { bypassed: Array<{ plugin: string; reason: string }> }> {
   const runEnv = await (await import("./run-config")).runEnv(req.runId).catch(() => process.env);
   const approved = g.approvedHolds ?? [];
@@ -75,12 +77,12 @@ async function mergeLanding(req: MergeRequest, g: MergeGate): Promise<MergeOutco
   }
   if (approved.length) {
     // The first veto, in order, that isn't a hold a person approved: it stops the merge as it would have.
-    const satisfied = (v: { plugin: string; decision: "deny" | "hold"; text: string }) => v.decision === "hold" && approved.some((h) => h.plugin === v.plugin && h.reason === v.text);
+    const satisfied = (v: { plugin: string; decision: "deny" | "hold"; text: string; holdId?: string }) => v.decision === "hold" && approved.some((h) => sameHold(h, v));
     const vetoes = out.vetoes ?? [{ plugin: out.plugin ?? "", decision: out.decision, text: out.text }];
     const next = vetoes.find((v) => !satisfied(v));
     if (!next) return { bypassed: [] };
-    return next.decision === "hold" ? { status: "failed", reason: next.text, held: { plugin: next.plugin } } : { status: "failed", reason: refusedText({ plugin: next.plugin, text: next.text }) };
+    return next.decision === "hold" ? { status: "failed", reason: next.text, held: heldOf(next) } : { status: "failed", reason: refusedText({ plugin: next.plugin, text: next.text }) };
   }
-  if (out.decision === "hold") return { status: "failed", reason: out.text, held: { plugin: out.plugin } };
+  if (out.decision === "hold") return { status: "failed", reason: out.text, held: heldOf(out) };
   return { status: "failed", reason: refusedText(out) };
 }

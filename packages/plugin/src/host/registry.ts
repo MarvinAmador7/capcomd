@@ -33,10 +33,10 @@ export interface ModifyOptions<N extends ModifyHook> extends FireOptions {
 /** A refused operation. `plugin` is who refused it (null: the daemon is stopping); the kernel reports
  *  `reason: "plugin:<name>"` with `text` as the hint (§6.2). `failure` is set when the listener failed closed (§6.5). */
 export type Refusal = { decision: "deny"; plugin: string | null; text: string; reasons: string[]; failure: HookFailureKind | null } & VetoExtras;
-export type Hold = { decision: "hold"; plugin: string; text: string } & VetoExtras;
+export type Hold = { decision: "hold"; plugin: string; text: string; holdId?: string } & VetoExtras;
 /** What a veto fire collected on the way: the judges' review reports (`verify.judging`, in order) and, with `askAll`,
  *  every deny and hold. */
-export type VetoExtras = { reviews?: Array<{ plugin: string; review: ReviewReport }>; vetoes?: Array<{ plugin: string; decision: "deny" | "hold"; text: string }> };
+export type VetoExtras = { reviews?: Array<{ plugin: string; review: ReviewReport }>; vetoes?: Array<{ plugin: string; decision: "deny" | "hold"; text: string; holdId?: string }> };
 export type VetoOutcome<N extends VetoHook> = ({ decision: "allow" } & VetoExtras) | Refusal | (N extends "merge.landing" ? Hold : never);
 export type ModifyOutcome<N extends ModifyHook> = { decision: "allow"; payload: HookPayload<N>; patches: Array<{ plugin: string; patch: HookPatch<N> }> } | Refusal;
 
@@ -257,10 +257,10 @@ export class HookRegistry {
       if (v.result.decision === "deny") { if (stop(this.refuse(l, o, null, v.result.reason, v.result.reasons ?? []))) break; continue; }
       if (v.result.decision === "hold") {
         this.gateEvent(l, o, "hold", v.result.reason);
-        if (stop({ decision: "hold", plugin: l.plugin, text: v.result.reason })) break;
+        if (stop({ decision: "hold", plugin: l.plugin, text: v.result.reason, ...(v.result.holdId !== undefined ? { holdId: v.result.holdId } : {}) })) break;
       }
     }
-    const extras: VetoExtras = { ...(reviews.length ? { reviews } : {}), ...(o.askAll ? { vetoes: refused.map((x) => ({ plugin: x.plugin ?? "", decision: x.decision, text: x.text })) } : {}) };
+    const extras: VetoExtras = { ...(reviews.length ? { reviews } : {}), ...(o.askAll ? { vetoes: refused.map((x) => ({ plugin: x.plugin ?? "", decision: x.decision, text: x.text, ...("holdId" in x && x.holdId !== undefined ? { holdId: x.holdId } : {}) })) } : {}) };
     return refused[0] ? { ...refused[0], ...extras } : { decision: "allow", ...extras };
   }
 
@@ -396,7 +396,10 @@ function checkReview(v: unknown): ReviewReport | string {
   };
 }
 
-export function checkVeto(hook: VetoHook, v: unknown): Checked<({ decision: "allow" } | Deny | { decision: "hold"; reason: string }) & { review?: ReviewReport }> {
+/** The longest `holdId` a merge.landing hold may carry (§6.6.15). */
+export const HOLD_ID_MAX = 200;
+
+export function checkVeto(hook: VetoHook, v: unknown): Checked<({ decision: "allow" } | Deny | { decision: "hold"; reason: string; holdId?: string }) & { review?: ReviewReport }> {
   if (!isObject(v)) return { ok: false, kind: "invalid_result", message: "a veto listener answers {decision: allow|deny}" };
   if ("patch" in v) return { ok: false, kind: "invalid_result", message: `${hook} is a veto hook: an answer carries no patch` };
   if (v.review !== undefined) {
@@ -410,7 +413,9 @@ export function checkVeto(hook: VetoHook, v: unknown): Checked<({ decision: "all
   if (v.decision === "deny") return checkDeny(v);
   if (v.decision === "hold" && hook === "merge.landing") {
     if (typeof v.reason !== "string" || !v.reason.trim()) return { ok: false, kind: "invalid_result", message: "a hold carries a reason (a non-empty string)" };
-    return { ok: true, result: { decision: "hold", reason: v.reason } };
+    if (v.holdId !== undefined && (typeof v.holdId !== "string" || !v.holdId || v.holdId.length > HOLD_ID_MAX))
+      return { ok: false, kind: "invalid_result", message: `a hold's holdId is a non-empty string of at most ${HOLD_ID_MAX} characters` };
+    return { ok: true, result: { decision: "hold", reason: v.reason, ...(v.holdId !== undefined ? { holdId: v.holdId as string } : {}) } };
   }
   return { ok: false, kind: "invalid_result", message: `unknown decision ${JSON.stringify(v.decision)}` };
 }

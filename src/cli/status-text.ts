@@ -17,3 +17,19 @@ export function statusText(s: RunStatus): string[] {
     `Budget: ${usd(spent)} billed${cap !== undefined ? ` of ${usd(cap)}` : " (no limit)"}${notional > 0 ? `; ${usd(notional)} notional on plan logins` : ""}${other.length ? `; ${other.join(", ")}` : ""}`,
   ];
 }
+
+/** `capcomd merge`'s and `capcomd approve`'s lines for a merge a plugin held (merge.landing): who held it and why, the
+ *  files it changes (the approval's subject.files, at most `max` named), and how to approve that hold (`again`: after
+ *  an approval of something else). */
+export function heldMergeText(runId: string, mrgId: string, m: { heldBy: { plugin: string; reason: string }; diff?: { files?: Array<{ path: string }>; filesTotal?: number; added?: number; removed?: number } }, o: { again?: boolean; max?: number } = {}): string[] {
+  const max = o.max ?? 5;
+  const lines = [`  held by the ${m.heldBy.plugin} plugin: ${m.heldBy.reason}`];
+  const d = m.diff;
+  if (d && Array.isArray(d.files) && typeof d.filesTotal === "number") {
+    const named = d.files.slice(0, max).map((f) => f.path);
+    const more = d.filesTotal > named.length && named.length ? `, and ${d.filesTotal - named.length} more` : "";
+    lines.push(`  changes ${d.filesTotal} file(s), +${d.added ?? 0} -${d.removed ?? 0}${named.length ? `: ${named.join(", ")}${more}` : ""}`);
+  }
+  lines.push(`  approve it${o.again ? " again" : ""} to land it: capcomd approve ${runId} ${mrgId}`);
+  return lines;
+}

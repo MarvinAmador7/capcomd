@@ -14,9 +14,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `~/.capcomd/work`), and refuses one whose git settings or hooks something else changed; the first merge after
   upgrading makes its clones again. For https://github.com, capcomd uses your GitHub login (`GITHUB_TOKEN`, `GH_TOKEN`
   or `gh auth login`) and never hands it to your own credential helper to save (such as the macOS keychain); without a
-  login, and for other remotes, your own git credentials (credential helper or ssh key) are used. `capcomd fetch` no longer refuses a checkout because of its git settings. A check
-  that runs on your machine (`CAPCOMD_CHECKS=host`) and changes capcomd's clone's git settings now fails the merge.
-  See docs/spec/plugin-api.md §11.7.
+  login, and for other remotes, your own git credentials (credential helper or ssh key) are used. `capcomd fetch` no
+  longer refuses a checkout because of its git settings. A check that runs on your machine (`CAPCOMD_CHECKS=host`) and
+  changes capcomd's clone's git settings now fails the merge. See docs/spec/plugin-api.md §11.7.
+- A merge a plugin holds for your approval now shows the files it changes, as a merge into a protected branch does:
+  on the approval card in the apps (`subject.files`), on the `merge.approval_requested` event, and in `capcomd merge`
+  and `capcomd approve`, which also print the plugin's reason. For plugin authors, a `merge.landing` hold can carry an
+  optional `holdId` (`{decision: "hold", reason, holdId}`): once the person approves it, a later hold from your plugin
+  with the same `holdId` doesn't ask them again, even if its reason changed. Without a `holdId` the hold is still
+  matched by its exact reason. Approvals show it as `subject.heldBy.holdId`.
 - When a plugin holds a merge for your approval, the approval now says which plugin held it and why: in the question
   and `subject.heldBy` the apps show, in `capcomd approve`'s output, in the prompt `capcomd_approve` asks under
   `driver.approvals: "elicit"`, and as `heldBy` on the `merge.approval_requested` event. Approving satisfies only that
