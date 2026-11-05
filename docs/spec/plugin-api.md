@@ -459,7 +459,7 @@ member, not a new hook).
 
 #### 6.6.3 `run.creating` · modify · `ops.runNew` before the scope's `init`; `POST /v1/runs` before `runNew`
 `RunCreating {options: RunCreateOptions}`. Patch `{label?, budget?, sandbox?}`: `budget` may only lower each unit;
-`sandbox` must be a listed, available provider; `checks`, `reviewer`, `target` and `goalBranch` are the operator's and
+`sandbox` must be a listed, available provider (available: an active plugin provides its seam, §7.2); `checks`, `reviewer`, `target` and `goalBranch` are the operator's and
 read-only (ADR-018 §4). For cost caps and run policies. Fires once per run. At `POST /v1/runs` (the daemon, before
 it starts `capcomd run`) only `sandbox` applies: the request has no label or budget to lower, so such a patch there
 is `invalid_result`.
@@ -495,7 +495,11 @@ for good (code `config`, reason `plugin:<name>`).
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
 `checkpointed` is the progress signal (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
 recorded when the agent is claimed, before its machine is ensured, so its `machine` is null (`sandbox.changed`
-`ready` names the machine).
+`ready` names the machine); it is told once, at the agent's first claim, which is always attempt 1 (a retried attempt
+prepares again, `agent.preparing`; a resumed agent is `resumed`). Each change's `principal` is who caused it: the agent
+for its own work, its spawner (the parent agent, else the operator) for `spawned` and `started`, the `by` the kernel
+recorded for a pause, resume, cancel or title; a verification's and merge's changes are their asker's, a decision its
+approver's (`src/plugins/changes.ts` `causeOf`).
 
 #### 6.6.9 `agent.item` · observe · the runner, as it drains the thread (`putItems`)
 `AgentItem {agent: {id, runId, profile}, item: ThreadItem}`, untrusted. The only turn and tool-call surface capcomd can
@@ -545,8 +549,14 @@ When `operator` is true the decisions are recorded and bypassed (§6.5). Once pe
 `merge.requested` + `merge.gating` pair (decision: one gate under the lock; a cheap policy denial a few hundred ms
 later costs nothing that matters). It fires before the forge's path is chosen: `fastPath` says the merge has a verified
 commit to try the fast path with, and `sha` and `target.sha` are that commit and the target it was verified on (empty
-without one). A person's approval of a merge a plugin held satisfies the hold: the approved merge fires again and a
-`hold` then lets it land. A dry run (no repository) has no lock and lands nothing, and fires no `merge.landing`.
+without one). A held merge carries the hold (`heldBy {plugin, reason}`) on its record and its approval (the question
+and `subject.heldBy`, the park event, the elicitation prompt), so the person sees the plugin's reason. A person's
+approval of that hold satisfies **only that hold** (the same plugin and reason): the approved merge fires again as a
+new attempt (`idempotencyKey` `merge.landing:<mrg>:<n>`, one more per approved hold; a replay keeps its key), every
+listener is asked (`askAll`), and the first veto that isn't an approved hold stops it as it would have (a deny fails
+it, a new hold parks it again). An approval of anything else (a protected target's) satisfies no hold. A person's deny
+of a held merge ends its verifier record `failed`. A dry run (no repository) has no lock and lands nothing, and fires
+no `merge.landing`.
 
 #### 6.6.16 `merge.changed` · observe
 `MergeChanged {merge, change: requested|landed{sha, pr, bypassedVetoes[]}|failed{reason}|parked{approvalId}}`.

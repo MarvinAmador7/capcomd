@@ -214,6 +214,13 @@ function titledEvent(agentId: string, title: string | null, by: TitleBy | "clear
 /** recordStep: an agent's step history (agent.step) keeps at most this many; later steps are dropped. */
 export const STEPS_MAX = 500;
 
+/** The idempotency key of the next of a repeatable change (a merge parked again, approved again): `base` the first time,
+ *  then `base-2`, `base-3`… The caller's state check (running, awaiting_approval) keeps a replay from adding one. */
+async function nthKey(tx: any, base: string): Promise<string> {
+  const n = Number((await tx.execute("SELECT COUNT(*) AS n FROM scope_events WHERE idem_key = ? OR idem_key LIKE ?", base, `${base}-%`))[0]?.n ?? 0);
+  return n ? `${base}-${n + 1}` : base;
+}
+
 async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, data: Record<string, unknown>, idemKey: string) {
   // harness.v1 §6.2: the published payload schemas are open, but the daemon emits only declared fields.
   const chk = strictEventData(dottedType(type), data);
@@ -1093,16 +1100,20 @@ export const scopeActor = actor({
     },
 
     /** Merges into a protected target wait for the operator: running → awaiting_approval (idempotent). `diff`, the files
-     *  the branch changes (read before parking), is kept on the op and the event, so the approval can show them. */
-    async parkOp(c, params: { opId: string; reason: string; diff?: Record<string, unknown> }) {
+     *  the branch changes (read before parking), is kept on the op and the event, so the approval can show them. A merge
+     *  a plugin held (`heldBy`, merge.landing) keeps the hold, and the holds approved before it (`approvedHolds`), on the
+     *  op: the approval shows the plugin's reason, and only approving it satisfies that hold. A merge parks again when a
+     *  plugin holds it after an approval (a protected target's, or another plugin's hold): each park is its own event. */
+    async parkOp(c, params: { opId: string; reason: string; diff?: Record<string, unknown>; heldBy?: { plugin: string; reason: string }; approvedHolds?: Array<{ plugin: string; reason: string }> }) {
       await c.db.transaction(async (tx: RawAccess) => {
         const r = await tx.execute("SELECT * FROM ops WHERE op_id = ?", params.opId);
         if (!r.length) fail("not_found", `${params.opId} not found`);
         const op = opRow(r[0]);
         if (op.state !== "running") return;
-        const data = params.diff ? { ...op.data, diff: params.diff } : op.data;
+        const data = { ...op.data, ...(params.diff ? { diff: params.diff } : {}), ...(params.heldBy ? { heldBy: params.heldBy, approvedHolds: params.approvedHolds ?? [] } : {}) };
         await tx.execute("UPDATE ops SET state = 'awaiting_approval', data = ?, updated_at = ? WHERE op_id = ? AND state = 'running'", JSON.stringify(data), Date.now(), params.opId);
-        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason, ...(params.diff ? { diff: params.diff } : {}), ...(op.data.askedBy ? { askedBy: op.data.askedBy } : {}) }, `park-${params.opId}`);
+        const diff = params.diff ?? (data.diff as Record<string, unknown> | undefined);
+        await addEvent(tx, "MERGE_AWAITING_APPROVAL", (op.data.agentId as string) ?? null, { id: params.opId, target: op.data.target, ref: op.data.ref, branch: op.data.branch ?? null, reason: params.reason, ...(diff ? { diff } : {}), ...(op.data.askedBy ? { askedBy: op.data.askedBy } : {}), ...(params.heldBy ? { heldBy: params.heldBy } : {}) }, await nthKey(tx, `park-${params.opId}`));
       }, { name: "scopeParkOp" });
       opsChanged(c, params.opId);
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
@@ -1119,7 +1130,7 @@ export const scopeActor = actor({
         const now = Date.now();
         if (params.approve) {
           await tx.execute("UPDATE ops SET state = 'running', updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", now, params.opId);
-          await addEvent(tx, "MERGE_APPROVED", (op.data.agentId as string) ?? null, { id: params.opId, by: params.by }, `approve-${params.opId}`);
+          await addEvent(tx, "MERGE_APPROVED", (op.data.agentId as string) ?? null, { id: params.opId, by: params.by }, await nthKey(tx, `approve-${params.opId}`));
         } else {
           const result = { merged: false, status: "denied", by: params.by, ...(params.reason ? { reason: params.reason } : {}) };
           await tx.execute("UPDATE ops SET state = 'failed', result = ?, updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", JSON.stringify(result), now, params.opId);

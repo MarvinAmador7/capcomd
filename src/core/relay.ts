@@ -25,7 +25,7 @@ export const isActorNotFound = (e: unknown): boolean => {
   const x = e as { group?: unknown; code?: unknown } | null;
   return x?.group === "actor" && x?.code === "not_found";
 };
-type ActorKind = "scope" | "run" | "worker";
+type ActorKind = "scope" | "run" | "worker" | "verifier";
 type Client = ReturnType<typeof client>;
 /** Actors this process has seen exist, by engine (capcomd never destroys a scope, run or worker): looked up once each. */
 const actorsSeen = new Set<string>();

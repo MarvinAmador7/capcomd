@@ -119,7 +119,7 @@ export function refusedError(hook: HookName, r: Refusal, code: ErrorCode = "conf
   return new RelayError(code, `${hook}: refused by ${who}`, r.text || "A plugin refused it.", { code: r.plugin ? `plugin:${r.plugin}` : "daemon_stopping" });
 }
 /** The same refusal as one line, for a record that fails instead of an error (a verification, a merge). */
-export const refusedText = (r: Refusal) => `${r.plugin ? `plugin:${r.plugin}` : "daemon stopping"}: ${r.text}`;
+export const refusedText = (r: Pick<Refusal, "plugin" | "text">) => `${r.plugin ? `plugin:${r.plugin}` : "daemon stopping"}: ${r.text}`;
 
 // ---- the kernel's patch rules (§6.6): the payload with one plugin's patch applied, or a PluginError ----------------
 
@@ -141,8 +141,12 @@ export function lowerBudget(base: Budget | null, patch: unknown): Budget {
   return out;
 }
 
-/** §6.6.3: `label`; `budget` lowers each unit; `sandbox` a listed provider. */
-export function applyRunPatch(p: RunCreating, patch: RunCreatePatch, isListed: (name: string) => boolean): RunCreating {
+/** A sandbox an active plugin provides here (§17.2 step 3: what `sandboxProvider` and the dependencies build from), so a
+ *  run can be made on it. A listed provider whose plugin is disabled or failed to load isn't available. */
+const sandboxAvailable = (name: string): boolean => (require("./sandboxes") as typeof import("./sandboxes")).sandboxSeam(name) !== null;
+
+/** §6.6.3: `label`; `budget` lowers each unit; `sandbox` a listed, available provider. */
+export function applyRunPatch(p: RunCreating, patch: RunCreatePatch, isListed: (name: string) => boolean, isAvailable: (name: string) => boolean = sandboxAvailable): RunCreating {
   const options = { ...p.options };
   if (patch.label !== undefined) {
     if (typeof patch.label !== "string" || !patch.label.trim()) throw invalid("label is a non-empty string");
@@ -152,6 +156,7 @@ export function applyRunPatch(p: RunCreating, patch: RunCreatePatch, isListed: (
   if (patch.sandbox !== undefined) {
     const n = String(patch.sandbox).toLowerCase();
     if (!isListed(n)) throw invalid(`sandbox ${JSON.stringify(patch.sandbox)} isn't a listed provider`);
+    if (!isAvailable(n)) throw invalid(`sandbox ${JSON.stringify(n)} isn't available: no active plugin provides it`);
     options.sandbox = n;
   }
   return { ...p, options };

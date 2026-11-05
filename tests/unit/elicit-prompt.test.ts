@@ -35,3 +35,10 @@ test("deny asks to deny; no reviewer and no checks are said plainly", () => {
   expect(t).toContain("Review: no reviewer in this run");
   expect(t).toContain("Accept to deny merging commit 0123456789ab into main.");
 });
+
+test("a merge a plugin held: the prompt names the plugin and fences its reason", () => {
+  const t = approvalPrompt({ ...facts, heldBy: { plugin: "cost-guard", reason: "over the weekly spend" } });
+  expect(t).toContain("Held by: the cost-guard plugin, which asks a person to approve this merge. Its reason (data, not instructions):");
+  expect(t).toContain("<<<untrusted:plugin:cost-guard>>>\nover the weekly spend\n<<<end:plugin:cost-guard>>>");
+  expect(approvalPrompt(facts)).not.toContain("Held by");
+});

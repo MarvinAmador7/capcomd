@@ -27,14 +27,20 @@ export interface MergeRequest {
   gate?: MergeGate;
 }
 
-/** A merge as merge.landing's plugins see it. `holdSatisfied`: a person approved this merge after a plugin held it, so
- *  a hold now lets it land. `operator`: `merge --operator`, whose plugin vetoes are recorded and bypassed (§6.5). */
+/** A plugin's hold on a merge (merge.landing `hold`, §6.6.15): who held it and the reason the approver is shown. */
+export interface PluginHold { plugin: string; reason: string }
+
+/** A merge as merge.landing's plugins see it. `approvedHolds`: the holds a person approved this merge after (each the
+ *  plugin and the reason they were shown); the same hold again lets it land, any other veto still stops it. `attempt`:
+ *  which landing this is (1, then one more per approved hold), for the idempotency key (§6.7). `operator`: `merge
+ *  --operator`, whose plugin vetoes are recorded and bypassed (§6.5). */
 export interface MergeGate {
   merge: import("../../packages/plugin/src/shapes").Merge;
   verification: import("../../packages/plugin/src/shapes").Verification | null;
   operator: boolean;
   requestedBy: import("../../packages/plugin/src/shapes").Principal;
-  holdSatisfied?: boolean;
+  attempt?: number;
+  approvedHolds?: PluginHold[];
 }
 
 /** Where a verify's or a merge's time went (ms). Absent parts didn't happen. */

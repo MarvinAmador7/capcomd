@@ -17,3 +17,12 @@ test("a parked merge's diff becomes subject.files, filesTotal, added and removed
     .toEqual({ target: "main", ref: "capcomd/run-x/agt-x", ...diff });
   expect(mergeApprovalText({ ref: "agt-x", target: "main", diff: "nonsense" }).subject).toEqual({ target: "main", ref: "agt-x" });
 });
+
+// A plugin held it (merge.landing `hold`): the person approving is shown which plugin and why, in the question and the
+// subject, since approving satisfies only that hold.
+test("a merge a plugin held names the plugin and its reason", () => {
+  const heldBy = { plugin: "cost-guard", reason: "this run is over its weekly spend" };
+  expect(mergeApprovalText({ ref: "agt-x", branch: "capcomd/run-x/agt-x", target: "main", heldBy }))
+    .toEqual({ question: "Merge this agent's work into main? The cost-guard plugin held it: this run is over its weekly spend", subject: { target: "main", ref: "capcomd/run-x/agt-x", heldBy } });
+  expect(mergeApprovalText({ ref: "agt-x", target: "main", heldBy: { plugin: 3 } }).question).toBe("Merge this agent's work into main?");
+});

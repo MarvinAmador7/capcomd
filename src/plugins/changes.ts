@@ -6,7 +6,7 @@
 // `judged`, which only the verify knows, from src/primitives/ops.ts.
 import type { AgentChange, ApprovalChange, MergeChange, RunChange, VerifyChange } from "../../packages/plugin/src/hooks";
 import type { HookName } from "../../packages/plugin/src/hooks";
-import type { Run } from "../../packages/plugin/src/shapes";
+import type { Principal, Run } from "../../packages/plugin/src/shapes";
 import type { ScopeAgent, ScopeOp } from "../actors/scope";
 import { hooks, iso, principalOf, untrusted } from "./hooks";
 import { agentOf, approvalOf, mergeOf, verificationOf } from "./shapes";
@@ -19,6 +19,8 @@ type Db = { execute(sql: string, ...args: unknown[]): Promise<any[]> };
 /** Per actor: the last event told (null until a listener first appears), and the flushes in order. */
 type Tap = { mark: number; ready: Promise<void>; chain: Promise<void> };
 const taps = new Map<string, Tap>();
+const runOf = (c: any): string | null => (Array.isArray(c?.key) && typeof c.key[0] === "string" ? (c.key[0] as string) : null);
+const tapOf = (c: any): string => String(c?.actorId ?? runOf(c));
 
 /** Wrap a scope actor's actions (reads, named get…, pass through untouched). */
 export function changedHooks<A extends Record<string, (c: any, ...args: any[]) => any>>(actions: A, rows: Rows): A {
@@ -26,7 +28,12 @@ export function changedHooks<A extends Record<string, (c: any, ...args: any[]) =
   for (const [name, fn] of Object.entries(actions)) {
     if (name.startsWith("get") || name.startsWith("list") || name === "driveMode" || name === "inbox" || name === "itemsHead" || name === "isRevoked") { out[name] = fn; continue; }
     out[name] = function (this: unknown, c: any, ...args: any[]) {
-      if (!hooks.listeningAny(CHANGED)) return fn.call(this, c, ...args);
+      if (!hooks.listeningAny(CHANGED)) {
+        // Nobody listens: what this action commits is told to no one, then or later. The tap is dropped, so a listener
+        // that comes back is told only what changes from then on (the next tapped action marks where that starts).
+        if (taps.size) taps.delete(tapOf(c));
+        return fn.call(this, c, ...args);
+      }
       return tapped(c, rows, () => fn.call(this, c, ...args));
     };
   }
@@ -35,8 +42,8 @@ export function changedHooks<A extends Record<string, (c: any, ...args: any[]) =
 
 async function tapped(c: any, rows: Rows, run: () => unknown) {
   const db: Db = c.db;
-  const runId = Array.isArray(c.key) && typeof c.key[0] === "string" ? (c.key[0] as string) : null;
-  const id = String(c.actorId ?? runId);
+  const runId = runOf(c);
+  const id = tapOf(c);
   let t = taps.get(id);
   if (!t) {
     // The first action after a listener appeared: only what changes from now on is told.
@@ -57,33 +64,70 @@ async function flush(db: Db, runId: string, t: Tap, rows: Rows) {
     .map((r: any) => ({ seq: Number(r.seq), at: Number(r.at), type: String(r.type), agentId: (r.agent_id as string | null) ?? null, data: JSON.parse(r.data) }));
   if (!evs.length) return;
   t.mark = evs.at(-1)!.seq;
-  const at = (e: Ev) => ({ principal: principalOf(null), entity: `${runId}#${e.seq}`, runId, agentId: e.agentId });
   const agentRow = async (agentId: string) => { const r = await db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", agentId); return r.length ? rows.agent(r[0]) : null; };
   const opRow = async (opId: unknown) => { const r = typeof opId === "string" ? await db.execute("SELECT * FROM ops WHERE op_id = ?", opId) : []; return r.length ? rows.op(r[0]) : null; };
+  // Who caused each change (§3.2, §6.1): read once per event, and only for an event something is told about.
+  const causes = new Map<number, Promise<Principal>>();
+  const cause = (e: Ev) => {
+    let p = causes.get(e.seq);
+    if (!p) {
+      p = (async () => causeOf(e, runId, OP_EVENTS.has(e.type) ? await opRow(e.data.id) : null, e.type === "AGENT_STARTED" && e.agentId ? await agentRow(e.agentId) : null))();
+      causes.set(e.seq, p);
+    }
+    return p;
+  };
+  const at = async (e: Ev) => ({ principal: await cause(e), entity: `${runId}#${e.seq}`, runId, agentId: e.agentId });
   const { approvalIdFor } = await import("../api/source");
   const runChanges = hooks.listening("run.changed") ? await runChangesOf(db, runId, evs) : [];
   for (const e of evs) {
-    for (const r of runChanges.filter((x) => x.seq === e.seq)) hooks.fire("run.changed", "observe", { run: r.run, change: r.change }, at(e));
+    for (const r of runChanges.filter((x) => x.seq === e.seq)) hooks.fire("run.changed", "observe", { run: r.run, change: r.change }, await at(e));
     if (e.agentId && hooks.listening("agent.changed")) {
       const change = agentChange(e);
       const a = change ? await agentRow(e.agentId) : null;
-      if (change && a) hooks.fire("agent.changed", "observe", { agent: agentOf(a), change }, at(e));
+      if (change && a) hooks.fire("agent.changed", "observe", { agent: agentOf(a), change }, await at(e));
     }
     const verify = verifyChange(e);
     if (verify && hooks.listening("verify.changed")) {
       const op = await opRow(e.data.id);
-      if (op) hooks.fire("verify.changed", "observe", { verification: verificationOf(runId, op), change: verify }, at(e));
+      if (op) hooks.fire("verify.changed", "observe", { verification: verificationOf(runId, op), change: verify }, await at(e));
     }
     const merge = mergeChange(e, (opId) => approvalIdFor(runId, opId));
     if (merge && hooks.listening("merge.changed")) {
       const op = await opRow(e.data.id);
-      if (op) hooks.fire("merge.changed", "observe", { merge: mergeOf(runId, op), change: merge }, at(e));
+      if (op) hooks.fire("merge.changed", "observe", { merge: mergeOf(runId, op), change: merge }, await at(e));
     }
     const approval = approvalChange(e, (opId) => approvalIdFor(runId, opId));
     if (approval && hooks.listening("approval.changed")) {
       const op = await opRow(e.data.id);
-      if (op) hooks.fire("approval.changed", "observe", { approval: approvalOf(runId, op, approvalIdFor(runId, op.id)), change: approval }, at(e));
+      if (op) hooks.fire("approval.changed", "observe", { approval: approvalOf(runId, op, approvalIdFor(runId, op.id)), change: approval }, await at(e));
     }
+  }
+}
+
+/** The events about a verification or a merge: their asker is the op's (`askedBy`), their approver the event's `by`. */
+const OP_EVENTS = new Set(["VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED", "MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED"]);
+
+/**
+ * Who caused a committed change (plugin API §3.2), from what the kernel records with it: an agent's own work (its
+ * steps, checkpoints, notices, result) is the agent's; its spawn and start are its spawner's (the parent agent, else the
+ * operator); a pause, resume, cancel or title names who did it (`by`, `setBy`); a verification's and a merge's changes
+ * are their asker's (an agent's in-VM call), and an approval's decision its approver's. What the kernel did on its own
+ * or nobody recorded is the operator's (§3.2 has no kernel principal; principalOf's default).
+ */
+export function causeOf(e: Ev, runId: string, op: { data: Record<string, unknown> } | null = null, agent: { parent: string | null } | null = null): Principal {
+  const d = e.data;
+  const by = (v: unknown) => principalOf(typeof v === "string" ? v : null, runId);
+  switch (e.type) {
+    case "AGENT_SPAWNED": return by(d.parent);
+    case "AGENT_STARTED": return by(agent?.parent);
+    case "AGENT_RESUMED": case "AGENT_CANCELLED": case "RUN_ENDED": return by(d.by);
+    case "AGENT_PAUSED": return by(d.result?.by);
+    case "AGENT_REAPED": return by(d.orphanOf);
+    case "AGENT_TITLED": case "RUN_TITLED": return by(d.setBy);
+    case "MERGE_APPROVED": case "MERGE_DENIED": return by(d.by);
+    default:
+      if (OP_EVENTS.has(e.type)) return by(op?.data.askedBy);
+      return e.agentId && e.type.startsWith("AGENT_") ? principalOf(e.agentId, runId) : principalOf(null);
   }
 }
 

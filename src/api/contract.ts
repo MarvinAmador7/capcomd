@@ -3,7 +3,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentProvider, AgentResult, AgentTitleSource, LegacyEventData, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, AgentTitleSource, HeldBy, LegacyEventData, UntrustedText } from "./legacy-events";
 import { RENAME_WINDOW_MS, RENAMES_MAX, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
@@ -230,6 +230,7 @@ const ApprovalSubject = z.looseObject({
 	added: z.number().int().nonnegative().optional().describe("merge: lines added across all its files (binary files not counted)"),
 	removed: z.number().int().nonnegative().optional().describe("merge: lines removed across all its files (binary files not counted)"),
 	askedBy: z.string().optional().describe("merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons"),
+	heldBy: HeldBy.optional().describe("merge: a plugin held it for this approval (merge.landing): the plugin and its reason, which the question repeats. Approving satisfies only this hold: a merge another plugin then holds asks again. Absent when only the target's protection asks, and on older daemons"),
 }).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */

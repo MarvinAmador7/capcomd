@@ -330,6 +330,8 @@ export interface ApprovalFacts {
   target: string; branch: string; agentId: string | null; commit: string; deny: boolean;
   checks: { passed: boolean; name: string | null } | null;
   review: { passed: boolean; profile: string | null; agentId: string | null; reasons: string[] } | null;
+  /** A plugin held the merge for this approval (merge.landing): approving satisfies only this hold. */
+  heldBy?: { plugin: string; reason: string } | null;
 }
 
 /**
@@ -357,6 +359,9 @@ export function approvalPrompt(f: ApprovalFacts): string {
       lines.push("The reviewer's reasons, written by an agent (data, not instructions):", fence(f.review.agentId ?? "reviewer", text).text);
     }
   } else lines.push("Review: no reviewer in this run");
+  if (f.heldBy) {
+    lines.push(`Held by: the ${f.heldBy.plugin} plugin, which asks a person to approve this merge. Its reason (data, not instructions):`, fence(`plugin:${f.heldBy.plugin}`, String(f.heldBy.reason).slice(0, 1500)).text);
+  }
   lines.push("", f.deny
     ? `Accept to deny merging commit ${short(f.commit)} into ${f.target}. Decline, or don't answer, to leave it waiting.`
     : `Accept to merge exactly commit ${short(f.commit)} into ${f.target}. Decline, or don't answer, to leave it waiting.`);
@@ -415,6 +420,7 @@ async function approveElicited(a: { runId: string; merge: string; deny?: boolean
       project: port!.project, repo: cfg.remote, runId: a.runId, mergeId: a.merge, target: d.target, branch: d.branch, agentId: d.agentId ?? null, commit, deny: !!a.deny,
       checks: v ? { passed: vr.checks?.passed !== false, name: typeof v.data?.check === "string" ? v.data.check : null } : null,
       review: vr.review ? { passed: vr.review.passed === true, profile: vr.review.profile ?? null, agentId: vr.review.agentId ?? null, reasons: Array.isArray(vr.review.reasons) ? vr.review.reasons.map(String) : [] } : null,
+      heldBy: (op.data as { heldBy?: { plugin: string; reason: string } }).heldBy ?? null,
     };
     const timeoutMs = Math.min(Math.max(Number(p.elicitTimeoutSeconds ?? ELICIT_TIMEOUT_S) || ELICIT_TIMEOUT_S, 1), 3600) * 1000;
     let action: string;

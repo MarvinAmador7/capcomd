@@ -20,6 +20,12 @@ export const MergeDiff = z.object({
 	files: z.array(z.object({ path: T, status: S, added: N.nullable(), removed: N.nullable() })),
 	filesTotal: N, added: N, removed: N,
 });
+/** A merge a plugin held for a person's approval (merge.landing `hold`): the plugin and its reason, which the approver
+ *  sees; approving it satisfies only this hold. */
+export const HeldBy = z.object({
+	plugin: S.describe("The plugin that held the merge"),
+	reason: T.describe("Agent-written text (here the plugin's own words): render as plain text"),
+}).describe("Set when a plugin held the merge for a person's approval (merge.landing): who held it and why. Approving it satisfies only this hold; absent when the target is protected and no plugin held it");
 const budget = { add: U, budget: U, by: U };
 /** agent.done / agent.failed `result`. Every text field is agent-written. Unknown fields may appear (the agent's declared result bag). */
 export const AgentResult = z.looseObject({
@@ -125,7 +131,7 @@ export const LegacyEventShapes = {
 	"merge.started": { id: S },
 	"merge.succeeded": { id: S },
 	"merge.failed": { id: S },
-	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read"), askedBy: S.optional().describe("The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge") },
+	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read"), askedBy: S.optional().describe("The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge"), heldBy: HeldBy.optional() },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
 	"plugin.gate_denied": {
