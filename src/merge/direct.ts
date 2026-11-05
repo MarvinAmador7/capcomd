@@ -9,16 +9,31 @@ import { cloneDir, findExistingMerge, openClone, withCloneLock, withWorktree } f
 import { integrate } from "./integrate";
 import { checksFailReason, runTests } from "./verify";
 import type { MergeOutcome, MergeRequest, MergeTimings } from "./types";
+import type { Forge, LandOutcome, LandRequest } from "../../packages/plugin/src/seams";
+import { forgeFor, land } from "../plugins/forges";
 
 /** Test seam: runs right before the push (e.g. to move the target and force a lease rejection). `beforeFastPush`: before
  *  the fast path's push of a verified commit. */
 export const testHooks: { beforePush?: (attempt: number) => Promise<void>; beforeFastPush?: () => Promise<void> } = {};
 
-const LEASE_REJECTED = /stale info|\(fetch first\)|non-fast-forward|\[rejected\]|failed to update ref|cannot lock ref|reference already exists|incorrect old value/i;
+/** How long one landing push may take before it is cancelled (the target's lock waits as long). */
+const LAND_MS = 15 * 60_000;
 
 const since = (t: number) => Date.now() - t;
 const span = <T>(name: string, req: MergeRequest, fn: () => Promise<T>) =>
   withSpan(name, { "relay.run_id": req.runId, "git.ref": req.branch, "git.target": req.target }, fn);
+
+/** The forge's direct land of `sha` onto the target (docs/spec/plugin-api.md §7.4): a CAS on `targetSha`, and with
+ *  `branchSha` the branch leased at it in the same atomic push. Serialized with the clone's other git work. */
+async function landDirect(forge: Forge, cfg: MergeConfig, req: MergeRequest, cloneName: string, git: Git, o: { sha: string; targetSha: string; branchSha?: string; subject?: string }): Promise<LandOutcome> {
+  const key = taskKey(req.runId, req.taskId);
+  const r: LandRequest = {
+    runId: req.runId, mrgId: req.gate?.merge.mrgId ?? key, remote: cfg.remote, repo: cfg.github.repo, branch: req.branch, target: req.target,
+    sha: o.sha, targetSha: o.targetSha, ...(o.branchSha ? { branchSha: o.branchSha, leaseBranch: true } : {}), mode: "direct", strategy: cfg.strategy,
+    subject: o.subject ?? `capcomd ${key}`, body: "", trailers: { "Capcomd-Task": key }, workdir: git.cwd,
+  };
+  return withCloneLock(cfg, cloneName, () => span("merge.push", req, () => land(forge, r, { merge: cfg }, LAND_MS)));
+}
 
 /**
  * The branch on the target, checked: integrate it per the repo's strategy onto `targetSha` (detached, in `git`'s
@@ -73,7 +88,7 @@ export async function directVerify(baseCfg: MergeConfig, req: MergeRequest, clon
  * the verified commit. One round trip to the remote, no fetch, integration or check run. Anything else (the target or
  * the branch moved, the commit isn't in this clone, the remote has no atomic pushes) is a fallback to the full path.
  */
-async function landVerified(baseCfg: MergeConfig, req: MergeRequest, cloneName: string, t: MergeTimings): Promise<MergeOutcome | { fallback: string }> {
+async function landVerified(baseCfg: MergeConfig, req: MergeRequest, cloneName: string, t: MergeTimings, forge: Forge): Promise<MergeOutcome | { fallback: string }> {
   const v = req.verified!;
   if (!req.expectSha) return { fallback: "no verified branch commit" };
   if (v.sha === v.targetSha) return { fallback: "the verified change is already on the target" };
@@ -85,31 +100,31 @@ async function landVerified(baseCfg: MergeConfig, req: MergeRequest, cloneName: 
   killpoint("merge.before_cas");
   if (testHooks.beforeFastPush) await testHooks.beforeFastPush();
   const p0 = Date.now();
-  const push = await withCloneLock(baseCfg, cloneName, () => span("merge.push", req, () => git.run(["push", "--porcelain", "--atomic",
-    `--force-with-lease=refs/heads/${req.target}:${v.targetSha}`, `--force-with-lease=refs/heads/${req.branch}:${req.expectSha}`,
-    "origin", `${v.sha}:refs/heads/${req.target}`, `${req.expectSha}:refs/heads/${req.branch}`])));
+  const out = await landDirect(forge, baseCfg, req, cloneName, git, { sha: v.sha, targetSha: v.targetSha, branchSha: req.expectSha });
   t.pushMs = since(p0);
-  if (push.code !== 0) return { fallback: LEASE_REJECTED.test(push.stdout + push.stderr) ? "the target or the branch moved since the verify" : `push failed: ${(push.stdout + push.stderr).trim().slice(-300)}` };
+  if (out.status === "conflict") return { fallback: "the target or the branch moved since the verify" };
+  if (out.status === "failed") return { fallback: `push failed: ${out.reason.slice(-300)}` };
   killpoint("merge.after_cas.before_event");
-  // "=" for the target: it was there already (a retry after a crash between the push and its record).
-  const already = push.stdout.split("\n").some((l) => l.startsWith("=") && l.includes(`:refs/heads/${req.target}\t`));
-  return { status: "merged", sha: v.sha, already, how: v.how ?? baseCfg.strategy, strategy: baseCfg.strategy, mode: "direct", attempts: 1, targetBefore: v.targetSha };
+  return { status: "merged", sha: v.sha, already: out.already, how: v.how ?? baseCfg.strategy, strategy: baseCfg.strategy, mode: "direct", attempts: 1, targetBefore: v.targetSha };
 }
 
 /**
  * direct mode: integrate → verify → push --force-with-lease=<target>:<expected sha>.
  * A rejected push means someone else moved the target: re-fetch, re-check idempotency,
  * re-integrate, re-verify, retry (≤ maxPushRetries). Caller holds the per-target lock.
- * With `req.verified` (a passing verify's commit), the fast path is tried first: see landVerified.
+ * With `req.verified` (a passing verify's commit), the fast path is tried first: see landVerified. The push is the
+ * project's forge's (`forge`, else the one that serves the remote): the kernel integrates and checks, the forge lands.
  */
-export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, cloneName: string, t: MergeTimings = {}): Promise<MergeOutcome> {
+export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, cloneName: string, t: MergeTimings = {}, forge?: Forge): Promise<MergeOutcome> {
   if (req.testOnly) return directVerify(baseCfg, req, cloneName);
+  const f = forge ?? (await forgeFor(baseCfg));
+  if (!f) return { status: "failed", reason: `no active forge lands on ${baseCfg.remote}` };
   const targetRef = `refs/remotes/origin/${req.target}`;
   // The clone's view of the target: its last fetch, or this host's last push to it (a push moves it too).
   const local = req.verified && existsSync(join(cloneDir(baseCfg, cloneName), ".git")) ? await new Git(cloneDir(baseCfg, cloneName)).revParse(targetRef) : null;
   if (req.verified) {
     // Known to have moved (a merge from here landed on it since the verify): the fast push would only be refused.
-    const fast = local && local !== req.verified.targetSha ? { fallback: "the target moved since the verify" } : await landVerified(baseCfg, req, cloneName, t);
+    const fast = local && local !== req.verified.targetSha ? { fallback: "the target moved since the verify" } : await landVerified(baseCfg, req, cloneName, t, f);
     if (!("fallback" in fast)) return { ...fast, timings: { ...t, path: "fast" } };
     t.fastFallback = fast.fallback;
   }
@@ -150,21 +165,18 @@ export async function directMerge(baseCfg: MergeConfig, req: MergeRequest, clone
 
     killpoint("merge.before_cas");
     if (testHooks.beforePush) await testHooks.beforePush(attempts);
-    // Pre-push hooks run. Lease = compare-and-swap on the remote ref.
+    // The forge lands it: pre-push hooks run; the lease is a compare-and-swap on the remote ref.
     const p0 = Date.now();
-    const push = await withCloneLock(baseCfg, cloneName, () => span("merge.push", req, () => git.run(leaseBranch
-      ? ["push", "--porcelain", "--atomic", `--force-with-lease=refs/heads/${req.target}:${targetSha}`, `--force-with-lease=refs/heads/${req.branch}:${req.expectSha}`, "origin", `${merged.head}:refs/heads/${req.target}`, `${req.expectSha}:refs/heads/${req.branch}`]
-      : ["push", "--porcelain", `--force-with-lease=refs/heads/${req.target}:${targetSha}`, "origin", `${merged.head}:refs/heads/${req.target}`])));
+    const out = await landDirect(f, cfg, req, cloneName, git, { sha: merged.head, targetSha, ...(leaseBranch ? { branchSha: req.expectSha } : {}) });
     t.pushMs = (t.pushMs ?? 0) + since(p0);
-    if (push.code === 0) {
+    if (out.status === "merged") {
       killpoint("merge.after_cas.before_event");
-      return done({ status: "merged", sha: merged.head, already: false, how: merged.how, strategy: cfg.strategy, mode: "direct", attempts, targetBefore: targetSha });
+      return done({ status: "merged", sha: merged.head, already: out.already, how: merged.how, strategy: cfg.strategy, mode: "direct", attempts, targetBefore: targetSha });
     }
-    const text = push.stdout + push.stderr;
     // No atomic pushes on this remote: the next attempt fetches and pushes the target alone, as before.
-    if (leaseBranch && /atomic/i.test(text) && !LEASE_REJECTED.test(text)) { attempts--; continue; }
-    if (!LEASE_REJECTED.test(text)) return done({ status: "failed", reason: `push failed: ${text.trim().slice(-500)}` });
-    if (attempts > cfg.maxPushRetries) return done({ status: "failed", reason: `push rejected ${attempts} times (target keeps moving); last: ${text.trim().slice(-300)}` });
-    // Lease rejected: loop → fetch, idempotency check, rebase onto the new tip, re-verify.
+    if (out.status === "failed" && leaseBranch && out.retryable) { attempts--; continue; }
+    if (out.status === "failed") return done({ status: "failed", reason: `push failed: ${out.reason.slice(-500)}` });
+    if (attempts > cfg.maxPushRetries) return done({ status: "failed", reason: `push rejected ${attempts} times (target keeps moving); last: ${(out.detail ?? "").slice(-300)}` });
+    // Lease rejected (the target moved): loop → fetch, idempotency check, rebase onto the new tip, re-verify.
   }
 }

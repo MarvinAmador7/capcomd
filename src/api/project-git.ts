@@ -246,13 +246,18 @@ async function publish(input: PublishInput, i: ProjectInspection, root: string, 
 	}
 	const branch = await currentBranch(root, env);
 	const full = `${input.owner}/${input.name}`;
-	const made = await run(ghBin(env), ["repo", "create", full, `--${input.visibility}`, "--source", root, "--remote", "origin", "--push"], { cwd: root, env, timeoutMs: PUBLISH_TIMEOUT_MS });
-	if (made.code !== 0) {
-		const why = firstLine(made.err) || firstLine(made.out);
-		const kept = files !== null ? " The first commit is made; publishing again pushes it." : "";
-		if (/already exists/i.test(made.err + made.out))
-			return { ok: false, status: 409, code: "conflict", field: "name", message: `${full} already exists on GitHub. Choose another name.${kept}` };
-		return { ok: false, status: 503, code: "unavailable", message: `The GitHub CLI couldn't publish ${full}: ${why || `exit ${made.code}`}.${kept}` };
+	// The forge that serves the repository it creates (docs/spec/plugin-api.md §7.4) creates it, adds it as origin and pushes.
+	const F = await import("../plugins/forges");
+	const kept = files !== null ? " The first commit is made; publishing again pushes it." : "";
+	const forge = await F.forgeFor({ remote: `https://github.com/${full}.git` });
+	try {
+		if (!forge) throw new Error("no forge creates repositories here");
+		await F.withForge({ env }, PUBLISH_TIMEOUT_MS, (c) => forge.publishRepository({ path: root, owner: input.owner, name: input.name, visibility: input.visibility }, c));
+	} catch (e) {
+		const p = e as { name?: string; code?: string; hint?: string; message: string };
+		if (p.name === "PluginError" && p.code === "conflict")
+			return { ok: false, status: 409, code: "conflict", field: "name", message: `${p.message}${p.hint ? ` ${p.hint}` : ""}${kept}` };
+		return { ok: false, status: 503, code: "unavailable", message: `${p.message}${kept}` };
 	}
 	// origin/HEAD, as a clone would have it (local only): inspect's defaultBranch.
 	await git(["remote", "set-head", "origin", branch], root, env);

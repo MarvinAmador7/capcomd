@@ -4,23 +4,16 @@ import { loadMergeConfig, type MergeConfig } from "./config";
 import { withTargetLock } from "./lock";
 import { directMerge, directVerify } from "./direct";
 import { prMerge } from "./pr";
-import { HttpGitHub, githubToken, type GitHubApi } from "./github";
 import type { MergeGate, MergeOutcome, MergeRequest, MergeTimings } from "./types";
 import { hooks, recordGateEvent, refusedText } from "../plugins/hooks";
+import { ForgeNotActive, forgeFor } from "../plugins/forges";
 
-let githubOverride: GitHubApi | null = null;
-/** Tests inject a fake GitHub adapter. */
-export function setGitHubApi(api: GitHubApi | null) { githubOverride = api; }
-/** A test injected a GitHub adapter (so no login is needed). */
-export const hasGitHubOverride = () => githubOverride !== null;
-
-/** The GitHub API for `cfg`'s repository: the injected fake, else REST with the user's token (GITHUB_TOKEN, GH_TOKEN, `gh auth token`). */
-export async function github(cfg: MergeConfig): Promise<GitHubApi> {
-  return githubOverride ?? new HttpGitHub(cfg.github.api, await githubToken());
-}
+/** Tests inject a fake GitHub REST adapter for the GitHub forge (src/plugins/forges/github.ts). */
+export { setGitHubApi, hasGitHubOverride } from "./github";
 
 /**
- * Land (or, with testOnly, just verify) one task. Serialized per (remote, target).
+ * Land (or, with testOnly, just verify) one task. Serialized per (remote, target). The kernel fetches, integrates and
+ * checks; the project's forge (docs/spec/plugin-api.md §7.4) lands the checked commit under the target's lock.
  * Returns `mode: "none"` when no repository is configured (explicit dry run).
  */
 export async function mergeTask(req: MergeRequest, cfg: MergeConfig | null = loadMergeConfig()): Promise<MergeOutcome> {
@@ -43,8 +36,13 @@ export async function mergeTask(req: MergeRequest, cfg: MergeConfig | null = loa
     const gate = !req.testOnly && req.gate && hooks.listening("merge.landing") ? await mergeLanding(req, req.gate) : null;
     if (gate && "status" in gate) return { ...gate, timings: t };
     const landed = (out: MergeOutcome): MergeOutcome => (gate?.bypassed.length && out.status === "merged" ? { ...out, bypassedVetoes: gate.bypassed } : out);
-    if (direct) return landed(await directMerge(cfg, req, clone, t));
-    const out = await prMerge(cfg, req, await github(cfg), clone);
+    let forge;
+    try { forge = await forgeFor(cfg); } catch (e) { if (e instanceof ForgeNotActive) return { status: "failed", reason: e.message }; throw e; }
+    if (!direct && !forge?.describe().pullRequests)
+      return { status: "failed", reason: `pr mode needs a GitHub repo (CAPCOMD_GITHUB_REPO or a github.com remote); remote is ${cfg.remote}` };
+    if (!forge) return { status: "failed", reason: `no active forge lands on ${cfg.remote}` };
+    if (direct) return landed(await directMerge(cfg, req, clone, t, forge));
+    const out = await prMerge(cfg, req, forge, clone);
     return landed({ ...out, timings: { ...t, ...out.timings } });
   });
 }

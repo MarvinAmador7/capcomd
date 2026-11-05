@@ -295,6 +295,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // And the agent providers are the ones its plugins registered (§7.3, §17.2 step 4); a host that didn't start leaves
   // the built-ins.
   if (started) (await import("../../plugins/agents")).useAgentSeams(host.contributions);
+  // Merges land and pull requests open through this host's forges (§7.4, step 6); a host that didn't start leaves the
+  // daemon on a host of the forge plugins alone, as the CLI uses.
+  if (started) (await import("../../plugins/forges")).useForges(host);
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {

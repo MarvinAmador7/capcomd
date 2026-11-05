@@ -1,27 +1,31 @@
 import { killpoint } from "../utils/killpoint";
 import type { MergeConfig } from "./config";
 import { taskKey, withRepoFile } from "./config";
-import type { GitHubApi, PullRequest } from "./github";
 import { findExistingMerge, openClone } from "./repo";
 import { integrate } from "./integrate";
 import { checksFailReason, runTests } from "./verify";
 import type { MergeOutcome, MergeRequest } from "./types";
 import { MergeRetryableError } from "./types";
+import type { Forge } from "../../packages/plugin/src/seams";
+import { land, withForge } from "../plugins/forges";
+
+/** What a pull request's calls around the wait may take, on top of the project's wait (CAPCOMD_GITHUB_TIMEOUT_MS). */
+const PR_CALLS_MS = 5 * 60_000;
 
 /**
- * pr mode (default): verify locally on the branch merged with the latest target, then open (or
- * find) the PR and ask GitHub to merge it. Branch protection, required checks and the merge queue
- * decide; capcomd waits and records the merged sha. Idempotent: a merged PR for the head branch,
- * or the task already in the target (git), is recorded without merging again.
+ * pr mode (default): verify locally on the branch merged with the latest target, then hand the checked head to the
+ * project's forge (docs/spec/plugin-api.md §7.4), which opens (or finds) the pull request and has the hosting service
+ * merge it. Branch protection, required checks and the merge queue decide; capcomd waits and records the merged sha.
+ * Idempotent: a merged PR for the head branch, or the task already in the target (git), is recorded without merging
+ * again. Called under the target's lock.
  */
-export async function prMerge(baseCfg: MergeConfig, req: MergeRequest, gh: GitHubApi, cloneName: string, sleep = (ms: number) => Bun.sleep(ms)): Promise<MergeOutcome> {
-  const repo = baseCfg.github.repo;
-  if (!repo) return { status: "failed", reason: `pr mode needs a GitHub repo (CAPCOMD_GITHUB_REPO or a github.com remote); remote is ${baseCfg.remote}` };
+export async function prMerge(baseCfg: MergeConfig, req: MergeRequest, forge: Forge, cloneName: string): Promise<MergeOutcome> {
   const key = taskKey(req.runId, req.taskId);
+  const scope = { merge: baseCfg };
 
-  const existingPr = await gh.findPullByHead(repo, req.branch, req.target);
-  if (existingPr?.merged && existingPr.merge_commit_sha) {
-    return { status: "merged", sha: existingPr.merge_commit_sha, already: true, how: "pr-already-merged", strategy: baseCfg.strategy, mode: "pr", attempts: 0, pr: existingPr.number };
+  const existingPr = await withForge(scope, PR_CALLS_MS, (c) => forge.findPullRequest({ remote: baseCfg.remote, head: req.branch, base: req.target }, c));
+  if (existingPr?.state === "merged" && existingPr.mergeSha) {
+    return { status: "merged", sha: existingPr.mergeSha, already: true, how: "pr-already-merged", strategy: baseCfg.strategy, mode: "pr", attempts: 0, pr: existingPr.number };
   }
 
   const git = await openClone(baseCfg, cloneName);
@@ -43,37 +47,20 @@ export async function prMerge(baseCfg: MergeConfig, req: MergeRequest, gh: GitHu
   if (!tests.passed) return { status: "failed", reason: checksFailReason(tests), output: tests.output };
   if (req.testOnly) return { status: "verified", sha: trial.head, output: tests.output, taskSha, targetSha, how: trial.how };
 
-  let pr: PullRequest = existingPr && existingPr.state === "open"
-    ? existingPr
-    : await gh.createPull(repo, { head: req.branch, base: req.target, title: subject, body: `Opened by capcomd.\n\nCapcomd-Task: ${key}` });
-
-  killpoint("merge.pr.before_merge");
-  const commitMessage = `Capcomd-Task: ${key}`;
-  let res = await gh.mergePull(repo, pr.number, { merge_method: cfg.strategy, sha: taskSha, commit_title: `${subject} (#${pr.number})`, commit_message: commitMessage });
-  if (!res.merged && (res.status === 405 || res.status === 409)) {
-    // Protection, pending required checks or a merge queue: hand it to auto-merge and wait.
-    await gh.enableAutoMerge(repo, pr, cfg.strategy).catch(() => false);
-    const deadline = Date.now() + cfg.github.timeoutMs;
-    for (;;) {
-      pr = await gh.getPull(repo, pr.number);
-      if (pr.merged && pr.merge_commit_sha) break;
-      if (pr.state === "closed") return { status: "failed", reason: `PR #${pr.number} was closed without merging` };
-      if (pr.mergeable_state === "dirty") {
-        return { status: "conflict", files: [], targetSha, taskSha };
-      }
-      if (Date.now() > deadline) throw new MergeRetryableError(`PR #${pr.number} not merged after ${cfg.github.timeoutMs}ms (${res.message ?? pr.mergeable_state})`);
-      await sleep(cfg.github.pollMs);
-      // Some repos have no auto-merge: retry the merge call once checks may have passed.
-      if (pr.mergeable_state === "clean") {
-        res = await gh.mergePull(repo, pr.number, { merge_method: cfg.strategy, sha: taskSha, commit_title: `${subject} (#${pr.number})`, commit_message: commitMessage });
-        if (res.merged) { pr = await gh.getPull(repo, pr.number); break; }
-      }
-    }
-  } else if (!res.merged) {
-    return { status: "failed", reason: `GitHub refused merge of PR #${pr.number} (${res.status}): ${res.message}` };
-  } else {
-    pr = await gh.getPull(repo, pr.number);
+  // The forge lands it: the pull request is merged at exactly the head the checks ran on.
+  const out = await land(forge, {
+    runId: req.runId, mrgId: req.gate?.merge.mrgId ?? key, remote: cfg.remote, repo: cfg.github.repo, branch: req.branch, target: req.target,
+    sha: trial.head, targetSha, branchSha: taskSha, mode: "pr", strategy: cfg.strategy, subject, body: `Opened by capcomd.\n\nCapcomd-Task: ${key}`,
+    trailers: { "Capcomd-Task": key }, workdir: git.cwd,
+  }, { merge: cfg }, cfg.github.timeoutMs + PR_CALLS_MS).catch((e) => {
+    if (e instanceof Error && e.name === "PluginError" && (e as { code?: string }).code === "timeout") throw new MergeRetryableError(e.message);
+    throw e;
+  });
+  if (out.status === "conflict") return { status: "conflict", files: [], targetSha, taskSha };
+  if (out.status === "failed") {
+    if (out.retryable) throw new MergeRetryableError(out.reason);
+    return { status: "failed", reason: out.reason };
   }
   killpoint("merge.after_pr_merge.before_event");
-  return { status: "merged", sha: pr.merge_commit_sha ?? res.sha ?? "", already: false, how: `pr-${cfg.strategy}`, strategy: cfg.strategy, mode: "pr", attempts: 1, pr: pr.number, targetBefore: targetSha };
+  return { status: "merged", sha: out.sha, already: out.already, how: out.how, strategy: cfg.strategy, mode: "pr", attempts: out.already ? 0 : 1, ...(out.pr !== null ? { pr: out.pr } : {}), ...(out.already ? {} : { targetBefore: targetSha }) };
 }

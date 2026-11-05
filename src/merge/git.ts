@@ -14,10 +14,13 @@ export class Git {
   /**
    * `timeoutMs` (default: none) bounds a call that can hang on the network: git runs in its own process group, and at
    * the deadline the whole group (git, ssh, a remote helper) is killed and the result is `{ code: 124, timedOut: true }`.
+   * An aborted `signal` (a seam call's, docs/spec/plugin-api.md §7.1) ends it the same way.
    */
-  async run(args: string[], opts: { input?: string; env?: Record<string, string>; timeoutMs?: number } = {}): Promise<GitResult> {
+  async run(args: string[], opts: { input?: string; env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<GitResult> {
+    const bounded = !!opts.timeoutMs || !!opts.signal;
+    if (opts.signal?.aborted) return { code: 124, stdout: "", stderr: `git ${args[0]} was cancelled`, timedOut: true };
     const proc = Bun.spawn(["git", ...args], {
-      ...(opts.timeoutMs ? { detached: true } : {}),
+      ...(bounded ? { detached: true } : {}),
       cwd: this.cwd,
       env: {
         ...process.env,
@@ -40,27 +43,32 @@ export class Git {
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    if (!opts.timeoutMs) {
+    if (!bounded) {
       const [stdout, stderr, code] = await done;
       return { code, stdout, stderr };
     }
-    let timer: ReturnType<typeof setTimeout> | undefined, fired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined, fired: "timeout" | "abort" | null = null, onAbort = () => {};
     const expired = new Promise<null>((resolve) => {
-      timer = setTimeout(() => {
-        fired = true;
+      const kill = (why: "timeout" | "abort") => {
+        if (fired) return;
+        fired = why;
         try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
         // Don't wait for the pipes: a grandchild outside the group could still hold them open.
         proc.exited.then(() => resolve(null), () => resolve(null));
-      }, opts.timeoutMs);
+      };
+      if (opts.timeoutMs) timer = setTimeout(() => kill("timeout"), opts.timeoutMs);
+      onAbort = () => kill("abort");
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
     });
     done.catch(() => {});
     try {
       const r = await Promise.race([done, expired]);
-      if (!r || fired) return { code: 124, stdout: "", stderr: `git ${args[0]} timed out after ${opts.timeoutMs} ms`, timedOut: true };
+      if (!r || fired) return { code: 124, stdout: "", stderr: fired === "abort" ? `git ${args[0]} was cancelled` : `git ${args[0]} timed out after ${opts.timeoutMs} ms`, timedOut: true };
       const [stdout, stderr, code] = r;
       return { code, stdout, stderr };
     } finally {
       clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
     }
   }
 

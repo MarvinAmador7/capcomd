@@ -200,6 +200,13 @@ export interface LandRequest {
   sha: string;
   /** The target commit the kernel integrated onto; a direct push is a CAS on it. */
   targetSha: string;
+  /** The branch commit `sha` was integrated from. `pr`: the pull request is merged at exactly this head (the hosting
+   *  service makes the merge commit itself, with `strategy`). `direct` with `leaseBranch`: the branch is leased at it. */
+  branchSha?: string;
+  /** `direct`: lease the branch at `branchSha` in the same atomic push as the target (the kernel integrated from refs
+   *  it didn't fetch). A remote that refuses atomic pushes is `{status: "failed", retryable: true}`: the kernel fetches
+   *  and lands again without it. */
+  leaseBranch?: boolean;
   mode: "direct" | "pr";
   strategy: MergeStrategy;
   subject: string;
@@ -211,10 +218,16 @@ export interface LandRequest {
 
 export type LandOutcome =
   | { status: "merged"; sha: string; already: boolean; how: string; pr: number | null }
-  | { status: "conflict"; targetSha: string }
+  /** The target moved (a refused lease), or the service can't merge it: `targetSha` when the forge knows it, else "";
+   *  `detail` is what the forge saw, for the record. */
+  | { status: "conflict"; targetSha: string; detail?: string }
   | { status: "failed"; reason: string; retryable: boolean };
 
-export interface PullRequestRef { number: number; url: string | null; state: "open" | "closed" | "merged"; head: string; base: string }
+export interface PullRequestRef {
+  number: number; url: string | null; state: "open" | "closed" | "merged"; head: string; base: string;
+  /** The commit the merge made on the base, once merged: a replay records it without merging again. */
+  mergeSha?: string | null;
+}
 
 /** The hosting service a repository's remote points at (§7.4). Selected by `merge.forge` in the project's config,
  *  default by `matches(remote)`; the built-in `git` forge matches every remote and lands by push only. */
