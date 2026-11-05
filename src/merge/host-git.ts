@@ -139,7 +139,7 @@ async function githubTokenForGit(): Promise<string | null> {
  */
 export async function hostCredentialEnv(remote: string, source: Record<string, string | undefined> = process.env): Promise<Record<string, string>> {
   const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: ALLOWED_PROTOCOLS };
-  if (!/^https:\/\/github\.com\//i.test(remote.trim()) || source.CAPCOMD_GIT_NO_TOKEN === "1") return env;
+  if (!/^https:\/\/github\.com\//i.test(remote.trim())) return env;
   const token = await githubTokenForGit();
   if (!token) return env;
   const n = Number(source.GIT_CONFIG_COUNT ?? 0) || 0;
