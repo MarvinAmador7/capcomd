@@ -124,10 +124,14 @@ disappeared.
 - **Threads filled in late.** After a project switch, threads appeared 2–3 s after the columns (the guards saw the
   column on screen before its content). Occasionally a thread rested mostly empty. Both reported to the owner, not
   fixed by the loop: behaviour is the owner's call.
-- **The reel didn't snap after a real swipe.** Replaying a swipe with real timestamps showed AppKit's own
-  deceleration carrying the reel up to ~200 pt past the column edge, and a queued scroll delta could be dropped. The
-  old synthetic "fling" sent no timestamps, which hid the bug and its cost: a realistic swipe costs about twice the
-  CPU of the synthetic one.
+- **The reel didn't always snap.** Replaying a swipe with real timestamps showed AppKit's own deceleration carrying
+  the reel past the column edge after the fingers lifted, and a queued scroll delta could be dropped. The old
+  synthetic "fling" sent no timestamps, which hid the deceleration and its cost: a swipe with it cost about twice the
+  CPU of the synthetic one. The ~200 pt those replays showed was largely the replay's own: it stamped each event with
+  the time it sent it, so a late timer set AppKit's release velocity, and each replay rested somewhere else. The
+  owner's gestures, recorded by hand on 2026-11-04, measured the bug itself: quick flicks rested on a column edge,
+  slow drags 25 and 31 pt off one. Fixed that day (the reel ends AppKit's deceleration when the fingers lift); all six
+  recordings now replay to within 0.2 pt of an edge (apps/menubar/app/DESKBENCH.md, Recorded gestures).
 - **Every column body ran twice per update.** Found by the cause records (C7); explained in §5.4.
 
 ## 5.4 It found a bug in its own bench
@@ -176,7 +180,9 @@ Sweep, step, 4 → 64 agents (main-thread CPU, most points on a busy machine):
 
 A recorded trackpad swipe is replayed into the window and scored on how well the content followed the fingers:
 position error, stalls, jerk, latency in frames. On three synthetic gestures, the content stayed on the path in all
-48 replays (0 pt error at p95; the spec's bar was 1 pt). A real gesture recorded by hand is still to come.
+48 replays (0 pt error at p95; the spec's bar was 1 pt). The owner recorded six real gestures by hand on 2026-11-04
+(four flicks, two slow drags); they found the reel's landing bug in §5.3. Their replays don't yet reproduce everything
+the hand did: with the reel as it was, the hand's flicks landed on the edge and their replays didn't.
 
 ## 5.7 A machine nobody is using
 
@@ -205,7 +211,9 @@ machines. It ran end to end on a Mac mini; trusted numbers from it wait on an un
   session's numbers (§2) were measured before the two-window fix.
 - **Not "trusted numbers on dedicated hardware" yet.** The developer's Mac marks its runs untrusted (late idle
   frames); the Mac mini's runs were behind a locked screen.
-- **No real recorded gesture yet;** smoothness results are on synthetic gestures.
+- **Smoothness results are on synthetic gestures.** The six gestures recorded by hand (2026-11-04) back only what
+  the hand measured (where the reel came to rest); their replays don't reproduce the hand's flicks with the old reel
+  yet (DESKBENCH.md, Recorded gestures).
 - **No VM runner;** it is a stub.
 - **Not a product yet.** It lives in the capcomd repo as a separate package; extraction (Phase 5) waits for a second
   app or a month of stable schemas. If extracted: its own repo, MIT.
@@ -231,8 +239,8 @@ knobs are off by default, so the app runs today's code. Open threads, if the loo
 
 1. Native thread rows with Core Text and cached measurements (the next native step; §5.5).
 2. The title bar's tab strip scroll, off the main thread.
-3. Trusted runs on the Mac mini (unlock its screen), and a real recorded gesture.
+3. Trusted runs on the Mac mini (unlock its screen), and replays that reproduce the hand's recorded flicks (§5.6).
 4. Re-measure the earlier phases' numbers after the two-window fix.
-5. The app bugs in §5.3, for the owner to decide on.
+5. The app bugs in §5.3, for the owner to decide on (the reel's landing is fixed, 2026-11-04).
 6. The menu-bar app's release build crashes the Swift compiler (`CapcomdStore.WindowFit.fitted`), on the base commit
    too; check against `main` before a release.
