@@ -132,6 +132,7 @@ test("restart mid-step: a worker whose engine host died inside a workflow step w
   expect(run).toMatch(/^run-/);
   await cj(["spawn", run, "--profile", "worker", "--task", "make the failing test pass", "--key", "mid"]);
   for (let i = 0; i < 300 && !engine.sawKill; i++) await sleep(100);
+  const killed = Date.now();
   expect(engine.sawKill).toBe(true);
   expect(await Bun.file(engine.logPath).text()).toContain("[KILLPOINT] Exiting at workflow.start_agent.mid");
   await engine.stop();
@@ -146,7 +147,10 @@ test("restart mid-step: a worker whose engine host died inside a workflow step w
   console.log(`  done ${Math.round((Date.now() - back) / 1000)}s after the engine came back`);
   expect(Date.now() - back).toBeLessThan(60_000);
   expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
-  expect((await cj(["events", run])).stdout).not.toContain('"DRIVE_FAILED"');
+  const events = (await cj(["events", run])).stdout;
+  // On a failure, which attempt failed, when (against the kill and the restart) and why.
+  if (events.includes('"DRIVE_FAILED"')) console.error(`killed ${new Date(killed).toISOString()}, back ${new Date(back).toISOString()}:`, JSON.stringify((JSON.parse(events.trim().split("\n").pop()!).events ?? []).filter((e: any) => /DRIVE|ATTEMPT|AGENT_(STARTED|DONE|FAILED)/.test(e.type))));
+  expect(events).not.toContain('"DRIVE_FAILED"');
 }, 300_000);
 
 test("restart mid-watch, after its steps' wakes have fired: the worker still wakes by itself at its watch's deadline", async () => {
