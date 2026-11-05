@@ -19,7 +19,9 @@ import { inspectProject, knownProjects, projectBranches, type KnownProject, setU
 import { initGit, publishOptions, publishProject, type GitInitOutcome, type OptionsOutcome, type PublishInput, type PublishOutcome } from "./project-git";
 import { applyTitle, normalizeTitle, shownTitle, type TitleState } from "../primitives/agent-title";
 
-export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown> };
+export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown>;
+	/** A plugin's own event (plugin.<name>.<event>) only: the entity it named and its own sentence. */
+	entity?: string; text?: string };
 export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
 type O<T extends z.ZodType> = z.infer<T>;
 
@@ -137,13 +139,15 @@ export type ControlResult = { changed: string[]; pending: string[]; noop: string
 export function toEnvelope(runId: string, e: RawEvent, entitySeq: number, projectId: string | null = null): HarnessEvent {
 	const type = /^[A-Z]/.test(e.type) ? dottedType(e.type) : e.type;
 	return {
-		v: 1, id: `evt_${runId}_${e.seq}`, scope: runId, seq: e.seq, entity: e.agentId ?? runId, entitySeq, type, typeVersion: 1,
-		durability: "durable", ts: isoTs(e.at), epochMs: e.at, projectId, runId, agentId: e.agentId, text: describeEvent(type, e.data, e.agentId), data: e.data,
+		v: 1, id: `evt_${runId}_${e.seq}`, scope: runId, seq: e.seq, entity: entityOf(runId, e), entitySeq, type, typeVersion: 1,
+		durability: "durable", ts: isoTs(e.at), epochMs: e.at, projectId, runId, agentId: e.agentId, text: e.text ?? describeEvent(type, e.data, e.agentId), data: e.data,
 	};
 }
+/** The envelope's entity: what a plugin's own event names, else the agent, else the run. entitySeq counts by it. */
+export const entityOf = (runId: string, e: RawEvent) => e.entity || e.agentId || runId;
 export function envelopes(runId: string, evs: RawEvent[], projectId: string | null = null): HarnessEvent[] {
 	const n = new Map<string, number>();
-	return evs.map((e) => { const k = e.agentId ?? runId; const s = (n.get(k) ?? 0) + 1; n.set(k, s); return toEnvelope(runId, e, s, projectId); });
+	return evs.map((e) => { const k = entityOf(runId, e); const s = (n.get(k) ?? 0) + 1; n.set(k, s); return toEnvelope(runId, e, s, projectId); });
 }
 
 /** message.sent events → thread messages. */

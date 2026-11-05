@@ -1,9 +1,11 @@
 // The plugin manifest (`plugin.json`), spec §4. This zod schema is the one source: the TypeScript type is inferred
 // from it and schema/plugin-manifest.schema.json is generated from it (scripts/schema.ts; the test fails when stale).
 import { z } from "zod";
+import { EVENT_NAME_PATTERN, PLUGIN_NAME_PATTERN } from "./event-type";
 
-/** `^[a-z0-9][a-z0-9-]{0,62}$`: the name every contribution of the plugin is namespaced by (§4.2). */
-export const PLUGIN_NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,62}$";
+/** `^[a-z0-9][a-z0-9-]{0,62}$`: the name every contribution of the plugin is namespaced by (§4.2). It is one part of
+ *  the event type pattern (event-type.ts), so every name allowed here makes valid `plugin.<name>.<event>` types. */
+export { PLUGIN_NAME_PATTERN };
 export const PluginName = z.string().regex(new RegExp(PLUGIN_NAME_PATTERN)).describe("Plugin name: lowercase letters, digits and hyphens, 1-63 characters. Every contribution is namespaced by it");
 
 /** A semver version (no range). */
@@ -83,7 +85,7 @@ export const Contributions = z.object({
   mcp: z.array(McpToolContribution).optional(),
   api: z.array(ApiRouteContribution).optional(),
   ui: z.array(UiSurfaceContribution).optional(),
-  events: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).optional().describe("Event types the plugin emits, without the prefix: emitted as `plugin.<name>.<type>` (§4.7.4)"),
+  events: z.array(z.string().regex(new RegExp(EVENT_NAME_PATTERN))).optional().describe("Event types the plugin emits, without the prefix: emitted as `plugin.<name>.<type>` (§4.7.4). Lowercase words joined by _, starting with a letter (`verdict`, `thread_posted`), so `plugin.<name>.<type>` is a valid event type"),
 }).strict();
 
 export const InProcessEntry = z.object({

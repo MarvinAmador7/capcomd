@@ -19,7 +19,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   change: the agent for its own work, the parent agent that spawned it, the agent that asked for a verify or a merge
   from its VM, or the person who approved, paused or cancelled, instead of always the operator. A plugin that stops
   listening and starts again is told only what changes from then on, not what happened in between.
-
+- Every event type follows one pattern, published with the event envelope (`type` in `openapi/capcomd.json`,
+  docs/events.md): capcomd's own are dotted lowercase (`run.created`, `plugin.loaded`), and a plugin's own are
+  `plugin.<plugin>.<event>`, hyphenated plugin names included (`plugin.gate-reviewer.verdict`). Only that plugin
+  writes them, and it can now write them on a run's stream as well as the daemon's: apps read them back from
+  `GET /v1/events` and the run's stream with the plugin's own sentence as `text` (plain text, like an agent's).
 - The reviewer is now a built-in plugin, `gate-reviewer` (listed by `capcomd plugins list`), one judge of a verify
   beside the checks: a verify passes only when the checks, the run's reviewer and every other plugin judge pass, for
   the same tree. Reviews work as before (`run new --reviewer`, `verify --review-profile`), from the CLI, the MCP

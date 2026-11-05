@@ -2954,7 +2954,8 @@
                       },
                       "type": {
                         "type": "string",
-                        "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                        "pattern": "^(?:plugin\\.(?:[a-z0-9][a-z0-9-]{0,62}\\.)?[a-z][a-z0-9_]*|(?!plugin\\.)[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+)$",
+                        "description": "Dotted lowercase: the kernel's are noun.verb_past (run.created, merge.approval_requested); a plugin's own are plugin.<plugin name>.<event> (plugin.gate-reviewer.verdict), written only by that plugin. Show a type you don't know by its envelope text"
                       },
                       "typeVersion": {
                         "type": "integer",
@@ -3000,7 +3001,7 @@
                       },
                       "text": {
                         "type": "string",
-                        "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+                        "description": "Plain-language sentence for this step, written by the daemon from trusted fields only. On a plugin's own event (plugin.<plugin name>.<event>) it is that plugin's sentence instead: render it as plain text, never markdown, links or actions"
                       },
                       "data": {
                         "type": "object",
@@ -9072,7 +9073,8 @@
                       },
                       "type": {
                         "type": "string",
-                        "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                        "pattern": "^(?:plugin\\.(?:[a-z0-9][a-z0-9-]{0,62}\\.)?[a-z][a-z0-9_]*|(?!plugin\\.)[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+)$",
+                        "description": "Dotted lowercase: the kernel's are noun.verb_past (run.created, merge.approval_requested); a plugin's own are plugin.<plugin name>.<event> (plugin.gate-reviewer.verdict), written only by that plugin. Show a type you don't know by its envelope text"
                       },
                       "typeVersion": {
                         "type": "integer",
@@ -9118,7 +9120,7 @@
                       },
                       "text": {
                         "type": "string",
-                        "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+                        "description": "Plain-language sentence for this step, written by the daemon from trusted fields only. On a plugin's own event (plugin.<plugin name>.<event>) it is that plugin's sentence instead: render it as plain text, never markdown, links or actions"
                       },
                       "data": {
                         "type": "object",
@@ -9304,7 +9306,8 @@
                             },
                             "type": {
                               "type": "string",
-                              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                              "pattern": "^(?:plugin\\.(?:[a-z0-9][a-z0-9-]{0,62}\\.)?[a-z][a-z0-9_]*|(?!plugin\\.)[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+)$",
+                              "description": "Dotted lowercase: the kernel's are noun.verb_past (run.created, merge.approval_requested); a plugin's own are plugin.<plugin name>.<event> (plugin.gate-reviewer.verdict), written only by that plugin. Show a type you don't know by its envelope text"
                             },
                             "typeVersion": {
                               "type": "integer",
@@ -9350,7 +9353,7 @@
                             },
                             "text": {
                               "type": "string",
-                              "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+                              "description": "Plain-language sentence for this step, written by the daemon from trusted fields only. On a plugin's own event (plugin.<plugin name>.<event>) it is that plugin's sentence instead: render it as plain text, never markdown, links or actions"
                             },
                             "data": {
                               "type": "object",
@@ -13236,7 +13239,8 @@
                 },
                 "type": {
                   "type": "string",
-                  "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+                  "pattern": "^(?:plugin\\.(?:[a-z0-9][a-z0-9-]{0,62}\\.)?[a-z][a-z0-9_]*|(?!plugin\\.)[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+)$",
+                  "description": "Dotted lowercase: the kernel's are noun.verb_past (run.created, merge.approval_requested); a plugin's own are plugin.<plugin name>.<event> (plugin.gate-reviewer.verdict), written only by that plugin. Show a type you don't know by its envelope text"
                 },
                 "typeVersion": {
                   "type": "integer",
@@ -13281,7 +13285,7 @@
                 },
                 "text": {
                   "type": "string",
-                  "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+                  "description": "Plain-language sentence for this step, written by the daemon from trusted fields only. On a plugin's own event (plugin.<plugin name>.<event>) it is that plugin's sentence instead: render it as plain text, never markdown, links or actions"
                 },
                 "data": {
                   "type": "object",

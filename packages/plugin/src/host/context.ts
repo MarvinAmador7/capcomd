@@ -2,6 +2,7 @@
 // registration is checked against the manifest (§4.7), recorded in order and disposed in reverse (§5.3); every
 // primitive is checked against the plugin principal's scopes (§11.1) before it reaches the kernel's implementation.
 import { PluginError } from "../errors";
+import { pluginEventType } from "../event-type";
 import { HOOKS, type HookName } from "../hooks";
 import type { PluginManifest, PluginScope } from "../manifest";
 import type { Registration } from "../testkit";
@@ -235,7 +236,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         const data = deep(e.data) as Record<string, unknown>;
         if (Buffer.byteLength(JSON.stringify(data)) > EVENT_DATA_MAX) throw new PluginError("invalid", "event data is over 64 KB");
         if (!o.emit) throw new PluginError("unsupported", "events.emit is not available to plugins yet");
-        return o.emit({ ...e, type: `plugin.${name}.${e.type}`, text: redact(String(e.text)), data });
+        return o.emit({ ...e, type: pluginEventType(name, e.type), text: redact(String(e.text)), data });
       },
       subscribe(stream, filter, handler) {
         live();

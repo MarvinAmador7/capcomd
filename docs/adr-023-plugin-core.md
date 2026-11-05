@@ -302,7 +302,7 @@ no plugin permission grants `approve` on a protected-target merge; a plugin may 
 
 `plugins.<name>` in `~/.capcomd/config.json` (user) and `.capcomd/config.json` (project; project wins key by key, as
 `driverPolicy()` merges `driver` today), validated against the manifest's JSON Schema on load and on `capcomd plugins
-validate`; invalid config disables the plugin with a `plugin.config_invalid` event rather than running it with
+validate`; invalid config disables the plugin with a `plugin.config_refused` event rather than running it with
 defaults. `CAPCOMD_PLUGIN_<NAME>_<KEY>` env overrides, the way `applyConfig` lets a real env var win. Secrets go through
 `userConfig`-style sensitive entries kept in the keychain (`src/config/keychain.ts`), never in the file; a plugin reads
 them through `host.auth`, which hands back a presence check or a sandbox-bound placeholder (ADR-015 §3), not the value,

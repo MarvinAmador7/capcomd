@@ -119,7 +119,8 @@ export interface EmittedEvent { type: string; stream: "daemon" | string; entity:
 export interface HarnessEventEnvelope { v: 1; id: string; scope: string; seq: number; entity: string; entitySeq: number; type: string; typeVersion: number; durability: "durable" | "ephemeral"; ts: Timestamp; epochMs: number; projectId: string | null; runId: string | null; agentId: string | null; text: string; data: Record<string, unknown> }
 export interface EventService {
   /** Emit `plugin.<name>.<type>` on a stream (`daemon`, or a run id). `type` must be declared in `contributes.events`.
-   *  `data` is redacted and `text` must be the plugin's own words (§4.7.4, §8.4). */
+   *  `data` is redacted and `text` must be the plugin's own words (§4.7.4, §8.4). `entity` is what the event is about
+   *  (`""`: the plugin itself, `plugin:<name>`). Durable: `ephemeral` is refused (`unsupported`) for now. */
   emit(e: EmittedEvent, o?: CallOptions): Promise<{ seq: number }>;
   /** Live events of a stream, after `after`; the handler is called in order and never concurrently. */
   subscribe(stream: "daemon" | string, filter: { types?: string[]; after?: number }, handler: (e: HarnessEventEnvelope) => void | Promise<void>): Disposable;

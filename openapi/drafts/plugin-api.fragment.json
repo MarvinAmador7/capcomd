@@ -63,7 +63,7 @@
     "/v1/plugins/{name}/events": {
       "post": {
         "operationId": "plugins.events.emit",
-        "description": "Capability plugins.protocol. `ctx.events.emit` over the wire (§9.6): a durable (default) or ephemeral event of type `plugin.<name>.<type>` on the daemon stream or a run's. Only the plugin's own token; `type` must be in contributes.events (422 invalid otherwise); `data` is redacted and capped at 64 KB; `text` is the plugin's own sentence. Needs an Idempotency-Key (same key, same body: the first seq is returned). 404 not_found for a run that does not exist.",
+        "description": "Capability plugins.protocol. `ctx.events.emit` over the wire (§9.6): a durable event of type `plugin.<name>.<type>` (packages/plugin/src/event-type.ts) on the daemon stream or a run's (ephemeral is refused for now, error unsupported). Only the plugin's own token; `type` must be in contributes.events (422 invalid otherwise); `data` is redacted and capped at 64 KB; `text` is the plugin's own sentence. Needs an Idempotency-Key (same key, same body: the first seq is returned). 404 not_found for a run that does not exist.",
         "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/PluginName" } }, { "$ref": "#/components/parameters/IdempotencyKey" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EmitBody" } } } },
         "responses": { "201": { "description": "Emitted", "content": { "application/json": { "schema": { "type": "object", "required": ["seq"], "properties": { "seq": { "type": "integer" } } } } } }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
@@ -182,7 +182,7 @@
       },
       "EmitBody": {
         "type": "object", "required": ["type", "stream", "entity", "text", "data"],
-        "properties": { "type": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "Without the plugin prefix; must be in contributes.events" }, "stream": { "type": "string", "description": "daemon or a run id" }, "entity": { "type": "string" }, "text": { "type": "string", "maxLength": 500 }, "data": { "type": "object" }, "durability": { "type": "string", "enum": ["durable", "ephemeral"], "default": "durable" } }
+        "properties": { "type": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "Without the plugin prefix (EVENT_NAME_PATTERN); must be in contributes.events" }, "stream": { "type": "string", "description": "daemon or a run id" }, "entity": { "type": "string" }, "text": { "type": "string", "maxLength": 500 }, "data": { "type": "object" }, "durability": { "type": "string", "enum": ["durable", "ephemeral"], "default": "durable" } }
       },
       "StorageKey": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$" },
       "StoragePutBody": { "type": "object", "required": ["value"], "properties": { "value": {}, "expect": { "type": ["string", "null"], "description": "For a compare-and-swap: the JSON text of the expected current value; null for must-not-exist; absent for an unconditional write" } } },
@@ -195,14 +195,14 @@
     "plugin.disposed": { "stream": "daemon", "data": { "plugin": "string", "cause": "daemon_stopping | disabled | breaker | replaced | failed" } },
     "plugin.version_refused": { "stream": "daemon", "data": { "plugin": "string", "version": "string", "engines": "string", "capcomd": "string", "apiVersion": "integer" } },
     "plugin.duplicate_refused": { "stream": "daemon", "data": { "plugin": "string", "kept": "builtin | user | project", "refused": "builtin | user | project", "path": "string" } },
-    "plugin.config_invalid": { "stream": "daemon", "data": { "plugin": "string", "errors": "[{path, message}]", "layer": "user | project | env | run" } },
+    "plugin.config_refused": { "stream": "daemon", "data": { "plugin": "string", "errors": "[{path, message}]", "layer": "user | project | env | run" } },
     "plugin.hook_failed": { "stream": "daemon", "data": { "plugin": "string", "hook": "HookName", "callId": "string", "kind": "timeout | threw | crashed | invalid_result | disconnected | suspended", "message": "string", "effect": "denied | skipped" } },
     "plugin.suspended": { "stream": "daemon", "data": { "plugin": "string", "failures": "integer", "lastHook": "HookName" } },
     "plugin.resumed": { "stream": "daemon", "data": { "plugin": "string", "by": "string" } },
     "plugin.gate_denied": { "stream": "run", "data": { "plugin": "string", "hook": "HookName", "entity": "string", "decision": "deny | hold", "reason": "string (untrusted: the plugin's)" } },
     "plugin.gate_bypassed": { "stream": "run", "data": { "hook": "merge.landing", "entity": "string", "by": "string", "plugins": "[{plugin, reason}]" } },
-    "plugin.deprecation": { "stream": "daemon", "data": { "plugin": "string", "hook": "HookName", "since": "string", "replacement": "HookName | null" } },
-    "plugin.process": { "stream": "daemon", "data": { "plugin": "string", "event": "started | disconnected | reconnected | exited | restarting", "pid": "integer | null", "code": "integer | null", "restarts": "integer" } },
+    "plugin.hook_deprecated": { "stream": "daemon", "data": { "plugin": "string", "hook": "HookName", "since": "string", "replacement": "HookName | null" } },
+    "plugin.process_changed": { "stream": "daemon", "data": { "plugin": "string", "event": "started | disconnected | reconnected | exited | restarting", "pid": "integer | null", "code": "integer | null", "restarts": "integer" } },
     "plugin.trusted": { "stream": "daemon", "data": { "plugin": "string", "source": "project", "hash": "string", "by": "string" } }
   }
 }
