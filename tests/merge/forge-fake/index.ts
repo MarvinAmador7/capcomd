@@ -3,10 +3,13 @@
 // of `sha` onto the target leased at `targetSha`; a pr land opens (or finds) an in-memory pull request and merges it by
 // pushing exactly `sha`, the commit the checks passed on. Idempotent by `mrgId`. Records every call and whether the
 // kernel held the target's lock when it called `land`; knobs to move the target first, fail a land, or not claim PRs.
+// Its branches are the remote's own (`git ls-remote`, as any forge may read them) unless a test hands it a listing, a
+// failure, or failures that pass (to see the kernel retry); its login answers what a test says, per use.
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { definePlugin, PluginError, type Forge, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "../../../packages/plugin/src/index";
+import { definePlugin, PluginError, type Forge, type ForgeBranches, type ForgeLogin, type ForgeLoginUse, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "../../../packages/plugin/src/index";
+import { lsRemoteBranches } from "../../../src/plugins/forges/git";
 import { Git } from "../../../src/merge/git";
 import { lockKey } from "../../../src/merge/lock";
 
@@ -27,10 +30,29 @@ export const fake = {
   beforeLand: null as null | ((req: LandRequest, n: number) => Promise<void>),
   /** The next land's outcome, without pushing. */
   failNext: null as LandOutcome | null,
+  /** `describe().publish`: it creates repositories (POST /v1/projects/publish asks the first that does). */
+  publish: true,
+  /** What `listBranches` answers: null reads the remote with `git ls-remote`; an Error is thrown. */
+  branches: null as ForgeBranches | Error | null,
+  /** `listBranches` throws a transient error (classified `transient`) this many times first. */
+  flakyBranches: 0,
+  /** What `login` answers per use (the kernel must never see it reject: `loginThrows` makes it). */
+  logins: { pullRequests: { ok: true, accounts: [] }, publish: { ok: true, accounts: [] } } as Record<ForgeLoginUse, ForgeLogin>,
+  loginThrows: false,
+  /** Every SeamCall a method got, by method (its deadline and trace), to check the kernel's wrapper. */
+  seen: [] as Array<{ method: string; deadline: string; traceId: string }>,
+  /** `findPullRequest` never settles and ignores its signal (the kernel must still answer `timeout`). */
+  hangFind: false,
   reset() {
-    Object.assign(fake, { lands: [], calls: [], pulls: [], published: [], claims: [], pullRequests: true, lockDir: null, beforeLand: null, failNext: null });
+    Object.assign(fake, {
+      lands: [], calls: [], pulls: [], published: [], claims: [], pullRequests: true, lockDir: null, beforeLand: null, failNext: null,
+      publish: true, branches: null, flakyBranches: 0, logins: { pullRequests: { ok: true, accounts: [] }, publish: { ok: true, accounts: [] } }, loginThrows: false, seen: [], hangFind: false,
+    });
   },
 };
+
+/** A failure the fake forge says is worth trying again. */
+export class FlakyError extends Error { constructor() { super("the fake service hiccupped"); this.name = "FlakyError"; } }
 
 const ref = (p: Pull): PullRequestRef => ({ number: p.number, url: p.url, state: p.state, head: p.head, base: p.base, mergeSha: p.mergeSha ?? null });
 
@@ -42,10 +64,12 @@ async function push(req: LandRequest, c: SeamCall): Promise<{ ok: true; already:
 }
 
 class FakeForge implements Forge {
-  describe() { return { name: "fake", label: "Fake forge", pullRequests: fake.pullRequests }; }
+  describe() { return { name: "fake", label: "Fake forge", pullRequests: fake.pullRequests, publish: fake.publish }; }
   matches(remote: string) { return fake.claims.some((p) => remote.startsWith(p)); }
   classifyError(e: unknown) {
     if (e instanceof PluginError && e.code === "unsupported") return { kind: "config" as const, retryable: false as const, hint: e.message };
+    if (e instanceof FlakyError) return { kind: "transient" as const, retryable: true as const, retryAfterMs: 10 };
+    if (e instanceof PluginError && e.code === "unavailable") return { kind: "auth" as const, retryable: false as const, hint: e.hint ?? "Log in to the fake forge" };
     return { kind: "unknown" as const, retryable: false as const };
   }
 
@@ -81,8 +105,10 @@ class FakeForge implements Forge {
     return ref(p);
   }
 
-  async findPullRequest(input: { remote: string; head: string; base: string }): Promise<PullRequestRef | null> {
+  async findPullRequest(input: { remote: string; head: string; base: string }, c?: SeamCall): Promise<PullRequestRef | null> {
     fake.calls.push(`find ${input.head}->${input.base}`);
+    if (c) fake.seen.push({ method: "findPullRequest", deadline: c.deadline, traceId: c.trace.traceId });
+    if (fake.hangFind) return new Promise(() => {});
     const mine = fake.pulls.filter((p) => p.remote === input.remote && p.head === input.head && p.base === input.base);
     const pick = mine.find((p) => p.state === "merged") ?? mine.find((p) => p.state === "open");
     return pick ? ref(pick) : null;
@@ -103,7 +129,20 @@ class FakeForge implements Forge {
     return { remote: bare, url: `fake://${input.owner}/${input.name}` };
   }
 
-  async defaultBranch() { return "main"; }
+  async listBranches(input: { remote: string; cwd: string; max: number }, c: SeamCall): Promise<ForgeBranches> {
+    fake.calls.push(`branches ${input.remote}`);
+    fake.seen.push({ method: "listBranches", deadline: c.deadline, traceId: c.trace.traceId });
+    if (fake.flakyBranches > 0) { fake.flakyBranches--; throw new FlakyError(); }
+    if (fake.branches instanceof Error) throw fake.branches;
+    return fake.branches ?? lsRemoteBranches(input, c);
+  }
+
+  async login(input: { use: ForgeLoginUse; accounts?: boolean }, c: SeamCall): Promise<ForgeLogin> {
+    fake.calls.push(`login ${input.use}${input.accounts ? " accounts" : ""}`);
+    fake.seen.push({ method: "login", deadline: c.deadline, traceId: c.trace.traceId });
+    if (fake.loginThrows) throw new PluginError("unavailable", "the fake forge can't tell who you are", "Log in to the fake forge");
+    return fake.logins[input.use];
+  }
 }
 
 export const plugin = definePlugin({

@@ -1,7 +1,7 @@
 // Worked example, spec §15.2: GitHub as a forge. Today's src/merge/github.ts HttpGitHub, src/merge/pr.ts prMerge and
-// the `gh` calls in src/api/project-git.ts and src/mcp/server.ts (capcomd_pr_open) become this module. The kernel
+// the `gh` calls (`gh repo create`, `gh auth status`, `gh api user`) become this module. The kernel
 // keeps the target lock, the CAS on `targetSha`, integration and the checks (src/merge/direct.ts, integrate.ts).
-import { definePlugin, PluginError, type ErrorClass, type Forge, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "../../src/index";
+import { definePlugin, PluginError, type ErrorClass, type Forge, type ForgeBranches, type ForgeLogin, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "../../src/index";
 
 interface Config { api: string; pollMs: number; timeoutMs: number }
 
@@ -13,7 +13,7 @@ const repoOf = (remote: string): string | null => /github\.com[:/]([^/]+\/[^/.]+
 
 class GitHubForge implements Forge {
   constructor(private readonly cfg: Config, private readonly token: () => Promise<string>, private readonly git: (workdir: string, args: string[], c: SeamCall) => Promise<{ code: number; stdout: string; stderr: string }>) {}
-  describe() { return { name: "github", label: "GitHub", pullRequests: true }; }
+  describe() { return { name: "github", label: "GitHub", pullRequests: true, publish: true }; }
   matches(remote: string) { return repoOf(remote) !== null; }
   classifyError(e: unknown): ErrorClass {
     if (e instanceof GitHubHttpError) {
@@ -95,11 +95,36 @@ class GitHubForge implements Forge {
     return { remote: r.json.clone_url, url: r.json.html_url };
   }
 
-  async defaultBranch(remote: string, c: SeamCall) {
-    const repo = repoOf(remote);
-    if (!repo) return null;
-    const r = await this.req<{ default_branch: string }>("GET", `/repos/${repo}`, c);
-    return r.status === 200 ? r.json?.default_branch ?? null : null;
+  async listBranches(input: { remote: string; cwd: string; max: number }, c: SeamCall): Promise<ForgeBranches> {
+    const repo = repoOf(input.remote);
+    let note: string | null = null;
+    if (repo) {
+      try {
+        const info = await this.req<{ default_branch: string }>("GET", `/repos/${repo}`, c);
+        const page = await this.req<Array<{ name: string }>>("GET", `/repos/${repo}/branches?per_page=100`, c);
+        if (info.status === 200 && page.status === 200) return { defaultBranch: info.json?.default_branch ?? null, branches: (page.json ?? []).map((b) => b.name).sort().slice(0, input.max), source: "service", note: null };
+        note = `GitHub answered ${info.status === 200 ? page.status : info.status}`;
+      } catch (e) { note = `GitHub: ${(e as Error).message}`; }
+    }
+    // The remote itself: its HEAD is the default branch.
+    const r = await this.git(input.cwd, ["ls-remote", "--symref", input.remote, "HEAD", "refs/heads/*"], c);
+    if (r.code !== 0) throw new PluginError("unavailable", [note, `git ls-remote failed: ${r.stderr.trim().split("\n")[0] ?? ""}`].filter(Boolean).join("; "));
+    const defaultBranch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.stdout)?.[1] ?? null;
+    const branches = [...r.stdout.matchAll(/^[0-9a-f]{40,64}\trefs\/heads\/(\S+)$/gm)].map((m) => m[1]!).sort().slice(0, input.max);
+    return { defaultBranch, branches, source: "git", note };
+  }
+
+  /** The token opens and merges pull requests and creates repositories alike; `accounts`: who it is, and its orgs. */
+  async login(input: { use: "pullRequests" | "publish"; accounts?: boolean }, c: SeamCall): Promise<ForgeLogin> {
+    try {
+      if (!input.accounts) { await this.token(); return { ok: true, accounts: [] }; }
+      const user = await this.req<{ login: string }>("GET", "/user", c);
+      if (user.status !== 200 || !user.json?.login) return { ok: false, reason: `GitHub answered ${user.status} for /user`, fix: "Set the token, or run `gh auth login`." };
+      const orgs = await this.req<Array<{ login: string }>>("GET", "/user/orgs", c);
+      return { ok: true, accounts: [{ login: user.json.login, kind: "user" }, ...(orgs.json ?? []).map((o) => ({ login: o.login, kind: "org" as const }))] };
+    } catch (e) {
+      return { ok: false, reason: (e as Error).message, fix: "Set the token, or run `gh auth login`." };
+    }
   }
 }
 

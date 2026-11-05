@@ -281,6 +281,13 @@ export async function runNew(o: RunNewOpts) {
     if (!(await import("../providers/registry")).isProviderName(n)) throw new RelayError("usage", `sandbox ${JSON.stringify(o.sandbox)} isn't one capcomd knows`, `Name one of: ${(await import("../providers/registry")).LISTED_PROVIDERS.join(", ")}.`, { code: "sandbox" });
     o = { ...o, sandbox: n };
   }
+  {
+    // The forge the run's settings name (CAPCOMD_MERGE_FORGE) must be active (plugin API §7.1): refused now, not at its first merge.
+    const { loadMergeConfig } = await import("../merge/config");
+    const forge = (() => { try { return loadMergeConfig(process.env)?.forge; } catch { return null; } })();
+    const off = await (await import("../plugins/forges")).inactiveForge(forge);
+    if (off) throw new RelayError("config", off.message, off.hint, { code: "forge" });
+  }
   if (o.target !== undefined && !BRANCH_NAME.test(o.target)) throw new RelayError("usage", `bad --target ${JSON.stringify(o.target)}`, "Name a branch, e.g. --target capcomd/integration.");
   if (o.goalBranch !== undefined || o.base !== undefined) {
     // A goal branch is the run's target, cut from its base: never "main" by default, never protected, never the base.

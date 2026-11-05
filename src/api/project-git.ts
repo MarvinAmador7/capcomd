@@ -1,11 +1,12 @@
 // POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (capability projects.git):
 // take a plain folder to a GitHub checkout from the app, so it can then be set up (src/api/projects.ts). Git-init starts
 // a repository in a folder that isn't in one; publish makes the first commit when there is none (refusing likely secrets
-// and folders that need a .gitignore first) and creates the GitHub repository with the GitHub CLI, which adds it as
-// origin and pushes. Every refusal is a daemon-written sentence with the field it is about.
+// and folders that need a .gitignore first), then the forge that publishes (docs/spec/plugin-api.md §7.4; forge-github:
+// the GitHub CLI) creates the repository, adds it as origin and pushes. Whether its login is here and who it can publish
+// as are the forge's `login`. Every refusal is a daemon-written sentence with the field it is about.
 //
-// git and gh run as child processes (never blocking the daemon), in the daemon's environment; CAPCOMD_GH_CLI names the
-// gh binary (tests use a fake one that pushes to a local bare repository).
+// git runs as a child process (never blocking the daemon), in the daemon's environment, and so does the forge's tool
+// (CAPCOMD_GH_CLI names the gh binary; tests use a fake one that pushes to a local bare repository).
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,7 +18,7 @@ type Env = Record<string, string | undefined>;
 
 /** The most files a first commit may hold: past it, the folder almost certainly needs a .gitignore first. */
 export const MAX_FIRST_COMMIT_FILES = 2000;
-/** How long `gh repo create … --push` may take. */
+/** How long the forge may take to create the repository and push to it. */
 const PUBLISH_TIMEOUT_MS = 180_000;
 
 export interface PublishAccount { login: string; kind: "user" | "org" }
@@ -57,32 +58,18 @@ export function run(cmd: string, args: string[], o: { cwd: string; env: Env; tim
 	});
 }
 const git = (args: string[], cwd: string, env: Env, timeoutMs?: number) => run("git", args, { cwd, env, timeoutMs });
-const ghBin = (env: Env) => env.CAPCOMD_GH_CLI || "gh";
 /** The first line of a tool's error output, short enough for a sentence. */
 const firstLine = (s: string) => (s.split("\n").map((l) => l.trim()).find(Boolean) ?? "").slice(0, 300);
 
-// ---- who you can publish as (gh api), cached like ghReady ----
-const ACCOUNTS_TTL_MS = 30_000;
-const accountsCache = new Map<string, { at: number; result: Promise<PublishAccount[]> }>();
-export function resetGhAccounts() { accountsCache.clear(); }
-/** The gh user, then the organizations they belong to (`gh api user`, `gh api user/orgs`). Asked at most every 30 s. */
-export function ghAccounts(env: Env, cwd = homedir()): Promise<PublishAccount[]> {
-	const bin = ghBin(env);
-	const hit = accountsCache.get(bin);
-	if (hit && Date.now() - hit.at < ACCOUNTS_TTL_MS) return hit.result;
-	const result = (async () => {
-		const u = await run(bin, ["api", "user"], { cwd, env, timeoutMs: 10_000 });
-		if (u.code !== 0) throw new Error(firstLine(u.err) || "gh api user failed");
-		const login = String(JSON.parse(u.out)?.login ?? "");
-		if (!login) throw new Error("gh api user named no login");
-		const o = await run(bin, ["api", "user/orgs"], { cwd, env, timeoutMs: 10_000 });
-		let orgs: string[] = [];
-		try { orgs = o.code === 0 ? (JSON.parse(o.out) as Array<{ login?: unknown }>).map((x) => String(x?.login ?? "")).filter(Boolean) : []; } catch { /* none */ }
-		return [{ login, kind: "user" as const }, ...[...new Set(orgs)].filter((x) => x !== login).map((x) => ({ login: x, kind: "org" as const }))];
-	})();
-	accountsCache.set(bin, { at: Date.now(), result });
-	result.catch(() => accountsCache.delete(bin));
-	return result;
+// ---- who you can publish as ----
+/** The user, then the organizations they belong to, as the forge that publishes says (plugin API §7.4 `login` with
+ *  `accounts`; for GitHub, `gh api user` and `gh api user/orgs`, asked at most every 30 s). Empty when it can't say. */
+export async function publishAccounts(env: Env): Promise<PublishAccount[]> {
+	const F = await import("../plugins/forges");
+	const forge = await F.publishForge();
+	if (!forge) return [];
+	const l = await F.forgeLogin(forge, { use: "publish", accounts: true }, { env });
+	return l.ok ? l.accounts : [];
 }
 
 // ---- names ----
@@ -188,7 +175,7 @@ export async function publishOptions(path: string, deps: ProjectDeps): Promise<O
 	if (no) return no;
 	const root = i.root!;
 	const ghReady = await deps.ghReady().catch(() => false);
-	const accounts = ghReady ? await ghAccounts(env, root).catch(() => []) : [];
+	const accounts = ghReady ? await publishAccounts(env).catch(() => []) : [];
 	const committed = await hasCommits(root, env);
 	const files = await publishedFiles(root, env, committed);
 	return {
@@ -203,7 +190,7 @@ export async function publishOptions(path: string, deps: ProjectDeps): Promise<O
 const publishing = new Set<string>();
 /**
  * Publish a checkout without origin to GitHub: the first commit when there is none (`git add -A`, "Initial commit"), then
- * `gh repo create <owner>/<name> --private|--public --source <root> --remote origin --push`.
+ * the forge that publishes creates the repository (forge-github: `gh repo create <owner>/<name> --source <root> --push`).
  */
 export async function publishProject(input: PublishInput, deps: ProjectDeps): Promise<PublishOutcome> {
 	const env = deps.env;
@@ -221,7 +208,7 @@ async function publish(input: PublishInput, i: ProjectInspection, root: string, 
 	if (!(await deps.ghReady().catch(() => false))) return bad(GH_NEEDED, "gh");
 	if (!OWNER.test(input.owner)) return bad(`"${input.owner.slice(0, 80)}" isn't a GitHub account name.`, "owner");
 	if (!REPO_NAME.test(input.name)) return bad(`"${input.name.slice(0, 80)}" isn't a name GitHub takes: use letters, digits, ".", "_" and "-" (up to 100).`, "name");
-	const accounts = await ghAccounts(env, root).catch(() => [] as PublishAccount[]);
+	const accounts = await publishAccounts(env).catch(() => [] as PublishAccount[]);
 	if (accounts.length && !accounts.some((a) => a.login.toLowerCase() === input.owner.toLowerCase()))
 		return bad(`The GitHub CLI isn't logged in as ${input.owner} or a member of it: choose ${accounts.map((a) => a.login).join(", ")}.`, "owner");
 	const committed = await hasCommits(root, env);
@@ -246,13 +233,14 @@ async function publish(input: PublishInput, i: ProjectInspection, root: string, 
 	}
 	const branch = await currentBranch(root, env);
 	const full = `${input.owner}/${input.name}`;
-	// The forge that serves the repository it creates (docs/spec/plugin-api.md §7.4) creates it, adds it as origin and pushes.
+	// The forge that creates repositories (docs/spec/plugin-api.md §7.4 `publish`) creates it, adds it as origin and pushes.
 	const F = await import("../plugins/forges");
 	const kept = files !== null ? " The first commit is made; publishing again pushes it." : "";
-	const forge = await F.forgeFor({ remote: `https://github.com/${full}.git` });
+	const forge = await F.publishForge();
+	let made: { remote: string; url: string | null };
 	try {
-		if (!forge) throw new Error("no forge creates repositories here");
-		await F.withForge({ env }, PUBLISH_TIMEOUT_MS, (c) => forge.publishRepository({ path: root, owner: input.owner, name: input.name, visibility: input.visibility }, c));
+		if (!forge) throw new Error("no active forge creates repositories (see `capcomd plugins list`)");
+		made = await F.withForge({ env }, PUBLISH_TIMEOUT_MS, (c) => forge.publishRepository({ path: root, owner: input.owner, name: input.name, visibility: input.visibility }, c));
 	} catch (e) {
 		const p = e as { name?: string; code?: string; hint?: string; message: string };
 		if (p.name === "PluginError" && p.code === "conflict")
@@ -267,7 +255,8 @@ async function publish(input: PublishInput, i: ProjectInspection, root: string, 
 		ok: true, inspection: after,
 		event: {
 			entity: `project:${name}`,
-			text: `Published ${name} (${at}) to github.com/${full}, ${input.visibility}${files !== null ? `, with a first commit of ${files} file${files === 1 ? "" : "s"}` : ""}.`,
+			// Where the forge says it is (https://github.com/acme/app → github.com/acme/app).
+			text: `Published ${name} (${at}) to ${made.url ? made.url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/\/$/, "") : full}, ${input.visibility}${files !== null ? `, with a first commit of ${files} file${files === 1 ? "" : "s"}` : ""}.`,
 			data: { path: root, name, owner: input.owner, repo: full, visibility: input.visibility, firstCommit: files !== null, files },
 		},
 	};

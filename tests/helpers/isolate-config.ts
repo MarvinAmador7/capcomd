@@ -14,3 +14,6 @@ process.env.CAPCOMD_HARNESS_SOCKET = privateHarnessSocket();
 // dirs, the checkout's .relay/, their own ports), as CI runs them; an inherited one is replaced by a fresh temp dir.
 // `bun test --isolate` (the package.json scripts, CI) runs this preload again for every file: one home per file.
 if (process.env.CAPCOMD_HOME) process.env.CAPCOMD_HOME = mkdtempSync(join(tmpdir(), "capcomd-test-home-"));
+// Nor ask the developer's own GitHub CLI (it reads its login from the keychain): the forges ask gh only through
+// CAPCOMD_GH_CLI, so a test that needs gh names its fake there. The live GitHub test (CAPCOMD_GH_LIVE=1) keeps the real one.
+if (process.env.CAPCOMD_GH_LIVE !== "1") process.env.CAPCOMD_GH_CLI ??= "/nonexistent/capcomd-test-gh";
