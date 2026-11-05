@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from "node:path";
 import { PluginHost, type Candidate, type PluginSummary } from "../../packages/plugin/src/host/host";
 import { PluginError } from "../../packages/plugin/src/errors";
+import { eventTypeOwner } from "../../packages/plugin/src/event-type";
 import type { HookRegistry } from "../../packages/plugin/src/host/registry";
 import { CAPABILITY_NAMES } from "../api/contract";
 import { Redactor } from "../agents/redact";
@@ -60,12 +61,41 @@ export function releaseSnapshot(path = pluginsSnapshotPath()) {
   try { if ((JSON.parse(readFileSync(path, "utf8")) as PluginsSnapshot).pid === process.pid) rmSync(path, { force: true }); } catch { /* gone already */ }
 }
 
-export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean } = {}): PluginHost {
+/** A plugin's own event on a run's stream (§4.7.4): a scope event of the run, read back like any other. */
+export type RunEventSink = (runId: string, e: { type: string; entity: string; text: string; data: Record<string, unknown>; key: string }) => Promise<{ seq: number }>;
+
+/** The run's scope actor, when the run exists (a plugin can't create one by writing to it). */
+const scopeSink: RunEventSink = async (runId, e) => {
+  const { existingActor } = await import("../core/relay");
+  const scope = /^run-[A-Za-z0-9_-]+$/.test(runId) ? await existingActor("scope", [runId]) : null;
+  if (!scope) throw new PluginError("not_found", `no run ${runId}`);
+  return scope.recordPluginEvent(e);
+};
+
+/**
+ * Where a plugin's own `plugin.<name>.<event>` goes (§4.7.4): the daemon stream or a run's. The type must be a plugin's
+ * own (the host built it from the manifest's name and a declared event, packages/plugin/src/event-type.ts), so a plugin
+ * never writes a kernel type. Its `entity` is what it named, else `plugin:<name>`; its text is its own sentence.
+ */
+export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventSink } = {}) {
+  const run = o.run ?? scopeSink;
+  return async (e: { type: string; stream: string; entity?: string; text: string; data: Record<string, unknown>; durability?: "durable" | "ephemeral" }): Promise<{ seq: number }> => {
+    const owner = eventTypeOwner(e.type);
+    if (owner?.kind !== "plugin") throw new PluginError("invalid", `not a plugin's own event type: ${e.type}`);
+    if (e.durability === "ephemeral") throw new PluginError("unsupported", "ephemeral plugin events are not written yet: leave durability out");
+    const ev = { type: e.type, entity: e.entity || `plugin:${owner.plugin}`, text: e.text, data: e.data };
+    if (e.stream === "daemon") return o.daemon?.(ev) ?? { seq: 0 };
+    return run(e.stream, { ...ev, key: `plugin-${owner.plugin}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` });
+  };
+}
+
+export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
-    if (e.stream !== "daemon") throw new PluginError("unsupported", `a plugin's own events on run streams are not written yet (${e.type})`);
+    if (e.stream !== "daemon") throw new PluginError("unsupported", `the host writes its own events on the daemon stream only (${e.type})`);
     return o.record?.({ type: e.type, entity: e.entity, text: e.text, data: e.data }) ?? { seq: 0 };
   };
+  const pluginEvent = pluginEventWriter({ ...(o.record ? { daemon: o.record } : {}), ...(o.run ? { run: o.run } : {}) });
   return new PluginHost({
     capcomd: VERSION,
     kernel: CAPABILITY_NAMES.map((n) => `kernel:${n}`),
@@ -83,7 +113,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
       redact: (t) => redactor.text(t),
       // §13.3: one JSON line per log call in the daemon's log, never an event. A CLI's local host keeps its output clean.
       log: (l) => { if (o.log !== false) console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })); },
-      emit: async (e) => record({ ...e, entity: e.entity || `plugin:${e.type}` }),
+      emit: pluginEvent,
     },
     ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins) } : {}),
   });

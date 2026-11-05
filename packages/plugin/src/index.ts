@@ -7,6 +7,7 @@ export * from "./context";
 export * from "./seams";
 export * from "./protocol";
 export * from "./events";
+export { EVENT_NAME_PATTERN, EVENT_TYPE_DOC, EVENT_TYPE_PATTERN, eventTypeOwner, isEventType, pluginEventType } from "./event-type";
 export * from "./load";
 export * from "./semver";
 export * from "./testkit";

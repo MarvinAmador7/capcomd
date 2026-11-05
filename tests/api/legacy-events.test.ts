@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { EventData } from "../../src/api/contract";
 import { dottedType } from "../../src/api/envelope";
+import { isEventType } from "../../packages/plugin/src/event-type";
 import { SCOPE_EVENT_TYPES, strictEventData } from "../../src/api/legacy-events";
 
 test("every type in SCOPE_EVENT_TYPES has a harness.v1 payload schema and a dotted name", () => {
@@ -47,7 +48,7 @@ test("decision 9: every harness.v1 type is dotted lowercase noun.verb-past; MERG
 	// the machine is its own past-tense event (sandbox.resource_deleted).
 	const nouns = new Set(["agent.step", "sandbox.resource_action"]);
 	for (const t of Object.keys(EventData)) {
-		expect(t).toMatch(/^[a-z]+(\.[a-z_]+)+$/);
+		expect(isEventType(t)).toBe(true); // the one event type pattern (packages/plugin/src/event-type.ts)
 		if (!nouns.has(t)) expect(t.split(".").at(-1)!).toMatch(past);
 	}
 	expect(dottedType("MERGED")).toBe("merge.succeeded");

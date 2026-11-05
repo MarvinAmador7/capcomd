@@ -5,6 +5,7 @@ import { redactShapes } from "../agents/redact";
 // either leaves the whole spawn or none of it.
 import { strictEventData, type ScopeEventType } from "../api/legacy-events";
 import { dottedType } from "../api/envelope";
+import { eventTypeOwner } from "../../packages/plugin/src/event-type";
 import { inlineOrAttach } from "../api/inline-cap";
 import { workspaceOf, type AgentWorkspace } from "../api/workspace";
 import { RUN_REPO_KV } from "../merge/run-config";
@@ -376,6 +377,9 @@ export const scopeActor = actor({
         )`);
       // recordStep counts an agent's steps on every write (the STEPS_MAX cap).
       await database.execute(`CREATE INDEX IF NOT EXISTS scope_events_agent_type ON scope_events (agent_id, type)`);
+      // A plugin's own events (plugin.<name>.<event>, recordPluginEvent) carry the plugin's entity and sentence.
+      await addColumn(database, "scope_events", "entity", "TEXT");
+      await addColumn(database, "scope_events", "text", "TEXT");
     },
   }),
 
@@ -945,6 +949,22 @@ export const scopeActor = actor({
       }, { name: "scopeGateEvent" });
       return { ok: true };
     },
+    /** A plugin's own event on the run's stream (plugin API §4.7.4): `type` is plugin.<name>.<event>, which only the
+     *  host writes, for that plugin (the kernel never writes a three-part plugin.* type). `entity` and `text` are the
+     *  plugin's; `data` is already redacted. Never an agent's event (agent_id stays null). `key` dedupes. */
+    async recordPluginEvent(c, params: { type: string; entity: string; text: string; data: Record<string, unknown>; key: string }) {
+      if (eventTypeOwner(params.type)?.kind !== "plugin") throw new UserError(`not a plugin's event type: ${params.type}`, { code: "invalid" });
+      let seq = 0;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const dup = await tx.execute("SELECT seq FROM scope_events WHERE idem_key = ?", params.key);
+        if (dup.length) { seq = Number(dup[0]!.seq); return; }
+        const last = await tx.execute("SELECT COALESCE(MAX(seq), 0) AS s FROM scope_events");
+        seq = Number(last[0]?.s ?? 0) + 1;
+        await tx.execute("INSERT INTO scope_events (seq, at, type, agent_id, data, idem_key, entity, text) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)",
+          seq, Date.now(), params.type, JSON.stringify(params.data), params.key, params.entity, params.text);
+      }, { name: "scopePluginEvent" });
+      return { seq };
+    },
     async isRevoked(c, params: { jti: string }) {
       return { revoked: (await c.db.execute("SELECT 1 FROM revoked WHERE jti = ?", params.jti)).length > 0 };
     },
@@ -1307,7 +1327,9 @@ export const scopeActor = actor({
 
     async getEvents(c, params: { since?: number }) {
       const rows = await c.db.execute("SELECT * FROM scope_events WHERE seq > ? ORDER BY seq", params.since ?? 0);
-      return rows.map((r: any) => ({ seq: Number(r.seq), at: Number(r.at), type: r.type as string, agentId: (r.agent_id as string | null) ?? null, data: JSON.parse(r.data) }));
+      return rows.map((r: any) => ({ seq: Number(r.seq), at: Number(r.at), type: r.type as string, agentId: (r.agent_id as string | null) ?? null, data: JSON.parse(r.data),
+        // Only a plugin's own events have these (recordPluginEvent); every other row reads as before.
+        ...(r.entity != null ? { entity: r.entity as string } : {}), ...(r.text != null ? { text: r.text as string } : {}) }));
     },
   }),
 

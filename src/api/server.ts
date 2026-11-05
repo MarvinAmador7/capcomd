@@ -11,7 +11,7 @@ import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
-import { CreateRunError, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
+import { CreateRunError, entityOf, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
 import { harnessState, type DaemonEvent, type HarnessState } from "./state";
@@ -739,7 +739,7 @@ export function harnessApp(o: ServerOptions) {
 					cursor = head;
 				}
 				const counts = new Map<string, number>();
-				for (const e of all) if (e.seq <= cursor) counts.set(e.agentId ?? runId, (counts.get(e.agentId ?? runId) ?? 0) + 1);
+				for (const e of all) if (e.seq <= cursor) counts.set(entityOf(runId, e), (counts.get(entityOf(runId, e)) ?? 0) + 1);
 				let busy = false;
 				const tick = async () => {
 					if (busy || closed) return;
@@ -747,7 +747,7 @@ export function harnessApp(o: ServerOptions) {
 					try {
 						const out: Array<{ event: string; data: unknown; seq: number }> = [];
 						for (const e of await src.events(runId, cursor)) {
-							const k = e.agentId ?? runId; const n = (counts.get(k) ?? 0) + 1; counts.set(k, n);
+							const k = entityOf(runId, e); const n = (counts.get(k) ?? 0) + 1; counts.set(k, n);
 							const env = envelopes(runId, [e])[0]!; env.entitySeq = n;
 							out.push({ event: env.type, data: env, seq: e.seq });
 							cursor = e.seq;

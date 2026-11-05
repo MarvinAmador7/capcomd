@@ -124,6 +124,15 @@ from:
 | Spans | `plugin.<name>.<op>` |
 | Data directory | `<capcomd home>/state/plugins/<name>/` |
 
+**One pattern for event types.** Every harness.v1 event type, the kernel's and every plugin's, matches
+`EVENT_TYPE_PATTERN` (`packages/plugin/src/event-type.ts`; the envelope schema, `openapi/capcomd.json` and the manifest
+schema are generated from it): the kernel's are dotted lowercase `noun.verb_past` (`run.created`) and never under
+`plugin.` except its own two-part events about plugins (`plugin.loaded`, §13.1); a plugin's own are exactly three parts,
+`plugin.<name>.<e>`, where `<name>` is the manifest's name and `<e>` a `contributes.events` entry
+(`^[a-z][a-z0-9_]*$`). So any name and event the manifest allows make a valid type, the type alone says who wrote the
+event, and a plugin can never write a kernel type. Past tense is the kernel's naming rule for its own types (a plugin's
+SHOULD follow it), not part of the pattern: `agent.step` and `sandbox.resource_action` are nouns.
+
 Seam names (`docker`, `claude`, `github`) and source names (`github`) are **not** prefixed: they are the names users
 select by, and uniqueness is enforced at resolution (§7.1, §16.3).
 
@@ -211,10 +220,12 @@ plugin publishes events instead).
 
 #### 4.7.4 Events
 
-`plugin.<name>.<type>` on the `daemon` stream or a run's. Durable by default, so they are replayed by `GET /v1/events`
-and the SSE stream like any kernel event; `ephemeral` ones are not. `data` is redacted (§11.5) and capped at 64 KB.
-`text` is the plugin's own sentence; the kernel does not write it for plugin events and marks the envelope's text as
-untrusted for clients (`x-untrusted` on `plugin.*` event text in the contract).
+`plugin.<name>.<type>` on the `daemon` stream or a run's. Durable, so they are replayed by `GET /v1/events` and the
+SSE stream like any kernel event; `ephemeral` is refused (`unsupported`) until the host can send events live only. The
+envelope's `entity` is the one the plugin names, else `plugin:<name>`; a run that doesn't exist is `not_found`. `data` is redacted (§11.5) and capped at 64 KB.
+`text` is the plugin's own sentence; the kernel does not write it for plugin events, and the envelope's `text`
+description in the contract tells clients to render a plugin's own event text as plain text, never markdown, links or
+actions (the type alone says it is a plugin's: three parts under `plugin.`, `eventTypeOwner`).
 
 #### 4.7.5 UI surfaces
 
@@ -846,9 +857,9 @@ the host never re-asks a timed-out gate call (the policy applied); a reconnectin
   in the next `hook.dropped`. Gate and modify frames are never dropped; a plugin that cannot keep up with gates times out
   and §6.5 applies.
 - The SSE heartbeat is 15 s (`src/api/server.ts` `HEARTBEAT_MS`). A hooks stream closed for more than 60 s makes the
-  plugin **disconnected** (`plugin.process {event: disconnected}`): gate calls fail with kind `disconnected`, observe
+  plugin **disconnected** (`plugin.process_changed {event: disconnected}`): gate calls fail with kind `disconnected`, observe
   calls queue. The process may reconnect with `Last-Event-ID` within the same session (`reconnected`).
-- A process that exits is restarted with backoff 1 s, 2 s, 4 s … 60 s (`plugin.process {event: restarting, restarts}`),
+- A process that exits is restarted with backoff 1 s, 2 s, 4 s … 60 s (`plugin.process_changed {event: restarting, restarts}`),
   with a **new session and token**. Five exits within 10 minutes → `failed(restart_limit)`. A gate call in flight when
   the process exited is `crashed` (denied).
 - The breaker (§6.5) counts crashes and disconnected gate calls as failures.
@@ -949,7 +960,7 @@ existing keychain entry is mapped to it by the config migration (§17).
 ### 10.4 Validation errors
 
 Config is validated against the schema at `resolved` (layers 1–4) and at run creation (layer 5). Invalid config is
-`failed(config_invalid)` with `plugin.config_invalid {errors: [{path, message}], layer}`; the plugin is **not** run with
+`failed(config_invalid)` with `plugin.config_refused {errors: [{path, message}], layer}`; the plugin is **not** run with
 defaults. `capcomd plugins validate` and `GET /v1/plugins/{name}` show the errors. A run-layer error is a 422 on `POST
 /v1/runs` with `field: "plugins.<name>.<path>"`.
 
@@ -1031,7 +1042,7 @@ ignore `change.kind`s it does not know.
 ### 12.4 Deprecation
 
 A deprecated hook keeps firing for one minor release with `call.deprecated = {since, replacement}`; the host emits
-`plugin.deprecation` once per daemon start per listening plugin; `capcomd plugins validate` warns. After the release it
+`plugin.hook_deprecated` once per daemon start per listening plugin; `capcomd plugins validate` warns. After the release it
 is removed from `HOOKS` and a manifest declaring it fails validation (which is the signal to the author).
 
 ### 12.5 The matrix the loader enforces
@@ -1051,14 +1062,15 @@ is removed from `HOOKS` and a manifest declaring it fails validation (which is t
 ### 13.1 Events every plugin emits automatically
 
 On the `daemon` stream: `plugin.loaded`, `plugin.failed`, `plugin.disposed`, `plugin.version_refused`,
-`plugin.duplicate_refused`, `plugin.config_invalid`, `plugin.hook_failed`, `plugin.suspended`, `plugin.resumed`,
-`plugin.deprecation`, `plugin.process`, `plugin.trusted`. On the run's stream: `plugin.gate_denied` and
+`plugin.duplicate_refused`, `plugin.config_refused`, `plugin.hook_failed`, `plugin.suspended`, `plugin.resumed`,
+`plugin.hook_deprecated`, `plugin.process_changed`, `plugin.trusted`. On the run's stream: `plugin.gate_denied` and
 `plugin.gate_bypassed`. Jobs: `job.started`, `job.ended`. Triggers: `trigger.received`, `trigger.subscribed`,
 `trigger.unsubscribed`. Data shapes: `packages/plugin/src/events.ts` and the fragment's `x-events`. All durable, written
 by the host, with daemon-written `text`; a plugin's `reason` inside them is untrusted. The run-stream ones are written from
 §17.2 step 5 (the gates), as scope events (`PLUGIN_GATE_DENIED`, `PLUGIN_GATE_BYPASSED` in capcomd.v1) by whichever
-process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin's own run-stream events
-(`plugin.<name>.<type>`, §4.7.4) are not written yet.
+process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin's own events (`plugin.<name>.<type>`,
+§4.7.4) are written on either stream: on a run's, as a scope event of that run that keeps the plugin's `entity` and
+`text` (never an agent's event: `agentId` is null).
 
 ### 13.2 `GET /v1/plugins`
 

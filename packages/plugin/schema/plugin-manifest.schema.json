@@ -367,7 +367,7 @@
           }
         },
         "events": {
-          "description": "Event types the plugin emits, without the prefix: emitted as `plugin.<name>.<type>` (§4.7.4)",
+          "description": "Event types the plugin emits, without the prefix: emitted as `plugin.<name>.<type>` (§4.7.4). Lowercase words joined by _, starting with a letter (`verdict`, `thread_posted`), so `plugin.<name>.<type>` is a valid event type",
           "type": "array",
           "items": {
             "type": "string",

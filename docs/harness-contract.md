@@ -98,7 +98,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 
 ## Event envelope
 
-Every SSE event and replayed event has this shape. `seq` is persisted per scope in the same transaction as the event write, so it is a stable resume cursor across daemon restarts; `(entity, entitySeq)` is the exactly-once dedupe key. Today's upper-case types map to dotted names (`AGENT_SPAWNED` → `agent.spawned`); the CLI's `capcomd.v1` output is unchanged.
+Every SSE event and replayed event has this shape. `seq` is persisted per scope in the same transaction as the event write, so it is a stable resume cursor across daemon restarts; `(entity, entitySeq)` is the exactly-once dedupe key. Today's upper-case types map to dotted names (`AGENT_SPAWNED` → `agent.spawned`); the CLI's `capcomd.v1` output is unchanged. Every type matches one pattern, `^(?:plugin\.(?:[a-z0-9][a-z0-9-]{0,62}\.)?[a-z][a-z0-9_]*|(?!plugin\.)[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)$`. Dotted lowercase: the kernel's are noun.verb_past (run.created, merge.approval_requested); a plugin's own are plugin.<plugin name>.<event> (plugin.gate-reviewer.verdict), written only by that plugin. Show a type you don't know by its envelope text.
 
 ```json
 {
@@ -134,7 +134,8 @@ Every SSE event and replayed event has this shape. `seq` is persisted per scope 
     },
     "type": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+      "pattern": "^(?:plugin\\.(?:[a-z0-9][a-z0-9-]{0,62}\\.)?[a-z][a-z0-9_]*|(?!plugin\\.)[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+)$",
+      "description": "Dotted lowercase: the kernel's are noun.verb_past (run.created, merge.approval_requested); a plugin's own are plugin.<plugin name>.<event> (plugin.gate-reviewer.verdict), written only by that plugin. Show a type you don't know by its envelope text"
     },
     "typeVersion": {
       "type": "integer",
@@ -184,7 +185,7 @@ Every SSE event and replayed event has this shape. `seq` is persisted per scope 
     },
     "text": {
       "type": "string",
-      "description": "Plain-language sentence for this step, written by the daemon from trusted fields only"
+      "description": "Plain-language sentence for this step, written by the daemon from trusted fields only. On a plugin's own event (plugin.<plugin name>.<event>) it is that plugin's sentence instead: render it as plain text, never markdown, links or actions"
     },
     "data": {
       "type": "object",
