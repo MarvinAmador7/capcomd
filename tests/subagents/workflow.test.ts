@@ -153,6 +153,22 @@ test("restart mid-step: a worker whose engine host died inside a workflow step w
   expect(events).not.toContain('"DRIVE_FAILED"');
 }, 300_000);
 
+test("an attempt that runs into the engine still starting (internal_error) runs again: no failed attempt, no DRIVE_FAILED", async () => {
+  // Right after a restart the engine can answer internal_error until the actors it routes are ready (a "restart
+  // mid-step" under load, 2026-11-05: one DRIVE_FAILED). Injected here: the first attempt this host starts fails so.
+  const logFrom = readFileSync(engine.logPath, "utf8").length;
+  await engine.stop();
+  process.env.CAPCOMD_TEST_ATTEMPT_ERRORS = "1";
+  try { await engine.start(null); } finally { delete process.env.CAPCOMD_TEST_ATTEMPT_ERRORS; }
+  const run = (await cj(["run", "new"])).j?.runId;
+  const agent = (await cj(["spawn", run, "--profile", "worker", "--task", "make the failing test pass", "--key", "starting"])).j?.agentId;
+  expect(agent).toMatch(/^agt-/);
+  const a = await untilStatus(run, agent, "done", 90_000);
+  expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
+  expect(readFileSync(engine.logPath, "utf8").slice(logFrom)).toContain(`${agent} attempt 1 ran into the engine still starting`);
+  expect((await cj(["events", run])).stdout).not.toContain('"DRIVE_FAILED"');
+}, 300_000);
+
 test("restart mid-watch, after its steps' wakes have fired: the worker still wakes by itself at its watch's deadline", async () => {
   // The live e2e's case (2026-10-30): the engine killed well after the run started, with the workflow waiting in its
   // watch (60 s default here) and every alarm a step armed already fired. The watch's own alarm must still wake it.
