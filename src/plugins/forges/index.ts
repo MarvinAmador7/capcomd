@@ -58,7 +58,7 @@ export class ForgeNotActive extends Error {
 }
 
 /**
- * The forge for a project (§7.1): the one its `merge.forge` names (CAPCOMD_MERGE_FORGE, `.capcomd.json`; a configured
+ * The forge for a project (§7.1): the one its `merge.forge` names (CAPCOMD_MERGE_FORGE; a configured
  * GitHub repository names `github`), else the first active forge whose `matches(remote)` is true in load order. Throws
  * ForgeNotActive for a named forge that isn't active; null when no forge at all claims the remote.
  */

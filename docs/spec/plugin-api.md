@@ -612,7 +612,7 @@ Selection, per use:
 |---|---|---|
 | sandbox | the run's `sandbox` (`POST /v1/runs`, `capcomd run --sandbox`, kv `RUN_SANDBOX_KV`), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForRun` |
 | agent | the resolved profile's `provider` (`PinnedSpec.provider`; ADR-024 `harness.provider`) | `src/agents/adapters.ts` `adapterFor` on the closed union `claude \| codex` |
-| forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set, or `merge.forge` in the target's `.capcomd.json`; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`) | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request and `POST /v1/projects/publish` |
+| forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`) | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request and `POST /v1/projects/publish` |
 
 A profile or run naming an implementation that is not active fails at **validation** (`capcomd profiles validate`,
 `POST /v1/runs` 422), not at spawn. The kernel wraps every seam object in its traced, resilient wrappers
