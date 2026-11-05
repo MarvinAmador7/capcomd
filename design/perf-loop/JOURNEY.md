@@ -127,11 +127,13 @@ disappeared.
 - **The reel didn't always snap.** Replaying a swipe with real timestamps showed AppKit's own deceleration carrying
   the reel past the column edge after the fingers lifted, and a queued scroll delta could be dropped. The old
   synthetic "fling" sent no timestamps, which hid the deceleration and its cost: a swipe with it cost about twice the
-  CPU of the synthetic one. The ~200 pt those replays showed was largely the replay's own: it stamped each event with
-  the time it sent it, so a late timer set AppKit's release velocity, and each replay rested somewhere else. The
-  owner's gestures, recorded by hand on 2026-11-04, measured the bug itself: quick flicks rested on a column edge,
-  slow drags 25 and 31 pt off one. Fixed that day (the reel ends AppKit's deceleration when the fingers lift); all six
-  recordings now replay to within 0.2 pt of an edge (apps/menubar/app/DESKBENCH.md, Recorded gestures).
+  CPU of the synthetic one. The owner's hand confirmed it on 2026-11-04: with the reel as it was, two quick flicks
+  stopped 204 and 126 pt off a column edge and slow drags 25–31 pt off (four earlier flicks happened to land), and
+  AppKit's deceleration was logged under the hand on every gesture. How far a replay went varied more than it should:
+  the replay stamped each event with the time it sent it, so a late timer set AppKit's release velocity (fixed: events
+  carry their recorded times). Fixed that day (the reel ends AppKit's deceleration when the fingers lift): four
+  gestures by hand rested within 0.2 pt of an edge, and every recording replays to within 0.2 pt (apps/menubar/app/
+  DESKBENCH.md, Recorded gestures).
 - **Every column body ran twice per update.** Found by the cause records (C7); explained in §5.4.
 
 ## 5.4 It found a bug in its own bench
@@ -181,8 +183,9 @@ Sweep, step, 4 → 64 agents (main-thread CPU, most points on a busy machine):
 A recorded trackpad swipe is replayed into the window and scored on how well the content followed the fingers:
 position error, stalls, jerk, latency in frames. On three synthetic gestures, the content stayed on the path in all
 48 replays (0 pt error at p95; the spec's bar was 1 pt). The owner recorded six real gestures by hand on 2026-11-04
-(four flicks, two slow drags); they found the reel's landing bug in §5.3. Their replays don't yet reproduce everything
-the hand did: with the reel as it was, the hand's flicks landed on the edge and their replays didn't.
+and more that evening; they measured the reel's landing bug in §5.3. Where a hand's flick lands with the old reel
+varies (the same kind of flick landed on the edge in the morning and 204 pt off in the evening), so a replay is held to
+the bug, not to one landing; with the fix, hand and replay both land on the edge.
 
 ## 5.7 A machine nobody is using
 
@@ -211,9 +214,8 @@ machines. It ran end to end on a Mac mini; trusted numbers from it wait on an un
   session's numbers (§2) were measured before the two-window fix.
 - **Not "trusted numbers on dedicated hardware" yet.** The developer's Mac marks its runs untrusted (late idle
   frames); the Mac mini's runs were behind a locked screen.
-- **Smoothness results are on synthetic gestures.** The six gestures recorded by hand (2026-11-04) back only what
-  the hand measured (where the reel came to rest); their replays don't reproduce the hand's flicks with the old reel
-  yet (DESKBENCH.md, Recorded gestures).
+- **Smoothness results are on synthetic gestures.** The gestures recorded by hand (2026-11-04) back only what the
+  hand measured (where the reel came to rest), not their replays (DESKBENCH.md, Recorded gestures).
 - **No VM runner;** it is a stub.
 - **Not a product yet.** It lives in the capcomd repo as a separate package; extraction (Phase 5) waits for a second
   app or a month of stable schemas. If extracted: its own repo, MIT.
@@ -239,7 +241,7 @@ knobs are off by default, so the app runs today's code. Open threads, if the loo
 
 1. Native thread rows with Core Text and cached measurements (the next native step; §5.5).
 2. The title bar's tab strip scroll, off the main thread.
-3. Trusted runs on the Mac mini (unlock its screen), and replays that reproduce the hand's recorded flicks (§5.6).
+3. Trusted runs on the Mac mini (unlock its screen).
 4. Re-measure the earlier phases' numbers after the two-window fix.
 5. The app bugs in §5.3, for the owner to decide on (the reel's landing is fixed, 2026-11-04).
 6. The menu-bar app's release build crashes the Swift compiler (`CapcomdStore.WindowFit.fitted`), on the base commit

@@ -434,8 +434,8 @@ per step per node), `gains` (b faster) and `losses` (b slower) with each item's 
   decides where they go, as under a hand. Real are that routing, AppKit's gesture handling (its queueing of deltas to the
   next refresh, its own deceleration after release), the reel's snapping and the per-frame work. Not real: the
   WindowServer, the trackpad driver and anything else a hand's event stream carries beyond the recorded numbers; a
-  recorded momentum curve is the recording machine's (what A/B wants, not "feel"). Known gap (2026-11-04): with the
-  reel as it was, the hand's quick flicks rested on a column edge and their replays didn't (see *Recorded gestures*).
+  recorded momentum curve is the recording machine's (what A/B wants, not "feel"). Where a hand's flick lands with the
+  old reel varies from flick to flick (see *Recorded gestures*), so a replay can't be held to one landing.
 - **Typing**: `NSEvent.keyEvent` pairs sent with `window.sendEvent` to the composer made first responder: the real
   field editor path, minus the input method.
 - **Frames**: a `CADisplayLink` callback on the main run loop, not Core Animation's commit log. A late tick means the
@@ -534,8 +534,8 @@ the idle check saw most idle frames late, so absolute frame numbers are high; th
   runs its own deceleration from the release velocity it read in the events' timestamps (+127 pt over 0.5 s in one
   flick) and carries the reel past the edge. The reel swallows the system's momentum, not this. With timestamps 0
   (`fling`, `--set timestamps=zero`) it snaps. *Corrected 2026-11-04 (below):* the deceleration is real and was a bug
-  under a hand too, for slow drags (25–31 pt off); the sizes here (up to 212 pt, different every replay) were largely
-  the replay's, which stamped events with the time it sent them. Fixed: the reel now ends that deceleration.
+  under a hand too (flicks 204 and 126 pt off, slow drags 25–31 pt); how much the sizes here varied (up to 212 pt,
+  different every replay) was the replay's, which stamped events with the time it sent them. Fixed: the reel now ends that deceleration.
 - That deceleration is also the dear part: `swipe` costs about twice the main-thread CPU and 2–3× the late frame time
   of the same gesture with timestamps 0, or of `fling`. `fling` understates what a hand's swipe costs.
 - A delta queued when the fingers lift can be dropped: the reel's slide starts from the offset AppKit has applied so
@@ -545,7 +545,10 @@ What the owner's recordings showed (2026-11-04, MacBook Pro at 120 Hz, crew17, t
 throughout, so frame and CPU numbers are comparisons between runs taken in turn, never absolutes). Six gestures
 recorded by hand with `record-gesture`: four quick flicks (two each way, released at 1,800–4,400 pt/s) and two slow
 drags (360 and 920 pt/s over the last 80 ms, with ±111 pt of vertical travel). The hand's rests are what
-`record-gesture` printed; each replay row is 3 replays (3 runs, the configurations taken in turn).
+`record-gesture` printed; each replay row is 3 replays (3 runs, the configurations taken in turn). These four flicks
+happened to land; that evening, with `DESKBENCH_APPKIT_TRACE=1`, two more flicks by hand on the old reel
+(`--knob reel.release=appkit`) stopped 204 and 126 pt off an edge and two slow drags 28 pt off, AppKit's deceleration
+logged on every gesture; on the fixed reel, four by hand (two flicks, two drags) rested 0.0–0.2 pt off.
 
 | rest off a column edge, pt | hand | replay before (delivery stamps, to the view) | replay now, old reel | replay now, reel fixed |
 |---|---|---|---|---|

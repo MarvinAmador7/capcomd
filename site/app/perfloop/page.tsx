@@ -35,16 +35,16 @@ function Reel({ blank = false, ghost = false }: { blank?: boolean; ghost?: boole
   );
 }
 
-/** The swipe finding as a diagram: the fingers lift, AppKit's deceleration carries the reel past the column edge, and
- *  nothing snaps it back. Only the ~30 pt (the owner's slow drags by hand: 25 and 31 pt) is measured; the curves are
+/** The swipe finding as a diagram: the fingers lift, AppKit's deceleration carries the reel ~200 pt past the column
+ *  edge, and nothing snaps it back. Only the 200 pt is measured (by the replay, then by hand: 204 pt); the curves are
  *  drawn. */
 function Swipe() {
   const y = (pt: number) => 230 - pt * 0.3;
   const fingers = "M40 230 C 90 222, 150 160, 210 " + y(300);
-  const content = `M40 230 C 90 222, 150 160, 210 ${y(300)} C 270 ${y(420)}, 360 ${y(462)}, 560 ${y(467)}`;
+  const content = `M40 230 C 90 222, 150 160, 210 ${y(300)} C 270 ${y(470)}, 360 ${y(625)}, 560 ${y(637)}`;
   const meant = `M210 ${y(300)} C 250 ${y(400)}, 300 ${y(437)}, 560 ${y(437)}`;
   return (
-    <svg className="pl-swipe" viewBox="0 0 600 260" role="img" aria-label="After the fingers lift, the reel keeps coasting about 30 points past the column edge and stays there instead of settling on the edge.">
+    <svg className="pl-swipe" viewBox="0 0 600 260" role="img" aria-label="After the fingers lift, the reel keeps coasting about 200 points past the column edge and stays there instead of settling on the edge.">
       <line className="pl-swipe__edge" x1="30" x2="580" y1={y(437)} y2={y(437)} />
       <text className="pl-swipe__t" x="578" y={y(437) + 18} textAnchor="end">column edge</text>
       <path className="pl-swipe__meant" d={meant} />
@@ -52,8 +52,8 @@ function Swipe() {
       <path className="pl-swipe__fingers" d={fingers} />
       <circle className="pl-swipe__lift" cx="210" cy={y(300)} r="6" />
       <text className="pl-swipe__t" x="222" y={y(300) + 22}>fingers lift</text>
-      <path className="pl-swipe__gap" d={`M548 ${y(437)} V ${y(467)}`} />
-      <text className="pl-swipe__t pl-swipe__t--hot" x="540" y={y(467) - 10} textAnchor="end">≈30 pt past</text>
+      <path className="pl-swipe__gap" d={`M548 ${y(437)} V ${y(637)}`} />
+      <text className="pl-swipe__t pl-swipe__t--hot" x="540" y={y(545) + 5} textAnchor="end">≈200 pt past</text>
     </svg>
   );
 }
@@ -109,7 +109,7 @@ export default function PerfLoopPage() {
           <figure className="pl-fig" data-reveal style={delay(120)}>
             <Swipe />
             <p className="pl-key"><span><i className="pl-key--fingers" />fingers</span><span><i className="pl-key--content" />the reel</span><span><i className="pl-key--meant" />where it should settle</span></p>
-            <figcaption>The first swipe replayed with real timestamps found a bug: after the fingers lifted, AppKit&apos;s deceleration carried the reel past the column edge, and nothing snapped it back. The old synthetic fling sent no timestamps, which hid the bug and its cost. Slow drags by hand rested 25–31 pt off the edge the same way; now the reel lands on it.</figcaption>
+            <figcaption>The first swipe replayed with real timestamps found a bug: AppKit&apos;s deceleration carried the reel up to about 200 pt past the column edge, and nothing snapped it back. The old synthetic fling sent no timestamps, which hid the bug and its cost. A flick by hand later stopped 204 pt off the edge; now the reel lands on it.</figcaption>
           </figure>
           <dl className="pl-figs">
             <div data-reveal><dt>48<small>/48</small></dt><dd>replays of three synthetic gestures with the content on the fingers&apos; path: 0 pt off at p95, against a bar of 1.</dd></div>
