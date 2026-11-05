@@ -540,7 +540,7 @@ The checker puts the branch on the target and runs the checks in one call, so th
 passed (the tree they passed is `tested`); checks that fail ask no judge.
 
 A judge that ran the run's reviewer profile (`reviewer`) adds `review: ReviewReport {profile, agentId, passed, reasons,
-error?, sha, targetSha?, startedAt?}` to its answer (any decision; a malformed one, or one on another hook, is
+error?, retryable?, sha, targetSha?, startedAt?}` to its answer (any decision; a malformed one, or one on another hook, is
 `invalid_result`). The kernel records it as the verification's `review` (capcomd.v1's `result.review`, `judge`, the
 review timings) and keeps "both must pass for the same tree" (`reviewFits`): a review counts only when its `sha` and
 `targetSha` are `tested.commit` and `tested.targetSha`. A verification with a reviewer whose judges all allowed it
@@ -1189,7 +1189,11 @@ the kernel's own agent primitives, not `ctx.agents` (a plugin's spawn has no par
 the `review` report (§6.6.13) instead of a `verdict` event (the verdict is on the reviewer's result and in the
 verification's record). Its `verify.judging` deadline is the maximum, 60 min. It fails closed with its own `deny` (the
 error in its `review`), never by failing the call: three failed calls would suspend it, and a suspended gate denies every
-verify (§6.5). A CLI that ran a verify waits (bounded) for the reviewer it started or stops before it exits.
+verify (§6.5). A call it made that failed in capcomd's own machinery (the engine or an actor didn't answer: not a
+UserError, not a kernel refusal such as an unknown profile or the budget) is tried again, keyed, within the deadline (4
+tries by default, `CAPCOMD_REVIEW_INFRA_TRIES`); still failing, its deny says the reviewer couldn't be run, with the
+error's own text, and its `review` is `retryable: true` (no verdict was given: verify again). A CLI that ran a verify
+waits (bounded) for the reviewer it started or stops before it exits.
 
 ### 15.4 A Slack notifier (`slack-notifier`, out of process)
 
@@ -1504,6 +1508,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.4 | 2026-11-05 | With the gates (§17.2 step 5): the built-in gates in a process that isn't the daemon (§6.1); `merge --operator` asks every landing gate (§6.5); `verify.judging`'s `tested.commit`, judges in order, a judge's `review` report, the kernel's same-tree and no-review rules, stopped reviewers (§6.6.13); the built-in reviewer gate (§15.3); the gate events as scope events, a plugin's own run events not yet (§13.1). |
 | 1.0.5 | 2026-11-05 | With the forges (§17.2 step 6): `LandRequest.branchSha`/`leaseBranch`, `PullRequestRef.mergeSha`, a conflict's `detail` and unknown `targetSha` (all additive); a pr land merges at the checked head (`branchSha`), not a pushed integrated commit; `merge.forge` from `CAPCOMD_MERGE_FORGE` (not `.capcomd.json`), `CAPCOMD_GITHUB_REPO` naming `github`; `forge-git` is `order: post`; `forge-fake` lives in `tests/merge/forge-fake`. |
 | 1.0.6 | 2026-11-05 | Orchestrate means full read visibility and no execution (§16.1, the owner's call after a live run whose planner and lead couldn't `git fetch`): read-only git with fetch and a detached checkout, every capcomd read; edits, git writes, installs, builds and tests refused. Claude Code's lists gain the read-only commands and the refused prefixes (plus three option wildcards); Codex's policy is `denyCommands` as execpolicy rules with its sandbox the agent's (`read-only` can't fetch and can't start in Docker) and its capcomd MCP tools approved; `toolPolicies.orchestrate.denyCommands`, `AgentConfig.denyCommands` and the optional `refusal(line)` (§7.3; all additive); the agent suite accepts `denyCommands` that refuse commits and pushes in place of a read-only sandbox. `capcomd fetch`; a verify's and a merge's `result.combined`; an orchestrate agent that spawned nothing ends failed; the mode is explained to everyone who briefs one; `capcomd logs` shows every agent's tool calls and refusals. |
+| 1.0.7 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

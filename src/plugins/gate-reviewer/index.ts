@@ -9,17 +9,27 @@
 //    awaited; its verdict is the answer, with the review as `review` for the verification's record.
 // No reviewer → allow (the checks decide alone). No verdict → deny (fail closed). A reviewer the verify doesn't need in
 // the end (the checks failed, the work had landed) is stopped by the kernel when the verify finishes.
+// The reviewer's machinery failing (the engine or one of its actors didn't answer a call: not a verdict, not a refusal
+// such as an unknown profile) is tried again within the call's deadline; still failing, the deny says so, with the
+// error's own text, and the review is marked `retryable` (verify again), never as the reviewer's "no".
 import { definePlugin } from "../../../packages/plugin/src/context";
 import type { HookCall, JudgeResult, ReviewReport } from "../../../packages/plugin/src/hooks";
 import type { Principal } from "../../../packages/plugin/src/shapes";
 import type { Budget } from "../../primitives/policy";
 import { env } from "../../utils/env";
+import { RelayError } from "../../core/errors";
+import { internalActorError } from "../../utils/actor-errors";
 import { inBackground } from "../hooks";
 import { reviewBrief } from "./review";
 
-const kernel = () => import("../../primitives/ops");
+/** The kernel the gate calls: its agent primitives and the verification's record (a test replaces them). */
+export const reviewerKernel = {
+  ops: () => import("../../primitives/ops"),
+  opOf: (runId: string, vfyId: string) => opOf(runId, vfyId),
+};
+const kernel = () => reviewerKernel.ops();
 
-interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string }
+interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string; retryable?: boolean }
 /** What a reviewer reads: the agent's commit `sha`, merged onto `target` at `targetSha` (the tree the checks test) when
  *  that is known; without a repository (a dry run) the commit alone. */
 interface ReviewTarget { runId: string; vfyId: string; profile: string; branch: string; sha: string; target: string; targetSha?: string; agentId: string | null; acceptance?: unknown; parent?: string; key?: string }
@@ -50,8 +60,38 @@ async function opOf(runId: string, vfyId: string): Promise<{ branch: string; age
   return { branch: String(op.data.branch ?? ""), agentId: (op.data.agentId as string | null) ?? null, target: String(op.data.target ?? "") };
 }
 
-const reviewFailed = (o: ReviewTarget, reviewer: string | null, e: unknown): Review =>
-  ({ profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` });
+/**
+ * Whether a call the reviewer gate made failed in capcomd's own machinery (the engine, one of its actors, the
+ * connection to them), so that trying again may get past it: not the actor's refusal (a UserError not marked internal)
+ * nor the kernel's (a RelayError: an unknown profile, the budget, a conflict), which would only fail again.
+ */
+export function reviewerInfraFailure(e: unknown): boolean {
+  if (e instanceof RelayError) return e.code === "engine_unreachable";
+  if (internalActorError(e)) return true;
+  const group = (e as { group?: unknown } | null)?.group;
+  if (typeof group === "string") return group !== "user";
+  // A plain error: the connection to the engine (reset, refused, closed, timed out), not a bug in the gate itself.
+  return !(e instanceof TypeError || e instanceof ReferenceError || e instanceof RangeError || e instanceof SyntaxError) && TRANSIENT.test(String((e as Error)?.message ?? e));
+}
+const TRANSIENT = /internal error|ECONNRESET|ECONNREFUSED|EPIPE|socket|fetch failed|network|timed? ?out|coordinator|connection|closed|unavailable|not reachable/i;
+
+/** An error as the verify's record shows it: its own text, with an actor failure's group and code when it has them. */
+export function errorText(e: unknown): string {
+  const x = e as { message?: unknown; group?: unknown; code?: unknown } | null;
+  const msg = String(x?.message ?? e).trim() || "unknown error";
+  const own = internalActorError(e) ?? (typeof x?.group === "string" && typeof x?.code === "string" && x.group !== "user" ? { group: x.group, code: x.code } : null);
+  const tag = own && !msg.includes(own.code) ? ` (${own.group}/${own.code})` : "";
+  return `${msg}${tag}`.slice(0, 300);
+}
+
+const reviewFailed = (o: ReviewTarget, reviewer: string | null, e: unknown): Review => {
+  const retryable = reviewerInfraFailure(e);
+  return { profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: `${retryable ? "the reviewer couldn't be run" : "review failed"}: ${errorText(e)}`, ...(retryable ? { retryable } : {}) };
+};
+
+/** How many times the gate tries a reviewer whose machinery failed, and the pause before each try again. */
+const INFRA_TRIES = () => Math.max(1, Number(env("REVIEW_INFRA_TRIES") ?? 4));
+const INFRA_BACKOFF_MS = (n: number) => Math.min(8000, 1000 * 2 ** (n - 1));
 
 /** Spawn the reviewer for this verification (keyed: a retry reuses it). */
 async function startReview(o: ReviewTarget): Promise<Reviewing> {
@@ -109,7 +149,7 @@ function replacementKey(vfyId: string, first: Reviewing, tested: { taskSha: stri
  */
 async function startEarlyReview(o: { runId: string; vfyId: string; profile: string; acceptance: unknown; parent?: string }): Promise<Reviewing | null> {
   const O = await kernel();
-  const { branch, agentId, target } = await opOf(o.runId, o.vfyId);
+  const { branch, agentId, target } = await reviewerKernel.opOf(o.runId, o.vfyId);
   const pushed = agentId ? ((await O.getAgentOrThrow(o.runId, agentId)).result?.commit as string | undefined) : undefined;
   if (!pushed) return null;
   const of = (targetSha: string | undefined): ReviewTarget => ({ runId: o.runId, vfyId: o.vfyId, profile: o.profile, branch, sha: pushed, target, ...(targetSha ? { targetSha } : {}), agentId, acceptance: o.acceptance ?? undefined, ...(o.parent ? { parent: o.parent } : {}) });
@@ -126,10 +166,11 @@ async function startEarlyReview(o: { runId: string; vfyId: string; profile: stri
 /** The judge's answer: the verdict, with the review for the verification's record (§6.6.13). */
 function answer(review: Review, read: { sha: string; targetSha?: string }, startedAt: number | null): JudgeResult {
   const report: ReviewReport = {
-    profile: review.profile, agentId: review.agentId, passed: review.passed, reasons: review.reasons, ...(review.error ? { error: review.error } : {}),
+    profile: review.profile, agentId: review.agentId, passed: review.passed, reasons: review.reasons, ...(review.error ? { error: review.error } : {}), ...(review.retryable ? { retryable: true } : {}),
     sha: read.sha, ...(read.targetSha ? { targetSha: read.targetSha } : {}), ...(startedAt ? { startedAt: new Date(startedAt).toISOString() } : {}),
   };
   if (review.passed) return { decision: "allow", review: report };
+  if (review.retryable) return { decision: "deny", reason: `${review.error} (not a verdict: the reviewer's machinery failed; verify again)`, reasons: [], review: report };
   return { decision: "deny", reason: review.error ?? `the reviewer (${review.profile}) failed the change`, reasons: review.reasons, review: report };
 }
 
@@ -158,7 +199,8 @@ export const plugin = definePlugin({
       // Fails closed with its own answer, never by throwing: three failed calls in a row would suspend this plugin, and a
       // suspended gate denies every verify, with a reviewer or not (§6.5).
       try { return await judge(call); } catch (e) {
-        return answer({ profile: reviewer, agentId: null, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` }, { sha: v.tested?.commit || "unknown", ...(v.tested?.targetSha ? { targetSha: v.tested.targetSha } : {}) }, null);
+        const retryable = reviewerInfraFailure(e);
+        return answer({ profile: reviewer, agentId: null, passed: false, reasons: [], error: `${retryable ? "the reviewer couldn't be run" : "review failed"}: ${errorText(e)}`, ...(retryable ? { retryable } : {}) }, { sha: v.tested?.commit || "unknown", ...(v.tested?.targetSha ? { targetSha: v.tested.targetSha } : {}) }, null);
       }
     });
   },
@@ -171,14 +213,25 @@ async function judge(call: HookCall<"verify.judging">): Promise<JudgeResult> {
   const tested = { taskSha: v.tested.commit, targetSha: v.tested.targetSha };
   const first = (await early.get(v.vfyId)) ?? null;
   early.delete(v.vfyId);
-  const { branch, agentId } = await opOf(v.runId, v.vfyId);
+  const { branch, agentId } = await reviewerKernel.opOf(v.runId, v.vfyId);
   const parent = parentOf(call.principal);
   const of = (key?: string): ReviewTarget => ({ runId: v.runId, vfyId: v.vfyId, profile: reviewer, branch, sha: tested.taskSha, target: v.target, targetSha: tested.targetSha, agentId, acceptance: acceptance ?? undefined, ...(parent ? { parent } : {}), ...(key ? { key } : {}) });
   // The reviewer must have read the tree the checks tested; one that read another (the branch or the target moved
   // between the reviewer's start and the checks' integration) is replaced by one for the tested tree.
   const O = await kernel();
   let started = first && !("failed" in first) && !O.reviewFits(first, tested) ? (dropReview(v.runId, first, first.sha !== tested.taskSha ? "replaced: it read another commit than the one the checks tested" : "replaced: the target moved before the checks put the change on it"), null) : first;
-  started ??= await startReview(of(first ? replacementKey(v.vfyId, first, tested) : undefined));
-  const review = await finishReview(of(), started, Math.max(1000, Date.parse(call.deadline) - Date.now() - 5_000));
-  return answer(review, "failed" in started ? { sha: tested.taskSha, targetSha: tested.targetSha } : started, "failed" in started ? null : started.startedAt);
+  const until = Date.parse(call.deadline) - 5_000;
+  for (let n = 1; ; n++) {
+    // Keyed: a start tried again finds the reviewer an earlier try made, and a wait tried again awaits the same one.
+    started ??= await startReview(of(first ? replacementKey(v.vfyId, first, tested) : undefined));
+    const review = await finishReview(of(), started, Math.max(1000, until - Date.now()));
+    // A verdict, a refusal, or the reviewer's own end is the answer; the machinery failing is tried again while there's time.
+    const pause = INFRA_BACKOFF_MS(n);
+    if (!review.retryable || n >= INFRA_TRIES() || Date.now() + pause + 1000 > until) {
+      return answer(review, "failed" in started ? { sha: tested.taskSha, targetSha: tested.targetSha } : started, "failed" in started ? null : started.startedAt);
+    }
+    console.error(`[gate-reviewer] ${v.vfyId}: ${review.error}; trying again in ${pause} ms (${n} of ${INFRA_TRIES()})`);
+    await new Promise((r) => setTimeout(r, pause));
+    if ("failed" in started) started = null;
+  }
 }

@@ -12,6 +12,7 @@ import { samplePayload } from "../../packages/plugin/src/testkit";
 import { BUILTINS } from "../../src/plugins/builtins";
 import { gates, hooks, inBackground, settled, useHooks } from "../../src/plugins/hooks";
 import { VERSION } from "../../src/utils/self";
+import * as gateReviewer from "../../src/plugins/gate-reviewer/index";
 
 const OPERATOR = { kind: "operator" as const, clientId: null };
 const at = (entity: string) => ({ principal: OPERATOR, entity, runId: "run-1" });
@@ -141,5 +142,85 @@ describe("the reviewer gate (§15.3)", () => {
     const t = Date.now();
     await settled(100);
     expect(Date.now() - t).toBeLessThan(1000);
+  });
+});
+
+// The live failure (a team-shape eval, 2026-11-05): two verifies failed with "review failed: An internal error occurred"
+// while their reviewers were still running; the reviewer's verdict was never asked for, and a verify again passed.
+describe("the reviewer gate and its machinery failing (not a verdict)", () => {
+  const { reviewerKernel, reviewerInfraFailure, errorText } = gateReviewer;
+  const saved = { ...reviewerKernel };
+  afterEach(() => { Object.assign(reviewerKernel, saved); delete process.env.CAPCOMD_REVIEW_INFRA_TRIES; });
+  const internal = () => Object.assign(new Error("SQLite transaction coordinator is closed."), { group: "sqlite", code: "transaction_closed" });
+  /** A kernel whose await fails `fails` times (as an actor that didn't answer), then gives the reviewer's verdict. */
+  function fakeKernel(o: { fails: number; error?: () => unknown; verdict?: { passed: boolean; reasons: string[] } }) {
+    const calls = { spawn: 0, await: 0 };
+    const ops = {
+      reviewerSpec: () => ({}),
+      getAgentOrThrow: async () => ({ task: "Add a test", result: {} }),
+      spawnAgent: async () => { calls.spawn++; return { agentId: "agt-rv" }; },
+      awaitAgents: async () => {
+        if (++calls.await <= o.fails) throw (o.error ?? internal)();
+        return { agents: [{ agentId: "agt-rv", status: "done", result: { verdict: o.verdict ?? { passed: true, reasons: ["fine"] } } }] };
+      },
+      reviewFits: () => true, cancelAgents: async () => ({}), finishedVerify: async () => false,
+    };
+    reviewerKernel.ops = (async () => ops) as never;
+    reviewerKernel.opOf = async () => ({ branch: "agent/x", agentId: "agt-x", target: "main" });
+    return calls;
+  }
+  async function judged() {
+    const b = BUILTINS.find((x) => (x.manifest as { name: string }).name === "gate-reviewer")!;
+    const { host } = await hostWith({ source: "builtin", manifest: b.manifest, module: b.module });
+    const sample = samplePayload("verify.judging");
+    return host.hooks.fire("verify.judging", "veto", { ...sample, reviewer: "reviewer" } as never, at("vfy-infra"));
+  }
+
+  test("a call that failed in the engine is tried again, and the reviewer's verdict decides", async () => {
+    const calls = fakeKernel({ fails: 1 });
+    const out = await judged();
+    expect(out).toMatchObject({ decision: "allow" });
+    expect(out.reviews?.[0]?.review).toMatchObject({ agentId: "agt-rv", passed: true, reasons: ["fine"] });
+    expect(out.reviews?.[0]?.review.retryable).toBeUndefined();
+    expect(calls).toEqual({ spawn: 1, await: 2 });
+  }, 20_000);
+
+  test("still failing: the deny says the reviewer couldn't be run, with the real error, and is retryable", async () => {
+    process.env.CAPCOMD_REVIEW_INFRA_TRIES = "2";
+    const calls = fakeKernel({ fails: 99 });
+    const out = await judged();
+    expect(out).toMatchObject({ decision: "deny", plugin: "gate-reviewer", failure: null, reasons: [] });
+    expect((out as { text: string }).text).toContain("not a verdict");
+    const review = out.reviews?.[0]?.review;
+    expect(review).toMatchObject({ passed: false, retryable: true, error: "the reviewer couldn't be run: SQLite transaction coordinator is closed. (sqlite/transaction_closed)" });
+    expect(review?.error).not.toContain("internal error");
+    expect(calls.await).toBe(2);
+  }, 20_000);
+
+  test("the reviewer's own no, and a refusal, are answers: not tried again, not retryable", async () => {
+    let calls = fakeKernel({ fails: 0, verdict: { passed: false, reasons: ["wrong value"] } });
+    let out = await judged();
+    expect(out).toMatchObject({ decision: "deny", reasons: ["wrong value"] });
+    expect(out.reviews?.[0]?.review.retryable).toBeUndefined();
+    expect(calls.await).toBe(1);
+    const { RelayError } = await import("../../src/core/errors");
+    calls = fakeKernel({ fails: 99, error: () => new RelayError("conflict", "the run's budget is spent", "free some budget") });
+    out = await judged();
+    expect(out.reviews?.[0]?.review).toMatchObject({ error: "review failed: the run's budget is spent" });
+    expect(out.reviews?.[0]?.review.retryable).toBeUndefined();
+    expect(calls.await).toBe(1);
+  }, 20_000);
+
+  test("what counts as the machinery failing", () => {
+    expect(reviewerInfraFailure(internal())).toBe(true);
+    expect(reviewerInfraFailure(Object.assign(new Error("An internal error occurred"), { group: "rivetkit", code: "internal_error" }))).toBe(true);
+    expect(reviewerInfraFailure(new Error("fetch failed: ECONNRESET"))).toBe(true);
+    expect(reviewerInfraFailure(Object.assign(new Error("no such profile"), { group: "user", code: "config" }))).toBe(false);
+    expect(reviewerInfraFailure(new TypeError("undefined is not an object"))).toBe(false);
+    // An actor action's failure as it crosses now (src/utils/actor-errors.ts): a UserError marked internal.
+    const crossed = Object.assign(new Error("SQLite transaction coordinator is closed."), { group: "user", code: "internal", metadata: { capcomdInternal: true, group: "sqlite", code: "transaction_closed" } });
+    expect(reviewerInfraFailure(crossed)).toBe(true);
+    expect(errorText(crossed)).toBe("SQLite transaction coordinator is closed. (sqlite/transaction_closed)");
+    expect(errorText(Object.assign(new Error("An internal error occurred"), { group: "rivetkit", code: "internal_error" }))).toBe("An internal error occurred (rivetkit/internal_error)");
   });
 });

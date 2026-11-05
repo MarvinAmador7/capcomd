@@ -12,7 +12,7 @@
 // ~/.capcomd, the daemon on :6420, Docker or the Claude Code config: the plugin is loaded with --plugin-dir (a copy
 // with no MCP server of its own) and the server with --mcp-config --strict-mcp-config.
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -125,8 +125,10 @@ sh(["bun", CLI, "setup", "project", "--yes", "--mode", "direct", "--target", "de
 log(`profiles: ${Object.keys(JSON.parse(readFileSync(join(PROJECT, ".capcomd", "agents.json"), "utf8")).agents).join(", ")}`);
 
 // ── 4. the engine ────────────────────────────────────────────────────────────────────────────────
+// The engine's own log (its actors' errors with their real text) is kept with the run, for --keep.
+const engineLog = openSync(join(WORK, "engine.log"), "a");
 const engine = spawn("bun", [CLI, "serve", "--port", String(PORT)], {
-  cwd: WORK, detached: true, stdio: ["ignore", "ignore", "ignore"],
+  cwd: WORK, detached: true, stdio: ["ignore", engineLog, engineLog],
   // CAPCOMD_AGENT=fake: a scripted agent's push names no profile, and the project's default profile (a real Claude
   // worker) would otherwise run against the fake machine.
   env: { ...process.env, ...common, CAPCOMD_AGENT: "fake", CAPCOMD_ENGINE_DATA: join(WORK, "engine"), CAPCOMD_HARNESS_SOCKET: join(WORK, "harness.sock"), CAPCOMD_NO_CONFIG: "1" },

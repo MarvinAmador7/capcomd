@@ -390,9 +390,10 @@ function checkReview(v: unknown): ReviewReport | string {
   if (!Array.isArray(v.reasons) || !v.reasons.every(isStr)) return "review.reasons is a list of strings";
   if (!isStr(v.sha) || !v.sha) return "review.sha is the commit the reviewer read";
   for (const k of ["error", "targetSha", "startedAt"] as const) if (v[k] !== undefined && !isStr(v[k])) return `review.${k} is a string`;
+  if (v.retryable !== undefined && typeof v.retryable !== "boolean") return "review.retryable is a boolean";
   return {
     profile: v.profile, agentId: v.agentId as string | null, passed: v.passed, reasons: (v.reasons as string[]).slice(0, 20).map((r) => r.slice(0, 500)), sha: v.sha,
-    ...(isStr(v.error) ? { error: v.error.slice(0, 1000) } : {}), ...(isStr(v.targetSha) ? { targetSha: v.targetSha } : {}), ...(isStr(v.startedAt) ? { startedAt: v.startedAt } : {}),
+    ...(isStr(v.error) ? { error: v.error.slice(0, 1000) } : {}), ...(v.retryable === true ? { retryable: true } : {}), ...(isStr(v.targetSha) ? { targetSha: v.targetSha } : {}), ...(isStr(v.startedAt) ? { startedAt: v.startedAt } : {}),
   };
 }
 
