@@ -3,7 +3,7 @@
 // spelled at the call site so `scripts/check-hook-modes.ts` can check it against HOOKS (§14.4).
 import { createHash, randomBytes } from "node:crypto";
 import { PluginError, type HookFailureKind } from "../errors";
-import { HOOKS, PATCH_KEYS, type HookCall, type HookListener, type HookName, type HookPatch, type HookPayload, type ModifyHook, type ObserveHook, type VetoHook } from "../hooks";
+import { HOOKS, PATCH_KEYS, type HookCall, type HookListener, type HookName, type HookPatch, type HookPayload, type ModifyHook, type ObserveHook, type ReviewReport, type VetoHook } from "../hooks";
 import type { PluginEventData, PluginEventType } from "../events";
 import type { Disposable } from "../context";
 import type { Principal } from "../shapes";
@@ -20,6 +20,9 @@ export interface FireOptions {
   runId?: string | null;
   agentId?: string | null;
   trace?: { traceId: string; spanId: string };
+  /** Veto hooks: ask every listener even after a deny or a hold (`merge --operator` records and bypasses them, §6.5).
+   *  The outcome is still the first refusal or hold; `vetoes` lists every one, in order. */
+  askAll?: boolean;
 }
 export interface ModifyOptions<N extends ModifyHook> extends FireOptions {
   /** The kernel's patch rule for this hook (§6.6): the payload with `patch` applied, or a `PluginError("widening")`
@@ -29,9 +32,12 @@ export interface ModifyOptions<N extends ModifyHook> extends FireOptions {
 
 /** A refused operation. `plugin` is who refused it (null: the daemon is stopping); the kernel reports
  *  `reason: "plugin:<name>"` with `text` as the hint (§6.2). `failure` is set when the listener failed closed (§6.5). */
-export type Refusal = { decision: "deny"; plugin: string | null; text: string; reasons: string[]; failure: HookFailureKind | null };
-export type Hold = { decision: "hold"; plugin: string; text: string };
-export type VetoOutcome<N extends VetoHook> = { decision: "allow" } | Refusal | (N extends "merge.landing" ? Hold : never);
+export type Refusal = { decision: "deny"; plugin: string | null; text: string; reasons: string[]; failure: HookFailureKind | null } & VetoExtras;
+export type Hold = { decision: "hold"; plugin: string; text: string } & VetoExtras;
+/** What a veto fire collected on the way: the judges' review reports (`verify.judging`, in order) and, with `askAll`,
+ *  every deny and hold. */
+export type VetoExtras = { reviews?: Array<{ plugin: string; review: ReviewReport }>; vetoes?: Array<{ plugin: string; decision: "deny" | "hold"; text: string }> };
+export type VetoOutcome<N extends VetoHook> = ({ decision: "allow" } & VetoExtras) | Refusal | (N extends "merge.landing" ? Hold : never);
 export type ModifyOutcome<N extends ModifyHook> = { decision: "allow"; payload: HookPayload<N>; patches: Array<{ plugin: string; patch: HookPatch<N> }> } | Refusal;
 
 /** Per-plugin hook statistics (§13.2, §13.5). */
@@ -229,27 +235,33 @@ export class HookRegistry {
     const meta = HOOKS[hook];
     if (this.stopping) return meta.gate ? { decision: "deny", plugin: null, text: "daemon stopping", reasons: [], failure: null } : { decision: "allow" };
     const at = this.now();
+    const reviews: NonNullable<VetoExtras["reviews"]> = [];
+    const refused: Array<Refusal | Hold> = [];
+    // A deny or hold is the answer, unless every listener is to be asked (askAll): then the chain goes on.
+    const stop = (r: Refusal | Hold): boolean => { refused.push(r); return !o.askAll; };
     for (const l of this.ordered(hook)) {
       const p = this.plugins.get(l.plugin);
       if (!p) continue;
       const pre = this.preflight(l, p);
       if (pre === "skip") continue;
-      if (pre) return this.refuse(l, o, pre);
+      if (pre) { if (stop(this.refuse(l, o, pre))) break; continue; }
       const r = await this.invoke(l, p, structuredClone(payload), o, at);
       const v = r.ok ? checkVeto(hook, r.value) : r;
       if (!v.ok) {
         const effect = this.failed(l, p, r.callId, v.kind, v.message);
-        if (effect === "denied") return this.refuse(l, o, { kind: v.kind, message: v.message });
+        if (effect === "denied" && stop(this.refuse(l, o, { kind: v.kind, message: v.message }))) break;
         continue;
       }
       this.succeeded(p);
-      if (v.result.decision === "deny") return this.refuse(l, o, null, v.result.reason, v.result.reasons ?? []);
+      if (v.result.review) reviews.push({ plugin: l.plugin, review: v.result.review });
+      if (v.result.decision === "deny") { if (stop(this.refuse(l, o, null, v.result.reason, v.result.reasons ?? []))) break; continue; }
       if (v.result.decision === "hold") {
         this.gateEvent(l, o, "hold", v.result.reason);
-        return { decision: "hold", plugin: l.plugin, text: v.result.reason };
+        if (stop({ decision: "hold", plugin: l.plugin, text: v.result.reason })) break;
       }
     }
-    return { decision: "allow" };
+    const extras: VetoExtras = { ...(reviews.length ? { reviews } : {}), ...(o.askAll ? { vetoes: refused.map((x) => ({ plugin: x.plugin ?? "", decision: x.decision, text: x.text })) } : {}) };
+    return refused[0] ? { ...refused[0], ...extras } : { decision: "allow", ...extras };
   }
 
   private async modify(hook: ModifyHook, payload: unknown, o: ModifyOptions<ModifyHook>): Promise<ModifyOutcome<ModifyHook>> {
@@ -367,9 +379,33 @@ function checkDeny(v: Record<string, unknown>): Checked<Deny> {
   return { ok: true, result: { decision: "deny", reason: v.reason, ...(v.reasons ? { reasons: v.reasons as string[] } : {}) } };
 }
 
-export function checkVeto(hook: VetoHook, v: unknown): Checked<{ decision: "allow" } | Deny | { decision: "hold"; reason: string }> {
+const isStr = (x: unknown): x is string => typeof x === "string";
+
+/** A judge's `review` (§6.6.13): the reasons kept as the kernel keeps a reviewer's (at most 20 of 500 characters). */
+function checkReview(v: unknown): ReviewReport | string {
+  if (!isObject(v)) return "review is an object";
+  if (!isStr(v.profile) || !v.profile) return "review.profile is the reviewer's profile name";
+  if (v.agentId !== null && !isStr(v.agentId)) return "review.agentId is the reviewer's agent id, or null";
+  if (typeof v.passed !== "boolean") return "review.passed is a boolean";
+  if (!Array.isArray(v.reasons) || !v.reasons.every(isStr)) return "review.reasons is a list of strings";
+  if (!isStr(v.sha) || !v.sha) return "review.sha is the commit the reviewer read";
+  for (const k of ["error", "targetSha", "startedAt"] as const) if (v[k] !== undefined && !isStr(v[k])) return `review.${k} is a string`;
+  return {
+    profile: v.profile, agentId: v.agentId as string | null, passed: v.passed, reasons: (v.reasons as string[]).slice(0, 20).map((r) => r.slice(0, 500)), sha: v.sha,
+    ...(isStr(v.error) ? { error: v.error.slice(0, 1000) } : {}), ...(isStr(v.targetSha) ? { targetSha: v.targetSha } : {}), ...(isStr(v.startedAt) ? { startedAt: v.startedAt } : {}),
+  };
+}
+
+export function checkVeto(hook: VetoHook, v: unknown): Checked<({ decision: "allow" } | Deny | { decision: "hold"; reason: string }) & { review?: ReviewReport }> {
   if (!isObject(v)) return { ok: false, kind: "invalid_result", message: "a veto listener answers {decision: allow|deny}" };
   if ("patch" in v) return { ok: false, kind: "invalid_result", message: `${hook} is a veto hook: an answer carries no patch` };
+  if (v.review !== undefined) {
+    if (hook !== "verify.judging") return { ok: false, kind: "invalid_result", message: `only a verify.judging answer carries a review, not ${hook}'s` };
+    const review = checkReview(v.review);
+    if (isStr(review)) return { ok: false, kind: "invalid_result", message: review };
+    const rest = checkVeto(hook, { ...v, review: undefined });
+    return rest.ok ? { ok: true, result: { ...rest.result, review } } : rest;
+  }
   if (v.decision === "allow") return { ok: true, result: { decision: "allow" } };
   if (v.decision === "deny") return checkDeny(v);
   if (v.decision === "hold" && hook === "merge.landing") {

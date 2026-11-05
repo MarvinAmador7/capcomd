@@ -71,6 +71,8 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     process.exit(1);
   }
   process.env.RIVET_RUN_ENGINE_PORT = String(port);
+  // This is the daemon: its verifies are judged by its own plugins, loaded below (src/plugins/hooks.ts gates).
+  (await import("../../plugins/hooks")).daemonHooks();
   // What the engine host starts itself (a paused agent's driver, at its reset) talks to this engine.
   process.env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
   // Every engine keeps its data under capcomd's home, one dir per port (src/engine/data.ts): never rivetkit's shared

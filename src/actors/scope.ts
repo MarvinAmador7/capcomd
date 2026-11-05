@@ -930,6 +930,14 @@ export const scopeActor = actor({
       }, { name: "scopeRevoke" });
       return { revoked: true };
     },
+    /** A plugin gate's audit on the run's stream (plugin API §13.1): a plugin denied or held an operation
+     *  (plugin.gate_denied), or `merge --operator` bypassed plugin vetoes (plugin.gate_bypassed). `key` dedupes. */
+    async recordGateEvent(c, params: { type: "PLUGIN_GATE_DENIED" | "PLUGIN_GATE_BYPASSED"; data: Record<string, unknown>; key?: string }) {
+      await c.db.transaction(async (tx: RawAccess) => {
+        await addEvent(tx, params.type, null, params.data, params.key ?? `gate-${params.type}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+      }, { name: "scopeGateEvent" });
+      return { ok: true };
+    },
     async isRevoked(c, params: { jti: string }) {
       return { revoked: (await c.db.execute("SELECT 1 FROM revoked WHERE jti = ?", params.jti)).length > 0 };
     },

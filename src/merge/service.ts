@@ -6,7 +6,7 @@ import { directMerge, directVerify } from "./direct";
 import { prMerge } from "./pr";
 import { HttpGitHub, githubToken, type GitHubApi } from "./github";
 import type { MergeGate, MergeOutcome, MergeRequest, MergeTimings } from "./types";
-import { hooks, refusedText } from "../plugins/hooks";
+import { hooks, recordGateEvent, refusedText } from "../plugins/hooks";
 
 let githubOverride: GitHubApi | null = null;
 /** Tests inject a fake GitHub adapter. */
@@ -59,9 +59,14 @@ async function mergeLanding(req: MergeRequest, g: MergeGate): Promise<MergeOutco
   const out = await hooks.fire("merge.landing", "veto", {
     merge: g.merge, verification: g.verification, target: { branch: req.target, protected: (await import("../utils/protected")).isProtectedBranch(req.target, runEnv), sha: req.verified?.targetSha ?? "" },
     sha: req.verified?.sha ?? req.expectSha ?? "", fastPath: !!req.verified, operator: g.operator, requestedBy: g.requestedBy,
-  }, { principal: g.requestedBy, entity: g.merge.mrgId, runId: req.runId, agentId: g.requestedBy.kind === "agent" ? g.requestedBy.agentId : null });
+  }, { principal: g.requestedBy, entity: g.merge.mrgId, runId: req.runId, agentId: g.requestedBy.kind === "agent" ? g.requestedBy.agentId : null, askAll: g.operator });
   if (out.decision === "allow") return { bypassed: [] };
-  if (g.operator && out.plugin) return { bypassed: [{ plugin: out.plugin, reason: out.text }] };
+  // `merge --operator` (§6.5): every listener was asked; each that vetoed is named on the run's stream, then it lands.
+  if (g.operator && out.plugin) {
+    const plugins = (out.vetoes ?? [{ plugin: out.plugin, text: out.text }]).map((v) => ({ plugin: v.plugin, reason: v.text }));
+    await recordGateEvent(req.runId, { type: "plugin.gate_bypassed", data: { hook: "merge.landing", entity: g.merge.mrgId, by: "operator", plugins }, key: `gate-bypassed-${g.merge.mrgId}` });
+    return { bypassed: plugins };
+  }
   if (out.decision === "hold") return g.holdSatisfied ? { bypassed: [] } : { status: "failed", reason: out.text, held: { plugin: out.plugin } };
   return { status: "failed", reason: refusedText(out) };
 }

@@ -1411,6 +1411,103 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `plugin.gate_denied`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string",
+      "description": "The plugin that denied or held it"
+    },
+    "hook": {
+      "type": "string",
+      "description": "The gate: verify.starting, verify.judging, merge.landing, approval.deciding or trigger.admitting"
+    },
+    "entity": {
+      "type": "string",
+      "description": "What it was about: the verification (vfy-…) or merge (mrg-…) id"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "deny",
+        "hold"
+      ],
+      "description": "deny refused it; hold parked a merge for a person's approval"
+    },
+    "reason": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text (here the plugin's own words): render as plain text"
+    }
+  },
+  "required": [
+    "plugin",
+    "hook",
+    "entity",
+    "decision",
+    "reason"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the run's stream: a plugin's gate denied a verification or a merge (the operation failed with reason plugin:<name>), or held a merge for a person's approval. Also when the gate failed closed (its listener errored or timed out: `reason` says so). Written by capcomd, never by the plugin"
+}
+```
+
+## `plugin.gate_bypassed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "hook": {
+      "type": "string",
+      "const": "merge.landing"
+    },
+    "entity": {
+      "type": "string",
+      "description": "The merge (mrg-…)"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who bypassed them: operator (`capcomd merge --operator`)"
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text (here the plugin's own words): render as plain text"
+          }
+        },
+        "required": [
+          "plugin",
+          "reason"
+        ]
+      },
+      "description": "Every plugin that denied or held the merge, in the order they were asked"
+    }
+  },
+  "required": [
+    "hook",
+    "entity",
+    "by",
+    "plugins"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the run's stream: `capcomd merge --operator` went on although these plugins denied or held the merge at merge.landing (spec §6.5); the merge's merge.succeeded result carries the same list as bypassedVetoes. Written by capcomd, never by the plugin"
+}
+```
+
 ## `task.added`
 
 ```json

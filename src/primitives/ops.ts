@@ -21,7 +21,8 @@ import type { AttachedSkill } from "../agents/skills";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
-import { parseVerdict, reviewBrief } from "./review";
+import { parseVerdict } from "./review";
+import type { ReviewReport } from "../../packages/plugin/src/hooks";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
@@ -30,7 +31,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, hooks, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 export { startDriver };
 
@@ -1429,6 +1430,7 @@ export function verifyRef(o: VerifyOpts): Promise<any> {
   if (live) return (async () => { const op = await client().scope.getOrCreate([o.runId]).getOp({ opId: id }); if (op) assertSameOp(id, op, given); return live; })();
   return track(id, async () => {
     await assertEngine();
+    await gates(); // its judges (the reviewer gate) listen in this process (plugin API §6.1)
     const op = await client().scope.getOrCreate([o.runId]).getOp({ opId: id });
     if (op) {
       if (op.kind !== "verify") throw new RelayError("not_found", `${id} is a ${op.kind}, not a verification`, "Pass the vfy-… id capcomd verify returned.");
@@ -1447,100 +1449,49 @@ export async function runReviewer(runId: string): Promise<string | undefined> {
 }
 
 /** A reviewer profile's resolved spec (unknown profiles are a config error). */
-function reviewerSpec(profile: string): Record<string, any> | null {
+export function reviewerSpec(profile: string): Record<string, any> | null {
   try { return (resolveAgent(encodeAgentRef(profile)).spec as any) ?? null; } catch (e) {
     if (e instanceof AgentConfigError) throw new RelayError("config", `reviewer: ${e.message}`, "Name an agent profile (`capcomd agents list`), e.g. --reviewer reviewer.");
     throw e;
   }
 }
 
+/** A verification's review (its `review` field): what the judge that ran the run's reviewer reported (§6.6.13). */
 interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string }
-/** What a reviewer reads: the agent's commit `sha`, merged onto `target` at `targetSha` (the tree the checks test) when
- *  that is known; without a repository (a dry run) the commit alone. */
-interface ReviewTarget { runId: string; vfyId: string; profile: string; branch: string; sha: string; target: string; targetSha?: string; agentId: string | null; acceptance?: unknown; parent?: string; key?: string }
-type Reviewing = { agentId: string; sha: string; targetSha?: string; spec: Record<string, any> | null; startedAt: number } | { failed: Review };
 
 /**
- * Whether a reviewer started alongside the checks read what they tested: the same agent commit, put on the same target
- * commit (when the checks say which). One that read another (the branch or the target moved in between) is replaced
- * by one for the tested tree, never counted: both must pass for the same tree.
+ * Whether a review read what the checks tested: the same agent commit, put on the same target commit (when the checks
+ * say which). One that read another (the branch or the target moved in between) never counts: both must pass for the
+ * same tree. The reviewer gate replaces such a reviewer with one for the tested tree.
  */
 export function reviewFits(started: { sha: string; targetSha?: string }, tested: { taskSha: string; targetSha?: string }): boolean {
   if (started.sha !== tested.taskSha) return false;
   return !tested.targetSha || started.targetSha === tested.targetSha;
 }
 
-const reviewFailed = (o: ReviewTarget, reviewer: string | null, e: unknown): Review =>
-  ({ profile: o.profile, agentId: reviewer, passed: false, reasons: [], error: `review failed: ${String((e as Error)?.message ?? e).slice(0, 300)}` });
-
-/** Spawn the reviewer for this verification (keyed: a retry reuses it). */
-async function startReview(o: ReviewTarget): Promise<Reviewing> {
-  try {
-    const spec = reviewerSpec(o.profile);
-    const childTask = o.agentId ? (await getAgentOrThrow(o.runId, o.agentId)).task : null;
-    const requested: Budget = {};
-    if (spec?.maxTurns) requested.turns = spec.maxTurns;
-    if (spec?.timeoutMs) requested.wallSeconds = Math.ceil(spec.timeoutMs / 1000);
-    if (spec?.maxBudgetUsd) requested.usd = spec.maxBudgetUsd;
-    const r = await spawnAgent({
-      runId: o.runId, task: reviewBrief({ criteria: o.acceptance, childTask }), profile: o.profile, key: o.key ?? `review-${o.vfyId}`,
-      ...(o.parent ? { parent: o.parent } : {}), contract: { review: { sha: o.sha, branch: o.branch, target: o.target, ...(o.targetSha ? { targetSha: o.targetSha } : {}), of: o.agentId ?? o.branch } },
-      ...(Object.keys(requested).length ? { budget: requested } : {}), review: true,
-    });
-    return { agentId: r.agentId, sha: o.sha, ...(o.targetSha ? { targetSha: o.targetSha } : {}), spec, startedAt: Date.now() };
-  } catch (e) { return { failed: reviewFailed(o, null, e) }; }
-}
-
-/** Await the reviewer, read its verdict. Fails closed. */
-async function finishReview(o: ReviewTarget, started: Reviewing): Promise<Review> {
-  if ("failed" in started) return started.failed;
-  try {
-    const { agentId, spec } = started;
-    const [a] = (await awaitAgents(o.runId, [agentId], { timeoutMs: spec?.timeoutMs ? spec.timeoutMs + 10 * 60_000 : Infinity })).agents as any[];
-    const v = a?.status === "done" ? (a.result?.verdict ?? null) : null;
-    if (v) return { profile: o.profile, agentId, passed: v.passed === true, reasons: v.reasons ?? [] };
-    return { profile: o.profile, agentId, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "reasons": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
-  } catch (e) { return reviewFailed(o, started.agentId, e); }
-}
-
-/** A reviewer started alongside the checks that turned out not to be needed (the checks failed, or the work had landed
- *  already): stop it, best effort. */
-function dropReview(runId: string, started: Reviewing | null, why: string) {
-  if (started && !("failed" in started)) void cancelAgents(runId, started.agentId, why).catch(() => {});
-}
-
-/** The key of a reviewer that replaces one that read another tree: the tested commit, and the target when it moved. */
-function replacementKey(vfyId: string, early: Reviewing, tested: { taskSha: string; targetSha?: string }): string {
-  const moved = !("failed" in early) && early.sha === tested.taskSha && tested.targetSha;
-  return `review-${vfyId}-${tested.taskSha.slice(0, 12)}${moved ? `-${tested.targetSha!.slice(0, 12)}` : ""}`;
-}
-
 /**
- * The reviewer that starts with the checks, for the agent's commit merged onto the target as it is now (its tip on the
- * remote, one ls-remote). A verify that runs again (its process went away) keeps the target its first reviewer was
- * given, so that reviewer is the same agent (keyed), not a conflict. The target's tip unknown (the remote didn't
- * answer): no early reviewer; one starts after the checks, for the tree they tested. No repository (a dry run): the
- * commit alone, as there is no target to put it on.
+ * The review of a verification whose checks passed, from its judges (§6.6.13). The kernel keeps the gate: a reviewer
+ * configured for it must have judged the tested tree and passed it. A report for another tree, or none at all when the
+ * judges let it through (the reviewer gate isn't active), fails it; judges that denied it before the reviewer was asked
+ * leave no review (the verify has failed already).
  */
-async function startEarlyReview(runId: string, vfyId: string, target: string, parent: string | undefined, of: (targetSha: string | undefined) => ReviewTarget): Promise<Reviewing | null> {
-  const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
-  if (!cfg) return startReview(of(undefined));
-  const prior: any = await client().scope.getOrCreate([runId]).getAgent({ agentId: stableId("agt", `${runId}\0${parent ?? "operator"}`, `review-${vfyId}`) }).catch(() => null);
-  if (prior?.contract?.review) return startReview(of(typeof prior.contract.review.targetSha === "string" ? prior.contract.review.targetSha : undefined));
-  const targetSha = await (await import("../merge/repo")).remoteBranchSha(cfg, target, 15_000).catch(() => null);
-  return targetSha ? startReview(of(targetSha)) : null;
+function reviewOfJudges(profile: string | undefined, judges: { passed: boolean; reviews: Array<{ plugin: string; review: ReviewReport }> } | null, tested: { taskSha: string; targetSha?: string }): { review: Review; startedAt: number | null } | null {
+  if (!profile) return null;
+  const r = judges?.reviews.find((x) => x.review.profile === profile)?.review;
+  if (!r) return judges && !judges.passed ? null : { review: { profile, agentId: null, passed: false, reasons: [], error: "no judge ran the reviewer: the gate-reviewer plugin isn't active (`capcomd plugins list`)" }, startedAt: null };
+  const startedAt = r.startedAt ? Date.parse(r.startedAt) : null;
+  if (!reviewFits(r, tested)) return { review: { profile, agentId: r.agentId, passed: false, reasons: [], error: "the review read another tree than the checks tested" }, startedAt };
+  return { review: { profile: r.profile, agentId: r.agentId, passed: r.passed, reasons: r.reasons, ...(r.error ? { error: r.error } : {}) }, startedAt };
 }
 
-/**
- * Whether the reviewer starts with the checks instead of after them (CAPCOMD_REVIEW_PARALLEL=0 turns it off). The
- * reviewer reads what the checks test (the agent's pushed commit merged onto the target as it is when the verify starts,
- * in its own checkout), not the checks' result, so it needn't wait for them: a verify then takes about
- * max(checks, review) instead of their sum. The gate is unchanged: both must pass, for the same tree (a reviewer that
- * read another commit or another target than the checks tested is replaced by one for the tested tree: reviewFits). The
- * price: when the checks fail (a conflict included), the reviewer has already started, and is cancelled (a few seconds
- * of its tokens).
- */
-const reviewInParallel = () => env("REVIEW_PARALLEL") !== "0";
+/** Review-mode agents a judge started for this verification (contract.review.vfyId) that are still running when it
+ *  ends (its checks failed, the work had landed, another judge denied it): stopped, best effort. */
+function stopReviewers(runId: string, vfyId: string, why: string) {
+  void (async () => {
+    const all: ScopeAgent[] = await client().scope.getOrCreate([runId]).listAgents({});
+    for (const a of all) if ((a.contract as any)?.review?.vfyId === vfyId && !TERMINAL_AGENT.has(a.status)) await cancelAgents(runId, a.agentId, why).catch(() => {});
+  })().catch(() => {});
+}
 
 async function verifyOnce(o: VerifyOpts, vfyId: string) {
   const s = client().scope.getOrCreate([o.runId]);
@@ -1580,11 +1531,9 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
     if (out.decision === "deny") return refusedVerify(runId, op, out);
     acceptance = out.payload.acceptance;
   }
-  const reviewOf = (sha: string, targetSha: string | undefined, key?: string): ReviewTarget => ({ runId, vfyId, profile: reviewProfile!, branch, sha, target, ...(targetSha ? { targetSha } : {}), agentId, acceptance: acceptance ?? undefined, ...(reviewParent ? { parent: reviewParent } : {}), ...(key ? { key } : {}) });
-  // The commit the agent pushed (its result), which the checks are about to test on the target: the reviewer can read
-  // the same already, the commit merged onto the target as it is now.
+  // The commit the agent pushed (its result), which the checks are about to test on the target (a reviewer the reviewer
+  // gate started at verify.starting reads the same already, merged onto the target as it is now).
   const pushed = agentId ? ((await getAgentOrThrow(runId, agentId)).result?.commit as string | undefined) : undefined;
-  const early = reviewProfile && pushed && reviewInParallel() ? await startEarlyReview(runId, vfyId, target, reviewParent, (targetSha) => reviewOf(pushed, targetSha)) : null;
   const c0 = Date.now();
   const res: any = await c.verifier.getOrCreate([runId, vfyId]).verify({
     verifierId: vfyId, taskId: label, branch, runId, target, testOnly: true, ...(d.checks ? { testCommand: d.checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
@@ -1596,22 +1545,14 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
   const alreadyMerged = out.status === "merged";
   const checksPassed = out.status === "verified" || alreadyMerged;
   if (hooks.listening("verify.changed")) verifyChanged(runId, op, { kind: "checked", passed: checksPassed, where: out.timings?.checksWhere ?? (alreadyMerged ? "reused" : "none"), excerpt: out.status === "failed" ? checkExcerpt("output" in out ? String(out.output ?? "") : "") : null });
-  // verify.judging (plugin API §6.6.13): plugins judge the tree the checks passed, alongside the reviewer; every judge must pass.
-  const judging = out.status === "verified" && out.sha && out.targetSha && hooks.listening("verify.judging") ? verifyJudging(runId, op, { sha: out.sha, targetSha: out.targetSha }, acceptance, reviewProfile ?? null, agentId, reviewParent)
-    .catch((e) => ({ passed: false, plugins: [] as string[], deniedBy: "capcomd", reasons: [`the judges could not be asked: ${String((e as Error)?.message ?? e).slice(0, 300)}`] })) : null;
-  let review: Review | null = null;
-  let reviewStarted: number | null = null;
-  if (checksPassed && reviewProfile && out.status === "verified" && out.taskSha) {
-    // The reviewer must have read the tree the checks tested; one that read another (the branch or the target moved
-    // between the reviewer's start and the checks' integration) is replaced by one for the tested tree.
-    const tested = { taskSha: out.taskSha, ...(out.targetSha ? { targetSha: out.targetSha } : {}) };
-    let started = early && !("failed" in early) && !reviewFits(early, tested) ? (dropReview(runId, early, early.sha !== out.taskSha ? "replaced: it read another commit than the one the checks tested" : "replaced: the target moved before the checks put the change on it"), null) : early;
-    started ??= await startReview(reviewOf(out.taskSha, out.targetSha, early ? replacementKey(vfyId, early, tested) : undefined));
-    reviewStarted = "failed" in started ? null : started.startedAt;
-    review = await finishReview(reviewOf(out.taskSha, out.targetSha), started);
-  } else dropReview(runId, early, alreadyMerged ? "not needed: the work is on the target already" : "not needed: the checks failed");
+  // verify.judging (plugin API §6.6.13): the judges (the reviewer gate among them) judge the tree the checks passed; the
+  // checks and every judge must pass, and a reviewer configured for the verify must have passed that same tree.
+  const judges = out.status === "verified" && out.sha && out.targetSha && out.taskSha && hooks.listening("verify.judging") ? await verifyJudging(runId, op, { sha: out.sha, targetSha: out.targetSha, commit: out.taskSha }, acceptance, reviewProfile ?? null, agentId, reviewParent)
+    .catch((e) => ({ passed: false, plugins: [] as string[], deniedBy: "capcomd", reasons: [`the judges could not be asked: ${String((e as Error)?.message ?? e).slice(0, 300)}`], reviews: [] })) : null;
+  const judged = checksPassed && out.status === "verified" && out.taskSha ? reviewOfJudges(reviewProfile, judges, { taskSha: out.taskSha, ...(out.targetSha ? { targetSha: out.targetSha } : {}) }) : null;
+  const review = judged?.review ?? null;
+  const reviewStarted = judged?.startedAt ?? null;
   if (review && hooks.listening("verify.changed")) verifyChanged(runId, op, { kind: "judged", by: `reviewer:${review.profile}`, passed: review.passed, reasons: review.reasons });
-  const judges = judging ? await judging : null;
   const pass = checksPassed && (review ? review.passed : true) && (judges ? judges.passed : true);
   const g = out.timings ?? {};
   const end = Date.now();
@@ -1630,10 +1571,11 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
     checks: { passed: checksPassed, status: out.status, ...(out.status === "failed" ? { reason: out.reason } : {}), ...(out.status === "conflict" ? { files: out.files } : {}), output: "output" in out && out.output ? String(out.output).slice(-2000) : null },
     // `judge` mirrors `review` for callers of the old --judge-profile contract.
     ...(review ? { review, judge: { profile: review.profile, passed: review.passed, feedback: (review.error ?? review.reasons.join("; ")).slice(0, 1000) } } : {}),
-    ...(judges ? { judges } : {}),
+    ...(judges ? { judges: { passed: judges.passed, plugins: judges.plugins, deniedBy: judges.deniedBy, reasons: judges.reasons } } : {}),
     timings,
   };
   const fin = opView(await s.finishOp({ opId: vfyId, state: pass ? "passed" : "failed", result }));
+  if (reviewProfile) stopReviewers(runId, vfyId, alreadyMerged ? "not needed: the work is on the target already" : !checksPassed ? "not needed: the checks failed" : "not needed: the verification ended");
   // A failed check says how on the agent's result too, with the lines of its output that name the failure (the app's card).
   const failedChecks = out.status === "failed" ? { reason: String(out.reason ?? "").slice(0, 300), excerpt: checkExcerpt("output" in out ? String(out.output ?? "") : "") } : {};
   if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: vfyId, pass, commit: result.commit, checks: { passed: checksPassed, status: out.status, ...failedChecks }, ...(review ? { review: { passed: review.passed, agentId: review.agentId } } : {}) } } }).catch(() => {});
@@ -1646,9 +1588,10 @@ function verifyChanged(runId: string, op: import("../actors/scope").ScopeOp, cha
   hooks.fire("verify.changed", "observe", { verification: verificationOf(runId, op), change }, { principal: principalOf(null), entity: `${op.id}#${change.kind === "judged" ? `judged:${change.by}` : change.kind}`, runId, agentId: (op.data.agentId as string | null) ?? null });
 }
 
-/** The plugins' judges of a verification (§6.6.13): the first deny fails it, with its reasons (at most 20 of 500 chars,
- *  as a reviewer's). Fail-closed: a judge that doesn't answer is a deny (the registry's gate policy). */
-async function verifyJudging(runId: string, op: import("../actors/scope").ScopeOp, tested: { sha: string; targetSha: string }, acceptance: unknown, reviewer: string | null, agentId: string | null, reviewParent?: string) {
+/** The plugins' judges of a verification (§6.6.13), in order: the first deny fails it, with its reasons (at most 20 of
+ *  500 chars, as a reviewer's). Fail-closed: a judge that doesn't answer is a deny (the registry's gate policy). The
+ *  reviews the judges reported come back with it. */
+async function verifyJudging(runId: string, op: import("../actors/scope").ScopeOp, tested: { sha: string; targetSha: string; commit: string }, acceptance: unknown, reviewer: string | null, agentId: string | null, reviewParent?: string) {
   const a = agentId ? await getAgentOrThrow(runId, agentId).catch(() => null) : null;
   const judges = hooks.order("verify.judging");
   const out = await hooks.fire("verify.judging", "veto", { verification: { ...verificationOf(runId, op), tested }, acceptance, task: a ? untrusted(a.task, a.parent ?? "operator") : null, reviewer },
@@ -1661,7 +1604,7 @@ async function verifyJudging(runId: string, op: import("../actors/scope").ScopeO
       if (denied) break;
     }
   }
-  return { passed: out.decision !== "deny", plugins: judges, deniedBy: out.decision === "deny" ? (out.plugin ?? "daemon stopping") : null, reasons };
+  return { passed: out.decision !== "deny", plugins: judges, deniedBy: out.decision === "deny" ? (out.plugin ?? "daemon stopping") : null, reasons, reviews: out.reviews ?? [] };
 }
 
 /** A verification a verify.starting plugin refused: failed, with the plugin's reason, before anything ran. */
@@ -1670,6 +1613,7 @@ async function refusedVerify(runId: string, op: import("../actors/scope").ScopeO
   const reason = refusedText(out);
   const result = { pass: false, branch: op.data.branch ?? null, target: op.data.target ?? null, commit: null, checks: { passed: false, status: "refused", reason, output: null }, refused: { plugin: out.plugin, reason: out.text }, timings: { totalMs: 0, checksMs: 0, queueMs: 0 } };
   const fin = opView(await s.finishOp({ opId: op.id, state: "failed", result }));
+  if (op.data.reviewProfile) stopReviewers(runId, op.id, "not needed: a plugin refused the verification");
   const agentId = (op.data.agentId as string | null) ?? null;
   if (agentId) await s.annotateResult({ agentId, patch: { verification: { id: op.id, pass: false, commit: null, checks: { passed: false, status: "refused", reason } } } }).catch(() => {});
   return fin;
