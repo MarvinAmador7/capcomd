@@ -1272,8 +1272,8 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    the caller's own, so an orchestrate agent may ask for it from its VM: it is how a router knows the state of the
    combined code without executing anything itself (in-VM `verify` takes only a child, and a host verify of the goal
    branch onto itself runs no checks). Rules: the commit is the branch's tip when asked (`result.commit`); the command is
-   an operator-named check (`--check`), else the one pinned to the agent checked, else the run's (an in-VM call can't
-   pass `--checks`); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
+   an operator-named check (`--check`), else the one pinned to the agent checked, else the run's (the repository's command; with none,
+   the run's one named check, and with several the caller must name one; an in-VM call can't pass `--checks`); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
    run once and a later one gets the record (`--key` checks a commit again); a tree that already passed the same
    command in the run isn't run again (`checks.where: "reused"`); the check's sandbox takes a machine slot where the
    run's place has a cap (§16.2 rule 3; `src/providers/capacity.ts` `holdSlot`), waiting with the agents, and gives up
