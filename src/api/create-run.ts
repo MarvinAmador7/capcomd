@@ -6,7 +6,7 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { defaultAgentsFile } from "../utils/home";
 import { applyConfig, projectConfigPath, readConfig } from "../config/store";
-import { REPO_ENV_KEYS } from "../merge/config";
+import { REPO_ENV_KEYS, loadMergeConfig } from "../merge/config";
 import { env as envVar } from "../utils/env";
 import { selfArgv } from "../utils/self";
 import { CreateRunError, type CreateRunInput } from "./source";
@@ -69,6 +69,11 @@ export function projectSource(repo: string, base: Env = process.env): Env {
 	return { ...ctx.env, CAPCOMD_AGENTS_FILE: envVar("AGENTS_FILE", ctx.env) ?? defaultAgentsFile(ctx.env, ctx.cwd) };
 }
 
+/** The forge a run's settings name (`merge.forge`), or null; a config the CLI would refuse anyway names none here. */
+function forgeNamed(env: Env): string | null {
+	try { return loadMergeConfig(env)?.forge ?? null; } catch { return null; }
+}
+
 /** The CLI errors that mean "not like this" (422), as opposed to a daemon fault. */
 const REFUSALS = new Set(["usage", "config", "not_found", "conflict"]);
 
@@ -85,6 +90,10 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 		const s = await (o.sandboxCheck ?? sandboxAvailable)(input.sandbox, ctx.env);
 		if (!s.available) throw new CreateRunError(`sandbox ${input.sandbox} isn't available: ${s.reason}`);
 	}
+	// The forge the project names (CAPCOMD_MERGE_FORGE) must be one of this daemon's active forges (plugin API §7.1): a
+	// 422 now, not a failed merge later.
+	const off = await (await import("../plugins/forges")).inactiveForge(forgeNamed(ctx.env));
+	if (off) throw new CreateRunError(`${off.message}. ${off.hint}`);
 	const [cmd, ...args] = selfArgv("run", "--detach", "--json", "--run-id", input.runId,
 		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []),
 		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.model ? [`--planner-model=${input.model}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []),

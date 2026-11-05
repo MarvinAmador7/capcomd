@@ -76,10 +76,9 @@ The full list, with approaches and sizes, is in [ROADMAP.md](ROADMAP.md). The bi
 ```bash
 bun run setup                  # installs the CLI/engine, apps/canvas and apps/tui
 bun run typecheck
-bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP (~1 min)
-bun run test:scenarios         # CI's regression suite, about 3.5 min on macOS, 6.5 min on Linux
-bun test tests/agents tests/primitives tests/merge
-(cd apps/tui && bun test)
+bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages
+bun run test:apps              # apps/canvas and apps/tui
+bun run test:scenarios         # CI's regression suite (scenarios, sub-agents, primitives, agents, merges; 7 CI shards)
 scripts/mac-subagents-e2e.sh   # live: needs BOXD_API_KEY, gh, and working claude + codex logins
 scripts/mac-agent-ops-e2e.sh   # live: notices, send to a running agent, spawn --continue (claude login)
 ```

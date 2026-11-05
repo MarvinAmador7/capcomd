@@ -4,7 +4,7 @@
 // checks every answer again and writes what `capcomd setup project` writes, through the same code
 // (src/config/project-setup.ts), then adds the folder to capcomd's projects. Only GitHub checkouts: the repository is
 // always the checkout's origin, never a URL the client sends.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
@@ -53,7 +53,8 @@ export interface ProjectDeps {
 	env: Env;
 	/** GET /v1/logins: who each agent logs in as, per place. */
 	logins: () => Promise<LoginState[]>;
-	/** `gh auth status` succeeds on the daemon's machine (PR mode needs it). */
+	/** The user's own login at the forge that publishes is on the daemon's machine (the daemon: `publishLogin`, for GitHub
+	 *  `gh auth status`): inspect's `ghReady` (PR mode needs it), and publishing. */
 	ghReady: () => Promise<boolean>;
 }
 
@@ -121,7 +122,7 @@ export async function inspectProject(path: string, deps: ProjectDeps): Promise<P
 /** GET /v1/projects/branches (capability runs.goal_branch): the run setup screen's base menu and goal branch. */
 export interface ProjectBranchesQuery { path: string; goal?: string; goalBranch?: string; base?: string }
 export interface ProjectBranchesResult {
-	path: string; root: string | null; github: string | null; source: BranchListing["source"]; note: string | null;
+	path: string; root: string | null; github: string | null; source: "github" | "git" | "local"; note: string | null;
 	defaultBranch: string | null; branches: string[]; projectTarget: string | null; suggestedBase: string | null;
 	suggestedGoalBranch: string | null; goalBranchProblem: string | null; baseProblem: string | null;
 }
@@ -134,20 +135,22 @@ export async function projectBranches(q: ProjectBranchesQuery, deps: ProjectDeps
 	const root = isDir ? gitRoot(dir) : null;
 	const origin = root ? originUrl(root) : "";
 	const github = origin ? githubRepoOf(httpsRemote(origin)) : null;
+	// The project's own settings (its .capcomd/config.json env) count, as they do for its runs: its protected branches,
+	// and the forge it names (CAPCOMD_MERGE_FORGE), which reads origin's branches (plugin API §7.4).
+	const cfgPath = root ? projectConfigPath(root, deps.env) : null;
+	const env: Env = { ...deps.env, ...((cfgPath ? readConfig(cfgPath).env : undefined) ?? {}) };
 	const listing: BranchListing = root
-		? await (deps.listBranches ?? listBranches)({ remote: origin ? "origin" : null, github, cwd: root, local: () => ({ defaultBranch: originHead(root) || null, branches: remoteBranches(root, 500) }) })
+		? await (deps.listBranches ?? listBranches)({ remote: origin || null, forge: env.CAPCOMD_MERGE_FORGE ?? env.RELAY_MERGE_FORGE ?? null, cwd: root, local: () => ({ defaultBranch: originHead(root) || null, branches: remoteBranches(root, 500) }) })
 		: { defaultBranch: null, branches: [], source: "local", note: `${tilde(dir, deps.env)} isn't a git checkout.` };
 	const projectTarget = root ? projectValues(root)?.target ?? null : null;
 	const suggestedBase = q.base ?? projectTarget ?? listing.defaultBranch;
-	// The project's own protected branches (its .capcomd/config.json env) count, as they do for its runs.
-	const cfgPath = root ? projectConfigPath(root, deps.env) : null;
-	const env: Env = { ...deps.env, ...((cfgPath ? readConfig(cfgPath).env : undefined) ?? {}) };
 	const listed = listing.source !== "local" && listing.branches.length > 0;
 	const baseProblem = q.base === undefined ? null : (G.baseProblem(q.base) ?? (listed && !listing.branches.includes(q.base) ? `${q.base} isn't a branch of ${github ?? "the repository"}. Pick one of its branches.` : null));
 	const goalBranchProblem = q.goalBranch === undefined ? null : (G.goalBranchProblem(q.goalBranch, { base: suggestedBase, env })
 		?? (G.collides(q.goalBranch, listing.branches) ? `${q.goalBranch} already exists on the remote (or clashes with a branch there): each run's work lands on a branch of its own. Pick another name.` : null));
 	return {
-		path: q.path, root, github, source: listing.source, note: listing.note, defaultBranch: listing.defaultBranch, branches: listing.branches, projectTarget, suggestedBase,
+		// The built-in forges say github or git; another forge says its own name (the contract lists the built-ins').
+		path: q.path, root, github, source: listing.source as ProjectBranchesResult["source"], note: listing.note, defaultBranch: listing.defaultBranch, branches: listing.branches, projectTarget, suggestedBase,
 		suggestedGoalBranch: q.goal !== undefined && q.goal.trim() ? G.suggestGoalBranch(q.goal, listing.branches) : null, goalBranchProblem, baseProblem,
 	};
 }
@@ -228,20 +231,13 @@ export function configuredText(o: { name: string; root: string; mode: string; ta
 	return `Set up ${o.name} (${tilde(o.root, env)}): ${o.mode === "pr" ? "pull requests" : "direct pushes"} into ${o.target}, with ${o.agents.map((a) => AGENT_LABEL[a]).join(" and ")}.`;
 }
 
-// ---- `gh auth status` on the daemon's machine, cached ----
-const GH_TTL_MS = 30_000;
-let ghCache: { at: number; result: Promise<boolean> } | null = null;
-export function resetGhCheck() { ghCache = null; }
-/** `gh auth status` exits 0 within 5 s (CAPCOMD_GH_CLI names the binary). Asked at most every 30 s. */
-export function ghReady(env: Env = process.env): Promise<boolean> {
-	if (ghCache && Date.now() - ghCache.at < GH_TTL_MS) return ghCache.result;
-	const result = new Promise<boolean>((done) => {
-		let p: ReturnType<typeof spawn>;
-		try { p = spawn(env.CAPCOMD_GH_CLI ?? "gh", ["auth", "status"], { stdio: "ignore", env: env as NodeJS.ProcessEnv }); } catch { return done(false); }
-		const t = setTimeout(() => { p.kill("SIGKILL"); done(false); }, 5_000);
-		p.on("error", () => { clearTimeout(t); done(false); });
-		p.on("exit", (c) => { clearTimeout(t); done(c === 0); });
-	});
-	ghCache = { at: Date.now(), result };
-	return result;
+/**
+ * The user's own login for publishing on this machine (the daemon's ProjectDeps.ghReady): the forge that creates
+ * repositories (plugin API §7.4 `publishForge`) says whether its login is here (`login` for `publish`; for GitHub,
+ * `gh auth status`). False when no active forge publishes. In `env` (CAPCOMD_GH_CLI names the gh binary).
+ */
+export async function publishLogin(env: Env = process.env): Promise<boolean> {
+	const F = await import("../plugins/forges");
+	const forge = await F.publishForge();
+	return !!forge && (await F.forgeLogin(forge, { use: "publish" }, { env })).ok;
 }

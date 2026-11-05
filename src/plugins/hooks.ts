@@ -46,7 +46,7 @@ export async function gates(): Promise<void> {
   if (daemon) return daemon.ready;
   if (!local) {
     const l: Local = { registry: null, started: Promise.resolve() };
-    l.started = import("./host").then(async (h) => { l.registry = await h.localHost(); })
+    l.started = import("./host").then(async (h) => { l.registry = (await h.localHost()).hooks; })
       .catch((e) => console.error(`capcomd: the built-in gates did not start: ${(e as Error)?.message ?? e}`));
     local = l;
   }

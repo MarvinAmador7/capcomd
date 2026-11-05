@@ -167,7 +167,8 @@ describe("pr mode: the forge opens and merges the pull request at the checked he
     await produceFakeWork(r.cfg, { ...req("p3", "t"), epoch: 1 });
     const out = await mergeTask(req("p3", "t"), withFake(r.cfg, { forge: "git" }));
     expect(out).toMatchObject({ status: "failed" });
-    expect((out as { reason: string }).reason).toContain("pr mode needs a GitHub repo");
+    // Said in the words of the active forges with pull requests (here the test forge and GitHub).
+    expect((out as { reason: string }).reason).toMatch(/^pr mode needs a (.+ or )?GitHub repo/);
     fake.pullRequests = false;
     expect((await mergeTask(req("p3", "t"), withFake(r.cfg))).status).toBe("failed");
     expect(fake.lands.length).toBe(0);
