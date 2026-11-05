@@ -134,8 +134,11 @@ async function githubTokenForGit(): Promise<string | null> {
 
 /**
  * The environment host git gets for `remote`: no prompts, only the plain protocols, and, for an https remote on
- * github.com, the user's GitHub token as a credential helper scoped to https://github.com (after the user's own
- * helpers, which git asks first), with the token in this one process's environment, never in a file or a URL.
+ * github.com, the user's GitHub token as the only credential helper for https://github.com, with the token in this one
+ * process's environment, never in a file or a URL. The helper list is reset first: git hands a credential that worked to
+ * every helper in the list to `store`, so with the user's own helpers still listed (macOS git's system config lists
+ * `osxkeychain`) the token would be saved in their keychain or credential store, and a saved copy, once the token
+ * changes, would be offered first and fail. Without a token, or for another remote, the user's own helpers apply.
  */
 export async function hostCredentialEnv(remote: string, source: Record<string, string | undefined> = process.env): Promise<Record<string, string>> {
   const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: ALLOWED_PROTOCOLS };
@@ -146,9 +149,12 @@ export async function hostCredentialEnv(remote: string, source: Record<string, s
   return {
     ...env,
     CAPCOMD_GIT_TOKEN: token,
-    GIT_CONFIG_COUNT: String(n + 1),
+    GIT_CONFIG_COUNT: String(n + 2),
+    // An empty helper clears the helpers listed before it (system, global, local) for https://github.com.
     [`GIT_CONFIG_KEY_${n}`]: "credential.https://github.com.helper",
-    [`GIT_CONFIG_VALUE_${n}`]: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=$CAPCOMD_GIT_TOKEN"; }; f',
+    [`GIT_CONFIG_VALUE_${n}`]: "",
+    [`GIT_CONFIG_KEY_${n + 1}`]: "credential.https://github.com.helper",
+    [`GIT_CONFIG_VALUE_${n + 1}`]: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=$CAPCOMD_GIT_TOKEN"; }; f',
   };
 }
 

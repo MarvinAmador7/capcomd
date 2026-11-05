@@ -1042,15 +1042,17 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    ones it had when it was made, and it has no alternates; else it is refused (`HostRepoRefused`) and a disposable one is
    made again. `lsRemote` runs outside any repository. The remote is always the repository's URL as capcomd knows it,
    never a remote's name. Git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_ALLOW_PROTOCOL=file:git:http:https:ssh` (no
-   `ext::`); the user's own git settings (their credential helper, ssh keys, global `url.*` rewrites) apply, and for an
-   https remote on github.com their GitHub token (`GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`) is offered after their
-   own helpers, scoped to `https://github.com`, in that one process's environment.
+   `ext::`); the user's own git settings (their credential helper, ssh keys, global `url.*` rewrites) apply, except that
+   for an https remote on github.com, when capcomd has the user's GitHub token (`GITHUB_TOKEN`, `GH_TOKEN` or
+   `gh auth token`), it is the only credential helper for `https://github.com` (the helper list is reset first, so git
+   never hands the token to the user's own helpers, such as `osxkeychain`, to store), in that one process's environment.
 3. `tests/unit/host-git-lint.test.ts` fails when a network git command is spelled anywhere else, or a credential helper
    is built outside `host-git.ts`; `tests/unit/host-git-credentials.test.ts` plants each vector above and checks that
    no planted command sees a token and nothing goes anywhere but the run's repository.
 
 Checks that run on the host (`CAPCOMD_CHECKS=host`, or the test sandboxes) run agent-written code as the operator, which
 no git setting can contain: there a planted setting or hook in the merge clone is refused (the merge fails), but the
+check is a tripwire, not a boundary (that code can also rewrite the host repo's marker, or race the check), and the
 code could read the operator's credentials directly. Use a real sandbox for agents you don't trust.
 
 ## 12. Versioning and compatibility

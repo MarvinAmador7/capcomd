@@ -17,7 +17,7 @@ import { bareRepo } from "../merge/gitfixture";
 import { FakeProvider } from "../../src/providers/fake";
 import type { ExecResult, VmId } from "../../src/providers/sandbox";
 import { Git } from "../../src/merge/git";
-import { HostRepoRefused, hostRepoProblems, initHostRepo, lsRemote, remoteGit } from "../../src/merge/host-git";
+import { HostRepoRefused, hostCredentialEnv, hostRepoProblems, initHostRepo, lsRemote, remoteGit } from "../../src/merge/host-git";
 import { pushFromSandbox, sendToSandbox, type SandboxGit } from "../../src/merge/transfer";
 import { directMerge } from "../../src/merge/direct";
 import { produceFakeWork } from "../../src/merge/fakework";
@@ -202,6 +202,33 @@ describe("the host side: credentialed git only in a host repo capcomd made, by U
       expect(l.stdout).toContain("refs/heads/main");
       expect(l.stdout).not.toContain("only-in-evil");
     } finally { process.chdir(cwd); }
+  });
+
+  test("the GitHub token is never handed to the user's own credential helpers to store (macOS git lists osxkeychain)", async () => {
+    // A user helper (as osxkeychain, in the system config) that records every request; git hands a credential that
+    // worked to every listed helper with `store`. No system config here, so the real keychain is never touched.
+    const home = mkdtempSync(join(tmpdir(), "capcomd-home-"));
+    const log = join(home, "user-helper.log");
+    const helper = join(home, "user-helper.sh");
+    writeFileSync(helper, `#!/bin/sh\necho "op=$1" >> "${log}"\ncat >> "${log}"\n`);
+    chmodSync(helper, 0o755);
+    writeFileSync(join(home, ".gitconfig"), `[credential]\n\thelper = ${helper}\n`);
+    const env = { ...(await hostCredentialEnv("https://github.com/o/r.git", {})), HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, ".gitconfig") };
+    const git = (op: string, input: string) => {
+      const p = Bun.spawnSync(["git", "credential", op], { cwd: home, env: { PATH: process.env.PATH!, ...env }, stdin: new TextEncoder().encode(input) });
+      return { code: p.exitCode, out: p.stdout.toString() };
+    };
+    // What git does around an https push: fill, then (it worked) approve.
+    const filled = git("fill", "protocol=https\nhost=github.com\npath=o/r.git\n\n");
+    expect(filled.code).toBe(0);
+    expect(filled.out).toContain(`password=${TOKEN}`);
+    expect(git("approve", filled.out + "\n").code).toBe(0);
+    const seen = existsSync(log) ? readFileSync(log, "utf8") : "";
+    expect(seen).not.toContain(TOKEN);
+    expect(seen).not.toContain("op=store");
+    // Another host still gets the user's own helper.
+    expect(git("fill", "protocol=https\nhost=gitlab.com\n\n").out).not.toContain(TOKEN);
+    expect(readFileSync(log, "utf8")).toContain("host=gitlab.com");
   });
 
   test("a merge whose host-run checks plant a pushInsteadOf and a pre-push hook in the shared clone: refused, nothing lands anywhere", async () => {

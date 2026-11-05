@@ -421,9 +421,12 @@ describe("agent config, redaction, credentials, egress", () => {
     try {
       const env = await hostCredentialEnv("https://github.com/o/r.git", {});
       expect(env.CAPCOMD_GIT_TOKEN).toBe("ghs_shortlived0123456789abcdef");
-      expect(env.GIT_CONFIG_KEY_0).toBe("credential.https://github.com.helper");
-      expect(env.GIT_CONFIG_VALUE_0).not.toContain("ghs_");
-      expect(env.GIT_CONFIG_VALUE_0).toContain("$CAPCOMD_GIT_TOKEN");
+      // The helper list for https://github.com is reset, then capcomd's helper (the user's helpers don't get it to store).
+      expect(env.GIT_CONFIG_COUNT).toBe("2");
+      expect([env.GIT_CONFIG_KEY_0, env.GIT_CONFIG_VALUE_0]).toEqual(["credential.https://github.com.helper", ""]);
+      expect(env.GIT_CONFIG_KEY_1).toBe("credential.https://github.com.helper");
+      expect(env.GIT_CONFIG_VALUE_1).not.toContain("ghs_");
+      expect(env.GIT_CONFIG_VALUE_1).toContain("$CAPCOMD_GIT_TOKEN");
       // No `ext::` (it runs a command), no prompts.
       expect(env.GIT_ALLOW_PROTOCOL).toBe("file:git:http:https:ssh");
       expect(env.GIT_TERMINAL_PROMPT).toBe("0");
