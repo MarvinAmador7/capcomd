@@ -89,6 +89,18 @@ test("the output and a failure come back whole; identical checks at once run onc
   const again = await w.cj(["check", run, "trunk", "--checks", cmd, "--key", "flaky"]);
   expect(again.j.id).not.toBe(x.j.id);
   expect(readFileSync(marks, "utf8").trim().split("\n")).toEqual(["ran", "ran"]);
+  // A run whose only checks are named ones (a project's `run.checks`, no test command): its one check is the default
+  // (not "nothing ran: pass"); with several, the caller names one.
+  const noCmd = { ...w.env, CAPCOMD_TEST_COMMAND: "" };
+  const last = (s: string) => JSON.parse(s.trim().split("\n").pop()!);
+  const one = last((await capcomd(["run", "new", "--key", `one-${Date.now()}`, "--checks-set", "unit=echo unit-ran", "--json"], noCmd)).stdout).runId;
+  const c1 = last((await capcomd(["check", one, "trunk", "--json"], noCmd)).stdout);
+  expect(c1).toMatchObject({ state: "passed", check: "unit", checks: "echo unit-ran", result: { checks: { where: "host", command: "echo unit-ran" } } });
+  expect(c1.result.checks.output).toContain("unit-ran");
+  const two = last((await capcomd(["run", "new", "--key", `two-${Date.now()}`, "--checks-set", "a=true", "--checks-set", "b=true", "--json"], noCmd)).stdout).runId;
+  const c2 = last((await capcomd(["check", two, "trunk", "--json"], noCmd)).stdout);
+  expect(c2.error.message).toContain("this run has 2 named checks and no default one");
+  expect(c2.error.hint).toContain("a, b");
   // A branch the repository doesn't have; a ref that isn't a branch name.
   expect((await w.cj(["check", run, "no-such-branch"])).j.error.message).toContain("branch no-such-branch isn't on");
   expect((await w.cj(["check", run, "../x"])).j.error.code).toBe("usage");

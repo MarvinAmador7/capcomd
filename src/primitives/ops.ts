@@ -1723,9 +1723,17 @@ async function resolveCheck(o: CheckOpts): Promise<{ ref: string; branch: string
     branch = b; agentId = ref;
     if (typeof a.contract?.check === "string") pinned = a.contract.check;
   } else if (!BRANCH_NAME.test(ref)) throw new RelayError("usage", `not a branch name: ${JSON.stringify(ref).slice(0, 200)}`, "Pass an agent id (agt-…) or a branch, e.g. capcomd check <runId> main.");
-  const check = o.check ?? (o.checks ? undefined : pinned);
-  const checks = check !== undefined ? await namedCheck(o.runId, check) : o.checks ?? null;
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(o.runId);
+  let check = o.check ?? (o.checks ? undefined : pinned);
+  // No command named and none configured for the repository, but the run has named checks (the project's
+  // `run.checks`): its one check is the run's checks; with several, the caller picks one (never "nothing ran: pass").
+  if (check === undefined && !o.checks && cfg && !cfg.testCommand.trim()) {
+    const set = (await (await import("./state")).kvGet(o.runId, CHECKS_KV)).value as Record<string, unknown> | null;
+    const names = set ? Object.keys(set).filter((k) => typeof set[k] === "string") : [];
+    if (names.length === 1) check = names[0]!;
+    else if (names.length > 1) throw new RelayError("usage", `this run has ${names.length} named checks and no default one: name the one to run`, `Pass --check NAME (check: in the tool): ${names.join(", ")}.`);
+  }
+  const checks = check !== undefined ? await namedCheck(o.runId, check) : o.checks ?? null;
   let sha = "";
   if (cfg) {
     const heads = await (await import("../merge/repo")).remoteHeads(cfg, [branch])
