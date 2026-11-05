@@ -5,7 +5,7 @@ import type { SandboxProvider } from "../providers/sandbox";
 import type { SnapshotPlatform, SnapshotInfo } from "./platform";
 import type { AgentConfig } from "../agents/config";
 import { BASE_EGRESS } from "../agents/config";
-import { ALL_ADAPTERS } from "../agents/adapters";
+import { activeAdapters } from "../agents/adapters";
 import { agentHome, agentPath, detectScript, installScript, parseDetect, sq, templateDir } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { rmSync } from "node:fs";
@@ -156,7 +156,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
 
     // 2. Detect what the image already has; install only what is missing (pinned).
     const versions: EnvRecord["versions"] = {};
-    for (const a of ALL_ADAPTERS) {
+    for (const a of activeAdapters()) {
       const det = parseDetect((await sh(detectScript(a))).stdout);
       if (det.node) versions.node = { version: det.node.replace(/^v/, ""), source: "image" };
       if (det.bin) { versions[a.bin] = { version: det.version ?? "unknown", source: "image" }; log(`${a.bin}: found ${det.version} at ${det.bin} (kept)`); continue; }

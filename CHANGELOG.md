@@ -12,9 +12,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   it and runs its sandbox's conformance suite against the real backend (for `sandbox-docker` that makes and removes
   containers in your Docker; for `sandbox-boxd`, VMs in your boxd org). The boxd key is still read from
   `BOXD_API_KEY`, the keychain or the credentials file `capcomd setup` wrote.
+- Claude Code and Codex are now plugins: `capcomd plugins list` shows `agent-claude` and `agent-codex`, and a
+  profile's `provider` is the name of an active agent provider (`claude`, `codex`, or one another plugin adds). A
+  profile naming a provider that isn't there, or whose plugin the daemon has disabled, is refused when it is
+  validated (`capcomd agents validate`, reading the agents file), with the providers you can use. In
+  `capcomd agents schema`, `provider` and `effort` are strings checked against the provider rather than fixed lists.
+- New profile field `toolMode: "orchestrate"` (default `"execute"`) for agents that plan and spawn but never change
+  files: Claude Code runs with only `Read, Glob, Grep, LS, Bash(capcomd:*)` and the edit tools denied, Codex with
+  `--sandbox read-only`; capcomd never commits or pushes its work, and refuses to verify or merge its own ref ("an
+  orchestrate agent has no work of its own"). It needs `children.allowSpawn`, and an override can't turn it back to
+  `execute` without `--operator`. `capcomd setup project` now writes it on the `planner` and `lead` profiles; profiles
+  you already have are kept as they are.
 - The plugin host now hears what capcomd does: runs, agents, sandboxes, verifies, merges and approvals each tell it
   their steps at the points the plugin API names (docs/spec/plugin-api.md §6.6), so a plugin will be able to watch
-  them, narrow them or refuse them. No plugin listens yet (the built-in sandboxes have no hooks), so nothing changes,
+  them, narrow them or refuse them. No plugin listens yet (the built-in sandboxes and agent providers have no hooks), so nothing changes,
   and with none listening capcomd does no extra work.
 - capcomd has a plugin host, the first step of making its providers, forges, gates and front doors plugins
   (docs/spec/plugin-api.md). `capcomd plugins list [--json]` shows the

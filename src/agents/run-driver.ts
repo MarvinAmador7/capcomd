@@ -3,14 +3,19 @@
 // its provider swapped and the model and login of that provider (another of the project's profiles on it, e.g. the
 // `codex-worker` capcomd setup writes; else the provider's default model). GET /v1/run-options lists the same choice.
 import { agentEffort, agentModel } from "./config";
-import { agentsFilePath, encodeAgentRef, PROVIDER_DEFAULT_EFFORT, PROVIDER_EFFORTS, PROVIDER_KIND, readAgentsFile, resolveAgent, type AgentSpec, type AuthMode, type Provider } from "./profiles";
+import { agentsFilePath, encodeAgentRef, providerDefaultEffort, providerEfforts, providerKind, readAgentsFile, resolveAgent, type AgentSpec, type AuthMode, type Provider } from "./profiles";
+import { agentSeam } from "../plugins/agents";
 import { profileFor } from "../auth/profiles";
 import { modelProblem } from "../config/models";
 import { env as envVar } from "../utils/env";
 
 type Env = Record<string, string | undefined>;
+/** The providers a run can be driven by (harness.v1 `DriverOption.provider`): the built-in ones. */
 export const DRIVERS = ["claude", "codex"] as const satisfies readonly Provider[];
-export const DRIVER_LABEL: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
+export type Driver = (typeof DRIVERS)[number];
+export const DRIVER_LABEL: Record<Driver, string> = { claude: "Claude Code", codex: "Codex" };
+/** A provider as people know it (its `describe().label`). */
+const labelOf = (provider: Provider) => agentSeam(provider)?.describe().label ?? provider;
 export const DEFAULT_PLANNER = "planner";
 
 /** A sandbox a check is made for, by name (for the command that fixes it) and as the app calls it. */
@@ -22,12 +27,12 @@ export interface SandboxWhere { name: string; label: string }
  */
 export function credentialReady(provider: Provider, auth: AuthMode, source: Env = process.env, where?: SandboxWhere): { ready: boolean; reason: string | null } {
   if (auth === "apikey") {
-    const key = provider === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+    const key = agentSeam(provider)?.describe().secretName ?? `${provider.toUpperCase()}_API_KEY`;
     if (source[key]?.trim() || envVar("CREDENTIALS", source)?.toLowerCase() === "secret") return { ready: true, reason: null };
     return { ready: false, reason: `${key} isn't set` };
   }
-  if (profileFor(PROVIDER_KIND[provider], source)) return { ready: true, reason: null };
-  return { ready: false, reason: where ? `Not logged in to ${DRIVER_LABEL[provider]} for ${where.label} (run \`capcomd auth login ${provider} --sandbox ${where.name}\`)` : `Not logged in to ${DRIVER_LABEL[provider]} (run capcomd auth login ${provider})` };
+  if (profileFor(providerKind(provider), source)) return { ready: true, reason: null };
+  return { ready: false, reason: where ? `Not logged in to ${labelOf(provider)} for ${where.label} (run \`capcomd auth login ${provider} --sandbox ${where.name}\`)` : `Not logged in to ${labelOf(provider)} (run capcomd auth login ${provider})` };
 }
 
 /** The planner profile `capcomd run` would use, if one may spawn: `name`, else the profile named "planner". */
@@ -47,10 +52,10 @@ export function profileProvider(name: string, source: Env = process.env): Provid
   return readAgentsFile(agentsFilePath(source)).agents[name]?.provider ?? "claude";
 }
 
-const levelsText = (provider: Provider) => PROVIDER_EFFORTS[provider].join(", ");
+const levelsText = (provider: Provider) => providerEfforts(provider).join(", ");
 /** Is `effort` one of `provider`'s levels? The reason when it isn't. */
 export function effortProblem(provider: Provider, effort: string): string | null {
-  return PROVIDER_EFFORTS[provider].includes(effort) ? null : `effort ${JSON.stringify(effort)} isn't a ${DRIVER_LABEL[provider]} level: use one of ${levelsText(provider)}`;
+  return providerEfforts(provider).includes(effort) ? null : `effort ${JSON.stringify(effort)} isn't a ${labelOf(provider)} level: use one of ${levelsText(provider)}`;
 }
 
 /**
@@ -61,7 +66,7 @@ export function effortProblem(provider: Provider, effort: string): string | null
  * CLI as a profile's model is (Claude Code `--model`, Codex `-m`); `model` is then that one.
  */
 export function plannerDriver(provider: Provider, name?: string, source: Env = process.env, chosen?: string, where?: SandboxWhere, chosenModel?: string): DriverChoice {
-  const fallback = PROVIDER_DEFAULT_EFFORT[provider];
+  const fallback = providerDefaultEffort(provider);
   if (chosen !== undefined) { const bad = effortProblem(provider, chosen); if (bad) return { ok: false, code: "effort", reason: bad, model: null, defaultEffort: fallback }; }
   if (chosenModel !== undefined) { const bad = modelProblem(provider, chosenModel, source); if (bad) return { ok: false, code: "model", reason: bad, model: null, defaultEffort: fallback }; }
   const planner = plannerProfile(name, source);

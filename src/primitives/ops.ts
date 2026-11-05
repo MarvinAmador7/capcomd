@@ -1363,6 +1363,9 @@ function taskLabelOf(a: any, agentId: string): string {
 async function resolveRef(runId: string, ref: string): Promise<{ branch: string; agentId: string | null; label: string; pinnedCheck?: string }> {
   if (ref.startsWith("agt-")) {
     const a = await getAgentOrThrow(runId, ref);
+    // Plugin API §16.1: an orchestrate agent (a planner, a lead) works through the agents it spawns; nothing of its own lands.
+    if ((a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate")
+      throw new RelayError("usage", `agent ${ref} is an orchestrate agent: an orchestrate agent has no work of its own`, "Verify and merge the work of the agents it spawned.", { code: "invalid" });
     const branch = a.result?.branch as string | undefined;
     if (a.status !== "done" || !branch) throw new RelayError("conflict", `agent ${ref} is ${a.status}; only a done agent's branch can be verified`, `Wait with \`capcomd await ${runId} ${ref}\`.`);
     const pin = a.contract?.check;

@@ -4,7 +4,7 @@
 import type { SandboxProvider } from "../providers/sandbox";
 import type { AgentConfig } from "../agents/config";
 import { egressFor, type EgressAuth, type RealAgent } from "../agents/config";
-import { ALL_ADAPTERS } from "../agents/adapters";
+import { activeAdapters } from "../agents/adapters";
 import { agentHome, agentPath, detectScript, parseDetect, SECRET_PLACEHOLDER_PREFIX } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 
@@ -41,7 +41,7 @@ const API: Record<string, { url: string; header: (v: string) => string[] }> = {
 
 export async function doctor(p: SandboxProvider, o: DoctorOptions): Promise<DoctorReport> {
   const groups = new Map<string, string[]>();
-  for (const a of ALL_ADAPTERS) {
+  for (const a of activeAdapters()) {
     const snap = (o.modes?.[a.kind] === "subscription" ? o.snapshots?.[a.kind] : undefined) ?? o.snapshot ?? "";
     groups.set(snap, [...(groups.get(snap) ?? []), a.kind]);
   }
@@ -52,17 +52,17 @@ export async function doctor(p: SandboxProvider, o: DoctorOptions): Promise<Doct
     first ??= rep;
     agents.push(...rep.agents);
   }
-  return { ...first!, agents: ALL_ADAPTERS.map((a) => agents.find((x) => x.agent === a.kind)!).filter(Boolean) };
+  return { ...first!, agents: activeAdapters().map((a) => agents.find((x) => x.agent === a.kind)!).filter(Boolean) };
 }
 
 async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]): Promise<DoctorReport> {
   const now = o.now ?? Date.now;
   const src = o.source ?? process.env;
-  const r = new Redactor(ALL_ADAPTERS.map((a) => src[a.secretName]));
+  const r = new Redactor(activeAdapters().map((a) => src[a.secretName]));
   const t0 = now();
   // Each agent's provider+auth egress set (subscription codex needs chatgpt.com, auth.openai.com, …).
   const authOf = (k: string): EgressAuth => (o.modes?.[k] === "subscription" ? "subscription" : "apikey");
-  const egress = [...new Set(ALL_ADAPTERS.filter((a) => kinds.includes(a.kind)).flatMap((a) => egressFor(a.kind as RealAgent, authOf(a.kind))))];
+  const egress = [...new Set(activeAdapters().filter((a) => kinds.includes(a.kind)).flatMap((a) => egressFor(a.kind as RealAgent, authOf(a.kind))))];
   const idemKey = `capcomd-doctor-${t0}`;
   // capcomd's own job: recorded so the place's Machines list doesn't show it as left behind.
   const { recordJobMachine } = await import("../providers/machines");
@@ -78,7 +78,7 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
     await p.waitReady(id, 120_000);
     const bootMs = now() - t0;
     const agents: DoctorAgent[] = [];
-    for (const a of ALL_ADAPTERS.filter((x) => kinds.includes(x.kind))) {
+    for (const a of activeAdapters().filter((x) => kinds.includes(x.kind))) {
       if (o.modes?.[a.kind] === "subscription") {
         const det = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a)], { env: baseEnv })).stdout);
         const bin = o.cfg.agentBin ?? det.bin;

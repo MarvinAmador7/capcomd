@@ -143,13 +143,13 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
   const profiles: Array<[string, Record<string, unknown>]> = [
     ...a.agents.map((x, i): [string, Record<string, unknown>] => [workers[i]!, { provider: x, auth: a.authOf(x) }]),
     ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...testTools(a.check, a.dir)] }],
-    // A module lead: the worker's settings (so it runs any check or test itself), and up to 3 worker helpers at once,
-    // one level down. The driver spawns it for a part with two or more independent sub-parts; it verifies and merges
-    // its helpers' work itself, or hands its branch back.
-    ["lead", { provider, auth, children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
+    // A module lead: up to 3 worker helpers at once, one level down. The driver spawns it for a part with two or more
+    // independent sub-parts; it verifies and merges its helpers' work itself (capcomd verify runs the checks). It
+    // orchestrates (plugin API §16.1): it reads and spawns, and changes no file itself.
+    ["lead", { provider, auth, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
     // No fan-out limits either: the planner may spawn workers, and leads for parts that split further, as it sees fit
-    // (set children.* to bound it).
-    ["planner", { provider, auth, children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead"] } }],
+    // (set children.* to bound it). It orchestrates too: every change is a worker's.
+    ["planner", { provider, auth, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead"] } }],
   ];
   return {
     dir: a.dir, configPath: join(a.dir, ".capcomd", "config.json"), agentsPath: join(a.dir, ".capcomd", "agents.json"), cap: a.cap, profiles,

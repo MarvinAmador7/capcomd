@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DRIVER_LABEL, DRIVERS, plannerDriver, plannerProfile } from "../agents/run-driver";
-import { agentsFilePath, PROVIDER_DEFAULT_EFFORT, PROVIDER_EFFORTS, readAgentsFile } from "../agents/profiles";
+import { agentsFilePath, providerDefaultEffort, providerEfforts, readAgentsFile } from "../agents/profiles";
 import { readConfig, userConfigPath } from "../config/store";
 import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } from "../providers/registry";
 import { withSandbox } from "../providers/run-sandbox";
@@ -100,9 +100,9 @@ export async function runOptions(source: Env = process.env, ask?: Parameters<typ
 	try { if (planner) defaultProvider = readAgentsFile(agentsFilePath(source)).agents[planner]?.provider ?? null; } catch { /* unreadable agents file: no default */ }
 	const drivers = DRIVERS.map((provider): DriverOption => {
 		let d: ReturnType<typeof plannerDriver>;
-		try { d = plannerDriver(provider, undefined, source); } catch (e) { d = { ok: false, code: "planner", reason: (e as Error).message, model: null, defaultEffort: PROVIDER_DEFAULT_EFFORT[provider] }; }
+		try { d = plannerDriver(provider, undefined, source); } catch (e) { d = { ok: false, code: "planner", reason: (e as Error).message, model: null, defaultEffort: providerDefaultEffort(provider) }; }
 		const sandboxes = Object.fromEntries(RUN_SANDBOXES.map((n) => [n, driverFit(provider, n, source)])) as Record<RunSandbox, DriverFit>;
-		return { provider, label: DRIVER_LABEL[provider], model: d.model, models: harnessModels(provider, source), efforts: [...PROVIDER_EFFORTS[provider]], effort: d.defaultEffort, available: d.ok, reason: d.ok ? null : d.reason, default: defaultProvider === provider, sandboxes };
+		return { provider, label: DRIVER_LABEL[provider], model: d.model, models: harnessModels(provider, source), efforts: [...providerEfforts(provider)], effort: d.defaultEffort, available: d.ok, reason: d.ok ? null : d.reason, default: defaultProvider === provider, sandboxes };
 	});
 	return { drivers, sandboxes };
 }

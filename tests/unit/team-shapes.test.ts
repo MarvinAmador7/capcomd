@@ -15,11 +15,14 @@ const GB = 1024 ** 3;
 const answers = (dir: string, check = "bun run test") => ({ dir, repo: "https://github.com/a/b.git", mode: "direct", target: "main", check, agents: ["claude"], authOf: () => "subscription", cap: null });
 
 describe("the profiles setup writes", () => {
-  test("a lead: the worker's settings, up to 3 worker helpers, one level; a valid agents file", () => {
+  test("a lead: the worker's settings, orchestrating up to 3 worker helpers, one level; a valid agents file", () => {
     const plan = planProject(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-"))));
     const by = Object.fromEntries(plan.profiles);
     expect(plan.profiles.map(([n]) => n)).toEqual(["worker", "reviewer", "lead", "planner"]);
-    expect(by.lead).toEqual({ ...by.worker, children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });
+    // Plugin API §16.1: the lead and the planner orchestrate; their workers do the work.
+    expect(by.lead).toEqual({ ...by.worker, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });
+    expect(by.planner!.toolMode).toBe("orchestrate");
+    expect(by.worker!.toolMode).toBeUndefined();
     const file: AgentsFile = { schema: "capcomd.agents/v1", default: "worker", agents: by as any };
     expect(validateFile(file)).toEqual([]);
     expect(leadText(by.lead as any)).toBe("up to 3 worker helpers, one level");

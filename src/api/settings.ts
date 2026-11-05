@@ -4,8 +4,8 @@
 // written here from what kind of login it is, not from what the ledger holds.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { AGENT_API_HOST } from "../agents/config";
-import { PROVIDER_KIND } from "../agents/profiles";
+import { agentApiHost } from "../agents/config";
+import { providerKind } from "../agents/profiles";
 import { profileFor } from "../auth/profiles";
 import { env as envVar } from "../utils/env";
 import { withSandbox } from "../providers/run-sandbox";
@@ -36,9 +36,9 @@ export function logins(source: Env = process.env, only?: SettingsSandbox): Login
 	return PROVIDERS.flatMap((provider) => SETTINGS_SANDBOXES.filter((x) => !only || x === only).map((sandbox): LoginState => {
 		const s = withSandbox(source, sandbox);
 		const command = `capcomd auth login ${provider} --sandbox ${sandbox}`;
-		const host = AGENT_API_HOST[PROVIDER_KIND[provider]];
+		const host = agentApiHost(providerKind(provider));
 		const unbound = { hostBound: false, boundTo: null };
-		const plan = profileFor(PROVIDER_KIND[provider], s);
+		const plan = profileFor(providerKind(provider), s);
 		if (plan) {
 			const detail = plan.store === "secret" ? `Kept as a boxd secret bound to ${host}` : plan.store === "snapshot" ? "Saved in the agent environment" : null;
 			return { provider, sandbox, loggedIn: true, how: "plan", detail, ...(plan.store === "secret" ? { hostBound: true, boundTo: host } : unbound), command };

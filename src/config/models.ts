@@ -4,6 +4,8 @@
 // already runs on is always offered), and a chosen model reaches the CLI as the profile's `model` does: Claude Code
 // `--model <id>`, Codex `-m <id>` (src/agents/adapters.ts).
 import { agentsFilePath, readAgentsFile, type Provider } from "../agents/profiles";
+import type { Driver } from "../agents/run-driver";
+import { agentSeam } from "../plugins/agents";
 
 type Env = Record<string, string | undefined>;
 
@@ -17,7 +19,7 @@ export interface HarnessModel {
 }
 
 /** Newest first per harness, the order a menu lists them. */
-export const HARNESS_MODELS: Record<Provider, readonly HarnessModel[]> = {
+export const HARNESS_MODELS: Record<Driver, readonly HarnessModel[]> = {
 	claude: [
 		{ id: "claude-opus-5-5", name: "Opus 5.5", note: "Most capable" },
 		{ id: "claude-sonnet-5-5", name: "Sonnet 5.5", note: "Balanced" },
@@ -35,7 +37,7 @@ export const HARNESS_MODELS: Record<Provider, readonly HarnessModel[]> = {
  * an unreadable agents file adds nothing.
  */
 export function harnessModels(provider: Provider, source: Env = process.env): HarnessModel[] {
-	const out: HarnessModel[] = [...HARNESS_MODELS[provider]];
+	const out: HarnessModel[] = [...((HARNESS_MODELS as Record<Provider, readonly HarnessModel[] | undefined>)[provider] ?? [])];
 	let agents: Record<string, { provider?: string; model?: string }> = {};
 	try { agents = readAgentsFile(agentsFilePath(source)).agents; } catch { /* no profiles: the table alone */ }
 	for (const [name, spec] of Object.entries(agents)) {
@@ -49,6 +51,6 @@ export function harnessModels(provider: Provider, source: Env = process.env): Ha
 export function modelProblem(provider: Provider, model: string, source: Env = process.env): string | null {
 	const list = harnessModels(provider, source);
 	if (list.some((m) => m.id === model)) return null;
-	const label = provider === "codex" ? "Codex" : "Claude Code";
+	const label = agentSeam(provider)?.describe().label ?? provider;
 	return `model ${JSON.stringify(model)} isn't a ${label} model capcomd offers: use one of ${list.map((m) => m.id).join(", ")}`;
 }

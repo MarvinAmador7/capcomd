@@ -5,9 +5,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, resolve } from "node:path";
 import { env as envVar } from "../utils/env";
 import { defaultAgentsFile } from "../utils/home";
+import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
 
 export const AGENTS_SCHEMA = "capcomd.agents/v1";
-export type Provider = "claude" | "codex";
+/** An active agent provider's name (docs/spec/plugin-api.md §7.3; ADR-024 `harness.provider`): the built-ins are
+ *  `claude` and `codex`, each its own plugin; another plugin may add one. Checked at validation, never at spawn. */
+export type Provider = string;
+export type ToolMode = "execute" | "orchestrate";
 export type AuthMode = "apikey" | "subscription";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
@@ -17,7 +21,7 @@ export interface AgentSpec {
   auth: AuthMode;
   description?: string;
   model?: string;
-  /** Reasoning effort, one of the provider's levels (PROVIDER_EFFORTS); unset: the CLI's default. */
+  /** Reasoning effort, one of the provider's levels (its describe().efforts); unset: the CLI's default. */
   effort?: string;
   /** Limits are optional (ADR-019): unset means none. An agent that reaches one is stopped and keeps its work. */
   maxTurns?: number;
@@ -43,6 +47,10 @@ export interface AgentSpec {
   disallowedTools?: string[];
   /** Sub-agent spawning policy (schema + validation now; runtime spawning later). */
   children?: ChildrenSpec;
+  /** docs/spec/plugin-api.md §16.1 (ADR-024 `tools.mode`): `orchestrate` routes, plans, spawns and decides, and never
+   *  edits files, runs work commands or pushes (its provider's tool policy, and capcomd refusing to verify or merge
+   *  its own ref). Needs children.allowSpawn. Default `execute`. */
+  toolMode?: ToolMode;
 }
 export interface ChildrenSpec {
   /** Default false: this agent may not spawn children. */
@@ -60,15 +68,12 @@ export interface ChildrenSpec {
 }
 export interface AgentsFile { schema: typeof AGENTS_SCHEMA; default?: string; agents: Record<string, AgentSpec> }
 
-export const PROVIDER_KIND: Record<Provider, "claude-code" | "codex"> = { claude: "claude-code", codex: "codex" };
-
-/**
- * Reasoning effort levels each provider's CLI takes, lowest to highest: claude `--effort <level>` (Claude Code
- * `--help`: low, medium, high, xhigh, max), codex `-c model_reasoning_effort=<level>`.
- */
-export const PROVIDER_EFFORTS: Record<Provider, readonly string[]> = { claude: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high"] };
+/** The runner's kind for a provider (`claude-code` for claude; another provider's is its name). */
+export const providerKind = (p: Provider): string => kindOf(p);
+/** Reasoning effort levels the provider's CLI takes, lowest to highest (its `describe().efforts`); [] when not active. */
+export const providerEfforts = (p: Provider): readonly string[] => agentSeam(p)?.describe().efforts ?? [];
 /** The level a provider's CLI uses when none is set, when it is fixed (codex: medium); null: the CLI decides (claude: by model). */
-export const PROVIDER_DEFAULT_EFFORT: Record<Provider, string | null> = { claude: null, codex: "medium" };
+export const providerDefaultEffort = (p: Provider): string | null => agentSeam(p)?.describe().defaultEffort ?? null;
 
 /** JSON Schema (draft 2020-12) for `.capcomd/agents.json`; `capcomd agents schema` prints it. */
 export const AGENTS_JSON_SCHEMA = {
@@ -93,11 +98,11 @@ export const AGENTS_JSON_SCHEMA = {
       additionalProperties: false,
       required: ["provider", "auth"],
       properties: {
-        provider: { enum: ["claude", "codex"] },
+        provider: { type: "string", minLength: 1, examples: ["claude", "codex"], description: "An active agent provider: claude and codex are built in; a plugin may add another (capcomd plugins list)" },
         auth: { enum: ["apikey", "subscription"], description: "Exactly one credential kind; no fallback" },
         description: { type: "string" },
         model: { type: "string", minLength: 1 },
-        effort: { enum: ["minimal", "low", "medium", "high", "xhigh", "max"], description: "Reasoning effort: claude low|medium|high|xhigh|max, codex minimal|low|medium|high" },
+        effort: { type: "string", minLength: 1, examples: ["minimal", "low", "medium", "high", "xhigh", "max"], description: "Reasoning effort, one of the provider's levels: claude low|medium|high|xhigh|max, codex minimal|low|medium|high" },
         maxTurns: { type: "integer", minimum: 1 },
         maxBudgetUsd: { type: "number", exclusiveMinimum: 0 },
         timeoutMs: { type: "integer", minimum: 1000 },
@@ -112,6 +117,7 @@ export const AGENTS_JSON_SCHEMA = {
         allowedTools: { type: "array", items: { type: "string" } },
         disallowedTools: { type: "array", items: { type: "string" } },
         children: { $ref: "#/$defs/children" },
+        toolMode: { enum: ["execute", "orchestrate"], default: "execute", description: "orchestrate: reads, spawns and decides; never edits files, runs work commands or pushes (needs children.allowSpawn)" },
       },
     },
     children: {
@@ -146,7 +152,7 @@ export function validateSpec(name: string, raw: unknown): string[] {
   // Legacy/ambiguous credential fields: both → error, never a silent choice.
   const legacyKey = "apiKey" in s || "apikey" in s, legacySub = "subscription" in s;
   if (legacyKey && legacySub) at("both an API key and a subscription are configured; set exactly one via auth: \"apikey\" | \"subscription\"");
-  if (!["claude", "codex"].includes(s.provider as string)) at(`provider must be "claude" or "codex"`);
+  if (typeof s.provider !== "string" || !agentProviderNames().includes(s.provider)) at(unknownProviderText(s.provider));
   if (s.auth === undefined) at(legacyKey || legacySub ? `use auth: "${legacyKey ? "apikey" : "subscription"}" instead of a credential field` : "auth is required (\"apikey\" or \"subscription\"): neither is configured");
   else if (!["apikey", "subscription"].includes(s.auth as string)) at(`auth must be "apikey" or "subscription"`);
   const posInt = (k: string, min = 1) => { if (s[k] !== undefined && (!Number.isInteger(s[k]) || (s[k] as number) < min)) at(`${k} must be an integer >= ${min}`); };
@@ -155,7 +161,7 @@ export function validateSpec(name: string, raw: unknown): string[] {
   if (s.sandbox !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(s.sandbox as string)) at("sandbox is invalid");
   if (s.model !== undefined && (typeof s.model !== "string" || !s.model)) at("model must be a non-empty string");
   if (s.effort !== undefined) {
-    const levels = PROVIDER_EFFORTS[s.provider as Provider];
+    const levels = typeof s.provider === "string" ? agentSeam(s.provider)?.describe().efforts : undefined;
     if (typeof s.effort !== "string" || (levels && !levels.includes(s.effort))) at(`effort must be one of ${(levels ?? []).join(", ")} for provider ${s.provider}`);
   }
   for (const k of ["egress", "allowedTools", "disallowedTools"]) {
@@ -165,6 +171,9 @@ export function validateSpec(name: string, raw: unknown): string[] {
   if (Array.isArray(s.egress) && s.egress.length === 0) at("egress must not be empty (boxd treats [] as unrestricted)");
   for (const k of ["systemPrompt", "appendSystemPrompt", "description"]) if (s[k] !== undefined && typeof s[k] !== "string") at(`${k} must be a string`);
   if (s.children !== undefined) e.push(...validateChildren(name, s.children));
+  if (s.toolMode !== undefined && s.toolMode !== "execute" && s.toolMode !== "orchestrate") at(`toolMode must be "execute" or "orchestrate"`);
+  // §16.1: an orchestrator with no children can do nothing.
+  if (s.toolMode === "orchestrate" && (s.children as ChildrenSpec | undefined)?.allowSpawn !== true) at("toolMode orchestrate needs children.allowSpawn: an orchestrate agent does its work through the agents it spawns");
   return e;
 }
 
@@ -222,6 +231,8 @@ export function widenings(base: AgentSpec, next: AgentSpec): string[] {
   const le = (k: "maxTurns" | "maxBudgetUsd" | "timeoutMs" | "idleAfterMs" | "stuckRepeats" | "noChangeAfterMs") => { if (next[k] !== undefined && base[k] !== undefined && next[k]! > base[k]!) w.push(`${k} ${next[k]} > ${base[k]}`); if (base[k] !== undefined && next[k] === undefined) w.push(`${k} unset (would lift ${base[k]})`); };
   le("maxTurns"); le("maxBudgetUsd"); le("timeoutMs"); le("idleAfterMs"); le("stuckRepeats"); le("noChangeAfterMs");
   if (next.provider !== base.provider) w.push(`provider ${base.provider} → ${next.provider}`);
+  // §16.1: the mode is a limit; an orchestrate agent's override or patch can't give it back its tools.
+  if (base.toolMode === "orchestrate" && next.toolMode !== "orchestrate") w.push(`toolMode orchestrate → ${next.toolMode ?? "execute"}`);
   if (next.auth !== base.auth) w.push(`auth ${base.auth} → ${next.auth}`);
   if (SANDBOX_RANK[next.sandbox ?? DEFAULT_SANDBOX]! > SANDBOX_RANK[base.sandbox ?? DEFAULT_SANDBOX]!) w.push(`sandbox ${base.sandbox ?? DEFAULT_SANDBOX} → ${next.sandbox}`);
   const subset = (k: "egress" | "allowedTools") => {
@@ -261,8 +272,9 @@ export function validateFile(raw: unknown): string[] {
         const child = f.agents[c] as AgentSpec | undefined;
         if (!child) { e.push(`agents.${n}.children.allowedChildProfiles: "${c}" is not a defined agent`); continue; }
         if (c === n && s.children?.allowSpawn) continue; // self-similar children are narrowing by definition
-        // Children inherit from the parent and may only narrow (provider/auth may differ: each child has its own credential).
-        const w = widenings({ ...s, provider: child.provider, auth: child.auth }, child).filter((x) => !x.startsWith("children."));
+        // Children inherit from the parent and may only narrow (provider/auth may differ: each child has its own credential;
+        // so may the tool mode: an orchestrator's children do the work).
+        const w = widenings({ ...s, provider: child.provider, auth: child.auth, toolMode: child.toolMode }, child).filter((x) => !x.startsWith("children."));
         if (w.length) e.push(`agents.${n}.children: child profile "${c}" is wider than its parent (${w.join("; ")})`);
       }
     }
@@ -290,7 +302,7 @@ export function writeAgentsFile(f: AgentsFile, path = agentsFilePath()) {
   renameSync(tmp, path);
 }
 
-export interface ResolvedAgent { name: string | null; kind: "fake" | "claude-code" | "codex"; spec?: AgentSpec; overridden?: boolean }
+export interface ResolvedAgent { name: string | null; kind: "fake" | (string & {}); spec?: AgentSpec; overridden?: boolean }
 
 /**
  * Which agent runs: explicit profile name (task/run) → CAPCOMD_AGENT (profile name or provider
@@ -302,25 +314,27 @@ export function resolveAgent(name?: string | null, source: Record<string, string
   const file = readAgentsFile(agentsFilePath(source));
   const pick = (n: string): ResolvedAgent | null => {
     const spec = file.agents[n];
-    return spec ? { name: n, kind: PROVIDER_KIND[spec.provider], spec } : null;
+    return spec ? { name: n, kind: kindOf(spec.provider), spec } : null;
   };
   if (name) {
     const ref = decodeAgentRef(name);
     name = ref.name;
     const r = pick(name);
     // An operator override may change the provider (`capcomd run --planner-provider`): the runner follows it.
-    if (r && ref.overrides) { const spec = applyOverrides(name, r.spec!, ref.overrides); return { ...r, kind: PROVIDER_KIND[spec.provider], spec, overridden: true }; }
+    if (r && ref.overrides) { const spec = applyOverrides(name, r.spec!, ref.overrides); return { ...r, kind: kindOf(spec.provider), spec, overridden: true }; }
     if (!r) throw new AgentConfigError(`unknown agent profile "${name}" (defined: ${Object.keys(file.agents).join(", ") || "none"}; add one with \`capcomd agents add\`)`);
     return r;
   }
   const env = envVar("AGENT", source)?.trim();
   if (env) {
     const v = env.toLowerCase();
-    if (v === "fake" || v === "claude-code" || v === "codex") return { name: null, kind: v };
-    if (v === "claude") return { name: null, kind: "claude-code" };
+    if (v === "fake") return { name: null, kind: v };
+    // A provider by its runner kind (claude-code, codex) or its name (claude).
+    const provider = agentProviderNames().find((n) => n === v || kindOf(n) === v);
+    if (provider) return { name: null, kind: kindOf(provider) };
     const r = pick(env);
     if (r) return r;
-    throw new AgentConfigError(`Unknown CAPCOMD_AGENT=${env} (expected fake|claude-code|codex or a profile name)`);
+    throw new AgentConfigError(`Unknown CAPCOMD_AGENT=${env} (expected fake|${agentProviderNames().map(kindOf).join("|")} or a profile name)`);
   }
   if (file.default) return pick(file.default)!;
   return { name: null, kind: "fake" };
@@ -340,9 +354,11 @@ export function pinnedAgent(ref: string | null | undefined, pinned: unknown): Re
   const name = decoded?.name ?? null;
   if (kind === "fake" && rest.provider === undefined) return { name, kind: "fake" };
   const spec = rest as unknown as AgentSpec;
-  if (spec.provider !== "claude" && spec.provider !== "codex") return null;
+  if (typeof spec.provider !== "string" || !spec.provider) return null;
   if (spec.auth !== "apikey" && spec.auth !== "subscription") return null;
-  return { name, kind: PROVIDER_KIND[spec.provider], spec, ...(decoded?.overrides ? { overridden: true } : {}) };
+  // A provider whose plugin isn't active (disabled since the spawn) is refused, never resolved to another.
+  if (!agentSeam(spec.provider)) throw new AgentConfigError(unknownProviderText(spec.provider));
+  return { name, kind: kindOf(spec.provider), spec, ...(decoded?.overrides ? { overridden: true } : {}) };
 }
 /** What to record with an agent so the engine can resolve it without the agents file (see pinnedAgent). */
 export function pinSpec(r: ResolvedAgent): Record<string, unknown> {

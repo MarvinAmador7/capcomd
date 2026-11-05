@@ -48,3 +48,7 @@ You can pause agents yourself: `capcomd pause <runId> [agt]` (or `POST /v1/runs/
 Auth is exactly one of `apikey` (the provider's API key, from local env or a boxd secret) or `subscription` (from `capcomd auth login claude|codex`). Giving both or neither is an error. `CAPCOMD_AGENT` still works as an override, set to a kind or a profile name.
 
 `children` (policy only for now): `{allowSpawn, maxDepth, maxChildren, maxTotalDescendants, allowedChildProfiles, budgetShare}`. Children may only narrow their parent.
+
+`provider` is the name of an active agent provider: `claude` and `codex` are built-in plugins (`agent-claude`, `agent-codex` in `capcomd plugins list`), and another plugin may add one. A profile naming one that isn't active is refused when it's validated.
+
+`toolMode: "orchestrate"` (default `"execute"`) makes an agent that plans, spawns, verifies and merges but never changes a file itself (docs/spec/plugin-api.md §16.1): Claude Code gets only `Read, Glob, Grep, LS, Bash(capcomd:*)` with the edit tools denied, Codex runs with `--sandbox read-only` (its capcomd MCP tools still work), nothing it does is committed or pushed, and capcomd refuses to verify or merge its own ref. It needs `children.allowSpawn`; its children run in their own mode, and an override can't lift it without `--operator`. `capcomd setup project` gives it to `planner` and `lead`.

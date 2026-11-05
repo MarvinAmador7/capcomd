@@ -651,9 +651,17 @@ Replaces every place the kernel names a provider's error (`src/actors/worker.ts`
 `claude | codex` carry (`src/agents/profiles.ts` `PROVIDER_KIND`, `PROVIDER_EFFORTS`, `PROVIDER_DEFAULT_EFFORT`,
 `src/agents/config.ts` `AGENT_API_HOST`, `CLAUDE_CODE_VERSION`/`CODEX_VERSION`) plus `toolPolicies.orchestrate`
 (§16.1). Every method but `available` is pure; `parse` MUST pass every string through the `redact` it is given before
-returning it (today `Redactor.text`). The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
+returning it (today `Redactor.text`); `redactJson` (`packages/plugin/src/seams.ts`) does that to a parsed line with the
+kernel's own rule, a credential-named key's string replaced whole. The kernel keeps one `AgentRunState` object per run,
+so a provider may keep fields of its own on it between lines. The `AgentConfig` a provider reads has the kernel's
+`credentialMode` values (`auto` included) and `usdPerMtok`, the operator's token rates for a CLI that reports tokens and
+not cost. The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
 install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is invoked and read.
-ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude` and `codex` are the built-ins.
+ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude` and `codex` are the built-ins
+(`agent-claude`, `agent-codex`: `src/plugins/agent-claude.ts`, `agent-codex.ts`). Only the daemon has a plugin host: in
+it the active providers are the ones its plugins registered; in every other process (the CLI, the MCP server, a
+driver) they are the built-ins (`src/plugins/agents.ts`). The runner's agent kind stays the provider's name, except
+Claude Code's, `claude-code` as before (CAPCOMD_AGENT, auth logins, the `Capcomd-Agent:` trailer).
 
 Conformance (§14.2): the recorded streams in `apps/tui/fixtures` and `packages/agent-thread/fixtures` are replayed
 through `parse` and `outcome`; `command` is checked to send stdout to `ctx.jsonl`; `guard` stops at the limits.
@@ -1154,15 +1162,21 @@ today is told so in prose (`src/recipes/planner-agent.ts` `plannerBrief`: "Don't
 tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `children.allowSpawn` and nothing else).
 
 **Specification.** ADR-024's profile schema gains `tools.mode: execute | orchestrate` (default `execute`), pinned as
-`PinnedSpec.toolMode`. For `orchestrate`:
+`PinnedSpec.toolMode`; in today's `capcomd.agents/v1` file, whose fields are the pinned spec's, it is the flat
+`toolMode` field. For `orchestrate`:
 
 1. The agent provider's `describe().toolPolicies.orchestrate` (§7.3) gives the CLI's tool lists that leave only reading
    and the capcomd command (Claude Code: allow `Read, Glob, Grep, LS, Bash(capcomd:*)`, disallow `Edit, Write,
-   MultiEdit, NotebookEdit, Bash`; Codex: `--sandbox read-only` plus the equivalent). The kernel applies them on top of
-   the profile's own lists at `agent.preparing`; a profile cannot widen them (`widenings()` treats mode as a limit).
+   MultiEdit, NotebookEdit`, and not `Bash`: a deny rule outranks every allow, so it would take `Bash(capcomd:*)` with
+   it, and with an allowlist Claude Code refuses any other command headless; Codex: no lists, `sandbox: "read-only"`,
+   its `--sandbox`, with the capcomd MCP server, which Codex starts outside its sandbox). The kernel applies them on
+   top of the profile's own lists when it builds the agent's config, after `agent.preparing`: `allowed` replaces the
+   profile's allowlist or narrows it, `disallowed` joins its denylist, `sandbox` is the loosest the CLI runs in. A
+   profile cannot widen them (`widenings()` treats mode as a limit; a child's own mode is its own, as its provider is).
 2. `children.allowSpawn` MUST be true (an orchestrator with no children can do nothing; `validate` refuses it).
 3. The kernel refuses `verify` and `merge` of such an agent's **own** ref (`ops.verifyRef`, `mergeRef`: `invalid`,
-   "an orchestrate agent has no work of its own"), and the workflow skips its push.
+   relay.v1 code `usage` with reason `invalid`, "an orchestrate agent has no work of its own"), and the runner never
+   commits or pushes its work.
 4. `jobs.foregroundMs` defaults to 5 000 for `orchestrate` agents and 60 000 otherwise (§16.2), matching the prototype's
    router and `standard` presets, so a planner's shell never blocks its inbox.
 
@@ -1385,6 +1399,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0 | 2026-11-04 | First normative version: 21 hooks, 3 seams (40 methods), 22 services (77 primitives), protocol 1, manifest `capcomd.plugin/v1`. Includes the super-agent primitives (§16). |
 | 1.0.1 | 2026-11-05 | With the kernel's hook sites (§17.2 step 2): which process a hook fires in (§6.1); no listener, no stop-time denial (§5.5); `run.creating` at `POST /v1/runs` takes only `sandbox`; `agent.preparing`'s site, and `skills`/`env` refused until step 8; `agent.changed` `started` has a null `machine`; `verify.judging` after the checks pass; `merge.landing`'s `fastPath`/`sha`, a satisfied hold, no dry-run gate; run-stream plugin events from step 5. |
 | 1.0.2 | 2026-11-05 | With sandbox providers as plugins (§17.2 step 3): the sandbox conformance suite's home (§7.2); the Docker sweep is the seam's `sweep`, called by the kernel (§15.1). |
+| 1.0.3 | 2026-11-05 | With the agent providers as plugins (§17.2 step 4): §7.3's `AgentConfig` gains `auto` and `usdPerMtok`, `toolPolicies.orchestrate` gains `sandbox`, `redactJson`, where the active providers come from, the runner's kind; §16.1's Claude Code policy denies no bare `Bash`, Codex's is its sandbox, v1 profiles spell the mode `toolMode`, the refusal's relay.v1 code, and the policy applied as the config is built. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

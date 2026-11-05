@@ -2,13 +2,13 @@
 // The VM then only ever sees a bxds_ placeholder; boxd substitutes the real value on egress to the
 // bound host. Values are read from the local env and never printed, logged or returned.
 import type { EnvPlatform, SecretInfo } from "./platform";
-import { ALL_ADAPTERS } from "../agents/adapters";
+import { activeAdapters } from "../agents/adapters";
 
 export interface SyncLine { name: string; domains: string[]; status: "set" | "skipped" | "verify_failed" | "unavailable"; detail: string }
 
 export async function secretsSync(p: EnvPlatform, source: Record<string, string | undefined> = process.env, only?: string[]): Promise<SyncLine[]> {
   const out: SyncLine[] = [];
-  for (const a of ALL_ADAPTERS) {
+  for (const a of activeAdapters()) {
     if (only?.length && !only.includes(a.kind)) continue;
     const value = source[a.secretName]?.trim();
     const domains = [a.apiHost];

@@ -8,7 +8,7 @@ import { secretsSync } from "../../env/secrets";
 import { doctor, formatDoctor } from "../../env/doctor";
 import { resolveEnvSnapshot } from "../../env/resolve";
 import { RelayError, SCHEMA } from "../../core/errors";
-import { ALL_ADAPTERS } from "../../agents/adapters";
+import { activeAdapters } from "../../agents/adapters";
 import { sandboxName } from "../../providers/registry";
 
 /** env/auth/doctor work on the CLIs, not one agent's credentials: don't apply the strict auth check. */
@@ -72,7 +72,7 @@ export async function envCommand(command: string, pos: string[], values: Record<
     const { sandboxCaps } = await import("../../providers/registry");
     const warm = sandboxCaps().isolation === "container";
     const place = platform();
-    const res = await envBuild(place, { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: ALL_ADAPTERS.map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}) });
+    const res = await envBuild(place, { repoUrl: repo?.remote, cfg: toolCfg(), force: !!values.force, log, forbidden: activeAdapters().map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}) });
     const v = Object.entries(res.record.versions).map(([k, x]) => `${k}=${x.version}(${x.source})`).join(" ");
     // Docker: plan logins saved on an older env image move onto this one (only their credential files; src/auth/carry.ts),
     // so their agents get its CLIs and warm template. One that can't be moved keeps working from its old image.
