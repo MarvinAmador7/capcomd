@@ -13,6 +13,8 @@ import { TITLE_MAX, TITLE_SOURCES } from "./run-title";
 import { SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
 import { isListedProvider, LISTED_PROVIDERS, PROVIDER_LABEL } from "../providers/registry";
 import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES } from "./sandboxes";
+import { PLUGIN_NAME_PATTERN } from "../../packages/plugin/src/manifest";
+import { PLUGIN_STATES } from "../../packages/plugin/src/host/host";
 import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TABLE_MAX_COLS, TABLE_MAX_ROWS, THREAD_FORMAT, ThreadItem } from "../../packages/agent-thread/src/index";
 
 export { ThreadItem };
@@ -265,6 +267,45 @@ The SSE \`event:\` field is the frame type: the envelope's dotted \`type\` for e
 Run scopes accept \`?feed=lifecycle\`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and \`?activity=1\`: live, ephemeral agent.activity_changed frames (at most one per agent per second), and \`?thread=1\`: live, ephemeral agent.thread_item_changed frames (Agent threads, below).
 Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 
+/** The plugin host's own events (capability plugins; docs/spec/plugin-api.md §13.1, packages/plugin/src/events.ts).
+ *  Durable, written by the host with daemon-written text; a plugin's `reason` or `message` inside them is untrusted. */
+const PLUGIN_EVENT = "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written";
+const PluginEventData = {
+	"plugin.loaded": z.looseObject({
+		plugin: z.string(), version: z.string(), runtime: z.string().describe("in-process or process"),
+		hooks: z.array(z.string()).describe("The hooks it listens to (spec §6.6)"), seams: z.array(z.string()).describe("The seams it implements, as <kind>/<name>"),
+		ms: z.number().describe("How long it took to load"),
+	}).describe(`${PLUGIN_EVENT}. A plugin became active (spec §5.4)`),
+	"plugin.failed": z.looseObject({
+		plugin: z.string(), version: z.string().nullable().describe("null when its manifest couldn't be read"),
+		cause: z.string().describe("Why (spec §5.4): invalid_manifest, untrusted, unresolved, cycle, seam_conflict, config_invalid, activate_threw, activate_timeout, conflict, … Treat an unknown cause as a failure for a reason you don't know"),
+		message: UntrustedText.describe("Agent-written text (here the host's details, which quote the plugin's manifest and errors): render as plain text"),
+	}).describe(`${PLUGIN_EVENT}. A plugin failed to validate, resolve or load; it stays listed by GET /v1/plugins with its cause. An incompatible plugin is plugin.version_refused instead, a second plugin of one name plugin.duplicate_refused`),
+	"plugin.disposed": z.looseObject({
+		plugin: z.string(), cause: z.string().describe("daemon_stopping or disabled (more may come)"),
+	}).describe(`${PLUGIN_EVENT}. An active plugin was unloaded`),
+	"plugin.version_refused": z.looseObject({
+		plugin: z.string(), version: z.string(), engines: z.string().describe("The capcomd versions it says it supports (a semver range)"),
+		capcomd: z.string().describe("This capcomd's version"), apiVersion: z.number().describe("The plugin API major it codes against"),
+	}).describe(`${PLUGIN_EVENT}. A plugin doesn't support this capcomd (spec §4.4): it is failed with cause incompatible`),
+	"plugin.duplicate_refused": z.looseObject({
+		plugin: z.string(), kept: z.string().describe("builtin, user or project: where the one kept came from"), refused: z.string().describe("Where the refused one came from"),
+		path: z.string().describe("The refused plugin's directory, or (built-in)"),
+	}).describe(`${PLUGIN_EVENT}. A second plugin with a name already discovered was refused (spec §4.8): it is failed with cause duplicate`),
+	"plugin.hook_failed": z.looseObject({
+		plugin: z.string(), hook: z.string(), callId: z.string(),
+		kind: z.string().describe("timeout, threw, crashed, invalid_result, disconnected or suspended"),
+		message: UntrustedText.describe("Agent-written text (here what went wrong, which may quote the plugin's error): render as plain text"),
+		effect: z.string().describe("denied (the operation was refused, naming the plugin) or skipped (the listener was left out)"),
+	}).describe(`${PLUGIN_EVENT}. One call to a plugin's hook listener produced no usable answer (spec §6.5)`),
+	"plugin.suspended": z.looseObject({
+		plugin: z.string(), failures: z.number().describe("Failed calls in a row"), lastHook: z.string(),
+	}).describe(`${PLUGIN_EVENT}. The breaker tripped: the plugin's listeners are no longer called (its gate listeners deny) until it is enabled again or the daemon restarts (spec §6.5)`),
+	"plugin.resumed": z.looseObject({
+		plugin: z.string(), by: z.string().describe("Who resumed it"),
+	}).describe(`${PLUGIN_EVENT}. A suspended plugin's listeners are called again`),
+} as const;
+
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
@@ -334,6 +375,7 @@ export const EventData = {
 		resourceId: z.string().describe("The machine's id"),
 		cause: z.string().describe("Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"),
 	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")"),
+	...PluginEventData,
 } as const;
 export type EventType = keyof typeof EventData;
 
@@ -402,6 +444,7 @@ export const CAPABILITIES = {
 	"runs.goal_branch": "Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events",
 	"agents.title": "Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled",
 	"agents.thread_tail": "GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages",
+	plugins: "GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; plugin.* events on the daemon stream audit the plugin host",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -511,6 +554,31 @@ export const ServiceStatus = z.object({
 	installCommand: z.string().describe("`capcomd service install`"),
 	uninstallCommand: z.string().describe("`capcomd service uninstall`"),
 });
+/** GET /v1/plugins (capability plugins): docs/spec/plugin-api.md §13.2. */
+export const PluginSummary = z.object({
+	name: z.string().regex(new RegExp(PLUGIN_NAME_PATTERN)).describe("The plugin's name: lowercase letters, digits and hyphens"),
+	version: z.string().describe("The plugin's own version (0.0.0 when its manifest couldn't be read)"),
+	apiVersion: z.literal(1).describe("The plugin API major it codes against"),
+	runtime: z.enum(["in-process", "process"]).describe("in-process: built into capcomd; process: a program capcomd starts"),
+	source: z.enum(["builtin", "user", "project"]).describe("Where it was found: shipped with capcomd, the user's plugins, or the project's"),
+	state: z.enum(PLUGIN_STATES).describe("Its lifecycle state (spec §5.4): discovered, validated, resolved, loading, active, disposing, disposed or failed. Treat a state you don't know as failed"),
+	enabled: z.boolean().describe("false while config holds it at validated (`plugins.<name>.enabled: false`)"),
+	cause: z.string().nullable().describe("Why it is failed, disposed or not enabled (spec §5.4, e.g. invalid_manifest, incompatible, untrusted, unresolved, activate_threw, disabled, dispose_timeout); null otherwise. Treat a cause you don't know as a failure for a reason you don't know"),
+	hooks: z.array(z.string()).describe("The hooks it listens to (spec §6.6): those it registered while active, those its manifest declares otherwise. Ignore names you don't know"),
+	seams: z.array(z.object({ kind: z.enum(["sandbox", "agent", "forge"]), name: z.string() })).describe("The seams it implements (spec §7), each by the name runs and profiles select it by"),
+	hooksSuspended: z.boolean().describe("The breaker tripped (plugin.suspended): its listeners aren't called, and its gate listeners deny, until it is enabled again or the daemon restarts"),
+	stats: z.object({
+		calls: z.number().int().describe("Hook calls since the daemon started"),
+		failures: z.number().int().describe("Calls that failed (plugin.hook_failed)"),
+		dropped: z.number().int().describe("Observe calls dropped because its queue was full (spec §6.2)"),
+		p50Ms: z.number().nullable().describe("Median call time over its recent calls; null before the first"),
+		p95Ms: z.number().nullable(),
+		lastFailureAt: Timestamp.nullable(),
+	}),
+});
+export const Plugins = z.object({ plugins: z.array(PluginSummary).describe("In load order, then the plugins that didn't load, in the order they were discovered") });
+export const PLUGINS_DOC = "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. " +
+	"This capcomd ships no plugins yet, so the list is empty until it does.";
 export const SERVICE_DOC = "Capability service. Whether capcomd runs as a background service. Needs the `read` scope. Reads the service definition, and asks launchd (systemd) whether it is loaded at most every few seconds, for at most a second.";
 
 
@@ -973,6 +1041,9 @@ export const contract = {
 	},
 	service: {
 		get: oc.route({ method: "GET", path: "/v1/service", description: SERVICE_DOC }).output(ServiceStatus),
+	},
+	plugins: {
+		list: oc.route({ method: "GET", path: "/v1/plugins", description: PLUGINS_DOC }).output(Plugins),
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),

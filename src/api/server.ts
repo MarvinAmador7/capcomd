@@ -5,7 +5,8 @@
 import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { CAPABILITY_NAMES, contract, CreateRunBody, MESSAGE_BODY_MAX_BYTES, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import type { z } from "zod";
+import { CAPABILITY_NAMES, contract, CreateRunBody, type Plugins, MESSAGE_BODY_MAX_BYTES, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -41,7 +42,7 @@ export const ACTIVITY_MS = 1000;
 export const THREAD_MS = 250;
 /** GET …/thread: a page stops at about this many bytes of items (`next` says where to go on). */
 export const THREAD_PAGE_MAX_BYTES = 4 * 1024 * 1024;
-export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState };
+export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; plugins?: () => z.infer<typeof Plugins>["plugins"]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState };
 
 export function harnessApp(o: ServerOptions) {
 	const src = o.source;
@@ -178,6 +179,8 @@ export function harnessApp(o: ServerOptions) {
 			}),
 		},
 		service: { get: os.service.get.handler(() => src.service()) },
+		// Capability plugins: the daemon's plugin host (src/plugins/host.ts), as it is now.
+		plugins: { list: os.plugins.list.handler(() => ({ plugins: o.plugins?.() ?? [] })) },
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
 				if (input.scope === "daemon") return state.daemonEvents(input.after ?? 0).map(daemonEnvelope);

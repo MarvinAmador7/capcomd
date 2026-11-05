@@ -82,6 +82,8 @@ src/
   mcp/          - MCP server
   merge/        - git: direct and PR merge modes, verification runs (checks in a VM with boxd)
   models/       - model client (fake only, see STATUS.md)
+  plugins/      - the kernel's plugin host (ADR-023): the built-in list (empty so far), what `capcomd serve` starts
+                  before the API opens, and the listing `capcomd plugins list` reads
   primitives/   - ADR-016 operations, policy, task board, kv, the reviewer
   providers/    - sandbox providers (boxd, fake)
   recipes/      - `capcomd run` composed from the primitives
@@ -96,8 +98,11 @@ packages/
                   blocks/1 tree; pure functions (no imports from src/), own tsconfig, tests and golden fixtures
   bot-avatar/   - (proposal) deterministic pixel bot avatars: agent id + role + size → SVG, from a parts catalog;
                   pure, no dependencies; catalog.json and golden bots for the Swift renderer
-  plugin/       - @capcomd/plugin (private, types only): the plugin API's manifest schema, context, hook registry,
-                  seams, protocol and test kit, with worked examples; normative spec in docs/spec/plugin-api.md
+  plugin/       - @capcomd/plugin (private): the plugin API's manifest schema and loading, context, hook registry,
+                  seams, protocol, the host's machinery (src/host/: states, order, dispatch, breaker) and the test
+                  kit, with worked examples; normative spec in docs/spec/plugin-api.md. The kernel fires hooks only
+                  as `hooks.fire("<hook>", "<mode>", …)`; `bun scripts/check-hook-modes.ts` (run by test:fast)
+                  checks each site's mode against HOOKS
 tests/          - unit, scenario, agent and merge suites
 scripts/        - live e2e scripts (boxd + GitHub) and helpers
 docs/           - design documents and ADRs

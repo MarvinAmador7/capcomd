@@ -2763,6 +2763,284 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `plugin.loaded`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "runtime": {
+      "type": "string",
+      "description": "in-process or process"
+    },
+    "hooks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The hooks it listens to (spec §6.6)"
+    },
+    "seams": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The seams it implements, as <kind>/<name>"
+    },
+    "ms": {
+      "type": "number",
+      "description": "How long it took to load"
+    }
+  },
+  "required": [
+    "plugin",
+    "version",
+    "runtime",
+    "hooks",
+    "seams",
+    "ms"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin became active (spec §5.4)"
+}
+```
+
+## `plugin.failed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "version": {
+      "description": "null when its manifest couldn't be read",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause": {
+      "type": "string",
+      "description": "Why (spec §5.4): invalid_manifest, untrusted, unresolved, cycle, seam_conflict, config_invalid, activate_threw, activate_timeout, conflict, … Treat an unknown cause as a failure for a reason you don't know"
+    },
+    "message": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text (here the host's details, which quote the plugin's manifest and errors): render as plain text"
+    }
+  },
+  "required": [
+    "plugin",
+    "version",
+    "cause",
+    "message"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin failed to validate, resolve or load; it stays listed by GET /v1/plugins with its cause. An incompatible plugin is plugin.version_refused instead, a second plugin of one name plugin.duplicate_refused"
+}
+```
+
+## `plugin.disposed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "cause": {
+      "type": "string",
+      "description": "daemon_stopping or disabled (more may come)"
+    }
+  },
+  "required": [
+    "plugin",
+    "cause"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. An active plugin was unloaded"
+}
+```
+
+## `plugin.version_refused`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "engines": {
+      "type": "string",
+      "description": "The capcomd versions it says it supports (a semver range)"
+    },
+    "capcomd": {
+      "type": "string",
+      "description": "This capcomd's version"
+    },
+    "apiVersion": {
+      "type": "number",
+      "description": "The plugin API major it codes against"
+    }
+  },
+  "required": [
+    "plugin",
+    "version",
+    "engines",
+    "capcomd",
+    "apiVersion"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin doesn't support this capcomd (spec §4.4): it is failed with cause incompatible"
+}
+```
+
+## `plugin.duplicate_refused`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "kept": {
+      "type": "string",
+      "description": "builtin, user or project: where the one kept came from"
+    },
+    "refused": {
+      "type": "string",
+      "description": "Where the refused one came from"
+    },
+    "path": {
+      "type": "string",
+      "description": "The refused plugin's directory, or (built-in)"
+    }
+  },
+  "required": [
+    "plugin",
+    "kept",
+    "refused",
+    "path"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A second plugin with a name already discovered was refused (spec §4.8): it is failed with cause duplicate"
+}
+```
+
+## `plugin.hook_failed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "hook": {
+      "type": "string"
+    },
+    "callId": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "description": "timeout, threw, crashed, invalid_result, disconnected or suspended"
+    },
+    "message": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text (here what went wrong, which may quote the plugin's error): render as plain text"
+    },
+    "effect": {
+      "type": "string",
+      "description": "denied (the operation was refused, naming the plugin) or skipped (the listener was left out)"
+    }
+  },
+  "required": [
+    "plugin",
+    "hook",
+    "callId",
+    "kind",
+    "message",
+    "effect"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. One call to a plugin's hook listener produced no usable answer (spec §6.5)"
+}
+```
+
+## `plugin.suspended`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "failures": {
+      "type": "number",
+      "description": "Failed calls in a row"
+    },
+    "lastHook": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "plugin",
+    "failures",
+    "lastHook"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. The breaker tripped: the plugin's listeners are no longer called (its gate listeners deny) until it is enabled again or the daemon restarts (spec §6.5)"
+}
+```
+
+## `plugin.resumed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who resumed it"
+    }
+  },
+  "required": [
+    "plugin",
+    "by"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A suspended plugin's listeners are called again"
+}
+```
+
 # Lifecycle feed
 
 Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.

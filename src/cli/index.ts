@@ -127,6 +127,8 @@ Usage:
                                        npm and Homebrew installs say how to upgrade them)
   capcomd sandbox shell <runId> <agentId>   A shell in the machine an agent runs on (its sandbox: what you change
   capcomd sandbox shell --sandbox docker|boxd --machine <id>   can change its work), or in a machine capcomd left behind
+  capcomd plugins list [--json]          The plugins the running daemon has (or would load, when none runs): each
+                                       one's state, why it failed, its hooks and seams (GET /v1/plugins)
   capcomd ui                             Launch the web UI
 
 Options:
@@ -361,6 +363,10 @@ async function main(argv: string[]): Promise<number> {
         }
         usage("capcomd clients add <name> [--scopes read,steer,approve,configure] | pair --app <name> | list | revoke <id>");
         return EXIT.usage;
+      }
+      case "plugins": {
+        const { pluginsCommand } = await import("./commands/plugins");
+        return await pluginsCommand(positionals, { json });
       }
       case "sandbox": {
         if (positionals[1] !== "shell") usage("usage: capcomd sandbox shell <runId> <agentId> | capcomd sandbox shell --sandbox <name> --machine <id>");

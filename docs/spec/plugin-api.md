@@ -136,7 +136,7 @@ ignored and `capcomd plugins validate` warns about it.
 ### 4.4 `engines` compatibility
 
 The host compares `engines.capcomd` with the running version (`src/utils/self.ts` `VERSION`) with semver range
-semantics, prereleases included. Outside the range the plugin is `failed(incompatible)` and a `plugin.incompatible`
+semantics, prereleases included. Outside the range the plugin is `failed(incompatible)` and a `plugin.version_refused`
 event names both values. An operator MAY record an exemption for one exact `name@version` with
 `capcomd plugins allow-version <name@version> --accept-risk` (kept in `<home>/plugins/compatibility.json`); the
 exemption applies only to that version. The same check runs before `capcomd plugins install`. `*` is refused at
@@ -225,7 +225,7 @@ Descriptors the app renders generically, so a plugin never ships Swift (ADR-021 
 
 ### 4.8 Discovery
 
-In this order; a later manifest with a name already seen is refused with `plugin.conflict` (no shadowing):
+In this order; a later manifest with a name already seen is refused with `plugin.duplicate_refused` (no shadowing):
 
 1. **Built-ins**: a static list in the capcomd package, bundled into the single executable (`src/utils/assets.ts` rule:
    import, never `readFileSync` a package file).
@@ -302,7 +302,7 @@ discovered → validated → resolved → loading → active → disposing → d
 | `validated` | the manifest passed §4.9, `engines` passed (§4.4) | config `enabled: false` or untrusted project code: stays here (listed, `enabled: false`); else → `resolved` when its `requires` are satisfiable; else `failed(unresolved \| cycle \| seam_conflict)`; config invalid → `failed(config_invalid)` (§10.4); `engines` outside range → `failed(incompatible)` |
 | `resolved` | dependencies, order and config are fixed | the host loads it in order (§5.5) → `loading` |
 | `loading` | in-process: the module is imported and `activate` runs; process: the child is spawned and the handshake (§9.3) is pending | `activate` returned and every declared contribution is registered → `active`; `activate` threw → `failed(activate_threw)`; 30 s passed → `failed(activate_timeout)`; the process exited or did not open a session within `connectWithinMs` → `failed(handshake_timeout \| crashed)`; an undeclared registration → `failed(conflict)` |
-| `active` | | `capcomd plugins disable`, daemon stop, the breaker (§6.5) with cause `breaker`, a replaced out-of-process session → `disposing`; the process crashed past its restart budget (§9.5) → `failed(restart_limit)` |
+| `active` | the breaker (§6.5) suspends the plugin's hooks without leaving this state | `capcomd plugins disable`, daemon stop, a replaced out-of-process session → `disposing`; the process crashed past its restart budget (§9.5) → `failed(restart_limit)` |
 | `disposing` | §5.3 is running | done → `disposed`; over budget → `disposed` with `dispose_timeout` recorded |
 | `disposed` | terminal for this daemon lifetime, except: | `capcomd plugins enable` → back to `validated` and onward (a fresh module import is **not** performed in-process: the same module instance's `activate` runs again; out of process a new child runs, so its code may differ) |
 | `failed` | with a `PluginFailureCause` | `capcomd plugins enable` → `validated` and onward; a `failed` plugin's partial registrations are disposed as in §5.3 before the state is entered |
@@ -832,8 +832,10 @@ The exact routes, parameters, bodies, responses and status codes are in
 `SessionOpened`, `HookCall`, `HookFrame`, `HookAnswer`, `EmitBody`, `StorageEntry`, and the `plugin.*`, `job.*` and
 `trigger.*` event data under `x-events`. Feature flags: `plugins` (listing and controls) and `plugins.protocol` (the
 process routes). **They are not applied to `openapi/capcomd.json`**: ADR-023 steps 1 and 8 move them into
-`src/api/contract.ts`, from which the committed contract is generated, and delete the fragment.
-`packages/plugin/test/protocol.test.ts` checks the fragment is well-formed and still unapplied.
+`src/api/contract.ts`, from which the committed contract is generated, and delete the fragment. Step 1 moved
+`GET /v1/plugins` (and its `PluginSummary`, the `plugins` flag and the host's daemon-stream `plugin.*` events); the
+fragment keeps the rest. `packages/plugin/test/protocol.test.ts` checks the fragment is well-formed and that what it
+still holds is unapplied.
 
 ### 9.10 Protocol versioning
 
@@ -897,7 +899,7 @@ defaults. `capcomd plugins validate` and `GET /v1/plugins/{name}` show the error
 
 | Scope | Grants a plugin's own calls | Not granted |
 |---|---|---|
-| `read` | every `GET`-shaped primitive: `runs.get/list`, `agents.get/tree/await`, `messages.inbox`, `gates.pending`, `events.subscribe/replay`, `kv.get/list`, `board.list`, `jobs.get/list/wait`, `profiles.*`, `auth.*` | |
+| `read` | every `GET`-shaped primitive: `runs.get/list`, `agents.get/tree/await`, `messages.inbox`, `gates.pending`, `events.subscribe/replay`, `kv.get/list`, `board.list`, `jobs.get/list/wait`, `profiles.*`, `auth.credentialMode/loginPresent` (`auth.redact` needs no scope, §11.5) | |
 | `steer` | `runs.new/pause/resume/end/title`, `agents.spawn/cancel/grant/title/notice`, `messages.send`, `gates.verify`, `gates.merge` into **non-protected** targets, `board.*`, `kv.put/cas`, `events.emit`, `jobs.start/cancel`, `triggers.subscribe/unsubscribe` | merging into a protected target (parks for a human as for a driver) |
 | `configure` | `ui.descriptor` writes (`write()`), `profiles` writes (ADR-024 step 6) | |
 | `approve` | **never grantable to a plugin** (`approve` in `scopes` fails validation) | `gates.decide` does not exist on the context |
@@ -988,8 +990,8 @@ is removed from `HOOKS` and a manifest declaring it fails validation (which is t
 
 ### 13.1 Events every plugin emits automatically
 
-On the `daemon` stream: `plugin.loaded`, `plugin.failed`, `plugin.disposed`, `plugin.incompatible`,
-`plugin.conflict`, `plugin.config_invalid`, `plugin.hook_failed`, `plugin.suspended`, `plugin.resumed`,
+On the `daemon` stream: `plugin.loaded`, `plugin.failed`, `plugin.disposed`, `plugin.version_refused`,
+`plugin.duplicate_refused`, `plugin.config_invalid`, `plugin.hook_failed`, `plugin.suspended`, `plugin.resumed`,
 `plugin.deprecation`, `plugin.process`, `plugin.trusted`. On the run's stream: `plugin.gate_denied` and
 `plugin.gate_bypassed`. Jobs: `job.started`, `job.ended`. Triggers: `trigger.received`, `trigger.subscribed`,
 `trigger.unsubscribed`. Data shapes: `packages/plugin/src/events.ts` and the fragment's `x-events`. All durable, written
@@ -998,7 +1000,7 @@ by the host, with daemon-written `text`; a plugin's `reason` inside them is untr
 ### 13.2 `GET /v1/plugins`
 
 Every discovered plugin with `state`, `enabled`, `cause`, `hooks`, `seams`, `hooksSuspended` and `stats {calls, failures,
-p50Ms, p95Ms, lastFailureAt}`; `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
+dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
 secrets. `capcomd plugins list|show` print the same. `/v1/health` gains the feature flag `plugins`.
 
 ### 13.3 Logs
@@ -1064,8 +1066,10 @@ checks the mode against `HOOKS` (ADR-023 step 1).
 ### 14.5 The test kit
 
 `@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext`, `load`,
-`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge}`, `call`. Interfaces only today; the
-implementation ships with ADR-023 step 1 and is what CI runs on `packages/plugin/examples`.
+`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge}`, `call`. Implemented with ADR-023
+step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what `test:fast` runs on
+`packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` needs the kernel's hook sites and the
+`conformance` suites the seams as plugins: they reject `unsupported` until §17.2 steps 2, 3, 4 and 6.
 
 ## 15. Worked examples
 

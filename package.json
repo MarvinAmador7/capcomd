@@ -30,6 +30,7 @@
     "src",
     "apps/tui/src",
     "packages/agent-thread/src",
+    "packages/plugin/src",
     "plugins",
     "docs/*.md",
     "docs/upstream",
@@ -46,7 +47,7 @@
     "setup": "bun install && cd apps/canvas && bun install && cd ../tui && bun install",
     "typecheck": "tsc --noEmit && tsc --noEmit -p apps/canvas && tsc --noEmit -p apps/tui && tsc --noEmit -p packages/agent-thread && tsc --noEmit -p packages/bot-avatar && tsc --noEmit -p packages/plugin",
     "test": "bun test",
-    "test:fast": "bun test packages/agent-thread packages/bot-avatar packages/plugin tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers",
+    "test:fast": "bun test packages/agent-thread packages/bot-avatar packages/plugin tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers tests/plugins",
     "test:scenarios": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts",
     "test:scenarios:timings": "bun test tests/scenarios tests/subagents tests/primitives/policy.test.ts --timings=tests/scenario-timings.json --update-timings"
   },
