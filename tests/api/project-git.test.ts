@@ -303,6 +303,28 @@ describe("POST /v1/projects/publish", () => {
 		expect(anon.state.daemonEvents()).toEqual([]);
 	});
 
+	test("the repository is created by the forge that serves it (plugin API §7.4): the test forge, when it claims github.com", async () => {
+		const { PluginHost } = await import("../../packages/plugin/src/host/host");
+		const { BUILTINS } = await import("../../src/plugins/builtins");
+		const { useForges } = await import("../../src/plugins/forges");
+		const { fake } = await import("../merge/forge-fake/index");
+		const host = new PluginHost({ capcomd: (await import("../../src/utils/self")).VERSION, kernel: [], emit: () => {}, dataDir: () => "/nonexistent" });
+		await host.start([{ source: "builtin", dir: join(import.meta.dir, "..", "merge", "forge-fake") }, ...BUILTINS.map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module }))]);
+		useForges(host);
+		fake.claims = ["https://github.com/"];
+		try {
+			const w = world();
+			const d = local({ "a.txt": "a\n" }, { commit: true });
+			const r = await w.publish({ path: d, owner: "acme", name: "forged" });
+			expect(r.status).toBe(200);
+			expect(fake.calls).toEqual(["publish acme/forged"]);
+			expect(fake.published).toMatchObject([{ path: d, owner: "acme", name: "forged", visibility: "private" }]);
+			expect(sh(["git", "log", "--format=%s", "main"], fake.published[0]!.bare)).toBe("work");
+			// gh was asked who you are (publish-options' accounts), never to create the repository.
+			expect(existsSync(join(w.gh.root, "calls")) ? read(join(w.gh.root, "calls")) : "").not.toContain("repo create");
+		} finally { fake.reset(); useForges(null); await host.stop(); }
+	});
+
 	test("the configure scope; advertised and published in the contract", async () => {
 		const w = world();
 		const d = local();

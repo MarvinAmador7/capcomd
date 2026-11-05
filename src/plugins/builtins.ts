@@ -9,6 +9,8 @@ import * as agentClaude from "./agent-claude";
 import * as agentCodex from "./agent-codex";
 import gateReviewerManifest from "./gate-reviewer/plugin.json" with { type: "json" };
 import { plugin as gateReviewer } from "./gate-reviewer/index";
+import * as forgeGit from "./forges/git";
+import * as forgeGithub from "./forges/github";
 
 export type Builtin = Required<Pick<Candidate, "manifest" | "module">> & {
   /** A gate the kernel needs wherever a verify or a merge runs, not only in the daemon (src/plugins/hooks.ts `gates`). */
@@ -23,4 +25,7 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   { manifest: agentClaude.manifest, module: agentClaude.plugin },
   { manifest: agentCodex.manifest, module: agentCodex.plugin },
   { manifest: shipped(gateReviewerManifest), module: gateReviewer as Builtin["module"], everyProcess: true },
+  // Forges (§7.4, step 6).
+  { manifest: forgeGithub.manifest, module: forgeGithub.plugin },
+  { manifest: forgeGit.manifest, module: forgeGit.plugin },
 ];

@@ -141,7 +141,9 @@ async function pullRequestFit(runId: string, branch: string): Promise<PullReques
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
   if (!cfg) return { available: false, reason: "This run has no repository, so there is no pull request to open.", repo: null, cfg };
   const repo = cfg.github.repo || null;
-  if (!repo) return { available: false, reason: `The repository (${cfg.remote}) isn't on GitHub, so capcomd can't open a pull request. The work is on ${branch}: open one or merge it with your own tools.`, repo, cfg };
+  // The project's forge opens pull requests (docs/spec/plugin-api.md §7.4); a forge that only pushes (git) can't.
+  const forge = await (await import("../plugins/forges")).forgeFor(cfg).catch(() => null);
+  if (!forge?.describe().pullRequests) return { available: false, reason: `The repository (${cfg.remote}) isn't on GitHub, so capcomd can't open a pull request. The work is on ${branch}: open one or merge it with your own tools.`, repo, cfg };
   if (!(await haveGitHubLogin())) return { available: false, reason: `capcomd opens pull requests with your GitHub login, and there is none on this machine: run \`gh auth login\` (or set GITHUB_TOKEN), then try again. The work is on ${branch}.`, repo, cfg };
   return { available: true, reason: null, repo, cfg };
 }
@@ -257,16 +259,21 @@ export async function openGoalPullRequest(runId: string, o: { by: string; stoppe
   const [agents, ops] = await Promise.all([s.listAgents({}) as Promise<ScopeAgent[]>, s.listOps({}) as Promise<ScopeOp[]>]);
   assertDecidable(agents, g);
   const fit = await pullRequestFit(runId, g.branch);
-  if (!fit.available || !fit.cfg || !fit.repo) throw new RelayError("conflict", fit.reason ?? "a pull request can't be opened", "Open it with your own tools; the branch is pushed.", { code: "github" });
-  const { github } = await import("../merge/service");
-  let gh;
-  try { gh = await github(fit.cfg); } catch (e) { throw new RelayError("conflict", (e as Error).message, "Run `gh auth login` (or set GITHUB_TOKEN), then try again.", { code: "github" }); }
-  const view = (p: import("../merge/github").PullRequest, created: boolean) => ({
+  if (!fit.available || !fit.cfg) throw new RelayError("conflict", fit.reason ?? "a pull request can't be opened", "Open it with your own tools; the branch is pushed.", { code: "github" });
+  // Through the project's forge (docs/spec/plugin-api.md §7.4), with the run's own settings.
+  const F = await import("../plugins/forges");
+  const forge = (await F.forgeFor(fit.cfg))!;
+  const label = forge.describe().label;
+  const call = <T>(fn: (c: import("../../packages/plugin/src/seams").SeamCall) => Promise<T>) => F.withForge({ merge: fit.cfg }, 60_000, fn);
+  const noLogin = (e: unknown) => (e as { name?: string; code?: string })?.name === "PluginError" && (e as { code?: string }).code === "unavailable"
+    ? new RelayError("conflict", (e as Error).message, "Run `gh auth login` (or set GITHUB_TOKEN), then try again.", { code: "github" }) : null;
+  const view = (p: import("../../packages/plugin/src/seams").PullRequestRef, created: boolean) => ({
     runId, branch: g.branch, base: g.base, created,
-    pullRequest: { number: p.number, url: p.html_url ?? (fit.cfg!.github.api.replace(/\/$/, "") === "https://api.github.com" ? `https://github.com/${fit.repo}/pull/${p.number}` : null), state: p.merged ? "merged" : p.state },
+    pullRequest: { number: p.number, url: p.url, state: p.state },
   });
   const record = async (v: ReturnType<typeof view>) => { await s.goalDecision({ choice: "pull_request", by: o.by, pr: { number: v.pullRequest.number, url: v.pullRequest.url } }); return v; };
-  const existing = await gh.findPullByHead(fit.repo, g.branch, g.base).catch((e) => { throw new RelayError("conflict", `GitHub: ${(e as Error).message}`, "Check your GitHub login (`gh auth status`) and try again.", { code: "github" }); });
+  const head = { remote: fit.cfg.remote, head: g.branch, base: g.base };
+  const existing = await call((c) => forge.findPullRequest(head, c)).catch((e) => { throw noLogin(e) ?? new RelayError("conflict", `${label}: ${(e as Error).message}`, "Check your GitHub login (`gh auth status`) and try again.", { code: "github" }); });
   if (existing) return record(view(existing, false));
   const compare = await compareOf(fit.cfg, g);
   if (!("error" in compare) && compare.ahead === 0) throw new RelayError("conflict", `nothing landed on ${g.branch}: it has no commits that ${g.base} doesn't`, "There is nothing to open a pull request for.", { code: "empty" });
@@ -279,7 +286,7 @@ export async function openGoalPullRequest(runId: string, o: { by: string; stoppe
   const title = firstLine(goal, 120) || g.branch;
   const stopped = !ask ? null : planner?.status === "failed" ? "the planner failed" : planner?.status === "cancelled" ? "the planner was cancelled" : "the run ended first";
   const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : g.ready?.summary ?? null, landed, notLanded, stopped });
-  const pr = await gh.createPull(fit.repo, { head: g.branch, base: g.base, title, body }).catch((e) => { throw new RelayError("conflict", `GitHub refused the pull request: ${(e as Error).message}`, "Check the branch on GitHub and your access to the repository.", { code: "github" }); });
+  const pr = await call((c) => forge.openPullRequest({ ...head, title, body }, c)).catch((e) => { throw noLogin(e) ?? new RelayError("conflict", `${label} refused the pull request: ${(e as Error).message}`, "Check the branch on GitHub and your access to the repository.", { code: "github" }); });
   return record(view(pr, true));
 }
 

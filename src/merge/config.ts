@@ -30,13 +30,18 @@ export interface MergeConfig {
   workdir: string;
   /** GitHub (pr mode). */
   github: { repo: string | null; api: string; pollMs: number; timeoutMs: number };
+  /** The forge that lands work and opens pull requests (docs/spec/plugin-api.md §7.1): CAPCOMD_MERGE_FORGE (a run
+   *  records it; `.capcomd/config.json` `env` can set it); a GitHub repository named outright (CAPCOMD_GITHUB_REPO)
+   *  names `github`, as before. Never from `.capcomd.json`: the forge is chosen before the target tree is checked out.
+   *  Absent (null): the first forge that claims the remote. Optional so configs made by hand keep working. */
+  forge?: string | null;
   /** The repo settings this config was built from (re-applied when `.capcomd.json` is read from a target tree). */
   sourceEnv?: Record<string, string>;
 }
 
 /** The settings a run's repository needs (CAPCOMD_<key>); `run new` records them so the engine needn't have them. */
 export const REPO_ENV_KEYS = ["REPO", "MERGE_MODE", "MERGE_STRATEGY", "MERGE_TARGET", "MERGE_MAX_RETRIES", "TEST_COMMAND", "SIGN_COMMITS",
-  "GITHUB_REPO", "GITHUB_API", "GITHUB_POLL_MS", "GITHUB_TIMEOUT_MS", "PROTECTED_BRANCHES", "WORKDIR"] as const;
+  "GITHUB_REPO", "GITHUB_API", "GITHUB_POLL_MS", "GITHUB_TIMEOUT_MS", "PROTECTED_BRANCHES", "WORKDIR", "MERGE_FORGE"] as const;
 
 /** The repo settings present in `source`, as CAPCOMD_* names (deprecated RELAY_* aliases resolved). */
 export function repoEnvOf(source: Record<string, string | undefined> = process.env): Record<string, string> {
@@ -76,6 +81,7 @@ export function loadMergeConfig(source: Record<string, string | undefined> = pro
       pollMs: Number(envVar("GITHUB_POLL_MS", source) ?? 5000),
       timeoutMs: Number(envVar("GITHUB_TIMEOUT_MS", source) ?? 30 * 60_000),
     },
+    forge: envVar("MERGE_FORGE", source) ?? (envVar("GITHUB_REPO", source) ? "github" : null),
     sourceEnv: repoEnvOf(source),
   };
 }

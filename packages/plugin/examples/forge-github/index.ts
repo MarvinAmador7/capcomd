@@ -53,14 +53,13 @@ class GitHubForge implements Forge {
       }
       return { status: "failed", reason: r.stderr.trim() || `git push exited ${r.code}`, retryable: /could not resolve host|timed out/i.test(r.stderr) };
     }
-    // PR mode: the branch carries the integrated commit; find or create the PR, then merge it with the exact sha.
-    await this.git(req.workdir, ["push", "origin", `${req.sha}:refs/heads/${req.branch}`, "--force"], c);
+    // PR mode: the branch is pushed; find or create the PR, then merge it at exactly the head the kernel checked.
     const pr = (await this.findPullRequest({ remote: req.remote, head: req.branch, base: req.target }, c))
       ?? (await this.openPullRequest({ remote: req.remote, head: req.branch, base: req.target, title: req.subject, body: req.body }, c));
-    if (pr.state === "merged") return { status: "merged", sha: req.sha, already: true, how: "pr", pr: pr.number };
+    if (pr.state === "merged") return { status: "merged", sha: pr.mergeSha ?? req.sha, already: true, how: "pr", pr: pr.number };
     const deadline = Date.parse(c.deadline);
     while (Date.now() < deadline && !c.signal.aborted) {
-      const m = await this.req<{ merged?: boolean; sha?: string; message?: string }>("PUT", `/repos/${repo}/pulls/${pr.number}/merge`, c, { merge_method: req.strategy, sha: req.sha, commit_title: req.subject, commit_message: req.body });
+      const m = await this.req<{ merged?: boolean; sha?: string; message?: string }>("PUT", `/repos/${repo}/pulls/${pr.number}/merge`, c, { merge_method: req.strategy, sha: req.branchSha ?? req.sha, commit_title: req.subject, commit_message: req.body });
       if (m.status === 200 && m.json?.merged) return { status: "merged", sha: m.json.sha ?? req.sha, already: false, how: "pr", pr: pr.number };
       if (m.status === 409) { const head = await this.req<{ object: { sha: string } }>("GET", `/repos/${repo}/git/ref/heads/${req.target}`, c); return { status: "conflict", targetSha: head.json?.object.sha ?? "" }; }
       if (m.status !== 405) return { status: "failed", reason: m.json?.message ?? m.text, retryable: m.status >= 500 };
@@ -83,10 +82,10 @@ class GitHubForge implements Forge {
     const repo = repoOf(input.remote);
     if (!repo) return null;
     const owner = repo.split("/")[0];
-    const r = await this.req<Array<{ number: number; html_url?: string; state: "open" | "closed"; merged_at: string | null }>>("GET", `/repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${input.head}`)}&base=${encodeURIComponent(input.base)}&per_page=10`, c);
+    const r = await this.req<Array<{ number: number; html_url?: string; state: "open" | "closed"; merged_at: string | null; merge_commit_sha?: string | null }>>("GET", `/repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${input.head}`)}&base=${encodeURIComponent(input.base)}&per_page=10`, c);
     if (r.status !== 200 || !r.json) throw new GitHubHttpError(r.status, r.text, false);
     const pick = r.json.find((p) => p.merged_at) ?? r.json.find((p) => p.state === "open");
-    return pick ? { number: pick.number, url: pick.html_url ?? null, state: pick.merged_at ? "merged" : pick.state, head: input.head, base: input.base } : null;
+    return pick ? { number: pick.number, url: pick.html_url ?? null, state: pick.merged_at ? "merged" : pick.state, head: input.head, base: input.base, mergeSha: pick.merged_at ? pick.merge_commit_sha ?? null : null } : null;
   }
 
   async publishRepository(input: { path: string; owner: string | null; name: string; visibility: "private" | "public" }, c: SeamCall) {

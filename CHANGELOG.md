@@ -32,10 +32,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   orchestrate agent has no work of its own"). It needs `children.allowSpawn`, and an override can't turn it back to
   `execute` without `--operator`. `capcomd setup project` now writes it on the `planner` and `lead` profiles; profiles
   you already have are kept as they are.
+- Merges, goal-branch pull requests and **Publish** now go through forges, built-in plugins too:
+  `forge-github` (pull requests, `gh repo create`) and `forge-git` (a compare-and-swap push to any remote). Merges land
+  as before; `capcomd plugins list` now lists both. Name a project's forge with `CAPCOMD_MERGE_FORGE` (for example
+  `CAPCOMD_MERGE_FORGE=git` in your environment or in the project's `.capcomd/config.json` `env`); without one, a
+  github.com remote or `CAPCOMD_GITHUB_REPO` uses GitHub and any other remote uses git. A forge that isn't active
+  fails the merge with "merge.forge names …".
 - The plugin host now hears what capcomd does: runs, agents, sandboxes, verifies, merges and approvals each tell it
   their steps at the points the plugin API names (docs/spec/plugin-api.md §6.6), so a plugin will be able to watch
-  them, narrow them or refuse them. Only the reviewer gate listens so far (the built-in sandboxes and agent providers
-  have no hooks), and for a hook no plugin listens to capcomd does no extra work.
+  them, narrow them or refuse them. Only the reviewer gate listens so far (the built-in sandboxes, agent providers and
+  forges have no hooks), and for a hook no plugin listens to capcomd does no extra work.
 - capcomd has a plugin host, the first step of making its providers, forges, gates and front doors plugins
   (docs/spec/plugin-api.md). `capcomd plugins list [--json]` shows the
   plugins the running daemon has (or would load, when none runs): each one's state, why it failed, its hooks and

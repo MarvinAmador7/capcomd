@@ -101,6 +101,17 @@ export class HttpGitHub implements GitHubApi {
   }
 }
 
+let githubOverride: GitHubApi | null = null;
+/** Tests inject a fake GitHub adapter. */
+export function setGitHubApi(api: GitHubApi | null) { githubOverride = api; }
+/** A test injected a GitHub adapter (so no login is needed). */
+export const hasGitHubOverride = () => githubOverride !== null;
+
+/** The GitHub API at `api`: the injected fake, else REST with the user's token (GITHUB_TOKEN, GH_TOKEN, `gh auth token`). */
+export async function githubAt(api: string): Promise<GitHubApi> {
+  return githubOverride ?? new HttpGitHub(api, await githubToken());
+}
+
 /** Token: GITHUB_TOKEN / GH_TOKEN, else `gh auth token`. Never logged. */
 export async function githubToken(): Promise<string> {
   const t = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;

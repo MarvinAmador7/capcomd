@@ -612,7 +612,7 @@ Selection, per use:
 |---|---|---|
 | sandbox | the run's `sandbox` (`POST /v1/runs`, `capcomd run --sandbox`, kv `RUN_SANDBOX_KV`), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForRun` |
 | agent | the resolved profile's `provider` (`PinnedSpec.provider`; ADR-024 `harness.provider`) | `src/agents/adapters.ts` `adapterFor` on the closed union `claude \| codex` |
-| forge | the project's `merge.forge` (`.capcomd/config.json`), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last | `src/merge/service.ts` `mergeTask` → `prMerge` (GitHub only) or `directMerge` |
+| forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`) | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request and `POST /v1/projects/publish` |
 
 A profile or run naming an implementation that is not active fails at **validation** (`capcomd profiles validate`,
 `POST /v1/runs` 422), not at spawn. The kernel wraps every seam object in its traced, resilient wrappers
@@ -689,13 +689,18 @@ fetch and integrate (`src/merge/integrate.ts`), the checks (`src/merge/verify.ts
 | `describe()` | `{name, label, pullRequests}` |
 | `matches(remote)` | pure; the default selection rule (§7.1) |
 | `classifyError(e)` | §7.2.3 |
-| `land(req, c)` | Called **under the kernel's target lock**. `mode: "direct"`: push `req.sha` to `req.target` as a compare-and-swap on `req.targetSha`; a moved target is `{status: "conflict", targetSha}` and the kernel re-integrates. `mode: "pr"`: push the branch, find or open the pull request, merge it with `req.strategy` and exactly `req.sha`. **Idempotent by `req.mrgId`**: a replay after a crash finds the existing PR or the pushed commit and reports `already: true`. MUST reject `unsupported` for `pr` when `pullRequests` is false. |
-| `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)` |
-| `publishRepository` | `POST /v1/projects/publish`; today's `gh repo create` in `src/api/project-git.ts` |
+| `land(req, c)` | Called **under the kernel's target lock**. `mode: "direct"`: push `req.sha` to `req.target` as a compare-and-swap on `req.targetSha` (with `req.leaseBranch`, the branch leased at `req.branchSha` in the same atomic push; a remote that refuses atomic pushes is `{status: "failed", retryable: true}`); a moved target is `{status: "conflict", targetSha}` (`""` when the forge doesn't know it) and the kernel fetches and re-integrates. `mode: "pr"`: the branch is pushed already; find or open the pull request and merge it with `req.strategy` at exactly `req.branchSha`, the head the kernel integrated as `req.sha` and checked (the hosting service makes the merge commit, so the outcome's `sha` is the service's); a pull request the service can't merge is `conflict`, a wait past the deadline `{status: "failed", retryable: true}`. **Idempotent by `req.mrgId`**: a replay after a crash finds the existing PR or the pushed commit and reports `already: true`. MUST reject `unsupported` for `pr` when `pullRequests` is false. |
+| `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)`. A merged pull request carries `mergeSha`, so a pr-mode merge that finds one records it without integrating again |
+| `publishRepository` | `POST /v1/projects/publish` (the forge that matches the repository it would create); today's `gh repo create` in `src/api/project-git.ts`. A name the service has already is `conflict` |
 | `defaultBranch(remote)` | for `POST /v1/runs` base resolution |
 
 Built-ins: `forge-github` (§15.2) and `forge-git` (direct pushes to any remote; `pullRequests: false`). A GitLab or
-Gitea forge is one plugin and no API change. `tests/merge/fake-github.ts` becomes the `forge-fake` test plugin.
+Gitea forge is one plugin and no API change. `tests/merge/fake-github.ts` stays the fake GitHub REST service that
+`forge-github`'s tests run against; `tests/merge/forge-fake` is the `forge-fake` test plugin, which lands what the kernel
+hands it without a hosting service. Every process that lands work has the forges: the daemon's host, else a host of the
+forge plugins alone (the CLI, `capcomd mcp`, tests). Until a project's layer of a plugin's config exists (§10.2), the
+built-in forges read a run's recorded merge settings (`CAPCOMD_GITHUB_API`, `_POLL_MS`, `_TIMEOUT_MS`, `_REPO`) and the
+caller's environment (`CAPCOMD_GH_CLI`) from the kernel for the call they serve.
 
 ## 8. Primitives: the context
 
@@ -1428,6 +1433,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.2 | 2026-11-05 | With sandbox providers as plugins (§17.2 step 3): the sandbox conformance suite's home (§7.2); the Docker sweep is the seam's `sweep`, called by the kernel (§15.1). |
 | 1.0.3 | 2026-11-05 | With the agent providers as plugins (§17.2 step 4): §7.3's `AgentConfig` gains `auto` and `usdPerMtok`, `toolPolicies.orchestrate` gains `sandbox`, `redactJson`, where the active providers come from, the runner's kind; §16.1's Claude Code policy denies no bare `Bash`, Codex's is its sandbox, v1 profiles spell the mode `toolMode`, the refusal's relay.v1 code, and the policy applied as the config is built; §14.2's agent suite: the turn limit may be the CLI's, `parse`'s null and redaction, a read-only sandbox for a policy with no allowlist, where it lives. |
 | 1.0.4 | 2026-11-05 | With the gates (§17.2 step 5): the built-in gates in a process that isn't the daemon (§6.1); `merge --operator` asks every landing gate (§6.5); `verify.judging`'s `tested.commit`, judges in order, a judge's `review` report, the kernel's same-tree and no-review rules, stopped reviewers (§6.6.13); the built-in reviewer gate (§15.3); the gate events as scope events, a plugin's own run events not yet (§13.1). |
+| 1.0.5 | 2026-11-05 | With the forges (§17.2 step 6): `LandRequest.branchSha`/`leaseBranch`, `PullRequestRef.mergeSha`, a conflict's `detail` and unknown `targetSha` (all additive); a pr land merges at the checked head (`branchSha`), not a pushed integrated commit; `merge.forge` from `CAPCOMD_MERGE_FORGE` (not `.capcomd.json`), `CAPCOMD_GITHUB_REPO` naming `github`; `forge-git` is `order: post`; `forge-fake` lives in `tests/merge/forge-fake`. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
