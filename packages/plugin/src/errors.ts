@@ -38,5 +38,5 @@ export type HookFailureKind = "timeout" | "threw" | "crashed" | "invalid_result"
 export type PluginFailureCause =
   | "invalid_manifest" | "incompatible" | "duplicate" | "untrusted" | "disabled"
   | "unresolved" | "cycle" | "seam_conflict" | "config_invalid"
-  | "activate_threw" | "activate_timeout" | "handshake_timeout" | "crashed" | "restart_limit"
+  | "activate_threw" | "activate_timeout" | "conflict" | "handshake_timeout" | "crashed" | "restart_limit"
   | "dispose_timeout";

@@ -1,5 +1,5 @@
 {
-  "$comment": "DRAFT, not applied to openapi/capcomd.json. The harness.v1 additions the plugin API needs (docs/spec/plugin-api.md §9.9, §13.2). When ADR-023 step 1 and step 8 land, these routes move into src/api/contract.ts and scripts/gen-harness-contract.ts regenerates the committed contract; this file is then deleted. Capability names: `plugins` (the listing and controls) and `plugins.protocol` (the out-of-process routes).",
+  "$comment": "DRAFT, not applied to openapi/capcomd.json. The harness.v1 additions the plugin API needs (docs/spec/plugin-api.md §9.9, §13.2). GET /v1/plugins moved into src/api/contract.ts with ADR-023 step 1 (its PluginSummary is the contract's now; the copy below is kept for PluginDetail); as the later steps land, the other routes move the same way and scripts/gen-harness-contract.ts regenerates the committed contract; this file is then deleted. Capability names: `plugins` (the listing and controls) and `plugins.protocol` (the out-of-process routes).",
   "openapi": "3.1.1",
   "info": { "title": "capcomd harness API: plugin additions (draft)", "version": "harness.v1" },
   "x-capabilities": {
@@ -7,13 +7,6 @@
     "plugins.protocol": "The out-of-process plugin protocol, version 1: POST /v1/plugins/{name}/sessions, GET /v1/plugins/{name}/hooks (SSE), POST /v1/plugins/{name}/hooks/{callId}, POST /v1/plugins/{name}/events and the /v1/plugins/{name}/storage routes. Only the token the host minted for that plugin may call them (403 otherwise)"
   },
   "paths": {
-    "/v1/plugins": {
-      "get": {
-        "operationId": "plugins.list",
-        "description": "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state (§5.4), why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the read scope. Local reads only, so poll it freely. Never contains config values or secrets.",
-        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "required": ["plugins"], "properties": { "plugins": { "type": "array", "items": { "$ref": "#/components/schemas/PluginSummary" } } } } } } } }
-      }
-    },
     "/v1/plugins/{name}": {
       "get": {
         "operationId": "plugins.get",
@@ -132,7 +125,7 @@
           "hooks": { "type": "array", "items": { "$ref": "#/components/schemas/HookName" } },
           "seams": { "type": "array", "items": { "type": "object", "required": ["kind", "name"], "properties": { "kind": { "type": "string", "enum": ["sandbox", "agent", "forge"] }, "name": { "type": "string" } } } },
           "hooksSuspended": { "type": "boolean", "description": "The breaker tripped (plugin.suspended): listeners are not called; gate listeners count as deny" },
-          "stats": { "type": "object", "required": ["calls", "failures", "p50Ms", "p95Ms", "lastFailureAt"], "properties": { "calls": { "type": "integer" }, "failures": { "type": "integer" }, "p50Ms": { "type": ["number", "null"] }, "p95Ms": { "type": ["number", "null"] }, "lastFailureAt": { "type": ["string", "null"] } } }
+          "stats": { "type": "object", "required": ["calls", "failures", "dropped", "p50Ms", "p95Ms", "lastFailureAt"], "properties": { "calls": { "type": "integer" }, "failures": { "type": "integer" }, "dropped": { "type": "integer" }, "p50Ms": { "type": ["number", "null"] }, "p95Ms": { "type": ["number", "null"] }, "lastFailureAt": { "type": ["string", "null"] } } }
         }
       },
       "PluginDetail": {
@@ -200,8 +193,8 @@
     "plugin.loaded": { "stream": "daemon", "data": { "plugin": "string", "version": "string", "runtime": "in-process | process", "hooks": "HookName[]", "seams": "string[]", "ms": "integer" } },
     "plugin.failed": { "stream": "daemon", "data": { "plugin": "string", "version": "string | null", "cause": "PluginFailureCause", "message": "string" } },
     "plugin.disposed": { "stream": "daemon", "data": { "plugin": "string", "cause": "daemon_stopping | disabled | breaker | replaced | failed" } },
-    "plugin.incompatible": { "stream": "daemon", "data": { "plugin": "string", "version": "string", "engines": "string", "capcomd": "string", "apiVersion": "integer" } },
-    "plugin.conflict": { "stream": "daemon", "data": { "plugin": "string", "kept": "builtin | user | project", "refused": "builtin | user | project", "path": "string" } },
+    "plugin.version_refused": { "stream": "daemon", "data": { "plugin": "string", "version": "string", "engines": "string", "capcomd": "string", "apiVersion": "integer" } },
+    "plugin.duplicate_refused": { "stream": "daemon", "data": { "plugin": "string", "kept": "builtin | user | project", "refused": "builtin | user | project", "path": "string" } },
     "plugin.config_invalid": { "stream": "daemon", "data": { "plugin": "string", "errors": "[{path, message}]", "layer": "user | project | env | run" } },
     "plugin.hook_failed": { "stream": "daemon", "data": { "plugin": "string", "hook": "HookName", "callId": "string", "kind": "timeout | threw | crashed | invalid_result | disconnected | suspended", "message": "string", "effect": "denied | skipped" } },
     "plugin.suspended": { "stream": "daemon", "data": { "plugin": "string", "failures": "integer", "lastHook": "HookName" } },

@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `runs.options.models`: GET /v1/run-options `drivers[].models`: the models each driver's planner can run on (an id, a display name and a one-line note); POST /v1/runs takes `model`, one of them; `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.known`: GET /v1/projects/known: capcomd's projects with their checkout folders on the daemon's machine, and which is the default; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`; `runs.goal_branch`: Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events; `agents.title`: Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled; `agents.thread_tail`: GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `runs.options.models`: GET /v1/run-options `drivers[].models`: the models each driver's planner can run on (an id, a display name and a one-line note); POST /v1/runs takes `model`, one of them; `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.known`: GET /v1/projects/known: capcomd's projects with their checkout folders on the daemon's machine, and which is the default; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`; `runs.goal_branch`: Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events; `agents.title`: Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled; `agents.thread_tail`: GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages; `plugins`: GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; plugin.* events on the daemon stream audit the plugin host. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -8692,6 +8692,235 @@
         }
       }
     },
+    "/v1/plugins": {
+      "get": {
+        "operationId": "plugins.list",
+        "description": "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. This capcomd ships no plugins yet, so the list is empty until it does.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                            "description": "The plugin's name: lowercase letters, digits and hyphens"
+                          },
+                          "version": {
+                            "type": "string",
+                            "description": "The plugin's own version (0.0.0 when its manifest couldn't be read)"
+                          },
+                          "apiVersion": {
+                            "const": 1,
+                            "description": "The plugin API major it codes against"
+                          },
+                          "runtime": {
+                            "enum": [
+                              "in-process",
+                              "process"
+                            ],
+                            "type": "string",
+                            "description": "in-process: built into capcomd; process: a program capcomd starts"
+                          },
+                          "source": {
+                            "enum": [
+                              "builtin",
+                              "user",
+                              "project"
+                            ],
+                            "type": "string",
+                            "description": "Where it was found: shipped with capcomd, the user's plugins, or the project's"
+                          },
+                          "state": {
+                            "enum": [
+                              "discovered",
+                              "validated",
+                              "resolved",
+                              "loading",
+                              "active",
+                              "disposing",
+                              "disposed",
+                              "failed"
+                            ],
+                            "type": "string",
+                            "description": "Its lifecycle state (spec §5.4): discovered, validated, resolved, loading, active, disposing, disposed or failed. Treat a state you don't know as failed"
+                          },
+                          "enabled": {
+                            "type": "boolean",
+                            "description": "false while config holds it at validated (`plugins.<name>.enabled: false`)"
+                          },
+                          "cause": {
+                            "description": "Why it is failed, disposed or not enabled (spec §5.4, e.g. invalid_manifest, incompatible, untrusted, unresolved, activate_threw, disabled, dispose_timeout); null otherwise. Treat a cause you don't know as a failure for a reason you don't know",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "hooks": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "The hooks it listens to (spec §6.6): those it registered while active, those its manifest declares otherwise. Ignore names you don't know"
+                          },
+                          "seams": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "enum": [
+                                    "sandbox",
+                                    "agent",
+                                    "forge"
+                                  ],
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "name"
+                              ]
+                            },
+                            "description": "The seams it implements (spec §7), each by the name runs and profiles select it by"
+                          },
+                          "hooksSuspended": {
+                            "type": "boolean",
+                            "description": "The breaker tripped (plugin.suspended): its listeners aren't called, and its gate listeners deny, until it is enabled again or the daemon restarts"
+                          },
+                          "stats": {
+                            "type": "object",
+                            "properties": {
+                              "calls": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991,
+                                "description": "Hook calls since the daemon started"
+                              },
+                              "failures": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991,
+                                "description": "Calls that failed (plugin.hook_failed)"
+                              },
+                              "dropped": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991,
+                                "description": "Observe calls dropped because its queue was full (spec §6.2)"
+                              },
+                              "p50Ms": {
+                                "description": "Median call time over its recent calls; null before the first",
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "p95Ms": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "lastFailureAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                                "format": "date-time",
+                                "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                              }
+                            },
+                            "required": [
+                              "calls",
+                              "failures",
+                              "dropped",
+                              "p50Ms",
+                              "p95Ms",
+                              "lastFailureAt"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "version",
+                          "apiVersion",
+                          "runtime",
+                          "source",
+                          "state",
+                          "enabled",
+                          "cause",
+                          "hooks",
+                          "seams",
+                          "hooksSuspended",
+                          "stats"
+                        ]
+                      },
+                      "description": "In load order, then the plugins that didn't load, in the order they were discovered"
+                    }
+                  },
+                  "required": [
+                    "plugins"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/skills": {
       "get": {
         "operationId": "skills.list",
@@ -11957,6 +12186,244 @@
         "additionalProperties": {},
         "description": "Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")",
         "x-event-type": "sandbox.resource_deleted"
+      },
+      "PluginLoadedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "runtime": {
+            "type": "string",
+            "description": "in-process or process"
+          },
+          "hooks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The hooks it listens to (spec §6.6)"
+          },
+          "seams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The seams it implements, as <kind>/<name>"
+          },
+          "ms": {
+            "type": "number",
+            "description": "How long it took to load"
+          }
+        },
+        "required": [
+          "plugin",
+          "version",
+          "runtime",
+          "hooks",
+          "seams",
+          "ms"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin became active (spec §5.4)",
+        "x-event-type": "plugin.loaded"
+      },
+      "PluginFailedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "version": {
+            "description": "null when its manifest couldn't be read",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string",
+            "description": "Why (spec §5.4): invalid_manifest, untrusted, unresolved, cycle, seam_conflict, config_invalid, activate_threw, activate_timeout, conflict, … Treat an unknown cause as a failure for a reason you don't know"
+          },
+          "message": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text (here the host's details, which quote the plugin's manifest and errors): render as plain text"
+          }
+        },
+        "required": [
+          "plugin",
+          "version",
+          "cause",
+          "message"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin failed to validate, resolve or load; it stays listed by GET /v1/plugins with its cause. An incompatible plugin is plugin.version_refused instead, a second plugin of one name plugin.duplicate_refused",
+        "x-event-type": "plugin.failed"
+      },
+      "PluginDisposedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "cause": {
+            "type": "string",
+            "description": "daemon_stopping or disabled (more may come)"
+          }
+        },
+        "required": [
+          "plugin",
+          "cause"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. An active plugin was unloaded",
+        "x-event-type": "plugin.disposed"
+      },
+      "PluginVersionRefusedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "engines": {
+            "type": "string",
+            "description": "The capcomd versions it says it supports (a semver range)"
+          },
+          "capcomd": {
+            "type": "string",
+            "description": "This capcomd's version"
+          },
+          "apiVersion": {
+            "type": "number",
+            "description": "The plugin API major it codes against"
+          }
+        },
+        "required": [
+          "plugin",
+          "version",
+          "engines",
+          "capcomd",
+          "apiVersion"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin doesn't support this capcomd (spec §4.4): it is failed with cause incompatible",
+        "x-event-type": "plugin.version_refused"
+      },
+      "PluginDuplicateRefusedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "kept": {
+            "type": "string",
+            "description": "builtin, user or project: where the one kept came from"
+          },
+          "refused": {
+            "type": "string",
+            "description": "Where the refused one came from"
+          },
+          "path": {
+            "type": "string",
+            "description": "The refused plugin's directory, or (built-in)"
+          }
+        },
+        "required": [
+          "plugin",
+          "kept",
+          "refused",
+          "path"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A second plugin with a name already discovered was refused (spec §4.8): it is failed with cause duplicate",
+        "x-event-type": "plugin.duplicate_refused"
+      },
+      "PluginHookFailedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "hook": {
+            "type": "string"
+          },
+          "callId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "timeout, threw, crashed, invalid_result, disconnected or suspended"
+          },
+          "message": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text (here what went wrong, which may quote the plugin's error): render as plain text"
+          },
+          "effect": {
+            "type": "string",
+            "description": "denied (the operation was refused, naming the plugin) or skipped (the listener was left out)"
+          }
+        },
+        "required": [
+          "plugin",
+          "hook",
+          "callId",
+          "kind",
+          "message",
+          "effect"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. One call to a plugin's hook listener produced no usable answer (spec §6.5)",
+        "x-event-type": "plugin.hook_failed"
+      },
+      "PluginSuspendedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "failures": {
+            "type": "number",
+            "description": "Failed calls in a row"
+          },
+          "lastHook": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin",
+          "failures",
+          "lastHook"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. The breaker tripped: the plugin's listeners are no longer called (its gate listeners deny) until it is enabled again or the daemon restarts (spec §6.5)",
+        "x-event-type": "plugin.suspended"
+      },
+      "PluginResumedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string",
+            "description": "Who resumed it"
+          }
+        },
+        "required": [
+          "plugin",
+          "by"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A suspended plugin's listeners are called again",
+        "x-event-type": "plugin.resumed"
       },
       "StreamResetFrame": {
         "type": "object",

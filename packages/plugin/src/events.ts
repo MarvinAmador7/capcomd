@@ -8,9 +8,9 @@ export interface PluginEventData {
   "plugin.loaded": { plugin: string; version: string; runtime: "in-process" | "process"; hooks: HookName[]; seams: string[]; ms: number };
   "plugin.failed": { plugin: string; version: string | null; cause: PluginFailureCause; message: string };
   "plugin.disposed": { plugin: string; cause: "daemon_stopping" | "disabled" | "breaker" | "replaced" | "failed" };
-  "plugin.incompatible": { plugin: string; version: string; engines: string; capcomd: string; apiVersion: number };
+  "plugin.version_refused": { plugin: string; version: string; engines: string; capcomd: string; apiVersion: number };
   /** Two manifests of the same name; the later source is refused (§4.8). */
-  "plugin.conflict": { plugin: string; kept: "builtin" | "user" | "project"; refused: "builtin" | "user" | "project"; path: string };
+  "plugin.duplicate_refused": { plugin: string; kept: "builtin" | "user" | "project"; refused: "builtin" | "user" | "project"; path: string };
   "plugin.config_invalid": { plugin: string; errors: Array<{ path: string; message: string }>; layer: "user" | "project" | "env" | "run" };
   /** One listener call that produced no usable result (§6.5). `effect` says what the host did. */
   "plugin.hook_failed": { plugin: string; hook: HookName; callId: string; kind: HookFailureKind; message: string; effect: "denied" | "skipped" };

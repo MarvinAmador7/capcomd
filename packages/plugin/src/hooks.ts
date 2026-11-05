@@ -243,6 +243,23 @@ export const HOOKS = {
 
 export const HOOK_NAMES: readonly HookName[] = Object.keys(HOOKS) as HookName[];
 
+/** The hooks of one mode. */
+export type HooksOfMode<M extends HookMode> = { [N in HookName]: HookModeOf<N> extends M ? N : never }[HookName];
+export type ObserveHook = HooksOfMode<"observe">;
+export type VetoHook = HooksOfMode<"veto">;
+export type ModifyHook = HooksOfMode<"modify">;
+
+/** The top-level keys a `modify` patch may carry, per hook (§6.6). A patch with any other key is an `invalid_result`;
+ *  whether the values only narrow is the kernel's check at the call site (a widening is refused with `widening`). */
+export const PATCH_KEYS = {
+  "run.creating": ["label", "budget", "sandbox"],
+  "profile.resolved": ["model", "effort", "allowedTools", "disallowedTools", "egress", "maxTurns", "maxBudgetUsd", "timeoutMs", "idleAfterMs", "stuckRepeats", "noChangeAfterMs", "checkpointEveryMs", "children"],
+  "agent.spawning": ["budget", "grant", "contract"],
+  "agent.preparing": ["prompt", "env", "egress"],
+  "sandbox.ensuring": ["labels", "size", "ttlSeconds"],
+  "verify.starting": ["acceptance"],
+} as const satisfies { [N in ModifyHook]: ReadonlyArray<keyof HookPatch<N>> };
+
 /** One invocation of a listener (§6.1). The same object shape travels on the wire out of process (§9.4). */
 export interface HookCall<N extends HookName = HookName> {
   /** Unique per invocation. */

@@ -70,6 +70,14 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "project.configured": return "A project was set up.";
 		case "project.git_initialized": return "A git repository was started in a folder.";
 		case "project.published": return "A project was published to GitHub.";
+		case "plugin.loaded": return "A plugin was loaded.";
+		case "plugin.failed": return "A plugin failed to load.";
+		case "plugin.disposed": return "A plugin was unloaded.";
+		case "plugin.version_refused": return "A plugin doesn't support this capcomd.";
+		case "plugin.duplicate_refused": return "A second plugin of the same name was refused.";
+		case "plugin.hook_failed": return "A plugin's hook listener failed.";
+		case "plugin.suspended": return "A plugin's hooks were suspended.";
+		case "plugin.resumed": return "A plugin's hooks were resumed.";
 		default: return type.replace(/[._]/g, " ") + ".";
 	}
 }

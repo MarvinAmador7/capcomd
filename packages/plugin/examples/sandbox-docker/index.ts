@@ -108,5 +108,10 @@ export const plugin = definePlugin<Config>({
       choices: [512, 1024, 2048, 4096].map((v) => ({ value: String(v), label: `${v / 1024 >= 1 ? v / 1024 + " GB" : v + " MB"}` })),
       async read() { return { value: String(ctx.config.get().agentMemoryMb), display: `${ctx.config.get().agentMemoryMb} MB`, source: "config", editable: true }; },
     });
+    // Declared in the manifest, so registered (§14.1): how many agents fit at once is Docker's memory over the setting.
+    ctx.ui.descriptor({
+      kind: "info", id: "agentSlots", label: "Agents at once", help: null, type: "info",
+      async read() { return { value: null, display: `As many as fit in Docker's memory at ${ctx.config.get().agentMemoryMb} MB each`, source: "daemon", editable: false }; },
+    });
   },
 });

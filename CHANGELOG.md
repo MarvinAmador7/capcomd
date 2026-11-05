@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- capcomd has a plugin host, the first step of making its providers, forges, gates and front doors plugins
+  (docs/spec/plugin-api.md). No plugins ship yet, so nothing else changes. `capcomd plugins list [--json]` shows the
+  plugins the running daemon has (or would load, when none runs): each one's state, why it failed, its hooks and
+  seams. Apps can read the same with `GET /v1/plugins` (the `read` scope; capability `plugins`), and the daemon stream
+  carries `plugin.*` events (loaded, failed, disposed, incompatible, conflict, hook_failed, suspended, resumed).
 - The window opens on **Home**: "What are we building?", the composer, and every run that's running, one line each
   (where it runs, its title, a few words on what its crew is doing, the crew's heads and how long it's been going). A
   run that asks shows its question, the files it would land with their +/−, and **Deny** / **Approve ↩** right there.

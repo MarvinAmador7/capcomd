@@ -3,10 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The capcomd plugin API: manifest schema, context and primitive interfaces, the typed hook registry, the seam interfaces, the out-of-process protocol and the test-kit interfaces. Types only; the normative spec is docs/spec/plugin-api.md. Not published yet.",
+  "description": "The capcomd plugin API: manifest schema and loading, context and primitive interfaces, the typed hook registry, the seam interfaces, the out-of-process protocol, the host's machinery (shared by the kernel's plugin host and the test kit) and the test kit. The normative spec is docs/spec/plugin-api.md. Not published yet.",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./testkit": "./src/testkit.ts",
     "./schema": "./schema/plugin-manifest.schema.json"
   },
   "scripts": {

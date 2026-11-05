@@ -174,7 +174,14 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     rmSync(pidFile, { force: true });
   };
   process.on("exit", reap);
-  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, async () => { console.log("\nStopping engine..."); await stopEngine(); process.exit(0); });
+  // The plugin host, once it has started (below): plugins dispose in reverse load order before the engine stops (§5.5).
+  let plugins: { stop(): Promise<void> } | null = null;
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, async () => {
+    if (plugins) await plugins.stop().catch((e: Error) => console.error(`capcomd serve: stopping plugins: ${e.message}`));
+    console.log("\nStopping engine...");
+    await stopEngine();
+    process.exit(0);
+  });
   // rivet-services (unused by capcomd) binds a fixed :8642; never let it collide off the default port.
   if (port !== 6420 && process.env.RIVET_RUN_SERVICES === undefined) process.env.RIVET_RUN_SERVICES = "0";
 
@@ -265,11 +272,20 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // engine's wake retries on every run it reads. Bounded by rivetkit (30 s); the API opens either way.
   await registry.startAndWait().catch((e: Error) => console.error(`capcomd serve: actors not ready yet (${e.message}); opening the harness API anyway`));
 
+  // Plugins (docs/spec/plugin-api.md §5.5): discovered, validated and resolved, then loaded one at a time, after the
+  // actors answer and before the API opens, so a client never sees a half-loaded daemon. A plugin that fails is listed
+  // with its cause and the daemon goes on.
+  const P = await import("../../plugins/host");
+  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath() });
+  process.on("exit", () => P.releaseSnapshot());
+  try { await host.start(P.builtinCandidates()); } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
+  plugins = host;
+
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {
     const { harnessApp } = await import("../../api/server");
     const { rivetSource } = await import("../../api/rivet-source");
-    const app = harnessApp({ source: rivetSource(), state: harnessStore });
+    const app = harnessApp({ source: rivetSource(), state: harnessStore, plugins: () => host.list() });
     let seq = 0;
     const harness = await serveHarnessSocket(sock, async (req: Request) => {
       const key = `${req.method} ${new URL(req.url).pathname}#${++seq}`;
