@@ -267,7 +267,6 @@ The SSE \`event:\` field is the frame type: the envelope's dotted \`type\` for e
 Run scopes accept \`?feed=lifecycle\`: no snapshot.steps/threads, only lifecycle events (below) after the snapshot, and \`?activity=1\`: live, ephemeral agent.activity_changed frames (at most one per agent per second), and \`?thread=1\`: live, ephemeral agent.thread_item_changed frames (Agent threads, below).
 Timestamps (ts, decidedAt, expiresAt): ${TIMESTAMP_DOC}.`;
 
-/** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 /** The plugin host's own events (capability plugins; docs/spec/plugin-api.md §13.1, packages/plugin/src/events.ts).
  *  Durable, written by the host with daemon-written text; a plugin's `reason` or `message` inside them is untrusted. */
 const PLUGIN_EVENT = "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written";
@@ -307,6 +306,7 @@ const PluginEventData = {
 	}).describe(`${PLUGIN_EVENT}. A suspended plugin's listeners are called again`),
 } as const;
 
+/** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
 	"agent.step": LegacyEventData["agent.step"].describe("Capability agent.steps. One finished step of an agent's history, in the order it took them: a streak of one kind of tool call (reading files, editing, running the tests), reported once the agent moved on to another kind or ended. Durable: replayed by GET /v1/events and on run streams like any event (not on the lifecycle feed). The envelope text is the step in past tense (\"Read 4 files\", \"Ran the tests\"); `agentId`/`entity` is the agent. At most 500 per agent; a cancelled agent's unfinished last step is not recorded"),
