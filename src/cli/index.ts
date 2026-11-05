@@ -1054,6 +1054,8 @@ async function main(argv: string[]): Promise<number> {
           const P = await import("../primitives/ops");
           const m: any = await P.decideMerge(runId, taskId, { approve: !values.deny, by: (values.by as string | undefined) ?? "cli", ...(values.reason ? { reason: String(values.reason) } : {}) });
           if (json) out(m); else console.log(`${taskId}: ${m.state}${m.result?.sha ? ` (${String(m.result.sha).slice(0, 12)})` : ""}${m.result?.reason ? ` ${m.result.reason}` : ""}`);
+          // Approved, then held by a plugin (merge.landing): it waits for a second approval, of that plugin's hold.
+          if (!json && m.state === "awaiting_approval" && m.heldBy) console.log(`  held by the ${m.heldBy.plugin} plugin: ${m.heldBy.reason}\n  approve it again to land it: capcomd approve ${runId} ${taskId}`);
           await P.settleCleanups();
           return m.state === "merged" || (values.deny && m.state === "failed") ? EXIT.ok : EXIT.run_failed;
         }

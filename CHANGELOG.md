@@ -5,6 +5,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- When a plugin holds a merge for your approval, the approval now says which plugin held it and why: in the question
+  and `subject.heldBy` the apps show, in `capcomd approve`'s output, in the prompt `capcomd_approve` asks under
+  `driver.approvals: "elicit"`, and as `heldBy` on the `merge.approval_requested` event. Approving satisfies only that
+  plugin's hold: approving a merge into a protected branch no longer also lets a plugin's later hold through unseen;
+  the merge waits again, showing the plugin's reason, and lands on your second approval. Each park and approval is
+  now its own event, so the approval shows as pending again. For plugin authors, each re-asked `merge.landing` is a new
+  attempt with its own `idempotencyKey` (`merge.landing:<mrg>:2`, …), and a `run.creating` patch can only pick a
+  sandbox an active plugin provides.
+- Denying a merge a plugin held no longer leaves it looking in flight: its verification record ends as failed, and the
+  engine stops reporting it as an in-flight verification each time it wakes.
+- Plugins watching runs, agents, verifies, merges and approvals (the `*.changed` hooks) are now told who caused each
+  change: the agent for its own work, the parent agent that spawned it, the agent that asked for a verify or a merge
+  from its VM, or the person who approved, paused or cancelled, instead of always the operator. A plugin that stops
+  listening and starts again is told only what changes from then on, not what happened in between.
+
 - The reviewer is now a built-in plugin, `gate-reviewer` (listed by `capcomd plugins list`), one judge of a verify
   beside the checks: a verify passes only when the checks, the run's reviewer and every other plugin judge pass, for
   the same tree. Reviews work as before (`run new --reviewer`, `verify --review-profile`), from the CLI, the MCP

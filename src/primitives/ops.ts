@@ -33,6 +33,7 @@ import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
 import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
+import type { PluginHold } from "../merge/types";
 export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
@@ -1507,13 +1508,15 @@ async function verifyOnce(o: VerifyOpts, vfyId: string) {
   if (reviewProfile) reviewerSpec(reviewProfile); // an unknown reviewer is refused before anything runs
   // The record names the check and the exact command it ran; merge --require re-runs that command.
   const data = { ref: o.ref, agentId, branch, target, ...(o.check !== undefined ? { check: o.check } : {}), checks: checks ?? null, acceptance: o.acceptance ?? null, reviewProfile: reviewProfile ?? null };
-  const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data }).catch(asRelay);
+  // Who asked (an in-VM verify's agent) isn't a parameter of the verification, as for a merge: it is kept beside it, so
+  // its changes name the agent that caused them (plugin API §3.2) and a resume asks the gates as that agent again.
+  const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data: o.reviewParent ? { ...data, askedBy: o.reviewParent } : data }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   return runVerify(o.runId, st.op, o.reviewParent);
 }
 
 /** Run (or resume: everything it calls is keyed by the op) a recorded verification, from its recorded parameters. */
-async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, reviewParent?: string) {
+async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, reviewParent: string | undefined = typeof op.data.askedBy === "string" ? op.data.askedBy : undefined) {
   const t0 = Date.now();
   const c = client();
   const s = c.scope.getOrCreate([runId]);
@@ -1713,11 +1716,11 @@ export async function settleCleanups(ms = 30_000) {
 
 /** Run a recorded merge op: land its ref (only the verified commit; the fast path when the target hasn't moved since
  *  the verify, else re-running the checks verify passed with). */
-async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp, o: { approved?: boolean } = {}) {
+async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp) {
   const t0 = Date.now();
   const c = client();
   const s = c.scope.getOrCreate([runId]);
-  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null; operator?: boolean; askedBy?: string };
+  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null; operator?: boolean; askedBy?: string; heldBy?: PluginHold; approvedHolds?: PluginHold[] };
   const { label } = await resolveRef(runId, d.ref);
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
@@ -1727,18 +1730,25 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   const verified = d.expectSha && v?.result?.commit === d.expectSha && tested?.sha && tested.targetSha ? { sha: tested.sha, targetSha: tested.targetSha, ...(tested.how ? { how: tested.how } : {}) } : undefined;
   const direct = onGoal(await runGoal(runId), d.target);
   // What merge.landing's plugins are asked, where the merge runs (the engine host): this process can't tell whether one
-  // listens there, so it always says.
+  // listens there, so it always says. A running merge with a plugin's hold on record is one a person approved after that
+  // hold (decideOp): that hold, and the ones approved before it, no longer stop it; any other plugin's still does. Each
+  // approved hold makes the next landing a new attempt (its own idempotency key, §6.7); a replay of one keeps its key.
+  const approvedHolds = [...(d.approvedHolds ?? []), ...(d.heldBy ? [d.heldBy] : [])];
   const gate: import("../merge/types").MergeGate = {
     merge: mergeOf(runId, op), verification: v ? verificationOf(runId, v) : null, operator: !!d.operator, requestedBy: principalOf(d.askedBy ?? null, runId),
-    ...(o.approved ? { holdSatisfied: true } : {}),
+    attempt: approvedHolds.length + 1, ...(approvedHolds.length ? { approvedHolds } : {}),
   };
   const res: any = await c.verifier.getOrCreate([runId, op.id]).verify({
     verifierId: op.id, taskId: label, branch: d.branch, runId, target: d.target, testOnly: false, ...(d.expectSha ? { expectSha: d.expectSha } : {}), ...(checks ? { testCommand: checks } : {}), ...(direct ? { mode: "direct" as const } : {}),
     ...(verified ? { verified } : {}), gate,
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
-  // A plugin held it: parked for a person's approval, as a protected target's merge is.
-  if (out.status === "failed" && out.held) return opView(await s.parkOp({ opId: op.id, reason: `held by the ${out.held.plugin} plugin: ${out.reason}` }));
+  // A plugin held it: parked for a person's approval, as a protected target's merge is. The hold is kept on the merge,
+  // so the approval shows the plugin's reason and only an approval of this hold satisfies it.
+  if (out.status === "failed" && out.held) {
+    const heldBy: PluginHold = { plugin: out.held.plugin, reason: out.reason };
+    return opView(await s.parkOp({ opId: op.id, reason: `held by the ${heldBy.plugin} plugin: ${heldBy.reason}`, heldBy, approvedHolds }));
+  }
   const merged = out.status === "merged";
   const g = out.timings ?? {};
   const timings = { totalMs: Date.now() - t0, queueMs: g.lockWaitMs ?? 0, ...Object.fromEntries(Object.entries(g).filter(([k]) => k !== "lockWaitMs")) };
@@ -1787,11 +1797,18 @@ export async function decideMerge(runId: string, mrgId: string, o: { approve: bo
   }
   const { decided, op: now } = await s.decideOp({ opId: mrgId, approve: o.approve, by: o.by ?? "operator", ...(o.reason ? { reason: o.reason } : {}) });
   // Approved (now, or by an earlier call that crashed before merging): run it.
-  if (o.approve && now.state === "running") return inflightOps.get(mrgId) ?? track(mrgId, () => executeMerge(runId, now, { approved: true }));
+  if (o.approve && now.state === "running") return inflightOps.get(mrgId) ?? track(mrgId, () => executeMerge(runId, now));
   if (!decided && now.state === "running") throw new RelayError("conflict", `${mrgId} is already merging`, "Wait for it, then check its state.");
+  // Denied after a plugin held it: the verifier left its record in flight for the approved re-run, which won't come.
+  if (decided && !o.approve && op.data.heldBy) await settleHeldMerge(runId, mrgId, o.reason).catch((e) => console.error(`capcomd: ${mrgId}: settling the held merge's record: ${(e as Error)?.message ?? e}`));
   if (decided && !o.approve && typeof op.data.agentId === "string")
     await s.annotateResult({ agentId: op.data.agentId, patch: { merge: { id: mrgId, target: op.data.target ?? null, state: "denied" } } }).catch(() => {});
   return opView(now);
+}
+
+async function settleHeldMerge(runId: string, mrgId: string, reason?: string) {
+  const v = await existingActor("verifier", [runId, mrgId]);
+  await v?.settleHeld({ verifierId: mrgId, reason: reason ? `denied: ${reason}` : "denied" });
 }
 
 /** Merges parked for approval in a run, oldest first. */

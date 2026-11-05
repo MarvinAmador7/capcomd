@@ -50,14 +50,17 @@ export async function mergeTask(req: MergeRequest, cfg: MergeConfig | null = loa
 /**
  * merge.landing (plugin API §6.6.15): under the target's lock, before anything is pushed. A deny fails the merge
  * (`plugin:<name>`); a hold parks it for a person's approval (a plugin adds a requirement, never decides one). For
- * `merge --operator` both are recorded and bypassed.
+ * `merge --operator` both are recorded and bypassed. After a person approved a plugin's hold, that same hold (the plugin
+ * and the reason they were shown) lets it land; every listener is asked then, so a later plugin's deny or new hold
+ * still stops it.
  */
 async function mergeLanding(req: MergeRequest, g: MergeGate): Promise<MergeOutcome | { bypassed: Array<{ plugin: string; reason: string }> }> {
   const runEnv = await (await import("./run-config")).runEnv(req.runId).catch(() => process.env);
+  const approved = g.approvedHolds ?? [];
   const out = await hooks.fire("merge.landing", "veto", {
     merge: g.merge, verification: g.verification, target: { branch: req.target, protected: (await import("../utils/protected")).isProtectedBranch(req.target, runEnv), sha: req.verified?.targetSha ?? "" },
     sha: req.verified?.sha ?? req.expectSha ?? "", fastPath: !!req.verified, operator: g.operator, requestedBy: g.requestedBy,
-  }, { principal: g.requestedBy, entity: g.merge.mrgId, runId: req.runId, agentId: g.requestedBy.kind === "agent" ? g.requestedBy.agentId : null, askAll: g.operator });
+  }, { principal: g.requestedBy, entity: g.merge.mrgId, attempt: g.attempt ?? 1, runId: req.runId, agentId: g.requestedBy.kind === "agent" ? g.requestedBy.agentId : null, askAll: g.operator || approved.length > 0 });
   if (out.decision === "allow") return { bypassed: [] };
   // `merge --operator` (§6.5): every listener was asked; each that vetoed is named on the run's stream, then it lands.
   if (g.operator && out.plugin) {
@@ -65,6 +68,14 @@ async function mergeLanding(req: MergeRequest, g: MergeGate): Promise<MergeOutco
     await recordGateEvent(req.runId, { type: "plugin.gate_bypassed", data: { hook: "merge.landing", entity: g.merge.mrgId, by: "operator", plugins }, key: `gate-bypassed-${g.merge.mrgId}` });
     return { bypassed: plugins };
   }
-  if (out.decision === "hold") return g.holdSatisfied ? { bypassed: [] } : { status: "failed", reason: out.text, held: { plugin: out.plugin } };
+  if (approved.length) {
+    // The first veto, in order, that isn't a hold a person approved: it stops the merge as it would have.
+    const satisfied = (v: { plugin: string; decision: "deny" | "hold"; text: string }) => v.decision === "hold" && approved.some((h) => h.plugin === v.plugin && h.reason === v.text);
+    const vetoes = out.vetoes ?? [{ plugin: out.plugin ?? "", decision: out.decision, text: out.text }];
+    const next = vetoes.find((v) => !satisfied(v));
+    if (!next) return { bypassed: [] };
+    return next.decision === "hold" ? { status: "failed", reason: next.text, held: { plugin: next.plugin } } : { status: "failed", reason: refusedText({ plugin: next.plugin, text: next.text }) };
+  }
+  if (out.decision === "hold") return { status: "failed", reason: out.text, held: { plugin: out.plugin } };
   return { status: "failed", reason: refusedText(out) };
 }

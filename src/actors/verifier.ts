@@ -94,6 +94,22 @@ export const verifierActor = actor({
     },
 
     /**
+     * A merge a plugin held, then a person denied: its row was left `verifying` for the approved re-run, which won't
+     * come now. Nothing landed (a hold is decided before anything is pushed), so it ends `failed`. Only a row still in
+     * flight moves; an ended one, or none, is left as it is.
+     */
+    async settleHeld(c, params: { verifierId: string; reason: string }) {
+      const row = await getLifecycle(c.db, params.verifierId);
+      if (!row || row.state !== "verifying") return { settled: false };
+      const ctx = JSON.parse(row.context as string);
+      const outcome: MergeOutcome = { status: "failed", reason: params.reason };
+      await c.db.transaction(async (tx: RawAccess) => {
+        await transitionLifecycle(tx, params.verifierId, "verifier", "failed", { ...ctx, commitSha: "", passed: false, outcome, verifiedAt: Date.now() }, { type: "VERIFY_FAIL" }, `verifier-${params.verifierId}-failed`);
+      }, { name: "settleHeld" });
+      return { settled: true };
+    },
+
+    /**
      * onWake hook. Deliberately does NOT decide outcomes any more: only git can say whether a
      * crashed merge landed, and that check is a remote call. The resuming client re-enters
      * verify(), which reconciles against git idempotently.

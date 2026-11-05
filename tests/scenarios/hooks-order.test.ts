@@ -4,7 +4,7 @@
 // and merges it from its VM (calls the daemon serves). The calls come in the kernel's order, the run ends as it would
 // with no plugin, and a hook whose kernel site isn't there yet (jobs, triggers) never fires.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { world, newRun, spawnRoot, waitAll, WORKER, type World } from "./harness";
@@ -12,14 +12,18 @@ import type { Recorded } from "../plugins/fixtures/hook-recorder/index";
 
 const RECORDER = join(import.meta.dir, "..", "plugins", "fixtures", "hook-recorder");
 let w: World;
+let logDir: string | undefined;
 let log: string;
 beforeAll(async () => {
-  log = join(mkdtempSync(join(tmpdir(), "capcomd-hooks-order-")), "hooks.ndjson");
+  logDir = mkdtempSync(join(tmpdir(), "capcomd-hooks-order-"));
+  log = join(logDir, "hooks.ndjson");
   w = await world("hooks-order", { CAPCOMD_TEST_PLUGINS: RECORDER, CAPCOMD_TEST_HOOK_LOG: log, NODE_ENV: "test" });
   // The engine answers a little before the daemon has loaded its plugins and opened its API (daemon.started).
   for (let i = 0; i < 300 && !calls().some((c) => c.hook === "daemon.started"); i++) await sleep(100);
 }, 120_000);
-afterAll(async () => { await w?.stop(); });
+afterAll(async () => {
+  try { await w?.stop(); } finally { if (logDir) rmSync(logDir, { recursive: true, force: true }); }
+});
 
 const calls = (): Recorded[] => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Recorded) : []);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -108,4 +112,11 @@ capcomd result --summary done >/dev/null`);
   for (const h of ["approval.deciding", "approval.changed", "job.changed", "trigger.admitting", "trigger.changed"]) expect(all.filter((c) => c.hook === h).length).toBe(0);
   // Every call was made in the daemon, about this run (but the daemon's start and machines a restart forgot).
   expect(all.filter((c) => c.runId && c.runId !== run).length).toBe(0);
+
+  // Each change names who caused it (§3.2, §6.1), never just the operator: the root was spawned from the host (the
+  // operator); the child's spawn and start are the planner's, its own end is its own; the planner asked for the verify
+  // and the merge from its VM, so their changes are the planner's too.
+  expect(all[at(of("agent.changed", root, "spawned"), "the root's agent.changed spawned")]!.principal).toBe("operator");
+  for (const [i, what] of [[spawned, "spawned"], [started, "started"], [ended, "ended"], [vStarted, "verify started"], [vFinished, "verify finished"], [mRequested, "merge requested"], [landed, "merge landed"]] as const)
+    expect(`${what}: ${all[i]!.principal}`).toBe(`${what}: agent`);
 }, 180_000);
