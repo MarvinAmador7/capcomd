@@ -162,7 +162,7 @@ export function messagesOf(evs: RawEvent[]): O<typeof Message>[] {
  * A parked merge's question and subject. The merge's `ref` is often just the agent's id (`capcomd_merge ref: agt-…`),
  * which made "Merge agt-mvqa… into main?": name the work as the agent's, and give the branch it pushed as the subject's ref.
  */
-export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown; askedBy?: unknown; heldBy?: unknown }): { question: string; subject: { target: string | null; ref: string | null; askedBy?: string; heldBy?: { plugin: string; reason: string } } & Partial<ApprovalDiff> } {
+export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?: unknown; target?: unknown; diff?: unknown; askedBy?: unknown; heldBy?: unknown }): { question: string; subject: { target: string | null; ref: string | null; askedBy?: string; heldBy?: { plugin: string; reason: string; holdId?: string } } & Partial<ApprovalDiff> } {
 	const ref = typeof d.ref === "string" ? d.ref : null, branch = typeof d.branch === "string" ? d.branch : null;
 	const target = typeof d.target === "string" ? d.target : null;
 	const byAgent = ref !== null && /^agt-/.test(ref);
@@ -172,8 +172,8 @@ export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?
 	const files = diff ? { files: diff.files, filesTotal: diff.filesTotal, added: diff.added, removed: diff.removed } : {};
 	const asker = typeof d.askedBy === "string" ? { askedBy: d.askedBy } : {};
 	// A plugin held it (merge.landing): the person approving sees which plugin and why, since approving satisfies that hold.
-	const h = d.heldBy as { plugin?: unknown; reason?: unknown } | null | undefined;
-	const held = h && typeof h.plugin === "string" && typeof h.reason === "string" ? { plugin: h.plugin, reason: h.reason } : null;
+	const h = d.heldBy as { plugin?: unknown; reason?: unknown; holdId?: unknown } | null | undefined;
+	const held = h && typeof h.plugin === "string" && typeof h.reason === "string" ? { plugin: h.plugin, reason: h.reason, ...(typeof h.holdId === "string" ? { holdId: h.holdId } : {}) } : null;
 	const question = `Merge ${what} into ${target ?? "the target"}?${held ? ` The ${held.plugin} plugin held it: ${held.reason}` : ""}`;
 	return { question, subject: { target, ref: branch ?? ref, ...files, ...asker, ...(held ? { heldBy: held } : {}) } };
 }

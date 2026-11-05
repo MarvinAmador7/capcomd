@@ -1859,6 +1859,14 @@ async function startMerge(o: MergeOpts, mrgId: string) {
   return executeMerge(o.runId, st.op);
 }
 
+/** The files a held merge's verified commit changes against where its branch left the target (the approval's
+ *  subject.files), as startMerge reads them for a protected target's park. Null without a repository or a commit. */
+async function heldMergeDiff(runId: string, d: { agentId?: string | null; branch: string; target: string; expectSha: string | null }) {
+  const cfg = (await import("../merge/config")).loadMergeConfig(await (await import("../merge/run-config")).runEnv(runId));
+  if (!cfg) return null;
+  return (await import("../api/run-files")).approvalDiff({ remote: cfg.remote, target: d.target, workdir: cfg.workdir }, { agentId: d.agentId ?? null, sha: d.expectSha, branch: d.branch });
+}
+
 async function dropCheckpoints(runId: string, agentId: string) {
   const cfg = (await import("../merge/config")).loadMergeConfig(await (await import("../merge/run-config")).runEnv(runId));
   if (cfg) await (await import("../merge/repo")).deleteRemoteRef(cfg, checkpointRef(agentId));
@@ -1877,7 +1885,7 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   const t0 = Date.now();
   const c = client();
   const s = c.scope.getOrCreate([runId]);
-  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null; operator?: boolean; askedBy?: string; heldBy?: PluginHold; approvedHolds?: PluginHold[] };
+  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null; operator?: boolean; askedBy?: string; heldBy?: PluginHold; approvedHolds?: PluginHold[]; diff?: unknown };
   const { label } = await resolveRef(runId, d.ref);
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
@@ -1901,10 +1909,13 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   });
   const out = res.outcome as import("../merge/types").MergeOutcome;
   // A plugin held it: parked for a person's approval, as a protected target's merge is. The hold is kept on the merge,
-  // so the approval shows the plugin's reason and only an approval of this hold satisfies it.
+  // so the approval shows the plugin's reason and only an approval of this hold satisfies it. The person sees what
+  // lands, as for a protected target: the files the verified commit changes, read now unless an earlier park read them
+  // (best effort, never blocks the park).
   if (out.status === "failed" && out.held) {
-    const heldBy: PluginHold = { plugin: out.held.plugin, reason: out.reason };
-    return opView(await s.parkOp({ opId: op.id, reason: `held by the ${heldBy.plugin} plugin: ${heldBy.reason}`, heldBy, approvedHolds }));
+    const heldBy: PluginHold = { plugin: out.held.plugin, reason: out.reason, ...(out.held.holdId !== undefined ? { holdId: out.held.holdId } : {}) };
+    const diff = d.diff ? null : await heldMergeDiff(runId, d).catch(() => null);
+    return opView(await s.parkOp({ opId: op.id, reason: `held by the ${heldBy.plugin} plugin: ${heldBy.reason}`, heldBy, approvedHolds, ...(diff ? { diff } : {}) }));
   }
   const merged = out.status === "merged";
   const g = out.timings ?? {};

@@ -10944,6 +10944,11 @@
                 "type": "string",
                 "x-untrusted": true,
                 "description": "Agent-written text (here the plugin's own words): render as plain text"
+              },
+              "holdId": {
+                "description": "The plugin's own name for this hold, when it gave one: approving satisfies a later hold of this plugin with the same holdId, whatever its reason says then; absent when the plugin named none (the reason identifies the hold). Plugin-written: render as plain text",
+                "type": "string",
+                "x-untrusted": true
               }
             },
             "required": [
@@ -11662,6 +11667,11 @@
                     "type": "string",
                     "x-untrusted": true,
                     "description": "Agent-written text (here the plugin's own words): render as plain text"
+                  },
+                  "holdId": {
+                    "description": "The plugin's own name for this hold, when it gave one: approving satisfies a later hold of this plugin with the same holdId, whatever its reason says then; absent when the plugin named none (the reason identifies the hold). Plugin-written: render as plain text",
+                    "type": "string",
+                    "x-untrusted": true
                   }
                 },
                 "required": [
@@ -13373,6 +13383,11 @@
                           "type": "string",
                           "x-untrusted": true,
                           "description": "Agent-written text (here the plugin's own words): render as plain text"
+                        },
+                        "holdId": {
+                          "description": "The plugin's own name for this hold, when it gave one: approving satisfies a later hold of this plugin with the same holdId, whatever its reason says then; absent when the plugin named none (the reason identifies the hold). Plugin-written: render as plain text",
+                          "type": "string",
+                          "x-untrusted": true
                         }
                       },
                       "required": [

@@ -25,6 +25,7 @@ export const MergeDiff = z.object({
 export const HeldBy = z.object({
 	plugin: S.describe("The plugin that held the merge"),
 	reason: T.describe("Agent-written text (here the plugin's own words): render as plain text"),
+	holdId: T.optional().describe("The plugin's own name for this hold, when it gave one: approving satisfies a later hold of this plugin with the same holdId, whatever its reason says then; absent when the plugin named none (the reason identifies the hold). Plugin-written: render as plain text"),
 }).describe("Set when a plugin held the merge for a person's approval (merge.landing): who held it and why. Approving it satisfies only this hold; absent when the target is protected and no plugin held it");
 const budget = { add: U, budget: U, by: U };
 /** agent.done / agent.failed `result`. Every text field is agent-written. Unknown fields may appear (the agent's declared result bag). */

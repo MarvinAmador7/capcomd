@@ -1134,7 +1134,7 @@ export const scopeActor = actor({
      *  a plugin held (`heldBy`, merge.landing) keeps the hold, and the holds approved before it (`approvedHolds`), on the
      *  op: the approval shows the plugin's reason, and only approving it satisfies that hold. A merge parks again when a
      *  plugin holds it after an approval (a protected target's, or another plugin's hold): each park is its own event. */
-    async parkOp(c, params: { opId: string; reason: string; diff?: Record<string, unknown>; heldBy?: { plugin: string; reason: string }; approvedHolds?: Array<{ plugin: string; reason: string }> }) {
+    async parkOp(c, params: { opId: string; reason: string; diff?: Record<string, unknown>; heldBy?: { plugin: string; reason: string; holdId?: string }; approvedHolds?: Array<{ plugin: string; reason: string; holdId?: string }> }) {
       await c.db.transaction(async (tx: RawAccess) => {
         const r = await tx.execute("SELECT * FROM ops WHERE op_id = ?", params.opId);
         if (!r.length) fail("not_found", `${params.opId} not found`);
