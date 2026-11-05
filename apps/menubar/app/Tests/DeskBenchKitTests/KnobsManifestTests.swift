@@ -17,7 +17,9 @@ final class KnobsManifestTests: XCTestCase {
     XCTAssertEqual(DeskKnobs.deskColumn.defaultValue, .swiftui)
     XCTAssertEqual(DeskKnobs.reelColumns.defaultValue, .keep)
     XCTAssertEqual(DeskKnobs.reelCache.defaultValue, .off)
-    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "reel.cache", "reel.columns", "reel.slide"])
+    // The reel ends AppKit's own deceleration when the fingers lift (the fix of 2026-11-04); `appkit` is the old reel.
+    XCTAssertEqual(DeskKnobs.reelRelease.defaultValue, .land)
+    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "reel.cache", "reel.columns", "reel.release", "reel.slide"])
     try XCTSkipIf(ProcessInfo.processInfo.environment[Knobs.variable] != nil, "PERFLOOP_KNOBS is set for this test run")
     XCTAssertEqual(DeskKnobs.reelSlide.value, .ca)
     XCTAssertEqual(DeskKnobs.buildPerFrame.value, 1)
@@ -25,7 +27,8 @@ final class KnobsManifestTests: XCTestCase {
     XCTAssertEqual(DeskKnobs.deskColumn.value, .swiftui)
     XCTAssertEqual(DeskKnobs.reelColumns.value, .keep)
     XCTAssertEqual(DeskKnobs.reelCache.value, .off)
-    XCTAssertEqual(DeskKnobs.vector, ["reel.slide": "ca", "build.perFrame": "1", "desk.layout": "auto", "desk.column": "swiftui", "reel.columns": "keep", "reel.cache": "off"])
+    XCTAssertEqual(DeskKnobs.reelRelease.value, .land)
+    XCTAssertEqual(DeskKnobs.vector, ["reel.slide": "ca", "build.perFrame": "1", "desk.layout": "auto", "desk.column": "swiftui", "reel.columns": "keep", "reel.cache": "off", "reel.release": "land"])
     XCTAssertEqual(DeskKnobs.problems.filter { !$0.contains("t.") }, [])
   }
 

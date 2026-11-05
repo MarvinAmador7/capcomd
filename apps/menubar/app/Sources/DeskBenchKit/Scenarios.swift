@@ -37,7 +37,7 @@ public enum Scenarios {
                  kind: .smooth, latencyBudgetMs: nil, params: ["flings": "6", "velocity": "2400"]),
     ScenarioSpec(name: "swipe", summary: "A recorded trackpad gesture (perfloop.gesture/1, --gesture FILE) replayed into the reel's NSScrollView at its recorded times, in-process; how closely the content followed the fingers.",
                  budget: "Reel scroll: no dropped frames at 120 Hz with 17 agents", rule: "no late frame while the reel moves; the content within 1 pt of the fingers (p95) with no stall; it lands on a column edge",
-                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "middle"]),
+                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "middle", "timestamps": "recorded", "deliver": "window"]),
     ScenarioSpec(name: "burst", summary: "Thread items arrive for one on-screen agent at a steady rate while the reel stands still, then again while it steps.",
                  budget: "A thread item arrives: re-renders its own column only", rule: "no Column, ColumnHead, CrewTab, TitleBar or other column's thread body during the burst; no late frame",
                  kind: .isolation, latencyBudgetMs: nil, params: ["itemsPerSecond": "20", "seconds": "3"]),

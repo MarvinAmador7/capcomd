@@ -36,7 +36,8 @@ function Reel({ blank = false, ghost = false }: { blank?: boolean; ghost?: boole
 }
 
 /** The swipe finding as a diagram: the fingers lift, AppKit's deceleration carries the reel ~200 pt past the column
- *  edge, and nothing snaps it back. Only the 200 pt is measured; the curves are drawn. */
+ *  edge, and nothing snaps it back. Only the 200 pt is measured (by the replay, then by hand: 204 pt); the curves are
+ *  drawn. */
 function Swipe() {
   const y = (pt: number) => 230 - pt * 0.3;
   const fingers = "M40 230 C 90 222, 150 160, 210 " + y(300);
@@ -108,7 +109,7 @@ export default function PerfLoopPage() {
           <figure className="pl-fig" data-reveal style={delay(120)}>
             <Swipe />
             <p className="pl-key"><span><i className="pl-key--fingers" />fingers</span><span><i className="pl-key--content" />the reel</span><span><i className="pl-key--meant" />where it should settle</span></p>
-            <figcaption>The first swipe replayed with real timestamps found a bug: AppKit&apos;s deceleration carried the reel up to about 200 pt past the column edge, and nothing snapped it back. The old synthetic fling sent no timestamps, which hid the bug and its cost.</figcaption>
+            <figcaption>The first swipe replayed with real timestamps found a bug: AppKit&apos;s deceleration carried the reel up to about 200 pt past the column edge, and nothing snapped it back. The old synthetic fling sent no timestamps, which hid the bug and its cost. A flick by hand later stopped 204 pt off the edge; now the reel lands on it.</figcaption>
           </figure>
           <dl className="pl-figs">
             <div data-reveal><dt>48<small>/48</small></dt><dd>replays of three synthetic gestures with the content on the fingers&apos; path: 0 pt off at p95, against a bar of 1.</dd></div>

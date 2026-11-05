@@ -4,10 +4,11 @@ import CapcomdDesk
 import DeskBenchKit
 import PerfLoopProbe
 
-/// `swipe` (design/perf-loop CAPABILITIES.md C9): a recorded gesture's scroll-wheel events delivered to the reel's
-/// NSScrollView at their recorded times, from the main run loop, in this process only (nothing is posted to the
-/// system). AppKit's gesture handling and the reel's snapping run as under a hand; the smoothness meter (PerfLoopProbe)
-/// compares where the document layer showed at each display tick with where the fingers put it.
+/// `swipe` (design/perf-loop CAPABILITIES.md C9): a recorded gesture's scroll-wheel events, stamped with their recorded
+/// times and delivered at those times through the window's event dispatch, from the main run loop, in this process only
+/// (nothing is posted to the system). The reel's own routing, AppKit's gesture handling and the reel's snapping run as
+/// under a hand; the smoothness meter (PerfLoopProbe) compares where the document layer showed at each display tick
+/// with where the fingers put it.
 extension Drive {
   func swipe() async -> ([StepResult], [Check]) {
     await rewind()
@@ -20,6 +21,11 @@ extension Drive {
       case .failure(let e): return ([], [Check("gesture", false, e.description)])
       }
     }
+    let stamps = GestureReplay.Stamps(rawValue: params["timestamps"] ?? "recorded")
+    guard let stamps else { return ([], [Check("gesture", false, "timestamps=\(params["timestamps"] ?? ""): one of recorded, delivery, zero")]) }
+    let route = GestureReplay.Route(rawValue: params["deliver"] ?? "window")
+    guard let route else { return ([], [Check("gesture", false, "deliver=\(params["deliver"] ?? ""): one of window, view")]) }
+    AppKitScrollTrace.installIfAsked()
     let cols = h.model.columns
     let from: Int = params["from"].flatMap(Int.init) ?? max(0, (cols.count - h.model.across) / 2)
     guard cols.indices.contains(from) else { return ([], [Check("gesture", false, "from=\(from): the fixture has \(cols.count) columns")]) }
@@ -34,7 +40,7 @@ extension Drive {
       _ = await h.waitQuiet(quietMs: 150)
       let m = h.begin("swipe#\(i) \(g.name)")
       let t = h.now()
-      let replay = GestureReplay(sv: sv, window: h.window, gesture: g, zeroTimestamps: params["timestamps"] == "zero")
+      let replay = GestureReplay(sv: sv, window: h.window, gesture: g, stamps: stamps, route: route)
       replay.blockMs = params["inject-block-ms"].flatMap(Double.init) ?? 0
       async let done: Void = replay.run()
       let (_, settled) = await h.waitReelSettled(since: t, timeoutMs: max(2500, g.durationMs + 1500))
@@ -89,13 +95,49 @@ extension Drive {
   private var next = 0
   private var carry = (dx: 0.0, dy: 0.0, sentX: 0.0, sentY: 0.0)
   private var finished: CheckedContinuation<Void, Never>?
+  /// The CGEvent field an NSEvent reads its window number from (undocumented; `NSEvent(cgEvent:).window` resolves by it).
+  private static let windowNumberField = CGEventField(rawValue: 51)!
 
-  /// `--set timestamps=zero`: every event stamped 0, as `fling` sends them (AppKit then can't see the release velocity).
-  let zeroTimestamps: Bool
+  /// What each event's timestamp (`NSEvent.timestamp`) says. AppKit reads the release velocity from it: the reel's
+  /// landing and AppKit's own deceleration depend on it.
+  enum Stamps: String {
+    /// When the hand made it: the replay's start plus its recorded time, as a trackpad's events carry the time the
+    /// hardware saw them however late the main thread takes them (the default).
+    case recorded
+    /// When it was handed over (before 2026-11-04): a late timer firing two events together gave AppKit a release
+    /// velocity of the main thread's jitter (one flick read 820 to 7000 pt/s across replays).
+    case delivery
+    /// 0 on every event, as `fling` sends them: AppKit then can't see a release velocity.
+    case zero
+  }
+  let stamps: Stamps
+  /// Where each event goes.
+  enum Route: String {
+    /// To the application (`NSApp.sendEvent`) for the reel's window, at its pointer location over the scroll view, as
+    /// the window server hands a hand's events over: local event monitors run, so the reel's routing (ReelView.took)
+    /// decides, as under a hand (the default). Falls back to `view` where the event's window location can't be set.
+    case window
+    /// Straight to the scroll view's `scrollWheel(with:)` (before 2026-11-04): the reel's routing is skipped.
+    case view
+  }
+  let route: Route
+  /// The route the events actually took (`window` falls back to `view`, once, if it can't place them).
+  private(set) var routed: Route
   /// `--set inject-block-ms=N`, the meter's self-check: the main thread sleeps N ms after the middle finger event, as a
   /// slow frame would hold it. The result must show the stalls (DESKBENCH.md, swipe).
   var blockMs = 0.0
-  init(sv: NSScrollView, window: NSWindow, gesture: Gesture, zeroTimestamps: Bool = false) { self.sv = sv; self.window = window; self.gesture = gesture; self.zeroTimestamps = zeroTimestamps }
+  init(sv: NSScrollView, window: NSWindow, gesture: Gesture, stamps: Stamps = .recorded, route: Route = .window) {
+    self.sv = sv; self.window = window; self.gesture = gesture; self.stamps = stamps; self.route = route
+    routed = route == .window && Self.setWindowLocation == nil ? .view : route
+  }
+
+  /// `CGEventSetWindowLocation` (SkyLight, not in the SDK): where an event addressed to a window lands in it. An
+  /// NSEvent made from a CGEvent with a window number takes its `locationInWindow` from this, not from the screen
+  /// location. Looked up at run time; without it the replay goes to the view.
+  private static let setWindowLocation: (@convention(c) (CGEvent, CGPoint) -> Void)? = {
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation") else { return nil }
+    return unsafeBitCast(sym, to: (@convention(c) (CGEvent, CGPoint) -> Void).self)
+  }()
 
   /// Where the document showed along x in the scroll view's layer, from the presentation tree (a slide in the render
   /// server included). Falls back to the clip view's offset when the views have no layers.
@@ -188,14 +230,24 @@ extension Drive {
     cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: sp)
     cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: mp)
     let now = CACurrentMediaTime()
-    if !zeroTimestamps { cg.timestamp = CGEventTimestamp(now * 1e9) }   // NSEvent.timestamp: the reel's release velocity reads it, and AppKit's
+    // NSEvent.timestamp: the reel's release velocity reads it, and AppKit's (Stamps).
+    switch stamps { case .recorded: cg.timestamp = CGEventTimestamp((start + e.t / 1000) * 1e9); case .delivery: cg.timestamp = CGEventTimestamp(now * 1e9); case .zero: break }
     let center = sv.convert(sv.bounds, to: nil).center
     let p = window.convertPoint(toScreen: center)
     cg.location = CGPoint(x: p.x, y: (NSScreen.screens.first?.frame.height ?? 0) - p.y)
+    if routed == .window, let place = Self.setWindowLocation {
+      cg.setIntegerValueField(Self.windowNumberField, value: Int64(window.windowNumber))
+      place(cg, CGPoint(x: center.x, y: window.frame.height - center.y))   // from the window's top left
+    }
     guard let ev = NSEvent(cgEvent: cg) else { return }
     sent.append(Sent(due: start + e.t / 1000, delivered: now, dx: Double(ev.scrollingDeltaX), dy: Double(ev.scrollingDeltaY), phase: Gesture.Phase(rawBits: ev.phase.rawValue),
                      momentum: Gesture.Phase(rawBits: ev.momentumPhase.rawValue), precise: ev.hasPreciseScrollingDeltas, finger: e.finger, before: Double(sv.contentView.bounds.origin.x)))
-    sv.scrollWheel(with: ev)
+    if routed == .window, ev.window === window {
+      NSApp.sendEvent(ev)
+    } else {
+      routed = .view
+      sv.scrollWheel(with: ev)
+    }
     sent[sent.count - 1].after = Double(sv.contentView.bounds.origin.x)
     if blockMs > 0, e.phase == .changed, sent.filter(\.finger).count == gesture.events.filter(\.finger).count / 2 { usleep(useconds_t(blockMs * 1000)) }
   }
@@ -213,7 +265,7 @@ extension Drive {
     let late = sent.map { ($0.delivered - $0.due) * 1000 }
     let fx = sent.filter(\.finger).reduce(0) { $0 + $1.dx }, mx = sent.filter { $0.momentum != .none }.reduce(0) { $0 + $1.dx }
     return ["\(gesture.name): \(sent.count)/\(gesture.events.count) events over \(Int(gesture.durationMs)) ms, delivered p95 \(Stats.round(Stats.percentile(late, 95), 2)) ms after due (max \(Stats.round(late.max() ?? 0, 2)) ms)",
-            "fingers moved \(Stats.round(fx, 1)) pt, momentum \(Stats.round(mx, 1)) pt; \(ticks.count) display ticks read"]
+            "fingers moved \(Stats.round(fx, 1)) pt, momentum \(Stats.round(mx, 1)) pt; \(ticks.count) display ticks read; timestamps \(stamps.rawValue), delivered to the \(routed.rawValue)"]
   }
 
   /// Why the replay wasn't the recording, if it wasn't: a phase the NSEvent didn't carry, or deltas that drifted.
