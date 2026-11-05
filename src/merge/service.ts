@@ -6,10 +6,10 @@ import { directMerge, directVerify } from "./direct";
 import { prMerge } from "./pr";
 import { sameHold, type MergeGate, type MergeOutcome, type MergeRequest, type MergeTimings } from "./types";
 import { hooks, recordGateEvent, refusedText } from "../plugins/hooks";
-import { ForgeNotActive, forgeFor } from "../plugins/forges";
+import { ForgeNotActive, forgeFor, orList, pullRequestLabels } from "../plugins/forges";
 
 /** Tests inject a fake GitHub REST adapter for the GitHub forge (src/plugins/forges/github.ts). */
-export { setGitHubApi, hasGitHubOverride } from "./github";
+export { setGitHubApi, hasGitHubOverride } from "../plugins/forges/github-rest";
 
 /**
  * Land (or, with testOnly, just verify) one task. Serialized per (remote, target). The kernel fetches, integrates and
@@ -38,8 +38,13 @@ export async function mergeTask(req: MergeRequest, cfg: MergeConfig | null = loa
     const landed = (out: MergeOutcome): MergeOutcome => (gate?.bypassed.length && out.status === "merged" ? { ...out, bypassedVetoes: gate.bypassed } : out);
     let forge;
     try { forge = await forgeFor(cfg); } catch (e) { if (e instanceof ForgeNotActive) return { status: "failed", reason: e.message }; throw e; }
-    if (!direct && !forge?.describe().pullRequests)
-      return { status: "failed", reason: `pr mode needs a GitHub repo (CAPCOMD_GITHUB_REPO or a github.com remote); remote is ${cfg.remote}` };
+    if (!direct && !forge?.describe().pullRequests) {
+      // Said in the words of the forges that have pull requests ("a GitHub repo"); none active: say that instead.
+      const prs = await pullRequestLabels();
+      return { status: "failed", reason: prs.length
+        ? `pr mode needs a ${orList(prs)} repo (one its forge claims, or CAPCOMD_MERGE_FORGE naming a forge with pull requests); remote is ${cfg.remote}`
+        : `pr mode needs a forge with pull requests, and no active forge supports them (see \`capcomd plugins list\`); remote is ${cfg.remote}` };
+    }
     if (!forge) return { status: "failed", reason: `no active forge lands on ${cfg.remote}` };
     if (direct) return landed(await directMerge(cfg, req, clone, t, forge));
     const out = await prMerge(cfg, req, forge, clone);

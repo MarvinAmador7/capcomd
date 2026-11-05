@@ -258,9 +258,16 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd(), l
   const repo = httpsRemote(String(v.repo ?? await p.ask("Repository the agents work on", origin)));
   if (!repo) return [{ step: "project", ok: false, detail: "no repository", hint: "Run setup inside a git checkout, or pass --repo <url>." }];
   const head = originHead(dir);
-  const gh = githubRepoOf(repo);
-  const ghOk = !!gh && sh("gh", ["auth", "status"]).code === 0;
-  const mode = String(v.mode ?? await p.choose("How should verified work land?", [{ value: "pr", label: "as a pull request merged by capcomd (GitHub)" }, { value: "direct", label: "pushed directly to the target branch" }], ghOk ? "pr" : "direct"));
+  // Asked only when the person chooses: pull requests are suggested when the repository's forge has them and the
+  // user's own login at it is on this machine (plugin API §7.4 `login`), named after it ("(GitHub)").
+  const mode = String(v.mode ?? await (async () => {
+    const F = await import("../../plugins/forges");
+    const forge = await F.forgeFor({ remote: repo }).catch(() => null);
+    const prs = forge?.describe().pullRequests ? forge : null;
+    const ok = !!prs && (await F.forgeLogin(prs, { use: "pullRequests" })).ok;
+    const label = prs?.describe().label ?? F.orList(await F.pullRequestLabels());
+    return p.choose("How should verified work land?", [{ value: "pr", label: `as a pull request merged by capcomd${label ? ` (${label})` : ""}` }, { value: "direct", label: "pushed directly to the target branch" }], ok ? "pr" : "direct");
+  })());
   // The suggestion is origin's default branch as git knows it (origin/HEAD, else what the remote reports): never a
   // guessed "main". Without one, the person names it (with --yes: --target).
   // Re-running setup keeps the project's target. Unknown: none is written, and each run asks for its base.
