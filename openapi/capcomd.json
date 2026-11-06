@@ -13197,7 +13197,7 @@
               "internal",
               "unavailable"
             ],
-            "description": "stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
+            "description": "stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
           },
           "message": {
             "type": "string"
@@ -13268,7 +13268,11 @@
             "additionalProperties": {}
           },
           "field": {
-            "description": "422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub",
+            "description": "422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub. From PUT /v1/profiles/{name} (capability profiles.edit): the field id the value is about (limits.maxTurns), rev, or repo",
+            "type": "string"
+          },
+          "rev": {
+            "description": "409 conflict from PUT /v1/profiles/{name} (capability profiles.edit): the profile's current `rev`",
             "type": "string"
           },
           "problem": {

@@ -93,6 +93,8 @@ function say(path: string, v: unknown): string | null {
 }
 /** profile.changed's text, daemon-written: "Profile reviewer changed: limits.maxTurns 20 → 40." */
 export function profileChangedText(name: string, changes: ProfileChange[]): string {
+	// The file changed and no value did: it now sets what it inherited, or no longer sets a value it inherits the same.
+	if (!changes.length) return `Profile ${name}'s file changed; its values are the same.`;
 	const parts = changes.slice(0, 5).map((c) => { const a = say(c.path, c.from), b = say(c.path, c.to); return a !== null && b !== null ? `${c.path} ${a} → ${b}` : `${c.path} changed`; });
 	const more = changes.length > 5 ? `, and ${changes.length - 5} more` : "";
 	return `Profile ${name} changed: ${parts.join(", ")}${more}.`;

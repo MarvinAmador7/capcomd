@@ -127,6 +127,14 @@ describe("PUT /v1/profiles/{name}", () => {
 		expect(unset.body.profile.version).toBe(3);
 	});
 
+	test("a write that changes the file and no value (the inherited value written down): bumped and audited, its text still a sentence", async () => {
+		const w = world({ "P/lead.yaml": "name: lead\nextends: worker\n" }, { worker });
+		const r = await w.put("lead", { values: { "limits.maxTurns": "20" }, rev: (await w.get("lead")).body.rev });
+		expect(r.body).toMatchObject({ changed: true, changes: [], profile: { version: 2 } });
+		expect(r.body.fields.find((f: any) => f.id === "limits.maxTurns")).toMatchObject({ value: "20", source: "profile" });
+		expect(w.state.daemonEvents().map((e) => [e.text, (e.data as any).changes])).toEqual([["Profile lead's file changed; its values are the same.", []]]);
+	});
+
 	test("an agents.json entry: its v1 fields change in place, its version stays 1", async () => {
 		const w = world({}, { worker });
 		const rev = (await w.get("worker")).body.rev;
