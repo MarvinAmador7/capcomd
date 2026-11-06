@@ -31,10 +31,13 @@ import { itemWriter } from "../agents/thread-store";
 import { heartbeatEveryMs } from "../subagents/results";
 import { adapterFor } from "../agents/adapters";
 import type { AttachedSkill } from "../agents/skills";
-import { bootSnapshot } from "../env/resolve";
+import { bootSnapshot, projectTemplateFor } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
 import { effectiveAgentRecord, type ProfileMachine } from "../profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
+import { env as envVar } from "../utils/env";
+import type { SandboxProvider } from "../providers/sandbox";
+import type { MergeConfig } from "../merge/config";
 import { admitStart, agentVmIdemKey, agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
 
 const LEGACY_EGRESS = ["github.com", "registry.npmjs.org"];
@@ -85,21 +88,57 @@ async function remoteBranchSha(remote: string, branch: string): Promise<string |
  * here is configuration (an unknown or invalid profile, no credentials, an environment the sandbox doesn't have): it
  * crosses the actor boundary as a typed error with its message, not rivetkit's opaque "internal error".
  */
-function agentSetup(profile: string | undefined, pinned: unknown, source: Record<string, string | undefined>, machine: ProfileMachine = {}) {
+function agentSetup(profile: string | undefined, pinned: unknown, source: Record<string, string | undefined>, machine: ProfileMachine = {}, repo?: string) {
   try {
     const kind = agentFromEnv(source, profile, pinned);
-    const boot = (login?: Parameters<typeof bootSnapshot>[0]["login"]) => {
-      const snap = bootSnapshot({ ...(machine.environment ? { environment: machine.environment } : {}), real: isRealAgent(kind), login }, source);
+    const boot = (login?: Parameters<typeof bootSnapshot>[0]["login"], pins?: Parameters<typeof bootSnapshot>[0]["pins"]) => {
+      const snap = bootSnapshot({ ...(machine.environment ? { environment: machine.environment } : {}), real: isRealAgent(kind), login, ...(repo ? { repo } : {}), ...(pins ? { pins } : {}) }, source);
       return snap ? { fromSnapshot: snap } : {};
     };
-    if (!isRealAgent(kind)) return { kind, config: null, egressAllow: LEGACY_EGRESS, snapshot: boot() as { fromSnapshot?: string }, record: null };
+    if (!isRealAgent(kind)) return { kind, config: null, egressAllow: LEGACY_EGRESS, snapshot: boot() as { fromSnapshot?: string }, record: null, template: null };
     const config = loadAgentConfig(source, profile, pinned);
     const login = config.credentialMode === "subscription" ? profileFor(kind, source) : undefined;
-    const snapshot: { fromSnapshot?: string } = boot(login ? { agent: kind, ...(login.snapshot ? { snapshot: login.snapshot } : {}), env: login.env } : null);
-    return { kind, config, egressAllow: config.egress, snapshot, record: effectiveAgentRecord(profile, source, pinned) };
+    const pins = { claude: config.version, codex: config.codexVersion, node: config.nodeVersion };
+    const snapshot: { fromSnapshot?: string } = boot(login ? { agent: kind, ...(login.snapshot ? { snapshot: login.snapshot } : {}), env: login.env } : null, pins);
+    // Its project's template (src/env/templates.ts), when the place keeps them and nothing else chose the machine's
+    // image (a plan login's, a profile's environment): used, or why not (none yet, built on other CLI pins).
+    const t = machine.environment || login?.snapshot ? null : projectTemplateFor(repo, pins, source);
+    const template = t && t.why !== "not_kept" ? { why: t.name && snapshot.fromSnapshot === t.name ? "used" as const : t.why === "used" ? "overridden" as const : t.why } : null;
+    return { kind, config, egressAllow: config.egress, snapshot, record: effectiveAgentRecord(profile, source, pinned), template };
   } catch (e) {
     throw configError(e);
   }
+}
+
+/**
+ * Its project's template (src/env/templates.ts), on a place that keeps them: built in the background when the project
+ * has none or one made for other agent CLI versions, and rebuilt when this agent couldn't use it in place or the delta
+ * it got passed the threshold. A run never waits for a build. Null: nothing to do (no template here, or the machine's
+ * image was chosen otherwise).
+ */
+async function templateHooks(provider: SandboxProvider, source: Record<string, string | undefined>, cfg: MergeConfig, setup: ReturnType<typeof agentSetup>, runId: string) {
+  if (!setup.template || !setup.config) return null;
+  const T = await import("../env/templates");
+  const { isSnapshotPlatform } = await import("../env/platform");
+  if (!T.keepsProjectTemplates(source) || !isSnapshotPlatform(provider)) return null;
+  // The project's setup step and its egress, as recorded with the run (`.capcomd/config.json` env).
+  const run = await (await import("../merge/run-config")).runEnv(runId);
+  const setupCmd = envVar("SETUP_COMMAND", run);
+  const req = {
+    provider: provider as SandboxProvider & import("../env/platform").SnapshotPlatform, repo: cfg.remote, cfg: setup.config, hostGit: { workdir: cfg.workdir }, source,
+    ...(setupCmd ? { setup: setupCmd } : {}), egress: (envVar("SETUP_EGRESS", run) ?? "").split(",").map((d) => d.trim()).filter(Boolean),
+  };
+  const schedule = (reason: string, unlessTargetAt?: { target: string; commit: string } | null) => T.scheduleTemplateBuild({ ...req, reason, ...(unlessTargetAt ? { unlessTargetAt } : {}) });
+  if (setup.template.why === "none") schedule("it has no template yet");
+  if (setup.template.why === "stale_base") schedule("its template was built for other agent CLI versions");
+  return {
+    onWorkspace: (w: { path: "in_place" | "clone"; reason?: string; bytes: number }) => {
+      if (setup.template?.why !== "used") return;
+      const why = T.rebuildReason(w, source);
+      // A clone: only a template whose branch moved would be different (else the agent's reason holds for a new one).
+      if (why) schedule(why, w.path === "clone" ? T.templateTarget(cfg.remote, source) : null);
+    },
+  };
 }
 
 /** A configuration problem as an error rivetkit passes on (code "config", the redacted message); never retried. */
@@ -338,7 +377,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
 
   killpoint("push.mid");
 
-  const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine);
+  // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
+  const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
+  const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine, cfg?.remote);
   recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
   const { id: vmId } = await provider.ensure({
     idemKey: vmKey,
@@ -364,8 +405,6 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   let resetAt: number | undefined; // limit "quota": when the provider said the usage limit resets (ms epoch)
   let orchestrateWrites: import("../agents/runner").OrchestrateWrites | undefined; // §16.1: an orchestrate agent wrote files (it fails)
   let adopted = false;
-  // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
-  const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
   const agent = setup.kind;
   // Takeover: a push that reached the remote before its holder died is adopted, not redone.
   if (takeover && cfg) {
@@ -381,6 +420,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
     if (!params.runId) throw new Error(`pushBranch needs runId for ${agent}`);
     const adapter = adapterFor(agent);
+    const templates = await templateHooks(provider, runSource, cfg, setup, params.runId);
     // Optional: with a boxd host-bound secret the VM holds a bxds_ placeholder and this is unused.
     const apiKey = process.env[adapter.secretName];
     const runId = params.runId;
@@ -409,8 +449,10 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       apiKey,
       // The host fetches and pushes the agent's checkout through its mirror of the run's repository (§11.7).
       hostGit: { workdir: cfg.workdir },
-      // A container per agent (Docker): the env image's warm template can be its workspace, used in place.
-      warmTemplate: sandboxCaps(runSource).isolation === "container",
+      // A container per agent (Docker): the env image's warm template can be its workspace, used in place; a VM per
+      // agent (boxd) the same from its project's template, when it booted from one (the runner reads its marker).
+      warmTemplate: sandboxCaps(runSource).isolation === "container" ? true : sandboxCaps(runSource).isolation === "vm" ? "vm" : false,
+      ...(templates ? { onWorkspace: templates.onWorkspace } : {}),
       heartbeatMs: beatEvery,
       vmTtlSeconds: lifeSeconds,
       onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
@@ -574,7 +616,9 @@ export const workerActor = actor({
         const ctx = JSON.parse(existing.context as string);
         return { workerId, vmId: ctx.vmId as string, state: existing.state };
       }
-      const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine);
+      // The run's repository, as recorded at `run new`: its project's template, when the place keeps them.
+      const repo = (await (await import("../merge/run-config")).mergeConfigFor(runId))?.remote;
+      const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine, repo);
 
       const idemKey =
         existing && JSON.parse(existing.context as string).idemKey
