@@ -6,7 +6,30 @@ export class GitError extends Error {
   }
 }
 
-export interface GitResult { code: number; stdout: string; stderr: string; timedOut?: boolean }
+export interface GitResult { code: number; stdout: string; stderr: string; timedOut?: boolean; stalled?: boolean }
+
+export interface GitRunOptions {
+  input?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Kill it when its stderr (git's `--progress` output) has been quiet this long: a stall, not a slow transfer. */
+  stallMs?: number;
+  /** Each progress line git writes to stderr (`Receiving objects:  45% (…), 212.00 MiB | 1.20 MiB/s`), as it comes. */
+  onProgress?: (line: string) => void;
+}
+
+/** stderr read as it comes: every chunk is activity, and its last line is git's latest progress. All of it is kept. */
+async function watchedText(stream: ReadableStream<Uint8Array>, onChunk: (lastLine: string) => void): Promise<string> {
+  const dec = new TextDecoder();
+  let text = "";
+  for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
+    const part = dec.decode(chunk, { stream: true });
+    text += part;
+    onChunk(part.split(/[\r\n]/).map((l) => l.trim()).filter(Boolean).at(-1) ?? "");
+  }
+  return text + dec.decode();
+}
 
 export class Git {
   constructor(readonly cwd: string, readonly extraEnv: Record<string, string> = {}) {}
@@ -14,10 +37,12 @@ export class Git {
   /**
    * `timeoutMs` (default: none) bounds a call that can hang on the network: git runs in its own process group, and at
    * the deadline the whole group (git, ssh, a remote helper) is killed and the result is `{ code: 124, timedOut: true }`.
-   * An aborted `signal` (a seam call's, docs/spec/plugin-api.md §7.1) ends it the same way.
+   * An aborted `signal` (a seam call's, docs/spec/plugin-api.md §7.1) ends it the same way, and so does `stallMs` of
+   * silence on stderr (`stalled: true` too): a fetch run with `--progress` writes there while objects arrive, so a big
+   * one that is slow but moving runs on, up to `timeoutMs`.
    */
-  async run(args: string[], opts: { input?: string; env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<GitResult> {
-    const bounded = !!opts.timeoutMs || !!opts.signal;
+  async run(args: string[], opts: GitRunOptions = {}): Promise<GitResult> {
+    const bounded = !!opts.timeoutMs || !!opts.signal || !!opts.stallMs;
     if (opts.signal?.aborted) return { code: 124, stdout: "", stderr: `git ${args[0]} was cancelled`, timedOut: true };
     const proc = Bun.spawn(["git", ...args], {
       ...(bounded ? { detached: true } : {}),
@@ -38,18 +63,25 @@ export class Git {
       stdout: "pipe",
       stderr: "pipe",
     });
+    let timer: ReturnType<typeof setTimeout> | undefined, stall: ReturnType<typeof setTimeout> | undefined;
+    let fired: "timeout" | "abort" | "stall" | null = null, onAbort = () => {}, kill = (_why: "timeout" | "abort" | "stall") => {};
+    const poke = () => {
+      if (!opts.stallMs || fired) return;
+      clearTimeout(stall);
+      stall = setTimeout(() => kill("stall"), opts.stallMs);
+    };
+    const watched = !!opts.stallMs || !!opts.onProgress;
     const done = Promise.all([
       new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
+      watched ? watchedText(proc.stderr, (line) => { poke(); if (line) opts.onProgress?.(line); }) : new Response(proc.stderr).text(),
       proc.exited,
     ]);
     if (!bounded) {
       const [stdout, stderr, code] = await done;
       return { code, stdout, stderr };
     }
-    let timer: ReturnType<typeof setTimeout> | undefined, fired: "timeout" | "abort" | null = null, onAbort = () => {};
     const expired = new Promise<null>((resolve) => {
-      const kill = (why: "timeout" | "abort") => {
+      kill = (why) => {
         if (fired) return;
         fired = why;
         try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
@@ -60,14 +92,19 @@ export class Git {
       onAbort = () => kill("abort");
       opts.signal?.addEventListener("abort", onAbort, { once: true });
     });
+    poke();
     done.catch(() => {});
     try {
       const r = await Promise.race([done, expired]);
-      if (!r || fired) return { code: 124, stdout: "", stderr: fired === "abort" ? `git ${args[0]} was cancelled` : `git ${args[0]} timed out after ${opts.timeoutMs} ms`, timedOut: true };
+      if (!r || fired) {
+        const why = fired === "abort" ? `git ${args[0]} was cancelled` : fired === "stall" ? `git ${args[0]} made no progress for ${Math.round(opts.stallMs! / 1000)} s` : `git ${args[0]} timed out after ${opts.timeoutMs} ms`;
+        return { code: 124, stdout: "", stderr: why, timedOut: true, ...(fired === "stall" ? { stalled: true } : {}) };
+      }
       const [stdout, stderr, code] = r;
       return { code, stdout, stderr };
     } finally {
       clearTimeout(timer);
+      clearTimeout(stall);
       opts.signal?.removeEventListener("abort", onAbort);
     }
   }

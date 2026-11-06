@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import type { ForgeRemoteCredential } from "../../packages/plugin/src/seams";
-import { Git, type GitResult } from "./git";
+import { Git, type GitResult, type GitRunOptions } from "./git";
 
 /** The git subcommands that talk to a remote. */
 export const NETWORK_OPS = ["fetch", "push", "ls-remote", "clone", "pull"] as const;
@@ -176,7 +176,7 @@ export async function hostCredentialEnv(remote: string, source: Record<string, s
 
 // ---- running it --------------------------------------------------------------------------------------------------
 
-export interface RemoteGitOptions { timeoutMs?: number; signal?: AbortSignal; input?: string; env?: Record<string, string> }
+export type RemoteGitOptions = Pick<GitRunOptions, "timeoutMs" | "signal" | "input" | "env" | "stallMs" | "onProgress">;
 
 /**
  * A network git command (`fetch`, `push`, `ls-remote`) against `remote` (its URL, which must be in `args`), in

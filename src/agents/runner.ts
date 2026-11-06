@@ -7,7 +7,7 @@ import type { AgentConfig, ContextBundleSpec } from "./config";
 import type { AgentAdapter, AgentCommandCtx, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
-import { gitSpan, pushFromSandbox, sendToSandbox, sendTreeAt, type HostRemote, type SandboxGit } from "../merge/transfer";
+import { gitSpan, progressLine, pushFromSandbox, sendToSandbox, sendTreeAt, type HostRemote, type OnTransferProgress, type SandboxGit } from "../merge/transfer";
 import { lsRemote } from "../merge/host-git";
 import { stateDir } from "../utils/home";
 import { join as joinPath } from "path";
@@ -543,6 +543,13 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
       throw new AgentError("git", `${what} failed: ${r.text(String((e as Error)?.message ?? e)).slice(-800)}`);
     }
   };
+  // A long transfer (a big repository's first clone) is never silent: its progress goes to the agent's log (`capcomd
+  // logs`) and to engine.log, besides its span's `git.progress` events.
+  const progress = (what: string): OnTransferProgress => (p) => {
+    const line = progressLine(what, p);
+    opts.onLog?.([`[capcomd] ${line}`]);
+    console.error(`[agent] ${task.agentId ?? task.taskId}: ${line}`);
+  };
   const key = taskKey(task.runId, task.taskId);
   const attrs = {
     "agent.kind": name, "agent.profile": cfg.profile ?? "", "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
@@ -573,7 +580,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     // The stopped agent's work, as the host fetched it (startRef's FETCH_HEAD).
     let fromSha: string | null = null;
     const start = (ref: string) => ref === "FETCH_HEAD" && fromSha ? fromSha : ref;
-    const bringFrom = async (dir: string) => { fromSha = (await sendToSandbox(host, box, dir, { branches: [], ref: task.from!.ref })).ref ?? null; };
+    const bringFrom = async (dir: string) => { fromSha = (await sendToSandbox(host, box, dir, { branches: [], ref: task.from!.ref, onProgress: progress("git fetch (continue)") })).ref ?? null; };
     // The warm template fits when chooseWorkspace says so from what's in the sandbox: its record and claim, then (only if
     // those fit) the fetches a fresh clone would make, the target's history and the start tree's lockfile.
     const warmWorkspace = async (): Promise<WorkspaceChoice> => {
@@ -584,7 +591,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
       const early = chooseWorkspace({ ...facts, fetched: true, ancestor: true, startFound: true, startLockHash: facts.marker?.lockHash ?? "none" });
       if (early.path === "clone" || !facts.marker) return early;
       // The refs a fresh clone has (every branch, as remote-tracking refs), and the continued agent's work.
-      const fetched = await sendToSandbox(host, box, T, { branches: "all" }).then(async () => { if (startFrom) await bringFrom(T); return true; }, () => false);
+      const fetched = await sendToSandbox(host, box, T, { branches: "all", onProgress: progress("git fetch (warm template)") }).then(async () => { if (startFrom) await bringFrom(T); return true; }, () => false);
       if (!fetched) return chooseWorkspace({ ...facts, fetched });
       const ref = start(startRef(task, branchExists));
       const look = await sh(`cd ${sq(T)} || exit 1
@@ -606,7 +613,7 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
       must(await sh(`rm -rf ${sq(repo)}`), "clean");
       // What `git clone --no-tags --branch <target>` made, from the host's mirror: every branch as origin/*, the
       // target checked out tracking origin/<target>, origin's URL without credentials.
-      await viaHost("git clone", () => sendToSandbox(host, box, repo, { branches: "all", checkout: task.target }, { fresh: true }));
+      await viaHost("git clone", () => sendToSandbox(host, box, repo, { branches: "all", checkout: task.target, onProgress: progress("git clone") }, { fresh: true }));
     }
 
     if (task.review) {
@@ -615,7 +622,7 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
       // clone has, or else fetched). A conflict fails the review: the checks report it too, and the verify fails on them.
       const on = task.review.targetSha;
       if (on) {
-        if ((await git(["cat-file", "-e", `${on}^{commit}`], repo)).code !== 0) await viaHost("git fetch (review target)", () => sendToSandbox(host, box, repo, { branches: [], ref: on }));
+        if ((await git(["cat-file", "-e", `${on}^{commit}`], repo)).code !== 0) await viaHost("git fetch (review target)", () => sendToSandbox(host, box, repo, { branches: [], ref: on, onProgress: progress("git fetch (review target)") }));
         const m = await git(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "-c", "commit.gpgsign=false", "merge", "-q", "--no-edit", "-m", `capcomd review: ${task.review.branch} merged onto ${task.target}`, on], repo);
         if (m.code !== 0) {
           await git(["merge", "--abort"], repo).catch(() => {});
@@ -862,7 +869,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // the agent holds no push credentials, and nothing in its checkout decides where the push goes.
     const pushCheckpoint = async (c: { sha: string; reason: string; files: number }) => {
       if (orchestrate) return; // never pushed (the supervisor makes none for it either)
-      const res = await pushFromSandbox(host, box, repo, { sha: c.sha, ref: ckptRef, force: true, near: [task.target, task.branch], timeoutMs: 300_000 })
+      const res = await pushFromSandbox(host, box, repo, { sha: c.sha, ref: ckptRef, force: true, near: [task.target, task.branch], timeoutMs: 300_000, onProgress: progress("checkpoint push") })
         .then(() => ({ code: 0, stderr: "" }), (e) => ({ code: 1, stderr: String((e as Error)?.message ?? e) }));
       addSpanEvent(span, "agent.checkpoint", { "git.sha": c.sha, "agent.checkpoint_reason": c.reason, "agent.checkpoint_files": c.files, ...(res.code ? { "agent.checkpoint_error": r.text(res.stderr).slice(-300) } : {}) });
       if (!res.code) opts.onReport?.({ type: "checkpoint", sha: c.sha, ref: ckptRef, reason: c.reason, files: c.files });
@@ -1129,7 +1136,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     }
     const sha = must(await git(["rev-parse", "HEAD"], repo), "rev-parse").stdout.trim();
     // The host pushes it (from its mirror, leased at where the branch was when the agent started: there, or absent).
-    await viaHost("git push", () => pushFromSandbox(host, box, repo, { sha, ref: `refs/heads/${task.branch}`, expect: branchExists ? existing : null, near: [task.target, task.branch], timeoutMs: 300_000, spanRef: `HEAD:refs/heads/${task.branch}` }));
+    await viaHost("git push", () => pushFromSandbox(host, box, repo, { sha, ref: `refs/heads/${task.branch}`, expect: branchExists ? existing : null, near: [task.target, task.branch], timeoutMs: 300_000, spanRef: `HEAD:refs/heads/${task.branch}`, onProgress: progress("git push") }));
     setSpanAttributes(span, { "git.sha": sha });
     return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
   } catch (err) {
