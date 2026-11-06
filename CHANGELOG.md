@@ -14,6 +14,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agent's log (`capcomd logs <run> <agent>`) and engine.log get a line such as `[capcomd] git clone: uploading 120.0 MB
   of 478.0 MB (25%) to the sandbox, 5m 08s at 0.39 MB/s`, its trace span gets a `git.progress` event and the bytes
   moved (`git.bytes`), and `capcomd env build` prints the same lines.
+- New: a guide to writing capcomd plugins, [docs/plugins.md](docs/plugins.md): the manifest, the hooks and how to
+  answer them, settings and secrets, testing, and how to ship a plugin people install with `capcomd plugins install`.
+- New: `@capcomd/plugin`, the package for writing plugins, can be published to npm with capcomd's releases, at
+  capcomd's version (the release workflow does it once it is switched on). It runs on Node 20 or later as well as Bun.
+  `sessionOpen()` builds a plugin process's handshake for you, and `testkit.bootWith` now works: it starts a real
+  capcomd daemon in a throwaway home on the fake sandbox, with your plugin installed and running, for your own tests
+  (`capcomd` from your `PATH`, or the `capcomd` option). Until it is on npm, `bun packages/plugin/scripts/pack.ts` in a
+  capcomd checkout builds the package file to install.
 - New: share agent profiles through git. `capcomd profiles install <owner/repo>[#<name>][@<ref>]` (a git URL or a
   local repository path works too) copies a profile package (a folder with a `profile.yaml`, its prompts and
   `skills/`) into `~/.capcomd/profiles/<name>/`, or with `--project` into the project's `.capcomd/profiles/<name>/` to

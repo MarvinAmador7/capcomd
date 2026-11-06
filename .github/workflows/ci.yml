@@ -114,6 +114,34 @@ jobs:
       - name: Context eval (fake sandbox and agent)
         run: bun scripts/eval-context.ts --seed 1 --expect --port 6571 --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered
 
+  # @capcomd/plugin as it would be published (packages/plugin/scripts/pack.ts): installed from its tarball into a fresh
+  # project and used from Node 20, the oldest it supports (no Bun at run time: every entry point, the test kit, connect()
+  # over a Unix socket), and its declarations typechecked by a TypeScript 5 consumer under nodenext. The examples are
+  # tested in test:fast (packages/plugin, tests/plugins/host.test.ts) and the Slack example against a real daemon on the
+  # fake sandbox in the scenarios (tests/scenarios/plugin-slack-example.test.ts).
+  plugin-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: bun install --frozen-lockfile
+
+      - name: Pack @capcomd/plugin
+        run: bun packages/plugin/scripts/pack.ts --out dist/plugin
+
+      - name: Install it and use it from Node (packages/plugin/scripts/smoke.sh)
+        run: packages/plugin/scripts/smoke.sh dist/plugin/capcomd-plugin-*.tgz
+
   # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
   # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that
   # loads something by a computed name) fails here, not at release.

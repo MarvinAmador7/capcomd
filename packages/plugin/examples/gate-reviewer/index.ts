@@ -1,7 +1,7 @@
 // Worked example, spec §15.3: the reviewer as a gate plugin. Today src/primitives/ops.ts startReview/finishReview and
 // src/primitives/review.ts parseVerdict/reviewBrief are inside verifyOnce; here they are one `verify.judging` listener.
 // The kernel keeps "both must pass for the same tree" (reviewFits) and fails closed on no verdict (§6.6.13).
-import { definePlugin, type VetoResult } from "../../src/index";
+import { definePlugin, type VetoResult } from "@capcomd/plugin";
 
 interface Config { maxReasons: number; maxReasonChars: number }
 interface Verdict { passed: boolean; reasons: string[] }
