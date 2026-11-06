@@ -306,6 +306,16 @@ const PluginEventData = {
 		plugin: z.string(), kept: z.string().describe("builtin, user or project: where the one kept came from"), refused: z.string().describe("Where the refused one came from"),
 		path: z.string().describe("The refused plugin's directory, or (built-in)"),
 	}).describe(`${PLUGIN_EVENT}. A second plugin with a name already discovered was refused (spec §4.8): it is failed with cause duplicate`),
+	"plugin.config_refused": z.looseObject({
+		plugin: z.string(),
+		errors: z.array(z.object({ path: z.string(), message: UntrustedText.describe("Agent-written text (here the schema's complaint, which may quote the plugin's schema): render as plain text") })).describe("What doesn't fit the plugin's config schema"),
+		layer: z.string().describe("The layer whose values broke it: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_*) or run (more may come)"),
+	}).describe(`Capability plugins.config. ${PLUGIN_EVENT}. A plugin's config doesn't fit its schema (spec §10.4): it is failed with cause config_invalid, never run with its defaults instead`),
+	"plugin.trusted": z.looseObject({
+		plugin: z.string(), source: z.string().describe("project: a project's plugin, which runs only once trusted (more may come)"),
+		hash: z.string().describe("The content hash trusted (sha256:<hex> over every file of the plugin): a changed file needs trusting again"),
+		by: z.string().describe("Who trusted it: operator (capcomd plugins trust on the daemon's machine)"),
+	}).describe(`Capability plugins.config. ${PLUGIN_EVENT}. The daemon ran a project's plugin under the operator's trust for the first time (spec §4.8; the trust is recorded by capcomd plugins trust)`),
 	"plugin.hook_failed": z.looseObject({
 		plugin: z.string(), hook: z.string(), callId: z.string(),
 		kind: z.string().describe("timeout, threw, crashed, invalid_result, disconnected or suspended"),
@@ -494,6 +504,7 @@ export const CAPABILITIES = {
 	profiles: "GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there",
 	"plugins.protocol": "The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process",
 	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from",
+	"plugins.config": "Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.config_refused and plugin.trusted on the daemon stream",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -522,6 +533,7 @@ export const CreateRunBody = z.object({
 	driver: AgentProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
 	model: z.string().min(1).max(100).regex(/^[A-Za-z0-9._:\/-]+$/, "model must be a model id").optional().describe("Capability runs.options.models. The model the run's planner (the driver) runs on (`capcomd run --planner-model`): one of that driver's `models[].id` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Passed to the agent CLI as a profile's model is (Claude Code `--model`, Codex `-m`). Omitted: the driver's `model` there (the planner profile's, else the CLI's default)."),
+	plugins: z.record(z.string(), z.record(z.string(), z.unknown())).optional().describe("Capability plugins.config. The run's own plugin settings (`capcomd run --plugin-config <plugin>.<key>=<value>`), by plugin name: only the settings a plugin's config schema marks per-run (`x-per-run`), each valid against its schema; anything else is 422 with `field` plugins.<name>.<key>. Kept for the run in the plugin's run storage (plugin API §10.2); the plugins' own config is unchanged"),
 	sandbox: SandboxName.optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): a listed place's name (GET /v1/run-options `sandboxes`), today docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't one, or isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox."),
 });
 export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; " +

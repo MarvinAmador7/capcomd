@@ -53,7 +53,7 @@ async function main(argv: string[]): Promise<number> {
     }
     if (command === "plugins") {
       const { pluginsCommand } = await import("./commands/plugins");
-      return await pluginsCommand(positionals, { json, conformance: !!values.conformance });
+      return await pluginsCommand(positionals, { json, conformance: !!values.conformance, project: !!values.project, yes: !!values.yes, acceptRisk: !!values["accept-risk"], dryRun: !!values["dry-run"] });
     }
     const door = await frontDoor(command);
     if (!door) throw new RelayError("usage", `unknown command: ${command}`, "Run `capcomd --help` for usage.");

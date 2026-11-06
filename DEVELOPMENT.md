@@ -86,6 +86,9 @@ src/
                   commands/, what they call
   core/         - client, errors, preflight, VM cleanup checks
   engine/       - engine launcher (per-port data dir, pid file)
+  install/      - installable packages (plugins now, profile packages next, ADR-024 step 7): source.ts, owner/repo#name@ref;
+                  fetch.ts, a package's directory written out of a fetched commit (host-git.ts fetches); lock.ts, LOCK and
+                  the content hash; trust.ts, the operator's trust per content hash and place (~/.capcomd/trust.json)
   env/          - env snapshots, secrets sync, doctor
   jobs/         - background jobs and timers (plugin API §16.2): service.ts, the records (a run's kv `_jobs/`, the
                   daemon's state/jobs/), limits, ctx.jobs, the job.changed hook, timers; machine.ts, a job's detached
@@ -107,7 +110,11 @@ src/
                   sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
                   setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an
                   out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's
-                  private storage. The user's plugins (~/.capcomd/plugins/<name>) run out of process.
+                  private storage. The user's plugins (~/.capcomd/plugins/<name>) run out of process. install.ts,
+                  `capcomd plugins install|update|remove|trust|allow-version` (plugin API §4.8): ~/.capcomd/plugins/
+                  <name>/ with its LOCK, a project's `plugins.use` fetched to ~/.capcomd/plugins/.project/<key>/,
+                  exemptions in ~/.capcomd/plugins/compatibility.json; run-config.ts, a run's per-run plugin settings
+                  (`--plugin-config`, POST /v1/runs `plugins`) in the plugin's run storage
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and

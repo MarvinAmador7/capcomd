@@ -1,26 +1,38 @@
 // A plugin's secrets (docs/spec/plugin-api.md §10.3): a property its config schema marks `"x-secret": true` holds a
-// reference, never a value, and the host resolves it for that plugin only. `env:<VAR>` is the daemon's environment
-// variable. The reference is the schema's default until config layering (§10.2) lands with the config service; so is
-// `keychain:<account>`: the boxd key `capcomd setup` keeps in the OS keychain still reaches the daemon as BOXD_API_KEY
-// (src/config/store.ts applyConfig), which is what sandbox-boxd's default reference names.
+// reference, never a value, and the host resolves it for that plugin only. The reference is the user's (`plugins.<name>.
+// <key>` in ~/.capcomd/config.json, off with CAPCOMD_NO_CONFIG), else CAPCOMD_PLUGIN_<NAME>_<KEY> holding one, else
+// the schema's default; never a project's (§10.2: a repository can't point a plugin at another of the daemon's
+// variables; the host refuses one there, config_invalid). `env:<VAR>` is the daemon's environment variable.
+// `keychain:<account>` isn't resolved yet: the boxd key `capcomd setup` keeps in the OS keychain still reaches the daemon
+// as BOXD_API_KEY (src/config/store.ts applyConfig), which is what sandbox-boxd's default reference names.
 import { PluginError } from "../../packages/plugin/src/errors";
+import { configSchema, secretRefOf } from "../../packages/plugin/src/config";
+import type { PluginManifest } from "../../packages/plugin/src/manifest";
+import { readConfig, userConfigPath } from "../config/store";
 
 type Env = Record<string, string | undefined>;
-type Schema = { properties?: Record<string, { "x-secret"?: unknown; default?: unknown } | undefined> };
+type Prop = { "x-secret"?: unknown; default?: unknown } | undefined;
 type Manifest = { name: string; config?: unknown };
 
-/** The reference `key` holds, when `key` is a secret `m` declares; a PluginError otherwise. */
-export function secretRef(m: Manifest, key: string): string {
-  const prop = (m.config as Schema | undefined)?.properties?.[key];
+/** The reference `key` holds, when `key` is a secret `m` declares; a PluginError otherwise. `dir`: the plugin's
+ *  directory, where a `$ref` schema is read from. */
+export function secretRef(m: Manifest, key: string, env: Env = process.env, dir: string | null = null): string {
+  const prop = configSchema(m as PluginManifest, dir)?.properties?.[key] as Prop;
   if (!prop || prop["x-secret"] !== true) throw new PluginError("forbidden", `${key} is not a secret the ${m.name} plugin declares (§10.3)`);
+  const user = env.CAPCOMD_NO_CONFIG ? undefined : ((readConfig(userConfigPath(env)).plugins as Record<string, unknown> | undefined)?.[m.name] as Record<string, unknown> | undefined)?.[key];
+  const fromEnv = (() => { const v = env[`CAPCOMD_PLUGIN_${`${m.name}_${key}`.toUpperCase().replace(/[-.]/g, "_")}`]; try { return v === undefined ? undefined : JSON.parse(v); } catch { return undefined; } })();
+  for (const v of [user, fromEnv]) {
+    const ref = secretRefOf(v);
+    if (ref) return ref;
+  }
   const ref = (prop.default as { $secret?: unknown } | undefined)?.$secret;
   if (typeof ref !== "string" || !ref) throw new PluginError("not_found", `no reference is set for the ${m.name} plugin's ${key}`);
   return ref;
 }
 
 /** `key`'s value for plugin `m`, or a PluginError: `not_found` when the reference resolves to nothing. */
-export function resolveSecret(m: Manifest, key: string, env: Env = process.env): string {
-  const ref = secretRef(m, key);
+export function resolveSecret(m: Manifest, key: string, env: Env = process.env, dir: string | null = null): string {
+  const ref = secretRef(m, key, env, dir);
   const named = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(ref);
   if (named) {
     const v = env[named[1]!];

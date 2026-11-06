@@ -310,7 +310,7 @@ export function harnessApp(o: ServerOptions) {
 		const parsed = CreateRunBody.safeParse(await c.req.json().catch(() => undefined));
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
-			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?, driver?, effort?, model?, sandbox?, base?, goalBranch?}", i?.path.length ? { field: String(i.path[0]) } : {});
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "body must be a JSON object {goal, repo?, profile?, targetBranch?, driver?, effort?, model?, sandbox?, base?, goalBranch?, plugins?}", i?.path.length ? { field: String(i.path[0]) } : {});
 		}
 		const p = parsed.data;
 		if (p.profile !== undefined && p.driver !== undefined) return err(c, 422, "invalid", "profile and driver can't be combined: driver runs the project's planner agent, which picks its own workers; send one of them");
@@ -338,14 +338,24 @@ export function harnessApp(o: ServerOptions) {
 			const fit = p.sandbox !== undefined ? d?.sandboxes?.[p.sandbox] : undefined;
 			if (fit && !fit.available) return err(c, 422, "invalid", `${d!.label} can't drive a run in ${PROVIDER_LABEL[p.sandbox as keyof typeof PROVIDER_LABEL] ?? p.sandbox}: ${fit.reason ?? "unavailable"}`);
 		}
-		const input: CreateRunInput = { goal: p.goal.trim(), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.model !== undefined ? { model: p.model } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox as NonNullable<CreateRunInput["sandbox"]> } : {}),
+		// A run's plugin settings (capability plugins.config, plugin API §10.2 layer 5): per-run ones only, checked against
+		// the plugins of the run's project (`capcomd run` checks them again where it starts the run).
+		let plugins: Record<string, Record<string, unknown>> | undefined;
+		if (p.plugins !== undefined && Object.keys(p.plugins).length) {
+			const RC = await import("../plugins/run-config");
+			try { plugins = await RC.checkRunPluginConfig(p.plugins, { ...(p.repo ? { cwd: p.repo } : {}) }); } catch (e) {
+				if (e instanceof RC.RunConfigError) return err(c, 422, "invalid", e.message, { field: e.field });
+				throw e;
+			}
+		}
+		const input: CreateRunInput = { goal: p.goal.trim(), ...(plugins ? { plugins } : {}), ...(p.repo !== undefined ? { repo: p.repo } : {}), ...(p.profile !== undefined ? { profile: p.profile } : {}), ...(p.targetBranch !== undefined ? { targetBranch: p.targetBranch } : {}), ...(p.driver !== undefined ? { driver: p.driver } : {}), ...(p.effort !== undefined ? { effort: p.effort } : {}), ...(p.model !== undefined ? { model: p.model } : {}), ...(p.sandbox !== undefined ? { sandbox: p.sandbox as NonNullable<CreateRunInput["sandbox"]> } : {}),
 			...(p.base !== undefined ? { base: p.base } : {}), ...(p.goalBranch !== undefined ? { goalBranch: p.goalBranch } : {}) };
 		const kid = `${c.get("client").clientId}\u0000runs.create\u0000${key}`;
 		// driver and sandbox are part of the body (another value: idempotency_conflict); a request without them hashes as
 		// before they existed, so a retry across the upgrade still replays.
 		const hash = JSON.stringify(["runs.create", input.goal, input.repo ?? null, input.profile ?? null, input.targetBranch ?? null, ...(input.driver || input.sandbox || input.effort ? [input.driver ?? null, input.sandbox ?? null, ...(input.effort ? [input.effort] : [])] : []),
 			...(input.base !== undefined || input.goalBranch !== undefined ? [{ base: input.base ?? null, goalBranch: input.goalBranch ?? null }] : []),
-			...(input.model !== undefined ? [{ model: input.model }] : [])]);
+			...(input.model !== undefined ? [{ model: input.model }] : []), ...(input.plugins ? [{ plugins: input.plugins }] : [])]);
 		const conflict = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different body");
 		const replay = (r: Outcome) => c.json(r.body, r.status as 201, r.status === 201 ? { "idempotent-replayed": "true" } : {});
 		const prior = state.key(kid);

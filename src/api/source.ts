@@ -30,7 +30,9 @@ export type CreateRunInput = { goal: string; repo?: string; profile?: string; ta
 	/** Capability runs.options.models: the planner's model, one of its driver's `models`. */
 	model?: string;
 	/** Capability runs.goal_branch: the base the goal branch is cut from, and its name (false: no goal branch). */
-	base?: string; goalBranch?: string | false };
+	base?: string; goalBranch?: string | false;
+	/** Capability plugins.config: the run's per-run plugin settings, already checked (src/plugins/run-config.ts). */
+	plugins?: Record<string, Record<string, unknown>> };
 /** A run that can't be started as asked (bad repo, no repository, refused by `capcomd run`): 422 with this message,
  *  and the body field it's about when there is one (base, goalBranch). */
 export class CreateRunError extends Error {

@@ -5,6 +5,29 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: install plugins from a git repository. `capcomd plugins install <owner/repo>[#<name>][@<ref>]` (a git URL or a
+  local repository path works too; `#name` picks one plugin among several, `@ref` a branch, tag or commit) puts it in
+  `~/.capcomd/plugins/<name>/` with a `LOCK` file recording where it came from, the commit and a hash of every file;
+  the daemon runs it from its next start. capcomd refuses a plugin whose manifest points outside its folder, one with a
+  link out of it, one that would run inside capcomd itself, and one made for another capcomd version, unless you allow
+  that exact version with `capcomd plugins allow-version <name>@<version> --accept-risk`. `capcomd plugins update
+  <name>` fetches it again and shows which files, commit and hash changed before replacing it (`--dry-run` only shows),
+  `capcomd plugins remove <name>` deletes it (its data stays), and `capcomd plugins show <name>` shows one plugin with
+  its settings, where each came from, and its source.
+- New: a project's plugins (`.capcomd/plugins/<name>/` in the repository, or `"plugins": {"use":
+  ["owner/repo#name@ref"]}` in its `.capcomd/config.json`, fetched into your home with `capcomd plugins install
+  --project`) never run just because you opened the project: `capcomd plugins trust <name>` shows what would run (the
+  command, its scopes and hooks, the hash of its files) and asks first (`--yes` for scripts). A changed file, or the same
+  plugin in another project, needs trusting again; until then `capcomd plugins list` shows it `validated (untrusted)`.
+- New: plugin settings in layers. A plugin's settings are its defaults, then `"plugins": {"<name>": {…}}` in
+  `~/.capcomd/config.json`, then in the project's `.capcomd/config.json`, then `CAPCOMD_PLUGIN_<NAME>_<KEY>`; turning a
+  plugin on or off and its secrets (`{"$secret": "env:VAR"}`) are yours to set, not a project's. A run can set a plugin's
+  per-run settings: `capcomd run --plugin-config <plugin>.<key>=<value>` (also `run new`), or `plugins` in
+  `POST /v1/runs` (capability `plugins.config`); anything else is refused before the run starts.
+- **Breaking:** a plugin whose settings don't fit what it accepts is no longer started with them: it is listed failed
+  with cause `config_invalid` (and `plugin.config_refused` on the daemon stream names the layer). This includes the
+  built-in ones, e.g. a `"plugins": {"forge-github": {"pollMs": 5}}` below its minimum. Fix the setting; `capcomd
+  plugins show <name>` and the `plugin.failed` event say what is wrong.
 - New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
   a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
   `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`

@@ -414,8 +414,9 @@ describe("built-in config", () => {
   test("a built-in's config: plugins.<name> in the user's config, then CAPCOMD_PLUGIN_<NAME>_<KEY>; enabled: false turns it off", () => {
     writeFileSync(join(home, "config.json"), JSON.stringify({ plugins: { "source-schedule": { enabled: false, schedules: { a: { text: "x", everyMs: 1000 } } } } }));
     const c = { source: "builtin" as const, manifest: scheduleManifest, module: schedulePlugin as Candidate["module"] };
-    expect(configured(c, { CAPCOMD_HOME: home })).toMatchObject({ enabled: false, config: { schedules: { a: { text: "x", everyMs: 1000 } } } });
-    expect(configured(c, { CAPCOMD_HOME: home, CAPCOMD_PLUGIN_SOURCE_SCHEDULE_SCHEDULES: "{}" }).config).toEqual({ schedules: {} });
-    expect(configured(c, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" })).toEqual(c);
+    expect(configured(c, { CAPCOMD_HOME: home }, home)).toMatchObject({ enabled: false, layers: [{ layer: "user", values: { schedules: { a: { text: "x", everyMs: 1000 } } } }] });
+    expect(configured(c, { CAPCOMD_HOME: home, CAPCOMD_PLUGIN_SOURCE_SCHEDULE_SCHEDULES: "{}" }, home).layers).toEqual([
+      { layer: "user", values: { schedules: { a: { text: "x", everyMs: 1000 } } } }, { layer: "env", values: { schedules: {} } }]);
+    expect(configured(c, { CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, home)).toEqual(c);
   });
 });

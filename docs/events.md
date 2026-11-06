@@ -3517,6 +3517,86 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `plugin.config_refused`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "x-untrusted": true,
+            "description": "Agent-written text (here the schema's complaint, which may quote the plugin's schema): render as plain text"
+          }
+        },
+        "required": [
+          "path",
+          "message"
+        ]
+      },
+      "description": "What doesn't fit the plugin's config schema"
+    },
+    "layer": {
+      "type": "string",
+      "description": "The layer whose values broke it: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_*) or run (more may come)"
+    }
+  },
+  "required": [
+    "plugin",
+    "errors",
+    "layer"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins.config. Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin's config doesn't fit its schema (spec §10.4): it is failed with cause config_invalid, never run with its defaults instead"
+}
+```
+
+## `plugin.trusted`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "description": "project: a project's plugin, which runs only once trusted (more may come)"
+    },
+    "hash": {
+      "type": "string",
+      "description": "The content hash trusted (sha256:<hex> over every file of the plugin): a changed file needs trusting again"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who trusted it: operator (capcomd plugins trust on the daemon's machine)"
+    }
+  },
+  "required": [
+    "plugin",
+    "source",
+    "hash",
+    "by"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins.config. Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. The daemon ran a project's plugin under the operator's trust for the first time (spec §4.8; the trust is recorded by capcomd plugins trust)"
+}
+```
+
 ## `plugin.hook_failed`
 
 ```json

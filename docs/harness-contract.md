@@ -110,6 +110,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `profiles` | GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there |
 | `plugins.protocol` | The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process |
 | `triggers` | Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from |
+| `plugins.config` | Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.config_refused and plugin.trusted on the daemon stream |
 
 ## Event envelope
 
@@ -1282,6 +1283,8 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 - [`plugin.disposed`](events.md#plugindisposed)
 - [`plugin.version_refused`](events.md#pluginversion_refused)
 - [`plugin.duplicate_refused`](events.md#pluginduplicate_refused)
+- [`plugin.config_refused`](events.md#pluginconfig_refused)
+- [`plugin.trusted`](events.md#plugintrusted)
 - [`plugin.hook_failed`](events.md#pluginhook_failed)
 - [`plugin.suspended`](events.md#pluginsuspended)
 - [`plugin.resumed`](events.md#pluginresumed)

@@ -43,7 +43,7 @@ describe("every kernel event type matches the one pattern", () => {
   test("the host's plugin events in the contract are the ones packages/plugin lists, and only those not written yet are missing", () => {
     const inContract = Object.keys(EventData).filter((t) => t.startsWith("plugin."));
     for (const t of inContract) expect(PLUGIN_EVENT_TYPES as readonly string[]).toContain(t);
-    expect(PLUGIN_EVENT_TYPES.filter((t) => t.startsWith("plugin.") && !inContract.includes(t)).sort()).toEqual(["plugin.config_refused", "plugin.hook_deprecated", "plugin.trusted"]);
+    expect(PLUGIN_EVENT_TYPES.filter((t) => t.startsWith("plugin.") && !inContract.includes(t)).sort()).toEqual(["plugin.hook_deprecated"]);
     for (const old of ["plugin.config_invalid", "plugin.deprecation", "plugin.process"]) expect(PLUGIN_EVENT_TYPES as readonly string[]).not.toContain(old);
   });
 });
