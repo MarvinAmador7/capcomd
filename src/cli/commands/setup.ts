@@ -306,7 +306,7 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd(), l
   const env = await envImageStep(p, v, dir, log);
   return [
     { step: "project", ok: true, detail: `${repo} → ${target ?? "no target branch (each run asks for its base; --target B sets one)"} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${plan.configPath}` },
-    { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${plan.agentsPath})` },
+    { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${plan.profilesDir})` },
     { step: "project list", ok: true, detail: P.registeredLine(listed, userConfigPath()) },
     ...env,
   ];

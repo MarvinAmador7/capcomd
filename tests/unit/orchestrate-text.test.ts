@@ -9,7 +9,8 @@ import { tmpdir } from "os";
 import { plannerBrief } from "../../src/recipes/planner-agent";
 import { orchestrationSkill } from "../../src/subagents/skill";
 import { abilityText, ORCHESTRATE_TEXT } from "../../src/profiles";
-import { LEAD_DESCRIPTION, PLANNER_DESCRIPTION, planProject } from "../../src/config/project-setup";
+import { LEAD_DESCRIPTION, PLANNER_DESCRIPTION } from "../../src/config/project-setup";
+import { setupProfiles } from "../helpers/setup-profiles";
 import { INSTRUCTIONS } from "../../src/mcp/server";
 import { logLinesOf, REFUSAL } from "../../src/agents/runner";
 import { claude } from "../../src/plugins/agent-claude";
@@ -66,7 +67,7 @@ describe("the mode, explained", () => {
   });
 
   test("profile descriptions: setup's templates, capcomd_profiles / agents list `does`", () => {
-    const by = Object.fromEntries(planProject({ dir: mkdtempSync(join(tmpdir(), "capcomd-ot-")), repo: "https://github.com/a/b.git", mode: "direct", target: "main", check: "bun test", agents: ["claude"], authOf: () => "subscription", cap: null }).profiles);
+    const by = setupProfiles({ dir: mkdtempSync(join(tmpdir(), "capcomd-ot-")), repo: "https://github.com/a/b.git", mode: "direct", target: "main", check: "bun test", agents: ["claude"], authOf: () => "subscription", cap: null }).specs;
     expect(by.lead!.description).toBe(LEAD_DESCRIPTION);
     expect(by.planner!.description).toBe(PLANNER_DESCRIPTION);
     for (const d of [LEAD_DESCRIPTION, PLANNER_DESCRIPTION]) { expect(d).toContain("sees everything"); expect(d).toContain("runs nothing (no edits, commits, installs, builds or tests)"); expect(d).toContain("checks run at verify and merge"); expect(d).toContain("on the combined code with capcomd check"); }

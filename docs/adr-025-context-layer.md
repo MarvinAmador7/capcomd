@@ -242,7 +242,8 @@ written back by the agent" (ADR-024 §2.2); it is read from the checkout and cha
 
 ### 5.2 Consolidation: a profile, spawned by the run
 
-`context-consolidator` is a bundled profile in **`execute` mode** with read-only tools plus writes under
+`context-consolidator` is a profile (written by `capcomd setup project`, not bundled: §13, "Made while building step
+3") in **`execute` mode** with read-only tools plus writes under
 `.capcomd/context/` only (the agent provider's tool policy enforces the path; the kernel's gate re-checks it, §5.3). The
 planner spawns it as the **last child of its run** (an orchestration-skill rule: "before you end, spawn `consolidator`
 with the run's lessons"); an orchestrate profile cannot be the consolidator (it may not write files and ends failed if it
@@ -657,9 +658,10 @@ this list says why):
   be there). A new item is a draft, `generated` by the consolidator (`agent-generated`), `origin` the kernel's record of
   it, `sources` the candidates (who proposed each, with which profile and model), `stale_after` from D8 (lesson 180
   days, feedback 90, reference none) or the memory provider's `retain` in the profile.
-- The profile is recognised by its name, `context-consolidator`. Until ADR-024 §7 step 9 ships bundled profiles,
-  `capcomd setup project` writes it (read-only tools, a read-only Codex sandbox, briefed with the project's memory,
-  `context.review: human`) and adds it to the planner's `allowedChildProfiles`; the orchestration skill tells an agent
+- The profile is recognised by its name, `context-consolidator`. `capcomd setup project` writes it (read-only tools,
+  a read-only Codex sandbox, briefed with the project's memory, `context.review: human`; since ADR-024 §7 step 9 as
+  `.capcomd/profiles/context-consolidator.yaml`, not a bundled profile: ADR-024 §9, "Made while building migrate and
+  the templates") and adds it to the planner's `allowedChildProfiles`; the orchestration skill tells an agent
   that may spawn it to do so last, when the run's agents proposed lessons, and tells every agent that may spawn that a
   child's work never changes `.capcomd/context/`. With no model in its profile it runs on the run's strongest: the
   first, in the curated table (`src/config/models.ts`), of the models the run's agents on its provider use.

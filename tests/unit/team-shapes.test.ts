@@ -1,11 +1,12 @@
 // Team shapes: what a driver needs to plan one. The lead profile setup writes, what each profile can do in plain words,
 // a `children` grant that has no effect, how many agents run at once here, and the skill's "Choose a team shape".
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { LEAD_DESCRIPTION, PLANNER_DESCRIPTION, planProject, testTools } from "../../src/config/project-setup";
-import { abilityText, leadText, validateFile, widenings, type AgentsFile } from "../../src/profiles";
+import { LEAD_DESCRIPTION, PLANNER_DESCRIPTION, planProject, testTools, writeProject } from "../../src/config/project-setup";
+import { setupProfiles } from "../helpers/setup-profiles";
+import { abilityText, leadText, readProfiles, validateFile, widenings, type AgentsFile } from "../../src/profiles";
 import { applyGrant, childLimits, rootLimits } from "../../src/primitives/policy";
 import { placeCapacity, teamShapeHint } from "../../src/providers/capacity";
 import { INSTRUCTIONS } from "../../src/mcp/server";
@@ -16,9 +17,12 @@ const answers = (dir: string, check = "bun run test") => ({ dir, repo: "https://
 
 describe("the profiles setup writes", () => {
   test("a lead: the worker's settings, orchestrating up to 3 worker helpers, one level; a valid agents file", () => {
-    const plan = planProject(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-"))));
-    const by = Object.fromEntries(plan.profiles);
+    const { plan, specs } = setupProfiles(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-"))));
+    const by = specs as Record<string, any>;
     expect(plan.profiles.map(([n]) => n)).toEqual(["worker", "reviewer", "lead", "context-consolidator", "planner"]);
+    // Profile files (ADR-024 §6): the lead extends the worker, so it has the worker's settings without repeating them.
+    expect(Object.fromEntries(plan.profiles).lead).toMatchObject({ extends: "worker" });
+    expect(Object.fromEntries(plan.profiles).lead!.harness).toBeUndefined();
     // Plugin API §16.1: the lead and the planner orchestrate; their workers do the work.
     expect(by.lead).toEqual({ ...by.worker, description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });
     expect(by.planner!.toolMode).toBe("orchestrate");
@@ -26,6 +30,24 @@ describe("the profiles setup writes", () => {
     const file: AgentsFile = { schema: "capcomd.agents/v1", default: "worker", agents: by as any };
     expect(validateFile(file)).toEqual([]);
     expect(leadText(by.lead as any)).toBe("up to 3 worker helpers, one level");
+  });
+
+  test("a project's own profiles: one of a template's name is kept, and a template they wouldn't resolve with is left out", () => {
+    // The project's worker has an MCP server, which an orchestrate profile can't have: a lead or planner that extends it
+    // wouldn't resolve, so setup leaves them out rather than break every profile; the reviewer extends it fine.
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-ts-"));
+    mkdirSync(join(dir, ".capcomd", "profiles"), { recursive: true });
+    const mine = "name: worker\nharness: { provider: claude, auth: subscription }\ntools:\n  mcp:\n    - { name: semgrep, command: [semgrep-mcp] }\n";
+    writeFileSync(join(dir, ".capcomd", "profiles", "worker.yaml"), mine);
+    const plan = planProject(answers(dir));
+    const env = { CAPCOMD_HOME: mkdtempSync(join(tmpdir(), "capcomd-ts-home-")) };
+    const w = writeProject(plan, { env });
+    expect([w.made, w.kept]).toEqual([["reviewer", "context-consolidator"], ["worker", "lead", "planner"]]);
+    expect(readFileSync(join(dir, ".capcomd", "profiles", "worker.yaml"), "utf8")).toBe(mine);
+    const set = readProfiles(plan.agentsPath, env);
+    expect(Object.keys(set.profiles).sort()).toEqual(["context-consolidator", "reviewer", "worker"]);
+    // The project had no default and its worker isn't setup's: no profile is made the default (never the reviewer).
+    expect(set.default).toBeUndefined();
   });
 
   test("the reviewer may run the check's commands and the package manager's test runner", () => {
@@ -45,7 +67,7 @@ describe("the profiles setup writes", () => {
     expect(testTools("", empty)).toEqual([]);
     writeFileSync(join(empty, "Cargo.toml"), "");
     expect(testTools("make check", empty)).toEqual(["Bash(make check:*)", "Bash(cargo test:*)"]);
-    const rev = Object.fromEntries(planProject(answers(bun)).profiles).reviewer as any;
+    const rev = setupProfiles(answers(bun)).specs.reviewer as any;
     expect(rev.allowedTools).toEqual(expect.arrayContaining(["Read", "Bash(git diff:*)", "Bash(bun run:*)", "Bash(bun test:*)"]));
     expect(rev.allowedTools.some((t: string) => /^(Edit|Write)/.test(t))).toBe(false);
   });
@@ -75,7 +97,7 @@ describe("a children grant that would have no effect", () => {
   });
 
   test("a planner may spawn a lead, and the lead keeps its own helpers one level down", () => {
-    const by = Object.fromEntries(planProject(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-")))).profiles) as Record<string, any>;
+    const by = setupProfiles(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-")))).specs as Record<string, any>;
     expect(by.planner.children.allowedChildProfiles).toEqual(["worker", "lead", "context-consolidator"]);
     expect(widenings(by.planner, by.lead)).toEqual([]);
     const underPlanner = childLimits(rootLimits(by.planner.children), by.lead.children);

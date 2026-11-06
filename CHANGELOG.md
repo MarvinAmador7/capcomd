@@ -5,6 +5,30 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
+  (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
+  resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
+  version stays 1, and the default stays the default. `agents.json` stays where it is, without the moved profiles and
+  with a note saying where they went; `--keep` leaves it exactly as it was (for teammates on an older capcomd: the
+  profile files win, and `capcomd profiles validate` names each entry they hide), `--dry-run` says what it would write.
+  A profile whose prompt is a single word ending `.md` or `.txt` stays in `agents.json` (a profile file would read it
+  as a file's name), and so does one a profile file already hides; migrate says so.
+- Changed: `capcomd setup project` (and setting a project up from the app) writes its profiles as profile files in
+  `.capcomd/profiles/` (`worker.yaml`, `reviewer.yaml`, `lead.yaml`, `planner.yaml`, `context-consolidator.yaml`, and
+  `codex-worker.yaml` when you chose both agents) instead of `.capcomd/agents.json`. `reviewer`, `lead` and `planner`
+  extend `worker`, so a model or limit you set on the worker is theirs too unless they set their own; the reviewer is
+  tagged `review` and may answer as a report, the planner is tagged `plan`. Every profile it writes now has the
+  project's memory (`context: {providers: [{name: memory}]}`): agents start with the index of `.capcomd/context/`, and
+  a reviewer sees only its facts. A project that already has profiles keeps them (an `agents.json` entry of the same
+  name counts), and a profile that wouldn't work with yours (a lead extending a worker with MCP servers, say) is left
+  out rather than break the others. Each file starts with a comment saying what the profile is for.
+- Changed: `capcomd profiles add <name>` writes `.capcomd/profiles/<name>.yaml` in a project whose profiles are files
+  (a `profiles/` folder and no `agents.json` entries, as `capcomd setup project` and `capcomd profiles migrate` leave
+  it); a project with `agents.json` entries gets another entry, as before. `--default` (on `add` or `set`) moves the
+  default to that profile there too, taking `default: true` off the profile file that had it.
+- Deprecated: `.capcomd/agents.json` (and `~/.capcomd/agents.json`). capcomd keeps reading it for the next two minor
+  releases (0.10 and 0.11); after that `capcomd profiles validate` warns about it, and a later release stops reading
+  it. Move your profiles with `capcomd profiles migrate`.
 - New: project templates on boxd. `capcomd env build --project` builds a snapshot per project with its whole history,
   its setup step (`CAPCOMD_SETUP_COMMAND` in the project's `.capcomd/config.json` `env`, else its lockfile's install)
   and the agent CLIs; every agent's VM then boots from it and gets only what changed since, instead of a clone of the

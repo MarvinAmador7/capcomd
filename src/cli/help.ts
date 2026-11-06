@@ -28,21 +28,27 @@ Usage:
   capcomd env templates [rm --repo URL]  The project templates: age, size, how far behind, the delta an agent gets
   capcomd env status | env rm [name|all] List / delete env snapshots (env, auth, doctor: --sandbox docker|boxd
                                        works on that sandbox instead of CAPCOMD_SANDBOX)
-  capcomd profiles list|show|add|set|rm|schema|validate|install|update|export|trust
-                                       Named agent profiles: .capcomd/agents.json, and profile files
-                                       (profile.yaml) in .capcomd/profiles/ and ~/.capcomd/profiles/ (docs/agents.md).
+  capcomd profiles list|show|add|set|rm|schema|validate|migrate|install|update|export|trust
+                                       Named agent profiles: profile files (<name>.yaml, <name>/profile.yaml)
+                                       in .capcomd/profiles/ and ~/.capcomd/profiles/, and .capcomd/agents.json
+                                       (the old format, still read: docs/agents.md).
                                        show <name>: the files laid together and which one set each value;
                                        schema: a profile file's JSON Schema (schema v1: agents.json's).
                                        set and rm change the file a profile is defined in (its agents.json
                                        entry or its profile file; a profile file's version goes up); add
                                        writes agents.json, or a profile file with --extends P (or a --set
-                                       only a profile file holds, e.g. tags): provider, auth
+                                       only a profile file holds, e.g. tags, or when the project has
+                                       profile files and no agents.json entries): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --effort --max-turns --budget
                                        --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
                                        --append-system-prompt --allowed-tools --disallowed-tools
                                        --description --default --spec JSON --set path=value (limits.maxTurns=40,
                                        tags=a,b) --unset k1,k2 --extends P (add)
+  capcomd profiles migrate [--dry-run] [--keep]
+                                       Move agents.json's profiles into profile files beside it
+                                       (.capcomd/profiles/<name>.yaml), each resolving exactly as before;
+                                       agents.json stays with a note (--keep: as it was, entries and all)
   capcomd profiles install <owner/repo>[#<name>][@<ref>] [--project]
                                        Install a profile package from a git repository (a git URL or a
                                        local repository path works too) into ~/.capcomd/profiles/<name>/

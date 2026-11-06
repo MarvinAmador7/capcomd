@@ -2,13 +2,16 @@
 // every profile the project sees (.capcomd/agents.json, and the v2 ones in .capcomd/profiles/ and ~/.capcomd/profiles/);
 // show prints the files laid together and which one set each value; set and rm change the file a profile is defined in
 // (its agents.json entry or its profile file, ../../profiles/write.ts), add writes agents.json or, for what only a
-// profile file holds (--extends, tags, a title), a profile file. install, update and export move profile packages
-// between a git repository and the profiles here (ADR-024 §2.5, §7 step 7: ../../profiles/install.ts, with a LOCK as a
-// plugin's); trust is the prompt a project's profile skills wait for (decision 4: ../../profiles/trust.ts).
+// profile file holds (--extends, tags, a title) and in a project whose profiles are files, a profile file; migrate
+// moves agents.json's entries into profile files (ADR-024 §7 step 9, ../../profiles/migrate.ts). install, update and
+// export move profile packages between a git repository and the profiles here (ADR-024 §2.5, §7 step 7:
+// ../../profiles/install.ts, with a LOCK as a plugin's); trust is the prompt a project's profile skills wait for
+// (decision 4: ../../profiles/trust.ts).
 // `capcomd agents …` is the same command under its old name, for one minor release.
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { addProfileFile, agentsEntryOf, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile } from "../../profiles";
+import { existsSync } from "node:fs";
+import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -200,8 +203,11 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
     case "add": {
       const n = need();
       const edit = editFromFlags(values);
-      // A profile that needs what agents.json can't hold (extends, tags, a title, …) is added as a profile file.
-      if (values.extends !== undefined || onlyInProfileFile(edit).length) {
+      // A profile that needs what agents.json can't hold (extends, tags, a title, …) is added as a profile file, and so is
+      // any profile of a project whose profiles are files (a profiles/ folder and no agents.json entries: what
+      // `capcomd setup project` and `migrate` leave).
+      const filesHere = existsSync(profileLayers(path)[0]!.dir) && !Object.keys(guard(() => readAgentsFile(path)).agents).length;
+      if (values.extends !== undefined || onlyInProfileFile(edit).length || filesHere) {
         const w = written(() => addProfileFile(n, { ...(values.extends !== undefined ? { extends: values.extends } : {}), ...edit }, { path }), n);
         const isDefault = w.after.default === n;
         out({ name: n, spec: w.after.agents[n], default: isDefault, file: path, path: w.file, version: w.version }, `added ${n}${isDefault ? " (default)" : ""} → ${w.file}`);
@@ -252,12 +258,34 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       out({ removed: n, default: w.after.default ?? null, path: w.file }, `removed ${n} (${w.file})`);
       return 0;
     }
+    case "migrate": {
+      if (name) throw new RelayError("usage", "migrate moves every profile of the agents file", `${cmd} migrate [--dry-run] [--keep]`);
+      let m: ReturnType<typeof migrateProfiles>;
+      try { m = migrateProfiles({ path, keep: !!values.keep, dryRun: !!values["dry-run"] }); } catch (e) {
+        if (!(e instanceof ProfileWriteError)) throw e;
+        throw new RelayError("config", e.message, `${cmd} validate says what is wrong with the files as they are; ${cmd} migrate --dry-run what it would write.`);
+      }
+      const left = m.left.map((x) => `  ${x.name.padEnd(16)} left in ${m.file}: ${x.why}`);
+      const text = !m.migrated.length
+        ? [`Nothing to migrate: ${m.file} ${m.left.length ? "holds only profiles that stay there:" : "has no profiles."}`, ...left].join("\n")
+        : [
+          `${m.dryRun ? "Would move" : "Moved"} ${m.migrated.length} profile${m.migrated.length === 1 ? "" : "s"} from ${m.file} to ${m.dir}, each resolving as before:`,
+          ...m.migrated.map((x) => `  ${x.name.padEnd(16)} → ${x.path}${x.default ? " (the default)" : ""}`),
+          ...left,
+          m.agentsFile === "kept"
+            ? `${m.file} ${m.dryRun ? "would stay" : "stays"} as it was: a profile file wins over its entry of the same name (\`${cmd} validate\` warns about each).`
+            : `${m.file} ${m.dryRun ? "would stay" : "stays"}, without them, with a note saying where they went; capcomd still reads it.`,
+          m.dryRun ? "Nothing was written (--dry-run)." : "Agents already running keep the spec they were spawned with. Commit the new files to share them.",
+        ].join("\n");
+      out({ migration: m }, text);
+      return 0;
+    }
     case "install": return installCommand(pos.slice(2), values, cmd, path);
     case "update": return updateCommand(pos.slice(2), values, cmd, path);
     case "export": return exportCommand(pos.slice(2), values, cmd, path);
     case "trust": return trustCommand(pos.slice(2), values, cmd, path);
   }
-  throw new RelayError("usage", `usage: ${cmd} list|show|add|set|rm|schema|validate|install|update|export|trust`, "");
+  throw new RelayError("usage", `usage: ${cmd} list|show|add|set|rm|schema|validate|migrate|install|update|export|trust`, "");
 }
 
 const short = (sha: string) => sha.slice(0, 12);

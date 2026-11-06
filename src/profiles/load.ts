@@ -101,8 +101,9 @@ export interface ResolvedProfile {
  *  `readAgentsFile(…).agents[name]` reads v2 profiles the same way. */
 export interface ProfileSet extends AgentsFile { profiles: Record<string, ResolvedProfile>; warnings: string[] }
 
-/** The profiles shipped with capcomd, the lowest layer. None yet: `capcomd setup project` writes its four into the
- *  project's agents.json until ADR-024 §7 step 9 ships them here as v2 templates. */
+/** The profiles shipped with capcomd, the lowest layer. None: the ones `capcomd setup project` writes depend on the
+ *  project (its agents, their logins, its check), so they are templates written into the project's profiles/ (ADR-024
+ *  §7 step 9, src/config/project-setup.ts), and a bundled profile needs a harness every user can run. */
 export const BUNDLED_PROFILES: Readonly<Record<string, ProfileDoc>> = {};
 
 /**
@@ -254,7 +255,8 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       const manifest = fromFlat(name, spec);
       return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [], runtime: {} }];
     }));
-    return { ...f, profiles, warnings };
+    const { $comment: _, ...file } = f;
+    return { ...file, profiles, warnings };
   }
 
   // The v1 file: its own checks (but `default`, which may name a v2 profile), then its entries join its layer.
