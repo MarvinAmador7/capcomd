@@ -159,7 +159,9 @@ export function profileFields(p: ResolvedProfile): ProfileField[] {
   for (const v of profileValues(p)) {
     if (BY_ID.has(v.path) || NOT_A_ROW.has(v.path)) continue;
     const r = row({ id: v.path, type: "info", label: v.path, help: "capcomd shows it as the profile's file has it; change it there", unset: "Not set", untrusted: true }, v.value);
-    rows.push({ ...r, value: null, display: shown(v.value) });
+    // An MCP server by its name: its command line may carry a token, and the rows are served to any reading client.
+    const value = v.path === "tools.mcp" && Array.isArray(v.value) ? v.value.map((s) => (s && typeof s === "object" && typeof (s as { name?: unknown }).name === "string" ? (s as { name: string }).name : "?")).join(", ") : v.value;
+    rows.push({ ...r, value: null, display: shown(value) });
   }
   return rows;
 }

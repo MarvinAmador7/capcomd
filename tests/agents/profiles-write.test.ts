@@ -132,7 +132,7 @@ describe("addProfileFile and removeProfile", () => {
 
 describe("profileFields: the rows a client edits", () => {
   test("each value with its type, encoding, display, the file that sets it and whether PUT can change it", () => {
-    const w = world({ "P/lead.yaml": LEAD.replace("description: Leads a part.", "description: Leads a part.\nprompt: { append: Plan first. }\nx-perfloop: { gestures: [scroll] }"), "P/lead/override.yaml": "harness: { effort: low }\n" }, { worker });
+    const w = world({ "P/lead.yaml": LEAD.replace("description: Leads a part.", "description: Leads a part.\nprompt: { append: Plan first. }\nx-perfloop: { gestures: [scroll] }\ntools: { mcp: [{ name: gh, command: [gh-mcp, --token, ghp_secret] }, { name: docs, command: [docs-mcp] }] }"), "P/lead/override.yaml": "harness: { effort: low }\n" }, { worker });
     const lead = w.load().profiles.lead!;
     const f = Object.fromEntries(profileFields(lead).map((r) => [r.id, r]));
     expect(f["limits.maxTurns"]).toEqual({ id: "limits.maxTurns", type: "number", label: "Turns", help: null, value: "40", display: "40 turns", choices: [], source: "profile", from: 1, editable: true, untrusted: false });
@@ -146,6 +146,9 @@ describe("profileFields: the rows a client edits", () => {
     expect(f["prompt.append"]).toMatchObject({ type: "info", value: null, display: "Set (11 characters)", editable: false });
     expect(f["x-perfloop.gestures"]).toMatchObject({ type: "info", label: "x-perfloop.gestures", value: null, display: '["scroll"]', editable: false, untrusted: true });
     expect(JSON.stringify(profileFields(lead))).not.toContain("Plan first");
+    // An MCP server by its name only: its command line may hold a token.
+    expect(f["tools.mcp"]).toMatchObject({ type: "info", value: null, display: "gh, docs", editable: false });
+    expect(JSON.stringify(profileFields(lead))).not.toContain("ghp_secret");
     // PUT's values: an editable row with a value of its type.
     expect(editOf(lead, { "limits.maxTurns": "60", tags: '["a"]', "permissions.report": "false", "harness.model": null })).toEqual({ edit: { "limits.maxTurns": 60, tags: ["a"], "permissions.report": false, "harness.model": null } });
     expect(editOf(lead, { "harness.effort": "high" })).toMatchObject({ field: "harness.effort" });
