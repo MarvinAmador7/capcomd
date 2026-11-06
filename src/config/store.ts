@@ -38,6 +38,19 @@ export interface CapcomdConfig {
    * CAPCOMD_DOCKER_AGENT_MEMORY_MB wins).
    */
   sandboxes?: Record<string, { idleLifetime?: number; agentMemory?: number }>;
+  /**
+   * Triggers (plugin API §16.3; user config only, read by the daemon for each trigger): per source, the actors whose
+   * requests are allowed, the threads opened to anyone's, what a request that doesn't address capcomd does (`mode`:
+   * off, observe (the default: recorded, nothing runs), auto) and the project a run it starts works in.
+   * CAPCOMD_TRIGGERS_FILE names a JSON file of this object instead. See src/triggers/intake.ts.
+   */
+  triggers?: { sources?: Record<string, { allowed?: string[]; opened?: string[]; mode?: "off" | "observe" | "auto"; project?: string }> };
+  /**
+   * Plugin settings by plugin name (plugin API §10.2, src/plugins/config.ts): `enabled`, and the plugin's own keys
+   * (its manifest's config schema), e.g. `{"watchdog": {"enabled": true, "stalledAfterMs": 900000}}`. A project's
+   * .capcomd/config.json, then CAPCOMD_PLUGIN_<NAME>_<KEY>, win.
+   */
+  plugins?: Record<string, Record<string, unknown>>;
 }
 
 export type DriverApprovals = "human" | "elicit" | "client-confirmed";
@@ -69,11 +82,15 @@ export function readConfig(path: string | null): CapcomdConfig {
   try { const v = JSON.parse(readFileSync(path, "utf8")); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
 
-/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key; other keys are replaced). */
+/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key, plugins plugin by plugin and then key
+ *  by key; other keys are replaced). */
 export function mergeConfig(cur: CapcomdConfig, patch: CapcomdConfig): CapcomdConfig {
-  const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) } };
+  const plugins: Record<string, Record<string, unknown>> = { ...(cur.plugins ?? {}) };
+  for (const [name, p] of Object.entries(patch.plugins ?? {})) plugins[name] = { ...(plugins[name] ?? {}), ...p };
+  const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) }, plugins };
   if (!Object.keys(next.env!).length) delete next.env;
   if (!Object.keys(next.run!).length) delete next.run;
+  if (!Object.keys(next.plugins!).length) delete next.plugins;
   return next;
 }
 /** A config file's bytes. */

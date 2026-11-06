@@ -77,11 +77,27 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "project.configured": return "A project was set up.";
 		case "project.git_initialized": return "A git repository was started in a folder.";
 		case "project.published": return "A project was published to GitHub.";
+		// A source's name is [a-z0-9-] (the manifest's pattern) and a run id capcomd's; the source's ids and threads stay in data.
+		case "trigger.received": {
+			const from = typeof d.source === "string" ? `A trigger from ${d.source}` : "A trigger";
+			switch (d.decision) {
+				case "deduped": return `${from} came again; it was already handled.`;
+				case "denied": return `${from} was denied.`;
+				case "recorded": return `${from} was recorded; nothing ran (observe mode).`;
+				case "started": return `${from} started ${d.runId ?? "a run"}.`;
+				case "continued": return `${from} went to ${d.runId ?? "a run"}, which follows its thread.`;
+				case "failed": return `${from} could not start a run.`;
+				default: return `${from} was received.`;
+			}
+		}
+		case "trigger.subscribed": return `${d.runId ?? "A run"} follows a thread from ${d.source ?? "a source"}.`;
+		case "trigger.unsubscribed": return `${d.runId ?? "A run"} no longer follows a thread from ${d.source ?? "a source"}${d.cause === "stopped" ? " (the run was stopped)" : d.cause === "expired" ? " (its time ran out)" : ""}.`;
 		case "plugin.loaded": return "A plugin was loaded.";
 		case "plugin.failed": return "A plugin failed to load.";
 		case "plugin.disposed": return "A plugin was unloaded.";
 		case "plugin.version_refused": return "A plugin doesn't support this capcomd.";
 		case "plugin.duplicate_refused": return "A second plugin of the same name was refused.";
+		case "plugin.config_refused": return `${d.plugin ? `The ${d.plugin} plugin's` : "A plugin's"} settings were refused.`;
 		case "plugin.hook_failed": return "A plugin's hook listener failed.";
 		case "plugin.suspended": return "A plugin's hooks were suspended.";
 		case "plugin.resumed": return "A plugin's hooks were resumed.";

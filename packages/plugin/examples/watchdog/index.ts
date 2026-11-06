@@ -1,7 +1,8 @@
-// Worked example, spec §16.4: a watchdog built only on observe hooks and the jobs primitive's timer. Progress means a
-// checkpoint that changed files or a new kind of tool use; activity alone (steps of the same kind, no checkpoint) is
-// not progress. The kernel's own `spinning` notice (src/agents/stuck.ts) catches repeated identical calls; this
-// plugin catches the slower drift the super-agent essay describes: "the process is still running" but nothing lands.
+// Worked example, spec §16.4: a watchdog built only on observe hooks and the jobs primitive's timer (capcomd's own, with
+// a fuller notion of progress, is src/plugins/watchdog.ts). Progress means a checkpoint that changed files or a new kind
+// of tool use; activity alone (steps of the same kind, no checkpoint) is not progress. The kernel's own `spinning`
+// notice (src/agents/stuck.ts) catches repeated identical calls; this plugin catches the slower drift the super-agent
+// essay describes: "the process is still running" but nothing lands.
 import { definePlugin } from "../../src/index";
 
 interface Config { everyMs: number; stalledAfterMs: number; stopAfterMs: number }
@@ -57,8 +58,8 @@ export const plugin = definePlugin<Config>({
           const detail = `no checkpoint with changes and no new kind of work for ${Math.round(quiet / 60_000)} min`;
           await ctx.agents.notice(w.runId, agentId, { kind: "stalled", detail }, { signal: call.signal });
           await ctx.events.emit({ type: "stalled", stream: w.runId, entity: agentId, text: `Agent ${agentId} looks stalled.`, data: { agentId, quietMs: quiet } }, { signal: call.signal });
-        } else if (now - w.stalledSince >= cfg.stopAfterMs) {
-          await ctx.agents.cancel(w.runId, agentId, `watchdog: stalled for ${Math.round((now - w.stalledSince) / 60_000)} min`, { signal: call.signal });
+        } else if (quiet >= cfg.stopAfterMs) {
+          await ctx.agents.cancel(w.runId, agentId, `watchdog: no progress for ${Math.round(quiet / 60_000)} min`, { signal: call.signal });
           await ctx.events.emit({ type: "stopped", stream: w.runId, entity: agentId, text: `The watchdog stopped agent ${agentId}.`, data: { agentId, stalledMs: now - w.stalledSince } }, { signal: call.signal });
           watched.delete(agentId);
         }

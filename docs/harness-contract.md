@@ -109,6 +109,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `plugins` | GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; GET /v1/plugins/{name} (its manifest and config, never a secret); POST /v1/plugins/{name}/enable and /disable (the configure scope, an Idempotency-Key); plugin.* events on the daemon stream audit the plugin host |
 | `profiles` | GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there |
 | `plugins.protocol` | The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process |
+| `triggers` | Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from |
 
 ## Event envelope
 
@@ -1273,11 +1274,15 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 - [`project.git_initialized`](events.md#projectgit_initialized)
 - [`project.published`](events.md#projectpublished)
 - [`sandbox.resource_deleted`](events.md#sandboxresource_deleted)
+- [`trigger.received`](events.md#triggerreceived)
+- [`trigger.subscribed`](events.md#triggersubscribed)
+- [`trigger.unsubscribed`](events.md#triggerunsubscribed)
 - [`plugin.loaded`](events.md#pluginloaded)
 - [`plugin.failed`](events.md#pluginfailed)
 - [`plugin.disposed`](events.md#plugindisposed)
 - [`plugin.version_refused`](events.md#pluginversion_refused)
 - [`plugin.duplicate_refused`](events.md#pluginduplicate_refused)
+- [`plugin.config_refused`](events.md#pluginconfig_refused)
 - [`plugin.hook_failed`](events.md#pluginhook_failed)
 - [`plugin.suspended`](events.md#pluginsuspended)
 - [`plugin.resumed`](events.md#pluginresumed)

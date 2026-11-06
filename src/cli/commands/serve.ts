@@ -280,11 +280,13 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // Background jobs and timers (§16.2): a plugin's timer is on the daemon's stream; plugins start theirs as they load.
   const J = await import("../../jobs/service");
   J.useDaemonEvents((e) => harnessStore.recordDaemonEvent(e));
+  // Triggers (§16.3): the intake's events are on the daemon's stream too, and its sweep ends subscriptions.
+  (await import("../../triggers/intake")).startTriggers((e) => harnessStore.recordDaemonEvent(e));
   // Out-of-process plugins (§9) connect to a socket of their own, bound now: they open their sessions while they load
   // (§5.5 step 4), before the harness socket opens to clients. It serves the same API, to their tokens only.
   const { pluginSocketPath } = await import("../../api/socket");
   const pluginSock = pluginSocketPath(sock);
-  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath(), jobs: true, process: { socket: pluginSock } });
+  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath(), jobs: true, triggers: true, process: { socket: pluginSock } });
   process.on("exit", () => P.releaseSnapshot());
   const { harnessApp, pluginsOnly } = await import("../../api/server");
   const { rivetSource } = await import("../../api/rivet-source");

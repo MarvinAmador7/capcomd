@@ -284,7 +284,9 @@ In this order; a later manifest with a name already seen is refused with `plugin
    (`capcomd plugins trust <name>`; event `plugin.trusted`), because opening a repository MUST NOT run code on the host.
    A changed hash resets trust.
 
-`plugins.<name>.enabled: false` in config (§10) keeps a discovered plugin at `validated`.
+`plugins.<name>.enabled: false` in config (§10) keeps a discovered plugin at `validated`. A built-in is enabled by
+default except one a person turns on: the watchdog (§16.4) is listed but held at `validated` (`disabled`) until
+`plugins.watchdog.enabled: true`, which `capcomd setup` writes (`src/plugins/builtins.ts` `off`).
 
 ### 4.9 Validation
 
@@ -691,12 +693,14 @@ no `merge.landing`.
 `JobChanged {job, change: started|output{stdout, stderr}|fired{n}|ended{state}}`. Results of background work arrive
 here; timers tick here. 5 s deadline. Fired by `src/jobs/service.ts` in the process that watches the job (the daemon,
 where agents' spools are pumped and timers armed); `output` frames are read only while a plugin listens. `trigger.*`'s
-sites arrive with the intake (step 10).
+sites are the intake's (§16.3.2, `src/triggers/intake.ts`).
 
 #### 6.6.20 `trigger.admitting` · veto · gate · the intake (§16.3), after the kernel's gate, before any action
 `TriggerAdmitting {trigger, gate: {allowed, strength, mode, subscribed}}`. A listener may only **deny**; it cannot
 admit what the gate refused (its result is consulted only when `gate.allowed`). Fail-closed: a failed call denies the
 trigger (recorded, not acted on). For team policies the kernel's allowlist cannot express ("no triggers from forks").
+It is asked only about a trigger the gate allowed (§16.3.2 step 4), with the source plugin as the principal and
+`trigger:<source>/<hash of id>` as the entity of its idempotency key.
 
 #### 6.6.21 `trigger.changed` · observe
 `TriggerChanged {trigger, decision}` with the full `TriggerDecision`. The audit a team reads before leaving
@@ -915,7 +919,14 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
   read-only (`forbidden`). Values ≤ 64 KB.
 - `agents.spawn`: subject to `spawnChecks`, `checkSpawn` and the plugin's budget share as any caller; a plugin cannot
   pass `operator`. `agents.notice`: a plugin may raise kinds the kernel does not (`stalled`) and clear only notices it
-  raised.
+  raised: raising a kernel kind is `forbidden`; a clear (`null`) takes away only a plugin kind, and the kernel's own
+  clear takes away only the kind it raised (the runner's stuck notices, its sandbox outage), so a plugin's notice stays
+  until progress or the plugin clears it. A notice needs a running agent (a later one replaces an earlier one of another
+  kind, as the kernel's do). `agents.cancel` cancels the agent and its descendants as `capcomd cancel` does, the reason
+  recorded as `by the <plugin> plugin: <reason>`. A call never creates a run (an unknown run is `not_found`).
+- In the daemon since §17.2 step 11, beside `jobs` and `storage`: `agents.get`, `agents.tree`, `agents.cancel`,
+  `agents.notice` (`src/plugins/services.ts`). The rest of `agents` answers `unsupported` until a later step; a CLI's
+  local host has none of them.
 - `gates.merge`: no `operator`; a plugin that wants to bypass vetoes cannot (§11.3).
 - `sandboxes.provider(name)`: the kernel's wrapped object (§7.1), never a raw plugin object; a provider plugin asking
   for itself gets the wrapper too.
@@ -1097,14 +1108,21 @@ replace, `null` deletes), as `src/config/store.ts` `applyConfig` and `driverPoli
 
 1. the schema's defaults;
 2. **user**: `~/.capcomd/config.json` `plugins.<name>`;
-3. **project**: `.capcomd/config.json` `plugins.<name>` of the project the daemon serves (or the run's `repo`);
+3. **project**: `.capcomd/config.json` `plugins.<name>` of the project the daemon serves (or the run's `repo`; a
+   later step's, as is layer 5: since §17.2 step 10 a built-in's config has layers 1, 2 and 4, `src/plugins/host.ts`
+   `configured`, and the user layer is off with `CAPCOMD_NO_CONFIG`);
 4. **env**: `CAPCOMD_PLUGIN_<NAME>_<KEY>` (name and key upper-cased, `-` and `.` → `_`; a real environment variable
    wins, as `applyConfig` lets one win today);
 5. **run**: `plugins: {<name>: {…}}` in `POST /v1/runs` or `capcomd run --plugin-config name.key=value`, only for
    `x-per-run` properties; refused (422) otherwise.
 
 Layers 1–4 are read at `resolved` (§5.4) and are what `ctx.config.get()` returns; they change only through
-`disable`/`enable` (§5.4). Layer 5 is run data, not plugin config: the kernel validates it at run creation and stores it
+`disable`/`enable` (§5.4). Since §17.2 step 11 the kernel reads them for its built-ins (`src/plugins/config.ts`): the
+project layer is the `.capcomd/config.json` found from where the process runs, an environment value that parses as JSON
+is that value (`CAPCOMD_PLUGIN_WATCHDOG_STALLEDAFTERMS=600000` is a number), else a string, and it replaces that key's
+value rather than patch it (`CAPCOMD_PLUGIN_SOURCE_SCHEDULE_SCHEDULES='{}'`: no schedules); `CAPCOMD_NO_CONFIG` skips
+the files, not the environment. A secret property (`x-secret`) is never read from a layer yet: its reference is the
+schema's (§10.3). Layer 5 is run data, not plugin config: the kernel validates it at run creation and stores it
 at `ctx.storage` run scope under the key `config` (readable by the plugin, written only by the kernel), so a listener on
 a run-scoped hook reads `await ctx.storage.get({runId}, "config")` for that run's overrides. Decision: `config.get()`
 is a constant for the plugin's life, which keeps every listener a pure function of its call plus one read.
@@ -1127,7 +1145,9 @@ existing keychain entry is mapped to it by the config migration (§17).
 
 Config is validated against the schema at `resolved` (layers 1–4) and at run creation (layer 5). Invalid config is
 `failed(config_invalid)` with `plugin.config_refused {errors: [{path, message}], layer}`; the plugin is **not** run with
-defaults. `capcomd plugins validate` and `GET /v1/plugins/{name}` show the errors. A run-layer error is a 422 on `POST
+defaults. Each layer is checked on its own, so an error names its layer (one event per layer); the kernel checks the
+subset of JSON Schema manifests use (`type`, `enum`, `minimum`/`maximum` and their exclusive forms, `minLength`/
+`maxLength`, `items`, `required`, `properties`, `additionalProperties`); a disabled plugin's settings aren't checked. `capcomd plugins validate` and `GET /v1/plugins/{name}` show the errors. A run-layer error is a 422 on `POST
 /v1/runs` with `field: "plugins.<name>.<path>"`.
 
 ## 11. Security model
@@ -1437,7 +1457,8 @@ sentence from daemon-written fields (agent text escaped as plain text), posts wi
 
 ### 15.5 A watchdog (`watchdog`, in-process)
 
-`examples/watchdog`. §16.4. Observe hooks plus one `timer` job; raises `stalled`, then cancels.
+`examples/watchdog`. §16.4. Observe hooks plus one `timer` job; raises `stalled`, then cancels. capcomd's built-in is
+`src/plugins/watchdog.ts` (§16.4 says what it counts as progress).
 
 ## 16. Super-agent primitives
 
@@ -1630,28 +1651,69 @@ A plugin contributes `sources: [{name, summary}]`, provides `source:<name>`, and
 for each external event, from a webhook route (`ctx.api.route`) or a poll (a `timer` job). It MUST drop its own bot's
 messages and events outside what it listens to before emitting, keep its own read position in `ctx.storage` (a restart
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
-structured context, never used for authorization.
+structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
+the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
+ISO time, `actor {id, display, bot}`, text and data ≤ 64 KB each) and refuses a malformed trigger `invalid` before
+recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+
+Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
+
+- `schedule` (`source-schedule`, `src/plugins/sources/schedule.ts`): its config `schedules: {<name>: {text, everyMs?,
+  at?, until?}}` (§10.2); each schedule is one timer, keyed by its settings (a changed schedule is a new timer, the
+  old one is cancelled; settings changed back to a cancelled timer's start it again under a new key,
+  `src/plugins/sources/timer.ts`), and each fire a trigger `{id: <name>/<jobId>/<n>, thread: schedule:<name>@<fire time>, actor:
+  {id: schedule:<name>, bot: true}, addressed: direct, text}`. Every fire is its own thread, so one night's run never
+  gets the next night's fire as a message. The operator allows the actor (or opens `schedule:*`) like any other.
+- `github` (`forge-github`, `src/plugins/forges/github-source.ts`; no GitHub code in the kernel): the issue and pull
+  request comments of its config's `sourceRepos` (`owner/name`), and of the repositories of the `github` threads runs
+  follow, read every `sourceEveryMs` (60 s) with the user's GitHub login; thread `owner/name#<number>`, id
+  `comment-<id>`, actor the author (`bot` from GitHub's user type), `addressed: mention` when a line starts with the
+  command word (`sourceCommand`, `/capcomd`), or, with `sourceMentions: true` (off by default), when someone else
+  @-mentions the login; `replyTo` the comment's URL. The login is usually the user's own: a mention of it addresses
+  the user, not capcomd, and their comments are theirs, not the bot's: what the source drops as its own is what
+  capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
+  position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
+  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
+  position before it, so the next poll reads it again. The source listens to `job.changed` only when `sourceRepos`
+  names a repository (as `source-schedule` only with a schedule): a listener there makes the daemon read every
+  background job's output (§6.6.19).
 
 #### 16.3.2 The intake
 
-`ctx.triggers.emit` hands the trigger to the kernel's **intake**, which decides in this order and records a
-`trigger.received` event and a `trigger.changed` call with the `TriggerDecision`:
+`ctx.triggers.emit` hands the trigger to the kernel's **intake** (`src/triggers/intake.ts`; the daemon's only: in any other
+process `ctx.triggers` is `unsupported`, as `ctx.jobs` is), which decides in this order and records a `trigger.received`
+event (on the daemon stream), a line of its log (`state/triggers/log.ndjson`, §16.3.4) and a `trigger.changed` call
+with the `TriggerDecision`:
 
 1. **Dedupe**: `(source, id)` seen within 30 days → `deduped`.
 2. **Subscription**: the thread is subscribed by a live run (or one ended < `until`) → the trigger is delivered to that
    run's planner as a message (`continued {runId, seq}`) **if the actor is a person** (bots and CI never resume an
    ended run; they reach a live run as context); no further gate. A person's stop is a message too; the planner decides
-   (the prototype's rule).
+   (the prototype's rule). The planner is the run's `_planner` record, else its top-level agent spawned with the key
+   `planner`; a run with neither (a run driven from outside, or the built-in recipe's) has no one to read it, and the
+   trigger goes on to the gate. The message is `from: trigger:<source>`, its body who wrote on which thread and what
+   (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. A person's trigger
+   on an ended run's thread lands in its planner's inbox; starting the planner again on it is a later step's.
 3. **Gate**: config `triggers.sources.<source>` (kernel-owned, operator-written: `allowed: [actor ids]`,
-   `opened: [thread patterns]`, `mode: off|observe|auto`, `project`). Strength is `explicit` when `addressed` is set and
-   the actor is allowed or the thread is opened; `inferred` otherwise. Not allowed and not inferred-eligible →
-   `denied {by: "allowlist"}`.
-4. **`trigger.admitting`** (§6.6.20): a plugin may deny → `denied {by: "plugin"}`.
+   `opened: [thread patterns]`, `mode: off|observe|auto`, `project`). The trigger is **allowed** when its actor's id is
+   in `allowed` or its thread matches an `opened` pattern (exact, `*` matching any run of characters). Strength is
+   `explicit` when `addressed` is set and it is allowed; `inferred` when it is allowed and not addressed. Not allowed →
+   `denied {by: "allowlist"}` (an allowed, unaddressed trigger is what "inferred-eligible" means). The settings are
+   `triggers` in the user's `~/.capcomd/config.json` (off with `CAPCOMD_NO_CONFIG`), or the JSON file
+   `CAPCOMD_TRIGGERS_FILE` names; they are read again for every trigger. A source with no settings allows nobody
+   and is in `observe`.
+4. **`trigger.admitting`** (§6.6.20): a plugin may deny → `denied {by: "plugin"}`. Asked only about an allowed trigger
+   (the payload's `gate.allowed` is therefore true).
 5. **Mode**: `explicit` → act. `inferred`: `off` → `denied {by: "mode"}`; `observe` → `recorded {wouldHave}` and
    nothing happens; `auto` → act.
-6. **Act**: start a run on the configured project with the trigger's text as the goal (`POST /v1/runs` semantics,
-   `run.creating` fires, the trigger is the run's `source` in `Run`… an additive `Run.trigger` field) → `started`, and
-   subscribe the run to the thread; or, when the thread names an existing goal branch's run, continue it.
+6. **Act**: start a run on the configured project (`project`, a checkout set up with `capcomd setup project`; unset,
+   the daemon's own repository) with the trigger's text as the goal (`POST /v1/runs` semantics: `run.creating` fires,
+   with the source plugin as the principal; harness.v1's additive `Run.trigger {source, id, thread, actor, at}`, under
+   the capability `triggers`) → `started`, and subscribe the run to the thread. `recorded.wouldHave` is `start` in
+   this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
+   §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
+   reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
+   trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`.
 
 What the intake does **not** do: judge content. The model-side assessment the prototype's "Eval" performs is the
 planner's job once a run exists (it reads the trigger as its goal and may decide there is nothing to do, ending with a
@@ -1668,23 +1730,31 @@ prototype's rule). A trigger plugin cannot widen them: `trigger.admitting` can o
 
 `mode` defaults to `observe`. A new source therefore starts by recording: every inferred trigger produces
 `recorded {wouldHave}` in `trigger.received`, which `capcomd triggers log` and the app list, and nothing runs until the
-operator sets `auto`. Explicit, addressed requests from allowed people work in every mode.
+operator sets `auto`. Explicit, addressed requests from allowed people work in every mode. `capcomd triggers log
+[--source S] [--limit N] [--json]` lists the intake's log (oldest first: when, source, actor, thread, the decision and
+the gate's finding, the text's first 300 characters, redacted), and `capcomd triggers subscriptions [runId]` the
+threads runs follow, from the daemon's state on this machine (the daemon need not run).
 
 #### 16.3.5 Subscriptions and lifetimes
 
 `ctx.triggers.subscribe {runId, source, thread, until?}`; the intake subscribes a started run to its thread
 automatically. Default `until` = 14 days after the run ends; the host expires them (`trigger.unsubscribed {cause:
 expired}`). A stopped run (`run.ended {state: cancelled}` by a person) unsubscribes at once (`stopped`). Sources poll
-subscribed threads while a subscription is live.
+subscribed threads while a subscription is live. `TriggerSubscription.until` is null while the run works and nobody set
+one (the run's end is not known yet); a subscriber's own `until` ends it then, whatever the run does. "Stopped" is a
+run-wide cancel (the lifecycle's `run.cancelled` with cause `cancelled`: the operator's Stop); a run that no longer
+exists expires its subscriptions. The daemon checks them on every trigger, on every `subscriptions` call and on a sweep
+(every `CAPCOMD_TRIGGERS_SWEEP_MS`, 1 min), which also drops dedupe marks past 30 days. Subscribing is idempotent; a
+second call may change `until`. A subscription's run must exist (`not_found`).
 
 #### 16.3.6 Mapping onto today's intake
 
 | Today | With triggers |
 |---|---|
-| `POST /v1/runs` from the app, `capcomd run`, `capcomd_run_new` | an **explicit** trigger from source `operator`/`driver` that skips the gate: the same `runNew` path; `run.creating` fires either way |
-| a person replying in the app (messages) | source `app`, always allowed |
+| `POST /v1/runs` from the app, `capcomd run`, `capcomd_run_new` | an **explicit** trigger from source `operator`/`driver` that skips the gate: the same `runNew` path; `run.creating` fires either way (step 10 leaves these paths as they are: they don't pass through the intake yet) |
+| a person replying in the app (messages) | source `app`, always allowed (likewise unchanged in step 10) |
 | GitHub comments, CI, Slack, schedules | source plugins (`github`, `slack`, `schedule`: a timer job that emits) |
-| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread, so review comments reach the planner |
+| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread, so review comments reach the planner (a later step: step 10's `github` source already reads the threads runs follow) |
 
 ### 16.4 A watchdog
 
@@ -1700,6 +1770,35 @@ that something landed), `notice`, and the agent's `activity` line in `Agent`. Th
 the plugin does, and `capcomd setup` enables the built-in `watchdog` with conservative defaults (15 min to `stalled`,
 45 min to cancel). Raising an ask is the `stalled` notice (the app shows the amber hand; a planner sees it on its child)
 and, through §16.5, one message to the person only when the watchdog stops an agent.
+
+The built-in (`src/plugins/watchdog.ts`, §17.2 step 11) is in the daemon only and off until `plugins.watchdog.enabled:
+true` (§4.8), which `capcomd setup` (its `service` part) writes in the user's config unless the user set it false or
+passed `--no-watchdog`; `capcomd setup check` says whether it is on. Its config: `stalledAfterMs` (default 900 000),
+`stopAfterMs` (default 2 700 000; 0 never stops; otherwise more than `stalledAfterMs`, else the plugin fails to
+activate), both counted from the agent's last progress, and `everyMs` (default 60 000), how often it looks. Its
+definition of progress:
+
+- the agent's files changed (`checkpointed`: the supervisor reports a checkpoint only for a new tree), or an agent
+  under it did;
+- an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
+- a background job (`job.changed`), a verification it asked for (`verify.changed`, its principal) or an approval it
+  waits on (`approval.changed`) ended.
+
+Tool calls (`step`) and the activity line are not progress. While it, or an agent under it, waits on a job, a
+verification or an approval, or is paused, its clock doesn't run. An agent with agents of its own running is judged
+through them: they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and
+the planner can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it
+confirms the agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in
+`detail`) or cancels (`agents.cancel`, then `plugin.watchdog.stopped {agentId, quietMs, stalledAt}` on the run's
+stream: the one message). Progress clears its notice; a notice that went some other way is raised again while the agent
+stays quiet, but never over a notice of the kernel's (`idle`, `spinning`, `failing`, …) while that one shows: the stop
+still comes. An agent whose work never shows as files changing isn't judged at all: a reviewer (`contract.review`), a
+report-only agent (`contract.report`) and an orchestrate agent (`toolMode: orchestrate`) are never checkpointed, so the
+watchdog can't see their progress (the kernel's own notices still watch their process); the built-in asks the kernel
+once per agent, when the agent is first due (`src/plugins/services.ts` `showsFileChanges`, a kernel helper outside
+`ctx`, as `skill-orchestration` reads the kernel's record). What it knows of each agent is in its daemon storage
+(`agents/<runId>/<agentId>`), with the time of its last look (`clock`): after a restart the time the daemon was down is
+added to every agent's clock, so downtime never counts as an agent's quiet.
 
 ### 16.5 The attention budget
 
@@ -1800,7 +1899,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
 | 1.0.21 | 2026-11-06 | With the context router (ADR-025 step 1): a `context` contribution (§4.7: `contributes.context: [{name, kinds}]`, `provides: context:<name>` in §4.6, `ctx.context.register`, a 23rd service and 78th primitive in §8.1; all additive), the term context provider (§2), its conformance suite (§14.2) and `testkit.conformance.context` (§14.5); `PinnedSpec.context` (additive); the kernel's context router as the agent.preparing listener that composes a profile's providers into the brief (§6.6.7); §11.5: `fence()` neutralises every `<<<…>>>`, and the brief is the one place untrusted text is the basis of attention from system-role text, and what fences it. |
 | 1.0.22 | 2026-11-06 | With the out-of-process runtime (§17.2 step 9): `failed(restart_limit)` holds the plugin's listeners, so its gates deny until it is enabled or disabled (§5.4, §9.5); the process's log lines are redacted of its own secrets as well as its token (§9.2); a `process` manifest's `contributes.context` is refused too (§4.9; ADR-025's providers are in process); the routes are in the committed contract and the draft fragment is gone (§9.9; `plugins.protocol`, additive); the plugin socket beside the harness socket, plugin tokens only (§9.2); the process's own process group, stdin held open, a leftover process from a dead daemon stopped (§9.2); the token in the daemon's memory only, revoked when the process is gone (§9.3); listeners registered at the first session and kept through restarts, a call made while the process is down waiting within its deadline (§9.3, §9.5); a secret that resolves to nothing left out until config layering (§9.3); frames redacted (§9.4); `events.emit` over the wire needs `steer` like in process, so the Slack example takes `steer` (§9.6, §15.4); `ctx.storage` implemented (both runtimes, the daemon's host) and the emit route's keys the plugin's (§9.6); no stream open, SIGTERM at once (§9.7); the client library `connect` ships (§9.8); `enable`/`disable` for the daemon's life, built-ins not disabled by the API (§9.9); a `process` manifest contributes hooks and events only (§4.9), so a third-party plugin has no command (§4.7.1); user plugins discovered (§4.8). |
-| 1.0.23 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
+| 1.0.23 | 2026-11-06 | With triggers (§17.2 step 10, §16.3): the intake's gate defined exactly (allowed: an allowed actor or an opened thread, `*` patterns; explicit: allowed and addressed; inferred: allowed and not addressed; not allowed: denied), its settings (`triggers.sources` in the user's config or `CAPCOMD_TRIGGERS_FILE`, read per trigger), `trigger.admitting` asked only about an allowed trigger, the planner a continued trigger reaches (and a run with none going on to the gate), a start that fails (logged `failed`, `decision: "failed"` on `trigger.received`, the emit rejecting, the trigger free to come again), `wouldHave` only `start` for now, `Run.trigger` and the capability `triggers` (additive), `TriggerSubscription.until` and `trigger.subscribed`'s `until` null while the run works, what stops a subscription, the sweep, `capcomd triggers log` and `subscriptions`; the built-in `schedule` source and forge-github's `github` source (§16.3.1: an @-mention of the login addresses capcomd only with `sourceMentions`, a retryable refusal is read again, a cancelled timer's settings start a new one); a built-in's config from the user layer and `CAPCOMD_PLUGIN_<NAME>_<KEY>` (§10.2); today's run and message paths don't pass through the intake yet, and a run's pull-request thread subscription is a later step (§16.3.6). |
+| 1.0.24 | 2026-11-06 | With the watchdog (§17.2 step 11): the built-in `watchdog`, off until `plugins.watchdog.enabled: true`, which `capcomd setup` writes (§4.8); its config, its definition of progress (files changed, an agent under it spawned or ended, a job, verification or approval it waited on ended; never tool calls), waiting holding its clock, an agent judged through the agents under it, a reviewer, a report-only and an orchestrate agent not judged (their work is never checkpointed), `stalled` never raised over the kernel's own notice, `stopAfterMs` counted from the last progress like `stalledAfterMs`, its memory across a restart (§16.4; the worked example's `stopAfterMs` now means the same). Config layers 1–4 read for the built-ins, the schema subset checked, one `plugin.config_refused` per layer (a harness.v1 daemon event, additive), secret properties not read from layers yet (§10.2, §10.4). In the daemon: `agents.get`, `agents.tree`, `agents.cancel` and `agents.notice`; a plugin raises and clears only its own notice kinds and the kernel's clear only the kind it raised (§8.4). |
+| 1.0.25 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

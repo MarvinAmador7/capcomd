@@ -17,6 +17,26 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   well-formed fields, unique ids, reciprocal supersession without cycles, no secrets, and an `index.md` that matches the
   items (`--fix` writes it). `--base <ref>` also refuses a changed id or a deleted item; `--run <runId>` checks that the
   verifies and merges an item cites are that run's. Problems exit 1, each naming its file.
+- New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
+  a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
+  `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`
+  allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
+  (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
+  starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
+  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
+  there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
+  `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
+  `capcomd triggers subscriptions` the threads runs follow; the daemon stream has `trigger.received`,
+  `trigger.subscribed` and `trigger.unsubscribed`, and a started run's `trigger` says where it came from (capability
+  `triggers`). Schedules: `"plugins": {"source-schedule": {"schedules": {"nightly": {"text": "update the
+  dependencies", "everyMs": 86400000}}}}` (or `at` for once), allowed as `schedule:nightly`. GitHub comments:
+  `"plugins": {"forge-github": {"sourceRepos": ["acme/app"]}}`, read every minute with your GitHub login (comments
+  from before you set it are not read; an @-mention of that login addresses you, not capcomd, unless you set
+  `"sourceMentions": true` for a login that is capcomd's own account). Plugins can add their own sources (`ctx.triggers`) and turn a trigger down
+  (the `trigger.admitting` hook).
+- New: built-in plugins take settings from `~/.capcomd/config.json` (`"plugins": {"<name>": {…}}`, and
+  `"enabled": false` to turn one off) or from `CAPCOMD_PLUGIN_<NAME>_<KEY>` environment variables.
 - New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
   `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
   its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
@@ -58,6 +78,25 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agents still get it once. See docs/agents.md, "Skills in a profile".
 - The skills an agent gets when it starts (the orchestration skill, a plugin's) are now each in a `<skill name="…">`
   block in its instructions, as a message's skills are; their text is unchanged.
+- New: a watchdog for agents that keep busy but get nowhere. It watches the work, not the process: an agent whose
+  files haven't changed for 15 minutes, and that hasn't spawned or heard back from an agent of its own or finished a
+  background job, check or approval it was waiting on, gets a "stalled" notice (the amber hand in the app; its parent
+  agent sees it too), and after 45 minutes without progress it is stopped, with one line on the run's stream saying
+  so. Tool calls alone don't count as progress; waiting on a job, a check, an approval or a usage limit doesn't count
+  against it; a planner is judged through the agents it started, so a stuck worker is stopped rather than its planner.
+  Reviewers, report-only agents (`--report`) and orchestrate agents, whose work never changes files, aren't judged by
+  it, and it doesn't put "stalled" over capcomd's own "idle", "spinning" or "failing" notice.
+  It is off until you turn it on: `capcomd setup service` (and the full `capcomd setup`) turns it on unless you pass
+  `--no-watchdog` or turned it off yourself; `capcomd setup check` says whether it is on, and when its settings
+  would keep it from loading. Tune it in
+  `~/.capcomd/config.json`: `"plugins": {"watchdog": {"stalledAfterMs": 900000, "stopAfterMs": 2700000}}` (`"enabled":
+  false` turns it off; `stopAfterMs: 0` never stops an agent), then restart the engine.
+- New: plugin settings live in `plugins.<name>` of `~/.capcomd/config.json` and a project's `.capcomd/config.json`, or
+  in `CAPCOMD_PLUGIN_<NAME>_<KEY>` environment variables; `"enabled": false` turns a plugin off. Settings its schema
+  refuses keep the plugin from loading (`capcomd plugins list` shows it failed with `config_invalid`) and are recorded
+  as a `plugin.config_refused` event naming each bad setting.
+- Fix: capcomd clearing its own "idle", "spinning" or "failing" notice on an agent no longer takes away a different
+  notice a plugin raised on it.
 - New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
   `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd profiles list|show`, which also
   give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether
