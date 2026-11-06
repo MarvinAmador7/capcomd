@@ -26,6 +26,7 @@ import { briefItems, inlineTask, pushText, triggered, type BriefItem } from "./e
 import { actionsFromLogs, admissions, decidedLimits, spendFromSpans, startingLimits, summarize, type Metrics, type Row } from "./eval-context/report";
 import { checkCommand, FAKE_EXPECTED, parseVerdict, suite, type Chain, type Step, type Verdict } from "./eval-context/tasks";
 import { generateWorld, repoFiles, worldHash } from "./eval-context/world";
+import { reapUnder } from "./reap";
 
 const { values: a } = parseArgs({
   options: {
@@ -103,7 +104,9 @@ const common: Record<string, string> = {
   CAPCOMD_HOME: HOME, CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}`, CAPCOMD_AGENTS_FILE: agentsFile, CAPCOMD_NO_CONFIG: "1",
   CAPCOMD_NO_ENGINE_AUTOSTART: "1", CAPCOMD_NO_DEPRECATION_WARNINGS: "1", CAPCOMD_TRACE_DIR: join(WORK, "traces"), CAPCOMD_WORKDIR: join(WORK, "merge-work"),
   CAPCOMD_MERGE_MODE: "direct", CAPCOMD_MERGE_STRATEGY: "squash", CAPCOMD_TEST_COMMAND: "", GIT_SSH_COMMAND: "false",
-  ...(LIVE ? { CAPCOMD_SANDBOX: a.sandbox ?? "boxd" } : {
+  // No project templates (boxd snapshots of 8 GB or more): every chain's repository is new, so each would get its own
+  // build and snapshot, none deleted, and a template appearing mid-run would change how later agents' checkouts start.
+  ...(LIVE ? { CAPCOMD_SANDBOX: a.sandbox ?? "boxd", CAPCOMD_PROJECT_TEMPLATES: process.env.CAPCOMD_PROJECT_TEMPLATES ?? "off" } : {
     CAPCOMD_SANDBOX: "fake-host", CAPCOMD_AGENT_CLAUDE_BIN: fakeBin, CAPCOMD_AGENT_WORKDIR: join(WORK, "vm"), CAPCOMD_AGENT_POLL_MS: "200",
     CAPCOMD_VM_RPC_POLL_MS: "200", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_ENV: "image", ANTHROPIC_API_KEY: "sk-ant-api03-EVALCONTEXT-abcdefghijklmnopqrstuvwxyz0123",
     CAPCOMD_AUTH_LEDGER: join(WORK, "auths.json"), CAPCOMD_ENV_LEDGER: join(WORK, "envs.json"),
@@ -119,20 +122,10 @@ const engine = spawn(process.execPath, [CLI, "serve", "--port", String(PORT)], {
 const stopAll = () => { if (engine.pid) { try { process.kill(-engine.pid, "SIGTERM"); } catch {} } };
 // The engine is detached (its own process group): whatever way this process ends, the engine doesn't outlive it.
 process.on("exit", stopAll);
-// Whatever still runs from the scratch folder (the engine's rivet-engine, a fake agent), by its path; not this process
-// or its parent, whose command line names the folder too when --work does.
-const reap = () => {
-  const ps = spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" }).stdout ?? "";
-  for (const l of ps.split("\n")) {
-    const m = /^\s*(\d+)\s+(.*)$/.exec(l);
-    if (!m || !m[2]!.includes(`${WORK}/`) || [process.pid, process.ppid].includes(Number(m[1]))) continue;
-    try { process.kill(Number(m[1]), "SIGKILL"); } catch {}
-  }
-};
 const cleanup = async () => {
   stopAll();
   await new Promise((r) => setTimeout(r, 3000));
-  reap();
+  reapUnder(WORK);
   if (!a.keep) rmSync(WORK, { recursive: true, force: true });
   else log(`kept ${WORK}`);
 };

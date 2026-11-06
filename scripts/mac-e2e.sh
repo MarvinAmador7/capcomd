@@ -40,6 +40,9 @@ gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="credential.https://github.com.helper" GIT_CONFIG_VALUE_0='!gh auth git-credential'
 
 export CAPCOMD_SANDBOX=boxd
+# No project template for the throwaway repository: it would be a boxd snapshot (8 GB or more) that nothing deletes.
+# Templates have their own tests; CAPCOMD_PROJECT_TEMPLATES=auto runs this with one.
+export CAPCOMD_PROJECT_TEMPLATES="${CAPCOMD_PROJECT_TEMPLATES:-off}"
 export CAPCOMD_AGENT="$AGENT"
 export CAPCOMD_REPO="https://github.com/$REPO.git"
 export CAPCOMD_GITHUB_REPO="$REPO"

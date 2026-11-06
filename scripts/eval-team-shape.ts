@@ -16,6 +16,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, read
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { reapUnder } from "./reap";
 
 const { values: a } = parseArgs({
   options: {
@@ -146,7 +147,7 @@ const probe = spawnSync("bun", [join(ROOT, "tests", "helpers", "ready-probe.ts")
 if (probe.status !== 0) {
   stopAll();
   await new Promise((r) => setTimeout(r, 3000));
-  spawnSync("sh", ["-c", `ps -axo pid=,command= | grep -F ${JSON.stringify(WORK)} | grep -v grep | awk -v me=$$ '$1 != me {print $1}' | xargs kill -9 2>/dev/null || true`]);
+  reapUnder(WORK);
   if (!a.keep) rmSync(WORK, { recursive: true, force: true });
   throw new Error(`engine not ready: ${probe.stderr}`);
 }
@@ -196,8 +197,9 @@ report(WORK);
 // ── 7. cleanup ───────────────────────────────────────────────────────────────────────────────────
 stopAll();
 await new Promise((r) => setTimeout(r, 3000));
-// The engine's own child (rivet-engine) and any scripted agent still running, by their scratch paths.
-spawnSync("sh", ["-c", `ps -axo pid=,command= | grep -F ${JSON.stringify(WORK)} | grep -v grep | awk -v me=$$ '$1 != me {print $1}' | xargs kill -9 2>/dev/null || true`]);
+// The engine's own child (rivet-engine) and any scripted agent still running, by their scratch paths (not this process,
+// whose command line names the folder too when --work does).
+reapUnder(WORK);
 if (!a.keep) rmSync(WORK, { recursive: true, force: true });
 else log(`kept ${WORK}`);
 process.exit(0);
