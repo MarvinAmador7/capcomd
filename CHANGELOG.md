@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- A Codex agent whose stream reconnected mid-turn ("Reconnecting... 1/5 (stream disconnected before completion)") and
+  then finished is no longer marked failed with its work dropped: an error Codex recovers from is not the run's error.
+  A failed turn, or an error the stream ends on, still fails it. Checked against Codex 0.166 as well as 0.163.
+- A verify whose reviewer couldn't be run because capcomd's engine didn't answer one of the reviewer gate's calls no
+  longer fails at once as if the reviewer had said no: the gate tries again within the verify's deadline (4 tries;
+  `CAPCOMD_REVIEW_INFRA_TRIES`), and the reviewer's verdict decides. When it still can't, the verify fails with "the
+  reviewer couldn't be run: <the error>" and `result.review.retryable: true` (no verdict was given: verify again),
+  instead of "review failed: An internal error occurred".
+- Errors from capcomd's engine now carry their own text everywhere (CLI, MCP tools, the harness API, a verify's
+  record, agent failures) instead of "An internal error occurred", with code `internal` for a failure inside the
+  engine as opposed to a refusal.
+- `scripts/eval-team-shape.ts` keeps the engine's log (`engine.log`) in its scratch folder, for `--keep`.
 - New: `capcomd check <runId> [<branch|agt>]` runs the run's checks on that branch's commit as it is (default: the
   run's target, so the combined code after its merges), in a fresh sandbox like `capcomd verify`, and prints the full
   output and pass or fail. It merges, integrates and reviews nothing. Pick one of the run's named checks with

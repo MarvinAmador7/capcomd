@@ -134,7 +134,8 @@ testkit.conformance.agent(() => claude, { name: "claude", streams: [
   { name: "claude-2.1.303-usage-limit", text: stream("claude-2.1.303-usage-limit.jsonl"), outcome: { ok: false } },
 ] });
 testkit.conformance.agent(() => codex, { name: "codex", streams: [
-  { name: "codex-0.163.0", text: stream("codex-0.163.0.jsonl"), state: { done: true, inputTokens: 1000, outputTokens: 150 } },
+  { name: "codex-0.163.0", text: stream("codex-0.163.0.jsonl"), state: { done: true, inputTokens: 1000, outputTokens: 150 }, outcome: { ok: true, stopReason: "success" } },
+  { name: "codex-0.166.0", text: stream("codex-0.166.0.jsonl"), state: { done: true, turns: 1 }, outcome: { ok: true, stopReason: "success" } },
   { name: "codex-0.163.0-turn-failed", text: stream("codex-0.163.0-turn-failed.jsonl"), exitCode: 1, outcome: { ok: false, stopReason: "turn_failed" } },
 ] });
 
@@ -181,14 +182,39 @@ describe("conformance: the recorded streams through parse and outcome (§7.3, §
     const all = replay(codex, "codex-0.163.0.jsonl");
     expect(all.events.every((e) => e !== null)).toBe(true);
     expect(all.state).toMatchObject({ done: true, inputTokens: 1000, outputTokens: 150, stopReason: "success" });
-    // The recording has a stream reconnect ("error" event) mid-turn, which the provider counts as the run's error.
-    expect(all.state.error).toContain("Reconnecting");
-    const state = fresh();
-    for (const l of all.lines.filter((l) => !l.startsWith('{"type":"error"'))) codex.parse(l, (s) => s, state, { credentialMode: "auto" });
-    expect(codex.outcome(state, 0)).toEqual({ ok: true, stopReason: "success" });
+    // The recording has a stream reconnect ("error" event) mid-turn; the turn then completed, so the run succeeded.
+    expect(all.state.error).toBeUndefined();
+    expect(codex.outcome(all.state, 0)).toEqual({ ok: true, stopReason: "success" });
+    expect(all.events.find((e) => e?.type === "error")?.text).toContain("Reconnecting");
     const failed = replay(codex, "codex-0.163.0-turn-failed.jsonl");
     expect(failed.state.quota?.message).toContain("usage limit");
     expect(codex.outcome(failed.state, 1)).toEqual({ ok: false, stopReason: "turn_failed" });
+    const v166 = replay(codex, "codex-0.166.0.jsonl");
+    expect(v166.events.every((e) => e !== null)).toBe(true);
+    expect(v166.state).toMatchObject({ done: true, turns: 1, inputTokens: 37293, outputTokens: 46, resultText: "ok" });
+    expect(codex.outcome(v166.state, 0)).toEqual({ ok: true, stopReason: "success" });
+  });
+
+  test("codex: a reconnect the turn recovers from is not a failure; a final error or a failed turn still is", () => {
+    const run = (...events: object[]) => {
+      const state = fresh();
+      for (const e of events) codex.parse(JSON.stringify(e), (s) => s, state, { credentialMode: "auto" });
+      return { state, out: codex.outcome(state, 0) };
+    };
+    const started = [{ type: "thread.started", thread_id: "t" }, { type: "turn.started" }];
+    const reconnect = { type: "error", message: "Reconnecting... 1/5 (stream disconnected before completion)" };
+    const completed = { type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5 } };
+    const recovered = run(...started, reconnect, { type: "error", message: "Reconnecting... waiting for network" }, completed);
+    expect(recovered.out).toEqual({ ok: true, stopReason: "success" });
+    expect([recovered.state.error, recovered.state.done]).toEqual([undefined, true]);
+    // An error the stream ends on (codex gave up) fails the run, with its text.
+    const gaveUp = run(...started, reconnect, { type: "error", message: "exceeded retry limit, last status: 503" });
+    expect(gaveUp.out).toEqual({ ok: false, stopReason: "error" });
+    expect(gaveUp.state.error).toBe("exceeded retry limit, last status: 503");
+    // A critical error: codex prints it as `error`, then fails the turn. A turn.failed stays final.
+    const critical = run(...started, { type: "error", message: "boom" }, { type: "turn.failed", error: { message: "boom" } }, { type: "error", message: "Reconnecting... 1/5" }, completed);
+    expect(critical.out).toEqual({ ok: false, stopReason: "turn_failed" });
+    expect(critical.state.error).toBe("boom");
   });
 
   test("parse passes every string through the redact it is given, and a credential's key hides its value", () => {

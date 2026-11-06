@@ -2,7 +2,7 @@
 // src/agents/adapters.ts codexAdapter and the codex rows of the PROVIDER_* tables; the kernel's runner reads it through
 // the seam (src/plugins/agents.ts).
 import { definePlugin } from "../../packages/plugin/src/context";
-import type { AgentEvent, AgentProvider } from "../../packages/plugin/src/seams";
+import type { AgentEvent, AgentProvider, AgentRunState } from "../../packages/plugin/src/seams";
 import { agentManifest, classifyAgentError, ORCHESTRATE_DENIED_COMMANDS, parseJson, toolCall } from "./agent-common";
 
 /** Pinned version, installed only when the VM image/snapshot does not already have the CLI. */
@@ -31,7 +31,11 @@ export function codexResetAt(message: string, now = Date.now()): number | undefi
   return at < now - 60_000 ? at + 86_400_000 : at;
 }
 
-const CODEX_TOOL_ITEMS = new Set(["command_execution", "file_change", "mcp_tool_call", "web_search"]);
+/** codex's own field on the run's state: the event that set `error`. An "error" event's is cleared by a later
+ *  turn.completed (the CLI retried and recovered); a "turn.failed" is final. */
+type CodexRunState = AgentRunState & { errorFrom?: "error" | "turn.failed" };
+
+const CODEX_TOOL_ITEMS =new Set(["command_execution", "file_change", "mcp_tool_call", "web_search"]);
 
 const DESCRIPTION = {
   name: "codex", label: "Codex", bin: "codex", npmPackage: "@openai/codex", pinnedVersion: CODEX_VERSION,
@@ -108,6 +112,7 @@ export const codex: AgentProvider = {
       }
       if (item.type === "agent_message" && typeof item.text === "string") { ev.text = item.text.slice(0, 500); if (type === "item.completed") state.resultText = item.text; }
     }
+    const s = state as CodexRunState;
     if (type === "turn.completed") {
       const u = raw.usage ?? {};
       state.inputTokens += Number(u.input_tokens ?? 0);
@@ -115,9 +120,15 @@ export const codex: AgentProvider = {
       const rate = cfg.usdPerMtok ?? { in: 1.25, out: 10 };
       state.costUsd = (state.inputTokens * rate.in + state.outputTokens * rate.out) / 1e6;
       state.done = true;
-      state.stopReason = "success";
+      // codex exec ends a turn that hit a critical error with turn.failed, never turn.completed, so an `error` event
+      // before a turn.completed was a stream error it retried and recovered from ("Reconnecting... 1/5 (stream
+      // disconnected before completion)", "Reconnecting... waiting for network"): the run succeeded and keeps its work.
+      if (s.errorFrom === "error") { delete state.error; delete state.quota; delete s.errorFrom; }
+      if (s.errorFrom !== "turn.failed") state.stopReason = "success";
     }
-    if (type === "turn.failed" || type === "error") {
+    // A turn.failed is final: a later `error` event or turn.completed doesn't replace or clear it.
+    if (type === "turn.failed" || (type === "error" && s.errorFrom !== "turn.failed")) {
+      s.errorFrom = type;
       state.error = String(raw.error?.message ?? raw.message ?? type).slice(0, 300);
       // A usage limit isn't retried by codex (retryable errors read "Reconnecting…", "exceeded retry limit…").
       if (CODEX_USAGE_LIMIT.test(state.error.trim())) {
@@ -125,8 +136,8 @@ export const codex: AgentProvider = {
         state.quota = { message: state.error, ...(reset ? { resetAt: reset } : {}) };
       }
       state.stopReason = type === "error" ? "error" : "turn_failed";
-      ev.text = state.error;
     }
+    if (type === "turn.failed" || type === "error") ev.text = String(raw.error?.message ?? raw.message ?? type).slice(0, 300);
     return ev;
   },
   // ChatGPT-plan login: `codex login --device-auth` writes $CODEX_HOME/auth.json when

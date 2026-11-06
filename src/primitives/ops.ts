@@ -34,6 +34,7 @@ import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
 import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import type { PluginHold } from "../merge/types";
+import { isInternalActorError } from "../utils/actor-errors";
 export { startDriver };
 
 /** An agent's worker for one attempt: each resume (epoch) gets a fresh worker, so a new VM and a new push. */
@@ -715,8 +716,9 @@ async function engineOutage(s: any, agentId: string, driver: string, seen: Engin
       return missed || seen.instance === undefined || now !== seen.instance ? "restarted" : "same";
     } catch (e) {
       // The scope's own refusal (a UserError) is an answer; anything else (connection refused or reset, an internal
-      // error while the engine starts) is the engine not answering.
-      if ((e as any)?.group === "user") return missed ? "restarted" : "same";
+      // error while the engine starts, an action's failure crossing as a UserError marked internal) is the engine not
+      // answering.
+      if ((e as any)?.group === "user" && !isInternalActorError(e)) return missed ? "restarted" : "same";
       missed = true;
       if (Date.now() > until) return "down";
       await sleep(1000);
@@ -1483,7 +1485,7 @@ export function reviewerSpec(profile: string): Record<string, any> | null {
 }
 
 /** A verification's review (its `review` field): what the judge that ran the run's reviewer reported (§6.6.13). */
-interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string }
+interface Review { profile: string; agentId: string | null; passed: boolean; reasons: string[]; error?: string; retryable?: boolean }
 
 /**
  * Whether a review read what the checks tested: the same agent commit, put on the same target commit (when the checks
@@ -1507,7 +1509,7 @@ function reviewOfJudges(profile: string | undefined, judges: { passed: boolean; 
   if (!r) return judges && !judges.passed ? null : { review: { profile, agentId: null, passed: false, reasons: [], error: "no judge ran the reviewer: the gate-reviewer plugin isn't active (`capcomd plugins list`)" }, startedAt: null };
   const startedAt = r.startedAt ? Date.parse(r.startedAt) : null;
   if (!reviewFits(r, tested)) return { review: { profile, agentId: r.agentId, passed: false, reasons: [], error: "the review read another tree than the checks tested" }, startedAt };
-  return { review: { profile: r.profile, agentId: r.agentId, passed: r.passed, reasons: r.reasons, ...(r.error ? { error: r.error } : {}) }, startedAt };
+  return { review: { profile: r.profile, agentId: r.agentId, passed: r.passed, reasons: r.reasons, ...(r.error ? { error: r.error } : {}), ...(r.retryable ? { retryable: true } : {}) }, startedAt };
 }
 
 /** Review-mode agents a judge started for this verification (contract.review.vfyId) that are still running when it

@@ -119,3 +119,26 @@ test("a configuration problem on the engine side crosses with its message (code 
   expect(ok).toMatchObject({ workerId: "agt-cfg", state: "idle" });
   await w.drainWorker({ workerId: "agt-cfg" });
 }, 60_000);
+
+test("any other failure of an actor action crosses with its own text, not as \"An internal error occurred\"", async () => {
+  const { client } = await import("../../src/core/relay");
+  const { isInternalActorError } = await import("../../src/utils/actor-errors");
+  const runId = `run-err${Date.now().toString(36)}`;
+  const r: any = client().run.getOrCreate([runId]);
+  // A traced action and a read (get…), each failing in its own code (here: called without its parameters).
+  for (const call of [() => r.createRun(undefined), () => r.getRun(undefined)]) {
+    let e: any = null;
+    try { await call(); } catch (x) { e = x; }
+    expect(e).not.toBeNull();
+    expect(String(e.message)).not.toContain("An internal error occurred");
+    expect(String(e.message)).toMatch(/undefined|not an object|runId/);
+    // Not the actor's own refusal: a caller that tells the two apart still can.
+    expect(e.code).toBe("internal");
+    expect(isInternalActorError(e)).toBe(true);
+  }
+  // An actor's refusal is unchanged.
+  let refused: any = null;
+  try { await client().scope.getOrCreate([runId]).claimDriver({ agentId: "agt-none", driver: "d", ttlMs: 1000 }); } catch (x) { refused = x; }
+  expect([refused?.group, refused?.code]).toEqual(["user", "not_found"]);
+  expect(isInternalActorError(refused)).toBe(false);
+}, 60_000);
