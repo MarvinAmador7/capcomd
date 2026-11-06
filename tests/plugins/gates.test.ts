@@ -124,10 +124,13 @@ describe("the reviewer gate (§15.3)", () => {
   test("outside the daemon a verify starts the built-in gates first (§6.1); the daemon's own wait for its host", async () => {
     expect(hooks.listening("verify.judging")).toBe(false);
     await gates();
-    expect(hooks.order("verify.judging")).toEqual(["gate-reviewer"]);
+    // context-memory's lint as a check (ADR-025 §5.3) judges first: a branch that changes the project's memory wrongly
+    // fails before a reviewer is asked.
+    expect(hooks.order("verify.judging")).toEqual(["context-memory", "gate-reviewer"]);
     expect(hooks.listening("verify.starting")).toBe(true);
-    // Nothing else listens in such a process (no daemon-stream observers, no landing gates).
-    for (const h of ["run.changed", "agent.spawning", "merge.landing", "verify.changed"] as const) expect(hooks.listening(h)).toBe(false);
+    // Nothing else listens in such a process (no daemon-stream observers); the landing gate is context-memory's.
+    for (const h of ["run.changed", "agent.spawning", "verify.changed"] as const) expect(hooks.listening(h)).toBe(false);
+    expect(hooks.order("merge.landing")).toEqual(["context-memory"]);
     useHooks(null);
     expect(hooks.listening("verify.judging")).toBe(false);
   });

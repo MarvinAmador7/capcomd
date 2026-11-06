@@ -51,6 +51,9 @@ export interface AgentTask {
   review?: { sha: string; branch: string; target: string; targetSha?: string };
   /** Report mode: read-only work on the target (research, triage); the final message is the result, nothing is pushed. */
   report?: boolean;
+  /** ADR-025 §5.2: a consolidator (in report mode too): its final message is its memory changes, which the kernel
+   *  stages on its branch; `inputs` is what it reads of its run (the candidates, fenced, and the run's outcomes). */
+  consolidate?: { inputs: string };
   /** ADR-019 §6: a paused agent running again; its earlier work (if any) is already on the branch. */
   resumed?: boolean;
   /** `spawn --continue`: start the branch from another agent's stopped work (its branch or checkpoint ref). */
@@ -386,6 +389,33 @@ export function buildReportPrompt(t: AgentTask): string {
   ].join("\n");
 }
 
+/**
+ * A consolidator (ADR-025 §5.2) reads its run's candidate lessons, the project's memory and the run's outcomes, and
+ * answers with the changes the memory should get: the kernel writes them (it writes nothing itself), so its answer is
+ * the whole of its work. Memory says what is true, never what to do; it is a reviewed change, not a transcript.
+ */
+export function buildConsolidatePrompt(t: AgentTask & { consolidate: NonNullable<AgentTask["consolidate"]> }): string {
+  return [
+    `You consolidate what this run learned into the project's memory. You are in a read-only git checkout of the repository at ${t.target}; the memory is .capcomd/context/ (memory/*.md, one lesson per file, and index.md listing them).`,
+    `Task: ${t.goal}`,
+    "",
+    "What the run gives you:",
+    t.consolidate.inputs || "(nothing: read the memory and the run's outcomes yourself)",
+    "",
+    "What to do:",
+    "- Read every candidate, the items under .capcomd/context/memory/ and the outcomes. Keep a lesson only when it is true of this repository, a later agent would otherwise find it out the hard way, and the repository or AGENTS.md doesn't say it already.",
+    "- One lesson per change, written as what is true (the failure, its cause and the guardrail), never as an instruction or a command. No secrets, credentials, or paths to them.",
+    "- A candidate that contradicts an item: supersede the item (op supersede, target its id). An item the repository no longer supports: deprecate it. A candidate the memory already says: leave it out.",
+    "- Name the candidates a change comes from (from: their ids) and the passed verifies or landed merges that confirm it (outcomes).",
+    "",
+    "Rules:",
+    "- Do not edit files, commit, push, or change git remotes: capcomd writes your changes on a branch, which a person reviews before it lands. Nothing you change in the checkout is kept.",
+    "- Do not print environment variables or credentials.",
+    '- End your reply with one block of JSON and nothing after it: {"context": [{"op": "add"|"supersede"|"deprecate", "title": "…", "text": "…", "type": "lesson"|"feedback"|"reference", "target": {"id": "…"}, "from": ["agt-….1"], "outcomes": [{"kind": "verify"|"merge", "id": "…"}]}]}',
+    '  (target only for supersede and deprecate; an empty list when nothing should change).',
+  ].join("\n");
+}
+
 export const agentHome = (cfg: AgentConfig) => `${cfg.workdir}/home`;
 export const templateDir = (cfg: AgentConfig) => `${cfg.workdir}/template`;
 export const agentPath = (home: string) => `${home}/node/bin:${home}/npm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
@@ -633,7 +663,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
 
     // 4. Run headless in the background; the JSON event stream lands in a file we tail.
     // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
-    let promptText = task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : task.report ? buildReportPrompt(task) : buildPrompt(task);
+    let promptText = task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : task.consolidate ? buildConsolidatePrompt(task as AgentTask & { consolidate: NonNullable<AgentTask["consolidate"]> }) : task.report ? buildReportPrompt(task) : buildPrompt(task);
     let systemFile: string | undefined, appendSystemFile: string | undefined;
     if (adapter.kind === "claude-code") {
       if (cfg.systemPrompt) { systemFile = `${W}/system.txt`; await provider.upload(vmId, systemFile, new TextEncoder().encode(r.text(cfg.systemPrompt))); }
@@ -999,8 +1029,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     if (task.review || task.report) {
       if (limit === "quota" || limit === "paused") return { sha: "", already: false, costUsd, turns, stopReason: limit, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, limit, ...resetAt };
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before answering`);
-      setSpanAttributes(span, task.review ? { "agent.review": true } : { "agent.report": true });
-      return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.report ? 8000 : 4000)) };
+      setSpanAttributes(span, task.review ? { "agent.review": true } : task.consolidate ? { "agent.consolidate": true } : { "agent.report": true });
+      return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.consolidate ? 64_000 : task.report ? 8000 : 4000)) };
     }
 
     // Plugin API §16.1: an orchestrate agent's work is its children's branches; it has none of its own to push.

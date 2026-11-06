@@ -93,9 +93,9 @@ export interface Limits {
 
 export function startingLimits(model: string): Limits {
   return {
-    schema: "capcomd.context-limits/v1", model, briefBytes: 25_600, indexLines: 200, descriptionChars: 150, itemBytes: 4096, proposalsPerRun: null, inlineItems: 1,
+    schema: "capcomd.context-limits/v1", model, briefBytes: 25_600, indexLines: 200, descriptionChars: 150, itemBytes: 4096, proposalsPerRun: 20, inlineItems: 1,
     measured: false,
-    source: "ADR-025 D4 starting values (Claude Code's 25 KB / 200-line memory index, ReasoningBank's k = 1; descriptionChars from the one-line index entries of that index). itemBytes is 4 KiB since capture (step 2): one lesson with its failure and its guardrail, half of a result's 8 KB of data; proposalsPerRun is set by the step that adds consolidation (3). Not yet measured: the step-0 baselines have no index arm.",
+    source: "ADR-025 D4 starting values (Claude Code's 25 KB / 200-line memory index, ReasoningBank's k = 1; descriptionChars from the one-line index entries of that index). itemBytes is 4 KiB since capture (step 2): one lesson with its failure and its guardrail, half of a result's 8 KB of data; proposalsPerRun is 20 since consolidation (step 3): the most lessons a run keeps as candidates and the most changes its consolidator stages, so the one hold a person reads stays readable (ADR-025 §8). Not yet measured: the step-0 baselines have no index arm.",
     evidence: [],
   };
 }

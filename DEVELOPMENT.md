@@ -81,7 +81,10 @@ src/
                   files mirror); limits.ts, the brief's budgets (limits.gen.ts: the eval's docs/evidence/context/
                   <model>/limits.json, regenerated with `bun scripts/gen-context-limits.ts`); providers.ts, the active
                   providers by name; capture.ts, the candidates an agent's result.data.context makes; scan.ts, the
-                  seeded secret scan that refuses (capture and lint); lint.ts, `capcomd context lint` and index.md
+                  seeded secret scan that refuses (capture and lint); lint.ts, `capcomd context lint` and index.md;
+                  consolidate.ts, how a consolidator's answer is staged as files (pure); consolidator.ts, its kernel
+                  side (its inputs, its model, the commit on its branch); promotion.ts, what the gates judge of a
+                  branch that changes .capcomd/context/
   cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
                   front door's registration, front-doors.ts); groups/, the kernel's commands by group; flags.ts, help.ts;
                   commands/, what they call
@@ -104,7 +107,8 @@ src/
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), skill-orchestration.ts, the orchestration
                   skill as an agent.preparing patch, context.ts, the context router's listeners (the brief, capture)
-                  and `capcomd context`, and context-memory.ts, the `memory` context provider: every process loads them
+                  and `capcomd context`, and context-memory.ts, the `memory` context provider and the gates that keep
+                  it (verify.judging, merge.landing): every process loads them
                   (host.ts `localHost`);
                   sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
                   setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an

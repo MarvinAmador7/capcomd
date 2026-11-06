@@ -173,7 +173,7 @@ describe("POST /v1/projects", () => {
 		expect(ProjectSetupResult.parse(r.body)).toEqual(r.body);
 		expect(r.body).toEqual({ project: { path: viaApi, root: viaApi, name: "app", configured: true, values: { repo: "https://github.com/acme/app.git", mode: "direct", target: "capcomd/staging", check: "bun run test", agents: ["claude", "codex"], budgetUsd: null } }, changed: true });
 		for (const f of ["config.json", "agents.json"]) expect(read(join(viaApi, ".capcomd", f))).toBe(read(join(viaCli, ".capcomd", f)));
-		expect(JSON.parse(read(join(viaApi, ".capcomd", "agents.json"))).agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead"]);
+		expect(JSON.parse(read(join(viaApi, ".capcomd", "agents.json"))).agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead", "context-consolidator"]);
 		// capcomd's project list (the user config under CAPCOMD_HOME): the first project is the default.
 		expect(JSON.parse(read(join(w.env.CAPCOMD_HOME, "config.json"))).projects).toEqual({ list: [{ name: "app", path: viaApi }], default: "app" });
 	});
@@ -202,7 +202,7 @@ describe("POST /v1/projects", () => {
 		expect(cfg).toEqual({ env: { CAPCOMD_SANDBOX: "docker", CAPCOMD_REPO: "https://github.com/acme/app.git", CAPCOMD_MERGE_MODE: "pr", CAPCOMD_MERGE_TARGET: "main", CAPCOMD_GITHUB_REPO: "acme/app" }, driver: { approvals: "elicit" }, run: { reviewer: "reviewer" } });
 		const agents = JSON.parse(read(join(co, ".capcomd", "agents.json"))).agents;
 		expect(agents.worker.model).toBe("claude-opus-5-5");
-		expect(Object.keys(agents)).toEqual(["worker", "reviewer", "lead", "planner"]);
+		expect(Object.keys(agents)).toEqual(["worker", "reviewer", "lead", "context-consolidator", "planner"]);
 		const again = await w.post(answers(co, { mode: "pr", check: "" }));
 		expect(again.body.changed).toBe(false);
 		expect(w.state.daemonEvents().length).toBe(1);

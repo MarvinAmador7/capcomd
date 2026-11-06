@@ -618,6 +618,19 @@ run reads it), with `plugin.context.proposed` per candidate and `plugin.context.
 stream. Nothing reaches a shared layer. The listener never throws (a failure is logged): three failed calls would
 suspend the plugin's `agent.preparing` listener with it (§6.5).
 
+An agent of the `context-consolidator` profile (ADR-025 §5.2) isn't captured: its answer (its `context` list, in its
+declared result's `data`, else in a JSON block of its final message) is a list of changes to the project's memory,
+which the kernel stages on its branch before it records the agent's end (`ops.settlePushed`,
+`src/context/consolidator.ts`): `.capcomd/context/` at the run's target, changed by plain rules and no model
+(`src/context/consolidate.ts`: an `add` titled as an active memory item becomes a supersede of it, one the lexical match
+finds said already adds nothing, every string scanned as a candidate's is, `proposalsPerRun` changes at most, each new
+item a draft with kernel-stamped provenance, `index.md` as lint writes it), committed and pushed on the host; its
+result carries the `branch`, the `commit` and `context` (what was applied and refused). It runs as a reporting agent
+does (a read-only checkout of the target, nothing of it kept), with the run's candidates and its verifies and merges in
+its prompt, fenced as their agents' text; its profile naming no model, it runs on the run's strongest (the most capable,
+by `src/config/models.ts`, of the models the run's agents on its provider use). The `context` plugin's listener then
+records `plugin.context.staged` (the branch, the commit, each change) and a `plugin.context.refused` per refused change.
+
 #### 6.6.9 `agent.item` · observe · the runner, as it drains the thread (`putItems`)
 `AgentItem {agent: {id, runId, profile}, item: ThreadItem}`, untrusted. The only turn and tool-call surface capcomd can
 offer (ADR-023 §5.3): the host sees tool calls after the fact and cannot block them. High volume: 5 s deadline, bounded
@@ -653,6 +666,15 @@ review timings) and keeps "both must pass for the same tree" (`reviewFits`): a r
 without a review (no reviewer gate active) fails closed. Review-mode agents a judge spawned for it (their contract's
 `review.vfyId`) that still run when it finishes are stopped by the kernel.
 
+The built-in `context-memory` is a judge too (ADR-025 §5.3, "lint as a check"): for an agent's branch whose
+`tested.commit` changes `.capcomd/context/` (against its merge base with `tested.targetSha`), it denies when the agent
+isn't a consolidator (`memory lands only from a consolidator or a person`), when a consolidator's branch changes a file
+outside that directory, and when `capcomd context lint` fails on the directory at `tested.commit` against the merge
+base (`src/context/promotion.ts`); a branch that touches nothing there, or isn't an agent's, is allowed unread. It is
+built in and loaded in every process (§6.1), and it judges before the reviewer gate (§6.3, by name), so a memory change
+that can't land costs no review. It reads the branch in a clone of the run's repository it keeps (a host repo,
+§11.7).
+
 #### 6.6.14 `verify.changed` · observe
 `VerifyChanged {verification, change: started|checked{passed, where, excerpt}|judged{by, passed, reasons}|finished{passed}}`.
 `judged` is told once per judge plugin asked (until the first deny) and once for the run's reviewer (`by`
@@ -678,6 +700,13 @@ listener is asked (`askAll`), and the first veto that isn't an approved hold sto
 it, a new hold parks it again). An approval of anything else (a protected target's) satisfies no hold. A person's deny
 of a held merge ends its verifier record `failed`. A dry run (no repository) has no lock and lands nothing, and fires
 no `merge.landing`.
+
+Promotion is a merge (ADR-025 §5.3): the built-in `context-memory` listens here, fail-closed, judging the agent's commit
+(its result's `commit`) as its `verify.judging` judge does (§6.6.13), and denies what that judge would. A consolidator's
+branch that passes is held for a person under its profile's `context.review: human` (the default), with what changes
+and what lint flags for a reader (an item that reads like an instruction, a stale or large one) in the reason and
+`holdId` `memory@<commit, 12 characters>`, so an approval holds for that commit only; under `review: lint` it is allowed
+on the lint alone. `merge --operator` lands a branch it denied, recorded as bypassing it (§6.5).
 
 #### 6.6.16 `merge.changed` · observe
 `MergeChanged {merge, change: requested|landed{sha, pr, bypassedVetoes[]}|failed{reason}|parked{approvalId}}`.
@@ -1905,6 +1934,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.24 | 2026-11-06 | With the watchdog (§17.2 step 11): the built-in `watchdog`, off until `plugins.watchdog.enabled: true`, which `capcomd setup` writes (§4.8); its config, its definition of progress (files changed, an agent under it spawned or ended, a job, verification or approval it waited on ended; never tool calls), waiting holding its clock, an agent judged through the agents under it, a reviewer, a report-only and an orchestrate agent not judged (their work is never checkpointed), `stalled` never raised over the kernel's own notice, `stopAfterMs` counted from the last progress like `stalledAfterMs`, its memory across a restart (§16.4; the worked example's `stopAfterMs` now means the same). Config layers 1–4 read for the built-ins, the schema subset checked, one `plugin.config_refused` per layer (a harness.v1 daemon event, additive), secret properties not read from layers yet (§10.2, §10.4). In the daemon: `agents.get`, `agents.tree`, `agents.cancel` and `agents.notice`; a plugin raises and clears only its own notice kinds and the kernel's clear only the kind it raised (§8.4). |
 | 1.0.25 | 2026-11-06 | With ADR-024's writes (its §7 step 6): the `configure` scope's profile writes (§11.1) are `PUT /v1/profiles/{name}` (capability `profiles.edit`; additive, with `GET /v1/profiles/{name}` and the daemon-stream event `profile.changed`); `ctx.profiles` gains no write method yet. A write changes the profile's own file and bumps its `version`; what an agent pinned at spawn (`profileVersion`, §6.6.7) is unchanged. |
 | 1.0.26 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
+| 1.0.27 | 2026-11-06 | With consolidation and promotion as a merge (ADR-025 step 3): an agent of the `context-consolidator` profile isn't captured; the kernel stages its answer on its branch before recording its end, runs it as a reporting agent with the run's candidates and outcomes in its prompt, and on the run's strongest model when its profile names none (§6.6.8); `plugin.context.staged` on the run's stream (additive); the built-in `context-memory` is a `verify.judging` judge (lint as a check, before the reviewer gate) and a `merge.landing` gate (deny for a branch of any agent but a consolidator that changes `.capcomd/context/`, or one that fails lint; `hold` for a consolidator's under `context.review: human`, the default; allow under `lint`) (§6.6.13, §6.6.15). Both listen in every process, so a verify asks a judge and a merge fires `merge.landing` where none did before. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
