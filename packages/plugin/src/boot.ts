@@ -71,10 +71,11 @@ async function freePortBlock(): Promise<number> {
 }
 
 /** The caller's environment without anything capcomd (or its engine) reads, so the daemon can't reach the developer's
- *  own daemon, home, config, logins or sandboxes. */
-function cleanEnv(): Record<string, string> {
+ *  own daemon, home, config, logins or sandboxes; nor git's GIT_* (a test run from a git hook has GIT_DIR, GIT_WORK_TREE
+ *  or GIT_INDEX_FILE set, and every git the daemon and the CLI run would act on the developer's repository). */
+export function cleanEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(CAPCOMD_|RELAY_|RIVET_|RIVETKIT_|BOXD_)/.test(k) && !["GITHUB_TOKEN", "GH_TOKEN"].includes(k)) out[k] = v;
+  for (const [k, v] of Object.entries(env)) if (v !== undefined && !/^(CAPCOMD_|RELAY_|RIVET_|RIVETKIT_|BOXD_|GIT_)/.test(k) && !["GITHUB_TOKEN", "GH_TOKEN"].includes(k)) out[k] = v;
   return out;
 }
 

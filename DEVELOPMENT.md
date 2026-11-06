@@ -330,10 +330,10 @@ CI builds releases (`.github/workflows/release.yml`); [AGENTS.md](AGENTS.md) has
 the changelog, what never to do by hand). By hand, before tagging:
 
 1. In a `release: vX.Y.Z` commit, bump `version` in `package.json`, in both plugin manifests under
-   `plugins/capcomd/` and in `packages/plugin/package.json` (`@capcomd/plugin` is released with capcomd); in `CHANGELOG.md`, rename `## Unreleased` to
-   `## X.Y.Z (YYYY-MM-DD)` and add a new empty `## Unreleased` above it (CI checks both stay in step:
-   `bun scripts/release-notes.ts --check`). `bun scripts/release-notes.ts vX.Y.Z` prints the release notes, or why
-   it can't.
+   `plugins/capcomd/` and in `packages/plugin/package.json` (`@capcomd/plugin` is released with capcomd); in
+   `CHANGELOG.md`, rename `## Unreleased` to `## X.Y.Z (YYYY-MM-DD)` and add a new empty `## Unreleased` above it
+   (CI checks both stay in step: `bun scripts/release-notes.ts --check`). `bun scripts/release-notes.ts vX.Y.Z`
+   prints the release notes, or why it can't.
 2. Run the live e2e (`scripts/mac-subagents-e2e.sh`, `E2E PASS`); CI can't (it needs boxd, GitHub and agent logins).
    Optionally `bun pm pack && scripts/release-smoke.sh capcomd-X.Y.Z.tgz X.Y.Z`, and
    `bun scripts/build-binary.ts && scripts/release-smoke.sh dist/capcomd-<os>-<arch> X.Y.Z` (the install checks CI runs).

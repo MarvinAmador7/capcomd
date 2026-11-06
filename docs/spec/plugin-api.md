@@ -1510,8 +1510,9 @@ user-visible output (dsh's rule, research §2.10; `tests/scenarios/` already wor
 prefix; else `CAPCOMD_TESTKIT_BIN`, else `capcomd` on the `PATH`), so a published package boots whichever capcomd the
 plugin's author installed. The daemon gets a home of its own (a temp directory: engine data, both sockets, its clients,
 state), `CAPCOMD_NO_CONFIG`, the fake sandbox, scripted agents with the profiles `planner`, `worker` and `reviewer`
-(`opts.profiles` replaces them), a free engine port block, and none of the caller's `CAPCOMD_*`, `RIVET*`, `BOXD_*`,
-`GITHUB_TOKEN` or `GH_TOKEN`. Each plugin is a directory, validated (§4.9) first and linked as the user's
+(`opts.profiles` replaces them), a free engine port block, and none of the caller's `CAPCOMD_*`, `RELAY_*`, `RIVET*`,
+`BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN` or `GIT_*` (a test run from a git hook has `GIT_DIR` and the like set: the daemon's
+git would act on the developer's repository). Each plugin is a directory, validated (§4.9) first and linked as the user's
 (`<home>/plugins/<name>`, §4.8 step 2): a plugin is a program out of process (§5.2), so there is no in-memory form.
 `opts.config` becomes `CAPCOMD_PLUGIN_<NAME>_<KEY>` (§10.2; a secret's value is its reference, its variable in
 `opts.env`). It waits for `GET /v1/health`, then for each plugin to be `active` (a `failed` one, or one held at

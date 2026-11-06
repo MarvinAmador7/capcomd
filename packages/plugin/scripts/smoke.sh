@@ -28,7 +28,6 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOOK_NAMES, PLUGIN_PROTOCOL_VERSION, PluginError, PluginManifest, definePlugin, satisfies, sessionOpen } from "@capcomd/plugin";
 import { connect } from "@capcomd/plugin/client";
@@ -58,7 +57,7 @@ await fake.dispose();
 
 // connect() without the daemon's environment refuses; with it, it speaks the protocol over the socket (node:http).
 assert.throws(() => connect({}), PluginError);
-const dir = mkdtempSync(join(tmpdir(), "cps-"));
+const dir = mkdtempSync(join(process.cwd(), "cps-"));   // in the project, which the script removes
 writeFileSync(join(dir, "plugin.json"), JSON.stringify({ contributes: { hooks: { "merge.landing": {} } } }));
 const seen = [];
 const call = { callId: "call_1", hook: "merge.landing", mode: "veto", payloadVersion: 1, idempotencyKey: "k", deadline: new Date(Date.now() + 10_000).toISOString(),

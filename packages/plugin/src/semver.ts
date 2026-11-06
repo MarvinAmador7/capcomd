@@ -88,7 +88,8 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 {
     if (t === undefined) return 1;
     if (s === t) continue;
     const sn = /^\d+$/.test(s), tn = /^\d+$/.test(t);
-    if (sn && tn) return sign(Number(s) - Number(t));
+    // Numbers by value (`00` is `0`, as Bun has it): equal ones go on to the next identifier.
+    if (sn && tn) { if (Number(s) !== Number(t)) return sign(Number(s) - Number(t)); continue; }
     if (sn !== tn) return sn ? -1 : 1;
     return s < t ? -1 : 1;
   }

@@ -68,6 +68,13 @@ describe("pack's pieces", () => {
     expect(withExtensions(`import { a } from "./hooks";\nexport * from "./host";\nimport type { b } from "../x.js";\ntype T = import("./seams").Forge;\nimport { z } from "zod";`, src))
       .toBe(`import { a } from "./hooks.js";\nexport * from "./host/index.js";\nimport type { b } from "../x.js";\ntype T = import("./seams.js").Forge;\nimport { z } from "zod";`);
   });
+  test("pack refuses a package version other than capcomd's, and builds nothing (§14.6)", async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "capcomd-plugin-pack-refused-"));
+    try {
+      await expect(pack(elsewhere, "0.0.1")).rejects.toThrow(/packages\/plugin\/package\.json is .* and capcomd 0\.0\.1: they are released together/);
+      expect(readdirSync(elsewhere)).toEqual([]);
+    } finally { rmSync(elsewhere, { recursive: true, force: true }); }
+  });
   test("publishedManifest keeps the identity and dependencies, never the workspace's private flag or scripts", () => {
     const m = publishedManifest({ name: "@capcomd/plugin", version: "0.0.0", private: true, scripts: { test: "bun test" }, dependencies: { zod: "^4" } }, "1.2.3");
     expect(m).toMatchObject({ name: "@capcomd/plugin", version: "1.2.3", dependencies: { zod: "^4" } });

@@ -11,7 +11,8 @@ import { parseArgs } from "node:util";
 
 const root = join(import.meta.dir, "..");
 const repo = join(root, "..", "..");
-const fail = (m: string): never => { console.error(`pack: ${m}`); process.exit(1); };
+// A refusal throws (the tests call `pack`); run as a script, it is printed and the exit code is 1.
+const fail = (m: string): never => { throw new Error(`pack: ${m}`); };
 const run = (argv: string[], cwd: string) => {
   const p = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe" });
   if (p.exitCode !== 0) fail(`${argv.join(" ")} failed:\n${p.stdout.toString()}${p.stderr.toString()}`);
@@ -58,9 +59,9 @@ function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => { const p = join(dir, n); return statSync(p).isDirectory() ? walk(p) : [p]; });
 }
 
-export async function pack(out: string): Promise<string> {
+/** `capcomd` is capcomd's version (default: the repository's package.json), which the package's must be. */
+export async function pack(out: string, capcomd: string = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).version): Promise<string> {
   const ws = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  const capcomd = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).version as string;
   if (ws.version !== capcomd) fail(`packages/plugin/package.json is ${ws.version} and capcomd ${capcomd}: they are released together (bump both in the release commit)`);
   const stage = join(out, "package");
   rmSync(stage, { recursive: true, force: true });
@@ -91,5 +92,6 @@ export async function pack(out: string): Promise<string> {
 
 if (import.meta.main) {
   const { values } = parseArgs({ options: { out: { type: "string" } } });
-  console.log(await pack(resolve(values.out ?? join(root, "dist"))));
+  try { console.log(await pack(resolve(values.out ?? join(root, "dist")))); }
+  catch (e) { console.error((e as Error).message); process.exit(1); }
 }
