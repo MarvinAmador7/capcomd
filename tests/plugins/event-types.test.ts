@@ -1,6 +1,6 @@
 // One pattern for event types (packages/plugin/src/event-type.ts; docs/spec/plugin-api.md §4.2): every kernel type in
 // the contract matches it, every type the manifest allows a plugin to emit matches it, and every published copy of it
-// (the envelope schema, openapi/capcomd.json and its menu bar copy, the manifest JSON Schema, the protocol fragment)
+// (the envelope schema, openapi/capcomd.json and its menu bar copy, the manifest JSON Schema, the protocol's emit body)
 // is that one pattern. A manifest naming an event that wouldn't make a valid type is refused at validate, and the
 // kernel's plugin event writer only writes a plugin's own types. The run stream end to end:
 // tests/scenarios/plugin-events.test.ts.
@@ -21,7 +21,7 @@ import { pluginEventWriter } from "../../src/plugins/host";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const json = (p: string) => JSON.parse(readFileSync(join(ROOT, p), "utf8"));
-const fragment = json("openapi/drafts/plugin-api.fragment.json");
+const openapi = json("openapi/capcomd.json");
 // The kernel's naming rule for its own types (decision 9), as tests/api/legacy-events.test.ts states it.
 const PAST = /(ed|done|sent|put|kept)$/;
 const NOUNS = new Set(["agent.step", "sandbox.resource_action"]);
@@ -32,7 +32,6 @@ describe("every kernel event type matches the one pattern", () => {
     ...SCOPE_EVENT_TYPES.map((t) => ["SCOPE_EVENT_TYPES (dotted)", dottedType(t)] as [string, string]),
     ...LIFECYCLE_TYPES.map((t) => ["LIFECYCLE_TYPES", t] as [string, string]),
     ...PLUGIN_EVENT_TYPES.map((t) => ["packages/plugin events.ts", t] as [string, string]),
-    ...Object.keys(fragment["x-events"]).map((t) => ["fragment x-events", t] as [string, string]),
   ];
   test.each(kernel)("%s: %s", (_where, t) => {
     expect(isEventType(t)).toBe(true);
@@ -41,8 +40,10 @@ describe("every kernel event type matches the one pattern", () => {
     if (!NOUNS.has(t)) expect(t.split(".").at(-1)!).toMatch(PAST);
   });
 
-  test("the host's plugin events and the fragment's x-events are the same list", () => {
-    expect(Object.keys(fragment["x-events"]).sort()).toEqual(PLUGIN_EVENT_TYPES.filter((t) => t.startsWith("plugin.")).sort());
+  test("the host's plugin events in the contract are the ones packages/plugin lists, and only those not written yet are missing", () => {
+    const inContract = Object.keys(EventData).filter((t) => t.startsWith("plugin."));
+    for (const t of inContract) expect(PLUGIN_EVENT_TYPES as readonly string[]).toContain(t);
+    expect(PLUGIN_EVENT_TYPES.filter((t) => t.startsWith("plugin.") && !inContract.includes(t)).sort()).toEqual(["plugin.hook_deprecated", "plugin.trusted"]);
     for (const old of ["plugin.config_invalid", "plugin.deprecation", "plugin.process"]) expect(PLUGIN_EVENT_TYPES as readonly string[]).not.toContain(old);
   });
 });
@@ -103,11 +104,11 @@ describe("every published copy is the one pattern", () => {
       for (const p of envelopes) expect(p).toBe(EVENT_TYPE_PATTERN);
     }
   });
-  test("the manifest JSON Schema and the protocol fragment's emit body", () => {
+  test("the manifest JSON Schema and the protocol's emit body in the contract", () => {
     const schema = json("packages/plugin/schema/plugin-manifest.schema.json");
     expect(schema.properties.name.pattern).toBe(PLUGIN_NAME_PATTERN);
     expect(schema.properties.contributes.properties.events.items.pattern).toBe(EVENT_NAME_PATTERN);
-    expect(fragment.components.schemas.EmitBody.properties.type.pattern).toBe(EVENT_NAME_PATTERN);
+    expect(openapi.paths["/v1/plugins/{name}/events"].post.requestBody.content["application/json"].schema.properties.type.pattern).toBe(EVENT_NAME_PATTERN);
   });
 });
 

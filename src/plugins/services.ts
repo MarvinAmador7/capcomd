@@ -1,16 +1,13 @@
 // The kernel's primitives for a plugin in the daemon (docs/spec/plugin-api.md §8.1), beyond `ctx.jobs`
-// (src/jobs/service.ts): `ctx.agents` (`get`, `tree`, `cancel`, `notice`) and `ctx.storage` at daemon scope. Each is
-// the kernel's own path (src/primitives/ops.ts, the scope actor), with the plugin as the caller; the host has already
-// checked the plugin's scopes (packages/plugin/src/host/context.ts). Errors reach the plugin as PluginErrors (§8.3).
-// What isn't here (`agents.spawn`, `await`, `grant`, `title`, storage at run scope, …) answers `unsupported` until a
-// later step implements it.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import type { AgentsService, StorageService } from "../../packages/plugin/src/context";
+// (src/jobs/service.ts) and `ctx.storage` (src/plugins/storage.ts): `ctx.agents` (`get`, `tree`, `cancel`, `notice`).
+// Each is the kernel's own path (src/primitives/ops.ts, the scope actor), with the plugin as the caller; the host has
+// already checked the plugin's scopes (packages/plugin/src/host/context.ts). Errors reach the plugin as PluginErrors
+// (§8.3). What isn't here (`agents.spawn`, `await`, `grant`, `title`, …) answers `unsupported` until a later step
+// implements it.
+import type { AgentsService } from "../../packages/plugin/src/context";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { ScopeAgent } from "../actors/scope";
 import { RelayError } from "../core/errors";
-import { stateDir } from "../utils/home";
 import { agentOf } from "./shapes";
 
 /** A kernel error as a plugin sees it (§8.3). */
@@ -87,67 +84,6 @@ export function pluginAgents(plugin: string): Partial<AgentsService> {
       const detail = String(notice.detail ?? "").trim();
       if (!detail) throw new PluginError("invalid", "a notice says what is wrong (detail)");
       await s.notice({ agentId, notice: { kind: notice.kind, detail: detail.slice(0, 300) } });
-    },
-  };
-}
-
-// ---- storage --------------------------------------------------------------------------------------------------------
-
-const KEY = /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/;
-const VALUE_MAX = 64 * 1024;
-
-/** `ctx.storage` at daemon scope for one plugin (§8.4): a JSON file per key under `<state>/plugins/<name>/storage/`.
- *  Run scope (kv `plugin/<name>/` on the run) is not here yet: `unsupported`. */
-export function pluginStorage(plugin: string, root = () => join(stateDir(), "plugins", plugin, "storage")): StorageService {
-  const daemon = (scope: unknown) => {
-    if (scope === "daemon") return;
-    throw new PluginError("unsupported", "storage at run scope is not available to plugins yet: use daemon scope");
-  };
-  const pathOf = (key: string) => {
-    if (typeof key !== "string" || !KEY.test(key) || key.split("/").some((p) => p === "" || p === "." || p === "..")) throw new PluginError("invalid", `not a storage key: ${String(key).slice(0, 80)} (letters, digits, . _ / -; no empty, . or .. parts)`);
-    return join(root(), `${key}.json`);
-  };
-  const read = (key: string): unknown | undefined => {
-    const p = pathOf(key);
-    if (!existsSync(p)) return undefined;
-    try { return JSON.parse(readFileSync(p, "utf8")); } catch { return undefined; }
-  };
-  const write = (key: string, value: unknown) => {
-    const text = JSON.stringify(value);
-    if (text === undefined) throw new PluginError("invalid", "a stored value is JSON (not undefined or a function)");
-    if (Buffer.byteLength(text) > VALUE_MAX) throw new PluginError("invalid", "a stored value is at most 64 KB");
-    const p = pathOf(key);
-    mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
-    const tmp = `${p}.${process.pid}.tmp`;
-    writeFileSync(tmp, text, { mode: 0o600 });
-    renameSync(tmp, p);
-  };
-  // Every call is synchronous inside: one daemon, one process, so a cas compares and writes with nothing in between.
-  return {
-    async get(scope, key) { daemon(scope); return read(key); },
-    async put(scope, key, value) { daemon(scope); write(key, value); },
-    async cas(scope, key, expect, value) {
-      daemon(scope);
-      const cur = read(key);
-      if (JSON.stringify(cur) !== JSON.stringify(expect)) return false;
-      write(key, value);
-      return true;
-    },
-    async delete(scope, key) { daemon(scope); rmSync(pathOf(key), { force: true }); },
-    async list(scope, prefix) {
-      daemon(scope);
-      const base = root();
-      if (!existsSync(base)) return [];
-      const out: string[] = [];
-      const walk = (d: string) => {
-        for (const f of readdirSync(d)) {
-          const p = join(d, f);
-          if (statSync(p).isDirectory()) walk(p);
-          else if (f.endsWith(".json")) out.push(relative(base, p).slice(0, -".json".length).split("\\").join("/"));
-        }
-      };
-      walk(base);
-      return out.filter((k) => k.startsWith(prefix ?? "")).sort();
     },
   };
 }

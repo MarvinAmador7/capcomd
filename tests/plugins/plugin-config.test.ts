@@ -1,7 +1,7 @@
 // A plugin's settings (docs/spec/plugin-api.md §10.2, §10.4; src/plugins/config.ts): the user's, then the project's
 // `plugins.<name>`, then CAPCOMD_PLUGIN_<NAME>_<KEY>, over the schema's defaults; `enabled` at any layer; what the schema
 // refuses fails the plugin `config_invalid` with `plugin.config_refused`. A built-in that is off until asked for (the
-// watchdog). And a plugin's daemon storage (§8.4, src/plugins/services.ts).
+// watchdog).
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,6 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { checkSchema, envName, mergePatch, pluginSettings } from "../../src/plugins/config";
 import { builtinCandidates } from "../../src/plugins/host";
-import { pluginStorage } from "../../src/plugins/services";
 import { mergeConfig } from "../../src/config/store";
 
 const SCHEMA = {
@@ -104,29 +103,5 @@ describe("the host and the built-ins", () => {
     expect(wd({ CAPCOMD_PLUGIN_WATCHDOG_ENABLED: "true", CAPCOMD_PLUGIN_WATCHDOG_EVERYMS: "5" }).configErrors).toEqual([{ path: "everyMs", message: "must be at least 1000", layer: "env" }]);
     // Every other built-in is on, as before.
     for (const c of builtinCandidates()) if ((c.manifest as { name: string }).name !== "watchdog") expect(c.enabled).toBe(true);
-  });
-});
-
-describe("a plugin's daemon storage (§8.4)", () => {
-  test("JSON per key, compare-and-swap, listing by prefix; keys stay inside; run scope isn't here yet", async () => {
-    const root = mkdtempSync(join(tmpdir(), "capcomd-pstore-"));
-    const s = pluginStorage("my-plugin", () => root);
-    expect(await s.get("daemon", "a/b")).toBeUndefined();
-    await s.put("daemon", "a/b", { n: 1 });
-    await s.put("daemon", "a/c.d", [1]);
-    await s.put("daemon", "z", "x");
-    expect(await s.get("daemon", "a/b")).toEqual({ n: 1 });
-    expect(await s.list("daemon", "a/")).toEqual(["a/b", "a/c.d"]);
-    expect(await s.list("daemon", "")).toEqual(["a/b", "a/c.d", "z"]);
-    expect(await s.cas("daemon", "a/b", { n: 2 }, { n: 3 })).toBe(false);
-    expect(await s.cas("daemon", "a/b", { n: 1 }, { n: 3 })).toBe(true);
-    expect(await s.cas("daemon", "new", undefined, 1)).toBe(true);
-    expect(await s.cas("daemon", "new", undefined, 2)).toBe(false);
-    await s.delete("daemon", "a/b");
-    expect(await s.get("daemon", "a/b")).toBeUndefined();
-    for (const bad of ["../x", "a/../../x", "a//b", "a/./b", "/abs", ".hidden"]) await expect(s.put("daemon", bad, 1)).rejects.toMatchObject({ code: "invalid" });
-    await expect(s.put("daemon", "big", "x".repeat(70 * 1024))).rejects.toMatchObject({ code: "invalid" });
-    await expect(s.get({ runId: "run-1" }, "a")).rejects.toBeInstanceOf(PluginError);
-    await expect(s.get({ runId: "run-1" }, "a")).rejects.toMatchObject({ code: "unsupported" });
   });
 });

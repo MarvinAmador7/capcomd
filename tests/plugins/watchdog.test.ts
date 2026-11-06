@@ -15,7 +15,7 @@ import type { Agent, Job, JobSpec, Principal } from "../../packages/plugin/src/s
 import type { AgentChange } from "../../packages/plugin/src/hooks";
 import type { StorageService } from "../../packages/plugin/src/context";
 import { manifest, plugin, stalledDetail, watchdog, watchdogPlugin, type WatchdogConfig, type WatchdogOptions } from "../../src/plugins/watchdog";
-import { pluginStorage } from "../../src/plugins/services";
+import { pluginStore, storageService } from "../../src/plugins/storage";
 
 const MIN = 60_000;
 const T0 = Date.parse("2026-11-06T10:00:00.000Z");
@@ -61,7 +61,7 @@ function kernel() {
 
 async function boot(k: ReturnType<typeof kernel>, o: { cfg?: Partial<WatchdogConfig>; storage?: StorageService; options?: WatchdogOptions } = {}) {
   const root = join(mkdtempSync(join(tmpdir(), "capcomd-wd-")), "storage");
-  const storage = o.storage ?? pluginStorage("watchdog", () => root);
+  const storage = o.storage ?? storageService(pluginStore("watchdog", root));
   const fake = testkit.fakeContext(manifest, { ...CFG, ...o.cfg }, { services: { ...k.services, storage } as never });
   const w = watchdog(fake.ctx as never, o.options);
   await w.start();
@@ -196,7 +196,7 @@ describe("the watchdog", () => {
     const k = kernel();
     const a = k.agent("agt-z1");
     const root = mkdtempSync(join(tmpdir(), "capcomd-wd-"));
-    const fake = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 0 }, { services: { ...k.services, storage: pluginStorage("watchdog", () => root) } as never });
+    const fake = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 0 }, { services: { ...k.services, storage: storageService(pluginStore("watchdog", root)) } as never });
     await testkit.load(fake, watchdogPlugin({ showsWork: async () => true }) as never);
     await fake.fire("agent.changed", { agent: a, change: started() });
     at(500 * MIN);

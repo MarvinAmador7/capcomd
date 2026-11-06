@@ -1,16 +1,20 @@
 // The plugin host (spec §5): discovers, validates, resolves, loads, runs and disposes plugins through the §5.4 states,
-// owns the registries, and writes the plugin.* events (§13.1). In-process only in this version: an out-of-process
-// plugin (§9) is listed at `validated` and not loaded.
+// owns the registries, and writes the plugin.* events (§13.1). An out-of-process plugin (§9) runs when the host has a
+// launcher (the daemon's: src/plugins/process.ts); without one (a CLI's local host) it is listed at `validated`.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PluginError, type PluginFailureCause } from "../errors";
-import type { HookName } from "../hooks";
+import { HOOKS, type HookCall, type HookName } from "../hooks";
 import { loadManifest, readManifest, type LoadedManifest } from "../load";
 import { PLUGIN_NAME_PATTERN, type PluginManifest } from "../manifest";
 import type { PluginModule } from "../context";
 import { createContext, ContributionStore, type ContextOptions, type PluginRuntime } from "./context";
 import { provided, resolveOrder } from "./order";
 import { HookRegistry, type HookStats, type HostEvent } from "./registry";
+import { ProcessPlugin, ProtocolError, type FrameSink, type ProcessLauncher, type ProcessTimings, type ProtocolCaller } from "./process";
+import type { PluginContext } from "../context";
+import type { SessionOpened } from "../protocol";
 
 export const PLUGIN_STATES = ["discovered", "validated", "resolved", "loading", "active", "disposing", "disposed", "failed"] as const;
 export type PluginState = (typeof PLUGIN_STATES)[number];
@@ -74,6 +78,27 @@ export interface HostOptions {
   activateTimeoutMs?: number;
   disposeBudgetMs?: number;
   breakerAt?: number;
+  /** Starts out-of-process plugins (§9.2, §9.3). Without it a `process` plugin stays `validated` (a CLI's local host:
+   *  a third-party plugin's code runs only beside the daemon). */
+  launcher?: ProcessLauncher;
+  processTimings?: ProcessTimings;
+}
+
+/** `GET /v1/plugins/{name}` (§13.2): the summary, the validated manifest and the config without secrets. */
+export interface PluginDetail extends PluginSummary {
+  manifest: PluginManifest | null;
+  config: { values: Record<string, unknown>; sources: Record<string, "default" | "user" | "project" | "env"> };
+}
+
+/** The out-of-process protocol's routes as the host answers them (§9.3-§9.6); the gateway maps HTTP onto these. Every
+ *  call checks that the caller's token is the plugin's own (a ProtocolError 403 otherwise). */
+export interface PluginProtocol {
+  open(name: string, caller: ProtocolCaller, body: unknown): SessionOpened;
+  attach(name: string, caller: ProtocolCaller, session: string, lastEventId: number | null, sink: FrameSink): () => void;
+  answer(name: string, caller: ProtocolCaller, callId: string, body: unknown): Promise<void>;
+  /** The plugin's own context, for the primitives the protocol carries (`events.emit`, `storage`, §9.6): the same scope
+   *  and declaration checks as in process. */
+  context(name: string, caller: ProtocolCaller): PluginContext<unknown>;
 }
 
 type Rec = {
@@ -89,6 +114,9 @@ type Rec = {
   message: string | null;
   runtime: PluginRuntime<unknown> | null;
   module: PluginModule<unknown> | null;
+  /** sha256 of the manifest file (a plugin from a directory): what its process must present (§9.3). */
+  hash: string | null;
+  process: ProcessPlugin | null;
 };
 
 /** `plugins.<name>` defaults from the config schema (§10.1): top-level `properties.*.default`. */
@@ -99,6 +127,16 @@ export function configDefaults(m: PluginManifest, dir: string | null): Record<st
   }
   const props = (schema as { properties?: Record<string, { default?: unknown; "x-secret"?: boolean }> } | null)?.properties ?? {};
   return Object.fromEntries(Object.entries(props).filter(([, p]) => p && "default" in p && !p["x-secret"]).map(([k, p]) => [k, structuredClone(p.default)]));
+}
+
+/** The `x-secret` properties of a plugin's config schema (§10.3). */
+export function secretKeys(m: PluginManifest, dir: string | null): string[] {
+  let schema: unknown = m.config;
+  if (schema && typeof schema === "object" && "$ref" in schema && dir) {
+    try { schema = JSON.parse(readFileSync(join(dir, String((schema as { $ref: string }).$ref)), "utf8")); } catch { schema = null; }
+  }
+  const props = (schema as { properties?: Record<string, { "x-secret"?: boolean }> } | null)?.properties ?? {};
+  return Object.entries(props).filter(([, p]) => p?.["x-secret"] === true).map(([k]) => k);
 }
 
 /** A candidate the kernel names as one of its own front doors: a built-in only, never a plugin from a directory. */
@@ -147,12 +185,14 @@ export class PluginHost {
       const r = this.rec(name);
       if (r?.state === "active") await this.unload(r, "daemon_stopping");
     }
+    for (const r of this.records) await this.release(r);
   }
 
   /** `capcomd plugins disable` (§5.4): an active plugin disposes; any plugin is held at `validated` until enabled. */
   async disable(name: string): Promise<PluginSummary> {
     const r = this.rec(name) ?? (() => { throw new PluginError("not_found", `no plugin ${name}`); })();
     r.enabled = false;
+    await this.release(r);
     if (r.state === "active") await this.unload(r, "disabled");
     else if (r.state === "validated" || r.state === "resolved") this.set(r, "validated", "disabled");
     else this.changed();
@@ -167,6 +207,7 @@ export class PluginHost {
     if (r.state === "active") { this.hooks.resume(name, by); return this.summary(r); }
     if (r.state === "loading" || r.state === "disposing") throw new PluginError("conflict", `${name} is ${r.state}`);
     if (r.state === "failed" && r.cause === "duplicate") return this.summary(r);
+    await this.release(r);
     if (!r.manifest || r.state === "failed" && ["invalid_manifest", "incompatible", "untrusted"].includes(r.cause ?? "")) {
       this.validate(r);
       if (r.state === "failed") return this.summary(r);
@@ -198,6 +239,37 @@ export class PluginHost {
   /** Why a plugin failed, in the host's words (the event's `message`); null when it didn't. */
   message(name: string): string | null { return this.rec(name)?.message ?? null; }
 
+  /** `GET /v1/plugins/{name}` (§13.2). Never a secret: those are never in a plugin's config values (§10.3). */
+  detail(name: string): PluginDetail | null {
+    const r = this.rec(name);
+    if (!r) return null;
+    const secret = new Set(r.manifest ? secretKeys(r.manifest, r.dir) : []);
+    const defaults = r.manifest ? configDefaults(r.manifest, r.dir) : {};
+    const own = Object.fromEntries(Object.entries(r.candidate.config ?? {}).filter(([k]) => !secret.has(k)));
+    const values = { ...defaults, ...own };
+    const sources = Object.fromEntries(Object.keys(values).map((k) => [k, k in own ? "user" as const : "default" as const]));
+    return { ...this.summary(r), manifest: r.manifest, config: { values, sources } };
+  }
+
+  /** The out-of-process protocol (§9), for the gateway. */
+  readonly protocol: PluginProtocol = {
+    open: (name, caller, body) => this.processOf(name, caller).open(caller, body),
+    attach: (name, caller, session, last, sink) => this.processOf(name, caller).attach(caller, session, last, sink),
+    answer: (name, caller, callId, body) => this.processOf(name, caller).answer(caller, callId, body),
+    context: (name, caller) => {
+      this.processOf(name, caller);
+      return this.rec(name)!.runtime!.ctx;
+    },
+  };
+
+  /** The running process of plugin `name`, for a caller holding that plugin's token. */
+  private processOf(name: string, caller: ProtocolCaller): ProcessPlugin {
+    if (caller.plugin !== name) throw new ProtocolError(403, "forbidden", `only the token the host minted for the ${name} plugin may use its protocol routes`);
+    const r = this.rec(name);
+    if (!r?.process || !r.runtime) throw new ProtocolError(409, "conflict", `the ${name} plugin has no process running`);
+    return r.process;
+  }
+
   // ---- states ---------------------------------------------------------------------------------------------------
 
   private rec(name: string): Rec | undefined { return this.records.find((r) => r.name === name && r.cause !== "duplicate") ?? this.records.find((r) => r.name === name); }
@@ -205,7 +277,7 @@ export class PluginHost {
   private discover(c: Candidate, index: number) {
     const raw = c.dir ? (() => { try { return JSON.parse(readFileSync(join(c.dir!, "plugin.json"), "utf8")); } catch { return null; } })() : c.manifest;
     const name = nameOf(raw, c.dir, index);
-    const r: Rec = { index, name, source: c.source, dir: c.dir ?? null, candidate: c, manifest: null, state: "discovered", enabled: c.enabled ?? true, cause: null, message: null, runtime: null, module: (c.module as PluginModule<unknown> | undefined) ?? null };
+    const r: Rec = { index, name, source: c.source, dir: c.dir ?? null, candidate: c, manifest: null, state: "discovered", enabled: c.enabled ?? true, cause: null, message: null, runtime: null, module: (c.module as PluginModule<unknown> | undefined) ?? null, hash: null, process: null };
     const first = this.records.find((x) => x.name === name);
     this.records.push(r);
     if (first) {
@@ -234,6 +306,8 @@ export class PluginHost {
       return this.fail(r, "invalid_manifest", message);
     }
     r.manifest = loaded.manifest;
+    r.hash = null;
+    if (c.dir) try { r.hash = createHash("sha256").update(readFileSync(join(c.dir, "plugin.json"))).digest("hex"); } catch { /* read just now: gone again */ }
     for (const w of loaded.warnings) this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `manifest: ${w.path}: ${w.message}`, fields: {} });
     if (loaded.manifest.entry.runtime === "in-process" && r.source !== "builtin")
       return this.fail(r, "untrusted", "only built-in plugins run in process (§5.2)");
@@ -249,11 +323,11 @@ export class PluginHost {
     this.set(r, "validated", r.enabled ? null : "disabled");
   }
 
-  /** Whether a validated plugin goes on to `resolved`: enabled, and in process (§9 is not in this version). */
+  /** Whether a validated plugin goes on to `resolved`: enabled, and in process or with a launcher for its process. */
   private loadable(r: Rec): boolean {
     if (r.state !== "validated" || !r.enabled || !r.manifest) return false;
-    if (r.manifest.entry.runtime === "process") {
-      this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: "out-of-process plugins are not loaded by this capcomd yet; it stays validated", fields: {} });
+    if (r.manifest.entry.runtime === "process" && (!this.o.launcher || !r.dir || !r.hash)) {
+      this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: "out-of-process plugins run only beside the daemon (capcomd serve); it stays validated here", fields: {} });
       return false;
     }
     return true;
@@ -279,6 +353,7 @@ export class PluginHost {
     if (missing.length) return this.fail(r, "unresolved", `nothing active provides ${missing.join(", ")}`);
     this.set(r, "loading", null);
     const started = Date.now();
+    if (m.entry.runtime === "process") return this.loadProcess(r, started);
     let mod = r.module;
     if (!mod && r.dir && m.entry.runtime === "in-process") {
       try {
@@ -315,10 +390,84 @@ export class PluginHost {
     this.o.emit({ type: "plugin.loaded", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin is active.`, data: { plugin: r.name, version: m.version, runtime: m.entry.runtime, hooks: s.hooks, seams: s.seams.map((x) => `${x.kind}/${x.name}`), ms: Date.now() - started } });
   }
 
-  /** `active → disposing → disposed` (§5.3). */
+  /**
+   * An out-of-process plugin (§9): `loading` until its process has opened its session and hooks stream (§9.3), then
+   * `active`. Its listeners are registered through its own context once the session is open, one per declared hook,
+   * each a call over the wire; they stay through restarts (§9.5). A process that can't be kept running fails it.
+   */
+  private async loadProcess(r: Rec, started: number) {
+    const m = r.manifest!;
+    const config = { ...configDefaults(m, r.dir), ...(r.candidate.config ?? {}) };
+    const hooks = Object.keys(m.contributes?.hooks ?? {}) as HookName[];
+    // The plugin's own secrets go to its process once, in the handshake's answer (§10.3), never in its environment.
+    const secrets: Record<string, string> = {};
+    for (const key of secretKeys(m, r.dir)) {
+      try { if (this.o.secret) secrets[key] = await this.o.secret(m, key); } catch (e) {
+        this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `its secret ${key} is not available: ${(e as Error).message}`, fields: {} });
+      }
+    }
+    const runtime = createContext({
+      manifest: m, runtime: "process", root: r.dir!, dataDir: this.o.dataDir(r.name), hooks: this.hooks, store: this.contributions, config,
+      ...(this.o.services ? { services: this.o.services(m) } : {}), ...this.o.sinks,
+    });
+    const redact = this.o.sinks?.redact;
+    const deep = (v: unknown): unknown => typeof v === "string" ? redact!(v) : Array.isArray(v) ? v.map(deep) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deep(x)])) : v;
+    const proc: ProcessPlugin = new ProcessPlugin({
+      name: r.name, manifest: m, root: r.dir!, dataDir: this.o.dataDir(r.name), manifestHash: r.hash!, launcher: this.o.launcher!, secrets: Object.values(secrets),
+      emit: (e) => this.o.emit(e), dropped: (n) => this.hooks.dropped(r.name, n),
+      ...(this.o.processTimings ? { timings: this.o.processTimings } : {}), ...(redact ? { redact: deep } : {}),
+      listen: () => { for (const h of hooks) runtime.ctx.hooks.on(h, ((call: HookCall) => proc.call(call)) as never); },
+      opened: () => ({
+        plugin: { name: m.name, version: m.version, scopes: [...(m.scopes ?? [])] },
+        config,
+        secrets,
+        hookTimeoutsMs: Object.fromEntries(hooks.map((h) => [h, Math.min(m.contributes?.hooks?.[h]?.timeoutMs ?? HOOKS[h].timeoutMs.default, HOOKS[h].timeoutMs.max)])),
+        daemon: { version: this.o.capcomd, capabilities: [...this.kernel].filter((k) => k.startsWith("kernel:")).map((k) => k.slice("kernel:".length)) },
+      }),
+      failed: (cause, message) => this.processFailed(r, proc, cause, message),
+    });
+    r.runtime = runtime;
+    r.process = proc;
+    this.hooks.attach(r.name, runtime.ctx.signal, { settled: (id, f) => proc.settled(id, f) });
+    const failure = await proc.run();
+    if (failure) {
+      await proc.dispose("disabled");
+      await runtime.dispose(this.o.disposeBudgetMs);
+      r.runtime = null;
+      r.process = null;
+      return this.fail(r, failure.cause, failure.message);
+    }
+    this.set(r, "active", null);
+    const s = this.summary(r);
+    this.o.emit({ type: "plugin.loaded", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin is active.`, data: { plugin: r.name, version: m.version, runtime: "process", hooks: s.hooks, seams: [], ms: Date.now() - started } });
+  }
+
+  /**
+   * The process couldn't be kept running (§9.5 `restart_limit`): the plugin is failed, but its listeners stay, held, until
+   * an operator enables or disables it. Each of its gate calls fails `crashed` at once (denied, §6.5), an open one is
+   * skipped: a crash-looping gate denies, as a suspended one does (§11.3), instead of letting merges pass unjudged.
+   */
+  private processFailed(r: Rec, proc: ProcessPlugin, cause: PluginFailureCause, message: string) {
+    if (r.process !== proc || r.state !== "active") return;
+    this.fail(r, cause, message);
+  }
+
+  /** A failed out-of-process plugin's held listeners (`processFailed`) go: it is enabled, disabled, or the daemon stops. */
+  private async release(r: Rec) {
+    if (r.state === "active" || (!r.runtime && !r.process)) return;
+    const proc = r.process;
+    r.process = null;
+    await r.runtime?.dispose(this.o.disposeBudgetMs);
+    r.runtime = null;
+    await proc?.dispose("disabled");
+  }
+
+  /** `active → disposing → disposed` (§5.3; an out-of-process plugin's process last, §9.7). */
   private async unload(r: Rec, why: "daemon_stopping" | "disabled") {
     this.set(r, "disposing", null);
     const d = await r.runtime?.dispose(this.o.disposeBudgetMs);
+    await r.process?.dispose(why);
+    r.process = null;
     r.runtime = null;
     this.set(r, "disposed", d?.timedOut ? "dispose_timeout" : why === "disabled" ? "disabled" : null);
     this.o.emit({ type: "plugin.disposed", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin was unloaded.`, data: { plugin: r.name, cause: why } });

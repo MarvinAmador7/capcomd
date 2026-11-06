@@ -115,7 +115,7 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     const told: HookCall<"job.changed">[] = [], events: Array<{ type: string; data: Record<string, unknown> }> = [];
     useDaemonEvents((e) => { events.push(e); });
     let ctx!: PluginContext;
-    const host = kernelHost({ log: false, daemon: true });
+    const host = kernelHost({ log: false, jobs: true });
     useHooks(host.hooks);
     await host.start([recorder(told, (c) => { ctx = c; })]);
     const now = Date.now();
@@ -140,7 +140,7 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
   test("idempotent by key; a missed fire fires once when the daemon re-arms it; cancel ends it killed", async () => {
     const told: HookCall<"job.changed">[] = [];
     let ctx!: PluginContext;
-    const host = kernelHost({ log: false, daemon: true });
+    const host = kernelHost({ log: false, jobs: true });
     useHooks(host.hooks);
     await host.start([recorder(told, (c) => { ctx = c; })]);
     const spec = { kind: "timer", runId: null, owner: { plugin: true }, label: "hourly", everyMs: 3_600_000 } as const;
@@ -166,7 +166,7 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
 
   test("checked: a timer fires at most once a second, an exec job is an agent's, a run-owned one isn't made yet", async () => {
     let ctx!: PluginContext;
-    const host = kernelHost({ log: false, daemon: true });
+    const host = kernelHost({ log: false, jobs: true });
     useHooks(host.hooks);
     await host.start([recorder([], (c) => { ctx = c; })]);
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: "fast", everyMs: 10 })).rejects.toMatchObject({ code: "invalid", message: "everyMs is at least 1000" });
@@ -199,7 +199,7 @@ describe("the Docker sweep is sandbox-docker's own timer (§15.1, §16.2)", () =
     const sweeps = () => (existsSync(calls) ? readFileSync(calls, "utf8").split("\n").filter((l) => l.startsWith("ps ")).length : 0);
     try {
       const start = async () => {
-        const host = kernelHost({ log: false, daemon: true });
+        const host = kernelHost({ log: false, jobs: true });
         useHooks(host.hooks);
         await host.start([{ source: "builtin", manifest: sandboxDocker.manifest, module: sandboxDocker.module as Candidate["module"] }]);
         useSandboxHost(host);
