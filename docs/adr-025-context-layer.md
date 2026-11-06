@@ -246,7 +246,7 @@ written back by the agent" (ADR-024 §2.2); it is read from the checkout and cha
 `.capcomd/context/` only (the agent provider's tool policy enforces the path; the kernel's gate re-checks it, §5.3). The
 planner spawns it as the **last child of its run** (an orchestration-skill rule: "before you end, spawn `consolidator`
 with the run's lessons"); an orchestrate profile cannot be the consolidator (it may not write files and ends failed if it
-spawned nothing, spec 1.0.6 and 1.0.12), and `run.changed ended` is too late to spawn anything. It reads the run's candidates
+spawned nothing, spec 1.0.6 and 1.0.13), and `run.changed ended` is too late to spawn anything. It reads the run's candidates
 (`result.data` of every agent, `kv notes/*`), the verify verdicts and merge outcomes (every capcomd read), and the
 current `.capcomd/context/`, and writes **itemised deltas** (ACE Reflector/Curator): one lesson per subtask with the
 failure case and the guardrail; `supersede` for a contradiction; `deprecate` for an item the repository no longer
