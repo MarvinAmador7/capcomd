@@ -115,6 +115,8 @@ const aborted = (c: SeamCall) => { if (c.signal.aborted) throw new PluginError("
 export function memoryProvider(o: { read?: TreeReader } = {}): ContextProvider {
   const read = o.read ?? mirrorReader;
   const cache = new Map<string, Parsed>();
+  /** A branch tip being read now, by (repository, branch, run): what a resolve arriving meanwhile waits for. */
+  const tips = new Map<string, ReturnType<TreeReader>>();
   const handleOf = (h: string): Handle => {
     try { const v = JSON.parse(h) as Handle; if (typeof v.remote === "string" && typeof v.sha === "string") return v; } catch { /* below */ }
     throw new PluginError("invalid", "not a handle this provider made");
@@ -150,7 +152,17 @@ export function memoryProvider(o: { read?: TreeReader } = {}): ContextProvider {
     async resolve(scope: ContextScope, c: SeamCall) {
       aborted(c);
       if (!scope.repo || !scope.ref) throw new PluginError("not_found", "the run has no repository, so no project memory");
-      const t = await read({ remote: scope.repo, at: { branch: scope.ref }, runId: scope.runId });
+      // Agents a planner starts together are prepared together: one fetch of the tip serves them all (the mirror runs one
+      // git operation at a time, so a fetch each would queue them past the router's deadline).
+      const tipKey = `${scope.repo}\0${scope.ref}\0${scope.runId ?? ""}`;
+      let reading = tips.get(tipKey);
+      if (!reading) {
+        reading = read({ remote: scope.repo, at: { branch: scope.ref }, runId: scope.runId });
+        tips.set(tipKey, reading);
+        const done = () => { if (tips.get(tipKey) === reading) tips.delete(tipKey); };
+        reading.then(done, done);
+      }
+      const t = await reading;
       aborted(c);
       if ("error" in t) throw new PluginError("unavailable", t.error);
       const h: Handle = { remote: scope.repo, sha: t.sha, project: scope.layers.includes("project"), projectId: scope.projectId };

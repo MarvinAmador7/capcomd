@@ -89,6 +89,21 @@ describe("the context contribution (ADR-025 §3.1, spec §4.6, §4.7)", () => {
 describe("the memory provider: items under .capcomd/context/ (ADR-025 §3.3, §11.1)", () => {
   testkit.conformance.context(() => memoryProvider({ read: tree(FILES) }), { name: "memory", scope: { ...scope(), layers: ["project", "run"] } });
 
+  test("agents prepared together share one read of the tip; one prepared after it reads it again", async () => {
+    let reads = 0;
+    const slowTree: TreeReader = async (o) => { reads++; await Bun.sleep(50); return tree(FILES)(o); };
+    const p = memoryProvider({ read: slowTree });
+    const s: ContextScope = { ...scope(), layers: ["project"] };
+    const call = { signal: new AbortController().signal, deadline: new Date(Date.now() + 10_000).toISOString(), trace: { traceId: "0".repeat(32), spanId: "0".repeat(16) } };
+    const together = await Promise.all(Array.from({ length: 6 }, () => p.resolve(s, call)));
+    expect(reads).toBe(1);
+    expect(new Set(together.map((r) => r.revision))).toEqual(new Set([SHA]));
+    await p.resolve(s, call);
+    expect(reads).toBe(2);
+    await Promise.all([p.resolve(s, call), p.resolve({ ...s, ref: "develop" }, call)]);
+    expect(reads).toBe(4);
+  });
+
   test("validate --conformance's run: without a scope the item cases are skipped, the rest pass", async () => {
     const r = await runContextConformance(memoryProvider({ read: tree(FILES) }), { name: "memory" });
     expect(r.every((c) => c.ok)).toBe(true);

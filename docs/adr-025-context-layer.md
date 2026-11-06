@@ -562,8 +562,8 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   that prepares an agent.
 - `context-memory` serves `memory/` (kind `memory`) and a project's own `facts/` (kind `fact`), as §3.3 lays out, so
   D11 is testable now: a reviewer or report agent gets the fact lines and none of the memory ones. It reads the tree at
-  the tip of the run's target through the daemon's files mirror (one fetch per brief, through host-git; a tree is parsed
-  once per commit). An item without `status` is `draft` (saving never raises authority); `description` falls back to
+  the tip of the run's target through the daemon's files mirror (one fetch per brief, through host-git, shared by the
+  briefs of agents prepared together; a tree is parsed once per commit). An item without `status` is `draft` (saving never raises authority); `description` falls back to
   `title`, then the id, never the body; `A supersedes B` hides `B` even when `B` doesn't say so.
 - Freshness is judged against the UTC day, not the instant, so two agents prepared the same day get the same brief.
   The router drops a line superseded by one in the same index, deprecated lines, stale ones (counted in the header) and,
