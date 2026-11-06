@@ -117,12 +117,13 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
   try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
   // A project template's setup runs the repository's own code: the VM reaches none of the domains a host-bound secret
   // is swapped in for, so a placeholder it can read is no use to it, and the setup runs without them in its env.
+  // A host in the project's egress that reaches a secret's domain is left out too (a parent domain, a wildcard, `*`).
   const exposure = o.project ? await (await import("./templates")).secretExposure(p) : { domains: [], names: [] };
-  const egress = [...new Set([...BASE_EGRESS, ...(o.project?.egress ?? [])])].filter((d) => !exposure.domains.includes(d.toLowerCase()));
-  if (o.project) for (const d of [...BASE_EGRESS, ...o.project.egress]) if (exposure.domains.includes(d.toLowerCase())) log(`egress: ${d} left out of the build VM (a host-bound secret is bound to it)`);
+  const egress = o.project ? (await import("./templates")).buildEgress(BASE_EGRESS, o.project.egress, exposure.domains) : { allow: [...BASE_EGRESS], left: [] };
+  for (const d of egress.left) log(`egress: ${d} left out of the build VM (it reaches a domain a host-bound secret is bound to)`);
   const release = recordJobMachine({ idemKey, sandbox: place, kind: "env_build", purpose: "env-build", ttlSeconds: 3600 });
   let id: string;
-  try { ({ id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: o.project ? 3 * 3600 : 3600, egressAllow: egress.length ? egress : [...BASE_EGRESS], labels: { purpose: "env-build" } })); } catch (e) { release(); throw e; }
+  try { ({ id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: o.project ? 3 * 3600 : 3600, egressAllow: egress.allow, labels: { purpose: "env-build" } })); } catch (e) { release(); throw e; }
   const sh = (s: string, timeoutMs = 120_000) => p.exec(id, ["sh", "-c", s], { env: baseEnv, timeoutMs });
   /** The repository's own code (its install or setup step), without the place's secret placeholders. */
   const untrusted = (cmd: string) => `${exposure.names.length ? `env ${exposure.names.map((n) => `-u ${sq(n)}`).join(" ")} ` : ""}sh -c ${sq(cmd)}`;

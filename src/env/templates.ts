@@ -19,6 +19,7 @@ import { isSecretPlatform } from "./platform";
 import { env as envVar } from "../utils/env";
 import { sandboxCaps } from "../providers/registry";
 import { buildInProgress, buildMarkerPath, projectKey, readBuildMarker, readTemplates, templateLedgerPath, writeTemplates, type ProjectTemplate } from "./resolve";
+import { OPEN_EGRESS } from "../providers/sandbox";
 
 type Source = Record<string, string | undefined>;
 
@@ -56,6 +57,31 @@ export async function secretExposure(p: unknown): Promise<{ domains: string[]; n
   return { domains: [...new Set(list.flatMap((s) => s.domains.map((d) => d.toLowerCase())))], names: [...new Set(list.map((s) => s.name))] };
 }
 
+/** Does egress entry `allowed` (a host, `*.host`, or `*`) let a VM reach `domain` (a host or `*.host`)? Generous on
+ *  purpose: it decides what a build VM must not reach. */
+export function reaches(allowed: string, domain: string): boolean {
+  const a = allowed.trim().toLowerCase(), d = domain.trim().toLowerCase();
+  if (!a || !d) return false;
+  if (a === OPEN_EGRESS) return true;
+  const host = (x: string) => x.replace(/^\*\./, "");
+  const under = (x: string, parent: string) => x === parent || x.endsWith(`.${parent}`);
+  if (a.startsWith("*.")) return under(host(d), host(a)) || under(host(a), host(d)) && d.startsWith("*.");
+  return a === d || (d.startsWith("*.") && under(a, host(d)));
+}
+
+/**
+ * The build VM's egress: `base` plus the project's `extra`, less every entry that reaches a domain a host-bound secret
+ * is bound to (`*`, open egress, reaches them all), and those left out. Throws when nothing is left: boxd takes an
+ * empty list as unrestricted.
+ */
+export function buildEgress(base: string[], extra: string[], secretDomains: string[]): { allow: string[]; left: string[] } {
+  const all = [...new Set([...base, ...extra].map((d) => d.trim()).filter(Boolean))];
+  const left = all.filter((a) => secretDomains.some((d) => reaches(a, d)));
+  const allow = all.filter((a) => !left.includes(a));
+  if (!allow.length) throw new Error(`env build: every host the build VM may reach (${all.join(", ")}) is bound to a host-bound secret; nothing is left for its egress`);
+  return { allow, left };
+}
+
 export interface TemplateBuildRequest {
   provider: SandboxProvider & SnapshotPlatform;
   repo: string;
@@ -71,12 +97,21 @@ export interface TemplateBuildRequest {
   log?: (line: string) => void;
 }
 
-/** Build (or find up to date) the project's template: envBuild with a full warm checkout and the project's setup. */
+/**
+ * Build (or find up to date) the project's template: envBuild with a full warm checkout and the project's setup. One
+ * build per project at a time: another process's build of it that is still running (its marker) refuses this one, so
+ * two builds never race on one snapshot name. The local API keys (each agent's) are checked absent from the VM, as in
+ * `capcomd env build`.
+ */
 export async function buildProjectTemplate(r: TemplateBuildRequest) {
   const { envBuild } = await import("./build");
   const source = r.source ?? process.env;
+  const m = readBuildMarker(templateMarkerPath(r.repo, source));
+  if (m && m.pid !== process.pid && buildInProgress(m)) throw new Error(`env build: a build of ${r.repo}'s template is already running (pid ${m.pid}, since ${m.startedAt}); wait for it`);
+  const { activeAdapters } = await import("../agents/adapters");
+  const forbidden = activeAdapters().map((a) => source[a.secretName]).filter((v): v is string => !!v);
   return envBuild(r.provider, {
-    repoUrl: r.repo, cfg: r.cfg, force: !!r.force, ...(r.log ? { log: r.log } : {}), ...(r.hostGit ? { hostGit: r.hostGit } : {}), warm: true,
+    repoUrl: r.repo, cfg: r.cfg, force: !!r.force, ...(r.log ? { log: r.log } : {}), ...(r.hostGit ? { hostGit: r.hostGit } : {}), warm: true, forbidden,
     project: { setup: r.setup ?? null, egress: r.egress ?? [], maxBytes: maxTemplateBytes(source), marker: templateMarkerPath(r.repo, source), ledger: templateLedgerPath(source) },
   });
 }
@@ -84,11 +119,28 @@ export async function buildProjectTemplate(r: TemplateBuildRequest) {
 const running = new Map<string, Promise<unknown>>();
 
 export type ScheduleResult = "started" | "running" | "retry_later" | "manual" | "off";
+
+/** The branch a project's template was built from and its commit then (templates.json), or null without one. */
+export function templateTarget(repo: string, source: Source = process.env): { target: string; commit: string } | null {
+  const t = readTemplates(templateLedgerPath(source)).templates[projectKey(repo)];
+  return t ? { target: t.target, commit: t.commit } : null;
+}
+
+/** `branch`'s tip on the remote (ls-remote, on the host), or null. */
+async function remoteTip(repo: string, branch: string): Promise<string | null> {
+  const { lsRemote } = await import("../merge/host-git");
+  const l = await lsRemote(repo, ["--heads", `refs/heads/${branch}`], { timeoutMs: 60_000 });
+  return l.code === 0 ? /^([0-9a-f]{40,64})\s/m.exec(l.stdout)?.[1] ?? null : null;
+}
+
 /**
  * Start the project's template build in the background unless one runs (here or in another capcomd process: its
  * marker), the last one failed less than RETRY_AFTER_MS ago, or templates are manual or off. Never waits for it.
+ * `unlessTargetAt`: the template's branch and commit; when that branch is still there, a rebuild would make the same
+ * template (an agent on another target, or on its own branch with another lockfile, can't use it either way), so the
+ * build is skipped and said so, instead of booting a VM and sending it the whole repository for nothing.
  */
-export function scheduleTemplateBuild(r: TemplateBuildRequest & { reason: string; now?: () => number }): ScheduleResult {
+export function scheduleTemplateBuild(r: TemplateBuildRequest & { reason: string; now?: () => number; unlessTargetAt?: { target: string; commit: string } | null }): ScheduleResult {
   const source = r.source ?? process.env;
   const mode = templateMode(source);
   const say = r.log ?? ((l: string) => console.error(`[templates] ${l}`));
@@ -101,8 +153,16 @@ export function scheduleTemplateBuild(r: TemplateBuildRequest & { reason: string
   if (buildInProgress(m, now)) return "running";
   if (m?.state === "failed" && now - Date.parse(m.endedAt ?? m.startedAt) < RETRY_AFTER_MS) return "retry_later";
   say(`${r.repo}: building its template in the background (${r.reason})`);
-  const job = buildProjectTemplate({ ...r, log: (l) => say(`${r.repo}: ${l}`) })
-    .then((res) => say(`${r.repo}: template ${res.name} ${res.cached ? "already up to date" : "ready"}`), (e) => say(`${r.repo}: template build failed: ${String((e as Error)?.message ?? e).slice(0, 400)}`))
+  const at = r.unlessTargetAt;
+  const job = (async () => {
+    if (at && (await remoteTip(r.repo, at.target).catch(() => null)) === at.commit) {
+      say(`${r.repo}: ${at.target} is still at ${at.commit.slice(0, 12)}, as its template was built: a rebuild would make the same one; not rebuilding`);
+      return;
+    }
+    const res = await buildProjectTemplate({ ...r, log: (l) => say(`${r.repo}: ${l}`) });
+    say(`${r.repo}: template ${res.name} ${res.cached ? "already up to date" : "ready"}`);
+  })()
+    .catch((e) => say(`${r.repo}: template build failed: ${String((e as Error)?.message ?? e).slice(0, 400)}`))
     .finally(() => running.delete(key));
   running.set(key, job);
   return "started";

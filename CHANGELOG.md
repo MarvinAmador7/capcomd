@@ -9,8 +9,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   its setup step (`CAPCOMD_SETUP_COMMAND` in the project's `.capcomd/config.json` `env`, else its lockfile's install)
   and the agent CLIs; every agent's VM then boots from it and gets only what changed since, instead of a clone of the
   whole repository. Without one (or with one it can't use) an agent clones as before and capcomd builds or rebuilds the
-  template in the background, never holding up the run; it also rebuilds once an agent's delta passes 50 MB
-  (`CAPCOMD_TEMPLATE_REBUILD_MB`) and daily for any project that moved (`CAPCOMD_TEMPLATE_REFRESH_HOURS`). `capcomd
+  template in the background (not when the branch it was built from hasn't moved), never holding up the run; it also
+  rebuilds once an agent's delta passes 50 MB (`CAPCOMD_TEMPLATE_REBUILD_MB`) and daily for any project that moved (`CAPCOMD_TEMPLATE_REFRESH_HOURS`). `capcomd
   env templates` shows each template's age, size, how far behind it is and the delta an agent would get;
   `CAPCOMD_PROJECT_TEMPLATES=manual` or `off` turns the automatic builds or the templates off. Templates are capped at
   10 GB (`CAPCOMD_TEMPLATE_MAX_GB`) on top of the base image. See docs/boxd.md, "Project templates".

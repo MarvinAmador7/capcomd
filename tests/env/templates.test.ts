@@ -13,7 +13,7 @@ import { agentHome, templateDir } from "../../src/agents/runner";
 import { loadAgentConfig } from "../../src/agents/config";
 import { TEMPLATE_MARKER, parseTemplateMarker } from "../../src/agents/workspace";
 import { baseEnvHash, envName, ENV_SCHEMA, isTemplateName, projectKey, projectTemplateFor, readTemplates, resolveEnvSnapshot, templateName, writeBuildMarker, writeLedger, writeTemplates } from "../../src/env/resolve";
-import { buildProjectTemplate, rebuildReason, refreshTemplates, removeProjectTemplate, scheduleTemplateBuild, templateBuildsSettled, templateMarkerPath, templateViews } from "../../src/env/templates";
+import { buildEgress, buildProjectTemplate, reaches, rebuildReason, refreshTemplates, removeProjectTemplate, scheduleTemplateBuild, templateBuildsSettled, templateMarkerPath, templateTarget, templateViews } from "../../src/env/templates";
 
 const KNOBS = ["CAPCOMD_SANDBOX", "CAPCOMD_TEMPLATE_LEDGER", "CAPCOMD_ENV_LEDGER", "CAPCOMD_PROJECT_TEMPLATES", "CAPCOMD_TEMPLATE_MAX_GB", "CAPCOMD_TEMPLATE_REBUILD_MB", "CAPCOMD_ENV", "CAPCOMD_ENV_SNAPSHOT"];
 let saved: Record<string, string | undefined> = {};
@@ -237,4 +237,75 @@ describe("seeing them", () => {
     expect(b.p.snapshots.has("capcomd-env-owners")).toBe(true);
     expect(readTemplates().templates).toEqual({});
   }, 60_000);
+});
+
+describe("what the build VM may reach (review)", () => {
+  test("a host that reaches a secret's domain is left out: the domain itself, a parent wildcard, `*`; nothing left refuses", () => {
+    expect(reaches("*", "api.anthropic.com")).toBe(true);
+    expect(reaches("*.anthropic.com", "api.anthropic.com")).toBe(true);
+    expect(reaches("api.anthropic.com", "*.anthropic.com")).toBe(true);
+    expect(reaches("api.anthropic.com", "api.anthropic.com")).toBe(true);
+    expect(reaches("proxy.golang.org", "api.anthropic.com")).toBe(false);
+    expect(reaches("anthropic.com.evil.io", "*.anthropic.com")).toBe(false);
+    const e = buildEgress(["github.com", "registry.npmjs.org"], ["*", "*.anthropic.com", "proxy.golang.org"], ["api.anthropic.com"]);
+    expect(e.allow).toEqual(["github.com", "registry.npmjs.org", "proxy.golang.org"]);
+    expect(e.left).toEqual(["*", "*.anthropic.com"]);
+    expect(() => buildEgress(["github.com"], [], ["github.com"])).toThrow(/nothing is left for its egress/);
+  });
+
+  test("a setup egress of `*` doesn't open the build VM while a host-bound secret exists", async () => {
+    const r = await bareRepo();
+    const b = await buildBox();
+    await b.p.secretSet("ANTHROPIC_API_KEY", "sk-ant-api03-REALVALUE-0123456789abcdef", { domains: ["api.anthropic.com"], scope: "org" });
+    const lines: string[] = [];
+    await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, egress: ["*", "proxy.golang.org"], log: (l) => lines.push(l) });
+    const allowed = [...b.p.egress.values()][0]!;
+    expect(allowed).not.toContain("*");
+    expect(allowed).toContain("proxy.golang.org");
+    expect(lines.some((l) => l.includes("egress: * left out of the build VM"))).toBe(true);
+  }, 60_000);
+});
+
+describe("one build per project, and no local key in it (review)", () => {
+  test("another process's running build of the project refuses this one", async () => {
+    const r = await bareRepo();
+    const b = await buildBox();
+    // The parent process is alive, and isn't this one.
+    writeBuildMarker(templateMarkerPath(r.bare), { state: "building", pid: process.ppid, startedAt: new Date().toISOString() });
+    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } })).rejects.toThrow(/already running \(pid \d+/);
+    expect(b.p.snapshots.size).toBe(0);
+  }, 60_000);
+
+  test("a local API key value the setup step wrote into the VM refuses the snapshot", async () => {
+    const r = await bareRepo();
+    const b = await buildBox();
+    const value = "local-key-value-0123456789";
+    const source = { ...process.env, ANTHROPIC_API_KEY: value };
+    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, source, setup: `printf %s ${value} > "$HOME/leak.txt"` })).rejects.toThrow(/a local API key value is present in the VM/);
+    expect(b.p.snapshots.size).toBe(0);
+  }, 60_000);
+});
+
+describe("a rebuild that would make the same template (review)", () => {
+  test("is skipped while the template's branch hasn't moved, and runs once it has", async () => {
+    const r = await bareRepo();
+    const b = await buildBox();
+    const hostGit = { workdir: join(state, "host-git") };
+    const first = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit });
+    const at = templateTarget(r.bare)!;
+    expect(at).toEqual({ target: "main", commit: (await r.sha("main"))! });
+    // Another branch moved (an agent's push), not main: an agent on another target would clone again either way.
+    await r.seed.ok(["push", "-q", "origin", "main:refs/heads/release"]);
+    const said: string[] = [];
+    const req = { provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, reason: "an agent couldn't use it (another target)", log: (l: string) => said.push(l), unlessTargetAt: at };
+    expect(scheduleTemplateBuild(req)).toBe("started");
+    await templateBuildsSettled();
+    expect(said.some((l) => /main is still at [0-9a-f]{12}, as its template was built: .*not rebuilding/.test(l))).toBe(true);
+    expect(readTemplates().templates[projectKey(r.bare)]!.name).toBe(first.name);
+    expect(b.p.egress.size).toBe(1); // no build VM booted
+    await r.pushToMain("moved.txt", "moved\n");
+    expect(scheduleTemplateBuild(req)).toBe("started");
+    await templateBuildsSettled();
+    expect(readTemplates().templates[projectKey(r.bare)]).toMatchObject({ previous: first.name, commit: (await r.sha("main"))! });
+  }, 90_000);
 });

@@ -110,7 +110,9 @@ capcomd env templates rm --repo URL
   step run in it: `CAPCOMD_SETUP_COMMAND` (put it in the project's `.capcomd/config.json` `env`, like
   `CAPCOMD_TEST_COMMAND`; a run records it), else the lockfile's install. The setup step must leave the tracked tree
   as it was (write dependencies to ignored paths); if it fails, the build fails and the template stays what it was.
-  `CAPCOMD_SETUP_EGRESS` (comma-separated) adds hosts it may reach to github.com, registry.npmjs.org and nodejs.org.
+  `CAPCOMD_SETUP_EGRESS` (comma-separated) adds hosts it may reach to github.com, registry.npmjs.org and nodejs.org;
+  any of them that reaches a domain a host-bound secret is bound to (the domain, a wildcard over it, or `*`) is left
+  out, and a build left with no host at all is refused.
 - **Agents.** An agent's VM boots from its project's template (unless its profile names an environment, its plan login
   is kept in a snapshot, or `CAPCOMD_ENV_SNAPSHOT`/`CAPCOMD_ENV=image` is set), and the host sends it only what changed
   since the template was built: a bundle of `<template's branch tips>..<their tips now>` plus the ref it needs. It works
@@ -120,9 +122,11 @@ capcomd env templates rm --repo URL
   versions) its VM boots from the base env and clones the whole repository, as before. On a template it can't use in
   place (its lockfile no longer matches, the target's history lost its commit, or a retry in the same VM finds it used
   by the first attempt) the clone borrows the template's objects, so the host still sends only what they lack. Except
-  for the retry, the worker then starts a rebuild in the background; the run never waits for it.
-- **Refresh.** A template is rebuilt in the background (one build per project at a time, none within an hour after
-  one failed) when an agent couldn't use it, when an agent's delta passed `CAPCOMD_TEMPLATE_REBUILD_MB` (default 50),
+  for the retry, the worker then starts a rebuild in the background, unless the branch the template was built from is
+  still where it was (a run on another target branch, or an agent's own branch with another lockfile: a rebuild would
+  make the same template, so it says so and skips it); the run never waits for it.
+- **Refresh.** A template is rebuilt in the background (one build per project at a time, `capcomd env build --project`
+  included, none within an hour after one failed) when an agent couldn't use it, when an agent's delta passed `CAPCOMD_TEMPLATE_REBUILD_MB` (default 50),
   and once a day for every template whose repository moved (the daemon's timer, `CAPCOMD_TEMPLATE_REFRESH_HOURS`, 0 to
   turn it off). `CAPCOMD_PROJECT_TEMPLATES=manual` leaves rebuilds to `capcomd env build --project`; `off` stops using
   templates. A rebuild never overwrites a snapshot: it makes a new one, keeps the one it replaced (agents may be booting
@@ -137,9 +141,10 @@ capcomd env templates rm --repo URL
   VM's too. The placeholder isn't the secret: boxd swaps in the value only on a request to the domain the secret is
   bound to, from a VM allowed to reach that domain. So a malicious install script that reads it could, at most, spend
   it against that domain (call the Anthropic API on your key, say), or write it into the snapshot, where agents' VMs
-  have it in their environment anyway. capcomd closes the first: the build VM's egress leaves out every domain a
-  secret of the place is bound to (the build says which it left out), and the setup step runs with those variables
-  unset. What a repository's install can always do is plant files in the checkout and its dependencies that run later
+  have it in their environment anyway. capcomd closes the first: the build VM's egress leaves out every host that
+  reaches a domain a secret of the place is bound to (the build says which it left out), and the setup step runs with
+  those variables unset. As `capcomd env build` does, the build also refuses to snapshot a VM holding the value of an
+  agent API key set on your machine. What a repository's install can always do is plant files in the checkout and its dependencies that run later
   in agents' VMs, which the repository's own code can do anyway: agents work on it.
 
 ## Typed errors (`src/providers/boxd-errors.ts`)

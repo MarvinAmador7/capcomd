@@ -1413,8 +1413,8 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    repository the same way as in item 1 (every branch's history, as a bundle from the host's mirror) and ran the
    project's setup step (`CAPCOMD_SETUP_COMMAND`, else its lockfile's install), so neither the VM nor its snapshot ever
    held a git credential. The setup step is the repository's own code: the build VM is isolated (no platform
-   credentials), its egress leaves out every domain a host-bound secret of the place is bound to (so a placeholder it
-   can read can't be spent), the step runs with those placeholders unset, and the snapshot passes the same secret scan
+   credentials), its egress leaves out every host that reaches a domain a host-bound secret of the place is bound to
+   (the domain, a wildcard over it, `*`; nothing left fails the build), so a placeholder it can read can't be spent, the step runs with those placeholders unset, and the snapshot passes the same secret scan
    as every env build. A template is named `capcomd-env-<base>-<project>-<build>` (`<base>`: the env build of the same
    agent CLI pins without a repository; `<project>`: the repository URL's key; `<build>`: its commit, branch tips,
    lockfile and setup step), adds at most `CAPCOMD_TEMPLATE_MAX_GB` (10) to the base image (its checkout and agent home), and is recorded in the place's templates ledger
@@ -1427,8 +1427,9 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    (git alternates, `SendRequest.seed`) and the bundle again holds only what they lack. Without a usable template the
    machine boots from the base env and clones the whole repository. A run never waits for a template: with `CAPCOMD_PROJECT_TEMPLATES=auto` (the default; `manual`, `off`)
    the worker starts a background build when its project has none or one on other pins, and a rebuild when its agent
-   couldn't use the template in place or got a delta over `CAPCOMD_TEMPLATE_REBUILD_MB` (50); one build per project at
-   a time, none within an hour of a failed one; and `sandbox-boxd` keeps a timer (§16.2: a plugin-owned job, `job.changed`
+   couldn't use the template in place (unless the branch it was built from hasn't moved: the same template again) or
+   got a delta over `CAPCOMD_TEMPLATE_REBUILD_MB` (50); one build per project at a time (another process's running
+   build refuses `capcomd env build --project`), none within an hour of a failed one; and `sandbox-boxd` keeps a timer (§16.2: a plugin-owned job, `job.changed`
    `fired`), daily by default (`CAPCOMD_TEMPLATE_REFRESH_HOURS`, 0 for none), that rebuilds every template whose
    repository moved since it was built.
 

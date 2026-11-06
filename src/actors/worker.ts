@@ -128,14 +128,15 @@ async function templateHooks(provider: SandboxProvider, source: Record<string, s
     provider: provider as SandboxProvider & import("../env/platform").SnapshotPlatform, repo: cfg.remote, cfg: setup.config, hostGit: { workdir: cfg.workdir }, source,
     ...(setupCmd ? { setup: setupCmd } : {}), egress: (envVar("SETUP_EGRESS", run) ?? "").split(",").map((d) => d.trim()).filter(Boolean),
   };
-  const schedule = (reason: string) => T.scheduleTemplateBuild({ ...req, reason });
+  const schedule = (reason: string, unlessTargetAt?: { target: string; commit: string } | null) => T.scheduleTemplateBuild({ ...req, reason, ...(unlessTargetAt ? { unlessTargetAt } : {}) });
   if (setup.template.why === "none") schedule("it has no template yet");
   if (setup.template.why === "stale_base") schedule("its template was built for other agent CLI versions");
   return {
     onWorkspace: (w: { path: "in_place" | "clone"; reason?: string; bytes: number }) => {
       if (setup.template?.why !== "used") return;
       const why = T.rebuildReason(w, source);
-      if (why) schedule(why);
+      // A clone: only a template whose branch moved would be different (else the agent's reason holds for a new one).
+      if (why) schedule(why, w.path === "clone" ? T.templateTarget(cfg.remote, source) : null);
     },
   };
 }
