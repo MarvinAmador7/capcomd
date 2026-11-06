@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: agent profiles as YAML files. Put a profile in `.capcomd/profiles/<name>/profile.yaml` (or
+  `.capcomd/profiles/<name>.yaml`; JSON works too), or in `~/.capcomd/profiles/` for every project, with blocks
+  (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.
+  A profile can `extends: <another profile>` and change only what differs (`null` removes an inherited value), and an
+  `override.yaml` in `<name>/` adjusts a profile without copying it. A prompt can live in a file next to the profile
+  (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd agents list|show|validate` see
+  these profiles; `.capcomd/agents.json` works as before, and a `profile.yaml` of the same name in the same project
+  wins. `--set` takes the new paths too (`--set limits.maxTurns=10`). See docs/agents.md, "Profile files".
 - New: background jobs for agents. An agent runs a long command (a test suite, a build) with
   `capcomd job start -- <command>` in its VM (or the `capcomd_job_start` tool): when the command ends within the
   foreground wait (60 s by default; `--foreground-ms N`) it answers with the exit code and output; otherwise it

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { validateSpec, validateFile, resolveAgent, parseAgentDirective, readAgentsFile, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA } from "../../src/agents/profiles";
+import { validateSpec, validateFile, resolveAgent, parseAgentDirective, readAgentsFile, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA } from "../../src/profiles";
 import { loadAgentConfig, agentFromEnv } from "../../src/agents/config";
 import { claudeAdapter, codexAdapter } from "../../src/agents/adapters";
 
@@ -86,7 +86,7 @@ describe("agent profiles", () => {
   }, 30_000);
 });
 
-import { validateChildren, widenings, applyOverrides, parseSetPairs, encodeAgentRef, decodeAgentRef, effectiveAgentRecord } from "../../src/agents/profiles";
+import { validateChildren, widenings, applyOverrides, parseSetPairs, encodeAgentRef, decodeAgentRef, effectiveAgentRecord } from "../../src/profiles";
 
 describe("children policy + narrowing overrides", () => {
   const parent = { provider: "claude", auth: "subscription", maxTurns: 20, maxBudgetUsd: 2, egress: ["github.com", "api.anthropic.com"], allowedTools: ["Read", "Edit", "Bash(npm test:*)"], disallowedTools: ["WebFetch"], sandbox: "workspace-write",
@@ -145,5 +145,273 @@ describe("children policy + narrowing overrides", () => {
     expect(r.out + r.err).toContain("--operator");
     const bad = cli(["run", "--set", "maxTurns=1", "go"], env);
     expect(bad.out + bad.err).toContain("need --profile");
+  }, 30_000);
+});
+
+import { mkdirSync, symlinkSync } from "fs";
+import { dirname } from "path";
+import { readProfiles, flatOverrides, PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, checkManifest, type ProfileDoc } from "../../src/profiles";
+import { defaultAgentsFile } from "../../src/utils/home";
+
+// ADR-024 §7 step 1: v2 profiles (YAML/JSON), `extends`, overrides, layers, resolution to the v1 flat pin.
+describe("profiles v2: loader and resolution", () => {
+  /** A project (repo/.capcomd/) and a CAPCOMD_HOME (home/) with these files; `P/` is the project's profiles, `U/` the user's. */
+  function world(files: Record<string, string>, agents?: Record<string, unknown>, def?: string) {
+    const root = mkdtempSync(join(tmpdir(), "capcomd-prof-"));
+    const dir = join(root, "repo", ".capcomd");
+    mkdirSync(dir, { recursive: true });
+    if (agents) writeFileSync(join(dir, "agents.json"), JSON.stringify({ schema: AGENTS_SCHEMA, ...(def ? { default: def } : {}), agents }));
+    const at = (rel: string) => join(root, rel.replace(/^P\//, "repo/.capcomd/profiles/").replace(/^U\//, "home/profiles/"));
+    for (const [rel, body] of Object.entries(files)) { mkdirSync(dirname(at(rel)), { recursive: true }); writeFileSync(at(rel), body); }
+    const source = { CAPCOMD_HOME: join(root, "home"), CAPCOMD_AGENTS_FILE: join(dir, "agents.json") };
+    return { root, at, source, load: (bundled?: Record<string, ProfileDoc>) => readProfiles(source.CAPCOMD_AGENTS_FILE, source, bundled) };
+  }
+  const yaml = (lines: string[]) => lines.join("\n") + "\n";
+  const errorOf = (f: () => unknown) => { try { f(); } catch (e) { return (e as Error).message; } return ""; };
+
+  test("a package: profile.yaml and the files it names resolve to the flat pin", () => {
+    const w = world({
+      "P/security-critic/profile.yaml": yaml([
+        `schema: ${PROFILE_SCHEMA}`, "name: security-critic", "version: 3",
+        "description: Reviews a change for security regressions and reports a verdict.", "tags: [review, security, read-only]",
+        "identity:", "  title: Security critic", "  persona: SOUL.md",
+        "harness:", "  provider: claude", "  auth: subscription", "  model: claude-opus-4-1", "  effort: high",
+        "prompt:", "  append: prompt.md",
+        "tools:", `  allowed: [Read, Glob, Grep, "Bash(git diff:*)"]`,
+        "sandbox:", "  egress: [github.com, api.anthropic.com]", "  codex: read-only",
+        "limits:", "  maxTurns: 40", "  maxBudgetUsd: 3",
+        "lifecycle:", "  checkpointEveryMs: 600000",
+        "permissions:", "  report: true",
+        "x-perfloop:", "  gestures: [scroll]",
+      ]),
+      "P/security-critic/SOUL.md": "You are careful.\n",
+      "P/security-critic/prompt.md": "Report a verdict.\n",
+    });
+    const set = w.load();
+    expect(set.agents["security-critic"]).toEqual({
+      provider: "claude", auth: "subscription", model: "claude-opus-4-1", effort: "high",
+      description: "Reviews a change for security regressions and reports a verdict.", appendSystemPrompt: "Report a verdict.\n",
+      allowedTools: ["Read", "Glob", "Grep", "Bash(git diff:*)"], sandbox: "read-only", egress: ["github.com", "api.anthropic.com"],
+      maxTurns: 40, maxBudgetUsd: 3, checkpointEveryMs: 600000,
+    });
+    const p = set.profiles["security-critic"]!;
+    const path = w.at("P/security-critic/profile.yaml");
+    expect(p).toMatchObject({ name: "security-critic", version: 3, source: "project", path, format: "v2", applied: [{ as: "profile", name: "security-critic", layer: "project", path }] });
+    expect(p.manifest).toMatchObject({ tags: ["review", "security", "read-only"], identity: { title: "Security critic", persona: "SOUL.md" }, "x-perfloop": { gestures: ["scroll"] } });
+    // Read, not applied yet (ADR-024 steps 4 and 8): said, not silently dropped.
+    expect(set.warnings).toEqual(["profiles.security-critic: identity.persona, permissions.report are read but not used yet by this capcomd"]);
+    // The pin is what an agent spawns with: resolveAgent gives it, with the profile's version and layer.
+    expect(resolveAgent("security-critic", w.source)).toEqual({ name: "security-critic", kind: "claude-code", spec: set.agents["security-critic"]!, profile: { name: "security-critic", version: 3, source: "project" } });
+  });
+
+  test("the jobs block (spec §16.2) is pinned as is, from a v2 profile and an agents.json entry, and checked once", () => {
+    const w = world({ "P/builder.yaml": yaml(["name: builder", "harness: { provider: claude, auth: apikey }", "jobs: { foregroundMs: 1000, max: 2 }"]) },
+      { flat: { provider: "codex", auth: "apikey", jobs: { afterTurnMs: 60000 } } });
+    const set = w.load();
+    expect(set.agents.builder).toEqual({ provider: "claude", auth: "apikey", jobs: { foregroundMs: 1000, max: 2 } });
+    expect(set.agents.flat).toEqual({ provider: "codex", auth: "apikey", jobs: { afterTurnMs: 60000 } });
+    expect(set.warnings).toEqual([]);
+    expect(validateSpec("j", { provider: "codex", auth: "apikey", jobs: { max: 0, every: 1 } })).toEqual(['agents.j: jobs: unknown field "every"', "agents.j: jobs.max must be an integer >= 1"]);
+    const bad = world({ "P/b.yaml": yaml(["name: b", "harness: { provider: claude, auth: apikey }", "jobs: { max: 0 }"]) });
+    expect(errorOf(() => bad.load()).split("jobs.max").length).toBe(2);
+  });
+
+  test("extends: a child widens its parent (authoring), `null` removes what it inherits; a v1 entry can be the parent", () => {
+    const worker = { provider: "claude", auth: "subscription", model: "sonnet", maxTurns: 20, timeoutMs: 600000, egress: ["github.com"], appendSystemPrompt: "Be brief." };
+    const w = world({
+      "P/lead/profile.yaml": yaml([
+        "name: lead", "extends: worker", "description: Leads a part.",
+        "limits: { maxTurns: 40, timeoutMs: null }", "prompt: { append: null }", "sandbox: null",
+        "tools: { mode: orchestrate }", "children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }",
+      ]),
+    }, { worker }, "worker");
+    const set = w.load();
+    expect(set.agents.lead).toEqual({ provider: "claude", auth: "subscription", model: "sonnet", description: "Leads a part.", maxTurns: 40, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: ["worker"], maxChildren: 3 } });
+    expect(set.agents.worker).toEqual(worker as any); // v1, untouched
+    expect(set.profiles.lead!.applied).toEqual([
+      { as: "extends", name: "worker", layer: "project", path: w.source.CAPCOMD_AGENTS_FILE },
+      { as: "profile", name: "lead", layer: "project", path: w.at("P/lead/profile.yaml") },
+    ]);
+    expect(set.default).toBe("worker");
+    expect(set.warnings).toEqual([]);
+  });
+
+  test("a child wider than the profile that may spawn it is refused, on resolved specs", () => {
+    const w = world({
+      "P/worker.yaml": yaml(["name: worker", "harness: { provider: claude, auth: subscription }", "limits: { maxTurns: 20 }"]),
+      "P/lead.yaml": yaml(["name: lead", "extends: worker", "limits: { maxTurns: 40 }", "children: { allowSpawn: true, allowedChildProfiles: [worker] }"]),
+      "P/planner.yaml": yaml(["name: planner", "extends: lead", "limits: { maxTurns: 30 }", "children: { allowedChildProfiles: [lead, worker] }"]),
+    });
+    expect(() => w.load()).toThrow(`profiles.planner.children: child profile "lead" is wider than its parent (maxTurns 40 > 30)`);
+  });
+
+  test("layers: bundled ← the user's override ← the project's override; a project override of a user profile", () => {
+    const bundled = { worker: { name: "worker", harness: { provider: "claude", auth: "subscription" }, limits: { maxTurns: 30 }, tools: { disallowed: ["WebFetch"] } } };
+    const w = world({
+      "U/worker/override.yaml": yaml(["harness: { model: opus }", "limits: { maxTurns: 25 }"]),
+      "P/worker/override.yaml": yaml(["limits: { maxTurns: 10 }", "tools: { disallowed: null }", "default: true"]),
+      "U/critic/profile.yaml": yaml(["name: critic", "harness: { provider: codex, auth: apikey }", "limits: { maxTurns: 20, stuckRepeats: 4 }"]),
+      "P/critic/override.yaml": yaml(["limits: { maxTurns: 8 }"]),
+      // The project defines solo itself: the user's override of their own solo doesn't reach it.
+      "U/solo/profile.yaml": yaml(["name: solo", "harness: { provider: claude, auth: apikey }"]),
+      "U/solo/override.yaml": yaml(["harness: { model: opus }"]),
+      "P/solo/profile.yaml": yaml(["name: solo", "harness: { provider: claude, auth: subscription }"]),
+    });
+    const set = w.load(bundled);
+    expect(set.agents.worker).toEqual({ provider: "claude", auth: "subscription", model: "opus", maxTurns: 10 });
+    expect(set.profiles.worker).toMatchObject({ source: "bundled", path: null, applied: [
+      { as: "profile", name: "worker", layer: "bundled", path: null },
+      { as: "override", name: "worker", layer: "user", path: w.at("U/worker/override.yaml") },
+      { as: "override", name: "worker", layer: "project", path: w.at("P/worker/override.yaml") },
+    ] });
+    expect(set.default).toBe("worker");
+    expect(set.agents.critic).toEqual({ provider: "codex", auth: "apikey", maxTurns: 8, stuckRepeats: 4 });
+    expect(set.profiles.critic!.source).toBe("user");
+    expect(set.agents.solo).toEqual({ provider: "claude", auth: "subscription" });
+    expect(set.warnings).toEqual([`${w.at("U/solo/override.yaml")}: doesn't apply: the project profile solo (${w.at("P/solo/profile.yaml")}) is used, and only overrides at its layer or above apply to it`]);
+  });
+
+  test("extends cycles, unknown parents and parents in another project are refused", () => {
+    const msg = errorOf(() => world({
+      "P/a.yaml": yaml(["name: a", "extends: b"]),
+      "P/b.yaml": yaml(["name: b", "extends: a", "harness: { provider: claude, auth: apikey }"]),
+      "P/self/profile.yaml": yaml(["name: self", "extends: self"]),
+    }).load());
+    expect(msg).toContain("profiles.a: extends itself (a → b → a)");
+    expect(msg).toContain("profiles.self: extends itself (self → self)");
+    expect(msg.match(/extends itself/g)?.length).toBe(2); // once per cycle, not once per member
+    expect(() => world({ "P/x.yaml": yaml(["name: x", "extends: ../../other/.capcomd/profiles/worker"]) }).load())
+      .toThrow("extends: must be a profile's name: one of this project's, your own or a bundled one (never another project's, a path or a repository)");
+    expect(() => world({ "P/y.yaml": yaml(["name: y", "extends: nobody"]) }).load()).toThrow(`extends "nobody", which isn't a profile here`);
+  });
+
+  test("strict: unknown fields, names, overrides that re-parent, files outside the package", () => {
+    const w = world({
+      "P/a.yaml": yaml(["name: b", "harness: { provider: claude, auth: apikey, temperature: 1 }", "flavour: x", "x-tool: { ok: true }"]),
+      "P/c/override.yaml": yaml(["name: c", "extends: a"]),
+      "P/d/profile.yaml": yaml(["name: d", "harness: { provider: claude, auth: apikey }", "prompt: { append: ../secret.md, system: link.md }"]),
+      "P/e.json": JSON.stringify({ name: "e", harness: { provider: "claude", auth: "apikey" }, prompt: { append: "notes.md" } }),
+      "P/f/profile.yaml": yaml(["name: f", "harness: { provider: claude, auth: subscription, effort: ludicrous }", "limits: { maxTurns: 0, maxBudgetUsd: .inf }", "tools: { mode: orchestrate }"]),
+      "secret.md": "host secret\n",
+    });
+    symlinkSync(join(w.root, "secret.md"), w.at("P/d/link.md"));
+    const msg = errorOf(() => w.load());
+    for (const x of [
+      `${w.at("P/a.yaml")}: harness.temperature: unknown field`,
+      `${w.at("P/a.yaml")}: flavour: unknown field (a vendor extension is spelled x-<name>)`,
+      `${w.at("P/a.yaml")}: name: is "b", but the file is the profile a's`,
+      `${w.at("P/c/override.yaml")}: name: an override.yaml can't set it`,
+      `${w.at("P/c/override.yaml")}: extends: an override.yaml can't set it`,
+      `${w.at("P/d/profile.yaml")}: prompt.append names ../secret.md, which leads outside the profile's directory`,
+      `${w.at("P/d/profile.yaml")}: prompt.system names link.md, which leads outside the profile's directory`,
+      `${w.at("P/e.json")}: prompt.append names a file (notes.md), which only a profile directory (<name>/profile.yaml) can hold`,
+      // The flat fields are checked on the resolved profile, in v2 words.
+      "profiles.f: harness.effort must be one of low, medium, high, xhigh, max for provider claude",
+      "profiles.f: limits.maxTurns must be an integer >= 1",
+      "profiles.f: tools.mode orchestrate needs children.allowSpawn",
+      "profiles.f: limits.maxBudgetUsd must be > 0", // YAML can say .inf, which a pin (JSON) can't hold
+    ]) expect(msg).toContain(x);
+    expect(msg).not.toContain("x-tool");
+    expect(msg).not.toContain("host secret");
+  });
+
+  test("a manifest that doesn't parse: where, never what (the file may be a link to anything on the host)", () => {
+    const w = world({ "secret.txt": "[default]\naws_secret_access_key = SUPERSECRET123\n  bad: : indent\n", "secret.json": "SUPERSECRET123\n" });
+    mkdirSync(w.at("P/"), { recursive: true });
+    symlinkSync(join(w.root, "secret.txt"), w.at("P/x.yaml"));
+    symlinkSync(join(w.root, "secret.json"), w.at("P/y.json"));
+    writeFileSync(w.at("P/z.yaml"), yaml(["name: z", "harness: { provider: claude, auth: apikey }", "harness: { provider: codex, auth: apikey }"]));
+    const msg = errorOf(() => w.load());
+    expect(msg).toContain(`${w.at("P/x.yaml")}: can't be read (invalid YAML at line 2, column 1: Unexpected scalar at node end)`);
+    expect(msg).toContain(`${w.at("P/y.json")}: can't be read (invalid JSON: JSON Parse error: Unexpected identifier)`);
+    expect(msg).toContain(`${w.at("P/z.yaml")}: can't be read (invalid YAML at line 3, column 1: Map keys must be unique)`);
+    expect(msg).not.toContain("SUPERSECRET");
+    expect(msg).not.toContain("codex");
+  });
+
+  test("memory is read as context (ADR-025 D2); the layers that aren't built are refused", () => {
+    const set = world({
+      "P/m.yaml": yaml(["name: m", "harness: { provider: claude, auth: apikey }", "memory: { scope: project, files: [MEMORY.md], retain: 30d }"]),
+      "P/n.yaml": yaml(["name: n", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: groundray, brain: acme, allowStale: warn }], limits: { briefBytes: null, indexLines: 200 }, review: human }"]),
+    }).load();
+    expect(set.profiles.m!.manifest.context).toEqual({ providers: [{ name: "memory", layers: ["project", "run"], index: "MEMORY.md", retain: { lesson: "30d", feedback: "30d", reference: "30d" } }] });
+    expect(set.profiles.m!.manifest.memory).toBeUndefined();
+    expect(set.profiles.n!.manifest.context).toEqual({ providers: [{ name: "groundray", brain: "acme", allowStale: "warn" }], limits: { briefBytes: null, indexLines: 200 }, review: "human" });
+    expect(set.agents.m).toEqual({ provider: "claude", auth: "apikey" }); // no behaviour yet: nothing in the pin
+    expect(set.warnings).toEqual(["profiles.m: context.providers is read but not used yet by this capcomd", "profiles.n: context.providers is read but not used yet by this capcomd"]);
+    expect(checkManifest({ name: "u", memory: { scope: "user" } }, "profile", "u").join()).toContain("memory.scope: user memory isn't built");
+    expect(checkManifest({ name: "u", memory: { files: ["A.md", "B.md"] } }, "profile", "u").join()).toContain("memory.files: must name one index file");
+    expect(checkManifest({ name: "u", memory: {}, context: {} }, "profile", "u").join()).toContain("memory: is the old name of context: set one of them");
+    // `memory: null` in a child removes what it inherits, as `context: null` does (the parent's memory is its context).
+    const kids = world({
+      "P/m.yaml": yaml(["name: m", "harness: { provider: claude, auth: apikey }", "memory: { scope: project }"]),
+      "P/k.yaml": yaml(["name: k", "extends: m", "memory: null"]),
+      "P/j.yaml": yaml(["name: j", "extends: m", "memory: null", "context: { review: lint }"]),
+    }).load();
+    expect(kids.profiles.k!.manifest.context).toBeUndefined();
+    expect(kids.profiles.j!.manifest.context).toEqual({ providers: [{ name: "memory", layers: ["project", "run"] }], review: "lint" });
+    expect(checkManifest({ name: "u", context: { limits: { k: 1 }, review: "auto" } }, "profile", "u")).toEqual([
+      "context.limits.k: unknown field (briefBytes, indexLines, descriptionChars, itemBytes, proposalsPerRun)", `context.review: must be "human" or "lint"`,
+    ]);
+  });
+
+  test("agents.json beside v2: a v2 profile of the same name wins (with a warning); v1-only is exactly the v1 file", () => {
+    const worker = { provider: "codex", auth: "apikey", maxTurns: 5 };
+    const v1only = world({}, { worker, other: { provider: "claude", auth: "subscription" } }, "other");
+    const set = v1only.load();
+    expect(set).toMatchObject({ ...readAgentsFile(v1only.source.CAPCOMD_AGENTS_FILE), warnings: [] });
+    expect(set.profiles.worker).toMatchObject({ format: "v1", source: "project", version: 1, spec: worker });
+    const bad = world({}, { bad: { provider: "claude" } });
+    expect(() => bad.load()).toThrow(`${bad.source.CAPCOMD_AGENTS_FILE}: agents.bad: auth is required ("apikey" or "subscription"): neither is configured`);
+    const both = world({ "P/worker/profile.yaml": yaml(["name: worker", "harness: { provider: claude, auth: subscription }"]) }, { worker });
+    const b = both.load();
+    expect(b.agents.worker).toEqual({ provider: "claude", auth: "subscription" });
+    expect(b.warnings).toEqual([`${both.source.CAPCOMD_AGENTS_FILE}: agents.worker is hidden by ${both.at("P/worker/profile.yaml")} (a v2 profile wins over agents.json)`]);
+    // A v1 profile may name a v2 one as its child: the narrowing runs on the resolved set.
+    const mixed = world({ "P/helper.yaml": yaml(["name: helper", "harness: { provider: claude, auth: subscription }", "limits: { maxTurns: 50 }"]) },
+      { lead: { provider: "claude", auth: "subscription", maxTurns: 10, children: { allowSpawn: true, allowedChildProfiles: ["helper"] } } });
+    expect(() => mixed.load()).toThrow(`${mixed.source.CAPCOMD_AGENTS_FILE}: agents.lead.children: child profile "helper" is wider than its parent (maxTurns 50 > 10)`);
+    // A project with only .capcomd/profiles/ is a project with profiles.
+    const repo = join(both.root, "repo");
+    expect(defaultAgentsFile({ CAPCOMD_HOME: both.source.CAPCOMD_HOME }, repo)).toBe(join(repo, ".capcomd", "agents.json"));
+  });
+
+  test("overrides take v2 paths (v1 names stay aliases) and still only narrow", () => {
+    const w = world({ "P/lead/profile.yaml": yaml(["name: lead", "harness: { provider: claude, auth: subscription }", "limits: { maxTurns: 40 }", "tools: { allowed: [Read, Grep, Edit] }", "sandbox: { egress: [github.com, api.anthropic.com] }"]) });
+    expect(parseSetPairs(["limits.maxTurns=5", "tools.allowed=Read,Grep", "sandbox.egress=github.com"])).toEqual({ limits: { maxTurns: 5 }, tools: { allowed: ["Read", "Grep"] }, sandbox: { egress: ["github.com"] } });
+    expect(flatOverrides({ limits: { maxTurns: 5 }, tools: { allowed: ["Read"], mode: "orchestrate" }, sandbox: { codex: "read-only" }, harness: { model: "opus" } }))
+      .toEqual({ maxTurns: 5, allowedTools: ["Read"], toolMode: "orchestrate", sandbox: "read-only", model: "opus" });
+    expect(flatOverrides({ sandbox: "read-only", maxTurns: 3 })).toEqual({ sandbox: "read-only", maxTurns: 3 });
+    const set = parseSetPairs(["limits.maxTurns=5", "tools.allowed=Read,Grep"]);
+    expect(resolveAgent(encodeAgentRef("lead", { set }), w.source).spec).toMatchObject({ maxTurns: 5, allowedTools: ["Read", "Grep"], egress: ["github.com", "api.anthropic.com"] });
+    expect(() => resolveAgent(encodeAgentRef("lead", { set: { limits: { maxTurns: 99 } } }), w.source)).toThrow("maxTurns 99 > 40");
+    expect(() => resolveAgent(encodeAgentRef("lead", { set: { skills: [] } }), w.source)).toThrow(`unknown field "skills"`);
+    expect(() => resolveAgent(encodeAgentRef("lead", { set: { limits: { turns: 1 } } }), w.source)).toThrow(`unknown field "limits.turns"`);
+  });
+
+  test("the JSON Schema lists what the loader accepts", () => {
+    expect(PROFILE_JSON_SCHEMA.$id).toBe("https://capcomd.dev/schema/profile-v2.json");
+    const every = { name: "z", version: 1, description: "d", tags: ["t"], identity: { title: "T" }, harness: { provider: "claude", auth: "apikey", cliVersion: ">=2" }, prompt: { system: "s" },
+      skills: [{ name: "tdd", source: "user", hash: `sha256:${"0".repeat(64)}` }], tools: { mode: "execute", mcp: [{ name: "semgrep", command: ["semgrep-mcp"], trust: "untrusted" }] },
+      context: { providers: [{ name: "memory" }], review: "human" }, sandbox: { provider: "docker", environment: "default", size: { vcpu: 2 } }, limits: { maxTurns: 1 },
+      jobs: { foregroundMs: 60000, max: 8, afterTurnMs: 1800000 }, lifecycle: { onStart: [], onEnd: ["post-review-summary"] }, children: { allowSpawn: false },
+      permissions: { report: true }, sharing: { source: "github:acme/p#z", license: "MIT" }, "x-perfloop": { gestures: [] } };
+    expect(checkManifest(every, "profile", "z")).toEqual([]);
+    for (const k of [...Object.keys(every).filter((k) => !k.startsWith("x-")), "memory", "extends", "default", "schema"]) expect(Object.keys(PROFILE_JSON_SCHEMA.properties)).toContain(k);
+    expect(Object.keys(PROFILE_JSON_SCHEMA.patternProperties)).toEqual(["^x-[a-z0-9][a-z0-9-]*$"]);
+  });
+
+  test("CLI: agents list/show/validate read v2 profiles; add/set/rm say they don't edit them", () => {
+    const w = world({ "P/critic/profile.yaml": yaml(["name: critic", "description: Reviews.", "harness: { provider: claude, auth: apikey }", "tools: { allowed: [Read, Grep] }", "skills: [{ name: tdd }]"]) },
+      { worker: { provider: "codex", auth: "apikey" } });
+    const env = { ...w.source, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
+    const list = JSON.parse(cli(["agents", "list", "--json"], env).out);
+    expect(list.agents.map((a: any) => [a.name, a.provider, a.does])).toEqual([["worker", "codex", expect.any(String)], ["critic", "claude", expect.stringContaining("read-only: a reviewer")]]);
+    expect(JSON.parse(cli(["agents", "show", "critic", "--json"], env).out).spec).toEqual({ provider: "claude", auth: "apikey", description: "Reviews.", allowedTools: ["Read", "Grep"] });
+    expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: skills is read but not used yet by this capcomd"] });
+    const set = cli(["agents", "set", "critic", "--model", "opus", "--json"], env);
+    expect(set.code).not.toBe(0);
+    expect(JSON.parse(set.out).error.message).toContain(`profile "critic" is defined in ${w.at("P/critic/profile.yaml")}`);
+    expect(JSON.parse(readFileSync(w.source.CAPCOMD_AGENTS_FILE, "utf8")).agents).toEqual({ worker: { provider: "codex", auth: "apikey" } });
   }, 30_000);
 });

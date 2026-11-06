@@ -5,12 +5,12 @@ import { definePlugin } from "../../../../packages/plugin/src/index";
 import { HOOK_NAMES, HOOKS, type HookCall, type HookName } from "../../../../packages/plugin/src/hooks";
 
 /** What the test reads back about one call. */
-export type Recorded = { hook: HookName; mode: string; at: string; key: string; runId: string | null; agentId: string | null; principal: string; change: string | null; subject: string | null };
+export type Recorded = { hook: HookName; mode: string; at: string; key: string; runId: string | null; agentId: string | null; principal: string; change: string | null; subject: string | null; profile?: { name: string; version: number; source: string } };
 
 function record(call: HookCall): Recorded {
   const p = call.payload as Record<string, any>;
   const subject = p.job?.jobId ?? p.merge?.mrgId ?? p.verification?.vfyId ?? p.approval?.approvalId ?? p.agent?.id ?? p.machine?.id ?? (call.hook === "agent.spawning" ? p.spawn?.profile : null) ?? (call.hook === "profile.resolved" ? p.profile?.name : null) ?? null;
-  return { hook: call.hook, mode: call.mode, at: call.at, key: call.idempotencyKey, runId: call.runId, agentId: call.agentId, principal: call.principal.kind, change: p.change?.kind ?? null, subject };
+  return { hook: call.hook, mode: call.mode, at: call.at, key: call.idempotencyKey, runId: call.runId, agentId: call.agentId, principal: call.principal.kind, change: p.change?.kind ?? null, subject, ...(call.hook === "profile.resolved" ? { profile: p.profile } : {}) };
 }
 
 export const plugin = definePlugin({

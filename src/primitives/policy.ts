@@ -2,7 +2,7 @@
 // budget is carved from the parent. Kept free of I/O so it can be unit-tested and so the
 // scope actor applies the same rules inside its spawn transaction.
 import { createHash } from "crypto";
-import { widenings, type AgentSpec, type ChildrenSpec } from "../agents/profiles";
+import { widenings, type AgentSpec, type ChildrenSpec } from "../profiles";
 
 export const TERMINAL_AGENT = new Set(["done", "failed", "cancelled"]);
 /** "paused" (ADR-019 §6): stopped by its provider's usage limit, work kept; it resumes after the reset or on `resume`. */

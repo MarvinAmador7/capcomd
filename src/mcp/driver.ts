@@ -521,9 +521,9 @@ export async function setup() {
 }
 
 export async function profiles() {
-  const { agentsFilePath, readAgentsFile, leadText, abilityText } = await import("../agents/profiles");
+  const { agentsFilePath, readProfiles, leadText, abilityText } = await import("../profiles");
   const { readiness } = await import("../cli/commands/agents");
-  const f = readAgentsFile(agentsFilePath());
+  const f = readProfiles(agentsFilePath());
   const profiles = Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...readiness(name, s) }));
   const leads = profiles.filter((p) => p.canLead).map((p) => p.name);
   return {

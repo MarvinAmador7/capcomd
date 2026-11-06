@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { credentialReady, plannerDriver } from "../../src/agents/run-driver";
-import { decodeAgentRef, resolveAgent } from "../../src/agents/profiles";
+import { decodeAgentRef, resolveAgent } from "../../src/profiles";
 import { addClient, loadClients } from "../../src/api/clients";
 import { CAPABILITY_NAMES, CreateRunBody, RunOptions } from "../../src/api/contract";
 import { launchContext, startDetachedRun } from "../../src/api/create-run";
@@ -346,7 +346,7 @@ describe("capcomd run --planner-provider / --sandbox (checked before the engine 
 describe("effort (the driver's reasoning effort)", () => {
 	const { claudeAdapter, codexAdapter } = require("../../src/agents/adapters") as typeof import("../../src/agents/adapters");
 	const { loadAgentConfig, agentEffort } = require("../../src/agents/config") as typeof import("../../src/agents/config");
-	const { validateSpec } = require("../../src/agents/profiles") as typeof import("../../src/agents/profiles");
+	const { validateSpec } = require("../../src/profiles") as typeof import("../../src/profiles");
 	const ctx = (cfg: any) => ({ bin: "x", repo: "/r", promptFile: "/p", jsonl: "/j", errFile: "/e", dir: "/w", cfg });
 	const q = (s: string) => `'${s}'`;
 
@@ -575,6 +575,16 @@ describe("GET /v1/run-options?repo= (capability runs.options.repo)", () => {
 		const ctx = launchContext(p, { CAPCOMD_NO_CONFIG: "1", CAPCOMD_AGENTS_FILE: "/daemon/agents.json" });
 		expect(ctx.env.CAPCOMD_AGENTS_FILE).toBeUndefined();
 		expect(launchContext(notProjectWithConfig(), { CAPCOMD_NO_CONFIG: "1", CAPCOMD_AGENTS_FILE: "/daemon/agents.json" }).env.CAPCOMD_AGENTS_FILE).toBe("/daemon/agents.json");
+	});
+	test("so do its v2 profiles, with no agents.json (ADR-024: .capcomd/profiles/)", async () => {
+		resetDockerCheck();
+		const p = notProjectWithConfig();
+		mkdirSync(join(p, ".capcomd", "profiles"));
+		writeFileSync(join(p, ".capcomd", "profiles", "worker.yaml"), "name: worker\nharness: { provider: claude, auth: subscription }\n");
+		writeFileSync(join(p, ".capcomd", "profiles", "planner.yaml"), "name: planner\nextends: worker\nharness: { model: claude-opus-5-5 }\nchildren: { allowSpawn: true, allowedChildProfiles: [worker] }\n");
+		expect(launchContext(p, { CAPCOMD_NO_CONFIG: "1", CAPCOMD_AGENTS_FILE: "/daemon/agents.json" }).env.CAPCOMD_AGENTS_FILE).toBeUndefined();
+		expect((await runOptionsFor(p, daemon(), dockerUp)).drivers[0]).toMatchObject({ provider: "claude", model: "claude-opus-5-5", available: true, default: true });
+		resetDockerCheck();
 	});
 	const notProjectWithConfig = () => {
 		const d = mkdtempSync(join(dir, "cfg-only-"));

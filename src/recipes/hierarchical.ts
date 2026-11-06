@@ -8,7 +8,7 @@ import { withSpan } from "../utils/tracing-simple";
 import { sandboxAuthError } from "../plugins/sandboxes";
 import { preflightNeeded, runPreflight } from "../core/preflight";
 import { RelayError } from "../core/errors";
-import { decodeAgentRef, parseAgentDirective } from "../agents/profiles";
+import { decodeAgentRef, parseAgentDirective } from "../profiles";
 import { awaitThroughPauses, mergeRef, runNew, spawnAgent, verifyRef } from "../primitives/ops";
 import * as S from "../primitives/state";
 import { isProtectedBranch } from "../utils/protected";

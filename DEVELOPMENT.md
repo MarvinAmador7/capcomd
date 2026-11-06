@@ -21,8 +21,8 @@ Run the CLI from the checkout with `bun capcomd â€¦` (or `bun src/cli/index.ts â
 ### Where state lives
 
 A git checkout keeps state next to the code: `.relay/` (auth profiles, env snapshot ledger, boxd VM ledger, run
-logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json`. An installed CLI, or any CLI with
-`CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`). The daemon's `harness-state.json`, the
+logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json` (with v2 profiles in `.capcomd/profiles/`). An
+installed CLI, or any CLI with `CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`, `profiles/`). The daemon's `harness-state.json`, the
 engine autostart's `engine.log` and the agent token signing key `rpc.key` follow the same rule: `.relay/` in a checkout, the top of `~/.capcomd` otherwise. `src/utils/home.ts` decides; the
 per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_LEDGER`, `CAPCOMD_TRACE_DIR`,
 `CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`, `CAPCOMD_RUNS_INDEX`, `CAPCOMD_RPC_KEY_FILE`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
@@ -74,7 +74,7 @@ Design documents live in `docs/`. Start with:
 ```
 src/
   actors/       - Rivet actors (run, scope, worker, verifier, planner, taskboard, judge)
-  agents/       - Claude Code / Codex adapters, profiles, credentials, the agent runner
+  agents/       - Claude Code / Codex adapters, credentials, the agent runner
   auth/         - subscription logins (auth login/status/logout)
   cli/          - CLI commands
   core/         - client, errors, preflight, VM cleanup checks
@@ -95,6 +95,9 @@ src/
                   a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite)
   primitives/   - ADR-016 operations, policy, task board, kv
+  profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
+                  layers a name resolves through, project, user, bundled (load.ts), resolution, pins and overrides
+                  (resolve.ts)
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

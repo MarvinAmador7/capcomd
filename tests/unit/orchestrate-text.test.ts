@@ -8,7 +8,7 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { plannerBrief } from "../../src/recipes/planner-agent";
 import { orchestrationSkill } from "../../src/subagents/skill";
-import { abilityText, ORCHESTRATE_TEXT } from "../../src/agents/profiles";
+import { abilityText, ORCHESTRATE_TEXT } from "../../src/profiles";
 import { LEAD_DESCRIPTION, PLANNER_DESCRIPTION, planProject } from "../../src/config/project-setup";
 import { INSTRUCTIONS } from "../../src/mcp/server";
 import { logLinesOf, REFUSAL } from "../../src/agents/runner";

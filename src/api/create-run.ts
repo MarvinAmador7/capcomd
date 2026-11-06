@@ -3,8 +3,8 @@
 // the engine and the background process; this file only decides the directory and environment it runs in.
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
-import { defaultAgentsFile } from "../utils/home";
+import { isAbsolute, resolve } from "node:path";
+import { defaultAgentsFile, hasProjectProfiles } from "../utils/home";
 import { applyConfig, projectConfigPath, readConfig } from "../config/store";
 import { REPO_ENV_KEYS, loadMergeConfig } from "../merge/config";
 import { env as envVar } from "../utils/env";
@@ -47,8 +47,9 @@ function contextFor(repo: string | undefined, base: Env, cwd: string): { cwd: st
 	// So does the project's sandbox: a run of a project that names one runs there, not on the daemon's CAPCOMD_SANDBOX.
 	const projEnv = readConfig(project).env ?? {};
 	if (projEnv.CAPCOMD_SANDBOX || projEnv.RELAY_SANDBOX) { delete env.CAPCOMD_SANDBOX; delete env.RELAY_SANDBOX; }
-	// The project's own profiles (.capcomd/agents.json, which the CLI finds from its directory) win over the daemon's file.
-	if (existsSync(join(dir, ".capcomd", "agents.json"))) { delete env.CAPCOMD_AGENTS_FILE; delete env.RELAY_AGENTS_FILE; }
+	// The project's own profiles (.capcomd/agents.json or .capcomd/profiles/, which the CLI finds from its directory) win
+	// over the daemon's file.
+	if (hasProjectProfiles(dir)) { delete env.CAPCOMD_AGENTS_FILE; delete env.RELAY_AGENTS_FILE; }
 	// CAPCOMD_NO_CONFIG (tests) skips the user's settings, never the project the request named.
 	if (base.CAPCOMD_NO_CONFIG) { for (const [k, v] of Object.entries(readConfig(project).env ?? {})) if (env[k] === undefined && typeof v === "string") env[k] = v; }
 	else applyConfig(env, dir);

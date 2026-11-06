@@ -66,7 +66,7 @@ export async function runPreflight(source: Record<string, string | undefined> = 
 
   const { credentialModeFor } = require("../agents/config") as typeof import("../agents/config");
   const { profileFor } = require("../auth/profiles") as typeof import("../auth/profiles");
-  const { resolveAgent } = require("../agents/profiles") as typeof import("../agents/profiles");
+  const { resolveAgent } = require("../profiles") as typeof import("../profiles");
   let agent: string = "fake";
   let credMode: string = "auto";
   try {

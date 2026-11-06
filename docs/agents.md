@@ -14,6 +14,44 @@ capcomd run --profile rev --overrides '{"maxTurns":50}' --operator "goal"       
 
 For Hermes or another orchestrator: define profiles with `agents add NAME --spec '<json>' --json`, read them with `agents list --json`, and select one per goal with `--profile`, or a per-task directive `[agent:NAME] …` in the goal text.
 
+## Profile files (v2: `profile.yaml`)
+
+A profile can also be a YAML (or JSON) file of its own, schema `capcomd.profile/v2` (design: ADR-024 §2): a
+directory `.capcomd/profiles/<name>/profile.yaml` (a package: the files it names sit next to it), or a single
+`.capcomd/profiles/<name>.yaml`. Your own profiles, for every project, go in `~/.capcomd/profiles/`.
+
+```yaml
+# .capcomd/profiles/lead/profile.yaml
+schema: capcomd.profile/v2
+name: lead
+extends: worker                  # a profile of this project, your own or a bundled one; never another project's
+description: Leads a part of the work.
+harness: { model: claude-opus-5-5, effort: high }   # provider and auth come from worker
+prompt: { append: prompt.md }    # a file name in the profile's directory is read from it
+tools: { mode: orchestrate }
+limits: { maxTurns: 40, timeoutMs: null }           # null removes what worker set
+children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
+```
+
+- The blocks are `harness` (provider, auth, model, effort), `prompt` (system, append), `tools` (mode, allowed,
+  disallowed), `sandbox` (codex, egress), `limits`, `lifecycle` (checkpointEveryMs), `children`, plus `description`,
+  `tags`, `version` and `default: true`. Each `agents.json` field has a home there (ADR-024 §6). Unknown keys are
+  refused, except `x-<name>` ones a plugin may read.
+- `extends` lays the child over its parent: values and lists replace, blocks merge key by key, and `null` removes a
+  key. A child may do more than its parent (a lead is a worker that can spawn); only the profiles a profile may
+  *spawn* (`children.allowedChildProfiles`) must be no wider than it, and that is checked on the resolved profiles.
+- A name is looked up in the project's `.capcomd/profiles/`, then `~/.capcomd/profiles/`, then the ones bundled with
+  capcomd. An `override.yaml` in `<name>/` changes a profile without copying it (same blocks, no `name`): yours over a
+  bundled one, the project's over yours or a bundled one.
+- `agents.json` keeps working as before; a `profile.yaml` of the same name in the same place wins, and `capcomd
+  agents validate` says so. `capcomd agents list`, `show` and `validate` read both; `add`, `set` and `rm` edit only
+  `agents.json`.
+- `identity`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name), `sandbox.provider|environment|size`,
+  `lifecycle.onStart|onEnd` and `permissions` are checked but don't change what an agent does yet; `capcomd agents
+  validate` lists the ones a profile sets. `jobs` (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background
+  jobs (`capcomd job start`), as the flat `jobs` field does in `agents.json`.
+- `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
+
 ## The planner's provider, model and effort for one run
 
 A run with a planner agent uses the project's `planner` profile. Three flags change it for that run only, without
