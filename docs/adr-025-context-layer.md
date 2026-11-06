@@ -596,7 +596,8 @@ this list says why):
   `deprecate` need a `target` (its `provider` defaults to `memory`). Provenance is `method: agent-generated`,
   `by: process:<agentId>`, `origin` from the agent's record (`image` null until a run records one).
 - The candidates are kept in kv `_context/<agentId>` (reserved, written by the kernel once, with `expect: 0`, so a
-  replayed change adds nothing; every agent of the run reads it: `capcomd kv get _context/<agentId>`), where the
+  replayed change adds nothing, and an agent resumed after it ended keeps its first end's candidates; every agent of
+  the run reads it: `capcomd kv get _context/<agentId>`), where the
   consolidator (step 3) finds them, beside one `plugin.context.proposed` per candidate (the candidate in its data) and
   one `plugin.context.refused` per refusal (a number and a reason: `secret`, `token`, `entropy`, `path`, `invalid`,
   `too_large`, `over_cap`; never the text). A run's own event log keeps what the agent wrote in its result, as before;
