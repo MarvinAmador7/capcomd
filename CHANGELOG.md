@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a big repository no longer fails to clone after 10 minutes. The host's fetch into its mirror now fails only when
+  git has reported no progress for 5 minutes (`CAPCOMD_GIT_STALL_SECONDS`), or after 3 hours
+  (`CAPCOMD_GIT_FETCH_MAX_SECONDS`), and `capcomd env build` no longer gives it 15 minutes. Git bundles go to an
+  agent's machine, and come back from it, 8 MiB at a time from disk (`CAPCOMD_TRANSFER_CHUNK_BYTES`) instead of whole
+  in memory.
+- New: a long clone, fetch or push says how far it is. Every 15 seconds (`CAPCOMD_TRANSFER_PROGRESS_SECONDS`) the
+  agent's log (`capcomd logs <run> <agent>`) and engine.log get a line such as `[capcomd] git clone: uploading 120.0 MB
+  of 478.0 MB (25%) to the sandbox, 5m 08s at 0.39 MB/s`, its trace span gets a `git.progress` event and the bytes
+  moved (`git.bytes`), and `capcomd env build` prints the same lines.
 - New: a guide to writing capcomd plugins, [docs/plugins.md](docs/plugins.md): the manifest, the hooks and how to
   answer them, settings and secrets, testing, and how to ship a plugin people install with `capcomd plugins install`.
 - New: `@capcomd/plugin`, the package for writing plugins, can be published to npm with capcomd's releases, at

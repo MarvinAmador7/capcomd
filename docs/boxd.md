@@ -81,6 +81,17 @@ mirror and pushes it to the repository's URL. Before, a git exec got the GitHub 
 (`gitCredentials`), so anything an agent planted in its VM (a credential helper, `url.*.insteadOf`, a hook, a `git`
 on its PATH, a process reading another's environment) could take it; the hook is gone.
 
+### Big repositories
+
+The host's mirror is kept between runs (`<state>/host-git`, one per repository URL), so only its first fetch is big.
+That fetch ends only when git has reported no progress for `CAPCOMD_GIT_STALL_SECONDS` (default 300), or at
+`CAPCOMD_GIT_FETCH_MAX_SECONDS` (default 3 hours), never at a fixed 10 minutes. A bundle goes to the VM, and a pushed
+one comes back, a chunk at a time from disk (`CAPCOMD_TRANSFER_CHUNK_BYTES`, default 8 MiB), never whole in memory.
+While a transfer lasts, every 15 seconds (`CAPCOMD_TRANSFER_PROGRESS_SECONDS`) it says how far it is: in the agent's
+log (`capcomd logs <run> <agent>`: `[capcomd] git clone: uploading 120.0 MB of 478.0 MB (25%) to the sandbox, 5m 08s
+at 0.39 MB/s`), in engine.log, and as `git.progress` events on its `git.clone`/`git.fetch`/`git.push` span, which also
+records the bytes moved (`git.bytes`). `capcomd env build` prints the same lines.
+
 ## Typed errors (`src/providers/boxd-errors.ts`)
 
 | class | from |

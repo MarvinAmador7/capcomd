@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import type { ForgeRemoteCredential } from "../../packages/plugin/src/seams";
-import { Git, type GitResult } from "./git";
+import { Git, type GitResult, type GitRunOptions } from "./git";
 
 /** The git subcommands that talk to a remote. */
 export const NETWORK_OPS = ["fetch", "push", "ls-remote", "clone", "pull"] as const;
@@ -176,7 +176,14 @@ export async function hostCredentialEnv(remote: string, source: Record<string, s
 
 // ---- running it --------------------------------------------------------------------------------------------------
 
-export interface RemoteGitOptions { timeoutMs?: number; signal?: AbortSignal; input?: string; env?: Record<string, string> }
+export type RemoteGitOptions = Pick<GitRunOptions, "timeoutMs" | "signal" | "input" | "env" | "stallMs" | "onProgress"> & {
+  /**
+   * A fetch receives every pack with index-pack (`fetch.unpackLimit=1`), never unpack-objects: under git's unpack limit
+   * (100 objects) unpack-objects writes no progress while a big object arrives, so a fetch bounded by `stallMs` would be
+   * killed while it is still moving. index-pack reports the bytes received every second.
+   */
+  indexPack?: boolean;
+};
 
 /**
  * A network git command (`fetch`, `push`, `ls-remote`) against `remote` (its URL, which must be in `args`), in
@@ -189,7 +196,8 @@ export async function remoteGit(git: Git, args: string[], remote: string, o: Rem
   if (!args.includes(remote)) throw new Error(`remoteGit needs the remote's URL in its arguments (git ${op})`);
   const why = await hostRepoProblems(git);
   if (why.length) throw new HostRepoRefused(git.cwd, why);
-  return git.run(args, { ...o, env: { ...(await hostCredentialEnv(remote)), ...(o.env ?? {}) } });
+  const { indexPack, ...run } = o;
+  return git.run([...(indexPack && op === "fetch" ? ["-c", "fetch.unpackLimit=1"] : []), ...args], { ...run, env: { ...(await hostCredentialEnv(remote)), ...(o.env ?? {}) } });
 }
 
 /** A directory in no repository (git finds none above it), where a command that needs no repository runs. */

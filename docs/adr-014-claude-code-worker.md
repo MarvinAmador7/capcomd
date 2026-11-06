@@ -14,6 +14,8 @@ mode are unchanged. The adapter runs inside the worker actor's `pushBranch`, in 
    pushed branch, or after a merge conflict (rework) it starts from the latest target. Git auth comes from the provider's
    `GitCredentialHook` (`src/agents/credentials.ts`). The GitHub token goes into the env of that one `git` exec only, through an inline
    `credential.helper`. It is never written to disk, never put in the remote URL, and the agent process never sees it.
+   (Superseded on 2026-11-05: no git credential enters the VM any more, and the VM runs no network git. The host
+   fetches and pushes for it through its mirror, with bundles; docs/spec/plugin-api.md §11.7.)
 2. **Install (pinned)**: Node `22.23.3` from nodejs.org and `@anthropic-ai/claude-code@2.1.303` from npm, installed into
    `$workdir/home`. Both are skipped if the pinned versions are already present.
 3. **Run headless**: `claude -p <prompt> --output-format stream-json --verbose --max-turns N --max-budget-usd B
