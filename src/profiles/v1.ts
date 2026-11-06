@@ -3,6 +3,7 @@
 // exactly one auth mode and harness limits; tasks and runs select one by name. Env (CAPCOMD_AGENT, CAPCOMD_AGENT_*)
 // stays an override on top.
 import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
+import type { ContextSpec } from "../../packages/plugin/src/context-layer";
 
 export const AGENTS_SCHEMA = "capcomd.agents/v1";
 /** An active agent provider's name (docs/spec/plugin-api.md §7.3; ADR-024 `harness.provider`): the built-ins are
@@ -52,6 +53,9 @@ export interface AgentSpec {
    *  for the result (default 60 s; 5 s for orchestrate), how many may run at once (8), and how long one may run
    *  (30 min). Unset: the daemon's CAPCOMD_JOBS_* or those defaults. */
   jobs?: JobsSpec;
+  /** ADR-025 §10 (v2 `context`; ADR-024's `memory` is read as it): the context providers the kernel's router briefs the
+   *  agent from at start (an index of the project's memory and facts, never their bodies), and their budgets. */
+  context?: ContextSpec;
 }
 export interface JobsSpec { foregroundMs?: number; max?: number; afterTurnMs?: number }
 export interface ChildrenSpec {
@@ -121,6 +125,7 @@ export const AGENTS_JSON_SCHEMA = {
         children: { $ref: "#/$defs/children" },
         toolMode: { enum: ["execute", "orchestrate"], default: "execute", description: "orchestrate: reads, spawns and decides; never edits files, runs work commands or pushes (needs children.allowSpawn)" },
         jobs: { $ref: "#/$defs/jobs" },
+        context: { $ref: "#/$defs/context" },
       },
     },
     jobs: {
@@ -131,6 +136,16 @@ export const AGENTS_JSON_SCHEMA = {
         foregroundMs: { type: "integer", minimum: 0, description: "How long a start waits for the result before answering running (default 60000; 5000 for orchestrate)" },
         max: { type: "integer", minimum: 1, description: "Jobs running at once (default 8)" },
         afterTurnMs: { type: "integer", minimum: 1000, description: "How long a job may run before it is stopped (default 1800000)" },
+      },
+    },
+    context: {
+      type: "object",
+      additionalProperties: false,
+      description: "What the agent is briefed with at start (ADR-025): an index of the project's memory and facts from these context providers, never their bodies",
+      properties: {
+        providers: { type: "array", items: { type: "object", required: ["name"], properties: { name: { type: "string", pattern: "^[a-z0-9][a-z0-9_-]{0,62}$" }, layers: { type: "array", items: { enum: ["project", "run"] }, uniqueItems: true } }, description: "A context provider (capcomd plugins list) and its own settings" } },
+        limits: { type: "object", additionalProperties: false, properties: Object.fromEntries(["briefBytes", "indexLines", "descriptionChars", "itemBytes", "proposalsPerRun"].map((k) => [k, { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] }])), description: "The brief's budgets; null: the eval's default for the model" },
+        review: { enum: ["human", "lint"] },
       },
     },
     children: {
@@ -201,8 +216,45 @@ export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { 
     }
   }
   if (s.toolMode !== undefined && s.toolMode !== "execute" && s.toolMode !== "orchestrate") at(`${k$("toolMode")} must be "execute" or "orchestrate"`);
+  if (s.context !== undefined) {
+    if (!s.context || typeof s.context !== "object" || Array.isArray(s.context)) at("context must be an object");
+    else e.push(...validateContext(s.context as Record<string, unknown>).map((m) => `${labels.prefix}: ${m}`));
+  }
   // §16.1: an orchestrator with no children can do nothing.
   if (s.toolMode === "orchestrate" && (s.children as ChildrenSpec | undefined)?.allowSpawn !== true) at(`${k$("toolMode")} orchestrate needs children.allowSpawn: an orchestrate agent does its work through the agents it spawns`);
+  return e;
+}
+
+/** ADR-025 §6.4 `ContextLimits`: null is the eval's default for the profile's model. */
+export const CONTEXT_LIMITS = ["briefBytes", "indexLines", "descriptionChars", "itemBytes", "proposalsPerRun"] as const;
+const CONTEXT_KEYS = ["providers", "limits", "review"];
+const LAYERS = ["project", "run"];
+const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** A `context` block (ADR-025 §10): `providers` (each a provider's name, the layers it reads and its own settings),
+ *  `limits`, `review`. Messages name the field from `context.`. */
+export function validateContext(c: Record<string, unknown>): string[] {
+  const e: string[] = [];
+  for (const k of Object.keys(c)) if (!CONTEXT_KEYS.includes(k)) e.push(`context.${k}: unknown field (${CONTEXT_KEYS.join(", ")})`);
+  if (c.providers != null) {
+    if (!Array.isArray(c.providers) || c.providers.some((p) => !isMap(p) || typeof p.name !== "string" || !NAME.test(p.name))) e.push("context.providers: must be a list of { name: <a context provider>, … its settings }");
+    else {
+      const names = c.providers.map((p) => (p as { name: string }).name);
+      const twice = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+      if (twice.length) e.push(`context.providers: names ${twice.join(", ")} more than once`);
+      for (const p of c.providers as Array<Record<string, unknown>>)
+        if (p.layers !== undefined && !(Array.isArray(p.layers) && p.layers.length && p.layers.every((l) => LAYERS.includes(l as string)) && new Set(p.layers).size === p.layers.length))
+          e.push(`context.providers.${p.name}.layers: must be a list of ${LAYERS.join(", ")} (the layers that exist, ADR-025 §4)`);
+    }
+  }
+  if (c.limits != null) {
+    if (!isMap(c.limits)) e.push("context.limits: must be a map");
+    else for (const [k, v] of Object.entries(c.limits)) {
+      if (!(CONTEXT_LIMITS as readonly string[]).includes(k)) e.push(`context.limits.${k}: unknown field (${CONTEXT_LIMITS.join(", ")})`);
+      else if (v !== null && !(Number.isInteger(v) && (v as number) >= 1)) e.push(`context.limits.${k}: must be an integer >= 1, or null for the default`);
+    }
+  }
+  if (c.review != null && c.review !== "human" && c.review !== "lint") e.push(`context.review: must be "human" or "lint"`);
   return e;
 }
 
@@ -298,6 +350,8 @@ export function widenings(base: AgentSpec, next: AgentSpec): string[] {
   }
   const extraKids = (nc.allowedChildProfiles ?? []).filter((x) => !(bc.allowedChildProfiles ?? []).includes(x));
   if (extraKids.length) w.push(`children.allowedChildProfiles adds ${extraKids.join(",")}`);
+  // ADR-025 §8: what an agent is briefed with is its profile's; an override may drop it, never add or change it.
+  if (next.context !== undefined && JSON.stringify(next.context) !== JSON.stringify(base.context)) w.push("context changed (only the profile sets it; an override may only remove it)");
   return w;
 }
 
@@ -334,8 +388,9 @@ export function childNarrowing(agents: Record<string, AgentSpec>, label = (n: st
       if (!child) { e.push(`${label(n)}.children.allowedChildProfiles: "${c}" is not a defined agent`); continue; }
       if (c === n && s.children?.allowSpawn) continue; // self-similar children are narrowing by definition
       // Children inherit from the parent and may only narrow (provider/auth may differ: each child has its own credential;
-      // so may the tool mode: an orchestrator's children do the work).
-      const w = widenings({ ...s, provider: child.provider, auth: child.auth, toolMode: child.toolMode }, child).filter((x) => !x.startsWith("children."));
+      // so may the tool mode: an orchestrator's children do the work; and its context: each profile is briefed with its own,
+      // ADR-025 D12).
+      const w = widenings({ ...s, provider: child.provider, auth: child.auth, toolMode: child.toolMode, context: child.context }, child).filter((x) => !x.startsWith("children."));
       if (w.length) e.push(`${label(n)}.children: child profile "${c}" is wider than its parent (${w.join("; ")})`);
     }
   }

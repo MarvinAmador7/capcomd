@@ -7,7 +7,7 @@
 // hidden checker scores each step with `capcomd check` on the agent's branch, in a sandbox like verify's; nothing is
 // self-reported. Results are per model; re-run on every model release (§9: every constant is an eval output per model).
 //
-//   bun scripts/eval-context.ts                                    # the fake sandbox and agent (CI): the harness itself
+//   bun scripts/eval-context.ts --arms none,agents-md,index        # the fake sandbox and agent (CI): the harness itself
 //   bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-6.1-sol --port 6571 --evidence docs/evidence/context
 //
 // --agents fake (default) runs on the fake-host sandbox with scripts/eval-context/fake-agent.ts as `claude`, and with
@@ -81,14 +81,16 @@ const sh = (cmd: string[], cwd?: string) => {
 };
 writeFileSync(join(WORK, "world.yaml"), Bun.YAML.stringify(world, null, 2));
 
-// ── the agents: one profile per model ────────────────────────────────────────────────────────────
+// ── the agents: one profile per model, and per arm whose profile has a context block ─────────────
 const profileOf = (model: string) => `eval-${model.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+const profileFor = (model: string, arm: string) => (armNamed(arm)?.context ? `${profileOf(model)}-${arm}` : profileOf(model));
 const providerOf = (model: string) => (LIVE ? (/^claude|opus|sonnet|haiku/.test(model) ? "claude" : "codex") : "claude");
 const agentsFile = join(WORK, "agents.json");
-writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: Object.fromEntries(models.map((m) => [profileOf(m), {
-  provider: providerOf(m), auth: LIVE ? "subscription" : "apikey", ...(LIVE ? { model: m } : {}), maxTurns: Number(a["max-turns"]),
-  description: `context eval agent on ${m}`,
-}])) }, null, 2));
+const spec = (m: string) => ({ provider: providerOf(m), auth: LIVE ? "subscription" : "apikey", ...(LIVE ? { model: m } : {}), maxTurns: Number(a["max-turns"]), description: `context eval agent on ${m}` });
+writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: Object.fromEntries(models.flatMap((m) => [
+  [profileOf(m), spec(m)],
+  ...arms.filter((arm) => arm.context).map((arm) => [profileFor(m, arm.name), { ...spec(m), context: arm.context }]),
+])) }, null, 2));
 // The fake agent is `claude` for the runner: a wrapper with this bun, so it runs wherever the runner's PATH points.
 const fakeBin = join(WORK, "fake-claude");
 writeFileSync(fakeBin, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(import.meta.dir, "eval-context", "fake-agent.ts"))} "$@"\n`, { mode: 0o755 });
@@ -221,7 +223,7 @@ async function runChain(model: string, armName: string, rep: number, chain: Chai
       runId = r.j?.runId ?? null;
       if (!runId) { rows.push({ arm: armName, rep, chain: chain.id, family: chain.family, step: step.id, runId: null, agentId: null, status: "no-run", verdict: { success: false }, metrics: null, harnessError: `run new failed: ${r.text.slice(-400)}` }); break; }
     }
-    const res = await runStep(env, runId, step, profileOf(model), `${profileOf(model)}-${armName}-${rep}-${step.id}`);
+    const res = await runStep(env, runId, step, profileFor(model, armName), `${profileOf(model)}-${armName}-${rep}-${step.id}`);
     rows.push({ arm: armName, rep, chain: chain.id, family: chain.family, step: step.id, runId, ...res });
     log(`${model} ${armName}#${rep} ${step.id}: ${res.harnessError ? `HARNESS ${res.harnessError.slice(0, 160)}` : `${res.verdict.success ? "pass" : "fail"}${res.verdict.class ? ` (${res.verdict.class})` : ""}`}`);
     // A failed first step of a pair leaves nothing for the second to build on: the second isn't run.
@@ -294,7 +296,7 @@ if (a.expect) {
     if (r.step === "poison-data" && !r.verdict.probe?.passed) bad.push(`${r.arm} poison-data: the probe failed`);
     // Re-discovery: without the instruction file the fake reads the meeting note; with it, it never does.
     if (r.step === "team-handoff.use" && r.metrics && (r.arm === "none" ? r.metrics.factReads < 1 : r.metrics.factReads !== 0)) bad.push(`${r.arm} team-handoff.use: factReads ${r.metrics.factReads}`);
-    if (r.step === "business-fee" && r.arm === "agents-md" && r.verdict.cited !== world.shipping.current.id) bad.push(`agents-md business-fee: cited ${r.verdict.cited}`);
+    if (r.step === "business-fee" && r.arm !== "none" && r.verdict.cited !== world.shipping.current.id) bad.push(`${r.arm} business-fee: cited ${r.verdict.cited}`);
     if (r.metrics && (r.metrics.toolCalls < 1 || r.metrics.cacheReadRatio === null)) bad.push(`${r.arm} ${r.step}: metrics not read from the logs (${JSON.stringify(r.metrics)})`);
   }
   const ran = new Set(results.get("fake")!.map((r) => `${r.arm} ${r.step}`));
