@@ -16,6 +16,7 @@ import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES } from "./sandboxes";
 import { PLUGIN_NAME_PATTERN } from "../../packages/plugin/src/manifest";
 import { PLUGIN_STATES } from "../../packages/plugin/src/host/host";
 import { HOOK_NAMES, type HookName } from "../../packages/plugin/src/hooks";
+import { EVENT_NAME_PATTERN } from "../../packages/plugin/src/event-type";
 import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TABLE_MAX_COLS, TABLE_MAX_ROWS, THREAD_FORMAT, ThreadItem } from "../../packages/agent-thread/src/index";
 
 export { ThreadItem };
@@ -650,7 +651,7 @@ export const HookAnswerBody = z.object({
 	}),
 });
 export const EmitBody = z.object({
-	type: z.string().regex(/^[a-z][a-z0-9_]*$/).describe("Without the plugin prefix: one of its contributes.events (written as plugin.<name>.<type>)"),
+	type: z.string().regex(new RegExp(EVENT_NAME_PATTERN)).describe("Without the plugin prefix: one of its contributes.events (written as plugin.<name>.<type>)"),
 	stream: z.string().describe("daemon, or a run id"),
 	entity: z.string().optional().describe("What the event is about; absent or empty: plugin:<name>"),
 	text: z.string().max(500).describe("The plugin's own sentence (clients render it as plain text)"),
