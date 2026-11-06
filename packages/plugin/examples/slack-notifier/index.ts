@@ -1,7 +1,8 @@
 // Worked example, spec §15.4: a third-party, out-of-process plugin. The host starts this process (§9.2); it opens a
-// session, reads hook calls from the SSE stream and posts to Slack. It holds a `read` token and nothing else.
-// `PluginClient` is the interface a client library implements (§9.8); `connect` stands for that library.
-import type { HookFrame, PluginClient, ProcessEnvironment, SessionOpened, WireHookCall } from "../../src/index";
+// session, reads hook calls from the SSE stream and posts to Slack. Its token reads, and steers only to write its own
+// `posted` event (events.emit needs steer, §11.1).
+// `PluginClient` is the interface the client library implements (§9.8); `connect` makes one.
+import { connect, type HookFrame, type PluginClient, type ProcessEnvironment, type SessionOpened, type WireHookCall } from "../../src/index";
 
 interface Config { channel: string; quiet: boolean }
 
@@ -70,8 +71,7 @@ async function manifestHash(root: string): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// The entry point: `connect` is the client library's constructor (not shipped yet, §9.8); the environment is §9.2's.
-declare function connect(env: ProcessEnvironment): PluginClient;
+// The entry point: `connect` is the client library's constructor (§9.8); the environment is §9.2's.
 if (import.meta.main) {
   const env = process.env as unknown as ProcessEnvironment;
   const ac = new AbortController();

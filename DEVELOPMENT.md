@@ -103,7 +103,11 @@ src/
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), skill-orchestration.ts, the orchestration
                   skill as an agent.preparing patch, context.ts, the context router's listener and `capcomd context`,
-                  and context-memory.ts, the `memory` context provider: every process loads them (host.ts `localHost`)
+                  and context-memory.ts, the `memory` context provider: every process loads them (host.ts `localHost`);
+                  sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
+                  setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an
+                  out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's
+                  private storage. The user's plugins (~/.capcomd/plugins/<name>) run out of process.
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and
@@ -113,6 +117,9 @@ src/
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results
+  triggers/     - the trigger intake (plugin API §16.3): intake.ts, what the daemon does with a source's trigger (dedupe,
+                  a followed thread, the operator's gate, trigger.admitting, the accept mode, a run), subscriptions,
+                  ctx.triggers; its records in the daemon's state/triggers/ (`capcomd triggers log` reads log.ndjson)
   utils/        - lifecycle, killpoints, tracing, state paths
 apps/
   canvas/       - web UI (capcomd ui)
@@ -124,7 +131,8 @@ packages/
   bot-avatar/   - (proposal) deterministic pixel bot avatars: agent id + role + size → SVG, from a parts catalog;
                   pure, no dependencies; catalog.json and golden bots for the Swift renderer
   plugin/       - @capcomd/plugin (private): the plugin API's manifest schema and loading, context, hook registry,
-                  seams, protocol, the host's machinery (src/host/: states, order, dispatch, breaker) and the test
+                  seams, protocol and its client library (client.ts `connect`), the host's machinery (src/host/: states,
+                  order, dispatch, breaker, process.ts the out-of-process runtime) and the test
                   kit, with worked examples; normative spec in docs/spec/plugin-api.md. The kernel fires hooks only
                   as `hooks.fire("<hook>", "<mode>", …)`; `bun scripts/check-hook-modes.ts` (run by test:fast)
                   checks each site's mode against HOOKS
@@ -270,6 +278,8 @@ and workflow tests use to check that a crashed step resumes. Named killpoints:
 - `merge.before_cas` - Kill before merge CAS
 - `merge.after_cas.before_event` - Kill after CAS, before event
 - `push.mid`, `push.after.before_event` - Kill during or after a branch push
+- `plugin.hook.mid` - Kill the daemon right after it sent a gate or modify call to an out-of-process plugin
+- `plugin.process.crash` - Kill the plugin's process (not the daemon) at the same point: the call is `crashed`, denied
 - `vm.create.after_request.before_record` - Kill during VM creation
 - `lease.expire.mid` - Kill during lease expiry
 - `budget.charge.mid` - Kill during budget charge

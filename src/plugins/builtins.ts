@@ -17,6 +17,7 @@ import * as frontHermes from "./front/hermes";
 import * as skillOrchestration from "./skill-orchestration";
 import * as contextRouter from "./context";
 import * as contextMemory from "./context-memory";
+import * as sourceSchedule from "./sources/schedule";
 
 export type Builtin = Required<Pick<Candidate, "manifest" | "module">> & {
   /** A plugin the kernel needs in every process, not only the daemon: a gate wherever a verify runs (src/plugins/hooks.ts
@@ -51,6 +52,8 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   // the providers its profile names, wherever an agent is prepared or a brief printed.
   { manifest: contextMemory.manifest, module: contextMemory.plugin as Builtin["module"], everyProcess: true },
   { manifest: contextRouter.manifest, module: contextRouter.plugin as Builtin["module"], everyProcess: true },
+  // Trigger sources (§16.3, step 10): schedules. GitHub's comments are forge-github's own source.
+  { manifest: sourceSchedule.manifest, module: sourceSchedule.plugin as Builtin["module"] },
 ];
 
 /** The kernel's own front doors, by name: the dispatcher prints their output as theirs (src/cli/front-doors.ts). */

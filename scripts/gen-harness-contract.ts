@@ -62,7 +62,9 @@ for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.
 	if (op.operationId === "health") continue;
 	for (const s of ERROR_STATUSES) op.responses[String(s)] ??= { description: `Error (${s})`, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Routes that need a scope a token may lack (configure is new in sandboxes.settings): 403 forbidden.
-	if (["sandboxes.settings", "projects.setup", "projects.gitInit", "projects.publish", "profiles.update"].includes(op.operationId)) op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	if (["sandboxes.settings", "projects.setup", "projects.gitInit", "projects.publish", "plugins.enable", "plugins.disable", "profiles.update"].includes(op.operationId)) op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	// The out-of-process protocol (plugins.protocol): only the plugin's own token.
+	if (/^plugins\.(openSession|hooks|answer|emit|storage)/.test(op.operationId)) op.responses["403"] ??= { description: "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Publishing (projects.git): 503 unavailable when the GitHub CLI fails.
 	if (op.operationId === "projects.publish") op.responses["503"] ??= { description: "Error (503 unavailable): the GitHub CLI couldn't create or push the repository", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Actions (sandboxes.actions): the steer scope, and 503 unavailable when a provider doesn't answer.
@@ -79,12 +81,13 @@ for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.
 	ok.description = "The bytes; Content-Type says what they are (image/png, image/jpeg, image/gif, image/webp, video/*, audio/*, text/plain, application/octet-stream)";
 }
 // oRPC's eventIterator says event is always "message"; capcomd names each frame by its type.
-const sseEvent = (n: any): any => {
+const sseEvent = (n: any, what: string): any => {
 	if (!n || typeof n !== "object") return;
-	if (n.properties?.event?.const === "message") n.properties.event = { type: "string", description: "Frame type: the envelope's dotted type, or stream.reset / snapshot.*" };
-	for (const v of Object.values(n)) sseEvent(v);
+	if (n.properties?.event?.const === "message" || (n.properties?.event?.type === "string" && n.properties.event.description !== what && n.properties.event.description?.startsWith("Frame type"))) n.properties.event = { type: "string", description: what };
+	for (const v of Object.values(n)) sseEvent(v, what);
 };
-for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) for (const r of Object.values<any>(op.responses ?? {})) sseEvent(r.content?.["text/event-stream"]);
+for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.values<any>(ops)) for (const r of Object.values<any>(op.responses ?? {}))
+	sseEvent(r.content?.["text/event-stream"], op.operationId === "plugins.hooks" ? "Frame type: the frame's `frame` (hook.call, hook.dropped, session.closing)" : "Frame type: the envelope's dotted type, or stream.reset / snapshot.*");
 const folded = nullFold(spec);
 // One pattern per timestamp: zod stacks extra patterns in allOf, which makes generators wrap the string (value1/value2).
 const onePattern = (n: any): void => {

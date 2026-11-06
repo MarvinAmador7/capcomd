@@ -280,8 +280,25 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // Background jobs and timers (§16.2): a plugin's timer is on the daemon's stream; plugins start theirs as they load.
   const J = await import("../../jobs/service");
   J.useDaemonEvents((e) => harnessStore.recordDaemonEvent(e));
-  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath(), jobs: true });
+  // Triggers (§16.3): the intake's events are on the daemon's stream too, and its sweep ends subscriptions.
+  (await import("../../triggers/intake")).startTriggers((e) => harnessStore.recordDaemonEvent(e));
+  // Out-of-process plugins (§9) connect to a socket of their own, bound now: they open their sessions while they load
+  // (§5.5 step 4), before the harness socket opens to clients. It serves the same API, to their tokens only.
+  const { pluginSocketPath } = await import("../../api/socket");
+  const pluginSock = pluginSocketPath(sock);
+  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath(), jobs: true, triggers: true, process: { socket: pluginSock } });
   process.on("exit", () => P.releaseSnapshot());
+  const { harnessApp, pluginsOnly } = await import("../../api/server");
+  const { rivetSource } = await import("../../api/rivet-source");
+  const { pluginStore } = await import("../../plugins/storage");
+  const app = harnessApp({ source: rivetSource(), state: harnessStore, plugins: () => host.list(), pluginHost: host, pluginStorage: (name) => pluginStore(name, P.pluginDataDir(name)) });
+  try {
+    const plugSocket = await serveHarnessSocket(pluginSock, pluginsOnly((req) => app.fetch(req)));
+    process.on("exit", () => plugSocket.release());
+  } catch (e) {
+    // Without it the out-of-process plugins can't connect: they fail their handshake; the daemon goes on.
+    console.error(`capcomd serve: the plugin socket ${pluginSock} didn't open: ${(e as Error).message}`);
+  }
   let started = false;
   try { await host.start(P.builtinCandidates()); started = true; } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
   plugins = host;
@@ -306,9 +323,6 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
 
   // harness.v1 API on the 0600 Unix socket (flag > CAPCOMD_HARNESS_SOCKET > config harness.socket > ~/.capcomd/harness.sock).
   try {
-    const { harnessApp } = await import("../../api/server");
-    const { rivetSource } = await import("../../api/rivet-source");
-    const app = harnessApp({ source: rivetSource(), state: harnessStore, plugins: () => host.list() });
     let seq = 0;
     const harness = await serveHarnessSocket(sock, async (req: Request) => {
       const key = `${req.method} ${new URL(req.url).pathname}#${++seq}`;

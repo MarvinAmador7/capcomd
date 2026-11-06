@@ -6,10 +6,14 @@ import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
-import { CAPABILITY_NAMES, contract, CreateRunBody, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { CAPABILITY_NAMES, contract, CreateRunBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
-import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
+import { authenticate, loadClients, pluginClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
+import type { PluginDetail as HostPluginDetail, PluginProtocol, PluginSummary as HostPluginSummary } from "../../packages/plugin/src/host/host";
+import { ProtocolError, type FrameSink } from "../../packages/plugin/src/host/process";
+import { PluginError, type PluginErrorCode } from "../../packages/plugin/src/errors";
+import type { PluginStore } from "../plugins/storage";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { CreateRunError, entityOf, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
@@ -42,7 +46,33 @@ export const ACTIVITY_MS = 1000;
 export const THREAD_MS = 250;
 /** GET …/thread: a page stops at about this many bytes of items (`next` says where to go on). */
 export const THREAD_PAGE_MAX_BYTES = 4 * 1024 * 1024;
-export type ServerOptions = { source: HarnessSource; clients?: () => ClientRecord[]; plugins?: () => z.infer<typeof Plugins>["plugins"]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState };
+/** The daemon's plugin host as the gateway uses it (capabilities plugins and plugins.protocol, plugin API §9, §13.2). */
+export type GatewayHost = {
+	detail(name: string): HostPluginDetail | null;
+	enable(name: string, by?: string): Promise<HostPluginSummary>;
+	disable(name: string): Promise<HostPluginSummary>;
+	protocol: PluginProtocol;
+};
+export type ServerOptions = {
+	source: HarnessSource; clients?: () => ClientRecord[]; plugins?: () => z.infer<typeof Plugins>["plugins"]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState;
+	/** The plugin host behind GET /v1/plugins/{name}, the controls and the out-of-process protocol (absent: 404 / 409). */
+	pluginHost?: GatewayHost;
+	/** A plugin's private storage (src/plugins/storage.ts), for its /v1/plugins/{name}/storage routes. */
+	pluginStorage?: (plugin: string) => PluginStore;
+};
+
+/** The out-of-process protocol's routes (plugin API §9.3-§9.6): only the plugin's own token, whatever its scopes. */
+const PROTOCOL_ROUTE = /^\/v1\/plugins\/[^/]+\/(sessions|hooks|storage)(\/|$)/;
+const PLUGIN_CONTROL = /^\/v1\/plugins\/[^/]+\/(enable|disable)$/;
+const PLUGIN_STATUS: Record<PluginErrorCode, 403 | 404 | 409 | 422 | 503> = { forbidden: 403, not_found: 404, conflict: 409, invalid: 422, widening: 422, unsupported: 422, disposed: 409, timeout: 503, unavailable: 503 };
+
+/** The plugin socket's door (plugin API §5.5 step 4, §9.2): only a token the daemon minted for a plugin's process gets
+ *  through, so nothing else sees the daemon there before its plugins have loaded and the harness socket opens. */
+export function pluginsOnly(fetch: (req: Request) => Response | Promise<Response>): (req: Request) => Response | Promise<Response> {
+	return (req) => authenticate(req.headers.get("authorization"), pluginClients())
+		? fetch(req)
+		: Response.json({ code: "unauthorized", message: "this socket serves the plugins capcomd starts (CAPCOMD_PLUGIN_TOKEN); clients use the harness socket" }, { status: 401 });
+}
 
 export function harnessApp(o: ServerOptions) {
 	const src = o.source;
@@ -201,7 +231,21 @@ export function harnessApp(o: ServerOptions) {
 		},
 		service: { get: os.service.get.handler(() => src.service()) },
 		// Capability plugins: the daemon's plugin host (src/plugins/host.ts), as it is now.
-		plugins: { list: os.plugins.list.handler(() => ({ plugins: o.plugins?.() ?? [] })) },
+		plugins: {
+			list: os.plugins.list.handler(() => ({ plugins: o.plugins?.() ?? [] })),
+			get: os.plugins.get.handler(({ input }) => (o.pluginHost?.detail(input.name) as z.infer<typeof PluginDetail> | null) ?? (() => { throw nf(`plugin ${input.name.slice(0, 64)}`); })()),
+			// Served natively below (Idempotency-Key, the configure scope; the protocol's own-token rule, SSE): never reached.
+			enable: os.plugins.enable.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			disable: os.plugins.disable.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			openSession: os.plugins.openSession.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			hooks: os.plugins.hooks.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			answer: os.plugins.answer.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			emit: os.plugins.emit.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			storageList: os.plugins.storageList.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			storageGet: os.plugins.storageGet.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			storagePut: os.plugins.storagePut.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			storageDelete: os.plugins.storageDelete.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+		},
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
 				if (input.scope === "daemon") return state.daemonEvents(input.after ?? 0).map(daemonEnvelope);
@@ -215,15 +259,18 @@ export function harnessApp(o: ServerOptions) {
 	const app = new Hono<{ Variables: { client: AuthedClient } }>();
 	app.use("*", async (c, next) => {
 		if (c.req.method === "GET" && c.req.path === "/v1/health") return next();
-		const cl = authenticate(c.req.header("authorization"), clients());
+		const cl = authenticate(c.req.header("authorization"), [...clients(), ...pluginClients()]);
 		if (!cl) return err(c, 401, "unauthorized", "missing or unknown bearer token (create one with `capcomd clients add`)");
+		c.set("client", cl);
+		// A plugin's protocol routes need its own token, any scope (the route checks it, plugin API §9.3).
+		if (PROTOCOL_ROUTE.test(c.req.path)) return next();
 		// PATCH changes settings (capability sandboxes.settings), POST /v1/projects sets a folder up (projects.setup) and
-		// …/git-init and …/publish start and publish its repository (projects.git), PUT /v1/profiles/{name} changes a profile
-		// (profiles.edit): the configure scope, which steering a run doesn't give.
-		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && CONFIGURE_POSTS.has(c.req.path)) || (c.req.method !== "GET" && c.req.path.startsWith("/v1/profiles/"));
+		// …/git-init and …/publish start and publish its repository (projects.git), a plugin's enable and disable
+		// (plugins), and PUT /v1/profiles/{name} changes a profile (profiles.edit): the configure scope, which steering a
+		// run doesn't give.
+		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && (CONFIGURE_POSTS.has(c.req.path) || PLUGIN_CONTROL.test(c.req.path))) || (c.req.method !== "GET" && c.req.path.startsWith("/v1/profiles/"));
 		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
-		c.set("client", cl);
 		return next();
 	});
 
@@ -360,13 +407,14 @@ export function harnessApp(o: ServerOptions) {
 
 	// Run controls and steer messages (steer scope). Same Idempotency-Key rules as decisions: the key is scoped to the
 	// client; the same key + same request replays the first 200; the same key on another request is idempotency_conflict.
-	// Only a 200 is stored: an error changed nothing, so a retry looks again. Concurrent duplicates share one apply.
+	// Only a success is stored: an error changed nothing, so a retry looks again. Concurrent duplicates share one apply.
+	// `owner`: whose keys these are when not the client's (a plugin's, across its process's restarts and their tokens).
 	const writing = new Map<string, { hash: string; done: Promise<Outcome> }>();
-	const idempotent = async (c: Context, request: unknown[], apply: (client: AuthedClient, key: string) => Promise<Outcome>) => {
+	const idempotent = async (c: Context, request: unknown[], apply: (client: AuthedClient, key: string) => Promise<Outcome>, owner?: string) => {
 		const key = c.req.header("idempotency-key");
 		if (!key || key.length < 8 || key.length > 200) return err(c, 422, "invalid", "Idempotency-Key header (8-200 chars) is required");
 		const client = c.get("client");
-		const kid = `${client.clientId}\u0000${key}`;
+		const kid = `${owner ?? client.clientId}\u0000${key}`;
 		const hash = JSON.stringify(request);
 		const reused = () => err(c, 409, "idempotency_conflict", "Idempotency-Key reused with a different request");
 		const prior = state.key(kid);
@@ -383,7 +431,7 @@ export function harnessApp(o: ServerOptions) {
 		writing.set(kid, { hash, done });
 		try {
 			const out = await apply(client, key);
-			if (out.status === 200) state.recordKey(kid, { bodyHash: hash, status: 200, result: out.body });
+			if (out.status === 200 || out.status === 201) state.recordKey(kid, { bodyHash: hash, status: out.status, result: out.body });
 			settle(out);
 			return c.json(out.body, out.status as 200);
 		} catch (e) {
@@ -617,6 +665,111 @@ export function harnessApp(o: ServerOptions) {
 			return { status: 200, body: r.inspection };
 		});
 	});
+
+	// ---- plugins (capabilities plugins and plugins.protocol; plugin API §9, §13.2) ----------------------------------
+	const host = o.pluginHost;
+	const noHost = (c: Context) => err(c, 409, "conflict", "this daemon runs no plugin host");
+	const caller = (c: Context) => { const cl = c.get("client") as AuthedClient; return { clientId: cl.clientId, plugin: cl.plugin ?? null }; };
+	/** A refused protocol request (ProtocolError) or primitive (PluginError) as an ApiError; anything else is thrown on. */
+	const refusedBy = (c: Context, e: unknown) => {
+		if (e instanceof ProtocolError) return err(c, e.status, e.code, e.message);
+		if (e instanceof PluginError) return err(c, PLUGIN_STATUS[e.code], e.code, e.message);
+		throw e;
+	};
+	const control = (action: "enable" | "disable") => app.post(`/v1/plugins/:name/${action}`, async (c) => {
+		const name = c.req.param("name");
+		if (!host) return noHost(c);
+		// A plugin never turns plugins on or off, whatever its scopes: disabling another's gate would bypass it (§11.3).
+		if ((c.get("client") as AuthedClient).plugin) return err(c, 403, "forbidden", "a plugin's token can't enable or disable plugins");
+		return idempotent(c, [`plugins.${action}`, name], async (client) => {
+			const d = host.detail(name);
+			if (!d) return gone(`plugin ${name.slice(0, 64)}`);
+			// The kernel's own plugins hold the places, agents, forges and front doors the daemon runs on: they stay up.
+			if (action === "disable" && d.source === "builtin") return { status: 409, body: { code: "conflict", message: `${name} is built into capcomd: it can't be disabled while the daemon runs` } };
+			try { return { status: 200, body: action === "enable" ? await host.enable(name, `client:${client.clientId}`) : await host.disable(name) }; } catch (e) {
+				if (e instanceof PluginError) return { status: PLUGIN_STATUS[e.code], body: { code: e.code, message: e.message } };
+				throw e;
+			}
+		});
+	});
+	control("enable");
+	control("disable");
+
+	app.post("/v1/plugins/:name/sessions", async (c) => {
+		if (!host) return noHost(c);
+		const body = await c.req.json().catch(() => null);
+		try { return c.json(host.protocol.open(c.req.param("name"), caller(c), body), 200); } catch (e) { return refusedBy(c, e); }
+	});
+
+	app.get("/v1/plugins/:name/hooks", (c) => {
+		if (!host) return noHost(c);
+		const lastRaw = c.req.header("last-event-id");
+		const last = lastRaw && /^\d+$/.test(lastRaw) ? Number(lastRaw) : null;
+		const enc = new TextEncoder();
+		let ctl!: ReadableStreamDefaultController<Uint8Array>;
+		let closed = false, hb: ReturnType<typeof setInterval> | undefined, detach: (() => void) | undefined;
+		const end = () => { if (closed) return; closed = true; clearInterval(hb); detach?.(); };
+		const stream = new ReadableStream<Uint8Array>({ start: (k) => { ctl = k; }, cancel: end });
+		const sink: FrameSink = {
+			frame: (f) => { if (!closed) ctl.enqueue(enc.encode(`id: ${f.seq}\nevent: ${f.frame}\ndata: ${JSON.stringify(f)}\n\n`)); },
+			close: () => { if (closed) return; end(); try { ctl.close(); } catch { /* already closed */ } },
+		};
+		ctl.enqueue(enc.encode(": connected\n\n"));
+		try { detach = host.protocol.attach(c.req.param("name"), caller(c), c.req.query("session") ?? "", last, sink); } catch (e) { closed = true; return refusedBy(c, e); }
+		hb = setInterval(() => { if (!closed) ctl.enqueue(enc.encode(": heartbeat\n\n")); }, heartbeatMs);
+		c.req.raw.signal?.addEventListener?.("abort", end);
+		return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
+	});
+
+	app.post("/v1/plugins/:name/hooks/:callId", async (c) => {
+		if (!host) return noHost(c);
+		const body = await c.req.json().catch(() => null);
+		try { await host.protocol.answer(c.req.param("name"), caller(c), c.req.param("callId"), body); return c.body(null, 204); } catch (e) { return refusedBy(c, e); }
+	});
+
+	// ctx.events.emit over the wire: the same checks as in process (the steer scope, a declared type, redaction, caps).
+	app.post("/v1/plugins/:name/events", async (c) => {
+		if (!host) return noHost(c);
+		const name = c.req.param("name");
+		let ctx;
+		try { ctx = host.protocol.context(name, caller(c)); } catch (e) { return refusedBy(c, e); }
+		const raw = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+		if (!raw || typeof raw.type !== "string" || typeof raw.stream !== "string" || typeof raw.text !== "string" || !raw.data || typeof raw.data !== "object" || Array.isArray(raw.data) || (raw.entity !== undefined && typeof raw.entity !== "string"))
+			return err(c, 422, "invalid", "body must be EmitBody {type, stream, entity, text, data, durability?}");
+		const e = { type: raw.type, stream: raw.stream, entity: (raw.entity as string | undefined) ?? "", text: raw.text, data: raw.data as Record<string, unknown>, ...(raw.durability !== undefined ? { durability: raw.durability as "durable" } : {}) };
+		return idempotent(c, ["plugins.events", name, e], async () => {
+			try { return { status: 201, body: await ctx.events.emit(e) }; } catch (x) {
+				if (x instanceof PluginError) return { status: PLUGIN_STATUS[x.code], body: { code: x.code, message: x.message } };
+				throw x;
+			}
+		}, `plugin:${name}`);
+	});
+
+	// The plugin's private storage (§8.4), the daemon scope or `?run=` a run's.
+	const storage = async (c: Context, fn: (store: PluginStore, scope: "daemon" | { runId: string }) => Promise<Response>) => {
+		if (!host || !o.pluginStorage) return noHost(c);
+		const name = c.req.param("name")!;
+		try {
+			host.protocol.context(name, caller(c));
+			const run = c.req.query("run");
+			return await fn(o.pluginStorage(name), run ? { runId: run } : "daemon");
+		} catch (e) { return refusedBy(c, e); }
+	};
+	app.get("/v1/plugins/:name/storage", (c) => storage(c, async (s, scope) => c.json({ entries: await s.list(scope, c.req.query("prefix") ?? "") }, 200)));
+	app.get("/v1/plugins/:name/storage/:key{.+}", (c) => storage(c, async (s, scope) => {
+		const e = await s.get(scope, c.req.param("key"));
+		return e ? c.json(e, 200) : err(c, 404, "not_found", "no such key");
+	}));
+	app.put("/v1/plugins/:name/storage/:key{.+}", (c) => storage(c, async (s, scope) => {
+		const raw = await c.req.json().catch(() => null) as { value?: unknown; expect?: unknown } | null;
+		if (!raw || !("value" in raw) || (raw.expect !== undefined && raw.expect !== null && typeof raw.expect !== "string")) return err(c, 422, "invalid", "body must be {value, expect?: string | null}");
+		const key = c.req.param("key");
+		try { return c.json(await s.put(scope, key, raw.value, raw.expect as string | null | undefined), 200); } catch (e) {
+			if (e instanceof PluginError && e.code === "conflict") return err(c, 409, "conflict", e.message, { current: await s.get(scope, key) });
+			throw e;
+		}
+	}));
+	app.delete("/v1/plugins/:name/storage/:key{.+}", (c) => storage(c, async (s, scope) => { await s.delete(scope, c.req.param("key")); return c.body(null, 204); }));
 
 	app.get("/v1/streams/:scope/events", (c) => {
 		const scope = c.req.param("scope");

@@ -17,6 +17,41 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `PUT /v1/profiles/{name}` changes them, with a token that has the `configure` scope, an `Idempotency-Key` and the
   profile's `rev`. Each change is a `profile.changed` event on the daemon stream. The menu bar app doesn't edit
   profiles yet.
+- New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
+  a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
+  `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`
+  allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
+  (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
+  starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
+  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
+  there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
+  `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
+  `capcomd triggers subscriptions` the threads runs follow; the daemon stream has `trigger.received`,
+  `trigger.subscribed` and `trigger.unsubscribed`, and a started run's `trigger` says where it came from (capability
+  `triggers`). Schedules: `"plugins": {"source-schedule": {"schedules": {"nightly": {"text": "update the
+  dependencies", "everyMs": 86400000}}}}` (or `at` for once), allowed as `schedule:nightly`. GitHub comments:
+  `"plugins": {"forge-github": {"sourceRepos": ["acme/app"]}}`, read every minute with your GitHub login (comments
+  from before you set it are not read; an @-mention of that login addresses you, not capcomd, unless you set
+  `"sourceMentions": true` for a login that is capcomd's own account). Plugins can add their own sources (`ctx.triggers`) and turn a trigger down
+  (the `trigger.admitting` hook).
+- New: built-in plugins take settings from `~/.capcomd/config.json` (`"plugins": {"<name>": {…}}`, and
+  `"enabled": false` to turn one off) or from `CAPCOMD_PLUGIN_<NAME>_<KEY>` environment variables.
+- New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
+  `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
+  its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
+  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. If it crashes while deciding, the decision is a deny, and it is started again; after five crashes in ten
+  minutes it stays stopped and its gates deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn
+  it off with `/disable`). What it prints goes to the daemon's log with its token and secrets blanked out.
+  `capcomd plugins list` shows it with `runtime: process`. Such a plugin contributes hooks and events only (no
+  commands, tools or sandboxes), and a CLI never starts one. The client library `connect()` in `@capcomd/plugin` does
+  the talking; the plugin API spec §9 is the protocol.
+- New (harness.v1, capability `plugins.protocol`): the out-of-process protocol's routes (`/v1/plugins/{name}/sessions`,
+  `/hooks` as an event stream, `/hooks/{callId}`, `/events`, `/storage`), usable only with the token capcomd made for
+  that plugin, and `plugin.process_changed` events on the daemon stream. Capability `plugins` adds
+  `GET /v1/plugins/{name}` (a plugin's manifest and config, never a secret) and `POST /v1/plugins/{name}/enable` and
+  `/disable` (the configure scope; for the daemon's life, and a built-in can't be disabled).
 - New: project memory for agents. A profile with a `context` block (`context: {providers: [{name: memory}]}`, in
   `profile.yaml` or an `agents.json` entry) briefs each of its agents, when it starts, with an index of what the project
   keeps under `.capcomd/context/` in its repository: one line per item (a lesson, feedback, a project fact) with what it

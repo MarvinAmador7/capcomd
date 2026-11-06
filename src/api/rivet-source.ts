@@ -14,9 +14,11 @@ import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { approvalIdFor, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
 import { applyRunPatch, hooks, principalOf, untrusted } from "../plugins/hooks";
 import { PluginError } from "../../packages/plugin/src/errors";
+import type { Principal } from "../../packages/plugin/src/shapes";
 import { goalSummary } from "../primitives/goal";
 import { RelayError } from "../core/errors";
 import { startDetachedRun } from "./create-run";
+import { triggerOfRun } from "../triggers/intake";
 import { runTitle, type TitleAgent } from "./run-title";
 import { workspaceOf } from "./workspace";
 import { mirrorFor, workTips } from "./run-files";
@@ -190,13 +192,14 @@ export function recordedMachines(env: Record<string, string | undefined> = proce
 /**
  * run.creating (plugin API §6.6.3) for a run an app starts (POST /v1/runs), here in the daemon before `capcomd run`
  * starts it. Only `sandbox` applies at this site (the request carries no label or budget to lower); a refusal is the
- * request's 422 with the plugin's reason.
+ * request's 422 with the plugin's reason. A run a trigger starts (src/triggers/intake.ts) is its source plugin's.
  */
-async function runCreating(runId: string, input: CreateRunInput): Promise<CreateRunInput> {
+async function runCreating(runId: string, input: CreateRunInput, principal: Principal): Promise<CreateRunInput> {
 	const { isListedProvider } = await import("../providers/registry");
-	const options = { runId, label: input.goal.slice(0, 200), goal: untrusted(input.goal, "operator"), budget: {}, checks: {}, reviewer: null, target: input.targetBranch ?? null,
+	const by = principal.kind === "plugin" ? `plugin:${principal.name}` : "operator";
+	const options = { runId, label: input.goal.slice(0, 200), goal: untrusted(input.goal, by), budget: {}, checks: {}, reviewer: null, target: input.targetBranch ?? null,
 		goalBranch: typeof input.goalBranch === "string" && input.base ? { branch: input.goalBranch, base: input.base } : null, sandbox: input.sandbox ?? null, profile: input.profile ?? null, driver: input.driver ?? null, repo: input.repo ?? null };
-	const out = await hooks.fire("run.creating", "modify", { options }, { principal: principalOf(null), entity: runId, runId,
+	const out = await hooks.fire("run.creating", "modify", { options }, { principal, entity: runId, runId,
 		apply: (p, patch) => {
 			if (patch.label !== undefined || patch.budget !== undefined) throw new PluginError("invalid", "a run started from POST /v1/runs takes only a sandbox patch here");
 			return applyRunPatch(p, patch, isListedProvider);
@@ -204,6 +207,16 @@ async function runCreating(runId: string, input: CreateRunInput): Promise<Create
 	if (out.decision === "deny") throw new CreateRunError(`refused by ${out.plugin ? `the ${out.plugin} plugin` : "capcomd (the daemon is stopping)"}: ${out.text}`);
 	const sandbox = out.payload.options.sandbox;
 	return sandbox && sandbox !== input.sandbox ? { ...input, sandbox: sandbox as ListedProvider } : input;
+}
+
+/** runs.create (POST /v1/runs), and a run the trigger intake starts as its source plugin (src/triggers/intake.ts):
+ *  run.creating, then `capcomd run --detach` in the project's directory. */
+export async function createRunAs(input: CreateRunInput, principal: Principal = principalOf(null)) {
+	const runId = generateRunId();
+	if (hooks.listening("run.creating")) input = await runCreating(runId, input, principal);
+	const { repo } = await startDetachedRun({ ...input, runId });
+	// What GET /v1/runs/{runId} shows once the run's process has registered it, but for the state.
+	return { id: runId, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, ...runTitle({ label: input.goal, goal: input.goal }), repo, createdAt: isoTs(Date.now()) };
 }
 
 const listers = new Map<string, SandboxProvider>();
@@ -217,6 +230,12 @@ async function lister(name: ListedProvider): Promise<SandboxProvider> {
 	return p;
 }
 
+/** Run.trigger (capability triggers): the trigger a run was started from, when one was (src/triggers/intake.ts). */
+function withTrigger(runId: string): { trigger?: NonNullable<ReturnType<typeof triggerOfRun>> } {
+	const t = triggerOfRun(runId);
+	return t ? { trigger: t } : {};
+}
+
 export function rivetSource(): HarnessSource {
 	const runsIndex = () => recentRuns(500);
 	const runs = async () => Promise.all(runsIndex().map(async (r) => {
@@ -227,7 +246,7 @@ export function rivetSource(): HarnessSource {
 		// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
 		const goal = meta?.goal ?? null;
 		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agentTitle: meta?.agentTitle?.title ?? null, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
-			goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended) };
+			goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended), ...withTrigger(r.runId) };
 	}));
 	const surface = sandboxSurface({
 		// The user config (~/.capcomd/config.json `sandboxes`); off with CAPCOMD_NO_CONFIG.
@@ -375,13 +394,7 @@ export function rivetSource(): HarnessSource {
 			const id = parseApprovalId(approvalId)!;
 			await decideMerge(id.runId, id.opId, { approve, by, ...(reason ? { reason } : {}) });
 		},
-		createRun: async (input) => {
-			const runId = generateRunId();
-			if (hooks.listening("run.creating")) input = await runCreating(runId, input);
-			const { repo } = await startDetachedRun({ ...input, runId });
-			// What GET /v1/runs/{runId} shows once the run's process has registered it, but for the state.
-			return { id: runId, projectId: projectIdOf(repo), label: input.goal, state: "starting", goal: input.goal, ...runTitle({ label: input.goal, goal: input.goal }), repo, createdAt: isoTs(Date.now()) };
-		},
+		createRun: (input) => createRunAs(input),
 		// The repository verify and merge use for this run (its recorded settings, else the daemon's), and its target.
 		repo: async (runId) => {
 			const cfg = await mergeConfigFor(runId).catch(() => null);

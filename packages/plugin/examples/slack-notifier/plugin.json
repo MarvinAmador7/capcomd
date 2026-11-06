@@ -6,7 +6,7 @@
   "apiVersion": 1,
   "engines": { "capcomd": ">=0.9.0 <1.0.0" },
   "entry": { "runtime": "process", "command": ["bun", "${PLUGIN_ROOT}/index.ts"] },
-  "scopes": ["read"],
+  "scopes": ["read", "steer"],
   "order": "post",
   "contributes": {
     "hooks": {
