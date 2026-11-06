@@ -3075,6 +3075,89 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `profile.changed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "The profile"
+    },
+    "version": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Its version now (an agents.json entry's stays 1)"
+    },
+    "previousVersion": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Its version before"
+    },
+    "layer": {
+      "type": "string",
+      "description": "The layer it is found in: project, user (more may be added)"
+    },
+    "path": {
+      "type": "string",
+      "description": "The file written, on the daemon's machine"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The value's path (a field's `id`)"
+          },
+          "from": {
+            "description": "Before, as the field's `value` said it (null: unset, a prompt, or a value outside capcomd's rows)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "description": "After, the same way",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "from",
+          "to"
+        ]
+      },
+      "description": "Every value that changed, as PUT /v1/profiles/{name} answers them"
+    },
+    "clientId": {
+      "type": "string",
+      "description": "The API client that changed it (cli-…)"
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "previousVersion",
+    "layer",
+    "path",
+    "changes",
+    "clientId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability profiles.edit. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client changed a profile with PUT /v1/profiles/{name}. `entity` is profile:<name>; the envelope text is daemon-written and names each value that changed, with the values only where capcomd wrote them (numbers, toggles, choices, names): \"Profile reviewer changed: limits.maxTurns 20 → 40, description changed.\" A change made by editing the file, or with `capcomd profiles set`, isn't an event"
+}
+```
+
 ## `project.git_initialized`
 
 ```json

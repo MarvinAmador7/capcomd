@@ -1,7 +1,7 @@
 // `capcomd profiles` (ADR-024 §5, §7 step 2): list, show with the files laid together and which one set each value,
 // schema, validate; `capcomd agents` is the same command under its old name.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { capcomd } from "../helpers/engine";
@@ -86,8 +86,40 @@ describe("capcomd profiles", () => {
     const again = await capcomd(["profiles", "add", "cx", "--provider", "codex", "--auth", "apikey", "--json"], own.env);
     expect(json(again).error).toMatchObject({ code: "conflict", hint: "capcomd profiles set cx …" });
     expect(json(await capcomd(["profiles", "rm", "cx", "--json"], own.env))).toMatchObject({ removed: "cx" });
-    const v2 = await capcomd(["profiles", "set", "lead", "--model", "opus", "--json"], w.env);
-    expect(json(v2).error.message).toBe(`profile "lead" is defined in ${w.at("P/lead/profile.yaml")}, which \`capcomd profiles set\` doesn't edit`);
+  }, 30_000);
+});
+
+describe("capcomd profiles add|set|rm: the file a profile is defined in (ADR-024 §7 step 6)", () => {
+  test("set on a profile file: flags, --set paths and --unset change it, its comments stay and its version goes up", async () => {
+    const w = world({ "P/lead/profile.yaml": `# Leads a part.\n${LEAD}\n`, "P/lead/override.yaml": "harness: { effort: high }\n" }, { worker }, "worker");
+    const r = await capcomd(["profiles", "set", "lead", "--model", "opus", "--set", "limits.maxTurns=50", "--set", "tags=lead,review", "--unset", "children.maxChildren", "--json"], w.env);
+    expect(r.code).toBe(0);
+    expect(json(r)).toMatchObject({ ok: true, name: "lead", path: w.at("P/lead/profile.yaml"), changed: true, version: 3, previousVersion: 2, spec: { model: "opus", maxTurns: 50, children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } });
+    expect(json(r).changes.map((c: any) => c.path)).toEqual(["tags", "harness.model", "limits.maxTurns", "children.maxChildren"]);
+    const text = readFileSync(w.at("P/lead/profile.yaml"), "utf8");
+    expect(text).toStartWith("# Leads a part.\nname: lead\nextends: worker\nversion: 3\n");
+    // The override still wins where it sets a value: set says so, and changes nothing.
+    const hidden = await capcomd(["profiles", "set", "lead", "--effort", "low", "--json"], w.env);
+    expect(json(hidden).error).toMatchObject({ code: "config", message: `harness.effort: ${w.at("P/lead/override.yaml")} (an override of lead) sets it after this profile's own file, so a change here wouldn't show: change it there` });
+    expect(readFileSync(w.at("P/lead/profile.yaml"), "utf8")).toBe(text);
+    const t = await capcomd(["profiles", "set", "lead", "--max-turns", "45"], w.env);
+    expect(t.stdout.trim()).toBe(`updated lead, version 3 → 4: limits.maxTurns → ${w.at("P/lead/profile.yaml")}`);
+    expect((await capcomd(["profiles", "set", "lead", "--max-turns", "45"], w.env)).stdout.trim()).toBe(`lead: nothing changed (${w.at("P/lead/profile.yaml")})`);
+    expect(json(await capcomd(["profiles", "set", "lead", "--json"], w.env)).error).toMatchObject({ code: "usage", message: "nothing to set: give the values to change" });
+  }, 30_000);
+
+  test("add --extends writes a profile file; add with only v1 fields still writes agents.json; rm removes either", async () => {
+    const w = world({}, { worker }, "worker");
+    const a = await capcomd(["profiles", "add", "reviewer", "--extends", "worker", "--set", "tags=review", "--allowed-tools", "Read,Grep", "--json"], w.env);
+    expect(json(a)).toMatchObject({ ok: true, name: "reviewer", path: w.at("P/reviewer.yaml"), version: 1, default: false, spec: { provider: "claude", model: "sonnet", allowedTools: ["Read", "Grep"] } });
+    expect(readFileSync(w.at("P/reviewer.yaml"), "utf8")).toBe("schema: capcomd.profile/v2\nname: reviewer\nversion: 1\nextends: worker\ntags:\n  - review\ntools:\n  allowed:\n    - Read\n    - Grep\n");
+    expect(json(await capcomd(["profiles", "add", "reviewer", "--extends", "worker", "--json"], w.env)).error).toMatchObject({ code: "conflict", message: `profile "reviewer" already exists (${w.at("P/reviewer.yaml")})` });
+    expect(json(await capcomd(["profiles", "add", "cx", "--provider", "codex", "--auth", "apikey", "--set", "limits.maxTurns=9", "--json"], w.env))).toMatchObject({ path: w.agentsFile, spec: { provider: "codex", auth: "apikey", maxTurns: 9 } });
+    // rm: a profile others extend stays.
+    expect(json(await capcomd(["profiles", "rm", "worker", "--json"], w.env)).error.message).toContain('extends "worker", which isn\'t a profile here');
+    expect(json(await capcomd(["profiles", "rm", "reviewer", "--json"], w.env))).toMatchObject({ removed: "reviewer", path: w.at("P/reviewer.yaml") });
+    expect(existsSync(w.at("P/reviewer.yaml"))).toBe(false);
+    expect(json(await capcomd(["profiles", "list", "--json"], w.env)).profiles.map((p: any) => p.name)).toEqual(["worker", "cx"]);
   }, 30_000);
 });
 

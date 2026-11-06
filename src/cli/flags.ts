@@ -43,6 +43,7 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   default: { type: "boolean" },
   spec: { type: "string" },
   unset: { type: "string" },
+  extends: { type: "string" },
   task: { type: "string" },
   parent: { type: "string" },
   key: { type: "string" },

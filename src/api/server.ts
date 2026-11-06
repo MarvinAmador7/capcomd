@@ -6,7 +6,7 @@ import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
-import { CAPABILITY_NAMES, contract, CreateRunBody, type Plugins, MESSAGE_BODY_MAX_BYTES, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { CAPABILITY_NAMES, contract, CreateRunBody, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -159,12 +159,26 @@ export function harnessApp(o: ServerOptions) {
 			}
 		}) },
 		// Capability profiles: as GET /v1/run-options, a `repo` that isn't a project is 422.
-		profiles: { list: os.profiles.list.handler(async ({ input }) => {
-			try { return await src.profiles(input.repo); } catch (e) {
-				if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
-				throw e;
-			}
-		}) },
+		profiles: {
+			list: os.profiles.list.handler(async ({ input }) => {
+				try { return await src.profiles(input.repo); } catch (e) {
+					if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
+					throw e;
+				}
+			}),
+			// Capability profiles.edit: one profile as rows; 404 for a name that isn't one, 422 when they can't be read.
+			get: os.profiles.get.handler(async ({ input }) => {
+				let r: Awaited<ReturnType<typeof src.profile>>;
+				try { r = await src.profile(input.name, input.repo); } catch (e) {
+					if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
+					throw e;
+				}
+				if (r.ok) return r.detail;
+				throw new ORPCError(r.status === 404 ? "NOT_FOUND" : "UNPROCESSABLE_CONTENT", { message: r.message });
+			}),
+			// Served natively below (Idempotency-Key, the configure scope): never reached.
+			update: os.profiles.update.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+		},
 		skills: { list: os.skills.list.handler(() => src.skills()) },
 		// ?sandbox= (capability sandboxes): one place's rows; a name that isn't a listed place is 404.
 		logins: { list: os.logins.list.handler(async ({ input }) => {
@@ -204,9 +218,9 @@ export function harnessApp(o: ServerOptions) {
 		const cl = authenticate(c.req.header("authorization"), clients());
 		if (!cl) return err(c, 401, "unauthorized", "missing or unknown bearer token (create one with `capcomd clients add`)");
 		// PATCH changes settings (capability sandboxes.settings), POST /v1/projects sets a folder up (projects.setup) and
-		// …/git-init and …/publish start and publish its repository (projects.git): the configure scope, which steering a run
-		// doesn't give.
-		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && CONFIGURE_POSTS.has(c.req.path));
+		// …/git-init and …/publish start and publish its repository (projects.git), PUT /v1/profiles/{name} changes a profile
+		// (profiles.edit): the configure scope, which steering a run doesn't give.
+		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && CONFIGURE_POSTS.has(c.req.path)) || (c.req.method !== "GET" && c.req.path.startsWith("/v1/profiles/"));
 		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
 		c.set("client", cl);
@@ -494,6 +508,30 @@ export function harnessApp(o: ServerOptions) {
 			});
 		}
 		return c.json(r.detail, 200);
+	});
+
+	// PUT /v1/profiles/{name} (capability profiles.edit; the configure scope, checked above): change a profile in its own
+	// file. Both an Idempotency-Key (a replay answers the first 200 and writes once) and `rev` (a change made from a stale
+	// read is 409). A write that changed something is audited on the daemon stream (profile.changed).
+	app.put("/v1/profiles/:name", async (c) => {
+		const name = c.req.param("name"), repo = c.req.query("repo");
+		if (repo !== undefined && !repo.startsWith("/")) return err(c, 422, "invalid", "repo: repo must be an absolute path", { field: "repo" });
+		const p = await bodyOf(c, ProfileWriteBody, "{values: {<field id>: <value> | null}, rev}");
+		if (!p.body) return p.refused!;
+		const b = p.body;
+		return idempotent(c, ["profiles.update", name, repo ?? null, b.values, b.rev], async (client) => {
+			let r: Awaited<ReturnType<typeof src.updateProfile>>;
+			try { r = await src.updateProfile(name, repo, b); } catch (e) {
+				if (e instanceof CreateRunError) return { status: 422, body: { code: "invalid", message: e.message } };
+				throw e;
+			}
+			if (!r.ok) {
+				const { ok: _, status, ...body } = r;
+				return { status, body };
+			}
+			if (r.event) state.recordDaemonEvent({ type: "profile.changed", entity: r.event.entity, text: r.event.text, data: { ...r.event.data, clientId: client.clientId } });
+			return { status: 200, body: r.detail };
+		});
 	});
 
 	// POST /v1/sandboxes/{name}/resources/{id}/actions/{action} (capability sandboxes.actions; the steer scope, as

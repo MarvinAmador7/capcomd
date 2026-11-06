@@ -343,7 +343,7 @@ export function flatOverrides(set: Record<string, unknown>): Record<string, unkn
 }
 
 /** The v2 paths `--set` takes a comma list for. */
-export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed"];
+export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed", "tags"];
 
 /**
  * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 steps 5 and 8; ADR-025

@@ -440,7 +440,7 @@ describe("profiles v2: loader and resolution", () => {
     expect(Object.keys(PROFILE_JSON_SCHEMA.patternProperties)).toEqual(["^x-[a-z0-9][a-z0-9-]*$"]);
   });
 
-  test("CLI: agents list/show/validate read v2 profiles; add/set/rm say they don't edit them", () => {
+  test("CLI: agents list/show/validate read v2 profiles; set edits the profile file, not agents.json (§7 step 6)", () => {
     const w = world({ "P/critic/profile.yaml": yaml(["name: critic", "description: Reviews.", "harness: { provider: claude, auth: apikey }", "tools: { allowed: [Read, Grep] }", "skills: [{ name: tdd }]"]) },
       { worker: { provider: "codex", auth: "apikey" } });
     const env = { ...w.source, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
@@ -450,8 +450,9 @@ describe("profiles v2: loader and resolution", () => {
     expect(JSON.parse(cli(["agents", "show", "critic", "--json"], env).out).spec).toEqual({ provider: "claude", auth: "apikey", description: "Reviews.", allowedTools: ["Read", "Grep"] });
     expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: skills is read but not used yet by this capcomd"] });
     const set = cli(["agents", "set", "critic", "--model", "opus", "--json"], env);
-    expect(set.code).not.toBe(0);
-    expect(JSON.parse(set.out).error.message).toContain(`profile "critic" is defined in ${w.at("P/critic/profile.yaml")}`);
+    expect(set.code).toBe(0);
+    expect(JSON.parse(set.out)).toMatchObject({ path: w.at("P/critic/profile.yaml"), version: 2, spec: { model: "opus" } });
+    expect(readFileSync(w.at("P/critic/profile.yaml"), "utf8")).toContain("harness: { provider: claude, auth: apikey, model: opus }");
     expect(JSON.parse(readFileSync(w.source.CAPCOMD_AGENTS_FILE, "utf8")).agents).toEqual({ worker: { provider: "codex", auth: "apikey" } });
   }, 30_000);
 
