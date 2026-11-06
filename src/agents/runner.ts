@@ -683,7 +683,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       const servers = cfg.mcp;
       const config = `${W}/mcp.json`;
       const own = capcomdCtx ? { capcomd: { command: "node", args: [capcomdCtx.cli, "mcp"], env: { CAPCOMD_RPC_DIR: opts.subagents!.rpcDir } } } : {};
-      await provider.upload(vmId, config, new TextEncoder().encode(JSON.stringify({ mcpServers: { ...own, ...Object.fromEntries(servers.map((s) => [s.name, { command: s.command[0], args: s.command.slice(1) }])) } })));
+      // capcomd's own last: no profile's server takes its name (the profile is refused for it, and this keeps it so).
+      await provider.upload(vmId, config, new TextEncoder().encode(JSON.stringify({ mcpServers: { ...Object.fromEntries(servers.map((s) => [s.name, { command: s.command[0], args: s.command.slice(1) }])), ...own } })));
       mcpCtx = { config, servers };
       const trusted = servers.filter((s) => s.trust === "trusted").map((s) => `mcp__${s.name}`);
       if (adapter.kind === "claude-code" && cfg.allowedTools && trusted.length) cfg = { ...cfg, allowedTools: [...cfg.allowedTools, ...trusted] };

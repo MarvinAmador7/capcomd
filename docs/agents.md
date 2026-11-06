@@ -99,7 +99,9 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   (`mcp__semgrep`, or `mcp__semgrep__<tool>`), Codex asks its own approval rules (which refuse what needs asking). An
   orchestrate profile can't have servers: it runs nothing, so give them to the profiles it spawns.
 - `sandbox.provider` runs the profile's agents on that sandbox (`docker`, `boxd`), whatever the run's is (`capcomd run
-  --sandbox`) or the daemon's; it must be an active sandbox plugin. `sandbox.environment` is what their machines boot
+  --sandbox`) or the daemon's; it must be an active sandbox plugin, and it can't take them out of isolation (a sandbox
+  that runs agents on your machine, as the test ones do, is refused unless the run's is one too: `reason:
+  "sandbox_isolation"`). `sandbox.environment` is what their machines boot
   from there: `default` (the current `capcomd env build`, as for every agent), `image` (the provider's plain image: the
   agent CLI is installed at start) or a build's name from `capcomd env status --sandbox <name>`. With a plan login kept
   in an image (`capcomd auth login`), that image is the one used, so the environment must be `default` or the one it

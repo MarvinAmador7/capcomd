@@ -428,6 +428,11 @@ function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string
   // Its machine's sandbox: its profile's (ADR-024 `sandbox.provider`), else the run's, else this process's.
   const rt = resolved.runtime ?? {};
   const source = rt.sandboxProvider ? withSandbox(runSource, rt.sandboxProvider) : runSource;
+  // A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
+  // commands run in a sandbox, never on the host): a sandbox that runs them on this host (the test fakes) only when the
+  // run's own does too.
+  if (rt.sandboxProvider && !realSandbox(source) && realSandbox(runSource))
+    throw new RelayError("config", `profile ${resolved.name}: sandbox.provider ${rt.sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
   const envProblem = envSnapshotProblem(spec?.provider, source, rt.environment);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
   if (rt.environment) environmentCheck(resolved, source);

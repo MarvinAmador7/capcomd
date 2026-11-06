@@ -9,7 +9,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   must hear them. `tools.mcp: [{name, command, trust}]` starts each server in the agent's sandbox (never on your
   machine) for Claude Code and Codex, beside capcomd's own; `trust: trusted` approves its tools up front, `untrusted`
   (the default) leaves them to the profile's tool rules. An orchestrate profile can't have any. `sandbox.provider`
-  runs the profile's agents on that sandbox (`docker`, `boxd`) whatever the run's is; `sandbox.environment`
+  runs the profile's agents on that sandbox (`docker`, `boxd`) whatever the run's is (never on your machine: a
+  sandbox that runs agents on the host is refused, `reason: "sandbox_isolation"`); `sandbox.environment`
   is what their machines boot from there: `default` (the current `capcomd env build`), `image` (the provider's plain
   image) or a build's name from `capcomd env status`; `sandbox.size: { vcpu: 1 | 2 | 4 | 8 }` sizes their machines on
   boxd (Docker containers share your CPUs). `lifecycle.onStart` and `lifecycle.onEnd` name plugins that must be active

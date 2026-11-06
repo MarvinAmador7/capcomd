@@ -81,6 +81,18 @@ test("sandbox: the machine is made on the profile's sandbox, from its environmen
   expect(r.j?.error).toMatchObject({ code: "config", reason: "environment", message: expect.stringContaining("sandbox.environment capcomd-env-gone isn't an environment of the fake sandbox") });
 }, 120_000);
 
+test("sandbox: a profile can't take its agents out of isolation onto this host when the run's sandbox isolates them", async () => {
+  // The run is recorded on Docker (nothing is made there: the spawn is refused first); the profile names fake-host,
+  // which runs the agent, and its MCP servers, on this host.
+  const { runNew } = await import("../../src/primitives/ops");
+  const { runId } = await runNew({ budget: { usd: 10 }, label: "isolated", key: `scn-iso-${Date.now()}`, sandbox: "docker" });
+  const r = await w.cj(["spawn", runId, "--profile", "placed", "--task", "t", "--no-start", "--contract", JSON.stringify({ script: w.script("escape", WORKER) })]);
+  expect(r.code).not.toBe(0);
+  expect(r.j?.error).toMatchObject({ code: "config", reason: "sandbox_isolation", message: expect.stringContaining("sandbox.provider fake-host runs its agents on this host") });
+  const { client } = await import("../../src/core/relay");
+  expect(await client().scope.getOrCreate([runId]).listAgents({})).toEqual([]);
+}, 60_000);
+
 test("lifecycle: the named plugin hears the agent's changes with its names; a plugin that isn't there refuses the spawn", async () => {
   const run = await newRun(w);
   const worker = w.script("leaf", WORKER);
@@ -112,7 +124,25 @@ capcomd result --summary done >/dev/null`);
   expect(r.j?.error).toMatchObject({ code: "config", reason: "lifecycle_inactive", message: expect.stringContaining("lifecycle names not-loaded, which isn't an active plugin listening to agent.changed") });
 }, 180_000);
 
-test("profiles validate: a lifecycle plugin the daemon hasn't is an error; an environment its sandbox hasn't, a warning", async () => {
+test("lifecycle: an agent whose named plugin is gone by its start fails as config, before its machine is made", async () => {
+  const run = await newRun(w);
+  const ok = await spawnRoot(w, run, "watched", w.script("pre", WORKER), { args: ["--no-start"] });
+  const { client } = await import("../../src/core/relay");
+  const scope = client().scope.getOrCreate([run]);
+  const a: any = await scope.getAgent({ agentId: ok });
+  // As if the plugin was turned off since the spawn (which checked it): the same record, naming one the daemon hasn't.
+  const id = `agt-gone${Date.now()}`;
+  await scope.spawn({ runId: run, agentId: id, key: "gone", paramsHash: "gone", parent: null, profile: a.profile, ref: a.ref, spec: { ...a.spec, lifecycle: { onStart: ["not-loaded"], onEnd: [] } },
+    task: "t", contract: a.contract, operator: false, ...(a.driveEnv ? { driveEnv: a.driveEnv } : {}) });
+  const { startDriver } = await import("../../src/primitives/drivers");
+  await startDriver(run, id);
+  const done = (await waitAll(w, run, [id])).agents[0];
+  expect(done.status).toBe("failed");
+  expect(JSON.stringify(done.result)).toContain("lifecycle names not-loaded");
+  expect(calls().some(of("sandbox.ensuring", id))).toBe(false);
+}, 120_000);
+
+test("profiles validate:a lifecycle plugin the daemon hasn't is an error; an environment its sandbox hasn't, a warning", async () => {
   const r = await w.cj(["profiles", "validate"]);
   expect(r.code).toBe(2);
   expect(r.j).toMatchObject({ ok: false });

@@ -353,7 +353,8 @@ Each step ships alone, with tests, and leaves every existing test green.
 - **Two sources of truth during the overlap.** Mitigated by "directory wins, validate warns", and by `show` printing
   where every value came from.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
-  environment is a readiness problem shown before the run (`GET /v1/run-options`), not a spawn failure.
+  environment is warned about by `capcomd profiles validate` and refused at spawn (`reason: environment`, §9), not left
+  to the provider's boot error; showing it as readiness before the run (`GET /v1/run-options`) is still to do.
 - **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
   per hash (decision 4 below).
 - A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam
@@ -515,7 +516,10 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
 - **`sandbox.provider` wins over the run's sandbox** for that profile's agents (§2.2 "absent: the run's, else the
   daemon's"): the machine is made, run, pushed from and destroyed there (`providerForAgent`, recorded on the worker as
   its `sandbox`, which `capcomd sandbox shell` and the drain read), its idle lifetime is that place's current setting (a
-  run records its own place's), and its slot is that place's. A run's checks stay on the run's sandbox.
+  run records its own place's), and its slot is that place's. A run's checks stay on the run's sandbox. **It never
+  takes an agent out of isolation**: a sandbox that runs its agents on this host (`isolation: host`, the test fakes) is
+  refused at spawn (`reason: sandbox_isolation`) unless the run's own sandbox is one too, since a profile is data
+  (§2.5) and its agent's commands and MCP servers run in a sandbox, never on the host.
 - **`sandbox.environment` names an environment of the agent's sandbox**: `default` (or unset) is the current build, as
   for every agent; `image` is the provider's plain image (the CLI is installed at start, as `CAPCOMD_ENV=image`); any
   other name is a build in that sandbox's env ledger (`capcomd env status`), by its name. `capcomd env build --name`

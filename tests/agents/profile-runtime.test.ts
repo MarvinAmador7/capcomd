@@ -72,7 +72,7 @@ describe("the runtime blocks of a profile", () => {
   });
 
   test("the pinned blocks are read defensively: what this capcomd can't read is left out", () => {
-    expect(pinnedRuntime({ mcp: [{ name: "ok", command: ["a", "b"] }, { name: "Bad", command: ["x"] }, { name: "e", command: [] }, { name: "n", command: ["x", 1] }], sandboxProvider: "docker", environment: "../x", size: { vcpu: 3 }, lifecycle: { onEnd: ["p"] } }))
+    expect(pinnedRuntime({ mcp: [{ name: "ok", command: ["a", "b"] }, { name: "Bad", command: ["x"] }, { name: "capcomd", command: ["x"] }, { name: "e", command: [] }, { name: "n", command: ["x", 1] }], sandboxProvider: "docker", environment: "../x", size: { vcpu: 3 }, lifecycle: { onEnd: ["p"] } }))
       .toEqual({ mcp: [{ name: "ok", command: ["a", "b"], trust: "untrusted" }], sandboxProvider: "docker", lifecycle: { onStart: [], onEnd: ["p"] } });
     expect(pinnedRuntime(null)).toEqual({});
     expect(pinnedMachine({ provider: "claude", sandboxProvider: "boxd", environment: "default", size: { vcpu: 8 }, mcp: [] })).toEqual({ sandbox: "boxd", environment: "default", size: { vcpu: 8 } });
@@ -173,7 +173,7 @@ describe("tools.mcp: the agent's CLI gets the servers", () => {
     const listed = await run({ allowed: "Read,Edit", subagents: true });
     expect(listed.argv[listed.argv.indexOf("--allowedTools") + 1]).toBe("Read,Edit,Bash(capcomd:*),mcp__capcomd,mcp__docs");
     const both = JSON.parse(readFileSync(listed.argv[listed.argv.indexOf("--mcp-config") + 1]!, "utf8")).mcpServers;
-    expect(Object.keys(both)).toEqual(["capcomd", "semgrep", "docs", "shell"]);
+    expect(Object.keys(both)).toEqual(["semgrep", "docs", "shell", "capcomd"]);
     expect(both.capcomd).toMatchObject({ command: "node", args: [join(listed.rpcDir, "bin", "capcomd"), "mcp"] });
   }, 60_000);
 });

@@ -59,12 +59,13 @@ export function runtimeProblems(name: string, rt: ProfileRuntime, spec: Pick<Age
 }
 
 /** The runtime blocks an agent was pinned with (its spec as recorded at spawn), read defensively: a record from before
- *  them, or with a value this capcomd doesn't know, gives what it can read and nothing else. */
+ *  them, or with a value this capcomd doesn't know, gives what it can read and nothing else (and no server that would
+ *  take capcomd's own name). */
 export function pinnedRuntime(spec: unknown): ProfileRuntime {
   if (!isMap(spec)) return {};
   const out: ProfileRuntime = {};
   if (Array.isArray(spec.mcp)) {
-    const mcp = spec.mcp.filter((m): m is Record<string, unknown> => isMap(m) && typeof m.name === "string" && NAME.test(m.name) && names(m.command).length > 0 && names(m.command).length === (m.command as unknown[]).length)
+    const mcp = spec.mcp.filter((m): m is Record<string, unknown> => isMap(m) && typeof m.name === "string" && NAME.test(m.name) && m.name !== "capcomd" && names(m.command).length > 0 && names(m.command).length === (m.command as unknown[]).length)
       .map((m): McpServer => ({ name: m.name as string, command: names(m.command), trust: m.trust === "trusted" ? "trusted" : "untrusted" }));
     if (mcp.length) out.mcp = mcp;
   }
