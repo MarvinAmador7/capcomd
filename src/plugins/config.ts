@@ -1,12 +1,13 @@
 // A plugin's config, layered (docs/spec/plugin-api.md §10.2): its schema's defaults, then `plugins.<name>` in the user's
 // ~/.capcomd/config.json, then in the project's .capcomd/config.json (the daemon's, found from where it runs), then the
 // environment, CAPCOMD_PLUGIN_<NAME>_<KEY> (name and key upper-cased, `-` and `.` as `_`; a value that reads as JSON is
-// that value, else a string). Objects merge key by key, `null` deletes. `enabled` is reserved at every layer: false keeps
-// the plugin at `validated` (§5.4), true turns on a built-in that is off until asked for (the watchdog, which `capcomd
-// setup` turns on). The result is checked against the schema (the subset manifests use: types, bounds, enums, required,
-// additionalProperties); an error fails the plugin `config_invalid` (§10.4) rather than run it with defaults. A secret
-// property (`x-secret`) is never read from these layers: its reference stays the schema's (src/plugins/secrets.ts).
-// CAPCOMD_NO_CONFIG (tests) skips the files, not the environment.
+// that value, else a string, and it replaces the key's value). The files' objects merge key by key, `null` deletes.
+// `enabled` is reserved at every layer: false keeps the plugin at `validated` (§5.4), true turns on a built-in that is
+// off until asked for (the watchdog, which `capcomd setup` turns on). Each layer is checked against the schema (the
+// subset manifests use: types, bounds, enums, required, additionalProperties); an error fails the plugin
+// `config_invalid` (§10.4) rather than run it with defaults. A secret property (`x-secret`) is never read from these
+// layers: its reference stays the schema's (src/plugins/secrets.ts). CAPCOMD_NO_CONFIG (tests) skips the files, not
+// the environment.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { projectConfigPath, readConfig, userConfigPath } from "../config/store";
@@ -142,7 +143,9 @@ export function pluginSettings(m: { name: string; config?: unknown }, o: { dir?:
     for (const k of Object.keys(rest)) if (secret.has(k)) delete rest[k];
     // Each layer on its own, so an error names where it came from; a null only deletes what a layer below set.
     if (schema) for (const e of checkSchema({ ...schema, required: [] }, withoutNulls(rest))) errors.push({ ...e, layer });
-    config = mergePatch(config, rest) as Record<string, unknown>;
+    // A variable is the whole value of its key (CAPCOMD_PLUGIN_X_SCHEDULES='{}': none), not a patch of it.
+    if (layer === "env") for (const [k, v] of Object.entries(rest)) { if (v === null) delete config[k]; else config[k] = v; }
+    else config = mergePatch(config, rest) as Record<string, unknown>;
   }
   return { ...(enabled === undefined ? {} : { enabled }), config, errors };
 }

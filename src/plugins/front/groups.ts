@@ -5,7 +5,7 @@ import { kernelGroup } from "./group";
 
 export const FRONT_RUN = kernelGroup({
   name: "front-run",
-  description: "The CLI's run commands: start a run, follow it, decide its approvals, cancel or pause it, and read what it recorded (events, trace, logs).",
+  description: "The CLI's run commands: start a run, follow it, decide its approvals, cancel or pause it, and read what it recorded (events, trace, logs) and what triggers from sources did.",
   load: async () => (await import("../../cli/groups/run")).COMMANDS,
   commands: [
     { name: "run", summary: "Start or resume a run (a planner agent, or the built-in recipe); `run new` makes a scope that plans nothing" },
@@ -22,6 +22,7 @@ export const FRONT_RUN = kernelGroup({
     { name: "inspect", summary: "A run's bundle (status, tree, trace, events), or one agent's record and logs" },
     { name: "logs", summary: "An agent's logs, or follow them" },
     { name: "agent-drive", summary: "Drive one agent of a run in this process (the driver's own step)" },
+    { name: "triggers", summary: "What the daemon did with each trigger from a source, and the threads runs follow" },
   ],
 });
 
