@@ -347,7 +347,45 @@ Context: loaded 2 of 2 lines (…); groundray at 9f8e7d6c5b4a, modified 2026-10-
 - A repository given as a path is recorded as an absolute path.
 - Reviewers get the brain's facts too (only memory is left out for them). Deprecated and superseded facts, and those
   past their `stale_after`, leave the brief; a fact without `status` counts as a draft.
-- Read-only for now: agents propose changes to a brain in a later release (through the brain's own pull requests).
+- Proposals to the brain go through its own pull requests (below); what agents read never changes until the brain's
+  owners merge one and the project maps the brain again.
+
+#### Proposing facts to a brain
+
+A run's consolidator can propose new facts for the brain its profile names, besides lessons for the project's memory:
+something the run established about the business (a policy, a decision, a definition, how a system behaves), not about
+the repository. Name the brain in the consolidator's profile:
+
+```yaml
+# the context-consolidator profile's context block (in .capcomd/agents.json, which `capcomd setup project` wrote)
+context:
+  providers:
+    - name: memory
+    - name: groundray
+      brain: acme
+  review: human        # human: you send the brain's proposals; lint: capcomd sends them when it stages
+```
+
+Each proposal becomes a draft made by the groundray CLI (it must be installed on your machine, or named with
+`CAPCOMD_GROUNDRAY=<path>`), on the branch `groundray/capcomd-<runId>-<agentId>` of the brain's repository, with one
+pull request per run for the brain's owners. Drafts only: capcomd never supersedes, deprecates or verifies an item in a
+brain, and never changes the brain's branch.
+
+```sh
+capcomd context brain propose --run <runId>          # what the run's consolidator proposed, and what was sent
+capcomd context brain propose --run <runId> --yes    # send them as you (groundray records you as the producer)
+```
+
+- Under `review: human` (the default) nothing goes to the brain until you send it; under `review: lint` capcomd sends
+  them as it stages the consolidator's answer, as itself (`capcomd/<version>`), for up to 4 minutes; any it couldn't
+  send wait for `--yes`.
+- A fact's title is 3 to 120 characters (groundray's limit); a longer one is refused when the answer is staged.
+- The consolidator's result says what it proposed (`context.brain`), and the run's stream has
+  `plugin.context.brain_staged` and `plugin.context.brain_proposed`.
+- groundray runs in a throwaway directory with settings of its own: your own groundray installation is never read or
+  changed. The pull request is opened with your own login at the brain's forge (GitHub); on a plain git remote the
+  branch is pushed and you open the pull request yourself.
+- A proposal is sent once; one that failed (no groundray, the brain's repository unreachable) can be sent again.
 
 ## The planner's provider, model and effort for one run
 

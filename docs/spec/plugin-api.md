@@ -697,6 +697,36 @@ its prompt, fenced as their agents' text; its profile naming no model, it runs o
 by `src/config/models.ts`, of the models the run's agents on its provider use). The `context` plugin's listener then
 records `plugin.context.staged` (the branch, the commit, each change) and a `plugin.context.refused` per refused change.
 
+A consolidator's answer may also propose new facts to a company's brain (ADR-025 step 5): a change with `brain: <name>`
+for the brain its own profile names (its `groundray` entry), one of groundray's types (`concept`, `decision`,
+`procedure`, `policy`, `system`, `source-summary`, `question`), a one-line title of 3 to 120 characters (groundray's schema) and the text, a new draft only (`add`:
+a brain's items are superseded, deprecated and verified by its owners). Each is checked as a memory change is (the
+seeded scan, `itemBytes`, its `from` the run's candidates; it takes its share of the run's `proposalsPerRun`), refused
+`no_brain` for a brain its profile doesn't name, and never staged on the branch: the kernel keeps it in kv
+`_context/brain/<agentId>.<n>` of the run (reserved, under the run's `_context/`), and the consolidator's result says
+so (`context.brain {name, proposals[], awaits, sent[]}`, additive). They go to the brain through its provider's
+`propose` (§4.7; `context-groundray` is writable, ADR-025 §11.2): under the consolidator's profile's `context.review:
+lint` the kernel sends them as the staging ends, as capcomd (groundray's actor `capcomd/<version>`), within 4 minutes
+for all of them (those it leaves no time for, or a send that can't start, wait for the command below, and
+`context.brain.awaits` says `person` when none could be sent); under `review:
+human` (the default) they wait for a person, who sends them with `capcomd context brain propose --run <runId> --yes` and
+is their actor (`human:<id>`, from the operator's or a driver's principal: an agent never names a person, ADR-025 §7).
+A sent proposal keeps its receipt in its record and is never sent again; one that failed keeps why, and can be sent
+again. The `context` plugin records `plugin.context.brain_staged` (they wait for a person) and
+`plugin.context.brain_proposed` (one was sent, and where).
+
+groundray's `propose` makes the draft with the groundray CLI (`CAPCOMD_GROUNDRAY`, else `groundray` on `PATH`;
+`unavailable` without one), never on what agents read: in a throwaway directory, a bare host repo fetches the brain's
+branch and the run's proposal branch (`groundray/capcomd-<runId>-<agentId>`, groundray's namespace for proposals), an
+authoring clone made from it locally sits on `main` at that branch's tip (else the brain's), and groundray runs with its
+own config, data, cache, `HOME` and `XDG_*` there (`setup --non-interactive`, `brain add <authoring clone>`, then
+`knowledge create … --method agent-generated --confidence low` planned and then `--apply`, a source naming the run and
+agent as the proposal's marker). Its commit is pushed only when it descends from the base and changes nothing outside
+the bundle, from the bare repo with a lease (§11.7), and the forge that serves the brain's remote (`matches`, §7.1)
+opens or finds the pull request into the brain's branch; a forge without pull requests leaves the pushed branch. A
+proposal the branch holds already (its marker) is found, not made again. Only `add` is taken (`unsupported` otherwise),
+and only for a brain with groundray's `brain.yaml`.
+
 #### 6.6.9 `agent.item` · observe · the runner, as it drains the thread (`putItems`)
 `AgentItem {agent: {id, runId, profile}, item: ThreadItem}`, untrusted. The only turn and tool-call surface capcomd can
 offer (ADR-023 §5.3): the host sees tool calls after the fact and cannot block them. High volume: 5 s deadline, bounded
@@ -1358,7 +1388,10 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    an env build's template, a context bundle at its commit), the host fetches the run's repository into its mirror and uploads a bundle of what the
    sandbox lacks, which the sandbox reads and whose refs the host names; to push (an agent's branch, its checkpoints),
    the sandbox bundles the commit, the host downloads it into its mirror, checks it is the commit asked for, and pushes
-   it to the repository's URL with a lease. In the sandbox git only makes and reads bundle files.
+   it to the repository's URL with a lease. In the sandbox git only makes and reads bundle files. A proposal to a brain
+   (groundray's `propose`, §6.6.8) runs on the host only: a bare host repo of its own fetches the brain and pushes the
+   proposal branch with a lease; the authoring clone the groundray CLI commits in is fetched from it as a local path,
+   and groundray itself talks to no remote.
 2. **On the host, network git runs only through `src/merge/host-git.ts`**: `remoteGit` in a *host repo* (one capcomd
    made with `initHostRepo`: the mirror, the merge clones, the scratch and files repos), checked before every call: its
    local settings are only those `git init`, `git remote add`, a fetch and `git worktree add` write, its hooks are the
@@ -1487,7 +1520,8 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
   `testkit.conformance.agent`.
 - **context** (ADR-025 §3.1): `describe` names the declared provider with kinds and layers the kernel knows,
   `available` never rejects, `classifyError` classifies anything (its own `not_found` as `not_found`), `propose` is
-  refused `unsupported` unless `caps.writable`, a call whose signal is already aborted rejects; with a scope that has
+  refused `unsupported` unless `caps.writable` and never stages through a handle `resolve` didn't give, a call whose
+  signal is already aborted rejects; with a scope that has
   items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time
   and names a bundle only when `caps.bundle` (a repository at a full commit, under a plain name), `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
   kind, untrusted description), `get` returns an indexed item with untrusted text and rejects an id that isn't there
@@ -2068,7 +2102,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.29 | 2026-11-06 | With groundray's read path (ADR-025 step 4): `ContextScope` gains `settings` (a provider entry's own settings from the pinned spec) and `bundleRoot`, `resolve` may answer a `bundle` (`ContextBundle`, a repository at a commit) when `caps.bundle` (all optional, additive); the router asks a provider once per brief (`skipped (named twice)`) and keeps the bundles its brief cites, which the attempt's runner places in the sandbox through the host's mirror (§6.6.7, §11.7); the conformance suite's bundle case (§14.2). The built-in `context-groundray` provides `context:groundray`. |
 | 1.0.30 | 2026-11-06 | With consolidation and promotion as a merge (ADR-025 step 3): an agent of the `context-consolidator` profile isn't captured; the kernel stages its answer on its branch before recording its end, runs it as a reporting agent with the run's candidates and outcomes in its prompt, and on the run's strongest model when its profile names none (§6.6.8); `plugin.context.staged` on the run's stream (additive); the built-in `context-memory` is a `verify.judging` judge (lint as a check, before the reviewer gate) and a `merge.landing` gate (deny for a branch of any agent but a consolidator that changes `.capcomd/context/`, or one that fails lint; `hold` for a consolidator's under `context.review: human`, the default; allow under `lint`) (§6.6.13, §6.6.15). Both listen in every process, so a verify asks a judge and a merge fires `merge.landing` where none did before. |
 | 1.0.31 | 2026-11-06 | With install, trust and update (§17.2 step 12) and the rest of config layering (the owner approved it with this step): installing from a git repository through the host's own repo, the files written out of the commit (no checkout, no link out, size limits), what `install` refuses, `LOCK`'s fields and the content hash, `update` reporting what changed before replacing, `remove` keeping the data (§4.8); `plugins.use` fetched to the user's home, trust per content hash and place in `<home>/trust.json` (a checkout's link out isn't its plugin; a checkout's `LOCK` is hashed), the trust prompt (with the secret references, its text escaped) and `--yes`, nothing written through a link or over a written file at install, an untrusted project plugin listed `validated`/`untrusted` through `enable` and checked again before every start of its process, `plugin.trusted` written by the daemon the first time it acts on a trust (§4.8); the daemon honours `allow-version` (§4.4); `enable` reads a directory plugin again (§4.8); every plugin's config is layered, not only a built-in's; `enabled` is the user's (a project turns off only its own plugins), a project's refused settings for a plugin not its own set aside rather than failing it, neither the project nor a run sets a secret, and a secret's reference is the user's or the environment's, a value where one belongs refused; `config.sources` per layer; the run layer checked against the manifests and its storage key the kernel's (§10.2, §10.4); a reference resolving to nothing still a warning, keychain references still unresolved (§9.3, §10.3); capability `plugins.config`, `POST /v1/runs` `plugins` and `plugin.trusted` in the contract (all additive, §13.1). |
-| 1.0.32 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
+| 1.0.32 | 2026-11-06 | With groundray's write path (ADR-025 step 5): a consolidator's change may name the brain its profile names (`brain`), checked and kept by the kernel in kv `_context/brain/<agentId>.<n>`, never staged on its branch (a title of 3 to 120 characters, as groundray's schema takes; refusal reason `no_brain`; the result's `context.brain`, additive); sent through the provider's `propose` by the kernel under `review: lint` (actor `capcomd/<version>`, within 4 minutes, the rest left for a person) or by a person with `capcomd context brain propose --run <runId> --yes` (actor `human:<id>`), and recorded as `plugin.context.brain_staged` and `plugin.context.brain_proposed` (§6.6.8). `context-groundray` is writable: a draft made by the groundray CLI in a throwaway authoring clone, pushed to `groundray/capcomd-<runId>-<agentId>` from a host repo (§11.7) and opened as a pull request through the forge that serves the brain; the conformance suite's propose case for a handle the provider didn't make (§14.2). |
+| 1.0.33 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

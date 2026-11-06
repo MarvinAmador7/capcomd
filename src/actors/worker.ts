@@ -258,7 +258,7 @@ export type PushBranchParams = {
   report?: boolean;
   /** ADR-025 §5.2: a consolidator answers with memory changes, which the kernel stages on its branch when it ends; the
    *  agent pushes nothing. `inputs`: the run's candidates and outcomes, which its prompt carries. */
-  consolidate?: { inputs: string };
+  consolidate?: { inputs: string; brain?: string };
   /** The agent's title when it starts (the driver's, its parent's or the user's): its commit's subject before the brief. */
   title?: string;
   /** What its profile pinned for its machine (as provisionWorker got it): the same sandbox, environment and size. */
