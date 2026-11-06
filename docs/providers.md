@@ -31,10 +31,12 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
   branch), its dependencies installed for Linux (with the package manager the lockfile needs when the base image has
   none: bun at the version the project pins in `packageManager` or `.bun-version`, else `CAPCOMD_BUN_VERSION` or
   1.4.3), and its record (commit, lockfile hash) in the template's `.git` and in the env manifest. The same secret scan
-  runs before the image is committed; no credential is baked in (git gets its token per command, as before). Every
-  container is its own copy-on-write copy of the image, so an agent works in the template in place: `git fetch`, then
-  `git checkout -B <branch>`, edit, commit. Its branch, tree and commit are the same as from a fresh clone, and a new
-  agent's workspace is ready in about a second instead of a clone plus a copy of `node_modules`.
+  runs before the image is committed. No git credential is baked in, and none ever enters a container: the host
+  fetches the project into its own mirror and hands the container a git bundle, and pushes the same way in reverse
+  (docs/spec/plugin-api.md §11.7). Every container is its own copy-on-write copy of the image, so an agent works in the
+  template in place: the host brings it the commits it lacks (a bundle of only those), then `git checkout -B
+  <branch>`, edit, commit. Its branch, tree and commit are the same as from a fresh clone, and a new agent's workspace
+  is ready in about a second instead of a clone plus a copy of `node_modules`.
 - **When it clones instead.** The runner uses the template only when its commit is in the target's history, the
   lockfile of the tree the agent starts from is the one its dependencies were installed for, it is of the run's
   repository, and no earlier run in that container used it (a retry); otherwise it clones and copies the template's
@@ -91,7 +93,10 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
      return `{code, stdout, stderr}`. Commands started detached (`setsid nohup … &`) must outlive the exec: the agent
      runs that way and later execs poll it.
    - `upload` / `download` absolute paths (parent directories exist), `destroy` (idempotent), `list(prefix)`.
-   - Git network commands (`git clone/fetch/push`) get the per-exec credentials of a `GitCredentialHook`.
+   - No git credential, ever: capcomd runs no network git in a sandbox. The host moves git objects for it as bundles
+     (docs/spec/plugin-api.md §11.7, `src/merge/transfer.ts`) through `upload` and `download`, a chunk at a time
+     (`CAPCOMD_TRANSFER_CHUNK_BYTES`, default 8 MiB), so those must take a file of that size and `exec` needs `sh`,
+     `cat`, `split` and `git` in the image.
 2. Add its descriptor to `PROVIDERS` in `src/providers/registry.ts` (ADR-021), and create it in `providerFromEnv`
    (`src/dependencies.ts`). The descriptor is what the engine asks (`sandboxCaps()`) and what the daemon serves to
    clients as data (`GET /v1/sandboxes`), so the app needs no change for a new place:

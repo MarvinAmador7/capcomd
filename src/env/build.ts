@@ -139,12 +139,14 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
         if (!d) throw fail(`the repository ${o.repoUrl} has no default branch`);
         return d;
       };
+      // A big repository's first fetch and upload take minutes: bounded by a stall, not a clock, and said as they go.
+      const onProgress = (q: import("../merge/transfer").TransferProgress) => log(T_.progressLine("warm template", q));
       if (o.warm) {
-        try { await T_.sendToSandbox(hostGit, box, T, { branches: "all", checkout: o.target ?? await fallback(), timeoutMs: 900_000 }, { fresh: true }); }
+        try { await T_.sendToSandbox(hostGit, box, T, { branches: "all", checkout: o.target ?? await fallback(), onProgress }, { fresh: true }); }
         catch (e) {
           if (!o.target || !(e instanceof T_.TransferError) || !/no branch /.test(e.message)) throw fail(e);
           log(`warm template: no branch ${o.target} to clone; using the repository's default branch`);
-          try { await T_.sendToSandbox(hostGit, box, T, { branches: "all", checkout: await fallback(), timeoutMs: 900_000 }, { fresh: true }); } catch (e2) { throw fail(e2); }
+          try { await T_.sendToSandbox(hostGit, box, T, { branches: "all", checkout: await fallback(), onProgress }, { fresh: true }); } catch (e2) { throw fail(e2); }
         }
       } else {
         try { await T_.sendTree(hostGit, box, T, await fallback()); } catch (e) { throw fail(e); }

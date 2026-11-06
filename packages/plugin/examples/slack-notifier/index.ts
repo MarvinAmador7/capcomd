@@ -1,8 +1,9 @@
 // Worked example, spec §15.4: a third-party, out-of-process plugin. The host starts this process (§9.2); it opens a
 // session, reads hook calls from the SSE stream and posts to Slack. Its token reads, and steers only to write its own
 // `posted` event (events.emit needs steer, §11.1).
-// `PluginClient` is the interface the client library implements (§9.8); `connect` makes one.
-import { connect, type HookFrame, type PluginClient, type ProcessEnvironment, type SessionOpened, type WireHookCall } from "../../src/index";
+// `PluginClient` is the interface the client library implements (§9.8); `connect` makes one. Only node: APIs and the
+// client library, so it runs on Bun or Node (docs/plugins.md says how to ship it with its dependency).
+import { connect, sessionOpen, type HookFrame, type PluginClient, type ProcessEnvironment, type SessionOpened, type WireHookCall } from "@capcomd/plugin";
 
 interface Config { channel: string; quiet: boolean }
 
@@ -37,10 +38,8 @@ export function render(call: WireHookCall, cfg: Config): string | null {
 const plain = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").slice(0, 300);
 
 export async function main(client: PluginClient, env: ProcessEnvironment, signal: AbortSignal): Promise<void> {
-  const session: SessionOpened = await client.open({
-    session: env.CAPCOMD_PLUGIN_SESSION, protocol: 1, manifestHash: await manifestHash(env.CAPCOMD_PLUGIN_ROOT), pid: process.pid,
-    hooks: ["run.changed", "agent.changed", "merge.changed"],
-  });
+  // The handshake (§9.3): this start's session, the hash of the manifest it was started from, its declared hooks.
+  const session: SessionOpened = await client.open(sessionOpen(env));
   const cfg = session.config as unknown as Config;
   const webhook = session.secrets["webhook"];
   if (!webhook) throw new Error("the webhook secret is not configured (plugins.slack-notifier.webhook)");
@@ -63,12 +62,6 @@ async function handle(frame: HookFrame, cfg: Config, webhook: string, client: Pl
     if (res.ok) await client.emit({ type: "posted", stream: frame.call.runId ?? "daemon", entity: frame.call.runId ?? "daemon", text: "Posted to Slack.", data: { hook: frame.call.hook, channel: cfg.channel } });
     else console.error(JSON.stringify({ level: "warn", message: "Slack refused the post", status: res.status }));
   } finally { clearTimeout(t); }
-}
-
-async function manifestHash(root: string): Promise<string> {
-  const bytes = await Bun.file(`${root}/plugin.json`).arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // The entry point: `connect` is the client library's constructor (§9.8); the environment is §9.2's.

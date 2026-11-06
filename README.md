@@ -250,8 +250,8 @@ agent profiles.
   are set by you; agents can't choose or change them.
 - **Authority comes from tokens, not text.** An agent can only act on its own subtree with the operations its token
   grants; anything another agent writes is fenced and treated as data.
-- **Nothing runs on your machine.** Agents and checks run in VMs. An agent's VM holds only its own login and a
-  short-lived git credential for pushing its branch; a checks VM holds none.
+- **Nothing runs on your machine.** Agents and checks run in VMs. An agent's VM holds only its own login, never a
+  git credential: capcomd fetches and pushes for it from your machine; a checks VM holds none.
 - **No self-approval.** An agent can't verify or merge its own work.
 
 ## Integrations
@@ -266,6 +266,8 @@ agent profiles.
 - **Hermes** (Nous Research's agent, also from Telegram, Slack and the rest of its gateway): `capcomd setup agent`
   registers the MCP server and installs the skills; see [docs/integration-agents.md](docs/integration-agents.md#hermes).
 - **Other callers** (scripts, services): see [docs/integration-agents.md](docs/integration-agents.md).
+- **Plugins for capcomd** (a notifier, a gate on merges, …): your own program, started and supervised by the daemon,
+  written with `@capcomd/plugin`; see [docs/plugins.md](docs/plugins.md).
 
 ## Documentation
 
