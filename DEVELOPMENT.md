@@ -137,7 +137,9 @@ src/
                   environment, size, lifecycle plugins (runtime.ts), resolution, pins and overrides (resolve.ts), and
                   what `capcomd profiles`, GET /v1/profiles and a planner read of each: the files and values, title,
                   tags, fit, cost (describe.ts); profile packages installed, updated and exported with a LOCK
-                  (install.ts, on ../install/), and the operator's trust in a project's profile skills (trust.ts)
+                  (install.ts, on ../install/), the operator's trust in a project's profile skills (trust.ts), and
+                  agents.json moved into profile files, checked to resolve the same (migrate.ts); the profiles
+                  `capcomd setup project` writes are ../config/project-setup.ts
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

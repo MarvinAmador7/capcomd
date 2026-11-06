@@ -12,7 +12,7 @@
 // ~/.capcomd, the daemon on :6420, Docker or the Claude Code config: the plugin is loaded with --plugin-dir (a copy
 // with no MCP server of its own) and the server with --mcp-config --strict-mcp-config.
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -122,7 +122,9 @@ const common: Record<string, string> = {
 };
 // The project as `capcomd setup project` of this version writes it (its profiles are part of what's evaluated).
 sh(["bun", CLI, "setup", "project", "--yes", "--mode", "direct", "--target", "dev", "--check", "bun test", "--agents", "claude", "--repo", BARE, "--json"], { cwd: PROJECT, env: common });
-log(`profiles: ${Object.keys(JSON.parse(readFileSync(join(PROJECT, ".capcomd", "agents.json"), "utf8")).agents).join(", ")}`);
+// Profile files since ADR-024 §7 step 9; an older --ref writes agents.json.
+const profilesDir = join(PROJECT, ".capcomd", "profiles");
+log(`profiles: ${(existsSync(profilesDir) ? readdirSync(profilesDir).map((f) => f.replace(/\.yaml$/, "")) : Object.keys(JSON.parse(readFileSync(join(PROJECT, ".capcomd", "agents.json"), "utf8")).agents)).join(", ")}`);
 
 // ── 4. the engine ────────────────────────────────────────────────────────────────────────────────
 // The engine's own log (its actors' errors with their real text) is kept with the run, for --keep.

@@ -349,7 +349,9 @@ Each step ships alone, with tests, and leaves every existing test green.
    `context`, whose steps build it (it stays read as `context`'s alias). Done for the others (2026-11-06; §9, "Made while
    building the runtime blocks").
 9. **`capcomd profiles migrate`** and the `setup project` templates in v2 form; `agents.json` v1 stays readable for two
-   minor releases, then `validate` warns and a later release stops reading it (breaking, changelog).
+   minor releases, then `validate` warns and a later release stops reading it (breaking, changelog). Done for migrate,
+   the templates and the deprecation notice (2026-11-06; §9, "Made while building migrate and the templates"); the
+   warning and the end of reading are later releases'.
 
 ## 8. Risks
 
@@ -404,7 +406,8 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   is since the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets.
   `sandbox.provider` is checked against the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
-  `agents.json`, and shipping them as data now would make names that are unknown today resolve.
+  `agents.json`, and shipping them as data now would make names that are unknown today resolve. (Step 9 kept it
+  empty: below.)
 - **`context` (and `memory`, read as it) has a runtime since ADR-025 step 1**: it is pinned with the flat spec
   (`AgentSpec.context`, a field an `agents.json` entry may hold too), its provider names are checked against the active
   context providers when profiles are read, and an override may remove it but never change it. The behaviour change
@@ -639,6 +642,57 @@ Made while building install, export and update (§7 step 7, 2026-11-06; `src/pro
 - **Not in this step**: `POST /v1/profiles/install` (§5; no client yet, and the plugins have no install route
   either), the marketplace file's `profiles` (§2.5), `profiles add --from`, and trust in the API (`GET /v1/profiles`
   rows don't say it yet).
+
+Made while building migrate and the templates (§7 step 9, 2026-11-06; `src/profiles/migrate.ts`,
+`src/config/project-setup.ts`):
+
+- **The templates are written into the project, and the bundled layer stays empty.** §6's four (five with ADR-025's
+  consolidator, six with a second agent's worker) depend on the project: its agents and their logins, its check (the
+  reviewer's tools). A bundled profile would need a harness every user can run, and a bundled `lead` that `extends:
+  worker` would break every project without a `worker` (an `extends` nothing answers is an error for the whole set).
+  So `capcomd setup project` writes them, `POST /v1/projects` writes the same bytes, and ADR-025's "until step 9 ships
+  bundled profiles" is answered by the consolidator staying a profile file setup writes.
+- **One `<name>.yaml` per profile, not `<name>/profile.yaml`.** A single file holds everything the templates set, and
+  it is what `capcomd profiles add` writes and `rm` removes (a package is the user's to delete); a person who adds a
+  `prompt.md` or `skills/` moves it into a directory. Each file starts with a comment saying what the profile is for and
+  that it is the user's to change.
+- **§6's shapes, with two changes.** `reviewer` extends `worker` (its read-only tools, `tags: [review]`,
+  `permissions.report: true`); `lead` extends `worker` (orchestrate, three helpers one level down). **`planner`
+  extends `worker`, not `lead`**: inheriting the lead's `children.maxChildren: 3` and `maxDepth: 1` would cap the
+  planner, which has no fan-out limits, unless its file removed them with `null`, a line nobody reading it should need.
+  **`context-consolidator` extends nothing**: with no model of its own it runs on the run's strongest (ADR-025 D6), and
+  a worker's `harness.model` would otherwise become its. A second agent's worker (`codex-worker`) extends nothing either:
+  its harness is all it has.
+- **Every template has the project's memory** (`context: {providers: [{name: memory}]}`, on `worker` and so on what
+  extends it; the consolidator's own with `review: human`), as ADR-025 §6.1 has it: a planner and a lead list it, a
+  worker gets the same index, and a reviewer inherits it and is given only the facts (the kernel's D11 rule, by role,
+  not by profile). The routing skill and the run's lessons need it on the planner, and the consolidator has been
+  written since ADR-025 step 3.
+- **Setup keeps what the project has**: a template whose name the project's layer has (a profile file or an
+  `agents.json` entry) is kept, so a project set up before keeps its `agents.json` and gets only the missing profiles
+  as files, extending its own `worker` entry. Each template is checked with every profile before it is written (the
+  loader's overlay), and one they wouldn't resolve with (a `lead` extending a worker the user gave MCP servers, which an
+  orchestrate profile can't have) is left out and reported as kept, rather than make every profile unreadable. Only the
+  first worker template becomes the default, and only when the project's layer has none (setup used to make the first
+  profile it added the default, which could be the reviewer).
+- **`migrate` moves an entry to `<name>.yaml` at version 1 with the entry's own values** (`fromFlat`, §6's table), the
+  file's `default` as that file's `default: true`, and checks through the overlay that every profile resolves to the
+  same spec, version, runtime and skills and the default stays, before it writes anything; otherwise it refuses. An
+  override of the entry keeps applying, now to the file. It leaves in `agents.json` an entry a profile file of its
+  layer already hides (the person removes it; `validate` names it) and one whose prompt is one word ending `.md` or
+  `.txt`, which a profile file reads as a file's name and only a package can hold (the overlay can't check a new
+  directory, as step 7 found). Profile files go first and `agents.json` last, so an interrupted migrate leaves files
+  that win over entries still there.
+- **`agents.json` is left in place with a note**: §6's "a comment" is a `$comment` (JSON has no comments), which the
+  v1 schema now allows and the loader ignores. An older capcomd refuses an unknown top-level key, but it doesn't read
+  profile files either, so a team member on one is served by `--keep` instead, which leaves `agents.json` exactly as it
+  was: the files win where they are read, and `validate` names each entry they hide (§6: "the v2 directory wins and
+  `validate` warns").
+- **`capcomd profiles add` follows the project**: a profile file where the project's profiles are files (its
+  `profiles/` folder exists and `agents.json` has no entries, as setup and `migrate` leave it), `agents.json` where it
+  has entries. Step 6 kept `add` on `agents.json` for scripts that add and then read it; those projects keep that.
+- **The deprecation is a notice in this release**: the changelog says `agents.json` is read for the next two minor
+  releases, then `validate` warns, then it isn't read. Nothing warns yet.
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 

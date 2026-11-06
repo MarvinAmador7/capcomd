@@ -1,10 +1,11 @@
 // capcomd setup: the parts that need no network (project, agent integration, check), driven non-interactively.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { githubRepoOf, httpsRemote, projectStep, suggestCheck } from "../../src/cli/commands/setup";
 import { LEAD_DESCRIPTION } from "../../src/config/project-setup";
+import { readProfiles } from "../../src/profiles";
 
 // The test projects' remotes are made-up GitHub ones: setup asks them for their default branch (`git ls-remote`), which
 // must fail at once here rather than try a real SSH connection (seconds on a machine with an SSH key).
@@ -97,11 +98,24 @@ describe("setup steps (non-interactive)", () => {
       env: { CAPCOMD_REPO: "https://github.com/acme/app.git", CAPCOMD_MERGE_MODE: "direct", CAPCOMD_MERGE_TARGET: "capcomd/staging", CAPCOMD_GITHUB_REPO: "acme/app" },
       run: { checks: { unit: "bun run test" }, reviewer: "reviewer" },
     });
-    const agents = JSON.parse(readFileSync(join(repo, ".capcomd", "agents.json"), "utf8")).agents;
-    expect(Object.keys(agents).sort()).toEqual(["codex-worker", "context-consolidator", "lead", "planner", "reviewer", "worker"]);
+    // Profile files (ADR-024 §6, §7 step 9), no agents.json; the worker is the default.
+    expect(existsSync(join(repo, ".capcomd", "agents.json"))).toBe(false);
+    expect(readdirSync(join(repo, ".capcomd", "profiles")).sort()).toEqual(["codex-worker.yaml", "context-consolidator.yaml", "lead.yaml", "planner.yaml", "reviewer.yaml", "worker.yaml"]);
+    const set = readProfiles(join(repo, ".capcomd", "agents.json"), env);
+    const agents = set.agents as Record<string, any>;
+    expect(set.default).toBe("worker");
+    expect(Object.values(set.profiles).map((p) => [p.name, p.version, p.source, p.applied.map((a) => a.name)])).toEqual([
+      ["codex-worker", 1, "project", ["codex-worker"]], ["context-consolidator", 1, "project", ["context-consolidator"]], ["lead", 1, "project", ["worker", "lead"]],
+      ["planner", 1, "project", ["worker", "planner"]], ["reviewer", 1, "project", ["worker", "reviewer"]], ["worker", 1, "project", ["worker"]],
+    ]);
     expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead", "context-consolidator"]);
     // A module lead: the worker's provider and login, orchestrating (plugin API §16.1) up to 3 worker helpers, one level.
-    expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
+    expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", description: LEAD_DESCRIPTION, toolMode: "orchestrate", context: { providers: [{ name: "memory" }] }, children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
+    // ADR-025 §6.1: every profile is briefed with the project's memory (a reviewer gets its facts only, D11).
+    for (const p of Object.values(agents)) expect(p.context).toMatchObject({ providers: [{ name: "memory" }] });
+    expect(agents["context-consolidator"]).toMatchObject({ provider: "claude", sandbox: "read-only", context: { review: "human" } });
+    expect(set.profiles.reviewer!.manifest).toMatchObject({ tags: ["review"], permissions: { report: true } });
+    expect(readFileSync(join(repo, ".capcomd", "profiles", "lead.yaml"), "utf8")).toStartWith("# Leads a part: up to 3 worker helpers at once, one level down.");
     // The reviewer runs the check and the package manager's test runner (bun test as well as bun run).
     expect(agents.reviewer.allowedTools).toEqual(expect.arrayContaining(["Bash(bun run:*)", "Bash(bun test:*)"]));
     expect(agents.reviewer.allowedTools).not.toContain("Edit");
@@ -112,19 +126,24 @@ describe("setup steps (non-interactive)", () => {
     expect(again.steps.find((s: any) => s.step === "profiles").detail).toContain("kept existing worker, reviewer, lead, context-consolidator, planner");
   });
 
-  test("project: an existing project's agents.json keeps its profiles; setup only adds the missing lead", () => {
+  test("project: an existing project's agents.json keeps its profiles; setup adds the missing ones as profile files", () => {
     const r3 = mkdtempSync(join(tmpdir(), "capcomd-setup-repo-"));
     Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: r3 });
     Bun.spawnSync(["git", "remote", "add", "origin", "git@github.com:acme/app.git"], { cwd: r3 });
     mkdirSync(join(r3, ".capcomd"));
     const mine = { provider: "claude", auth: "subscription", model: "opus", allowedTools: ["Read"] };
-    writeFileSync(join(r3, ".capcomd", "agents.json"), JSON.stringify({ schema: "capcomd.agents/v1", default: "worker", agents: { worker: mine, reviewer: mine, planner: { ...mine, children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } } }));
+    const v1 = JSON.stringify({ schema: "capcomd.agents/v1", default: "worker", agents: { worker: mine, reviewer: mine, planner: { ...mine, children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } } });
+    writeFileSync(join(r3, ".capcomd", "agents.json"), v1);
     expect(json(run(["setup", "project", "--yes", "--mode", "direct", "--json"], { cwd: r3, env }).out).ok).toBe(true);
-    const after = JSON.parse(readFileSync(join(r3, ".capcomd", "agents.json"), "utf8"));
-    expect(after.agents.worker).toEqual(mine);
-    expect(after.agents.reviewer).toEqual(mine);
-    expect(after.default).toBe("worker");
-    expect(after.agents.lead.children).toMatchObject({ allowSpawn: true, maxChildren: 3, maxDepth: 1 });
+    // agents.json is as it was; the missing lead and consolidator are profile files, and the default stays agents.json's.
+    expect(readFileSync(join(r3, ".capcomd", "agents.json"), "utf8")).toBe(v1);
+    expect(readdirSync(join(r3, ".capcomd", "profiles")).sort()).toEqual(["context-consolidator.yaml", "lead.yaml"]);
+    const set = readProfiles(join(r3, ".capcomd", "agents.json"), env);
+    expect([set.agents.worker, set.agents.reviewer, set.default]).toEqual([mine as any, mine as any, "worker"]);
+    // The lead extends the project's own worker (an agents.json entry), so it has its model and tools.
+    expect(set.agents.lead).toMatchObject({ model: "opus", allowedTools: ["Read"], toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1 } });
+    expect(set.profiles.lead!.applied.map((a) => [a.name, a.path])).toEqual([["worker", join(r3, ".capcomd", "agents.json")], ["lead", join(r3, ".capcomd", "profiles", "lead.yaml")]]);
+    expect(set.profiles.lead!.manifest.default).toBeUndefined();
   });
 
   test("project: an API-key login gets the spend cap per run it asks for (--budget), saved as driver.maxRunBudget", () => {
@@ -134,7 +153,7 @@ describe("setup steps (non-interactive)", () => {
     const out = json(run(["setup", "project", "--yes", "--auth", "apikey", "--budget", "20", "--mode", "direct", "--json"], { cwd: r2, env }).out);
     expect(out.ok).toBe(true);
     expect(JSON.parse(readFileSync(join(r2, ".capcomd", "config.json"), "utf8")).driver).toEqual({ maxRunBudget: "usd=20" });
-    expect(JSON.parse(readFileSync(join(r2, ".capcomd", "agents.json"), "utf8")).agents.worker).toEqual({ provider: "claude", auth: "apikey" });
+    expect(readProfiles(join(r2, ".capcomd", "agents.json"), env).agents.worker).toEqual({ provider: "claude", auth: "apikey", context: { providers: [{ name: "memory" }] } });
     const bad = json(run(["setup", "project", "--yes", "--auth", "apikey", "--budget", "lots", "--json"], { cwd: r2, env }).out);
     expect(bad.steps[0]).toMatchObject({ ok: false, detail: expect.stringContaining("isn't an amount") });
   });

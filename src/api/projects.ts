@@ -101,7 +101,7 @@ export async function inspectProject(path: string, deps: ProjectDeps): Promise<P
 	const list = readProjects(env).list;
 	const out: ProjectInspection = { ...base, root, name: list.find((x) => samePath(x.path, root))?.name ?? nameFor(root, list) };
 	if (isHome(root, env)) return { ...out, problems: [{ code: "home", message: `${at} is your home folder, where capcomd keeps its own settings. Choose your repository's folder.` }] };
-	const values = projectValues(root);
+	const values = projectValues(root, deps.env);
 	const origin = originUrl(root);
 	const repo = origin ? httpsRemote(origin) : null;
 	const github = repo ? githubRepoOf(repo) : null;
@@ -144,7 +144,7 @@ export async function projectBranches(q: ProjectBranchesQuery, deps: ProjectDeps
 	const listing: BranchListing = root
 		? await (deps.listBranches ?? listBranches)({ remote: origin || null, forge: env.CAPCOMD_MERGE_FORGE ?? env.RELAY_MERGE_FORGE ?? null, cwd: root, local: () => ({ defaultBranch: originHead(root) || null, branches: remoteBranches(root, 500) }) })
 		: { defaultBranch: null, branches: [], source: "local", note: `${tilde(dir, deps.env)} isn't a git checkout.` };
-	const projectTarget = root ? projectValues(root)?.target ?? null : null;
+	const projectTarget = root ? projectValues(root, deps.env)?.target ?? null : null;
 	const suggestedBase = q.base ?? projectTarget ?? listing.defaultBranch;
 	const listed = listing.source !== "local" && listing.branches.length > 0;
 	const baseProblem = q.base === undefined ? null : (G.baseProblem(q.base) ?? (listed && !listing.branches.includes(q.base) ? `${q.base} isn't a branch of ${github ?? "the repository"}. Pick one of its branches.` : null));
@@ -186,7 +186,7 @@ export async function setUpProject(input: ProjectSetupInput, deps: ProjectDeps):
 	let w, ignored = false;
 	try {
 		if (input.gitignore) checkGitignore(root);
-		w = writeProject(plan, { strict: true });
+		w = writeProject(plan, { strict: true, env: deps.env });
 		if (input.gitignore) ignored = ignoreCapcomd(root);
 	} catch (e) {
 		if (e instanceof ProjectWriteError) return bad(e.message, "path");
@@ -194,7 +194,7 @@ export async function setUpProject(input: ProjectSetupInput, deps: ProjectDeps):
 	}
 	const listed = addProject(root, deps.env);
 	return {
-		ok: true, project: { path: input.path, root, name: listed.project.name, configured: true, values: projectValues(root)! },
+		ok: true, project: { path: input.path, root, name: listed.project.name, configured: true, values: projectValues(root, deps.env)! },
 		changed: w.configChanged || w.made.length > 0 || listed.added || ignored,
 		event: {
 			text: configuredText({ name: listed.project.name, root, mode: input.mode, target: input.target, agents }, deps.env),

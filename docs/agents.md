@@ -1,6 +1,9 @@
 # Agent profiles
 
-Named harness agents (a capcomd primitive, see ADR-016) in `.capcomd/agents.json` (override with `CAPCOMD_AGENTS_FILE`), and profile files (below). Schema: `capcomd profiles schema v1` (JSON Schema, id `capcomd.agents/v1`). Design: ADR-015 §5–7, ADR-024.
+Named harness agents (a capcomd primitive, see ADR-016): profile files in `.capcomd/profiles/` (below; `capcomd
+setup project` writes them, schema `capcomd profiles schema`), and the older `.capcomd/agents.json` (override with
+`CAPCOMD_AGENTS_FILE`; schema `capcomd profiles schema v1`, id `capcomd.agents/v1`), which capcomd still reads for two
+more minor releases: `capcomd profiles migrate` moves it into profile files (below). Design: ADR-015 §5–7, ADR-024.
 
 ```bash
 capcomd profiles add rev --provider claude --auth subscription --max-turns 20 --append-system-prompt "Be terse." --default
@@ -45,8 +48,8 @@ profile's layer (`project`, `user` or `bundled`), and `list --json` its `version
 
 ## Profile files (v2: `profile.yaml`)
 
-A profile can also be a YAML (or JSON) file of its own, schema `capcomd.profile/v2` (design: ADR-024 §2): a
-directory `.capcomd/profiles/<name>/profile.yaml` (a package: the files it names sit next to it), or a single
+A profile is a YAML (or JSON) file of its own, schema `capcomd.profile/v2` (design: ADR-024 §2): a directory
+`.capcomd/profiles/<name>/profile.yaml` (a package: the files it names sit next to it), or a single
 `.capcomd/profiles/<name>.yaml`. Your own profiles, for every project, go in `~/.capcomd/profiles/`.
 
 ```yaml
@@ -82,7 +85,8 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   is checked as the files would be after it: one that would leave any profile unreadable (a value out of range, a
   child wider than the profile that spawns it), or that an `override.yaml` would hide, is refused and nothing is
   written. `capcomd profiles add <name> --extends <parent>` (or with a `--set` only a profile file holds, such as
-  `tags`) writes `.capcomd/profiles/<name>.yaml` at version 1; without, `add` writes `agents.json` as before. `rm`
+  `tags`, or in a project whose profiles are files: a `profiles/` folder and no `agents.json` entries) writes
+  `.capcomd/profiles/<name>.yaml` at version 1; otherwise `add` writes `agents.json` as before. `rm`
   removes an `agents.json` entry, a single profile file or a package `capcomd profiles install` put there (below), but
   not a package you made yourself (a directory with its own files) or a profile another one extends.
 - The harness API does the same: `GET /v1/profiles/{name}` serves a profile as rows an app renders and edits (each
@@ -139,6 +143,55 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   profile changes the next agents, not the running ones. `capcomd inspect <runId> <agentId>` shows it as
   `[worker v3, project]`; `spawn`, `inspect` and `await --json` and the API's `Agent` carry `profileVersion` and
   `profileSource`.
+
+### The profiles `capcomd setup project` writes
+
+`capcomd setup project` (and setting a project up from the app) writes one file per profile in `.capcomd/profiles/`,
+each starting with a comment saying what it is for:
+
+| File | What it is |
+|---|---|
+| `worker.yaml` | `harness` (the first agent you chose, and its login), the project's memory (`context: {providers: [{name: memory}]}`), `default: true` |
+| `codex-worker.yaml` (or `claude-worker.yaml`) | the same for your second agent, when you chose both |
+| `reviewer.yaml` | `extends: worker`; read-only tools plus your check's commands, `tags: [review]`, `permissions.report: true` |
+| `lead.yaml` | `extends: worker`; orchestrates, up to 3 worker helpers one level down |
+| `planner.yaml` | `extends: worker`; orchestrates, may spawn the workers, `lead` and the consolidator, `tags: [plan]` |
+| `context-consolidator.yaml` | its own `harness` (no model: it runs on the run's strongest), read-only, `context.review: human` |
+
+Because `reviewer`, `lead` and `planner` extend `worker`, a model, effort or limit you set on the worker is theirs too
+until they set their own (`capcomd profiles show <name>` says which file set each value). The planner extends the
+worker rather than the lead, so the lead's helper caps aren't the planner's. A reviewer inherits the memory block but
+gets only the project's facts from it (reviewers judge the code, not remembered opinions). Running setup again keeps
+every profile you have, a profile file or an `agents.json` entry of the same name; one that wouldn't resolve with
+yours (a lead extending a worker you gave MCP servers, which an orchestrating profile can't have) is left out, and
+setup says it kept it.
+
+### Moving `agents.json` to profile files: `capcomd profiles migrate`
+
+`agents.json` is still read, for the next two minor releases; then `capcomd profiles validate` warns about it, and a
+later release stops reading it. `capcomd profiles migrate` moves it:
+
+```text
+$ capcomd profiles migrate
+Moved 3 profiles from /work/app/.capcomd/agents.json to /work/app/.capcomd/profiles, each resolving as before:
+  worker           → /work/app/.capcomd/profiles/worker.yaml (the default)
+  reviewer         → /work/app/.capcomd/profiles/reviewer.yaml
+  planner          → /work/app/.capcomd/profiles/planner.yaml
+/work/app/.capcomd/agents.json stays, without them, with a note saying where they went; capcomd still reads it.
+Agents already running keep the spec they were spawned with. Commit the new files to share them.
+```
+
+- Each entry becomes `<name>.yaml` beside it at version 1, with its values where a profile file keeps them (ADR-024
+  §6: `model` → `harness.model`, `maxTurns` → `limits.maxTurns`, …); the default becomes that file's `default: true`.
+  An `override.yaml` of the profile keeps applying. Before writing anything, migrate checks that every profile
+  resolves to exactly what it did (the same spec, version, skills and default), and refuses otherwise.
+- `agents.json` stays with a `$comment` saying where its profiles went; an entry migrate can't move stays in it: one a
+  profile file of the same name already hides, and one whose prompt is a single word ending `.md` or `.txt` (a profile
+  file reads that as a file's name: make it a `<name>/profile.yaml` with the prompt in a file).
+- `--keep` leaves `agents.json` exactly as it was, for teammates whose capcomd reads only `agents.json`: the profile
+  files win for a capcomd that reads them, and `validate` names each entry they hide. `--dry-run` writes nothing.
+- It moves the agents file capcomd reads here: the project's, or your own `~/.capcomd/agents.json` into
+  `~/.capcomd/profiles/`.
 
 ### Skills in a profile
 
@@ -403,7 +456,7 @@ something the run established about the business (a policy, a decision, a defini
 the repository. Name the brain in the consolidator's profile:
 
 ```yaml
-# the context-consolidator profile's context block (in .capcomd/agents.json, which `capcomd setup project` wrote)
+# .capcomd/profiles/context-consolidator.yaml, which `capcomd setup project` wrote: its context block
 context:
   providers:
     - name: memory

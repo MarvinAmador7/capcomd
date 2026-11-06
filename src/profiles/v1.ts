@@ -72,7 +72,11 @@ export interface ChildrenSpec {
   /** Fraction (0,1] of this agent's remaining budget a single child may be given; children never exceed the parent. */
   budgetShare?: number;
 }
-export interface AgentsFile { schema: typeof AGENTS_SCHEMA; default?: string; agents: Record<string, AgentSpec> }
+export interface AgentsFile {
+  schema: typeof AGENTS_SCHEMA; default?: string; agents: Record<string, AgentSpec>;
+  /** A note for whoever opens the file (`capcomd profiles migrate` says where its profiles went); capcomd ignores it. */
+  $comment?: string;
+}
 
 /** The runner's kind for a provider (`claude-code` for claude; another provider's is its name). */
 export const providerKind = (p: Provider): string => kindOf(p);
@@ -91,6 +95,7 @@ export const AGENTS_JSON_SCHEMA = {
   required: ["schema", "agents"],
   properties: {
     schema: { const: AGENTS_SCHEMA },
+    $comment: { type: "string", description: "A note for whoever opens the file; capcomd ignores it (capcomd profiles migrate leaves one)" },
     default: { type: "string", description: "Profile used when a run/task names none" },
     agents: {
       type: "object",
@@ -368,7 +373,8 @@ export function validateFileShape(raw: unknown, defined?: (name: string) => bool
   const f = raw as Record<string, any>;
   const e: string[] = [];
   if (f.schema !== AGENTS_SCHEMA) e.push(`schema must be "${AGENTS_SCHEMA}"`);
-  for (const k of Object.keys(f)) if (!["schema", "default", "agents", "$schema"].includes(k)) e.push(`unknown top-level field "${k}"`);
+  for (const k of Object.keys(f)) if (!["schema", "default", "agents", "$schema", "$comment"].includes(k)) e.push(`unknown top-level field "${k}"`);
+  if (f.$comment !== undefined && typeof f.$comment !== "string") e.push("$comment must be a string");
   if (!f.agents || typeof f.agents !== "object") e.push("agents must be an object");
   else for (const [n, s] of Object.entries(f.agents)) e.push(...validateSpec(n, s));
   if (f.default !== undefined && !(defined ? defined(f.default) : f.agents?.[f.default])) e.push(`default "${f.default}" is not a defined agent`);

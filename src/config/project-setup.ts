@@ -2,12 +2,13 @@
 // branches, a check to suggest), the answers turned into a plan (the project config and the agent profiles), and the
 // plan written. `capcomd setup project` (src/cli/commands/setup.ts) asks the questions and calls this; the harness API
 // (POST /v1/projects, src/api/projects.ts) takes the answers from the app and calls the same code, so both write the
-// same two files: <checkout>/.capcomd/config.json and <checkout>/.capcomd/agents.json.
+// same files: <checkout>/.capcomd/config.json and a profile file per profile in <checkout>/.capcomd/profiles/
+// (ADR-024 §6, §7 step 9: `<name>.yaml`, schema capcomd.profile/v2).
 import { spawnSync } from "child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "fs";
 import { dirname, isAbsolute, join, relative } from "path";
 import { configText, mergeConfig, readConfig, userConfigPath, type CapcomdConfig } from "./store";
-import { AGENTS_SCHEMA, readAgentsFile, validateFile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../profiles";
+import { AgentConfigError, BUNDLED_PROFILES, PROFILE_SCHEMA, profileFileText, readProfiles, writeAtomic, type ProfileDoc, type ProfileSet } from "../profiles";
 import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
 
 type Env = Record<string, string | undefined>;
@@ -127,13 +128,18 @@ export interface ProjectAnswers {
 export interface ProjectPlan {
   dir: string;
   configPath: string;
+  /** The agents file the project's profiles are read with (.capcomd/agents.json, which needn't exist): its profiles/
+   *  folder beside it is the project's layer. */
   agentsPath: string;
+  /** Where the profiles go: .capcomd/profiles/, one `<name>.yaml` each. */
+  profilesDir: string;
   /** What goes into .capcomd/config.json (merged into what's there). */
   patch: CapcomdConfig;
   cap: string | null;
-  /** The profiles to add, in order: one worker per agent, a read-only reviewer, a lead and a planner that may spawn
-   *  the workers, and the consolidator the planner spawns last. */
-  profiles: Array<[string, Record<string, unknown>]>;
+  /** The profiles to add, in order, as profile files (ADR-024 §6): one worker per agent, a read-only reviewer and a
+   *  lead that extend the worker, the consolidator the planner spawns last, and a planner that extends the worker and
+   *  may spawn the rest. Each written at version 1; the first worker is the default when the project has none. */
+  profiles: Array<[string, ProfileDoc]>;
 }
 
 /** What the orchestrate profiles `capcomd setup` writes are for (their `description`; plugin API §16.1). */
@@ -144,6 +150,20 @@ export const PLANNER_DESCRIPTION = "Plans a goal: splits it among workers and le
 export const CONSOLIDATOR_DESCRIPTION = "Consolidates a run's lessons into the project's memory (.capcomd/context/): the planner spawns it last. It reads the run's candidate lessons, the memory and the run's verifies and merges, and answers with the changes to make; capcomd writes them on its branch, which a person reviews before it lands. It edits nothing itself.";
 /** What a consolidator may use: reading the checkout and its history, nothing that writes. */
 export const CONSOLIDATOR_TOOLS = ["Read", "Glob", "Grep", "LS", "Bash(git log:*)", "Bash(git show:*)", "Bash(git diff:*)", "Bash(cat:*)", "Bash(ls:*)"];
+/** The project's memory (ADR-025 §6.1): every profile setup writes is briefed with it. A planner and a lead list it, a
+ *  worker gets the same index, and a reviewer (which inherits it from the worker) only its facts: the kernel gives
+ *  review and report agents no memory lines (D11). */
+export const PROJECT_MEMORY = { providers: [{ name: "memory" }] };
+
+/** The `#` lines at the top of each profile file setup writes: what the profile is for, and that it is yours. */
+const NOTES: Record<string, string> = {
+  worker: "A worker: does one part of the work in its own sandbox. reviewer, lead and planner extend it, so a model or\nlimit set here is theirs too unless they set their own.",
+  reviewer: "Reviews each change before it merges (run.reviewer in .capcomd/config.json): read-only tools, plus the commands\nof the project's check.",
+  lead: "Leads a part: up to 3 worker helpers at once, one level down. It orchestrates: it sees everything and runs nothing.",
+  planner: "Plans a run: spawns workers and leads, and the consolidator last. It orchestrates: it sees everything and runs nothing.",
+  [CONSOLIDATOR_PROFILE]: "Turns a run's lessons into changes to .capcomd/context/, which a person reviews before they land (review: human).\nNo model of its own: it runs on the run's strongest.",
+};
+const HEADER = "Written by `capcomd setup project`; yours to change (`capcomd profiles set`, or by hand).\n`capcomd profiles show <name>` says where each value comes from.";
 
 /** The two files' contents for these answers. No turn, time or money limits on the profiles (ADR-019). */
 export function planProject(a: ProjectAnswers): ProjectPlan {
@@ -151,23 +171,28 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
   const provider = a.agents.includes("claude") ? "claude" : "codex";
   const auth = a.authOf(provider);
   const workers = a.agents.map((x) => (x === provider ? "worker" : `${x}-worker`));
-  const profiles: Array<[string, Record<string, unknown>]> = [
-    ...a.agents.map((x, i): [string, Record<string, unknown>] => [workers[i]!, { provider: x, auth: a.authOf(x) }]),
-    ["reviewer", { provider, auth, allowedTools: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...testTools(a.check, a.dir)] }],
+  const v2 = (name: string, doc: ProfileDoc): [string, ProfileDoc] => [name, { schema: PROFILE_SCHEMA, name, version: 1, ...doc }];
+  const profiles: Array<[string, ProfileDoc]> = [
+    // A worker per agent, briefed with the project's memory; the first one is what the others extend.
+    ...a.agents.map((x, i) => v2(workers[i]!, { harness: { provider: x, auth: a.authOf(x) }, context: PROJECT_MEMORY })),
+    // Reads and runs the check, never edits; it may answer as a report (permissions.report).
+    v2("reviewer", { extends: "worker", tags: ["review"], tools: { allowed: ["Read", "Glob", "Grep", "LS", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(cat:*)", "Bash(ls:*)", ...testTools(a.check, a.dir)] }, permissions: { report: true } }),
     // A module lead: up to 3 worker helpers at once, one level down. The driver spawns it for a part with two or more
     // independent sub-parts; it verifies and merges its helpers' work itself (capcomd verify runs the checks). It
     // orchestrates (plugin API §16.1): it sees everything and runs nothing; its helpers do and check the work.
-    ["lead", { provider, auth, description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
-    // ADR-025 §5.2: the planner's last child, when the run's agents proposed lessons. Read-only (codex: a read-only
-    // sandbox), briefed with the project's memory, no model of its own (it runs on the run's strongest, D6), and its
-    // branch waits for a person (review: human, D5).
-    [CONSOLIDATOR_PROFILE, { provider, auth, description: CONSOLIDATOR_DESCRIPTION, allowedTools: CONSOLIDATOR_TOOLS, sandbox: "read-only", context: { providers: [{ name: "memory" }], review: "human" } }],
+    v2("lead", { extends: "worker", description: LEAD_DESCRIPTION, tools: { mode: "orchestrate" }, children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }),
+    // ADR-025 §5.2: the planner's last child, when the run's agents proposed lessons. Its own harness, not the worker's:
+    // no model (it runs on the run's strongest, D6) whatever the worker's is. Read-only (codex: a read-only sandbox),
+    // briefed with the project's memory, and its branch waits for a person (review: human, D5).
+    v2(CONSOLIDATOR_PROFILE, { description: CONSOLIDATOR_DESCRIPTION, harness: { provider, auth }, tools: { allowed: CONSOLIDATOR_TOOLS }, context: { ...PROJECT_MEMORY, review: "human" }, sandbox: { codex: "read-only" } }),
     // No fan-out limits either: the planner may spawn workers, and leads for parts that split further, as it sees fit
-    // (set children.* to bound it). It orchestrates too: every change is a worker's.
-    ["planner", { provider, auth, description: PLANNER_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead", CONSOLIDATOR_PROFILE] } }],
+    // (set children.* to bound it). It orchestrates too: every change is a worker's. It extends the worker, not the
+    // lead, so the lead's caps (3 helpers, one level) aren't its own.
+    v2("planner", { extends: "worker", description: PLANNER_DESCRIPTION, tags: ["plan"], tools: { mode: "orchestrate" }, children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead", CONSOLIDATOR_PROFILE] } }),
   ];
+  const capcomd = join(a.dir, ".capcomd");
   return {
-    dir: a.dir, configPath: join(a.dir, ".capcomd", "config.json"), agentsPath: join(a.dir, ".capcomd", "agents.json"), cap: a.cap, profiles,
+    dir: a.dir, configPath: join(capcomd, "config.json"), agentsPath: join(capcomd, "agents.json"), profilesDir: join(capcomd, "profiles"), cap: a.cap, profiles,
     patch: {
       env: { CAPCOMD_REPO: a.repo, CAPCOMD_MERGE_MODE: a.mode, ...(a.target ? { CAPCOMD_MERGE_TARGET: a.target } : {}), ...(gh ? { CAPCOMD_GITHUB_REPO: gh } : {}) },
       run: { ...(a.check ? { checks: { unit: a.check } } : {}), reviewer: "reviewer" },
@@ -175,33 +200,51 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
   };
 }
 
-/** A plan that can't be written as asked (a .capcomd that leads out of the checkout, an unreadable agents file). */
+/** A plan that can't be written as asked (a .capcomd that leads out of the checkout, profiles that can't be read). */
 export class ProjectWriteError extends Error {}
 
 export interface ProjectWrite { config: CapcomdConfig; configChanged: boolean; made: string[]; kept: string[] }
 
+/** Whether the project's own layer names a default: its agents.json's `default`, or a profile file's `default: true`. */
+function projectDefault(set: ProfileSet, agentsPath: string): boolean {
+  try { if (JSON.parse(readFileSync(agentsPath, "utf8")).default !== undefined) return true; } catch { /* none, or unreadable: the loader said */ }
+  return Object.values(set.profiles).some((p) => p.manifest.default === true && p.applied[p.setBy.default ?? -1]?.layer === "project");
+}
+
 /**
- * Write a plan: the project config merged into what's there (as `capcomd setup` always has), and each profile added
- * unless one of that name exists (your edits survive). Both files are replaced atomically (tmp + rename).
- * `strict` (the API): refuse a .capcomd, config.json or agents.json whose real path leaves the checkout, and an agents
- * file that doesn't read, before writing anything. Without it (the CLI), an unreadable agents file keeps every profile.
+ * Write a plan: the project config merged into what's there (as `capcomd setup` always has), and each profile added as
+ * `.capcomd/profiles/<name>.yaml` unless the project has a profile of that name (an agents.json entry or a profile
+ * file: your edits survive), or the profiles wouldn't resolve with it (a kept `worker` a template can't extend, say).
+ * Each file is checked with every profile before it is written (the loader's overlay), and written atomically.
+ * `strict` (the API): refuse a .capcomd, config.json, agents.json or profiles/ whose real path leaves the checkout, and
+ * profiles that don't read, before writing anything. Without it (the CLI), profiles that don't read keep every profile.
  */
-export function writeProject(plan: ProjectPlan, o: { strict?: boolean } = {}): ProjectWrite {
+export function writeProject(plan: ProjectPlan, o: { strict?: boolean; env?: Env } = {}): ProjectWrite {
+  const env = o.env ?? process.env;
   if (o.strict) checkContained(plan);
   // Profiles first (in memory), so a strict write refuses before touching the config.
-  let file: AgentsFile | null;
-  try { file = readAgentsFile(plan.agentsPath); } catch (e) {
-    if (o.strict) throw new ProjectWriteError(`${plan.agentsPath} can't be read (${(e as Error).message}). Fix it or move it away, then set the project up again.`);
-    file = null;
+  let set: ProfileSet | null;
+  try { set = readProfiles(plan.agentsPath, env); } catch (e) {
+    if (!(e instanceof AgentConfigError)) throw e;
+    if (o.strict) throw new ProjectWriteError(`The project's profiles can't be read (${e.message}). Fix them or move them away, then set the project up again.`);
+    set = null;
   }
-  const made: string[] = [], kept: string[] = [];
-  for (const [name, spec] of plan.profiles) {
-    // As `capcomd profiles add <name> --spec …` (one per profile): an existing name, or a profile the file won't take, is kept.
-    if (!file || file.agents[name] || validateSpec(name, spec).length) { kept.push(name); continue; }
-    const next: AgentsFile = { ...file, schema: AGENTS_SCHEMA, agents: { ...file.agents, [name]: spec as unknown as AgentSpec } };
-    if (!next.default) next.default = name;
-    if (validateFile(next).length) { kept.push(name); continue; }
-    file = next; made.push(name);
+  const made: string[] = [], kept: string[] = [], overlay = new Map<string, string>();
+  // The first worker is the default when the project has none (never a reviewer or a planner: a run that names no
+  // profile gets a worker).
+  let hasDefault = set ? projectDefault(set, plan.agentsPath) : true;
+  for (const [name, doc] of plan.profiles) {
+    const file = join(plan.profilesDir, `${name}.yaml`);
+    const there = set && Object.hasOwn(set.profiles, name) && set.profiles[name]!.source === "project";
+    if (!set || there || ["yaml", "yml", "json"].some((x) => exists(join(plan.profilesDir, `${name}.${x}`))) || exists(join(plan.profilesDir, name))) { kept.push(name); continue; }
+    const isDefault = !hasDefault && name === plan.profiles[0]![0];
+    overlay.set(file, profileFileText(isDefault ? { ...doc, default: true } : doc, `${NOTES[name] ?? NOTES.worker}\n\n${HEADER}`));
+    try { readProfiles(plan.agentsPath, env, BUNDLED_PROFILES, overlay); } catch (e) {
+      if (!(e instanceof AgentConfigError)) throw e;
+      overlay.delete(file); kept.push(name); continue;
+    }
+    made.push(name);
+    hasDefault ||= isDefault;
   }
   const cur = readConfig(plan.configPath);
   const patch: CapcomdConfig = { ...plan.patch, ...(plan.cap ? { driver: { ...cur.driver, maxRunBudget: plan.cap } } : {}) };
@@ -210,7 +253,7 @@ export function writeProject(plan: ProjectPlan, o: { strict?: boolean } = {}): P
   const text = configText(config);
   mkdirSync(dirname(plan.configPath), { recursive: true });
   atomicWrite(plan.configPath, text, 0o600);
-  if (made.length && file) writeAgentsFile(file, plan.agentsPath);
+  for (const [file, body] of overlay) writeAtomic(file, body);
   return { config, configChanged: before !== text, made, kept };
 }
 
@@ -221,19 +264,20 @@ function atomicWrite(path: string, text: string, mode: number) {
 }
 
 const inside = (child: string, parent: string) => { const r = relative(parent, child); return r === "" || (!!r && !r.startsWith("..") && !isAbsolute(r)); };
-/** .capcomd and its two files must stay inside the checkout (no symlink out of it), and .capcomd must be a folder. */
+/** .capcomd and what setup writes in it must stay inside the checkout (no symlink out of it), and .capcomd and
+ *  .capcomd/profiles must be folders. */
 function checkContained(plan: ProjectPlan) {
   let root: string;
   try { root = realpathSync(plan.dir); } catch { throw new ProjectWriteError(`${plan.dir} doesn't exist any more.`); }
-  const dot = join(plan.dir, ".capcomd");
   const out = (p: string) => new ProjectWriteError(`${p} leads outside the checkout (a symlink), so capcomd won't write there. Remove the link, or set the project up with \`capcomd setup project\` in Terminal.`);
-  if (exists(dot)) {
+  for (const d of [join(plan.dir, ".capcomd"), plan.profilesDir]) {
+    if (!exists(d)) continue;
     let real: string;
-    try { real = realpathSync(dot); } catch { throw out(dot); }
-    if (!inside(real, root)) throw out(dot);
-    if (!lstatSync(real).isDirectory()) throw new ProjectWriteError(`${dot} isn't a folder, so capcomd can't keep the project's settings in it.`);
+    try { real = realpathSync(d); } catch { throw out(d); }
+    if (!inside(real, root)) throw out(d);
+    if (!lstatSync(real).isDirectory()) throw new ProjectWriteError(`${d} isn't a folder, so capcomd can't keep the project's settings in it.`);
   }
-  for (const f of [plan.configPath, plan.agentsPath]) {
+  for (const f of [plan.configPath, plan.agentsPath, ...plan.profiles.map(([n]) => join(plan.profilesDir, `${n}.yaml`))]) {
     if (!exists(f)) continue;
     let real: string;
     try { real = realpathSync(f); } catch { throw out(f); }   // a dangling link
@@ -246,15 +290,15 @@ const exists = (p: string) => { try { lstatSync(p); return true; } catch { retur
 export interface ProjectValues { repo: string | null; mode: string | null; target: string | null; check: string; agents: string[]; budgetUsd: number | null }
 
 /** The settings `capcomd setup project` wrote in `dir` (null when its .capcomd/config.json names no repository). */
-export function projectValues(dir: string): ProjectValues | null {
+export function projectValues(dir: string, env: Env = process.env): ProjectValues | null {
   const cfg = readConfig(join(dir, ".capcomd", "config.json"));
   const repo = cfg.env?.CAPCOMD_REPO;
   if (typeof repo !== "string" || !repo) return null;
   let agents: string[] = [];
   try {
-    const f = readAgentsFile(join(dir, ".capcomd", "agents.json"));
-    // The workers setup made: "worker" (the first agent) and "<agent>-worker".
-    const ws = Object.entries(f.agents).filter(([n]) => n === "worker" || n.endsWith("-worker")).map(([, s]) => s.provider);
+    // The workers setup made: "worker" (the first agent) and "<agent>-worker", in the project's own profiles.
+    const set = readProfiles(join(dir, ".capcomd", "agents.json"), env);
+    const ws = Object.values(set.profiles).filter((p) => p.source === "project" && (p.name === "worker" || p.name.endsWith("-worker"))).map((p) => p.spec.provider);
     agents = (["claude", "codex"] as const).filter((p) => ws.includes(p));
   } catch { /* unreadable: none */ }
   const m = /^usd=([0-9.]+)/.exec(cfg.driver?.maxRunBudget ?? "");

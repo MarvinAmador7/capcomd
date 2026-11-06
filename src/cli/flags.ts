@@ -96,6 +96,8 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   // capcomd profiles export --flat --out DIR (ADR-024 §2.5)
   flat: { type: "boolean" },
   out: { type: "string" },
+  // capcomd profiles migrate --keep: agents.json left as it was (ADR-024 §7 step 9)
+  keep: { type: "boolean" },
   ref: { type: "string" },
   id: { type: "string" },
   checks: { type: "string" },

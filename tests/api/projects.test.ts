@@ -13,6 +13,7 @@ import { harnessApp } from "../../src/api/server";
 import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
 import { describeEvent } from "../../src/api/describe";
+import { readProfiles } from "../../src/profiles";
 import spec from "../../openapi/capcomd.json";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "harness-projects-")));
@@ -83,6 +84,8 @@ function world(o: { gh?: boolean; logins?: Login[]; runOptions?: Record<string, 
 }
 const answers = (path: string, extra: Record<string, unknown> = {}) => ({ path, mode: "direct", target: "main", check: "bun run test", agents: ["claude"], ...extra });
 const read = (f: string) => readFileSync(f, "utf8");
+/** What `capcomd setup project` writes in .capcomd/ for these workers (ADR-024 §7 step 9: profile files, no agents.json). */
+const SETUP_FILES = (workers: string[]) => ["config.json", ...[...workers, "reviewer", "lead", "context-consolidator", "planner"].map((n) => `profiles/${n}.yaml`)];
 
 describe("GET /v1/projects/inspect", () => {
 	test("a GitHub checkout, from a folder inside it: its root, origin, branches, check and agents; nothing written", async () => {
@@ -172,8 +175,9 @@ describe("POST /v1/projects", () => {
 		expect(r.status).toBe(200);
 		expect(ProjectSetupResult.parse(r.body)).toEqual(r.body);
 		expect(r.body).toEqual({ project: { path: viaApi, root: viaApi, name: "app", configured: true, values: { repo: "https://github.com/acme/app.git", mode: "direct", target: "capcomd/staging", check: "bun run test", agents: ["claude", "codex"], budgetUsd: null } }, changed: true });
-		for (const f of ["config.json", "agents.json"]) expect(read(join(viaApi, ".capcomd", f))).toBe(read(join(viaCli, ".capcomd", f)));
-		expect(JSON.parse(read(join(viaApi, ".capcomd", "agents.json"))).agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead", "context-consolidator"]);
+		for (const f of SETUP_FILES(["worker", "codex-worker"])) expect(read(join(viaApi, ".capcomd", f))).toBe(read(join(viaCli, ".capcomd", f)));
+		expect(existsSync(join(viaApi, ".capcomd", "agents.json"))).toBe(false);
+		expect(read(join(viaApi, ".capcomd", "profiles", "planner.yaml"))).toContain("allowedChildProfiles:\n    - worker\n    - codex-worker\n    - lead\n    - context-consolidator\n");
 		// capcomd's project list (the user config under CAPCOMD_HOME): the first project is the default.
 		expect(JSON.parse(read(join(w.env.CAPCOMD_HOME, "config.json"))).projects).toEqual({ list: [{ name: "app", path: viaApi }], default: "app" });
 	});
@@ -186,7 +190,7 @@ describe("POST /v1/projects", () => {
 		expect(cli.exitCode).toBe(0);
 		const w = world({ logins: APIKEY });
 		expect((await w.post(answers(viaApi, { budgetUsd: 20 }))).status).toBe(200);
-		for (const f of ["config.json", "agents.json"]) expect(read(join(viaApi, ".capcomd", f))).toBe(read(join(viaCli, ".capcomd", f)));
+		for (const f of SETUP_FILES(["worker"])) expect(read(join(viaApi, ".capcomd", f))).toBe(read(join(viaCli, ".capcomd", f)));
 		expect(JSON.parse(read(join(viaApi, ".capcomd", "config.json"))).driver).toEqual({ maxRunBudget: "usd=20" });
 	});
 
@@ -200,9 +204,11 @@ describe("POST /v1/projects", () => {
 		expect(r.status).toBe(200);
 		const cfg = JSON.parse(read(join(co, ".capcomd", "config.json")));
 		expect(cfg).toEqual({ env: { CAPCOMD_SANDBOX: "docker", CAPCOMD_REPO: "https://github.com/acme/app.git", CAPCOMD_MERGE_MODE: "pr", CAPCOMD_MERGE_TARGET: "main", CAPCOMD_GITHUB_REPO: "acme/app" }, driver: { approvals: "elicit" }, run: { reviewer: "reviewer" } });
-		const agents = JSON.parse(read(join(co, ".capcomd", "agents.json"))).agents;
-		expect(agents.worker.model).toBe("claude-opus-5-5");
-		expect(Object.keys(agents)).toEqual(["worker", "reviewer", "lead", "context-consolidator", "planner"]);
+		// The project's worker stays in agents.json; the rest are profile files, and those that extend it have its model.
+		expect(Object.keys(JSON.parse(read(join(co, ".capcomd", "agents.json"))).agents)).toEqual(["worker"]);
+		const set = readProfiles(join(co, ".capcomd", "agents.json"), w.env);
+		expect(Object.values(set.profiles).map((p) => [p.name, p.format])).toEqual([["worker", "v1"], ["context-consolidator", "v2"], ["lead", "v2"], ["planner", "v2"], ["reviewer", "v2"]]);
+		expect([set.agents.lead!.model, set.agents.reviewer!.model, set.default]).toEqual(["claude-opus-5-5", "claude-opus-5-5", "worker"]);
 		const again = await w.post(answers(co, { mode: "pr", check: "" }));
 		expect(again.body.changed).toBe(false);
 		expect(w.state.daemonEvents().length).toBe(1);
@@ -285,6 +291,22 @@ describe("POST /v1/projects", () => {
 		symlinkSync(target, join(co2, ".capcomd", "config.json"));
 		expect((await w.post(answers(co2))).body).toMatchObject({ field: "path", message: expect.stringContaining("leads outside the checkout") });
 		expect(read(target)).toBe("{}\n");
+		// And for the profiles folder, and a profile file setup would write.
+		const co3 = checkout();
+		mkdirSync(join(co3, ".capcomd"));
+		symlinkSync(outside, join(co3, ".capcomd", "profiles"));
+		expect((await w.post(answers(co3))).body).toMatchObject({ field: "path", message: `${join(co3, ".capcomd", "profiles")} leads outside the checkout (a symlink), so capcomd won't write there. Remove the link, or set the project up with \`capcomd setup project\` in Terminal.` });
+		const co4 = checkout();
+		mkdirSync(join(co4, ".capcomd", "profiles"), { recursive: true });
+		symlinkSync(join(outside, "lead.yaml"), join(co4, ".capcomd", "profiles", "lead.yaml"));
+		expect((await w.post(answers(co4))).body).toMatchObject({ field: "path", message: expect.stringContaining(`${join(co4, ".capcomd", "profiles", "lead.yaml")} leads outside the checkout`) });
+		expect(existsSync(join(outside, "worker.yaml")) || existsSync(join(outside, "lead.yaml")) || existsSync(join(co4, ".capcomd", "profiles", "worker.yaml"))).toBe(false);
+		// Profiles that don't read: refused before anything is written, saying why.
+		const co5 = checkout();
+		mkdirSync(join(co5, ".capcomd", "profiles"), { recursive: true });
+		writeFileSync(join(co5, ".capcomd", "profiles", "worker.yaml"), "name: worker\nharness: { provider: claude }\n");
+		expect((await w.post(answers(co5))).body).toMatchObject({ field: "path", message: expect.stringContaining("The project's profiles can't be read") });
+		expect(existsSync(join(co5, ".capcomd", "config.json"))).toBe(false);
 		expect(w.state.daemonEvents()).toEqual([]);
 	});
 

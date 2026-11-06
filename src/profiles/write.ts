@@ -147,6 +147,17 @@ export function agentsEntryOf(edit: ProfileEdit): Record<string, unknown> {
   return entry;
 }
 
+/** A manifest in the schema's order (who it is, then its blocks), as capcomd writes profile files. */
+export function orderedManifest(doc: ProfileDoc): ProfileDoc {
+  const order = Object.keys(PROFILE_JSON_SCHEMA.properties), rank = (k: string) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
+  return Object.fromEntries(Object.entries(doc).sort(([a], [b]) => rank(a) - rank(b)));
+}
+/** A new profile file's YAML: the manifest in the schema's order, after `comment` (each of its lines a `#` line). */
+export function profileFileText(doc: ProfileDoc, comment?: string): string {
+  const head = comment ? comment.split("\n").map((l) => (l ? `# ${l}` : "#")).join("\n") + "\n" : "";
+  return head + toYaml(orderedManifest(doc));
+}
+
 /** The profile files' layer for new ones: the project's profiles/ (or the user's, when the agents file is). */
 const newFileDir = (path: string, source: Env) => profileLayers(path, source)[0]!.dir;
 
@@ -260,11 +271,7 @@ export function addProfileFile(name: string, edit: ProfileEdit, o: WriteOptions 
   if (there) throw new ProfileWriteError("conflict", `profile "${name}" already exists (${there.path ?? "bundled with capcomd"})`);
   const file = join(newFileDir(path, source), `${name}.yaml`);
   if (existsSync(file)) throw new ProfileWriteError("conflict", `${file} already exists`);
-  const made = applyToObject({ schema: PROFILE_SCHEMA, name, version: 1 }, editPaths(edit));
-  // In the schema's order (who it is, then its blocks), as the profile files capcomd documents are.
-  const order = Object.keys(PROFILE_JSON_SCHEMA.properties), rank = (k: string) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
-  const doc = Object.fromEntries(Object.entries(made).sort(([a], [b]) => rank(a) - rank(b)));
-  const text = toYaml(doc);
+  const text = profileFileText(applyToObject({ schema: PROFILE_SCHEMA, name, version: 1 }, editPaths(edit)));
   const after = checked(path, source, new Map([[file, text]]));
   writeAtomic(file, text);
   return { name, file, format: "v2", changed: true, version: 1, previousVersion: 0, before, after, changes: profileChanges(undefined, after.profiles[name]) };
