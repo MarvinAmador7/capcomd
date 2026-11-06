@@ -5,9 +5,9 @@
 // and a token dies with its agent (any terminal status).
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join } from "path";
+import { dirname } from "path";
 import { env } from "../utils/env";
+import { homeFile } from "../utils/home";
 
 export const ALL_OPS = [
   "spawn", "await", "wait-any", "status", "tree", "cancel", "send", "inbox", "handoff", "events",
@@ -28,13 +28,19 @@ export interface Claims {
 
 const b64 = (b: Buffer | string) => Buffer.from(b).toString("base64url");
 
+/** The signing key's file: CAPCOMD_RPC_KEY_FILE, else rpc.key in the capcomd home like the rest of its state
+ *  (~/.capcomd/rpc.key, $CAPCOMD_HOME/rpc.key, or <repo>/.relay/rpc.key in a dev checkout; src/utils/home.ts). */
+export function rpcKeyFile(source: Record<string, string | undefined> = process.env): string {
+  return env("RPC_KEY_FILE", source) ?? homeFile("rpc.key", source);
+}
+
 let cachedKey: Buffer | null = null;
-/** Host-only signing key: CAPCOMD_RPC_KEY, else ~/.capcomd/rpc.key (created 0600). */
+/** Host-only signing key: CAPCOMD_RPC_KEY, else the key file (rpcKeyFile; created 0600). Read once per process. */
 export function signingKey(): Buffer {
   if (cachedKey) return cachedKey;
   const fromEnv = env("RPC_KEY");
   if (fromEnv) return (cachedKey = Buffer.from(fromEnv));
-  const p = env("RPC_KEY_FILE") ?? join(homedir(), ".capcomd", "rpc.key");
+  const p = rpcKeyFile();
   if (!existsSync(p)) {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, randomBytes(32).toString("hex"), { mode: 0o600 });
