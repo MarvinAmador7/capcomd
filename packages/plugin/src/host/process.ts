@@ -5,7 +5,7 @@
 // modify calls go one at a time, the next after the previous is answered or its deadline passed (§9.4); a stream closed
 // for 60 s makes the plugin disconnected; a process that exits is started again with a new session and token, with
 // backoff, until five exits in ten minutes fail it (`restart_limit`). A gate call in flight when the process exits is
-// `crashed`, so it denies (§6.5). Transport-agnostic: the kernel's gateway (src/api/server.ts) maps HTTP onto it.
+// `crashed`, so it denies (§6.5), and so is every gate or modify call once it has failed: a crash-looping gate denies. Transport-agnostic: the kernel's gateway (src/api/server.ts) maps HTTP onto it.
 import { randomBytes } from "node:crypto";
 import { HookFailure, type HookFailureKind, type PluginFailureCause } from "../errors";
 import { HOOKS, type HookCall, type HookName } from "../hooks";
@@ -28,7 +28,8 @@ export interface ProcessStart {
 
 /** How the kernel starts a plugin's process (§9.2, §9.3): the command, the environment, the token. */
 export interface ProcessLauncher {
-  start(o: { manifest: PluginManifest; root: string; dataDir: string; session: string }): ProcessStart;
+  /** `secrets`: the plugin's own secret values (§10.3), redacted from what the process writes, as its token is (§9.2). */
+  start(o: { manifest: PluginManifest; root: string; dataDir: string; session: string; secrets: readonly string[] }): ProcessStart;
   /** Called right after a gate or modify call went out to the process: the kernel's chaos killpoints. */
   sent?(plugin: string, start: ProcessStart): void;
 }
@@ -74,6 +75,8 @@ export interface ProcessOptions {
   emit(e: HostEvent): void;
   /** What a session's handshake answers beside its id, protocol and deadline (§9.3). */
   opened(): Omit<SessionOpened, "session" | "protocol" | "connectWithinMs">;
+  /** The plugin's secret values: its handshake gives them out, its log lines never show them. */
+  secrets?: readonly string[];
   /** The first session opened: register the plugin's listeners. They stay through restarts, so a gate fired while the
    *  process is down is still asked (and fails closed) instead of passing unjudged. */
   listen(): void;
@@ -119,6 +122,8 @@ export class ProcessPlugin {
   private stopping = false;
   private listening = false;
   private exits: number[] = [];
+  /** Set once the process kept exiting (`restart_limit`): why every gate or modify call now fails (§9.5). */
+  private gaveUp: string | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly gates: Gate[] = [];
   private readonly outbox: Outgoing[] = [];
@@ -162,6 +167,10 @@ export class ProcessPlugin {
   /** A call to this plugin's listener for `call.hook`, as the registry makes it. Observe calls are queued and return at
    *  once; gate and modify calls resolve with the process's answer (the registry checks it and applies the deadline). */
   call(call: HookCall): Promise<unknown> | undefined {
+    if (this.gaveUp !== null) {
+      if (HOOKS[call.hook].mode === "observe") return undefined;
+      throw new HookFailure("crashed", this.gaveUp);
+    }
     const wire = this.wire(call);
     if (HOOKS[call.hook].mode === "observe") {
       this.observe(wire);
@@ -291,7 +300,7 @@ export class ProcessPlugin {
     let ready!: () => void;
     const readyAt = new Promise<void>((r) => { ready = r; });
     const id = `ses_${hex(12)}`;
-    const start = this.o.launcher.start({ manifest: this.o.manifest, root: this.o.root, dataDir: this.o.dataDir, session: id });
+    const start = this.o.launcher.start({ manifest: this.o.manifest, root: this.o.root, dataDir: this.o.dataDir, session: id, secrets: this.o.secrets ?? [] });
     const s: Session = { id, start, open: false, exited: false, seq: 0, sink: null, ring: [], disconnected: false, timer: null, ready, readyAt };
     this.session = s;
     this.changed("started");
@@ -318,7 +327,8 @@ export class ProcessPlugin {
     this.exits = [...this.exits.filter((t) => now - t < this.t.restartWindowMs), now];
     if (this.exits.length >= this.t.restartLimit) {
       this.stopping = true;
-      for (const g of [...this.gates]) { this.settle(g); g.reject(new HookFailure("crashed", `the ${this.o.name} plugin's process keeps exiting`)); }
+      this.gaveUp = `the ${this.o.name} plugin's process kept exiting (restart_limit): its calls fail until the plugin is enabled again`;
+      for (const g of [...this.gates]) { this.settle(g); g.reject(new HookFailure("crashed", this.gaveUp)); }
       this.o.failed("restart_limit", `the process exited ${this.exits.length} times within ${Math.round(this.t.restartWindowMs / 60_000)} minutes (§9.5)`);
       return;
     }

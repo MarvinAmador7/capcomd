@@ -5,8 +5,9 @@
 //   frames.ndjson  one line per frame: frame, hook, callId, idempotencyKey, mode, subject (the merge, agent or run id).
 // and does what control.json there says, read again for every call (absent: deny every merge, allow the rest):
 //   { "<hook>": "allow" | "deny" | "hold" | "invalid" | "widen" | "slow" | "crash" | "none", "slowMs": n,
-//     "atStart": "exit" | "hang" | "badHash" | "badHooks", "emit": true, "store": true }
-// "none" never answers; "slow" answers after slowMs; "crash" exits with the call in flight. It exits 0 on
+//     "atStart": "exit" | "hang" | "badHash" | "badHooks", "emit": true, "store": true, "print": true }
+// "none" never answers; "slow" answers after slowMs; "crash" exits with the call in flight; "print" writes its token
+// and secrets to stdout and stderr once it is open (the host must redact them from its log). It exits 0 on
 // session.closing, and when its stdin closes (the daemon is gone).
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -16,7 +17,7 @@ import type { HookFrame, ProcessEnvironment, WireHookCall } from "../../../../pa
 
 const env = process.env as unknown as ProcessEnvironment;
 const data = env.CAPCOMD_PLUGIN_DATA;
-type Control = Record<string, unknown> & { atStart?: string; slowMs?: number; emit?: boolean; store?: boolean };
+type Control = Record<string, unknown> & { atStart?: string; slowMs?: number; emit?: boolean; store?: boolean; print?: boolean };
 const control = (): Control => { try { return JSON.parse(readFileSync(join(data, "control.json"), "utf8")) as Control; } catch { return {}; } };
 const log = (o: Record<string, unknown>) => appendFileSync(join(data, "frames.ndjson"), `${JSON.stringify(o)}\n`);
 const subject = (c: WireHookCall) => { const p = c.payload as Record<string, any>; return p.merge?.mrgId ?? p.agent?.id ?? p.run?.id ?? p.spawn?.profile ?? null; };
@@ -42,6 +43,11 @@ try {
 }
 // The secrets' names, and a digest of each value (the test knows the value; it must never be in env.json).
 writeFileSync(join(data, "opened.json"), JSON.stringify({ ...opened, secrets: Object.fromEntries(Object.entries(opened.secrets).map(([k, v]) => [k, createHash("sha256").update(v).digest("hex")])) }));
+if (c0.print) {
+  const secrets = Object.values(opened.secrets).join(" ");
+  console.log(`token ${env.CAPCOMD_PLUGIN_TOKEN} secrets ${secrets}`);
+  console.error(JSON.stringify({ level: "warn", message: `secrets ${secrets}`, token: env.CAPCOMD_PLUGIN_TOKEN }));
+}
 if (c0.atStart === "noStream") {
   // Open the hooks stream, then let it go and never come back: the host calls the plugin disconnected.
   const ac = new AbortController();

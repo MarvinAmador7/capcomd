@@ -27,7 +27,7 @@ type Boot = { host: PluginHost; events: Array<{ type: string; data: Record<strin
 const live: Boot[] = [];
 afterEach(async () => { for (const b of live.splice(0)) await b.stop().catch(() => {}); });
 
-async function boot(o: { name?: string; hooks?: Record<string, object>; control?: object; timings?: ProcessTimings; manifest?: Record<string, unknown>; clientsPath?: string } = {}): Promise<Boot> {
+async function boot(o: { name?: string; hooks?: Record<string, object>; control?: object; timings?: ProcessTimings; manifest?: Record<string, unknown>; clientsPath?: string; log?: boolean } = {}): Promise<Boot> {
   const name = o.name ?? `proc-gate-${Math.random().toString(36).slice(2, 8)}`;
   const dir = mkdtempSync(join(tmpdir(), "cpp-"));
   const plugin = join(dir, "p");
@@ -42,7 +42,7 @@ async function boot(o: { name?: string; hooks?: Record<string, object>; control?
   if (o.control) writeFileSync(join(data, "control.json"), JSON.stringify(o.control));
   const events: Boot["events"] = [];
   const sock = join(dir, "s.sock");
-  const host = kernelHost({ record: (e) => { events.push(e); return { seq: events.length }; }, log: false, jobs: true, process: { socket: sock, ...(o.timings ? { timings: o.timings } : {}) } });
+  const host = kernelHost({ record: (e) => { events.push(e); return { seq: events.length }; }, log: o.log ?? false, jobs: true, process: { socket: sock, ...(o.timings ? { timings: o.timings } : {}) } });
   const app = harnessApp({ source: memorySource({}), clients: () => (o.clientsPath ? loadClients(o.clientsPath) : []), pluginHost: host, pluginStorage: (n) => pluginStore(n, pluginDataDir(n)) });
   const served = await serveHarnessSocket(sock, pluginsOnly((r) => app.fetch(r)));
   const b: Boot = { host, events, data, dir, app, stop: async () => { await host.stop(); served.close(); rmSync(dir, { recursive: true, force: true }); } };
@@ -80,6 +80,25 @@ describe("the out-of-process runtime", () => {
       expect(b.events.map((e) => e.type)).toEqual(expect.arrayContaining(["plugin.process_changed", "plugin.loaded"]));
       expect(b.events.find((e) => e.type === "plugin.loaded")!.data).toMatchObject({ runtime: "process" });
     } finally { for (const k of ["PROC_GATE_SECRET", "GITHUB_TOKEN", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "CAPCOMD_RPC_KEY"]) delete process.env[k]; }
+  }, 30_000);
+
+  test("what the process writes is the daemon's log, with its token and its secrets redacted", async () => {
+    const secret = "proc-gate-secret-value-for-the-log";
+    process.env.PROC_GATE_SECRET = secret;
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => { lines.push(a.map(String).join(" ")); };
+    try {
+      const b = await boot({ log: true, control: { print: true }, manifest: { config: { type: "object", properties: { apiKey: { type: "string", "x-secret": true, default: { $secret: "env:PROC_GATE_SECRET" } } } } } });
+      const name = nameOf(b);
+      await until(() => lines.filter((l) => l.includes(`"plugin":"${name}"`) && l.includes("secrets")).length === 2);
+      const mine = lines.filter((l) => l.includes(`"plugin":"${name}"`));
+      expect(mine.join("\n")).not.toContain(secret);
+      expect(mine.map((l) => JSON.parse(l))).toEqual(expect.arrayContaining([
+        expect.objectContaining({ level: "info", message: "token [REDACTED] secrets [REDACTED]" }),
+        expect.objectContaining({ level: "warn", message: "secrets [REDACTED]", fields: { token: "[REDACTED]" } }),
+      ]));
+    } finally { console.log = log; delete process.env.PROC_GATE_SECRET; }
   }, 30_000);
 
   test("a gate call goes to the process and its answer decides; observe calls arrive too", async () => {
@@ -138,18 +157,41 @@ describe("the out-of-process runtime", () => {
     expect(b.host.list()[0]).toMatchObject({ state: "active" });
   }, 30_000);
 
-  test("exits past the restart budget fail the plugin (restart_limit); its gate is no longer asked", async () => {
+  test("exits past the restart budget fail the plugin (restart_limit); its gate keeps denying until it is enabled", async () => {
     const b = await boot({ control: { "merge.landing": "crash" }, timings: { backoffMs: () => 100, restartLimit: 3 } });
     writeFileSync(join(b.data, "control.json"), JSON.stringify({ "merge.landing": "crash", atStart: "exit" }));
     expect(await b.host.hooks.fire("merge.landing", "veto", merge, OPERATOR)).toMatchObject({ decision: "deny", failure: "crashed" });
     await until(() => b.host.list()[0]!.state === "failed");
     expect(b.host.list()[0]).toMatchObject({ state: "failed", cause: "restart_limit" });
-    expect(b.host.hooks.listening("merge.landing")).toBe(false);
     expect(pluginClients().filter((c) => c.plugin === nameOf(b))).toEqual([]);
-    // capcomd plugins enable starts it over: a new process.
+    // A crash-looping gate denies (§11.3): the merge isn't let through unjudged, and it is denied at once, not at the
+    // deadline. An observe hook is skipped.
+    expect(b.host.hooks.listening("merge.landing")).toBe(true);
+    const t0 = Date.now();
+    expect(await b.host.hooks.fire("merge.landing", "veto", merge, { ...OPERATOR, attempt: 2 })).toMatchObject({ decision: "deny", plugin: nameOf(b), failure: "crashed", text: expect.stringContaining("restart_limit") });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    b.host.hooks.fire("run.changed", "observe", { run: { id: "run-1" }, change: { kind: "started" } } as never, { ...OPERATOR, entity: "run-1" });
+    // capcomd plugins enable starts it over: a new process, asked once (the held listener is gone).
     writeFileSync(join(b.data, "control.json"), JSON.stringify({ "merge.landing": "allow" }));
     expect(await b.host.enable(nameOf(b))).toMatchObject({ state: "active" });
-    expect(await b.host.hooks.fire("merge.landing", "veto", merge, { ...OPERATOR, attempt: 2 })).toMatchObject({ decision: "allow" });
+    const asked = frames(b).filter((f) => f.hook === "merge.landing").length;
+    expect(await b.host.hooks.fire("merge.landing", "veto", merge, { ...OPERATOR, attempt: 3 })).toMatchObject({ decision: "allow" });
+    expect(frames(b).filter((f) => f.hook === "merge.landing")).toHaveLength(asked + 1);
+  }, 30_000);
+
+  test("a plugin failed by restart_limit and then disabled is no longer asked: the operator's call", async () => {
+    const b = await boot({ control: { "merge.landing": "crash", atStart: "exit" }, timings: { backoffMs: () => 100, restartLimit: 2 } });
+    writeFileSync(join(b.data, "control.json"), JSON.stringify({ "merge.landing": "crash" }));
+    expect(b.host.list()[0]).toMatchObject({ state: "failed", cause: "crashed" });
+    // Failed at its start (never active), a plugin holds nothing: like an in-process one whose activate threw.
+    expect(b.host.hooks.listening("merge.landing")).toBe(false);
+    expect(await b.host.enable(nameOf(b))).toMatchObject({ state: "active" });
+    writeFileSync(join(b.data, "control.json"), JSON.stringify({ "merge.landing": "crash", atStart: "exit" }));
+    expect(await b.host.hooks.fire("merge.landing", "veto", merge, OPERATOR)).toMatchObject({ decision: "deny", failure: "crashed" });
+    await until(() => b.host.list()[0]!.state === "failed");
+    expect(b.host.hooks.listening("merge.landing")).toBe(true);
+    expect(await b.host.disable(nameOf(b))).toMatchObject({ enabled: false });
+    expect(b.host.hooks.listening("merge.landing")).toBe(false);
   }, 30_000);
 
   test("a process that never opens its session fails the plugin (handshake_timeout) and is killed", async () => {
@@ -212,6 +254,25 @@ describe("the out-of-process runtime", () => {
     const b = await boot({ control: { atStart: "noStream" }, timings: { disconnectMs: 500 } });
     await until(() => b.events.some((e) => e.type === "plugin.process_changed" && e.data.event === "disconnected"));
     expect(await b.host.hooks.fire("merge.landing", "veto", merge, OPERATOR)).toMatchObject({ decision: "deny", failure: "disconnected" });
+  }, 30_000);
+
+  test("a process a dead daemon left running is killed before the next start, only while its pid runs the recorded command", async () => {
+    const { spawn } = await import("node:child_process");
+    const leftover = spawn("sleep", ["37"], { detached: true, stdio: "ignore" });
+    const other = spawn("sleep", ["38"], { detached: true, stdio: "ignore" });
+    try {
+      for (const [name, pid, command] of [["proc-gate-left", leftover.pid!, "sleep 37"], ["proc-gate-other", other.pid!, "sleep 99"]] as const) {
+        mkdirSync(pluginDataDir(name), { recursive: true });
+        writeFileSync(join(pluginDataDir(name), "process.json"), JSON.stringify({ pid, command, daemon: 1 }));
+        const b = await boot({ name });
+        expect(b.host.list()[0]).toMatchObject({ state: "active" });
+        // This start's record replaced it.
+        expect(JSON.parse(readFileSync(join(b.data, "process.json"), "utf8"))).toMatchObject({ daemon: process.pid, command: `bun ${MAIN}` });
+      }
+      await until(() => !alive(leftover.pid!));
+      // A pid that runs something else now (a recycled pid) is left alone.
+      expect(alive(other.pid!)).toBe(true);
+    } finally { for (const p of [leftover, other]) try { process.kill(-p.pid!, "SIGKILL"); } catch { /* gone */ } }
   }, 30_000);
 
   test("dispose: session.closing, the process exits, its token is revoked", async () => {

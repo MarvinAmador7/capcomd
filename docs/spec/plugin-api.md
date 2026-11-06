@@ -351,7 +351,7 @@ discovered → validated → resolved → loading → active → disposing → d
 | `active` | the breaker (§6.5) suspends the plugin's hooks without leaving this state | `capcomd plugins disable`, daemon stop, a replaced out-of-process session → `disposing`; the process crashed past its restart budget (§9.5) → `failed(restart_limit)` |
 | `disposing` | §5.3 is running | done → `disposed`; over budget → `disposed` with `dispose_timeout` recorded |
 | `disposed` | terminal for this daemon lifetime, except: | `capcomd plugins enable` → back to `validated` and onward (a fresh module import is **not** performed in-process: the same module instance's `activate` runs again; out of process a new child runs, so its code may differ) |
-| `failed` | with a `PluginFailureCause` | `capcomd plugins enable` → `validated` and onward; a `failed` plugin's partial registrations are disposed as in §5.3 before the state is entered |
+| `failed` | with a `PluginFailureCause` | `capcomd plugins enable` → `validated` and onward; a `failed` plugin's partial registrations are disposed as in §5.3 before the state is entered, except `restart_limit`'s listeners, which stay held until `enable` or `disable` (§9.5) |
 
 A plugin in `failed` or `disposed` keeps appearing in `GET /v1/plugins` with its `cause`, so an app can explain why a
 feature is missing. **There is no hot reload of code.** A changed in-process module takes effect at the next daemon
@@ -916,8 +916,8 @@ The host spawns `entry.command` with cwd = the plugin's root, `${PLUGIN_ROOT}` a
 (`ProcessEnvironment`) `CAPCOMD_PLUGIN_NAME`, `CAPCOMD_PLUGIN_ROOT`, `CAPCOMD_PLUGIN_DATA`, `CAPCOMD_PLUGIN_SOCKET`,
 `CAPCOMD_PLUGIN_SESSION`, `CAPCOMD_PLUGIN_TOKEN`, `CAPCOMD_PLUGIN_PROTOCOL=1`. No `CAPCOMD_*` of the daemon's, no
 `BOXD_*`, no `GITHUB_TOKEN`. stdout and stderr are captured: a line that parses as JSON with a `level` field is a
-structured log (§13.3), any other line is logged at `info`, both under the plugin's name, redacted (its own token among
-what is redacted). A runtime on the user's machine is the plugin's concern (the launcher pattern in
+structured log (§13.3), any other line is logged at `info`, both under the plugin's name, redacted (its own token and
+its secrets' values among what is redacted). A runtime on the user's machine is the plugin's concern (the launcher pattern in
 `plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
 
 The kernel's launcher is `src/plugins/process.ts`. The process leads a process group of its own (the daemon's terminal
@@ -979,7 +979,10 @@ is the registry's own judgement of the answer (its shape for the mode, a modify 
   plugin **disconnected** (`plugin.process_changed {event: disconnected}`): gate calls fail with kind `disconnected`, observe
   calls queue. The process may reconnect with `Last-Event-ID` within the same session (`reconnected`).
 - A process that exits is restarted with backoff 1 s, 2 s, 4 s … 60 s (`plugin.process_changed {event: restarting, restarts}`),
-  with a **new session and token**. Five exits within 10 minutes → `failed(restart_limit)`. A gate call in flight when
+  with a **new session and token**. Five exits within 10 minutes → `failed(restart_limit)`; its listeners stay **held**
+  until `capcomd plugins enable` (a new process) or `disable` (the operator's call): each gate or modify call to it fails
+  `crashed` at once (a gate denies, an open modify is skipped, §6.5) and observe calls are dropped, so a crash-looping
+  gate denies, as a suspended one does (§11.3), instead of letting operations pass unjudged. A gate call in flight when
   the process exited is `crashed` (denied). A gate or modify call made while the process is down (between an exit and the
   next start's stream) waits for that start, within its deadline (`timeout`, denied, past it); observe calls queue.
   `restarts` in the event is the number of exits in the window. A start that never connects is killed and counts as an exit.
@@ -1738,7 +1741,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.18 | 2026-11-06 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
 | 1.0.19 | 2026-11-06 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
-| 1.0.21 | 2026-11-06 | With the out-of-process runtime (§17.2 step 9): the routes are in the committed contract and the draft fragment is gone (§9.9; `plugins.protocol`, additive); the plugin socket beside the harness socket, plugin tokens only (§9.2); the process's own process group, stdin held open, a leftover process from a dead daemon stopped (§9.2); the token in the daemon's memory only, revoked when the process is gone (§9.3); listeners registered at the first session and kept through restarts, a call made while the process is down waiting within its deadline (§9.3, §9.5); a secret that resolves to nothing left out until config layering (§9.3); frames redacted (§9.4); `events.emit` over the wire needs `steer` like in process, so the Slack example takes `steer` (§9.6, §15.4); `ctx.storage` implemented (both runtimes, the daemon's host) and the emit route's keys the plugin's (§9.6); no stream open, SIGTERM at once (§9.7); the client library `connect` ships (§9.8); `enable`/`disable` for the daemon's life, built-ins not disabled by the API (§9.9); a `process` manifest contributes hooks and events only (§4.9), so a third-party plugin has no command (§4.7.1); user plugins discovered (§4.8). |
+| 1.0.21 | 2026-11-06 | With the out-of-process runtime (§17.2 step 9): `failed(restart_limit)` holds the plugin's listeners, so its gates deny until it is enabled or disabled (§5.4, §9.5); the process's log lines are redacted of its own secrets as well as its token (§9.2); the routes are in the committed contract and the draft fragment is gone (§9.9; `plugins.protocol`, additive); the plugin socket beside the harness socket, plugin tokens only (§9.2); the process's own process group, stdin held open, a leftover process from a dead daemon stopped (§9.2); the token in the daemon's memory only, revoked when the process is gone (§9.3); listeners registered at the first session and kept through restarts, a call made while the process is down waiting within its deadline (§9.3, §9.5); a secret that resolves to nothing left out until config layering (§9.3); frames redacted (§9.4); `events.emit` over the wire needs `steer` like in process, so the Slack example takes `steer` (§9.6, §15.4); `ctx.storage` implemented (both runtimes, the daemon's host) and the emit route's keys the plugin's (§9.6); no stream open, SIGTERM at once (§9.7); the client library `connect` ships (§9.8); `enable`/`disable` for the daemon's life, built-ins not disabled by the API (§9.9); a `process` manifest contributes hooks and events only (§4.9), so a third-party plugin has no command (§4.7.1); user plugins discovered (§4.8). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

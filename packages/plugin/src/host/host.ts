@@ -183,12 +183,14 @@ export class PluginHost {
       const r = this.rec(name);
       if (r?.state === "active") await this.unload(r, "daemon_stopping");
     }
+    for (const r of this.records) await this.release(r);
   }
 
   /** `capcomd plugins disable` (§5.4): an active plugin disposes; any plugin is held at `validated` until enabled. */
   async disable(name: string): Promise<PluginSummary> {
     const r = this.rec(name) ?? (() => { throw new PluginError("not_found", `no plugin ${name}`); })();
     r.enabled = false;
+    await this.release(r);
     if (r.state === "active") await this.unload(r, "disabled");
     else if (r.state === "validated" || r.state === "resolved") this.set(r, "validated", "disabled");
     else this.changed();
@@ -203,6 +205,7 @@ export class PluginHost {
     if (r.state === "active") { this.hooks.resume(name, by); return this.summary(r); }
     if (r.state === "loading" || r.state === "disposing") throw new PluginError("conflict", `${name} is ${r.state}`);
     if (r.state === "failed" && r.cause === "duplicate") return this.summary(r);
+    await this.release(r);
     if (!r.manifest || r.state === "failed" && ["invalid_manifest", "incompatible", "untrusted"].includes(r.cause ?? "")) {
       this.validate(r);
       if (r.state === "failed") return this.summary(r);
@@ -399,7 +402,7 @@ export class PluginHost {
     const redact = this.o.sinks?.redact;
     const deep = (v: unknown): unknown => typeof v === "string" ? redact!(v) : Array.isArray(v) ? v.map(deep) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deep(x)])) : v;
     const proc: ProcessPlugin = new ProcessPlugin({
-      name: r.name, manifest: m, root: r.dir!, dataDir: this.o.dataDir(r.name), manifestHash: r.hash!, launcher: this.o.launcher!,
+      name: r.name, manifest: m, root: r.dir!, dataDir: this.o.dataDir(r.name), manifestHash: r.hash!, launcher: this.o.launcher!, secrets: Object.values(secrets),
       emit: (e) => this.o.emit(e), dropped: (n) => this.hooks.dropped(r.name, n),
       ...(this.o.processTimings ? { timings: this.o.processTimings } : {}), ...(redact ? { redact: deep } : {}),
       listen: () => { for (const h of hooks) runtime.ctx.hooks.on(h, ((call: HookCall) => proc.call(call)) as never); },
@@ -410,7 +413,7 @@ export class PluginHost {
         hookTimeoutsMs: Object.fromEntries(hooks.map((h) => [h, Math.min(m.contributes?.hooks?.[h]?.timeoutMs ?? HOOKS[h].timeoutMs.default, HOOKS[h].timeoutMs.max)])),
         daemon: { version: this.o.capcomd, capabilities: [...this.kernel].filter((k) => k.startsWith("kernel:")).map((k) => k.slice("kernel:".length)) },
       }),
-      failed: (cause, message) => { void this.processFailed(r, proc, cause, message); },
+      failed: (cause, message) => this.processFailed(r, proc, cause, message),
     });
     r.runtime = runtime;
     r.process = proc;
@@ -428,14 +431,24 @@ export class PluginHost {
     this.o.emit({ type: "plugin.loaded", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin is active.`, data: { plugin: r.name, version: m.version, runtime: "process", hooks: s.hooks, seams: [], ms: Date.now() - started } });
   }
 
-  /** The process couldn't be kept running (§9.5 `restart_limit`): the plugin's registrations go and it is failed. */
-  private async processFailed(r: Rec, proc: ProcessPlugin, cause: PluginFailureCause, message: string) {
+  /**
+   * The process couldn't be kept running (§9.5 `restart_limit`): the plugin is failed, but its listeners stay, held, until
+   * an operator enables or disables it. Each of its gate calls fails `crashed` at once (denied, §6.5), an open one is
+   * skipped: a crash-looping gate denies, as a suspended one does (§11.3), instead of letting merges pass unjudged.
+   */
+  private processFailed(r: Rec, proc: ProcessPlugin, cause: PluginFailureCause, message: string) {
     if (r.process !== proc || r.state !== "active") return;
+    this.fail(r, cause, message);
+  }
+
+  /** A failed out-of-process plugin's held listeners (`processFailed`) go: it is enabled, disabled, or the daemon stops. */
+  private async release(r: Rec) {
+    if (r.state === "active" || (!r.runtime && !r.process)) return;
+    const proc = r.process;
     r.process = null;
     await r.runtime?.dispose(this.o.disposeBudgetMs);
-    await proc.dispose("disabled");
     r.runtime = null;
-    this.fail(r, cause, message);
+    await proc?.dispose("disabled");
   }
 
   /** `active → disposing → disposed` (§5.3; an out-of-process plugin's process last, §9.7). */

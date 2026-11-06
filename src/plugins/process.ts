@@ -4,7 +4,7 @@
 // HOME, USER, LANG, TERM, TMPDIR), the manifest's `entry.env` and the CAPCOMD_PLUGIN_* ones: no other CAPCOMD_* of the
 // daemon's, no BOXD_*, no GITHUB_TOKEN, no provider key, never a secret (those go once in the handshake's answer, §10.3).
 // stdin stays open while the daemon lives (a process should exit when it closes); stdout and stderr lines are the
-// plugin's log (§13.3), redacted, its own token among what is redacted. Chaos (CAPCOMD_KILLPOINT): `plugin.hook.mid`
+// plugin's log (§13.3), redacted, its own token and secrets among what is redacted. Chaos (CAPCOMD_KILLPOINT): `plugin.hook.mid`
 // kills the daemon, `plugin.process.crash` the plugin's process, right after a gate or modify call went out to it.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -69,12 +69,12 @@ function reapStale(dataDir: string) {
 }
 
 /** The daemon's launcher: `socket` is the plugin socket its processes connect to (CAPCOMD_PLUGIN_SOCKET). */
-export function processLauncher(o: { socket: string; log(line: Line): void; secrets?: () => string[] }): ProcessLauncher {
+export function processLauncher(o: { socket: string; log(line: Line): void }): ProcessLauncher {
   return {
-    start({ manifest, root, dataDir, session }): ProcessStart {
+    start({ manifest, root, dataDir, session, secrets }): ProcessStart {
       if (manifest.entry.runtime !== "process") throw new Error(`${manifest.name} is not an out-of-process plugin`);
       const minted = mintPluginClient(manifest.name, manifest.scopes ?? []);
-      const redactor = new Redactor([minted.token, ...(o.secrets?.() ?? [])]);
+      const redactor = new Redactor([minted.token, ...secrets]);
       const redact = (s: string) => redactor.text(s);
       mkdirSync(dataDir, { recursive: true, mode: 0o700 });
       const sub = (s: string) => s.replaceAll("${PLUGIN_ROOT}", root).replaceAll("${PLUGIN_DATA}", dataDir);
