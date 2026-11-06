@@ -3,11 +3,11 @@
 // commit with capcomd trailers → push. Agent specifics live in adapters.ts. ADR-014, ADR-015.
 import { SUPERVISOR_SOURCE } from "../utils/assets";
 import type { SandboxProvider, VmId, ExecResult } from "../providers/sandbox";
-import type { AgentConfig } from "./config";
+import type { AgentConfig, ContextBundleSpec } from "./config";
 import type { AgentAdapter, AgentCommandCtx, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
-import { gitSpan, pushFromSandbox, sendToSandbox, type HostRemote, type SandboxGit } from "../merge/transfer";
+import { gitSpan, pushFromSandbox, sendToSandbox, sendTreeAt, type HostRemote, type SandboxGit } from "../merge/transfer";
 import { lsRemote } from "../merge/host-git";
 import { stateDir } from "../utils/home";
 import { join as joinPath } from "path";
@@ -472,6 +472,43 @@ for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 -"$p" 2>/dev/null || exit 0; sleep 0.5
 kill -KILL -"$p" 2>/dev/null; true`;
 }
 
+/** The file a placed context bundle keeps its commit in: one the sandbox has at that commit (the env image's, an
+ *  earlier attempt's) is used as it is. */
+export const BUNDLE_MARKER = ".capcomd-bundle";
+
+/**
+ * A context bundle (ADR-025 §6.2: a brain at the commit the brief cites) at `b.dir` in the sandbox: its tree from the
+ * host's mirror of its repository (src/merge/transfer.ts `sendTreeAt`: no credential enters the sandbox, no history
+ * either), its files made read-only (a convention: the sandbox is the agent's, so a citation is checked host-side), and
+ * the marker. A bundle that can't be placed leaves the agent to start without it, which its log says: the brief's lines
+ * for it then name files that aren't there. True when it is there.
+ */
+export async function placeBundle(b: ContextBundleSpec, h: HostRemote, box: SandboxGit, span: Parameters<typeof addSpanEvent>[0], r: Redactor, onLog?: (lines: string[]) => void): Promise<boolean> {
+  const marker = `${b.dir}/${BUNDLE_MARKER}`;
+  const what = `${b.provider} ${b.name} at ${b.commit.slice(0, 12)}`;
+  const attrs = { "context.provider": b.provider, "context.bundle": b.name, "git.sha": b.commit };
+  const had = await box.exec(["sh", "-c", `cat ${sq(marker)} 2>/dev/null; true`]).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+  if (had.stdout.trim() === b.commit) {
+    addSpanEvent(span, "agent.context_bundle", { ...attrs, "context.placed": "kept" });
+    onLog?.([`[capcomd] context: ${what} is already in ${b.dir}`]);
+    return true;
+  }
+  const t0 = Date.now();
+  try {
+    await gitSpan("archive", b.commit, () => sendTreeAt(h, box, b.dir, b.commit, { branch: b.branch }));
+    const done = await box.exec(["sh", "-c", `cd ${sq(b.dir)} && find . -type f -exec chmod a-w {} + && printf %s ${sq(b.commit)} > ${sq(marker)}`]);
+    if (done.code !== 0) throw new Error(`marking it read-only failed: ${(done.stderr || done.stdout).trim().slice(-300)}`);
+    addSpanEvent(span, "agent.context_bundle", { ...attrs, "context.placed": "placed", "context.ms": Date.now() - t0 });
+    onLog?.([`[capcomd] context: placed ${what} in ${b.dir} (${Date.now() - t0} ms)`]);
+    return true;
+  } catch (e) {
+    const why = r.text(String((e as Error)?.message ?? e)).slice(-400);
+    addSpanEvent(span, "agent.context_bundle", { ...attrs, "context.placed": "failed", "context.error": why });
+    onLog?.([`[capcomd] context: couldn't place ${what} in ${b.dir}, so the agent starts without it: ${why}`]);
+    return false;
+  }
+}
+
 export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider, vmId: VmId, task: AgentTask, cfg: AgentConfig, opts: AgentRunOptions): Promise<AgentResult> {
   const r = new Redactor([opts.apiKey, ...(opts.secrets ?? [])]);
   const now = opts.now ?? Date.now;
@@ -620,6 +657,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       setSpanAttributes(span, { "agent.workspace": workspace.path });
       opts.onLog?.([workspace.path === "in_place" ? `[capcomd] workspace: the env image's warm checkout, in place (${ms} ms)` : `[capcomd] workspace: a fresh clone, ${workspace.reason} (${ms} ms)`]);
     }
+    // The context bundles its brief cites (ADR-025 §6.2: a brain at the commit its lines name), beside the checkout.
+    for (const b of cfg.contextBundles ?? []) await placeBundle(b, { remote: b.remote, workdir: host.workdir }, box, span, r, opts.onLog);
 
     // 2. Detect the CLI (image or snapshot may already have it); install the pin only if absent.
     let bin = adapter.kind === "claude-code" ? (cfg.agentBin ?? cfg.claudeBin) : cfg.agentBin;

@@ -345,6 +345,10 @@ export async function runNew(o: RunNewOpts) {
       await (name ? put : put.catch(() => {}));
     }
   }
+  // The project's context settings (its .capcomd/config.json `context`: the brains it maps, each pinned to a commit), read
+  // now from the files and kept with the run, so every agent of the run is briefed from the commits the run started with
+  // (ADR-025 §11.2). A retry keeps what the first call recorded; a run starts without them if the write fails.
+  await (await import("../context/project")).recordRunContext(runId, process.cwd()).catch(() => {});
   // Written on every (idempotent) call, so a crash between init and this put heals on retry.
   if (hasChecks) await (await import("./state")).kvWrite(runId, { k: CHECKS_KV, value: o.checks, writer: "operator" });
   if (o.reviewer) await (await import("./state")).kvWrite(runId, { k: REVIEWER_KV, value: { profile: o.reviewer }, writer: "operator" });
@@ -1159,9 +1163,11 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
   const skills = await pinnedSkillTexts(runId, a);
   const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: machine.environment ?? null } };
   let n: AgentPreparing = payload, patches: Array<{ patch: PreparePatch }> = [];
+  // The kernel's own listeners read the agent's record from here, not the engine again (the orchestration skill); the
+  // context router leaves the bundles its brief cites here, for the attempt's runner to place (ADR-025 §6.2).
+  const kernel: { runId: string; agentId: string; record: unknown; bundles?: unknown[] } = { runId, agentId: a.agentId, record: a };
   if (hooks.listening("agent.preparing")) {
-    // The kernel's own listener (the orchestration skill) reads the agent's record from here, not the engine again.
-    const out = await preparingAgent.run({ runId, agentId: a.agentId, record: a }, () => hooks.fire("agent.preparing", "modify", payload, { principal: principalOf(null), entity: `${a.agentId}/e${a.epoch}`, attempt, runId, agentId: a.agentId,
+    const out = await preparingAgent.run(kernel, () => hooks.fire("agent.preparing", "modify", payload, { principal: principalOf(null), entity: `${a.agentId}/e${a.epoch}`, attempt, runId, agentId: a.agentId,
       apply: (p, patch) => applyPreparePatch(p, patch) }));
     // A final error (code config): the attempt isn't retried, the agent fails with the plugin's reason.
     if (out.decision === "deny") throw refusedError("agent.preparing", out, "config");
@@ -1178,6 +1184,7 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
     ...(a.spec ?? {}), ...(append ? { appendSystemPrompt: append } : {}), ...(JSON.stringify(n.egress) !== JSON.stringify(egress) ? { egress: n.egress } : {}),
     ...(n.prompt.skills.length ? { skills: n.prompt.skills.map(({ name, hash, source }) => ({ name, hash, source })) } : {}),
     ...(Object.keys(env).length ? { pluginEnv: env } : {}),
+    ...(kernel.bundles?.length ? { contextBundles: kernel.bundles } : {}),
   };
 }
 

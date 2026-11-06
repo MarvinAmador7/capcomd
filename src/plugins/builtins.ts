@@ -17,6 +17,7 @@ import * as frontHermes from "./front/hermes";
 import * as skillOrchestration from "./skill-orchestration";
 import * as contextRouter from "./context";
 import * as contextMemory from "./context-memory";
+import * as contextGroundray from "./context-groundray";
 import * as sourceSchedule from "./sources/schedule";
 import * as watchdog from "./watchdog";
 
@@ -52,9 +53,10 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   { manifest: frontMcp.manifest, module: frontMcp.plugin as Builtin["module"], everyProcess: true, kernelSurface: true },
   { manifest: frontHermes.manifest, module: frontHermes.plugin as Builtin["module"], everyProcess: true, kernelSurface: true },
   { manifest: skillOrchestration.manifest, module: skillOrchestration.plugin as Builtin["module"], everyProcess: true },
-  // The context layer (ADR-025 step 1): project memory as a context provider, and the router that briefs an agent from
-  // the providers its profile names, wherever an agent is prepared or a brief printed.
+  // The context layer (ADR-025 steps 1 and 4): project memory and a company's brain as context providers, and the router
+  // that briefs an agent from the providers its profile names, wherever an agent is prepared or a brief printed.
   { manifest: contextMemory.manifest, module: contextMemory.plugin as Builtin["module"], everyProcess: true },
+  { manifest: contextGroundray.manifest, module: contextGroundray.plugin as Builtin["module"], everyProcess: true },
   { manifest: contextRouter.manifest, module: contextRouter.plugin as Builtin["module"], everyProcess: true },
   // Trigger sources (§16.3, step 10): schedules. GitHub's comments are forge-github's own source.
   { manifest: sourceSchedule.manifest, module: sourceSchedule.plugin as Builtin["module"] },

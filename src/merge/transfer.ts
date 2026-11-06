@@ -214,16 +214,45 @@ export async function sendTree(h: HostRemote, s: SandboxGit, dir: string, branch
   if (!isBranchName(branch)) throw new TransferError(`not a branch name: ${JSON.stringify(branch).slice(0, 200)}`, "refused");
   const id = uniq();
   const got = await fetchedMirror(h, [branch], { tmpRef: `refs/capcomd/xfer/${id}` });
-  const m = got.m, sha = got.heads[branch]!;
-  await m.run(["update-ref", "--stdin"], { input: got.pins.map((p) => `delete ${p}`).join("\n") + "\n" }).catch(() => {});
+  const sha = got.heads[branch]!;
+  await got.m.run(["update-ref", "--stdin"], { input: got.pins.map((p) => `delete ${p}`).join("\n") + "\n" }).catch(() => {});
+  await unpackTree(got.m, s, dir, sha, id, branch);
+  return sha;
+}
+
+/**
+ * Remote → a plain directory in the sandbox at one commit, as sendTree does a branch's tip: a context bundle (a brain,
+ * ADR-025 §6.2) at the commit its brief cites. The host's mirror fetches the commit by name when it hasn't got it; a
+ * remote that won't serve a commit by name is fetched at `branch`, which must have it.
+ */
+export async function sendTreeAt(h: HostRemote, s: SandboxGit, dir: string, commit: string, o: { branch?: string | null } = {}): Promise<string> {
+  if (!HEX.test(commit)) throw new TransferError(`not a commit: ${JSON.stringify(commit).slice(0, 200)}`, "refused");
+  if (o.branch != null && !isBranchName(o.branch)) throw new TransferError(`not a branch name: ${JSON.stringify(o.branch).slice(0, 200)}`, "refused");
+  const id = uniq();
+  const tmpRef = `refs/capcomd/xfer/${id}`;
+  let got: Awaited<ReturnType<typeof fetchedMirror>>;
+  try { got = await fetchedMirror(h, [], { ref: commit, tmpRef }); } catch (e) {
+    if (!o.branch || !(e instanceof TransferError)) throw e;
+    got = await fetchedMirror(h, [o.branch], { ref: commit, tmpRef });
+  }
+  try {
+    if (got.ref !== commit) throw new TransferError(`the host's copy of ${h.remote} has ${String(got.ref).slice(0, 12)}, not ${commit.slice(0, 12)}`, "refused");
+    await unpackTree(got.m, s, dir, commit, id, commit.slice(0, 12));
+    return commit;
+  } finally {
+    await got.m.run(["update-ref", "--stdin"], { input: got.pins.map((p) => `delete ${p}`).join("\n") + "\n" }).catch(() => {});
+  }
+}
+
+/** `sha`'s tree from the mirror `m`, as a tar (`git archive`), unpacked into `dir` in the sandbox (made anew). */
+async function unpackTree(m: Git, s: SandboxGit, dir: string, sha: string, id: string, what: string): Promise<void> {
   const proc = Bun.spawn(["git", "archive", "--format=tar", sha], { cwd: m.cwd, stdout: "pipe", stderr: "pipe" });
   const [tar, err, code] = await Promise.all([new Response(proc.stdout).arrayBuffer(), new Response(proc.stderr).text(), proc.exited]);
-  if (code !== 0) throw new TransferError(`git archive ${branch} failed: ${err.trim().slice(-300)}`);
+  if (code !== 0) throw new TransferError(`git archive ${what} failed: ${err.trim().slice(-300)}`);
   const at = `/tmp/capcomd-tree-${id}.tar`;
   await s.upload(at, new Uint8Array(tar));
   const r = await s.exec(["sh", "-c", `rm -rf ${sq(dir)} && mkdir -p ${sq(dir)} && tar -xf ${sq(at)} -C ${sq(dir)}; rc=$?; rm -f ${sq(at)}; exit $rc`], { timeoutMs: 600_000 });
-  if (r.code !== 0) throw new TransferError(`unpacking ${branch} in the sandbox failed: ${tail(r)}`, "sandbox");
-  return sha;
+  if (r.code !== 0) throw new TransferError(`unpacking ${what} in the sandbox failed: ${tail(r)}`, "sandbox");
 }
 
 export interface PushRequest {

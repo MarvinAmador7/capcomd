@@ -147,6 +147,28 @@ export interface AgentConfig {
   pluginEnv?: Record<string, string>;
   /** Its profile's MCP servers (ADR-024 `tools.mcp`, pinned at spawn): its CLI starts them in its sandbox. */
   mcp?: McpServer[];
+  /** The context bundles this attempt's brief cites (ADR-025 §6.2; src/primitives/ops.ts `agentPreparing`): each
+   *  repository at its commit, placed by the runner at `dir` (under `<workdir>/context/`) before the agent starts. */
+  contextBundles?: ContextBundleSpec[];
+}
+
+/** A context bundle as the attempt's spec records it. */
+export interface ContextBundleSpec { provider: string; name: string; remote: string; branch: string | null; commit: string; dir: string }
+
+/** The agent work directory in the sandbox (CAPCOMD_AGENT_WORKDIR, default /var/tmp/capcomd): checkouts, the warm
+ *  template, context bundles. */
+export const agentWorkdir = (source: Record<string, string | undefined> = process.env): string => envVar("AGENT_WORKDIR", source) ?? "/var/tmp/capcomd";
+
+const BUNDLE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+/** The context bundles of the attempt's spec, each checked again here (a spec is data): a plain provider and name, a full
+ *  commit, its directory exactly `<workdir>/context/<provider>/<name>`. */
+function contextBundlesOf(spec: unknown, workdir: string): ContextBundleSpec[] | null {
+  const raw = (spec as { contextBundles?: unknown } | null | undefined)?.contextBundles;
+  if (!Array.isArray(raw)) return null;
+  const ok = raw.filter((b): b is ContextBundleSpec => !!b && typeof b === "object" && typeof b.provider === "string" && BUNDLE_NAME.test(b.provider) && typeof b.name === "string" && BUNDLE_NAME.test(b.name)
+    && typeof b.remote === "string" && !!b.remote && typeof b.commit === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(b.commit) && (b.branch === null || typeof b.branch === "string")
+    && b.dir === `${workdir}/context/${b.provider}/${b.name}`);
+  return ok.length ? ok.map(({ provider, name, remote, branch, commit, dir }) => ({ provider, name, remote, branch, commit, dir })) : null;
 }
 
 /** The variables agent.preparing's plugins added, from the attempt's spec (src/primitives/ops.ts `agentPreparing`). */
@@ -209,7 +231,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     profile: ra.name,
     systemPrompt: spec?.systemPrompt,
     appendSystemPrompt: spec?.appendSystemPrompt,
-    workdir: envVar("AGENT_WORKDIR", source) ?? "/var/tmp/capcomd",
+    workdir: agentWorkdir(source),
     claudeBin: envVar("AGENT_CLAUDE_BIN", source),
     agentBin: envVar("AGENT_BIN", source),
     egress: list(envVar("AGENT_EGRESS", source), spec?.egress ?? (isRealAgent(kind) ? [OPEN_EGRESS] : AGENT_EGRESS)),
@@ -220,6 +242,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
     // An orchestrate agent runs nothing (§16.1): never a server, whatever made it orchestrate after its profile was checked.
     ...(mcp && isRealAgent(kind) && spec?.toolMode !== "orchestrate" ? { mcp } : {}),
+    ...(contextBundlesOf(spec, agentWorkdir(source)) ? { contextBundles: contextBundlesOf(spec, agentWorkdir(source))! } : {}),
   };
   if (spec?.toolMode !== "orchestrate" || !isRealAgent(kind)) return cfg;
   // §16.1: the provider's policy on top of the profile's lists and the env's; nothing here widens it.

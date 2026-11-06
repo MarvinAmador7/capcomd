@@ -606,7 +606,17 @@ patch the kernel would refuse, which would cost the agent its brief too. It runs
 listener (`after: [skill-orchestration]`, §6.3), so a context skill never takes that skill's room.
 `plugin.context.loaded`'s `data.skills` lists the attached ones by `{name, hash}` (additive). Their names are
 the kernel's: a profile can't name them, and a profile with a context block keeps room for them (one of the 8 skills,
-two when it may spawn, and their bytes), as one that may spawn does for the orchestration skill.
+two when it may spawn, and their bytes), as one that may spawn does for the orchestration skill. Each provider is asked once per brief, for the profile's first entry naming it (a second is
+`skipped (named twice)`: two brains are never in one brief), with that entry's own settings as `ContextScope.settings`
+(groundray's `brain`). A provider that declares `caps.bundle` may name, from `resolve`, the one repository at a commit its
+lines point into (`ContextBundle {remote, branch, commit, name}`, ADR-025 §6.2); the router keeps it only when the
+provider loaded, the remote is a URL or path without a credential in it and the commit is full, and leaves it in the
+kernel's record of the call (`preparingAgent`, not the patch, so no plugin can place files), from which the attempt's spec
+records it (`contextBundles`, with its directory `<workdir>/context/<provider>/<name>`, `ContextScope.bundleRoot`). The
+attempt's runner places each before the agent starts: the tree at that commit from the host's mirror of the repository
+(§11.7, `sendTreeAt`), its files read-only, a `.capcomd-bundle` marker naming the commit (one the sandbox already has at
+that commit, an earlier attempt's or an environment image's, is kept). A bundle that can't be placed leaves the agent
+to start without it and its log says so.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
@@ -1294,7 +1304,7 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
 1. **No git credential enters a sandbox.** The sandbox providers pass an exec exactly the env capcomd gives it, and
    capcomd runs no network git in a sandbox (no clone, fetch, push or ls-remote). Objects move through the host
    (`src/merge/transfer.ts`): to fetch (an agent's clone, `capcomd fetch`, a review's target, a continued agent's work,
-   an env build's template), the host fetches the run's repository into its mirror and uploads a bundle of what the
+   an env build's template, a context bundle at its commit), the host fetches the run's repository into its mirror and uploads a bundle of what the
    sandbox lacks, which the sandbox reads and whose refs the host names; to push (an agent's branch, its checkpoints),
    the sandbox bundles the commit, the host downloads it into its mirror, checks it is the commit asked for, and pushes
    it to the repository's URL with a lease. In the sandbox git only makes and reads bundle files.
@@ -1426,8 +1436,8 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
 - **context** (ADR-025 §3.1): `describe` names the declared provider with kinds and layers the kernel knows,
   `available` never rejects, `classifyError` classifies anything (its own `not_found` as `not_found`), `propose` is
   refused `unsupported` unless `caps.writable`, a call whose signal is already aborted rejects; with a scope that has
-  items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time,
-  `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
+  items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time
+  and names a bundle only when `caps.bundle` (a repository at a full commit, under a plain name), `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
   kind, untrusted description), `get` returns an indexed item with untrusted text and rejects an id that isn't there
   `not_found`, and `search` answers at most `limit` hits. `packages/plugin/src/context-conformance.ts`; `capcomd plugins
   validate --conformance` runs it without a scope (the item cases skipped).
@@ -1963,7 +1973,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.26 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
 | 1.0.27 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach (an override that makes an agent with MCP servers orchestrate is refused, `orchestrate_mcp`); an agent's machine is on its profile's `sandbox.provider` before the run's, never one that runs it on the host unless the run's does (`sandbox_isolation`, §7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
 | 1.0.28 | 2026-11-06 | With ADR-025 step 6: the context router attaches the context layer's skills at `agent.preparing` (§6.6.7): `capcomd-context-doctrine` to every agent whose spec has a context block, `capcomd-context-routing` to one of them that may spawn and isn't a reviewer or a report agent, `source: builtin`, pinned by hash, after the orchestration skill and only as many as fit the room the agent's other skills leave; their names are the kernel's and a profile with a context block keeps room for them; `plugin.context.loaded`'s `data.skills` (additive). Inline items and the `context` message kind (§11.5) stay unshipped: the step's eval did not admit them (ADR-025 §13). |
-| 1.0.29 | 2026-11-06 | With consolidation and promotion as a merge (ADR-025 step 3): an agent of the `context-consolidator` profile isn't captured; the kernel stages its answer on its branch before recording its end, runs it as a reporting agent with the run's candidates and outcomes in its prompt, and on the run's strongest model when its profile names none (§6.6.8); `plugin.context.staged` on the run's stream (additive); the built-in `context-memory` is a `verify.judging` judge (lint as a check, before the reviewer gate) and a `merge.landing` gate (deny for a branch of any agent but a consolidator that changes `.capcomd/context/`, or one that fails lint; `hold` for a consolidator's under `context.review: human`, the default; allow under `lint`) (§6.6.13, §6.6.15). Both listen in every process, so a verify asks a judge and a merge fires `merge.landing` where none did before. |
+| 1.0.29 | 2026-11-06 | With groundray's read path (ADR-025 step 4): `ContextScope` gains `settings` (a provider entry's own settings from the pinned spec) and `bundleRoot`, `resolve` may answer a `bundle` (`ContextBundle`, a repository at a commit) when `caps.bundle` (all optional, additive); the router asks a provider once per brief (`skipped (named twice)`) and keeps the bundles its brief cites, which the attempt's runner places in the sandbox through the host's mirror (§6.6.7, §11.7); the conformance suite's bundle case (§14.2). The built-in `context-groundray` provides `context:groundray`. |
+| 1.0.30 | 2026-11-06 | With consolidation and promotion as a merge (ADR-025 step 3): an agent of the `context-consolidator` profile isn't captured; the kernel stages its answer on its branch before recording its end, runs it as a reporting agent with the run's candidates and outcomes in its prompt, and on the run's strongest model when its profile names none (§6.6.8); `plugin.context.staged` on the run's stream (additive); the built-in `context-memory` is a `verify.judging` judge (lint as a check, before the reviewer gate) and a `merge.landing` gate (deny for a branch of any agent but a consolidator that changes `.capcomd/context/`, or one that fails lint; `hold` for a consolidator's under `context.review: human`, the default; allow under `lint`) (§6.6.13, §6.6.15). Both listen in every process, so a verify asks a judge and a merge fires `merge.landing` where none did before. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

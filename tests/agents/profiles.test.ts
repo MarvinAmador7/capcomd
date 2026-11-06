@@ -386,9 +386,9 @@ describe("profiles v2: loader and resolution", () => {
     expect(set.agents.n as unknown).toEqual({ provider: "claude", auth: "apikey", context: n });
     expect(set.warnings).toEqual([]);
     // A provider no active plugin provides is refused when profiles are read, as a sandbox's name is (ADR-025 §3.1).
-    expect(errorOf(() => world({ "P/g.yaml": yaml(["name: g", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: groundray, brain: acme }] }"]) }).load()))
-      .toContain(`profiles.g: context.providers names "groundray", which isn't an active context provider (memory; see \`capcomd plugins list\`)`);
-    expect(errorOf(() => world({}, { v: { provider: "claude", auth: "apikey", context: { providers: [{ name: "groundray" }] } } }).load())).toContain(`agents.v: context.providers names "groundray"`);
+    expect(errorOf(() => world({ "P/g.yaml": yaml(["name: g", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: glean, space: acme }] }"]) }).load()))
+      .toContain(`profiles.g: context.providers names "glean", which isn't an active context provider (memory, groundray; see \`capcomd plugins list\`)`);
+    expect(errorOf(() => world({}, { v: { provider: "claude", auth: "apikey", context: { providers: [{ name: "glean" }] } } }).load())).toContain(`agents.v: context.providers names "glean"`);
     expect(errorOf(() => world({ "P/l.yaml": yaml(["name: l", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: memory, layers: [user] }] }"]) }).load()))
       .toContain("context.providers.memory.layers: must be a list of project, run");
     expect(checkManifest({ name: "u", memory: { scope: "user" } }, "profile", "u").join()).toContain("memory.scope: user memory isn't built");

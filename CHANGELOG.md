@@ -46,6 +46,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   items (`--fix` writes it). `--base <ref>` also refuses a changed id or a deleted item; `--run <runId>` checks that the
   verifies and merges an item cites are that run's. Problems exit 1, each naming its file. A link in the directory is
   a problem, and `--fix` never writes through one.
+- New: business knowledge from a groundray brain. `capcomd context brain add <name> <repo>` maps a brain (a git
+  repository with groundray's `brain.yaml` and `knowledge/`, or any OKF bundle with `--bundle <dir>`) to a name in the
+  project's `.capcomd/config.json`, pinned at its branch's tip (run it again to move the pin; `capcomd context brain
+  list|remove`). A profile with `context: {providers: [{name: groundray, brain: <name>}]}` briefs its agents with one line
+  per fact of that brain (a decision, a policy, a definition…), and each agent finds the brain's files at that commit in
+  its sandbox, read-only, where the lines point. A run reads the commit the brain was pinned at when the run started.
+  A restricted brain (`default_sensitivity: restricted`, or any file under its bundle marked restricted) is refused by
+  `brain add` and never briefed, as is one too big to check (a file over 4 MiB, more than 2000 files); a URL with a
+  credential in it is refused. Reads need no groundray CLI. See docs/agents.md, "Business
+  knowledge: a groundray brain".
+- The context brief names a provider a profile lists twice once (`skipped (named twice)` for the other), and a line's
+  file path may now be up to 320 characters.
 - New: `capcomd profiles set` changes any profile where it is defined: a profile file (`.capcomd/profiles/<name>.yaml`,
   `<name>/profile.yaml`, the same in `~/.capcomd/profiles/`) as well as an `agents.json` entry, with the same flags plus
   `--set path=value` (`--set limits.maxTurns=40 --set tags=review,security`). A YAML file keeps its comments and its
