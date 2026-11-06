@@ -83,6 +83,9 @@ export interface PinnedSpec {
    *  budgets. */
   context?: ContextSpec;
   profile?: { name: string; version: number; source: "project" | "user" | "bundled" | "installed" };
+  /** ADR-024 `skills` (§7 step 5): the profile's skills, pinned at spawn by the sha256 of each SKILL.md; agent.preparing
+   *  (§6.6.7) has their text in `prompt.skills`. */
+  skills?: Array<Pick<AttachedSkill, "name" | "hash" | "source">>;
 }
 
 export type ApprovalKind = "merge" | "budget" | "egress" | "secret" | "spawn_widen" | "custom";

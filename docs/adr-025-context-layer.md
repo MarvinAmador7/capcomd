@@ -548,7 +548,7 @@ Each step: `bun run typecheck`, `bun run test:fast`, `bun run test:scenarios`, t
 for the models in use, and a CHANGELOG line for what a user sees ("profiles: `context` block; agents see project memory
 at start"; "memory lands through a reviewed merge"; "business context from a groundray brain").
 
-**Made while building step 1** (spec 1.0.20; where the code and §3.2 differ, the code is right and this list says why):
+**Made while building step 1** (spec 1.0.21; where the code and §3.2 differ, the code is right and this list says why):
 
 - The envelope is `packages/plugin/src/context-layer.ts`: `context.ts` is the plugin's `PluginContext`, and the
   glossary keeps "context" for it. The service is `ctx.context.register` all the same.

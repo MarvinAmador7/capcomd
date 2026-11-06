@@ -392,11 +392,11 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   asked for a spawn, and the file may be a link to anything on the host).
 - **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
-- **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `sandbox.provider|environment|size`,
-  `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4; `context` until ADR-025 step 1,
-  below) are checked and kept on the resolved profile, not pinned (`jobs` is pinned as is since the jobs service, spec
-  §17.2 step 7); `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is checked against
-  the active sandbox seams.
+- **Blocks with no runtime yet** (`identity.persona`, `tools.mcp`, `sandbox.provider|environment|size`,
+  `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4, `skills` until step 5, `context`
+  until ADR-025 step 1, below) are checked and kept on the resolved profile, not pinned (`jobs` is pinned as is since
+  the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is
+  checked against the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.
 - **`context` (and `memory`, read as it) has a runtime since ADR-025 step 1**: it is pinned with the flat spec
@@ -464,6 +464,34 @@ Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src
   readiness (a missing login) stays in `ready`/`detail`, not in `capacity`. Only `capcomd_profiles` reports it:
   `capcomd profiles list` also runs in an agent's VM, which can't see the host's sandbox.
 - **`prompt.*` as files** shipped with step 1 (above).
+
+Made while building skills in the profile (§7 step 5, 2026-11-06; `src/profiles/skills.ts`, spec §6.6.7):
+
+- **`source` is `package`, `user` or `bundled`.** `package` is the profile's `skills/<name>/SKILL.md`, looked up in the
+  nearest directory that has it: an `override.yaml`'s, the profile's own, then each ancestor's (a child that extends a
+  package uses its parent's skills unless it has its own); `user` is `~/.claude/skills`, read as `capcomd send
+  --skill` reads it (`src/agents/skills.ts`); `bundled` is capcomd's. **Unset is `package`, then `bundled`, never
+  `user`**: a profile shared in a repository must not quietly depend on what each user has installed. `~/.capcomd/skills`
+  (§2.2's comment) isn't read: `send --skill` doesn't read it either, and one list of a user's skills is simpler.
+- **Skills are read when the profile resolves and pinned at spawn**: the agent's spec records `{name, hash, source}`
+  and the run keeps each text (the scope's content-addressed attachments, in the spawn's transaction), so the process
+  that prepares the agent (the daemon, a driver) needs no access to the project's files, and a retried or resumed
+  agent gets exactly what it was spawned with. The text never goes into the spec or the `agent.spawned` event (up to
+  256 KB per agent). A skill missing or changed at preparation fails the attempt (`config`) rather than run without it.
+- **A missing, empty, too big or changed (against `hash:`) skill makes the profile invalid**, like any other error in
+  it, so `validate` names it and a spawn of any profile is refused until it is fixed; a warning instead would start
+  agents without the skill their profile promises.
+- **`capcomd-orchestration` stays the kernel's** (one mechanism, `agent.preparing`): a profile that may spawn may name
+  it and the built-in `skill-orchestration` plugin attaches it, written for the agent, so the agent gets it once; it is
+  never pinned (its text depends on the agent's limits, budget and goal branch), so a `hash` on it is refused, and so
+  is naming it in a profile that can't spawn ("today's gating stays"). A profile that may spawn keeps one of the 8
+  skills and 32 KB for it.
+- **The agent reads each skill in a `<skill name="…">` block**, the profile's after its `prompt.append` and before the
+  plugins' (`skillBlock`, the same as a message's skills): every skill an agent gets reads the same way, the
+  orchestration skill included.
+- **The trust prompt for a project's skills (decision 4) waits for step 7** (`capcomd profiles trust`, with the plugin
+  trust mechanism, spec §4.8, which isn't built yet). Until then a project's skills are used as its `prompt.append`
+  and `agents.json` prompts always were: as text the project supplies.
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 
