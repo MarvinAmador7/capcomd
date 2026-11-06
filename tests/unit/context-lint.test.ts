@@ -113,6 +113,8 @@ describe("lint (ADR-025 §5.3)", () => {
     expect(JSON.stringify(r)).not.toContain(RUN_SECRET);
     expect(r.errors.map((p) => p.message)).toContain("holds a secret value of the run: take it out (the item is refused, never redacted)");
     expect(r.index.text).not.toContain(RUN_SECRET);
+    expect(r.index.text).not.toContain("sk-ant-api03");
+    expect(r.index.text).toContain("- [lesson] shaped → memory/shaped.md (id shaped; draft)");
   });
 
   test("against a base: an id never changes, an item is never deleted (moving it is fine)", () => {

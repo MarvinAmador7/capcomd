@@ -185,6 +185,8 @@ export function lintContext(i: LintInput): LintResult {
     if (hit) err(f.path, "secret", `holds ${hit.what}: take it out (the item is refused, never redacted)`);
     const item = readItem(f as LintFile & { text: string }, kind, (rule, message) => err(f.path, rule, message));
     if (!item) continue;
+    // An item holding a secret is in the index by its id alone: `--fix` never copies the secret into index.md.
+    if (hit) Object.assign(item, { description: item.id, paths: [] });
     const first = firstById.get(item.id);
     if (first) { err(f.path, "duplicate-id", `id ${item.id} is already ${rel(first.file)}'s`); continue; }
     firstById.set(item.id, item);
