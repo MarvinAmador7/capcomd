@@ -962,7 +962,9 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   // ADR-025 §5.2: a consolidator answers with deltas, which the kernel stages on its branch when it ends (settlePushed);
   // a real one reads the run's candidates and outcomes in its prompt (a scripted one reads them with its capcomd).
   const { isConsolidator, consolidationInputs } = await import("../context/consolidator");
-  const consolidate = isConsolidator(a) && !review && !report ? { inputs: exec && mode !== "script" ? await consolidationInputs(runId) : "" } : null;
+  // The brain its profile names, which its prompt says it may propose new drafts to (ADR-025 step 5).
+  const brain = isConsolidator(a) ? (await import("../context/consolidate")).brainOf((a.spec as { context?: import("../../packages/plugin/src/context-layer").ContextSpec } | null)?.context) : null;
+  const consolidate = isConsolidator(a) && !review && !report ? { inputs: exec && mode !== "script" ? await consolidationInputs(runId) : "", ...(brain ? { brain } : {}) } : null;
   // Children branch from the run's target (a staging branch) when the operator set one.
   const target = await runTarget(runId);
   // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
@@ -1059,12 +1061,47 @@ async function consolidatedOf(runId: string, a: ScopeAgent, declared: Record<str
     const changes = st.applied.filter((x) => x.op !== "duplicate").length;
     const text = st.sha
       ? `Staged ${changes} memory change${changes === 1 ? "" : "s"} on ${st.branch} (${st.applied.map((x) => (x.op === "supersede" ? `supersede ${x.target} with ${x.id}` : `${x.op} ${x.id}`)).join(", ")})${st.refused.length ? `; ${st.refused.length} refused` : ""}.`
-      : `Nothing to stage: ${st.applied.length ? "the project's memory says it already" : st.refused.length ? `all ${st.refused.length} of its changes were refused` : "it gave no changes"}.`;
-    return { staged: st, error: null, result: { ...summary(text), context: { applied: st.applied, refused: st.refused.map(({ n, reason }) => ({ n, reason })), ignored: st.ignored, lint: { errors: st.lint.errors.length, warnings: st.lint.warnings } } } };
+      : `Nothing to stage: ${st.applied.length ? "the project's memory says it already" : st.refused.length ? `all ${st.refused.length} of its changes were refused` : st.brain.proposals.length ? "its changes are all for the brain" : "it gave no changes"}.`;
+    const brain = await brainProposalsOf(runId, a, st.brain);
+    return { staged: st, error: null, result: { ...summary(brain ? `${text} ${brain.text}` : text), context: { applied: st.applied, refused: [...st.refused, ...st.brain.refused].sort((x, y) => x.n - y.n).map(({ n, reason }) => ({ n, reason })), ignored: st.ignored, lint: { errors: st.lint.errors.length, warnings: st.lint.warnings }, ...(brain ? { brain: brain.result } : {}) } } };
   } catch (e) {
     const error = `its memory changes could not be staged: ${String((e as Error)?.message ?? e).slice(0, 500)}`;
     return { staged: { sha: null }, error, result: { error, context: { applied: [], refused: [], ignored: [] } } };
   }
+}
+
+/**
+ * A consolidator's proposals to the brain its profile names (ADR-025 step 5, src/context/brain-proposals.ts), kept when
+ * it was staged: under `review: lint` sent now, as capcomd, each a draft on the run's proposal branch of the brain's
+ * repository and a pull request there; under `review: human` (the default) they wait for a person to send them, as
+ * themselves. What its result says of them (`context.brain`), and a sentence for its summary. null: it proposed none.
+ */
+async function brainProposalsOf(runId: string, a: ScopeAgent, b: import("../context/consolidator").StagedBranch["brain"]) {
+  if (!b.name || !b.proposals.length) return null;
+  const n = b.proposals.length;
+  const listed = b.proposals.map(({ n: k, title, type }) => ({ n: k, title, type }));
+  const lint = (a.spec as { context?: { review?: string } } | null)?.context?.review === "lint";
+  if (!lint) {
+    return {
+      result: { name: b.name, proposals: listed, awaits: "person" as const, sent: [] },
+      text: `${n} proposal${n === 1 ? "" : "s"} to brain ${b.name} wait${n === 1 ? "s" : ""} for a person: capcomd context brain propose --run ${runId} --yes`,
+    };
+  }
+  const { sendBrainProposals, LINT_SEND_BUDGET_MS } = await import("../context/brain-proposals");
+  // Kept already: a send that can't even start leaves them for a person, never fails the memory staged on the branch.
+  // Bounded as a whole (the settle step it runs in has its own deadline); what is left is sent with the command.
+  const sent = await sendBrainProposals(runId, { agentId: a.agentId, by: { kind: "agent", agentId: a.agentId, runId }, budgetMs: LINT_SEND_BUDGET_MS }).catch((e: unknown) => e as Error);
+  if (sent instanceof Error) {
+    return {
+      result: { name: b.name, proposals: listed, awaits: "person" as const, sent: [], error: String(sent.message ?? sent).slice(0, 500) },
+      text: `${n} proposal${n === 1 ? "" : "s"} to brain ${b.name} couldn't be sent (${String(sent.message ?? sent).slice(0, 200)}): send ${n === 1 ? "it" : "them"} with capcomd context brain propose --run ${runId} --yes`,
+    };
+  }
+  const ok = sent.filter((x) => x.ok);
+  return {
+    result: { name: b.name, proposals: listed, awaits: null, sent: sent.map((x) => (x.ok ? { id: x.id, item: x.item, where: x.where } : { id: x.id, error: x.error })) },
+    text: `Proposed ${ok.length} of ${n} to brain ${b.name}${ok[0]?.where ? ` (${ok[0].where})` : ""}${ok.length < n ? `; the rest can be sent again with capcomd context brain propose --run ${runId} --yes` : ""}.`,
+  };
 }
 
 async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`, seen: EngineSeen = {}): Promise<ScopeAgent> {
