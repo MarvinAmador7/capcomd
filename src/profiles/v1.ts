@@ -77,7 +77,7 @@ export const providerEfforts = (p: Provider): readonly string[] => agentSeam(p)?
 /** The level a provider's CLI uses when none is set, when it is fixed (codex: medium); null: the CLI decides (claude: by model). */
 export const providerDefaultEffort = (p: Provider): string | null => agentSeam(p)?.describe().defaultEffort ?? null;
 
-/** JSON Schema (draft 2020-12) for `.capcomd/agents.json`; `capcomd agents schema` prints it. */
+/** JSON Schema (draft 2020-12) for `.capcomd/agents.json`; `capcomd profiles schema v1` prints it. */
 export const AGENTS_JSON_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://capcomd.dev/schema/agents-v1.json",
@@ -244,7 +244,7 @@ export function leadText(s: Pick<AgentSpec, "children">): string | null {
 
 /**
  * What `toolMode: orchestrate` means for whoever gives the agent a task (plugin API §16.1), in plain words: the
- * profile descriptions (capcomd_profiles, `capcomd agents list`), the planner's brief and the orchestration skill say it.
+ * profile descriptions (capcomd_profiles, `capcomd profiles list`), the planner's brief and the orchestration skill say it.
  */
 export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, git history and any branch, every agent's logs, verify and merge reports with their full check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs it to run code itself (its helpers write and test the code). Checks run at verify and merge, and their results are readable; capcomd check runs them on the combined code when it asks";
 
@@ -257,7 +257,7 @@ export function readOnlyTools(allowed: readonly string[] | undefined): boolean {
   return !!allowed?.length && !allowed.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\((:?\*)?\))?$/.test(t.trim()));
 }
 
-/** What a profile is for, in plain words (capcomd_profiles, `capcomd agents list`). */
+/** What a profile is for, in plain words (capcomd_profiles, `capcomd profiles list`). */
 export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & { toolMode?: string }): string {
   const lead = leadText(s);
   const mode = s.toolMode === "orchestrate" ? `. ${ORCHESTRATE_TEXT}` : "";

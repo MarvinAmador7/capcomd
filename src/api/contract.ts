@@ -3,7 +3,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentProvider, AgentResult, AgentTitleSource, HeldBy, LegacyEventData, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, AgentTitleSource, HeldBy, LegacyEventData, PROFILE_SOURCE_TEXT, PROFILE_VERSION_TEXT, ProfileSource, ProfileVersion, UntrustedText } from "./legacy-events";
 import { RENAME_WINDOW_MS, RENAMES_MAX, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
@@ -96,6 +96,8 @@ export const Agent = z.object({
 	parent: z.string().nullable(),
 	depth: z.number().int(),
 	profile: ProfileName.nullable(),
+	profileVersion: ProfileVersion.nullable().optional().describe(`${PROFILE_VERSION_TEXT}. null without a profile (a fake agent, CAPCOMD_AGENT naming a provider) or for an agent spawned before capcomd recorded it. Older daemons don't send it`),
+	profileSource: ProfileSource.nullable().optional().describe(`${PROFILE_SOURCE_TEXT}. null when profileVersion is. Older daemons don't send it`),
 	status: AgentStatus,
 	text: z.string().describe("Plain-language status line written by the daemon (trusted)"),
 	activity: AgentActivity.nullable().describe("What it is doing now (or, once it stopped, the last thing it did); null until it reports a step. Live updates: agent.activity_changed with ?activity=1 on a run stream"),
@@ -480,6 +482,7 @@ export const CAPABILITIES = {
 	"agents.title": "Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled",
 	"agents.thread_tail": "GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages",
 	plugins: "GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; plugin.* events on the daemon stream audit the plugin host",
+	profiles: "GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there",
 	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
@@ -615,6 +618,49 @@ export const PluginSummary = z.object({
 export const Plugins = z.object({ plugins: z.array(PluginSummary).describe("In load order, then the plugins that didn't load, in the order they were discovered") });
 export const PLUGINS_DOC = "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. " +
 	"This capcomd ships no plugins yet, so the list is empty until it does.";
+/** GET /v1/profiles (capability profiles): ADR-024 §5, the rows `capcomd profiles list --json` lists. */
+const ProfileLayerName = z.string().describe("A layer profiles are found in, highest first: project (the project's .capcomd/profiles/ and its agents.json), user (~/.capcomd/profiles/, or the user's agents.json), bundled (shipped with capcomd). More may be added (installed packages): treat one you don't know as user");
+export const ProfileFile = z.object({
+	as: z.enum(["extends", "profile", "override"]).describe("What the file is to the profile: one of its `extends` ancestors (or an ancestor's override), the profile itself, or an override.yaml laid over it"),
+	name: ProfileName.describe("The profile the file defines or overrides"),
+	layer: ProfileLayerName,
+	path: z.string().nullable().describe("The file on the daemon's machine (a profile.yaml, <name>.yaml, override.yaml, or the agents.json holding the entry); null for a profile bundled with capcomd"),
+});
+export const ProfileSummary = z.object({
+	name: ProfileName,
+	version: z.number().int().positive().describe("Its `version` (1 when its file sets none, and for every agents.json entry)"),
+	source: ProfileLayerName.describe("The layer it was found in (an override from a higher layer may change it): today project, user or bundled. Treat one you don't know as user"),
+	format: z.enum(["v1", "v2"]).describe("v1: an entry of an agents.json; v2: a profile file (profile.yaml)"),
+	path: z.string().nullable().describe("The file that defines it, on the daemon's machine; null for a profile bundled with capcomd"),
+	default: z.boolean().describe("What a run or a spawn that names no profile uses"),
+	description: UntrustedText.nullable().describe("Agent-written text: render as plain text, never markdown, links or actions. Its description as its file says it (a project's profile files are in its repository, which agents change); null when it has none"),
+	tags: z.array(z.string()).describe("Its tags as its file says them (lowercase words); empty when it has none"),
+	provider: z.string().describe("The agent provider it runs on, by its plugin's name: claude or codex today (GET /v1/plugins lists the active ones)"),
+	auth: z.enum(["apikey", "subscription"]).describe("How its agents log in: an API key, or a plan login (`capcomd auth login`)"),
+	model: z.string().nullable().describe("Its model; null: the provider CLI's default"),
+	effort: z.string().nullable().describe("Its reasoning effort (one of its provider's levels, GET /v1/run-options `efforts`); null: the provider CLI's default"),
+	toolMode: z.enum(["execute", "orchestrate"]).describe("orchestrate: it sees everything and runs nothing (no edits, builds or tests); the agents it spawns do the work"),
+	canSpawn: z.boolean().describe("It may spawn agents of its own"),
+	canLead: z.string().nullable().describe("Who it spawns when it leads a part, in plain words written by the daemon, e.g. \"up to 3 worker helpers, one level\"; null when it can't lead"),
+	does: z.string().describe("What it is for, one sentence written by the daemon from its settings (never from its description)"),
+	ready: z.boolean().describe("Its login is there for the daemon's own sandbox (a plan login, or the API key); GET /v1/logins has every sandbox's"),
+	readiness: z.string().describe("Why it is ready or not, one short sentence written by the daemon (never a credential), e.g. \"not logged in: capcomd auth login claude\""),
+	applied: z.array(ProfileFile).describe("The files laid together to make it, first to last (a later one wins): its `extends` ancestors (root first), itself, then its overrides (the user's, then the project's)"),
+});
+export const Profiles = z.object({
+	file: z.string().describe("The agents.json the profiles are read with, on the daemon's machine (it may not exist); the profiles/ folder beside it is the project's layer"),
+	layers: z.array(z.object({ layer: ProfileLayerName, dir: z.string().describe("Where that layer's profile files are, on the daemon's machine (it may not exist)") })).describe("The folders profiles are looked up in, highest first (the bundled layer has none)"),
+	default: ProfileName.nullable().describe("The default profile; null when none is set"),
+	profiles: z.array(ProfileSummary).describe("Every profile, in a stable order: the agents.json's, then each layer's profile files, highest first. Empty when `error` is set"),
+	warnings: z.array(z.string()).describe("What works but may not be meant, one sentence each, as `capcomd profiles validate` prints them: a profile file hiding an agents.json entry, an override that doesn't apply, a block this capcomd reads but doesn't use yet"),
+	error: z.string().nullable().describe("Why the profiles can't be used, as `capcomd profiles validate` says it (every problem, naming each file, never a file's text); `profiles` is then empty, and a run that needs a profile is refused. null when they can be"),
+});
+export const PROFILES_DOC = "Capability profiles. Every agent profile a run can use, as `capcomd profiles list --json` lists them: the daemon's, or with `repo` a project's, as POST /v1/runs with the same `repo` resolves them. Needs the `read` scope. Local files only, so poll it freely. Never contains a credential or a prompt; `capcomd profiles show <name>` prints which file set each value. " +
+	"422 `invalid` when `repo` isn't a project checkout, with the message POST /v1/runs gives; profiles that can't be read are a 200 with `error`.";
+export const ProfilesQuery = z.object({
+	repo: z.string().refine((p) => p.startsWith("/"), "repo must be an absolute path").optional()
+		.describe("Absolute path of a project checkout on the daemon's machine, as POST /v1/runs `repo`: that project's profiles. Omitted: the daemon's own."),
+});
 export const SERVICE_DOC = "Capability service. Whether capcomd runs as a background service. Needs the `read` scope. Reads the service definition, and asks launchd (systemd) whether it is loaded at most every few seconds, for at most a second.";
 
 
@@ -1080,6 +1126,9 @@ export const contract = {
 	},
 	plugins: {
 		list: oc.route({ method: "GET", path: "/v1/plugins", description: PLUGINS_DOC }).output(Plugins),
+	},
+	profiles: {
+		list: oc.route({ method: "GET", path: "/v1/profiles", description: PROFILES_DOC }).input(ProfilesQuery).output(Profiles),
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),

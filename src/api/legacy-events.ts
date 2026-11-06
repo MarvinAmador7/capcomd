@@ -52,6 +52,14 @@ export const AgentResult = z.looseObject({
 const finish = { result: AgentResult, spent: U, budget: U };
 /** Which AI provider an agent runs on (harness.v1 Agent.provider, agent.spawned agent.provider). */
 export const AgentProvider = z.enum(["claude", "codex"]);
+/** Where an agent's profile came from (harness.v1 Agent.profileSource, agent.spawned profileSource; ADR-024 §2.3): the
+ *  layer its name was found in. Same values as `src/profiles/load.ts` ProfileLayer. */
+export const ProfileSource = z.enum(["project", "user", "bundled"]);
+/** Agent.profileVersion, agent.spawned profileVersion (ADR-024 §2.4). */
+export const ProfileVersion = z.number().int().positive();
+/** The descriptions both carry (a description on the nullable field replaces the inner one in the published schema). */
+export const PROFILE_VERSION_TEXT = "The version of its profile the agent was spawned with: the profile's `version`, else 1 (an agents.json profile is 1). Fixed at spawn, so it says what the agent runs with whatever the profile says now";
+export const PROFILE_SOURCE_TEXT = "The layer its profile was found in at spawn: project (the project's .capcomd/profiles/ or .capcomd/agents.json), user (~/.capcomd/profiles/ or the user's agents.json) or bundled (shipped with capcomd). More may be added: show an unknown one as it is";
 /** agent.spawned `agent`: the agent's profile as resolved at spawn (provider, auth, limits, …) plus the runner the daemon
  * chose. Open: other profile fields come along, and may be added. */
 export const SpawnedAgent = z.looseObject({
@@ -114,7 +122,10 @@ export const LegacyEventShapes = {
 	"run.pr_opened": { branch: S, base: S, number: N.describe("The pull request's number on GitHub"), url: nS.describe("Its page on GitHub"), by: S.describe("Who opened it: client:<id>, operator or driver"), ...cause },
 	"run.branch_kept": { branch: S, base: S, by: S.describe("Who chose to keep it: client:<id>, operator or driver"), ...cause },
 	"run.titled": { title: AgentTitleText.describe(`Agent-written text: render as plain text, never markdown, links or actions. The run's new title from its planner (\`capcomd title --run\`): Run.title with titleSource agent, unless the run has a label of its own. 1 to ${TITLE_WORDS_MAX} lowercase words`), setBy: S.describe("The agent that named the run (its planner)"), ...cause },
-	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(),
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"),
+		profileVersion: ProfileVersion.nullable().optional().describe(`${PROFILE_VERSION_TEXT} (Agent.profileVersion). null without a profile (a fake agent, or CAPCOMD_AGENT naming a provider). Absent from older daemons`),
+		profileSource: ProfileSource.nullable().optional().describe(`${PROFILE_SOURCE_TEXT} (Agent.profileSource). null without a profile. Absent from older daemons`),
+		budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(),
 		title: AgentTitleText.optional().describe("Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title: its title at spawn (Agent.title): its spawner's (`spawn --title`; agent.titled follows), else derived from the task. Absent when it has none, and from older daemons"),
 		titleSource: AgentTitleSource.optional(), ...cause },
 	"agent.started": { ...cause },

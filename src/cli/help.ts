@@ -24,7 +24,19 @@ Usage:
   capcomd env build [--force]            Bake agent CLIs + repo deps into a snapshot (no secrets)
   capcomd env status | env rm [name|all] List / delete env snapshots (env, auth, doctor: --sandbox docker|boxd
                                        works on that sandbox instead of CAPCOMD_SANDBOX)
-  capcomd agents list|show|add|set|rm|schema|validate
+  capcomd profiles list|show|add|set|rm|schema|validate
+                                       Named agent profiles: .capcomd/agents.json, and profile files
+                                       (profile.yaml) in .capcomd/profiles/ and ~/.capcomd/profiles/ (docs/agents.md).
+                                       show <name>: the files laid together and which one set each value;
+                                       schema: a profile file's JSON Schema (schema v1: agents.json's).
+                                       add, set and rm edit agents.json: provider, auth
+                                       (apikey|subscription, exactly one), model, limits, prompts, tools.
+                                       add/set flags: --provider --auth --model --effort --max-turns --budget
+                                       --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
+                                       --append-system-prompt --allowed-tools --disallowed-tools
+                                       --description --default --spec JSON --unset k1,k2
+  capcomd agents …                     The old name of capcomd profiles, until the next minor release
+                                       (agents schema: agents.json's; agents list --json: the rows under "agents")
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
                                            onto the run's goal branch: --goal-branch G (default: capcomd/<goal-slug>), cut
@@ -82,12 +94,6 @@ Usage:
                                        comment): deduped, denied, recorded (observe mode: what would have run), started
                                        or continued a run  ·  capcomd triggers subscriptions [runId] [--source S]: the
                                        threads runs follow (settings: \`triggers.sources.<source>\` in ~/.capcomd/config.json)
-                                       Named agent profiles (.capcomd/agents.json): provider, auth
-                                       (apikey|subscription, exactly one), model, limits, prompts, tools.
-                                       add/set flags: --provider --auth --model --effort --max-turns --budget
-                                       --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
-                                       --append-system-prompt --allowed-tools --disallowed-tools
-                                       --description --default --spec JSON --unset k1,k2
   capcomd auth login claude|codex        Log in with your Claude/ChatGPT plan in a VM; saves a private auth profile
   capcomd auth status [agent] [--quick]  Verify saved logins   |   capcomd auth logout claude|codex
   capcomd secrets sync                   Store local ANTHROPIC/OPENAI keys as boxd host-bound secrets

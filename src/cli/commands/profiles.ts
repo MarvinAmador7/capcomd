@@ -1,10 +1,11 @@
-// capcomd agents add|set|list|show|rm|schema|validate — named agent profiles (.capcomd/agents.json). list, show and
-// validate read every profile the project sees (v2 ones in .capcomd/profiles/ and ~/.capcomd/profiles/ too, ADR-024);
-// add, set and rm edit the agents file.
+// capcomd profiles list|show|add|set|rm|schema|validate — named agent profiles (ADR-024 §5). list, show and validate read
+// every profile the project sees (.capcomd/agents.json, and the v2 ones in .capcomd/profiles/ and ~/.capcomd/profiles/);
+// show prints the files laid together and which one set each value; add, set and rm edit the agents file.
+// `capcomd agents …` is the same command under its old name, for one minor release.
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { abilityText, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, leadText, profileFacts, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../../profiles";
-import { credentialModeFor, loadAgentConfig } from "../../agents/config";
+import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, notApplied, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile } from "../../profiles";
+import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
 
@@ -53,20 +54,32 @@ export function readiness(name: string, spec: AgentSpec, source = process.env) {
   return { ready: !!p, detail: p ? `logged in (${p.store === "secret" ? "boxd secret" : p.snapshot})` : `not logged in: capcomd auth login ${spec.provider}` };
 }
 
-export async function agentsCommand(pos: string[], values: Record<string, any>): Promise<number> {
+/** A value as `show` prints it: a string as written (its first line, cut at 48 characters), anything else as JSON. */
+function shown(v: unknown): string {
+  const t = typeof v === "string" ? v : JSON.stringify(v);
+  const line = t.split("\n")[0]!;
+  return line.length > 48 ? `${line.slice(0, 47)}…` : line === t ? t : `${line}…`;
+}
+const appliedText = (a: AppliedFile) => `${a.as.padEnd(8)} ${a.name.padEnd(16)} ${a.layer.padEnd(7)} ${a.path ?? "(bundled with capcomd)"}`;
+
+/** `as`: the name it was run under; `capcomd agents` keeps its old outputs where they differ (list's `agents`, schema). */
+export async function profilesCommand(pos: string[], values: Record<string, any>, as: "profiles" | "agents" = "profiles"): Promise<number> {
   const json = !!values.json;
+  const cmd = `capcomd ${as}`;
   const out = (obj: Record<string, unknown>, text: string) => console.log(json ? JSON.stringify({ schema: SCHEMA, ok: true, ...obj }) : text);
+  if (as === "agents" && !json) console.error("capcomd agents is now capcomd profiles (the same commands; `capcomd agents` stays until the next minor release)");
   const sub = pos[1] ?? "list";
   const name = pos[2];
   const path = agentsFilePath();
-  const need = () => { if (!name) throw new RelayError("usage", `usage: capcomd agents ${sub} <name>`, ""); return name; };
-  const guard = <T>(f: () => T): T => { try { return f(); } catch (e) { if (e instanceof AgentConfigError) throw new RelayError("config", e.message, `Fix ${path} or use \`capcomd agents set\`.`); throw e; } };
+  const need = () => { if (!name) throw new RelayError("usage", `usage: ${cmd} ${sub} <name>`, ""); return name; };
+  const guard = <T>(f: () => T): T => { try { return f(); } catch (e) { if (e instanceof AgentConfigError) throw new RelayError("config", e.message, `Fix the file it names (${path} or a profile file), or use \`${cmd} set\` for agents.json.`); throw e; } };
   // A v2 profile (a profile.yaml) isn't in the agents file: these commands don't edit it.
   const v2File = (n: string) => { try { const r = readProfiles(path).profiles[n]; return r?.format === "v2" ? r.path ?? "capcomd's bundled profiles" : null; } catch { return null; } };
 
   switch (sub) {
     case "schema":
-      console.log(JSON.stringify(AGENTS_JSON_SCHEMA, null, json ? 0 : 2));
+      // A profile file's (profile.yaml); agents.json's for `capcomd agents schema` and `capcomd profiles schema v1`.
+      console.log(JSON.stringify(as === "agents" || name === "v1" ? AGENTS_JSON_SCHEMA : PROFILE_JSON_SCHEMA, null, json ? 0 : 2));
       return 0;
     case "validate": {
       let warnings: string[] = [];
@@ -76,22 +89,36 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
     }
     case "list": {
       const f = guard(() => readProfiles(path));
-      const rows = Object.entries(f.agents).map(([n, s]) => ({ name: n, provider: s.provider, auth: s.auth, model: s.model ?? null, default: f.default === n, canSpawn: !!s.children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...profileFacts(f.profiles[n]!), ...readiness(n, s) }));
-      out({ file: path, default: f.default ?? null, agents: rows }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title, r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") : `no agents (${path}); add one: capcomd agents add <name> --provider claude|codex --auth apikey|subscription`);
+      const rows = profileRows(f).map((r) => ({ ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!) }));
+      const warned = f.warnings.length ? `\n(${f.warnings.length} warning${f.warnings.length === 1 ? "" : "s"}: \`${cmd} validate\` lists ${f.warnings.length === 1 ? "it" : "them"})` : "";
+      out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title, r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
       return 0;
     }
     case "show": {
       const n = need();
       const f = guard(() => readProfiles(path));
-      const spec = Object.hasOwn(f.agents, n) ? f.agents[n] : undefined;
-      if (!spec) throw new RelayError("not_found", `agent "${n}" not found`, "capcomd agents list");
+      const r = Object.hasOwn(f.profiles, n) ? f.profiles[n] : undefined;
+      if (!r) throw new RelayError("not_found", `profile "${n}" not found`, `${cmd} list`);
+      const spec = r.spec;
       let effective: unknown = null, error: string | null = null;
       try {
         const c = loadAgentConfig(process.env, n);
         effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
-      const facts = profileFacts(f.profiles[n]!);
-      out({ name: n, default: f.default === n, spec, effective, error, ...facts, ...readiness(n, spec) }, JSON.stringify({ name: n, ...facts, spec, effective, error }, null, 2));
+      const facts = profileFacts(r), vals = profileValues(r), unused = notApplied(r.manifest), ready = readiness(n, spec), isDefault = f.default === n;
+      const text = [
+        `${n}: version ${r.version}, found in ${{ project: "the project's profiles", user: "your profiles", bundled: "capcomd's bundled profiles" }[r.source]}${isDefault ? ", the default" : ""}`,
+        ...(facts.title || facts.tags.length ? [[facts.title, facts.tags.length ? `tags: ${facts.tags.join(", ")}` : null].filter(Boolean).join(" · ")] : []),
+        `Fit: ${facts.fit}`,
+        "Files, first to last (a later one wins):",
+        ...r.applied.map((a, i) => `  ${String(i + 1).padStart(2)}  ${appliedText(a)}`),
+        "Values (the number is the file that set it):",
+        ...vals.map((v) => `  ${v.path.padEnd(30)} ${shown(v.value).padEnd(48)} ${v.from ? r.applied.indexOf(v.from) + 1 : "-"}`),
+        ...(unused.length ? [`Read but not used yet by this capcomd: ${unused.join(", ")}`] : []),
+        error ? `Effective config: ${error}` : `Effective config (with capcomd's defaults): ${JSON.stringify(effective)}`,
+        `${ready.ready ? "Ready" : "NOT READY"}: ${ready.detail}`,
+      ].join("\n");
+      out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, effective, error, ...ready }, text);
       return error ? 1 : 0;
     }
     case "add":
@@ -99,9 +126,9 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
       const n = need();
       const f = guard(() => readAgentsFile(path));
       const v2 = v2File(n);
-      if (v2 && !f.agents[n]) throw new RelayError(sub === "add" ? "conflict" : "usage", `profile "${n}" is defined in ${v2}, which \`capcomd agents ${sub}\` doesn't edit`, `Edit ${v2}.`);
-      if (sub === "add" && f.agents[n]) throw new RelayError("conflict", `agent "${n}" already exists`, `capcomd agents set ${n} …`);
-      if (sub === "set" && !f.agents[n]) throw new RelayError("not_found", `agent "${n}" not found`, `capcomd agents add ${n} …`);
+      if (v2 && !f.agents[n]) throw new RelayError(sub === "add" ? "conflict" : "usage", `profile "${n}" is defined in ${v2}, which \`${cmd} ${sub}\` doesn't edit`, `Edit ${v2}.`);
+      if (sub === "add" && f.agents[n]) throw new RelayError("conflict", `profile "${n}" already exists`, `${cmd} set ${n} …`);
+      if (sub === "set" && !f.agents[n]) throw new RelayError("not_found", `profile "${n}" not found`, `${cmd} add ${n} …`);
       const next: Record<string, unknown> = { ...(f.agents[n] ?? {}), ...specFromFlags(values) };
       for (const k of list(values.unset) ?? []) delete next[k];
       const errs = validateSpec(n, next);
@@ -116,8 +143,8 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
       const n = need();
       const f = guard(() => readAgentsFile(path));
       const v2 = v2File(n);
-      if (v2 && !f.agents[n]) throw new RelayError("usage", `profile "${n}" is defined in ${v2}, which \`capcomd agents rm\` doesn't edit`, `Remove ${v2}.`);
-      if (!f.agents[n]) throw new RelayError("not_found", `agent "${n}" not found`, "capcomd agents list");
+      if (v2 && !f.agents[n]) throw new RelayError("usage", `profile "${n}" is defined in ${v2}, which \`${cmd} rm\` doesn't edit`, `Remove ${v2}.`);
+      if (!f.agents[n]) throw new RelayError("not_found", `profile "${n}" not found`, `${cmd} list`);
       const { [n]: _, ...rest } = f.agents;
       const file = { ...f, agents: rest, default: f.default === n ? Object.keys(rest)[0] : f.default };
       if (!file.default) delete (file as any).default;
@@ -126,5 +153,5 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
       return 0;
     }
   }
-  throw new RelayError("usage", "usage: capcomd agents list|show|add|set|rm|schema|validate", "");
+  throw new RelayError("usage", `usage: ${cmd} list|show|add|set|rm|schema|validate`, "");
 }

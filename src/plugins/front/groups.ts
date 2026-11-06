@@ -53,7 +53,10 @@ export const FRONT_PROFILES = kernelGroup({
   name: "front-profiles",
   description: "The CLI's agent profiles: list, show, add, change, remove and validate the named profiles agents are spawned with.",
   load: async () => (await import("../../cli/groups/profiles")).COMMANDS,
-  commands: [{ name: "agents", summary: "Agent profiles: list, show, add, set, rm, schema, validate" }],
+  commands: [
+    { name: "profiles", summary: "Agent profiles: list, show (where each value came from), add, set, rm, schema, validate" },
+    { name: "agents", summary: "The old name of profiles, until the next minor release" },
+  ],
 });
 
 export const FRONT_ENV = kernelGroup({
