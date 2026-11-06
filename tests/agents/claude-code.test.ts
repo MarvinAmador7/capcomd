@@ -366,7 +366,7 @@ describe("agent config, redaction, credentials, egress", () => {
     const { claudeAdapter } = await import("../../src/agents/adapters");
     const { claudeCostUsd } = await import("../../src/agents/config");
     const r = new Redactor([]);
-    const st = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
+    const st: import("../../src/agents/types").AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     const msg = (id: string, model: string, u: Record<string, number>) => JSON.stringify({ type: "assistant", message: { id, model, usage: u, content: [{ type: "text", text: "x" }] } });
     const u1 = { input_tokens: 1000, cache_creation_input_tokens: 2000, cache_read_input_tokens: 10_000, output_tokens: 500 };
     claudeAdapter.parse(msg("m1", "claude-opus-5-5", u1), r, st, {} as any);
@@ -374,11 +374,14 @@ describe("agent config, redaction, credentials, egress", () => {
     // opus 5.5: 1000×$4 + 2000×$5 (write 1.25×) + 10000×$0.20 + 500×$20, per Mtok
     expect(st.costUsd).toBeCloseTo((4000 + 10_000 + 2000 + 10_000) / 1e6, 9);
     expect(st.inputTokens).toBe(13_000);
+    // Cache reads apart, and the model the CLI reported (on the agent span: the context eval reads both).
+    expect([st.cacheReadTokens, st.model]).toEqual([10_000, "claude-opus-5-5"]);
     claudeAdapter.parse(msg("m2", "claude-haiku-5-5", { input_tokens: 1_000_000, output_tokens: 0 }), r, st, {} as any);
     expect(st.costUsd).toBeCloseTo(0.026 + 0.1, 9);
     expect(claudeCostUsd({ model: "claude-something-new", input: 1e6, cacheWrite: 0, cacheRead: 0, output: 0 })).toBe(5); // unknown: priced high
-    claudeAdapter.parse('{"type":"result","subtype":"success","total_cost_usd":0.2,"num_turns":2,"usage":{}}', r, st, {} as any);
+    claudeAdapter.parse('{"type":"result","subtype":"success","total_cost_usd":0.2,"num_turns":2,"usage":{"input_tokens":5,"cache_read_input_tokens":40}}', r, st, {} as any);
     expect(st.costUsd).toBe(0.2);
+    expect([st.inputTokens, st.cacheReadTokens, st.model]).toEqual([45, 40, "claude-haiku-5-5"]);
   });
 
   test("CAPCOMD_AGENT selects claude-code; default stays fake", () => {

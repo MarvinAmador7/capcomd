@@ -82,8 +82,8 @@ jobs:
           retention-days: 14
 
   # The deterministic evals (fakes: no VMs, no models): the primitives' recipes (correctness; their latency against
-  # evals/primitives/baseline.json, a developer machine's, is printed but doesn't fail on a shared runner), and
-  # `capcomd run --recipe` against `--legacy` on the same goals.
+  # evals/primitives/baseline.json, a developer machine's, is printed but doesn't fail on a shared runner),
+  # `capcomd run --recipe` against `--legacy` on the same goals, and the context eval's harness.
   evals:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -104,6 +104,12 @@ jobs:
 
       - name: Recipe parity eval
         run: bun evals/recipe-parity/run.ts
+
+      # ADR-025 §12: the context eval's harness on the fake sandbox with its scripted agent (every runnable arm, every
+      # task chain, the hidden checkers through `capcomd check`, the metrics); --expect fails on any verdict the fake
+      # agent's policy doesn't produce. The live baselines per model are in docs/evidence/context/.
+      - name: Context eval (fake sandbox and agent)
+        run: bun scripts/eval-context.ts --seed 1 --expect --port 6571
 
   # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
   # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that

@@ -8,6 +8,7 @@ import { runAgent, AgentError, parseDetect } from "../../src/agents/runner";
 import { codexAdapter, claudeAdapter, adapterFor } from "../../src/agents/adapters";
 import { loadAgentConfig, agentFromEnv, agentEgress, CODEX_VERSION } from "../../src/agents/config";
 import { Redactor } from "../../src/agents/redact";
+import type { AgentRunState } from "../../src/agents/types";
 import { getFinishedSpans, resetSpans } from "../../src/utils/tracing-simple";
 import { taskBranch } from "../../src/merge/config";
 import { Git } from "../../src/merge/git";
@@ -144,6 +145,11 @@ describe("codex adapter (fake codex exec --json)", () => {
     const bad = codexAdapter.parse('{"type":"item.completed","item":{"type":"command_execution","command":"npm test","exit_code":1,"status":"failed","aggregated_output":"1 failing: expected 3"}}', r, st, cfg)!;
     expect(bad.results).toEqual([{ call: 'command "npm test"', error: "1 failing: expected 3" }]);
     expect(codexAdapter.parse('{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}', r, st, cfg)!.calls).toBeUndefined();
+    // Usage per turn, cached input counted apart (the context eval's cache ratio): two turns add up.
+    const tu: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
+    codexAdapter.parse('{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":600,"output_tokens":50}}', r, tu, cfg);
+    codexAdapter.parse('{"type":"turn.completed","usage":{"input_tokens":2000,"cached_input_tokens":1500,"output_tokens":70}}', r, tu, cfg);
+    expect([tu.inputTokens, tu.cacheReadTokens]).toEqual([3000, 2100]);
     expect(agentFromEnv({ CAPCOMD_AGENT: "codex" })).toBe("codex");
     expect([cfg.egress, cfg.codexSandbox]).toEqual([["*"], "danger-full-access"]); // unrestricted unless a profile narrows it
     expect(adapterFor("codex").secretName).toBe("OPENAI_API_KEY");

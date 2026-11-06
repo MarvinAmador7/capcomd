@@ -696,7 +696,9 @@ Replaces every place the kernel names a provider's error (`src/actors/worker.ts`
 (§16.1). Every method but `available` is pure; `parse` MUST pass every string through the `redact` it is given before
 returning it (today `Redactor.text`); `redactJson` (`packages/plugin/src/seams.ts`) does that to a parsed line with the
 kernel's own rule, a credential-named key's string replaced whole. The kernel keeps one `AgentRunState` object per run,
-so a provider may keep fields of its own on it between lines. The `AgentConfig` a provider reads has the kernel's
+so a provider may keep fields of its own on it between lines. A provider whose CLI reports them sets the optional
+`cacheReadTokens` (of `inputTokens`) and `model` (the model the CLI says it ran); the kernel puts them on the agent's
+span as `gen_ai.usage.cache_read.input_tokens` and `gen_ai.response.model`. The `AgentConfig` a provider reads has the kernel's
 `credentialMode` values (`auto` included) and `usdPerMtok`, the operator's token rates for a CLI that reports tokens and
 not cost, and `denyCommands`, the command prefixes an orchestrate agent's CLI must refuse (§16.1). The optional, pure
 `refusal(line, redact)` reads a tool call the CLI refused from one line of its stderr, for a CLI that reports refusals
@@ -1587,6 +1589,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.8 | 2026-11-05 | `merge.landing`'s `hold` takes an optional `holdId` (§6.6.15; additive): an approved hold is matched by plugin and `holdId`, falling back to the reason text without one; `heldBy.holdId` on the record and the approval. A plugin-held merge's approval carries the changed files, as a protected target's does. |
 | 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
 | 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
+| 1.0.11 | 2026-11-05 | With the context eval (ADR-025 step 0): §7.3's `AgentRunState` gains the optional `cacheReadTokens` and `model` (additive), which the kernel records on the agent's span (`gen_ai.usage.cache_read.input_tokens`, `gen_ai.response.model`): the eval's cache-read ratio and the model a result was measured on. |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 

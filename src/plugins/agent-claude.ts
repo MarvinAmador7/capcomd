@@ -104,6 +104,7 @@ export const claude: AgentProvider = {
     if (!raw) return null;
     const ev: AgentEvent = { type: String(raw.type ?? "unknown"), raw };
     if (raw.subtype) ev.subtype = String(raw.subtype);
+    if (ev.type === "system" && raw.subtype === "init" && typeof raw.model === "string") state.model = raw.model;
     const content = raw.message?.content;
     if (Array.isArray(content)) {
       const tool = content.find((c: any) => c?.type === "tool_use");
@@ -130,7 +131,9 @@ export const claude: AgentProvider = {
       // Turns, likewise: one per model response until the result's num_turns replaces the count.
       state.turns = all.length;
       state.inputTokens = all.reduce((x, v) => x + v.input + v.cacheWrite + v.cacheRead, 0);
+      state.cacheReadTokens = all.reduce((x, v) => x + v.cacheRead, 0);
       state.outputTokens = all.reduce((x, v) => x + v.output, 0);
+      if (typeof m.model === "string" && m.model !== "<synthetic>") state.model = m.model;
     }
     // Usage limit: a rejected rate_limit_event carries the reset (epoch s); the stop itself is a synthetic assistant
     // message and an is_error result with api_error "usage_limit_reached" (internal, so the text prefix too).
@@ -149,6 +152,7 @@ export const claude: AgentProvider = {
       // Tokens processed, cache reads/writes included (they are input the model consumed).
       const u = raw.usage ?? {};
       state.inputTokens = Number(u.input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0) + Number(u.cache_read_input_tokens ?? 0);
+      state.cacheReadTokens = Number(u.cache_read_input_tokens ?? 0);
       state.outputTokens = Number(u.output_tokens ?? 0);
       state.stopReason = String(raw.subtype ?? "result");
       if (raw.is_error) state.error = state.stopReason;
