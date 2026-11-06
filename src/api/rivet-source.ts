@@ -281,7 +281,8 @@ export function rivetSource(): HarnessSource {
 			return all.map((a) => {
 				const inl = inlineOrAttach(redactShapes(String(a.task ?? "")));
 				return {
-					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile), status: a.status,
+					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile),
+					profileVersion: a.profileVersion ?? null, profileSource: a.profileSource ?? null, status: a.status,
 					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
 					...agentRuntime(a.spec), createdAt: a.createdAt ? isoTs(a.createdAt) : null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,

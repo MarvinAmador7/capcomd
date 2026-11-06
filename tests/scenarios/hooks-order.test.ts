@@ -75,6 +75,8 @@ capcomd result --summary done >/dev/null`);
   const ended = at(of("agent.changed", child, "ended"), "agent.changed ended");
   // The resolved profile: the run's agents file is the project's layer (ADR-024 §2.3), a v1 entry is version 1.
   expect(all[resolved]!.profile).toEqual({ name: "worker", version: 1, source: "project" });
+  // The agent then carries it (Agent.profileVersion, profileSource), and its pinned spec names it (PinnedSpec.profile).
+  for (const i of [spawned, preparing, started, ended]) expect(all[i]!.profile).toEqual({ name: "worker", version: 1, source: "project" });
   expect(all[spawning]!.principal).toBe("agent");
   expect(all[spawning]!.agentId).toBe(child);
   expect(resolved).toBeLessThan(spawning);

@@ -486,6 +486,8 @@ export async function spawnAgent(o: SpawnOpts) {
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
     profile: resolved.name, ref: ref ?? resolved.name, spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
+    // ADR-024 §2.4: the version of the profile it runs with and where it came from, beside the spec they pinned.
+    profileVersion: resolved.profile?.version ?? null, profileSource: resolved.profile?.source ?? null,
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
     // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.
@@ -564,7 +566,8 @@ export function envSnapshotProblem(provider: unknown, source: Record<string, str
 
 export function view(a: ScopeAgent) {
   return {
-    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status, ...shownTitle(a.titleState, redactShapes(a.task)),
+    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile,
+    ...(a.profileVersion !== null ? { profileVersion: a.profileVersion, profileSource: a.profileSource } : {}), status: a.status, ...shownTitle(a.titleState, redactShapes(a.task)),
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
     ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...noticeView(a),
     ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),

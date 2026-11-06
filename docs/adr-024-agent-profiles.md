@@ -199,7 +199,7 @@ treats a distribution-owned `SOUL.md` that way).
   ones) and treated as a bump with a notice.
 - An agent records `profile: name`, `profileVersion`, and the resolved spec (the pin), so a run that outlives an edit
   shows what it actually ran with (`harness.v1` `Agent.profile`, `Agent.profileVersion`; both already planned in
-  harness-architecture.md §5.1).
+  harness-architecture.md §5.1), and the layer the profile came from (`Agent.profileSource`). Done in §7 step 3.
 - The schema id bumps only on a breaking change (`capcomd.profile/v3`); additions never bump. Unknown keys are refused,
   as today, except under `x-` (vendor extensions a plugin may read: `x-perfloop.gestures`).
 
@@ -328,7 +328,7 @@ Each step ships alone, with tests, and leaves every existing test green.
 2. **`capcomd profiles` CLI and `GET /v1/profiles`** (read-only), with `show` printing sources. `capcomd agents` becomes
    an alias. Tests: `tests/cli`, `tests/api/contract.test.ts` (new capability `profiles`), the generated
    `docs/harness-contract.md`.
-3. **Pin the version**: `agent.spawned` and `Agent` carry `profileVersion` and `source`. Tests:
+3. **Pin the version**: `agent.spawned` and `Agent` carry `profileVersion` and `source` (named `profileSource`, §9). Tests:
    `tests/scenarios/contract.test.ts`, `tests/api/agent-provider.test.ts`.
 4. **New blocks that need no new runtime**: `identity.title`, `tags`, `prompt.*` as files, `permissions.report`,
    `sharing`. `capcomd_profiles` returns `tags`, `fit`, `capacity`, `cost`. Test: `scripts/eval-team-shape.ts` before and
@@ -398,6 +398,21 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.
+
+Made while pinning the version (§7 step 3, 2026-11-05; `src/actors/scope.ts`, `src/api/contract.ts`):
+
+- **The field is `profileSource`, not `source`**, on `Agent` and on `agent.spawned`: a bare `source` next to `profile`,
+  `provider` and `workspace` doesn't say whose source it is. Its values are the layers (`project`, `user`, `bundled`;
+  more may be added, so a client shows an unknown one as it is). `profile.resolved` keeps `profile.source`.
+- **Both are optional and nullable**: absent from older daemons, null for an agent without a profile (a fake one, or
+  `CAPCOMD_AGENT` naming a provider) and for an agent spawned before they were recorded. An `agents.json` profile is
+  version 1.
+- **Fixed at the first spawn**: the scope stores them with the agent (two columns beside the pinned spec), outside the
+  spawn's params hash, so a keyed retry after an edit is the same spawn and keeps the version it was first recorded
+  with. The spec pin itself (what the agent runs with) is unchanged; the version says which profile text produced it.
+- **Where they show**: `Agent` (`GET /v1/runs/{runId}/agents`, `snapshot.agents`), `agent.spawned`, the plugin API's
+  `Agent` and `agent.preparing`'s `spec.profile`, and the CLI's `spawn`/`inspect`/`await --json` and the `inspect` line
+  (`[worker v3, project]`). The tree (`capcomd tree`) doesn't carry them.
 
 Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src/profiles/describe.ts`):
 
