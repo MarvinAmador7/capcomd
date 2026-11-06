@@ -14,6 +14,7 @@ import { FORBIDDEN_PORTS, GUARDED, REAL_CAPCOMD_HOME, forbiddenPorts, guardedRoo
 import { testPort } from "../helpers/engine";
 import { endpoint } from "../../src/core/relay";
 import { capcomdHome } from "../../src/utils/home";
+import { rpcKeyFile } from "../../src/subagents/token";
 
 const dir = mkdtempSync(join(tmpdir(), "capcomd-guard-"));
 const fence = join(dir, "fence"); // stands in for the real ~/.capcomd
@@ -43,7 +44,8 @@ test("the preload gives every test file a scratch home, a closed endpoint and no
   expect(capcomdHome()).not.toBe(REAL_CAPCOMD_HOME);
   expect(FORBIDDEN_PORTS as readonly number[]).not.toContain(Number(new URL(endpoint()).port));
   expect(process.env.CAPCOMD_NO_ENGINE_AUTOSTART).toBe("1");
-  expect(process.env.CAPCOMD_RPC_KEY_FILE?.startsWith(home)).toBe(true);
+  // The token signing key is the scratch home's, even when the developer's environment named a key file of its own.
+  expect(rpcKeyFile()).toBe(join(home, "rpc.key"));
   expect(process.env.BUN_OPTIONS).toContain("tests/helpers/guard-child.ts");
 });
 
