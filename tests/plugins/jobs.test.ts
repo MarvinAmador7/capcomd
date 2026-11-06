@@ -74,6 +74,12 @@ describe("a job's process in its machine (src/jobs/machine.ts)", () => {
     const m = { ...hostMachine(), node: "/nonexistent/node" };
     await expect(launch(m, "job-cccccc1", { cmd: ["true"], cwd: m.cwd })).rejects.toThrow(/no node in this machine/);
   });
+
+  test("a runner that doesn't start is a failed start, not a job that looks like it runs forever", async () => {
+    // A "node" that runs nothing: the runner never writes its pid.
+    const m = { ...hostMachine(), node: "/usr/bin/true" };
+    await expect(launch(m, "job-cccccc2", { cmd: ["sleep 1"], cwd: m.cwd })).rejects.toThrow(/the job's runner didn't start/);
+  }, 15_000);
 });
 
 describe("limits and messages", () => {

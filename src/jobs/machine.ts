@@ -1,7 +1,7 @@
 // A background job's process in its owner's machine (docs/spec/plugin-api.md §16.2): the agent's VM, or this host for a
 // scripted agent, reached through the same exec its spool pump uses (src/subagents/driver.ts). Each job is a directory
 // in the machine, next to the agent's spool, that outlives the daemon:
-//   <dir>/<jobId>/spec.json   what to run (argv, cwd, env); runner.cjs, the runner
+//   <dir>/<jobId>/spec.json   what to run (argv, cwd, env); runner.cjs, the runner (runner.log: what it said starting)
 //   <dir>/<jobId>/rpid        the runner's pid; pid: the job's (its own process group)
 //   <dir>/<jobId>/out, err    its output, as it goes
 //   <dir>/<jobId>/exit        `<code>:<ms epoch>`: its exit code and when it ended (written by the runner)
@@ -44,9 +44,16 @@ export const RUNNER = [
   `for(const g of["SIGTERM","SIGINT","SIGHUP"])process.on(g,()=>{try{process.kill(-c.pid,g)}catch{}});`,
 ].join("");
 
-// The node is looked for first: a job's directory with no runner in it would read as one just launched.
-const LAUNCH = `set -e; command -v "$4" >/dev/null 2>&1 || { echo "no node in this machine: a job needs the node capcomd runs on" >&2; exit 127; }
-mkdir -p "$1"; printf %s "$2" > "$1/spec.json"; printf %s "$3" > "$1/runner.cjs"; cd "$1"; nohup "$4" "$1/runner.cjs" "$1" >/dev/null 2>&1 </dev/null & echo started`;
+// The node is looked for first (a job's directory with no runner in it would read as one just launched), and run by its
+// path: nohup looks a bare name up on its own default PATH, which an exec with no PATH of its own doesn't extend. The
+// launch waits (up to 5 s) for the runner to write its pid, so a runner that didn't start is a failed start, not a job
+// that runs forever.
+const LAUNCH = `set -e; n=$(command -v "$4" 2>/dev/null) || { echo "no node in this machine: a job needs the node capcomd runs on" >&2; exit 127; }
+mkdir -p "$1"; printf %s "$2" > "$1/spec.json"; printf %s "$3" > "$1/runner.cjs"; cd "$1"
+nohup "$n" "$1/runner.cjs" "$1" >"$1/runner.log" 2>&1 </dev/null &
+i=0; while [ ! -s "$1/rpid" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done
+[ -s "$1/rpid" ] || { echo "the job's runner didn't start: $(head -c 300 "$1/runner.log" 2>/dev/null)" >&2; exit 1; }
+echo started`;
 
 /** Start the job's runner in the machine; resolves once it is started (not when the job ends). */
 export async function launch(m: JobMachine, jobId: string, spec: { cmd: string[]; cwd: string; env?: Record<string, string> }): Promise<void> {
