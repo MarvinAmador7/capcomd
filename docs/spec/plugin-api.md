@@ -1,7 +1,8 @@
 # capcomd plugin API, version 1 (normative)
 
 Status: **accepted** with [ADR-023](../adr-023-plugin-core.md) and [ADR-024](../adr-024-agent-profiles.md), 2026-11-04.
-Types: [`packages/plugin`](../../packages/plugin) (`@capcomd/plugin`, private). API additions: in
+Types: [`packages/plugin`](../../packages/plugin) (`@capcomd/plugin`, published at capcomd's version, §14.6). Guide for
+plugin authors: [docs/plugins.md](../plugins.md). API additions: in
 [`openapi/capcomd.json`](../../openapi/capcomd.json) (capabilities `plugins` and `plugins.protocol`, generated from
 `src/api/contract.ts`). Research: [plugin-architecture.md](../research/plugin-architecture.md).
 
@@ -1196,8 +1197,10 @@ is gone; calls still open fail `disconnected`.
 resume by `Last-Event-ID`, ending on `session.closing`, on the caller's signal and when stdin closes), `answer` (retried
 until the call's deadline while the daemon can't be reached; a refusal is final), `emit` (with an Idempotency-Key),
 `storage` (with an optional run) and `fetch`. It uses `node:http` over the plugin socket, so a plugin runs on Bun or Node.
-The Slack example (§15.4) and the test fixture (`tests/plugins/fixtures/proc-gate`) code against it. Publishing it is
-§17.2 step 13.
+`manifestHash(root)` and `sessionOpen(env?, hooks?)` build the handshake (§9.3: this start's session, protocol 1, the
+sha256 of the `plugin.json` in `CAPCOMD_PLUGIN_ROOT`, the pid, the manifest's hooks). The Slack example (§15.4) and the
+test fixture (`tests/plugins/fixtures/proc-gate`) code against it. It is published with the package (§14.6), also as
+the entry point `@capcomd/plugin/client`.
 
 ### 9.9 OpenAPI additions
 
@@ -1533,10 +1536,25 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
 
 ### 14.3 Real composition
 
-`bootWith(plugins, fn)`: a daemon booted **through the host** on the fake sandbox with scripted agents
+`bootWith(plugins, fn, opts?)`: a daemon booted **through the host** on the fake sandbox with scripted agents
 (`CAPCOMD_SPAWN_EXEC=script`), the plugin loaded like any other, `fn` driving it over the harness.v1 socket, asserting
 user-visible output (dsh's rule, research §2.10; `tests/scenarios/` already works this way). Every built-in converted in
 §17 keeps one.
+
+`packages/plugin/src/boot.ts` (§17.2 step 13) runs `capcomd serve` as a separate program (`opts.capcomd`, an argv
+prefix; else `CAPCOMD_TESTKIT_BIN`, else `capcomd` on the `PATH`), so a published package boots whichever capcomd the
+plugin's author installed. The daemon gets a home of its own (a temp directory: engine data, both sockets, its clients,
+state), `CAPCOMD_NO_CONFIG`, the fake sandbox, scripted agents with the profiles `planner`, `worker` and `reviewer`
+(`opts.profiles` replaces them), a free engine port block, and none of the caller's `CAPCOMD_*`, `RELAY_*`, `RIVET*`,
+`BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN` or `GIT_*` (a test run from a git hook has `GIT_DIR` and the like set: the daemon's
+git would act on the developer's repository). Each plugin is a directory, validated (§4.9) first and linked as the user's
+(`<home>/plugins/<name>`, §4.8 step 2): a plugin is a program out of process (§5.2), so there is no in-memory form.
+`opts.config` becomes `CAPCOMD_PLUGIN_<NAME>_<KEY>` (§10.2; a secret's value is its reference, its variable in
+`opts.env`). It waits for `GET /v1/health`, then for each plugin to be `active` (a `failed` one, or one held at
+`validated` with a cause, fails the boot with the cause and the daemon's log), within `opts.readyMs` (120 s). `fn` gets
+`{socket, token, home, env, fetch, cli, log, stop}`: an operator's token (`capcomd clients add`, every scope but none of
+the developer's), `cli(args)` running the CLI against this daemon, `log()` the daemon's output. The daemon is stopped
+(SIGTERM, which stops its engine and plugins; SIGKILL after 30 s) and its home removed (`opts.keep` keeps it).
 
 ### 14.4 Hook contract
 
@@ -1549,15 +1567,35 @@ checks the mode against `HOOKS` (ADR-023 step 1).
 ### 14.5 The test kit
 
 `@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext`, `load`,
-`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge, context}`, `call`. Implemented with ADR-023
-step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what `test:fast` runs on
-`packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` needs the kernel's hook sites and the
-`conformance` suites the seams as plugins: they reject `unsupported` until §17.2 steps 2, 3, 4 and 6.
+`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge, context}`, `call`, and `samplePayload`.
+Implemented with ADR-023 step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what
+`test:fast` runs on `packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` is §14.3. `conformance.forge`
+rejects `unsupported`: a seam is in process only (§9.6), so only a built-in is a forge, and the kernel tests those against
+local repositories (`tests/plugins/forges.test.ts`, `tests/merge`). The conformance suites register `bun:test` tests;
+everything else runs on Node too.
+
+### 14.6 The published package
+
+`@capcomd/plugin` is built by `packages/plugin/scripts/pack.ts` from the workspace package, which points at the
+TypeScript sources and stays `private` (its `exports` are the repository's). The published one: ESM JavaScript for
+Node ≥ 20 and Bun (no Bun API at run time: `semver.ts` compares versions itself), declarations whose relative imports
+carry `.js` (`moduleResolution: nodenext`), the manifest's JSON Schema, a README and the LICENSE; entry points `.`,
+`./client`, `./testkit`, `./schema`; `zod` its one dependency. Its version is capcomd's: `@capcomd/plugin@X.Y.Z` is the
+API capcomd X.Y.Z serves. `packages/plugin/package.json`'s `version` is bumped with `package.json`'s in the release commit
+(`scripts/release-notes.ts --check` and `pack.ts` refuse a difference). `packages/plugin/scripts/smoke.sh` installs the
+tarball into a fresh project with npm and uses it from Node (every entry point, the manifest checks, `loadDispose` and
+`hookContract`, `connect()` speaking the protocol to a stand-in daemon over a Unix socket) and typechecks a TypeScript 5
+consumer under `nodenext`: CI on every change (Node 20), and the release before publishing. The release workflow
+(`.github/workflows/release.yml` `npm-plugin`) publishes it from the release tag after capcomd's own checks, with
+provenance and the same dist-tag, only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true`; an
+already-published version is skipped.
 
 ## 15. Worked examples
 
-All five typecheck against the package (`packages/plugin/examples`, `bun test packages/plugin`); their manifests validate
-against the JSON Schema.
+All five typecheck against the package, which they import by its name, `@capcomd/plugin` (`packages/plugin/examples`,
+`bun test packages/plugin`); their manifests validate against the JSON Schema. The in-process ones pass `loadDispose`
+and `hookContract` (`tests/plugins/host.test.ts`); the Slack example has its own tests and runs against a real daemon
+(§15.4).
 
 ### 15.1 The Docker sandbox provider (`sandbox-docker`, in-process)
 
@@ -1606,6 +1644,11 @@ waits (bounded) for the reviewer it started or stops before it exits.
 `merge.changed`; the webhook is an `x-secret`. The process opens its session, iterates the hooks stream, renders a
 sentence from daemon-written fields (agent text escaped as plain text), posts within the call's deadline, and emits
 `plugin.slack-notifier.posted`. It follows §16.5: it speaks on failures, attention and landed work, and is quiet otherwise.
+Its tests are a plugin author's (§17.2 step 13): `render` per payload and `main` against a stand-in `PluginClient`
+(`examples/slack-notifier/index.test.ts`), and the example unchanged as a user's plugin of a daemon on the fake sandbox,
+booted by `testkit.bootWith`, with a local HTTP server as the webhook (`tests/scenarios/plugin-slack-example.test.ts`): it
+posts a run's start and end and a failed agent, nothing for a finished or cancelled one, writes its `posted` events on
+the run's stream, and its webhook never reaches the daemon's log.
 
 ### 15.5 A watchdog (`watchdog`, in-process)
 
@@ -2017,7 +2060,7 @@ step changes `relay.v1`/`capcomd.v1` output or harness.v1 except by adding featu
 | 10 | Triggers (§16.3): sources, the intake, `triggers.sources.*` config, `observe` default, subscriptions, `trigger.*` events, `capcomd triggers log`; a `schedule` source; the GitHub source | a scenario with a fixture source: deduped, denied, recorded, started, continued; a subscription expires; `observe` runs nothing |
 | 11 | Watchdog built-in (§16.4) enabled by `setup` | a scenario with a scripted agent that stops producing checkpoints: `stalled` raised at the configured time, cancelled after |
 | 12 | Install, trust, update: `capcomd plugins install|trust|update|remove|allow-version`, `LOCK`, the project trust prompt; with it (the owner's call) config layering: the project layer, validation per layer, the run layer | a local git fixture repository; a manifest escaping its directory refused; a changed hash reported; an untrusted project plugin never activates (`tests/plugins/install.test.ts`, `trust.test.ts`); the layers, a refused layer named, the run layer through a real engine (`tests/plugins/config-layers.test.ts`, `tests/scenarios/plugin-run-config.test.ts`) |
-| 13 | `@capcomd/plugin` published (the client library `connect`, the test kit), `docs/plugins.md`, the Slack example run by CI against the fake sandbox | the examples' conformance in CI |
+| 13 | `@capcomd/plugin` publishable (the client library `connect`, the test kit with `bootWith`; §14.6) and published by the release workflow once the repository variable `PUBLISH_PLUGIN_PACKAGE` is on, `docs/plugins.md`, the Slack example run by CI against the fake sandbox | the examples' conformance in CI (`tests/plugins/host.test.ts`, `bun test packages/plugin`, `tests/scenarios/plugin-slack-example.test.ts`); the package packed, installed and used from Node (`packages/plugin/test/pack.test.ts`, `scripts/smoke.sh` in CI) |
 
 Steps 1–2 are additions. Steps 3–8 are refactors behind unchanged tests. Steps 9–13 are the third-party surface.
 ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new runtime (step 4 there: `identity.title`,
@@ -2062,6 +2105,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.31 | 2026-11-06 | With install, trust and update (§17.2 step 12) and the rest of config layering (the owner approved it with this step): installing from a git repository through the host's own repo, the files written out of the commit (no checkout, no link out, size limits), what `install` refuses, `LOCK`'s fields and the content hash, `update` reporting what changed before replacing, `remove` keeping the data (§4.8); `plugins.use` fetched to the user's home, trust per content hash and place in `<home>/trust.json` (a checkout's link out isn't its plugin; a checkout's `LOCK` is hashed), the trust prompt (with the secret references, its text escaped) and `--yes`, nothing written through a link or over a written file at install, an untrusted project plugin listed `validated`/`untrusted` through `enable` and checked again before every start of its process, `plugin.trusted` written by the daemon the first time it acts on a trust (§4.8); the daemon honours `allow-version` (§4.4); `enable` reads a directory plugin again (§4.8); every plugin's config is layered, not only a built-in's; `enabled` is the user's (a project turns off only its own plugins), a project's refused settings for a plugin not its own set aside rather than failing it, neither the project nor a run sets a secret, and a secret's reference is the user's or the environment's, a value where one belongs refused; `config.sources` per layer; the run layer checked against the manifests and its storage key the kernel's (§10.2, §10.4); a reference resolving to nothing still a warning, keychain references still unresolved (§9.3, §10.3); capability `plugins.config`, `POST /v1/runs` `plugins` and `plugin.trusted` in the contract (all additive, §13.1). |
 | 1.0.32 | 2026-11-06 | With groundray's write path (ADR-025 step 5): a consolidator's change may name the brain its profile names (`brain`), checked and kept by the kernel in kv `_context/brain/<agentId>.<n>`, never staged on its branch (a title of 3 to 120 characters, as groundray's schema takes; refusal reason `no_brain`; the result's `context.brain`, additive); sent through the provider's `propose` by the kernel under `review: lint` (actor `capcomd/<version>`, within 4 minutes, the rest left for a person) or by a person with `capcomd context brain propose --run <runId> --yes` (actor `human:<id>`), and recorded as `plugin.context.brain_staged` and `plugin.context.brain_proposed` (§6.6.8). `context-groundray` is writable: a draft made by the groundray CLI in a throwaway authoring clone, pushed to `groundray/capcomd-<runId>-<agentId>` from a host repo (§11.7) and opened as a pull request through the forge that serves the brain; the conformance suite's propose case for a handle the provider didn't make (§14.2). |
 | 1.0.33 | 2026-11-06 | With ADR-024's install, export and update (its §7 step 7): a profile package is fetched and locked as a plugin is, `LOCK` with `kind: "profile"` and the same content hash (§4.8); `trust.json` keeps the operator's trust in a project's profile skills as kind `profile`, one entry per `SKILL.md` (the file made real, the sha256 the agent is pinned with); the kernel refuses a spawn of a profile with an untrusted project skill (`config`, reason `untrusted`) in its spawn checks, after `profile.resolved`. No hook, seam, route or contract shape changes; the step's decisions are in ADR-024 §9. |
+| 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

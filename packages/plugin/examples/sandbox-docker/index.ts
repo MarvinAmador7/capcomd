@@ -1,7 +1,7 @@
 // Worked example, spec §15.1: the Docker sandbox provider as a built-in, in-process plugin. Today's
 // src/providers/docker.ts DockerProvider becomes this module; src/providers/registry.ts's descriptor moves into
 // `describe()`; the 5-minute sweep src/cli/commands/serve.ts starts moves into the `daemon.started` listener.
-import { definePlugin, PluginError, type ErrorClass, type ExecResult, type MachineInfo, type SandboxDescriptor, type SandboxProvider, type SeamCall, type VmSpec } from "../../src/index";
+import { definePlugin, PluginError, type ErrorClass, type ExecResult, type MachineInfo, type SandboxDescriptor, type SandboxProvider, type SeamCall, type VmSpec } from "@capcomd/plugin";
 
 interface Config { bin: string; image: string; agentMemoryMb: 512 | 1024 | 2048 | 4096; idleLifetimeSeconds: number }
 

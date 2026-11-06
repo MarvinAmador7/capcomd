@@ -266,6 +266,8 @@ agent profiles.
 - **Hermes** (Nous Research's agent, also from Telegram, Slack and the rest of its gateway): `capcomd setup agent`
   registers the MCP server and installs the skills; see [docs/integration-agents.md](docs/integration-agents.md#hermes).
 - **Other callers** (scripts, services): see [docs/integration-agents.md](docs/integration-agents.md).
+- **Plugins for capcomd** (a notifier, a gate on merges, …): your own program, started and supervised by the daemon,
+  written with `@capcomd/plugin`; see [docs/plugins.md](docs/plugins.md).
 
 ## Documentation
 
