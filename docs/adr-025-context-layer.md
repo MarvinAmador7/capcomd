@@ -538,7 +538,8 @@ admitted them.
    brain in the environment image. Tests: two brains never in one brief; a `restricted` brain refused at `brain add`
    mapping; `skipped (timeout)` in the header when the provider is slow.
 5. **groundray write path**: `propose()` through the CLI into a throwaway clone, the PR through the forge, the approver
-   as actor. Tests: the forge fake receives a PR on the brain repository; the mounted export is unchanged.
+   as actor. Tests: the forge fake receives a PR on the brain repository; the mounted export is unchanged. *(Built; see
+   "Made while building step 5" below.)*
 6. **After spec §17.2 step 8**: the doctrine and routing paragraphs as hash-pinned skills on `agent.preparing`;
    inline items as a fenced first message *if* step 0's matrix admits them; the `context` message kind *if* triggered
    injection is admitted. *(Built: the two skills. Measured and not admitted: inline items and triggered injection;
@@ -726,6 +727,64 @@ this list says why):
   every agent's sandbox gets the tree at start.
 - A line's path may be 320 characters (200 before): a bundle's file is under the kernel's root.
 - `allowStale` (§10's example) isn't read: stale lines leave the brief as for any provider.
+
+**Made while building step 5** (spec 1.0.32; groundray's write path, `src/context/groundray-write.ts`, the consolidator's
+side in `src/context/brain-proposals.ts`; where the code and §5, §7 or §11.2 differ, the code is right and this list
+says why):
+
+- **What proposes to a brain: the consolidator, for the brain its profile names.** No hot-path write reaches a brain
+  (§5.1): workers propose lessons as before, and the run's consolidator may answer, besides its memory changes, with a
+  change `{brain: <name>, type, title, text, from}` for the one brain its own profile names (its `groundray` entry, the
+  same rule as a brief: one brain per profile). It is checked as a memory change is (the seeded scan and the
+  redactor's placeholder, `itemBytes`, its `from` the run's candidates, the run's `proposalsPerRun`, which the brain's
+  changes take first) and as groundray needs (one of its types, a one-line title of 3 to 120 characters, a body without frontmatter), and it is
+  `add` only: supersession, deprecation and verification are not exposed by groundray's CLI ("Creation never
+  authorizes promotion") and belong to the brain's owners. It is never staged on the consolidator's branch: the kernel
+  keeps it in kv `_context/brain/<agentId>.<n>` (reserved) and the consolidator's result says so (`context.brain`).
+  The prompt tells a consolidator whose profile names a brain how to propose to it.
+- **The approver as actor, without a hold.** §7 forwards "the approver of the hold"; a brain proposal has no branch in
+  the project's repository, so no merge and no hold of its own, and tying it to the memory branch's hold would drop it
+  when the run proposed facts and no lessons (no branch, no hold). So the rule is the profile's `context.review`, as for
+  memory: under `review: human` (the default) the proposals wait for a person, who sends them with `capcomd context brain
+  propose --run <runId> --yes` and is their actor (`human:<id>` from the operator's or a driver's principal; the local
+  CLI's is `human:operator`); under `review: lint` the kernel sends them as the staging ends, as `capcomd/<version>`,
+  within 4 minutes for all of them (the settle step that stages them has 10), leaving the rest for the command.
+  An agent never names a person. Either way the brain's owners review the pull request, and a draft never raises
+  authority there.
+- **The throwaway authoring clone.** groundray's `knowledge create` writes into its catalog's authoring repository
+  (which must be a clean `main` at the installed commit) and refreshes its installed snapshot, so capcomd gives it a
+  catalog of its own: per proposal, a throwaway directory where capcomd keeps its clones holds a bare host repo (the
+  only thing that talks to the brain's remote, through `host-git.ts`), an authoring clone made from it as a local path
+  on `main` at the run's proposal branch's tip (else the brain's branch's), and groundray's config, data, cache, `HOME`
+  and `XDG_*`. groundray runs `setup --non-interactive`, `brain add <authoring clone>` (a local path is kept as the
+  authoring repository, so no `brain attach`), then `knowledge create` planned and then `--apply` (`--method
+  agent-generated`, `--confidence low` with its basis, `--path inbox/<slug>-<key>.md`, one source naming the run and the
+  agent). The user's own groundray (its catalog, its installed brains, its skills) is never read or changed, groundray
+  talks to no remote, and the mounted export (the brain's branch, the host's files mirror, trees placed in sandboxes)
+  is never touched.
+- **What is pushed, and where.** capcomd pushes groundray's commit only when it descends from the base and changes
+  nothing outside the bundle, to `groundray/capcomd-<runId>-<agentId>` (groundray's namespace for proposals, so `groundray
+  brain review <name>` reads it) with a lease, and the forge that serves the brain's remote opens or finds one pull
+  request into the brain's branch; a run's later proposals join that branch and that pull request (one review per run,
+  not one per fact, and their `index.md` and `log.md` changes never conflict with each other). A forge without pull
+  requests (plain git) leaves the pushed branch. Idempotent by a marker in the item's source
+  (`capcomd://runs/<run>/agents/<agent>/proposals/<key>`): a replay finds the draft and the pull request.
+- **`x-capcomd` is a source, not an extension field.** `knowledge create` takes no extension fields (an `x-` field would
+  need a second saved version through `knowledge update --metadata-file`, and warns `KB-W104` unless the bundle documents
+  it), so the machine origin is the item's source (the run and agent) and its confidence basis; the model stays in
+  capcomd's records of the consolidator.
+- Who holds the brain repository's push credential (research open question 11): the user's own, through the forge's
+  `remoteCredential` or git's helpers on the host, as for the project's repository. groundray's own `brain propose`
+  (which pushes with groundray's git) isn't used, so its credentials never matter.
+- Only a brain with groundray's `brain.yaml` takes proposals (`unsupported` for a plain OKF bundle), and the groundray
+  CLI must be on the host (`CAPCOMD_GROUNDRAY`, else `PATH`); reads still need neither. The real CLI isn't run in CI:
+  the tests use a fake that does what groundray's `docs/cli.md` says it does and refuses what its item schema
+  (`schemas/knowledge-item.schema.yaml`) refuses of capcomd's values: a title of 3 to 120 characters (checked when the
+  consolidator's answer is staged), a description of 10 to 240 (the body's first sentence, else its start, else the
+  title), an actor `human:` with a lowercase id of two characters at least, a confidence basis of at most 280. Read
+  from groundray's source (not run): `brain add --json` answers `slug` and `id`, `knowledge create --json` answers
+  `item_id` and a bundle-relative `path`, and a source whose resource has a scheme other than http(s) (the
+  `capcomd://` marker) passes its validation.
 
 **Made while building step 6** (spec 1.0.28; evidence `docs/evidence/context/README.md`, "step 6"):
 

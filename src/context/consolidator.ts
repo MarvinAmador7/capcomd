@@ -5,12 +5,14 @@
 // `.capcomd/context/` at the run's target, committed and pushed here, on the host, in a clone of its own, as
 // src/merge/fakework.ts makes a fake agent's commit). The branch then lands as any child's work does: a verify (with
 // lint as a check), and a merge `context-memory`'s `merge.landing` gate holds for a person (`review: human`, the
-// default) or lets through on lint alone (`review: lint`).
+// default) or lets through on lint alone (`review: lint`). What it proposes for the company's brain its profile names (a
+// delta with `brain`) is kept for groundray (./brain-proposals.ts), never staged on the branch.
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import type { ContextSpec, Outcome } from "../../packages/plugin/src/context-layer";
 import { CANDIDATES_KV, type Candidate, type CaptureRecord } from "./capture";
-import { CONSOLIDATOR_PROFILE, stage, type Applied, type StageRefusal } from "./consolidate";
+import { brainDeltas, brainOf, CONSOLIDATOR_PROFILE, stage, type Applied, type StageRefusal } from "./consolidate";
+import type { BrainProposal } from "./brain-proposals";
 import type { LintProblem } from "./lint";
 import { fence } from "../subagents/results";
 
@@ -125,6 +127,8 @@ export interface StagedBranch {
   refused: StageRefusal[];
   ignored: string[];
   lint: { errors: LintProblem[]; warnings: LintProblem[] };
+  /** Its proposals to the brain its profile names (null: none named), kept in kv `_context/brain/`, and those refused. */
+  brain: { name: string | null; proposals: BrainProposal[]; refused: StageRefusal[] };
 }
 
 /** Write `text` at `rel` under `root`, refusing a path any part of which is a link (a repository could make
@@ -151,15 +155,27 @@ function writeIn(root: string, rel: string, text: string) {
  */
 export async function stageOnBranch(runId: string, a: { agentId: string; profile: string | null; spec: unknown; taskId: string }, raw: unknown, at = new Date().toISOString()): Promise<StagedBranch> {
   const branch = `capcomd/${runId}/${a.agentId}`;
-  const none = (applied: Applied[] = [], refused: StageRefusal[] = []): StagedBranch => ({ sha: null, branch, applied, refused, ignored: [], lint: { errors: [], warnings: [] } });
+  const spec = (a.spec ?? {}) as { model?: string; context?: ContextSpec };
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId);
+  const { limitsFor } = await import("./limits");
+  const { runSecrets, secretScan } = await import("./scan");
+  const { limits } = limitsFor(spec.model ?? null, spec.context);
+  const scan = secretScan(await runSecrets({ runId, remote: cfg?.remote ?? null }));
+  const records = await runCandidates(runId);
+  const candidates = records.flatMap((r) => r.candidates as Candidate[]);
+  const origin = { runId, agentId: a.agentId, profile: a.profile ?? CONSOLIDATOR_PROFILE, model: spec.model ?? null, image: null };
+  // Its proposals to the brain first (they need no repository), kept once; they take their share of the run's room.
+  const name = brainOf(spec.context);
+  const forBrain = brainDeltas({ raw, brain: name, candidates, agentId: a.agentId, scan, itemBytes: limits.itemBytes, room: limits.proposalsPerRun });
+  const proposals: BrainProposal[] = forBrain.accepted.map((d) => ({ ...d, id: `${a.agentId}.${d.n}`, origin, at, sent: null }));
+  if (proposals.length) await (await import("./brain-proposals")).keepBrainProposals(runId, proposals);
+  const brain = { name, proposals, refused: forBrain.refused };
+  const none = (applied: Applied[] = [], refused: StageRefusal[] = []): StagedBranch => ({ sha: null, branch, applied, refused, ignored: [], lint: { errors: [], warnings: [] }, brain });
   if (!cfg) return none();
   const { openClone, withCloneLock } = await import("../merge/repo");
   const { remoteGit } = await import("../merge/host-git");
   const { taskKey } = await import("../merge/config");
   const { readContextAt } = await import("./lint");
-  const { limitsFor } = await import("./limits");
-  const { runSecrets, secretScan } = await import("./scan");
   const target = (await (await import("../primitives/ops")).runTarget(runId)) ?? cfg.target;
   // One staging at a time in the run's clone (two consolidators of one run ending together): its checkout, the files
   // written and the commit are the clone's one working tree. The clone's own lock is openClone's, inside this one.
@@ -168,14 +184,10 @@ export async function stageOnBranch(runId: string, a: { agentId: string; profile
     const existing = await git.revParse(`refs/remotes/origin/${branch}`);
     const base = existing ? await git.revParse(`${existing}^`) : await git.revParse(`refs/remotes/origin/${target}`);
     if (!base) throw new Error(`target branch ${target} not found on ${cfg.remote}`);
-    const spec = (a.spec ?? {}) as { model?: string; context?: ContextSpec };
-    const { limits } = limitsFor(spec.model ?? null, spec.context);
-    const records = await runCandidates(runId);
     const staged = stage({
-      files: readContextAt(git.cwd, base), raw, candidates: records.flatMap((r) => r.candidates as Candidate[]),
-      origin: { runId, agentId: a.agentId, profile: a.profile ?? CONSOLIDATOR_PROFILE, model: spec.model ?? null, image: null }, at,
-      scan: secretScan(await runSecrets({ runId, remote: cfg.remote })), outcome: outcomeIn(await runOps(runId)),
-      itemBytes: limits.itemBytes, descriptionChars: limits.descriptionChars ?? 150, room: limits.proposalsPerRun, retain: retainOf(spec.context),
+      files: readContextAt(git.cwd, base), raw, candidates, origin, at, scan, outcome: outcomeIn(await runOps(runId)),
+      itemBytes: limits.itemBytes, descriptionChars: limits.descriptionChars ?? 150, retain: retainOf(spec.context),
+      room: limits.proposalsPerRun === null ? null : Math.max(0, limits.proposalsPerRun - proposals.length),
     });
     const out = { ...none(staged.applied, staged.refused), ignored: staged.ignored, lint: staged.lint };
     if (existing) return { ...out, sha: existing };

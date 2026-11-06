@@ -47,6 +47,10 @@ export const CONTEXT_CASES: readonly Case[] = [
     const e = await p.propose("conformance", { text: { text: "a lesson", untrusted: true, by: "agt-conformance" } }, { kind: "operator", clientId: null }, conformanceCall()).then(() => null, (x: unknown) => x);
     if (!(e instanceof PluginError && e.code === "unsupported")) fail(`propose on a read-only provider must reject unsupported, got ${e === null ? "a receipt" : String((e as Error)?.message ?? e)}`);
   } },
+  { name: "propose never stages through a handle the provider didn't make", async run(p) {
+    const e = await p.propose("conformance", { text: { text: "a lesson", untrusted: true, by: "agt-conformance" }, title: "A lesson" }, { kind: "operator", clientId: null }, conformanceCall()).then(() => null, (x: unknown) => x);
+    if (e === null) fail("propose answered a receipt for a handle resolve never gave");
+  } },
   { name: "a call whose signal is already aborted rejects", async run(p, o) {
     const c = conformanceCall();
     const ac = new AbortController();
