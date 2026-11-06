@@ -75,7 +75,7 @@ export function stalledDetail(quietMs: number, cfg: WatchdogConfig): string {
 export function watchdog(ctx: PluginContext<WatchdogConfig>) {
   const cfg = ctx.config.get();
   if (cfg.stopAfterMs !== 0 && cfg.stopAfterMs <= cfg.stalledAfterMs)
-    throw new PluginError("invalid", `plugins.watchdog.stopAfterMs (${cfg.stopAfterMs}) is 0 or more than stalledAfterMs (${cfg.stalledAfterMs}): both count from the last progress`);
+    throw new PluginError("invalid", `plugins.watchdog.stopAfterMs is ${cfg.stopAfterMs}: it must be 0 (never stop) or more than stalledAfterMs (${cfg.stalledAfterMs}), since both count from the last progress`);
   const watched = new Map<string, Watched>();
   const keyOf = (runId: string, agentId: string) => `${runId}/${agentId}`;
 

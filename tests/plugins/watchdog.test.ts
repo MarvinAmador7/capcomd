@@ -207,7 +207,7 @@ describe("the watchdog", () => {
     expect(k.cancels).toEqual([]);
     await fake.dispose();
     const bad = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 10 * MIN }, { services: k.services as never });
-    await expect(testkit.load(bad, plugin as never)).rejects.toThrow(/stopAfterMs \(600000\) is 0 or more than stalledAfterMs \(900000\)/);
+    await expect(testkit.load(bad, plugin as never)).rejects.toThrow(/stopAfterMs is 600000: it must be 0 \(never stop\) or more than stalledAfterMs \(900000\)/);
   });
 
   test("it loads and disposes cleanly, and answers every hook it declares", async () => {
