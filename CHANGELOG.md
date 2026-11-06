@@ -7,8 +7,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
   `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of
-  always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. Without
-  `CAPCOMD_HOME` nothing changes: the key stays `~/.capcomd/rpc.key`. `CAPCOMD_RPC_KEY_FILE` still names another file.
+  always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. An installed
+  capcomd without `CAPCOMD_HOME` is unchanged: the key stays `~/.capcomd/rpc.key`. `CAPCOMD_RPC_KEY_FILE` still names
+  another file.
   If you use `CAPCOMD_HOME`: after upgrading, the daemon makes a new key there when it restarts (the old key is not
   copied over; `~/.capcomd/rpc.key` is left as it is). An agent still running across that restart gets a new
   token as soon as capcomd picks it up again; a capcomd call it made with its old token in between fails once with
