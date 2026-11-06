@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: project templates on boxd. `capcomd env build --project` builds a snapshot per project with its whole history,
+  its setup step (`CAPCOMD_SETUP_COMMAND` in the project's `.capcomd/config.json` `env`, else its lockfile's install)
+  and the agent CLIs; every agent's VM then boots from it and gets only what changed since, instead of a clone of the
+  whole repository. Without one (or with one it can't use) an agent clones as before and capcomd builds or rebuilds the
+  template in the background (not when the branch it was built from hasn't moved), never holding up the run; it also
+  rebuilds once an agent's delta passes 50 MB (`CAPCOMD_TEMPLATE_REBUILD_MB`) and daily for any project that moved (`CAPCOMD_TEMPLATE_REFRESH_HOURS`). `capcomd
+  env templates` shows each template's age, size, how far behind it is and the delta an agent would get;
+  `CAPCOMD_PROJECT_TEMPLATES=manual` or `off` turns the automatic builds or the templates off. Templates are capped at
+  10 GB (`CAPCOMD_TEMPLATE_MAX_GB`) on top of the base image. See docs/boxd.md, "Project templates".
 - Fix: a big repository no longer fails to clone after 10 minutes. The host's fetch into its mirror now fails only when
   git has reported no progress for 5 minutes (`CAPCOMD_GIT_STALL_SECONDS`), or after 3 hours
   (`CAPCOMD_GIT_FETCH_MAX_SECONDS`), and `capcomd env build` no longer gives it 15 minutes. Git bundles go to an

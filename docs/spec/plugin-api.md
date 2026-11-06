@@ -1408,6 +1408,30 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
 3. `tests/unit/host-git-lint.test.ts` fails when a network git command is spelled anywhere else, or a credential helper
    is built outside `host-git.ts`; `tests/unit/host-git-credentials.test.ts` plants each vector above and checks that
    no planted command sees a token and nothing goes anywhere but the run's repository.
+4. **Project templates** (a place whose sandbox is a VM per agent with snapshots, `caps.isolation: "vm"` and
+   `caps.snapshots`: boxd; `src/env/templates.ts`). A project's template is an env build whose VM received the
+   repository the same way as in item 1 (every branch's history, as a bundle from the host's mirror) and ran the
+   project's setup step (`CAPCOMD_SETUP_COMMAND`, else its lockfile's install), so neither the VM nor its snapshot ever
+   held a git credential. The setup step is the repository's own code: the build VM is isolated (no platform
+   credentials), its egress leaves out every host that reaches a domain a host-bound secret of the place is bound to
+   (the domain, a wildcard over it, `*`; nothing left fails the build), so a placeholder it can read can't be spent, the step runs with those placeholders unset, and the snapshot passes the same secret scan
+   as every env build. A template is named `capcomd-env-<base>-<project>-<build>` (`<base>`: the env build of the same
+   agent CLI pins without a repository; `<project>`: the repository URL's key; `<build>`: its commit, branch tips,
+   lockfile and setup step), adds at most `CAPCOMD_TEMPLATE_MAX_GB` (10) to the base image (its checkout and agent home), and is recorded in the place's templates ledger
+   (`templates.json`), which lists every snapshot capcomd made as one: a rebuild keeps the template it replaces and
+   deletes the one before that, and capcomd deletes or overwrites no snapshot that list doesn't name. An agent's machine
+   boots from its project's template when nothing else chose its image (`sandbox.environment`, a plan login's image,
+   `CAPCOMD_ENV_SNAPSHOT`, `CAPCOMD_ENV=image`) and the template was built on the agent's CLI pins; the runner then
+   uses the template's checkout in place under the same rules as Docker's warm checkout (`chooseWorkspace`), so the host
+   sends only a bundle of what the template lacks; when the rules say clone, the clone borrows the template's objects
+   (git alternates, `SendRequest.seed`) and the bundle again holds only what they lack. Without a usable template the
+   machine boots from the base env and clones the whole repository. A run never waits for a template: with `CAPCOMD_PROJECT_TEMPLATES=auto` (the default; `manual`, `off`)
+   the worker starts a background build when its project has none or one on other pins, and a rebuild when its agent
+   couldn't use the template in place (unless the branch it was built from hasn't moved: the same template again) or
+   got a delta over `CAPCOMD_TEMPLATE_REBUILD_MB` (50); one build per project at a time (another process's running
+   build refuses `capcomd env build --project`), none within an hour of a failed one; and `sandbox-boxd` keeps a timer (§16.2: a plugin-owned job, `job.changed`
+   `fired`), daily by default (`CAPCOMD_TEMPLATE_REFRESH_HOURS`, 0 for none), that rebuilds every template whose
+   repository moved since it was built.
 
 Checks that run on the host (`CAPCOMD_CHECKS=host`, or the test sandboxes) run agent-written code as the operator, which
 no git setting can contain: there a planted setting or hook in the merge clone is refused (the merge fails), but the
@@ -2106,6 +2130,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.32 | 2026-11-06 | With groundray's write path (ADR-025 step 5): a consolidator's change may name the brain its profile names (`brain`), checked and kept by the kernel in kv `_context/brain/<agentId>.<n>`, never staged on its branch (a title of 3 to 120 characters, as groundray's schema takes; refusal reason `no_brain`; the result's `context.brain`, additive); sent through the provider's `propose` by the kernel under `review: lint` (actor `capcomd/<version>`, within 4 minutes, the rest left for a person) or by a person with `capcomd context brain propose --run <runId> --yes` (actor `human:<id>`), and recorded as `plugin.context.brain_staged` and `plugin.context.brain_proposed` (§6.6.8). `context-groundray` is writable: a draft made by the groundray CLI in a throwaway authoring clone, pushed to `groundray/capcomd-<runId>-<agentId>` from a host repo (§11.7) and opened as a pull request through the forge that serves the brain; the conformance suite's propose case for a handle the provider didn't make (§14.2). |
 | 1.0.33 | 2026-11-06 | With ADR-024's install, export and update (its §7 step 7): a profile package is fetched and locked as a plugin is, `LOCK` with `kind: "profile"` and the same content hash (§4.8); `trust.json` keeps the operator's trust in a project's profile skills as kind `profile`, one entry per `SKILL.md` (the file made real, the sha256 the agent is pinned with); the kernel refuses a spawn of a profile with an untrusted project skill (`config`, reason `untrusted`) in its spawn checks, after `profile.resolved`. No hook, seam, route or contract shape changes; the step's decisions are in ADR-024 §9. |
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
+| 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

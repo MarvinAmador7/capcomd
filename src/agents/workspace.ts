@@ -73,7 +73,7 @@ export type WorkspaceChoice = { path: "in_place" } | { path: "clone"; reason: st
 export function chooseWorkspace(f: WorkspaceFacts): WorkspaceChoice {
   const clone = (reason: string): WorkspaceChoice => ({ path: "clone", reason });
   if (!f.allowed) return clone("this sandbox doesn't keep a warm template per agent");
-  if (!f.marker) return clone("no warm template in the image (capcomd env build --sandbox docker makes one)");
+  if (!f.marker) return clone("no warm template in the image (capcomd env build --sandbox docker makes one; on boxd, capcomd env build --project)");
   if (f.claimed) return clone("the warm template was used by an earlier run in this sandbox");
   if (!sameRepo(f.marker.repo, f.repoUrl)) return clone("the warm template is of another repository");
   if (f.fetched === false) return clone("fetching into the warm template failed");

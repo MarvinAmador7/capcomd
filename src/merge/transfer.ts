@@ -255,6 +255,9 @@ export interface SendRequest {
   ref?: string;
   /** With `branches: "all"` in a fresh repository: set up `origin` and check out this branch tracking it (a clone). */
   checkout?: string;
+  /** With `fresh`: a repository in the sandbox (a project template's checkout) whose objects the new one borrows, so
+   *  only what it lacks is sent. Ignored when it isn't a git checkout there. */
+  seed?: string;
   /** Caps the mirror's fetch (default FETCH_MAX_MS; a stall ends it sooner either way). */
   timeoutMs?: number;
   /** Hears a long fetch and upload as they go (TransferProgress). */
@@ -284,8 +287,11 @@ async function send(h: HostRemote, s: SandboxGit, dir: string, req: SendRequest,
   const sx = (script: string, timeoutMs = 600_000) => s.exec(["sh", "-c", script], { timeoutMs });
   // A fresh repository (a clone), or what the sandbox has already (its remote-tracking refs and HEAD), to leave out of
   // the bundle.
+  // A fresh repository may borrow a seed's objects (git alternates): what the seed's remote-tracking refs and HEAD
+  // reach is then left out of the bundle too (marked `seed`, so they aren't taken for this repository's own refs).
+  const seed = o.fresh && req.seed ? ` && if [ -d ${sq(`${req.seed}/.git/objects`)} ]; then echo ${sq(`${req.seed}/.git/objects`)} > .git/objects/info/alternates && { git -C ${sq(req.seed)} for-each-ref --format='%(objectname) seed' refs/remotes/origin/; git -C ${sq(req.seed)} rev-parse -q --verify HEAD; true; }; fi` : "";
   const theirs = o.fresh
-    ? await sx(`rm -rf ${sq(dir)} && mkdir -p ${sq(dir)} && cd ${sq(dir)} && git init -q && git remote add origin ${sq(h.remote)}`)
+    ? await sx(`rm -rf ${sq(dir)} && mkdir -p ${sq(dir)} && cd ${sq(dir)} && git init -q && git remote add origin ${sq(h.remote)}${seed}`)
     : await sx(`cd ${sq(dir)} && git rev-parse --git-dir >/dev/null && { git for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/; git rev-parse -q --verify HEAD; true; }`);
   if (theirs.code !== 0) throw new TransferError(o.fresh ? `git init in the sandbox failed: ${tail(theirs)}` : `${dir} in the sandbox isn't a git checkout: ${tail(theirs)}`, "sandbox");
   const theirRefs = new Map<string, string>();
@@ -347,6 +353,29 @@ ${fetch}printf '%s\\n' ${lines.map(sq).join(" ")} | git update-ref --stdin${chec
   } finally {
     for (const f of files) rmSync(f, { force: true });
     if (got?.pins.length) await got.m.run(["update-ref", "--stdin"], { input: got.pins.map((p) => `delete ${p}`).join("\n") + "\n" }).catch(() => {});
+  }
+}
+
+/**
+ * What a sandbox holding `have` (a project template's branch tips) would receive now: the bytes of the bundle of every
+ * branch less those, and how many commits `target` gained. The host fetches its mirror for it.
+ */
+export async function deltaSince(h: HostRemote, have: string[], target: string): Promise<{ bytes: number; behind: number | null }> {
+  const id = uniq();
+  const got = await fetchedMirror(h, "all", { tmpRef: `refs/capcomd/xfer/${id}` });
+  const file = join(got.m.cwd, "xfer", `delta-${id}.bundle`);
+  try {
+    const known = await mirrorHas(got.m, have);
+    mkdirSync(join(got.m.cwd, "xfer"), { recursive: true });
+    const b = await got.m.run(["bundle", "create", "-q", file, "--stdin"], { input: [...got.pins, ...known.map((n) => `^${n}`)].join("\n") + "\n" });
+    const bytes = b.code === 0 ? statSync(file).size : /empty bundle/i.test(b.stderr) ? 0 : -1;
+    if (bytes < 0) throw new TransferError(`git bundle create failed: ${tail(b)}`);
+    const tip = got.heads[target];
+    const count = tip ? await got.m.run(["rev-list", "--count", tip, ...known.map((n) => `^${n}`)]) : null;
+    return { bytes, behind: count && count.code === 0 ? Number(count.stdout.trim()) : null };
+  } finally {
+    rmSync(file, { force: true });
+    await got.m.run(["update-ref", "--stdin"], { input: got.pins.map((p) => `delete ${p}`).join("\n") + "\n" }).catch(() => {});
   }
 }
 
