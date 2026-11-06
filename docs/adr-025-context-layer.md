@@ -580,7 +580,7 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   `scripts/gen-context-limits.ts`): the package ships `src/`, not `docs/evidence/`. Kernel floors and ceilings:
   `briefBytes` 1 KiB-100 KiB, `indexLines` 1-1000, `descriptionChars` 20-500.
 
-**Made while building step 4** (spec 1.0.24; groundray's read path, `src/context/groundray.ts`, the built-in
+**Made while building step 4** (spec 1.0.26; groundray's read path, `src/context/groundray.ts`, the built-in
 `context-groundray`):
 
 - **The mapping is the project's, pinned per run by the run's record.** `capcomd context brain add <name> <repo>

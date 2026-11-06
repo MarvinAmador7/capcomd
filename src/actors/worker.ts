@@ -380,6 +380,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     let pauseAsked = false;
     const beatEvery = heartbeatEveryMs();
     let beatAt = 0;
+    /** The stuck notice the runner raised and hasn't cleared (ADR-019 §2). */
+    let raised: string | null = null;
     // What it is doing now (harness.v1 Agent.activity): classified from its events, written at most once a second.
     // Each finished step goes into its history too (agent.step), unthrottled; the last one when it ends (not on a cancel).
     const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a }), { onStep: (st) => scope.recordStep({ agentId: workerId, ...st }) }) : null;
@@ -407,7 +409,12 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
         beatAt = Date.now();
         scope.heartbeat({ agentId: workerId }).catch(() => {});
       },
-      onNotice: (n) => { scope?.notice({ agentId: workerId, notice: n }).catch(() => {}); },
+      // Clearing takes away only the kind the runner raised: a plugin's notice (the watchdog's `stalled`) stays.
+      onNotice: (n) => {
+        const only = n ? null : raised;
+        raised = n?.kind ?? null;
+        if (n || only) scope?.notice({ agentId: workerId, notice: n, ...(only ? { only } : {}) }).catch(() => {});
+      },
       ...(activity ? { onEvent: activity.event } : {}),
       ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
       // Every agent's tool calls, refusals and words; one that may spawn also gets a `[capcomd] <op> → …` line per

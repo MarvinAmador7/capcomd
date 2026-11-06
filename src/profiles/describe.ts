@@ -58,6 +58,16 @@ const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 /** Who the profile is is said by its header (`name`) and its schema id; everything else is a value. */
 const HEADER = new Set(["$schema", "schema", "name"]);
 
+/** Two values' paths in the order profileValues lists them (the schema's; vendor `x-` fields last). */
+export function compareValuePaths(a: string, b: string): number {
+  const order = Object.keys(PROFILE_JSON_SCHEMA.properties);
+  const rank = (k: string, keys: string[]) => { const i = keys.indexOf(k); return i < 0 ? keys.length : i; };
+  const [a1, a2 = ""] = a.split("."), [b1, b2 = ""] = b.split(".");
+  if (a1 !== b1) return rank(a1!, order) - rank(b1!, order) || (a1! < b1! ? -1 : 1);
+  const keys = Object.keys(blockOf(a1!) ?? {});
+  return rank(a2, keys) - rank(b2, keys) || (a2 < b2 ? -1 : a2 > b2 ? 1 : 0);
+}
+
 /**
  * Every value of the resolved manifest, in the schema's order (top-level fields, then the blocks, each block's keys in
  * order; vendor `x-` fields last), with the file that set it (ADR-024 §2.6: `show` prints the layers and the result).

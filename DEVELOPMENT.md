@@ -109,7 +109,10 @@ src/
                   sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
                   setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an
                   out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's
-                  private storage. The user's plugins (~/.capcomd/plugins/<name>) run out of process.
+                  private storage; watchdog.ts, the daemon's watchdog (off until `capcomd setup` turns it on); config.ts,
+                  a plugin's settings from the user's and the project's config and CAPCOMD_PLUGIN_<NAME>_<KEY>;
+                  services.ts, the daemon's `ctx.agents`. The user's plugins (~/.capcomd/plugins/<name>) run out of
+                  process.
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and
