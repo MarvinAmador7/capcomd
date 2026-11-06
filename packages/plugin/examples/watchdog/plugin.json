@@ -22,7 +22,7 @@
     "properties": {
       "everyMs": { "type": "integer", "minimum": 10000, "default": 60000, "description": "How often the watchdog looks" },
       "stalledAfterMs": { "type": "integer", "minimum": 60000, "default": 900000, "description": "No checkpoint with changed files and no new tool kind for this long: the agent is stalled (a notice)" },
-      "stopAfterMs": { "type": "integer", "minimum": 60000, "default": 2700000, "x-per-run": true, "description": "Stalled for this long: the agent is cancelled with the reason" }
+      "stopAfterMs": { "type": "integer", "minimum": 60000, "default": 2700000, "x-per-run": true, "description": "No progress for this long (counted from the last progress, like stalledAfterMs): the agent is cancelled with the reason" }
     }
   }
 }

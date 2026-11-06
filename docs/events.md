@@ -3600,6 +3600,51 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `plugin.config_refused`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The setting, under plugins.<name> (e.g. stalledAfterMs)"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "message"
+        ],
+        "additionalProperties": {}
+      }
+    },
+    "layer": {
+      "type": "string",
+      "description": "Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), or run (more may come)"
+    }
+  },
+  "required": [
+    "plugin",
+    "errors",
+    "layer"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A plugin's settings failed its config schema (spec §10.4): it is failed with cause config_invalid, never run with defaults"
+}
+```
+
 ## `plugin.hook_failed`
 
 ```json

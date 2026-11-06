@@ -1286,6 +1286,7 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 - [`plugin.disposed`](events.md#plugindisposed)
 - [`plugin.version_refused`](events.md#pluginversion_refused)
 - [`plugin.duplicate_refused`](events.md#pluginduplicate_refused)
+- [`plugin.config_refused`](events.md#pluginconfig_refused)
 - [`plugin.hook_failed`](events.md#pluginhook_failed)
 - [`plugin.suspended`](events.md#pluginsuspended)
 - [`plugin.resumed`](events.md#pluginresumed)
