@@ -17,10 +17,17 @@ export type Inlined = { text: string; attachment: null } | { text: null; attachm
 
 export const textBytes = (s: string) => Buffer.byteLength(s, "utf8");
 
+/** The id of the attachment whose text has this sha256 (hex): content-addressed, so the same text is stored once. */
+export const attachmentId = (sha256: string) => `att-${sha256.slice(0, 24)}`;
+
+/** Text stored in full as an attachment, whatever its size (a profile's skill, pinned with the agent at spawn). */
+export function attach(text: string, mediaType = "text/plain; charset=utf-8"): AttachmentRef {
+	const sha256 = createHash("sha256").update(text).digest("hex");
+	return { id: attachmentId(sha256), bytes: textBytes(text), sha256, mediaType };
+}
+
 /** Text up to 64 KB (UTF-8 bytes) stays inline; anything longer becomes an attachment (content-addressed id). */
 export function inlineOrAttach(text: string, mediaType = "text/plain; charset=utf-8"): Inlined {
-	const bytes = textBytes(text);
-	if (bytes <= INLINE_TEXT_MAX_BYTES) return { text, attachment: null };
-	const sha256 = createHash("sha256").update(text).digest("hex");
-	return { text: null, attachment: { id: `att-${sha256.slice(0, 24)}`, bytes, sha256, mediaType }, body: text };
+	if (textBytes(text) <= INLINE_TEXT_MAX_BYTES) return { text, attachment: null };
+	return { text: null, attachment: attach(text, mediaType), body: text };
 }

@@ -20,12 +20,14 @@ import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TE
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
 import { checkpointRef, stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
-import type { AttachedSkill } from "../agents/skills";
+import { skillBlock, type AttachedSkill } from "../agents/skills";
+import { ORCHESTRATION_SKILL_NAME, pinnedSkills } from "../profiles/skills";
+import { attachmentId } from "../api/inline-cap";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
 import { parseVerdict } from "./review";
-import type { ReviewReport } from "../../packages/plugin/src/hooks";
+import type { AgentPreparing, PreparePatch, ReviewReport } from "../../packages/plugin/src/hooks";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
@@ -34,7 +36,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import { agentSeam } from "../plugins/agents";
 import type { PluginHold } from "../merge/types";
@@ -509,11 +511,15 @@ export async function spawnAgent(o: SpawnOpts) {
   const model = isRealAgent(resolved.kind) ? agentModel(resolved.spec) : undefined;
   const effort = isRealAgent(resolved.kind) ? agentEffort(resolved.spec) : undefined;
   const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}) });
+  // Its profile's skills (ADR-024 §7 step 5), pinned by hash on its spec; their text is kept with the run, so whoever
+  // prepares the agent (the daemon, a run's driver) gives it what was resolved here (agentPreparing).
+  const skills = resolved.skills ?? [];
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
     profile: resolved.name, ref: ref ?? resolved.name,
     // Its runtime blocks (ADR-024 §7 step 8: MCP servers, sandbox, environment, size, lifecycle) beside the flat spec.
-    spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(resolved.runtime ?? {}) },
+    spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(skills.length ? { skills: skills.map(({ name, source, hash }) => ({ name, source, hash })) } : {}), ...(resolved.runtime ?? {}) },
+    ...(skills.length ? { skillTexts: skills.map((s) => s.text) } : {}),
     // ADR-024 §2.4: the version of the profile it runs with and where it came from, beside the spec they pinned.
     profileVersion: resolved.profile?.version ?? null, profileSource: resolved.profile?.source ?? null,
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
@@ -1018,7 +1024,7 @@ async function driveOnce(runId: string, agentId: string, driver = `${process.pid
   const w = workerOf(runId, agentId, a.epoch);
   const cancelled = async () => (await s.getAgent({ agentId }))?.status === "cancelled";
   try {
-    const prepared = (await preparingHooks()) ? await agentPreparing(runId, a) : null;
+    const prepared = (await preparing(a)) ? await agentPreparing(runId, a) : null;
     if (await ensureWorker(runId, a, w, prepared)) return (await s.getAgent({ agentId }))!;
     const out = await runAttempt(runId, a, w, undefined, prepared);
     if (out.kind === "ended") return (await s.getAgent({ agentId }))!;
@@ -1048,27 +1054,46 @@ export async function prepareDrive(runId: string, agentId: string, driver: strin
 export async function ensureMachine(runId: string, agentId: string, epoch: number, attempt = 1): Promise<{ kind: "ok"; prepared?: Record<string, unknown> } | { kind: "ended" }> {
   const a = await getAgentOrThrow(runId, agentId);
   if (TERMINAL_AGENT.has(a.status)) return { kind: "ended" };
-  const prepared = (await preparingHooks()) ? await agentPreparing(runId, a, attempt) : null;
+  const prepared = (await preparing(a)) ? await agentPreparing(runId, a, attempt) : null;
   return (await ensureWorker(runId, a, workerOf(runId, agentId, epoch), prepared)) ? { kind: "ended" } : { kind: "ok", ...(prepared ? { prepared } : {}) };
 }
 
 /**
- * Whether a plugin prepares agents here. The built-in orchestration skill does in every process (src/plugins/
- * skill-orchestration.ts): an attempt prepared here waits for this process's plugins (the daemon's host, else a local
- * one, src/plugins/hooks.ts `gates`), so an agent that may spawn always gets it, even one resumed before they loaded.
+ * Whether agent `a` is prepared here: its profile pinned skills, or a plugin prepares agents. The built-in orchestration
+ * skill does in every process (src/plugins/skill-orchestration.ts): an attempt prepared here waits for this process's
+ * plugins (the daemon's host, else a local one, src/plugins/hooks.ts `gates`), so an agent that may spawn always gets
+ * it, even one resumed before they loaded.
  */
-async function preparingHooks(): Promise<boolean> {
+async function preparing(a: ScopeAgent): Promise<boolean> {
   await gates();
-  return hooks.listening("agent.preparing");
+  return hooks.listening("agent.preparing") || pinnedSkills(a.spec).length > 0;
 }
 
-/** The spec an attempt runs with when agent.preparing's plugins changed it; null: the agent's own. */
+/** The spec an attempt runs with when agent.preparing's plugins or its profile's skills changed it; null: the agent's own. */
 export type PreparedSpec = Record<string, unknown> | null;
 
 /**
- * agent.preparing (plugin API §6.6.7): once per attempt, before its machine is ensured. A plugin may append to the
- * agent's system prompt (after the profile's own) or remove egress hosts, or refuse the attempt (it fails, naming the
- * plugin). Returns the spec the attempt's machine and run get, or null when no plugin changed it.
+ * The skills agent `a` was pinned with at spawn (its profile's, ADR-024 §7 step 5), with the text the run keeps for
+ * each (scope `spawn`'s `skillTexts`), checked against its pin: one that isn't there as pinned fails the attempt for
+ * good, never runs it without the skill or with another text.
+ */
+async function pinnedSkillTexts(runId: string, a: ScopeAgent): Promise<AgentPreparing["prompt"]["skills"]> {
+  const s = client().scope.getOrCreate([runId]);
+  const out: AgentPreparing["prompt"]["skills"] = [];
+  for (const p of pinnedSkills(a.spec)) {
+    const att = await s.getAttachment({ id: attachmentId(p.hash) });
+    if (!att || skillHash(att.body) !== p.hash)
+      throw new RelayError("config", `${a.agentId}'s profile skill ${p.name} (sha256 ${p.hash.slice(0, 12)}…) isn't in run ${runId}'s records as it was pinned at spawn`, "Spawn the agent again: its profile's skills are read and pinned when it is spawned.");
+    out.push({ name: p.name, hash: p.hash, source: p.source, text: att.body });
+  }
+  return out;
+}
+
+/**
+ * agent.preparing (plugin API §6.6.7): once per attempt, before its machine is ensured. The payload has the profile's
+ * own prompt and skills (pinned at spawn); a plugin may append to the agent's system prompt, add skills or variables,
+ * remove egress hosts, or refuse the attempt (it fails, naming the plugin). Returns the spec the attempt's machine and
+ * run get, or null when neither a plugin nor the profile's skills changed it.
  */
 export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1): Promise<PreparedSpec> {
   const spec = pinnedOf(a);
@@ -1086,18 +1111,24 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
   }
   let provider = "fake";
   try { provider = (await RS.agentSandbox(runId, machine.sandbox)) ?? sandboxName(); } catch { /* an unknown CAPCOMD_SANDBOX: the run reports it */ }
-  const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills: [] }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: machine.environment ?? null } };
-  // The kernel's own listener (the orchestration skill) reads the agent's record from here, not the engine again.
-  const out = await preparingAgent.run({ runId, agentId: a.agentId, record: a }, () => hooks.fire("agent.preparing", "modify", payload, { principal: principalOf(null), entity: `${a.agentId}/e${a.epoch}`, attempt, runId, agentId: a.agentId,
-    apply: (p, patch) => applyPreparePatch(p, patch) }));
-  // A final error (code config): the attempt isn't retried, the agent fails with the plugin's reason.
-  if (out.decision === "deny") throw refusedError("agent.preparing", out, "config");
-  if (!out.patches.length) return null;
-  const n = out.payload;
-  // Skills go after the profile's text and the plugins' appends, in the order the plugins added them (the agent reads
-  // them as its instructions: Claude Code's appended system prompt, Codex's prompt); the spec records which, by hash.
-  const append = [n.prompt.append, ...n.prompt.skills.map((s) => s.text)].filter(Boolean).join("\n\n");
-  const env = Object.assign({}, ...out.patches.map((x) => x.patch.env ?? {})) as Record<string, string>;
+  const skills = await pinnedSkillTexts(runId, a);
+  const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: machine.environment ?? null } };
+  let n: AgentPreparing = payload, patches: Array<{ patch: PreparePatch }> = [];
+  if (hooks.listening("agent.preparing")) {
+    // The kernel's own listener (the orchestration skill) reads the agent's record from here, not the engine again.
+    const out = await preparingAgent.run({ runId, agentId: a.agentId, record: a }, () => hooks.fire("agent.preparing", "modify", payload, { principal: principalOf(null), entity: `${a.agentId}/e${a.epoch}`, attempt, runId, agentId: a.agentId,
+      apply: (p, patch) => applyPreparePatch(p, patch) }));
+    // A final error (code config): the attempt isn't retried, the agent fails with the plugin's reason.
+    if (out.decision === "deny") throw refusedError("agent.preparing", out, "config");
+    n = out.payload;
+    patches = out.patches;
+  }
+  if (!patches.length && !skills.length) return null;
+  // Skills go after the profile's text and the plugins' appends: the profile's first, then the plugins' in the order
+  // they added them, each in a block named for it as a message's are (src/agents/skills.ts `skillBlock`). The agent
+  // reads them as its instructions (Claude Code's appended system prompt, Codex's prompt); the spec records which, by hash.
+  const append = [n.prompt.append, ...n.prompt.skills.map((s) => skillBlock(s.name, s.text))].filter(Boolean).join("\n\n");
+  const env = Object.assign({}, ...patches.map((x) => x.patch.env ?? {})) as Record<string, string>;
   return {
     ...(a.spec ?? {}), ...(append ? { appendSystemPrompt: append } : {}), ...(JSON.stringify(n.egress) !== JSON.stringify(egress) ? { egress: n.egress } : {}),
     ...(n.prompt.skills.length ? { skills: n.prompt.skills.map(({ name, hash, source }) => ({ name, hash, source })) } : {}),
@@ -1207,10 +1238,13 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
 /**
  * An agent that may spawn gets its orchestration skill with its spec: the skill-orchestration plugin attaches it at
  * agent.preparing. An attempt no plugin prepared (`prepared` null: its workflow passed that step under a capcomd before
- * the skill was a plugin's, and starts or restarts the agent after an upgrade) gets it here instead, as it always did.
+ * the skill was a plugin's, and starts or restarts the agent after an upgrade), or prepared without it (only its
+ * profile's skills, no plugin listening), gets it here instead, as it always did.
  */
 export async function unpreparedSkill(runId: string, a: ScopeAgent, prepared: PreparedSpec): Promise<string | undefined> {
-  return prepared ? undefined : (await import("../plugins/skill-orchestration")).skillText(runId, a);
+  const has = Array.isArray(prepared?.skills) && (prepared.skills as Array<{ name?: unknown }>).some((s) => s?.name === ORCHESTRATION_SKILL_NAME);
+  // In its block, as a prepared attempt gets it (agentPreparing).
+  return has ? undefined : skillBlock(ORCHESTRATION_SKILL_NAME, await (await import("../plugins/skill-orchestration")).skillText(runId, a));
 }
 
 export async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {

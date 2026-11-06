@@ -79,10 +79,16 @@ const BLOCKS: Record<string, Record<string, object>> = {
   permissions: { report: { type: "boolean" } },
   sharing: { source: text, license: text },
 };
+/** Where a `skills[].source` looks (./skills.ts): the profile's own `skills/<name>/SKILL.md`, the user's
+ *  `~/.claude/skills` (as `capcomd send --skill`), capcomd's bundled ones. Unset: the package, then bundled. */
+export const SKILL_SOURCES = ["package", "user", "bundled"] as const;
 const TOP: Record<string, object> = {
   $schema: str, schema: { const: PROFILE_SCHEMA }, name, version: int(1), extends: name, default: { type: "boolean" },
   description: str, tags: names,
-  skills: { type: "array", items: { type: "object", additionalProperties: false, required: ["name"], properties: { name, source: text, hash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } } } },
+  skills: { type: "array", items: { type: "object", additionalProperties: false, required: ["name"], properties: {
+    name, source: { enum: SKILL_SOURCES, description: "package: the profile's skills/<name>/SKILL.md; user: ~/.claude/skills; bundled: capcomd's. Unset: package, then bundled" },
+    hash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$", description: "The SKILL.md's sha256: a changed file is refused, never taken silently" },
+  } } },
 };
 /** Keys a profile doesn't pass to one that extends it: who it is, not what it does. */
 const OWN = new Set(["$schema", "schema", "name", "extends", "version", "default", "sharing"]);
@@ -161,7 +167,7 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
         if (!isMap(s)) { at(p, "must be { name, source?, hash? }"); return; }
         for (const k of Object.keys(s)) if (!["name", "source", "hash"].includes(k)) at(`${p}.${k}`, "unknown field");
         if (typeof s.name !== "string" || !NAME.test(s.name)) at(`${p}.name`, "must be a skill's name");
-        if (s.source !== undefined && (typeof s.source !== "string" || !s.source)) at(`${p}.source`, "must be a non-empty string");
+        if (s.source !== undefined && !(SKILL_SOURCES as readonly unknown[]).includes(s.source)) at(`${p}.source`, `must be ${SKILL_SOURCES.join(", ")} (unset: the profile's own skills/, then capcomd's)`);
         if (s.hash !== undefined && (typeof s.hash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(s.hash))) at(`${p}.hash`, "must be sha256:<64 hex digits>");
       });
       const n = raw.skills.filter(isMap).map((s) => String(s.name));
@@ -358,11 +364,11 @@ export function flatOverrides(set: Record<string, unknown>): Record<string, unkn
 export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed"];
 
 /**
- * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 step 5; ADR-025 §13), so
+ * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-025 §13), so
  * `validate` can say so instead of the setting silently doing nothing. `tools.mcp`, `sandbox.provider|environment|size`
  * and `lifecycle.onStart|onEnd` apply since step 8 (./runtime.ts).
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion", "skills", "context.providers"].filter(set);
+  return ["identity.persona", "harness.cliVersion", "context.providers"].filter(set);
 }
