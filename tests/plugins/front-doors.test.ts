@@ -17,6 +17,7 @@ import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { BUILTINS, candidateOf, KERNEL_SURFACE } from "../../src/plugins/builtins";
 import { DISPATCHER_COMMANDS, parseLoose } from "../../src/cli/front-doors";
 import { MCP_TOOLS } from "../../src/plugins/front/mcp";
+import { FRONT_GROUPS } from "../../src/plugins/front/groups";
 import { kernelTools } from "../../src/mcp/tools";
 import { SKILL_NAME, plugin as skillPlugin, manifest as skillManifest, skillKernel } from "../../src/plugins/skill-orchestration";
 import { preparingAgent, skillHash } from "../../src/plugins/hooks";
@@ -85,6 +86,15 @@ describe("the kernel's front doors", () => {
     expect(Object.fromEntries(commands.map((c) => [c.key, c.plugin]))).toMatchObject({ run: "front-run", spawn: "front-primitives", verify: "front-primitives", agents: "front-profiles", auth: "front-env", setup: "front-setup", mcp: "front-mcp", hermes: "front-hermes" });
     // Usage lines from the CLI's help, for `capcomd <command> --help`.
     expect(commands.find((c) => c.key === "merge")!.value.spec.usage[0]).toStartWith("capcomd merge <runId> --ref");
+  });
+
+  test("each group's module answers exactly the commands its front door declares", async () => {
+    const modules: Record<string, string> = { "front-run": "run", "front-primitives": "primitives", "front-profiles": "profiles", "front-env": "env", "front-setup": "setup" };
+    expect(FRONT_GROUPS.map((g) => g.manifest.name).sort()).toEqual(Object.keys(modules).sort());
+    for (const g of FRONT_GROUPS) {
+      const { COMMANDS } = await import(`../../src/cli/groups/${modules[g.manifest.name]}`);
+      expect([g.manifest.name, Object.keys(COMMANDS).sort()]).toEqual([g.manifest.name, (g.manifest.contributes?.cli ?? []).map((c) => c.name).sort()]);
+    }
   });
 
   test("a plugin command's flags: --k v, --k=v, a kernel flag keeps its type, a repeat is a list", () => {
