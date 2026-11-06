@@ -33,8 +33,12 @@ export interface Candidate {
   enabled?: boolean;
   /** The plugin's config over its schema's defaults: the user, project and environment layers merged (§10.2). */
   config?: Record<string, unknown>;
-  /** What its schema refused in those layers (§10.4): an enabled plugin with any is failed `config_invalid`. */
-  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env" }>;
+  /** What its schema refused in those layers (§10.4): an enabled plugin with any is failed `config_invalid`, except for
+   *  those `setAside` (a project's settings for a plugin not its own, left out of `config`): those are only reported. */
+  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env"; setAside?: true }>;
+  /** The layer each top-level key of `config` came from (`GET /v1/plugins/{name}` `config.sources`); a key not listed
+   *  is the user's. */
+  configSources?: Record<string, "user" | "project" | "env">;
   /** One of the kernel's own front doors (§4.2, §4.7.1): its CLI groups take the kernel's command names and its MCP
    *  tools are `capcomd_<tool>`. The kernel's built-in list sets it; honoured for `source: "builtin"` only. */
   kernelSurface?: boolean;
@@ -70,9 +74,15 @@ export interface HostOptions {
   services?(manifest: PluginManifest): ContextOptions<unknown>["services"];
   sinks?: HostSinks;
   /** A plugin's own secret (§10.3): the value its `x-secret` property `key` references, for that plugin only. */
-  secret?(manifest: PluginManifest, key: string): Promise<string>;
+  secret?(manifest: PluginManifest, key: string, dir: string | null): Promise<string>;
   /** An operator's `allow-version` exemption (§4.4). */
   exempt?(name: string, version: string): boolean;
+  /**
+   * Whether a project's plugin may run (§4.8): the operator trusted its content as it is now. Asked each time it would
+   * go on from `validated` (at start and at `enable`) and before each start of its process. Without it no project
+   * plugin runs.
+   */
+  trusted?(name: string, dir: string): boolean;
   /** Called after every state change, with the new listing. */
   onChange?(plugins: PluginSummary[]): void;
   activateTimeoutMs?: number;
@@ -208,7 +218,8 @@ export class PluginHost {
     if (r.state === "loading" || r.state === "disposing") throw new PluginError("conflict", `${name} is ${r.state}`);
     if (r.state === "failed" && r.cause === "duplicate") return this.summary(r);
     await this.release(r);
-    if (!r.manifest || r.state === "failed" && ["invalid_manifest", "incompatible", "untrusted"].includes(r.cause ?? "")) {
+    // A plugin from a directory is read again: out of process a new child runs, so its manifest may have changed too.
+    if (!r.manifest || r.dir || r.state === "failed" && ["invalid_manifest", "incompatible", "untrusted"].includes(r.cause ?? "")) {
       this.validate(r);
       if (r.state === "failed") return this.summary(r);
     }
@@ -247,7 +258,7 @@ export class PluginHost {
     const defaults = r.manifest ? configDefaults(r.manifest, r.dir) : {};
     const own = Object.fromEntries(Object.entries(r.candidate.config ?? {}).filter(([k]) => !secret.has(k)));
     const values = { ...defaults, ...own };
-    const sources = Object.fromEntries(Object.keys(values).map((k) => [k, k in own ? "user" as const : "default" as const]));
+    const sources = Object.fromEntries(Object.keys(values).map((k) => [k, k in own ? r.candidate.configSources?.[k] ?? "user" as const : "default" as const]));
     return { ...this.summary(r), manifest: r.manifest, config: { values, sources } };
   }
 
@@ -318,14 +329,24 @@ export class PluginHost {
         const mine = errors.filter((e) => e.layer === layer).map(({ path, message }) => ({ path, message }));
         this.o.emit({ type: "plugin.config_refused", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin's settings were refused.`, data: { plugin: r.name, errors: mine, layer } });
       }
-      return this.fail(r, "config_invalid", errors.map((e) => `${e.layer}: plugins.${r.name}.${e.path}: ${e.message}`).join("; "));
+      const fatal = errors.filter((e) => !e.setAside);
+      if (fatal.length) return this.fail(r, "config_invalid", fatal.map((e) => `${e.layer}: plugins.${r.name}.${e.path}: ${e.message}`).join("; "));
+      this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `the project's settings for it were refused and left out: ${errors.map((e) => `plugins.${r.name}.${e.path}: ${e.message}`).join("; ")}`, fields: {} });
     }
     this.set(r, "validated", r.enabled ? null : "disabled");
   }
 
-  /** Whether a validated plugin goes on to `resolved`: enabled, and in process or with a launcher for its process. */
+  /**
+   * Whether a validated plugin goes on to `resolved`: enabled, a project's only once the operator trusted its content
+   * as it is now (§4.8: opening a repository runs no code; it stays `validated`, cause `untrusted`), and in process or
+   * with a launcher for its process.
+   */
   private loadable(r: Rec): boolean {
     if (r.state !== "validated" || !r.enabled || !r.manifest) return false;
+    if (r.source === "project" && !(r.dir && this.o.trusted?.(r.name, r.dir))) {
+      this.set(r, "validated", "untrusted", "a project's plugin runs only once you trust its content (capcomd plugins trust)");
+      return false;
+    }
     if (r.manifest.entry.runtime === "process" && (!this.o.launcher || !r.dir || !r.hash)) {
       this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: "out-of-process plugins run only beside the daemon (capcomd serve); it stays validated here", fields: {} });
       return false;
@@ -367,7 +388,7 @@ export class PluginHost {
     const runtime = createContext({
       manifest: m, runtime: m.entry.runtime, root: r.dir ?? "", dataDir: this.o.dataDir(r.name), kernelSurface: kernelSurfaceOf(r.candidate),
       hooks: this.hooks, store: this.contributions, config, ...(this.o.services ? { services: this.o.services(m) } : {}), ...this.o.sinks,
-      ...(this.o.secret ? { secret: (key: string) => this.o.secret!(m, key) } : {}),
+      ...(this.o.secret ? { secret: (key: string) => this.o.secret!(m, key, r.dir) } : {}),
     });
     r.runtime = runtime;
     this.hooks.attach(r.name, runtime.ctx.signal);
@@ -402,7 +423,7 @@ export class PluginHost {
     // The plugin's own secrets go to its process once, in the handshake's answer (§10.3), never in its environment.
     const secrets: Record<string, string> = {};
     for (const key of secretKeys(m, r.dir)) {
-      try { if (this.o.secret) secrets[key] = await this.o.secret(m, key); } catch (e) {
+      try { if (this.o.secret) secrets[key] = await this.o.secret(m, key, r.dir); } catch (e) {
         this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `its secret ${key} is not available: ${(e as Error).message}`, fields: {} });
       }
     }
@@ -413,7 +434,7 @@ export class PluginHost {
     const redact = this.o.sinks?.redact;
     const deep = (v: unknown): unknown => typeof v === "string" ? redact!(v) : Array.isArray(v) ? v.map(deep) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deep(x)])) : v;
     const proc: ProcessPlugin = new ProcessPlugin({
-      name: r.name, manifest: m, root: r.dir!, dataDir: this.o.dataDir(r.name), manifestHash: r.hash!, launcher: this.o.launcher!, secrets: Object.values(secrets),
+      name: r.name, manifest: m, root: r.dir!, dataDir: this.o.dataDir(r.name), manifestHash: r.hash!, launcher: this.trustedLauncher(r), secrets: Object.values(secrets),
       emit: (e) => this.o.emit(e), dropped: (n) => this.hooks.dropped(r.name, n),
       ...(this.o.processTimings ? { timings: this.o.processTimings } : {}), ...(redact ? { redact: deep } : {}),
       listen: () => { for (const h of hooks) runtime.ctx.hooks.on(h, ((call: HookCall) => proc.call(call)) as never); },
@@ -440,6 +461,24 @@ export class PluginHost {
     this.set(r, "active", null);
     const s = this.summary(r);
     this.o.emit({ type: "plugin.loaded", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin is active.`, data: { plugin: r.name, version: m.version, runtime: "process", hooks: s.hooks, seams: [], ms: Date.now() - started } });
+  }
+
+  /**
+   * The launcher for a plugin's process. A project's plugin is checked again before every start, restarts included
+   * (§4.8): files changed since it was trusted (a pull while it ran) are never run; that start fails as a process that
+   * couldn't be started, so its gates deny and it ends `failed(restart_limit)` until it is trusted and enabled again.
+   */
+  private trustedLauncher(r: Rec): ProcessLauncher {
+    const launcher = this.o.launcher!;
+    if (r.source !== "project") return launcher;
+    return {
+      ...launcher,
+      start: (o) => {
+        if (r.dir && this.o.trusted?.(r.name, r.dir)) return launcher.start(o);
+        this.o.sinks?.log?.({ plugin: r.name, level: "error", message: "not started: its files changed since you trusted them (capcomd plugins trust)", fields: {} });
+        return { clientId: "", pid: null, exited: Promise.resolve({ code: null, signal: null }), kill() {}, revoke() {} };
+      },
+    };
   }
 
   /**
@@ -494,7 +533,7 @@ export class PluginHost {
     const declaredHooks = Object.keys(m?.contributes?.hooks ?? {}) as HookName[];
     return {
       name: r.name, version: m?.version ?? "0.0.0", apiVersion: 1, runtime: m?.entry.runtime ?? "in-process", source: r.source, state: r.state,
-      enabled: r.enabled, cause: r.cause,
+      enabled: r.enabled && r.cause !== "untrusted", cause: r.cause,
       hooks: r.state === "active" ? regs.flatMap((x) => x.kind === "hook" ? [x.hook] : []) : declaredHooks,
       seams: r.state === "active" ? regs.flatMap((x) => x.kind === "seam" ? [{ kind: x.seam, name: x.name }] : []) : (m?.contributes?.seams ?? []).map((s) => ({ kind: s.kind, name: s.name })),
       hooksSuspended: r.state === "active" && this.hooks.suspended(r.name),

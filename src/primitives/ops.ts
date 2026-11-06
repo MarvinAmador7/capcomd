@@ -243,7 +243,10 @@ export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key
   sandbox?: string;
   /** The run's goal branch (`--goal-branch G --base B`): cut from `base`, the run's target; reviewed work lands on it
    *  directly and the user opens a pull request from it into `base` when the planner is done. Needs `base`. */
-  goalBranch?: string; base?: string }
+  goalBranch?: string; base?: string;
+  /** The run's plugin config (plugin API §10.2 layer 5, `--plugin-config`): only per-run settings, checked here and kept
+   *  in each plugin's run storage (src/plugins/run-config.ts). */
+  pluginConfig?: Record<string, Record<string, unknown>> }
 /** What a run's key is scoped by: the project's repository (its clone URL), else the project's directory (the nearest
  *  .capcomd/config.json, else the working directory). */
 export function projectIdentity(source: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
@@ -313,6 +316,8 @@ export async function runNew(o: RunNewOpts) {
     o = { ...o, target: o.goalBranch, targetFrom: o.base };
   }
   if (o.targetFrom !== undefined && o.target === undefined) throw new RelayError("usage", "--target-from needs --target", "Pass the branch to create: --target T --target-from <base>.");
+  const RC = await import("../plugins/run-config");
+  const pluginConfig = o.pluginConfig && Object.keys(o.pluginConfig).length ? await RC.checkRunPluginConfig(o.pluginConfig) : null;
   if (hooks.listening("run.creating")) o = await runCreating(runId, o);
   const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.base ? { base: o.base } : {}) });
   const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph }).catch(asRelay);
@@ -320,6 +325,7 @@ export async function runNew(o: RunNewOpts) {
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);
   if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
+  if (pluginConfig) await RC.writeRunPluginConfig(runId, pluginConfig);
   // The run's place and that provider's settings as they are now (ADR-021 §2): a run keeps the idle machine lifetime
   // it started with. The place: the one asked for, else the project's (its .capcomd/config.json), else the user's
   // config, read from the files now, not from the engine's environment (src/config/sandbox.ts); none of those: the

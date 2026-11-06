@@ -1,12 +1,14 @@
 // A plugin's private storage (plugin API §8.4, §9.6): `ctx.storage` in process and /v1/plugins/{name}/storage out of
 // process. The daemon scope is one JSON file in the plugin's data directory (<home>/state/plugins/<name>/storage.json,
 // 0600), which survives updates and reinstalls; a run's scope is the run's kv under `plugin/<name>/` (a reserved prefix
-// a plugin's `ctx.kv` can't write), so it goes with the run. Keys `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$`, values JSON of
+// a plugin's `ctx.kv` can't write), so it goes with the run; its key `config` there is the run's plugin config, which
+// the kernel writes (src/plugins/run-config.ts) and the plugin only reads. Keys `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$`, values JSON of
 // at most 64 KB. A write with `expect` (the JSON text of the current value, or null: none) is a compare-and-swap.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { StorageService } from "../../packages/plugin/src/context";
+import { RUN_CONFIG_KEY } from "./run-config";
 
 export type StorageScope = "daemon" | { runId: string };
 export interface StoredEntry { key: string; value: unknown; rev: string }
@@ -31,6 +33,10 @@ function checkValue(value: unknown): string {
   return text;
 }
 const conflict = (key: string) => new PluginError("conflict", `storage ${key}: its value isn't the one expected`);
+/** A run's `config` is the kernel's (a run's plugin config, §10.2 layer 5): the plugin reads it, never writes it. */
+const kernelOwned = (where: StorageScope, key: string) => {
+  if (where !== "daemon" && key === RUN_CONFIG_KEY) throw new PluginError("forbidden", `the run's ${RUN_CONFIG_KEY} is the run's plugin config, written by capcomd (§10.2): read it, keep your own data under another key`);
+};
 
 /** The storage of plugin `name`, whose data directory is `dataDir`. */
 export function pluginStore(name: string, dataDir: string): PluginStore {
@@ -64,6 +70,7 @@ export function pluginStore(name: string, dataDir: string): PluginStore {
     },
     async put(where, key, value, expect) {
       checkKey(key);
+      kernelOwned(where, key);
       const text = checkValue(value);
       if (where === "daemon") {
         const d = read();
@@ -93,6 +100,7 @@ export function pluginStore(name: string, dataDir: string): PluginStore {
     },
     async delete(where, key) {
       checkKey(key);
+      kernelOwned(where, key);
       if (where === "daemon") {
         const d = read();
         if (!(key in d.entries)) return;

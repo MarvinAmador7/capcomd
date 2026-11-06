@@ -11,6 +11,8 @@ import { createHash } from "node:crypto";
 import { kernelHost, pluginDataDir, userPlugins } from "../../src/plugins/host";
 import { loadManifest } from "../../packages/plugin/src/load";
 import { pluginStore } from "../../src/plugins/storage";
+import { recordTrust } from "../../src/install/trust";
+import { hashTree } from "../../src/install/lock";
 import { harnessApp, pluginsOnly } from "../../src/api/server";
 import { serveHarnessSocket } from "../../src/api/socket";
 import { memorySource } from "../../src/api/source";
@@ -27,7 +29,7 @@ type Boot = { host: PluginHost; events: Array<{ type: string; data: Record<strin
 const live: Boot[] = [];
 afterEach(async () => { for (const b of live.splice(0)) await b.stop().catch(() => {}); });
 
-async function boot(o: { name?: string; hooks?: Record<string, object>; control?: object; timings?: ProcessTimings; manifest?: Record<string, unknown>; clientsPath?: string; log?: boolean } = {}): Promise<Boot> {
+async function boot(o: { name?: string; hooks?: Record<string, object>; control?: object; timings?: ProcessTimings; manifest?: Record<string, unknown>; clientsPath?: string; log?: boolean; source?: "user" | "project"; beforeStart?: (dir: string) => void } = {}): Promise<Boot> {
   const name = o.name ?? `proc-gate-${Math.random().toString(36).slice(2, 8)}`;
   const dir = mkdtempSync(join(tmpdir(), "cpp-"));
   const plugin = join(dir, "p");
@@ -47,7 +49,8 @@ async function boot(o: { name?: string; hooks?: Record<string, object>; control?
   const served = await serveHarnessSocket(sock, pluginsOnly((r) => app.fetch(r)));
   const b: Boot = { host, events, data, dir, app, stop: async () => { await host.stop(); served.close(); rmSync(dir, { recursive: true, force: true }); } };
   live.push(b);
-  await host.start([{ source: "user", dir: plugin }]);
+  o.beforeStart?.(plugin);
+  await host.start([{ source: o.source ?? "user", dir: plugin }]);
   return b;
 }
 const frames = (b: Boot) => (existsSync(join(b.data, "frames.ndjson")) ? readFileSync(join(b.data, "frames.ndjson"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
@@ -178,6 +181,24 @@ describe("the out-of-process runtime", () => {
     const asked = frames(b).filter((f) => f.hook === "merge.landing").length;
     expect(await b.host.hooks.fire("merge.landing", "veto", merge, { ...OPERATOR, attempt: 3 })).toMatchObject({ decision: "allow" });
     expect(frames(b).filter((f) => f.hook === "merge.landing")).toHaveLength(asked + 1);
+  }, 30_000);
+
+  test("a trusted project plugin is checked again before every start: files changed while it ran are never run (§4.8)", async () => {
+    const b = await boot({ source: "project", control: { "merge.landing": "crash" }, timings: { backoffMs: () => 100, restartLimit: 3 },
+      beforeStart: (dir) => { recordTrust({ kind: "plugin", name: "p", dir, hash: hashTree(dir).hash, by: "operator" }); } });
+    expect(b.host.list()[0]).toMatchObject({ source: "project", state: "active" });
+    const first = JSON.parse(readFileSync(join(b.data, "opened.json"), "utf8")).session as string;
+    // A pull changes its files while it runs; then it crashes with a gate call in flight.
+    writeFileSync(join(b.dir, "p", "new-code.sh"), "#!/bin/sh\necho changed\n");
+    expect(await b.host.hooks.fire("merge.landing", "veto", merge, OPERATOR)).toMatchObject({ decision: "deny", failure: "crashed" });
+    await until(() => b.host.list()[0]!.state === "failed");
+    expect(b.host.list()[0]).toMatchObject({ state: "failed", cause: "restart_limit" });
+    // Never started again from the changed files: the one session it had is the last.
+    expect(JSON.parse(readFileSync(join(b.data, "opened.json"), "utf8")).session).toBe(first);
+    expect(b.events.filter((e) => e.type === "plugin.process_changed" && e.data.event === "started" && e.data.pid !== null)).toHaveLength(1);
+    expect(await b.host.hooks.fire("merge.landing", "veto", merge, { ...OPERATOR, attempt: 2 })).toMatchObject({ decision: "deny" });
+    // Enabling it doesn't either, until the new content is trusted.
+    expect(await b.host.enable(nameOf(b))).toMatchObject({ state: "validated", cause: "untrusted" });
   }, 30_000);
 
   test("a plugin failed by restart_limit and then disabled is no longer asked: the operator's call", async () => {

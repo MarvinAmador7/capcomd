@@ -29,13 +29,17 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     if ((goalBranch !== undefined || base !== undefined) && (values.target !== undefined || values["target-from"] !== undefined)) usage("--goal-branch/--base replace --target/--target-from: pass one pair");
     // --sandbox NAME: where this run's agents and checks run (recorded with the run); default: the project's.
     const sandbox = values.sandbox !== undefined ? await (await import("../../config/sandbox")).askedSandbox(String(values.sandbox)) : undefined;
-    const r = await P.runNew({ budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(sandbox ? { sandbox } : {}),
+    const pluginConfig = await runPluginConfig(values);
+    const r = await P.runNew({ ...(pluginConfig ? { pluginConfig } : {}), budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(sandbox ? { sandbox } : {}),
       ...(goalBranch !== undefined || base !== undefined ? { ...(goalBranch !== undefined ? { goalBranch } : {}), ...(base !== undefined ? { base } : {}) } : { ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) }) });
     if (json) out(r); else console.log(r.runId);
     return EXIT.ok;
   }
   const rawGoal = positionals[1];
   if (!rawGoal) usage("goal required: capcomd run <goal>");
+  // --plugin-config name.key=value: the run's per-run plugin settings, checked now (refused before anything starts).
+  const pluginConfig = await runPluginConfig(values);
+  if (pluginConfig && values.legacy) usage("--plugin-config needs a planner or recipe run (not --legacy)");
   // A planner agent plans real work: --planner P, or on real VMs the profile named "planner" (capcomd setup writes
   // it). The built-in recipe's planner is a placeholder model, so real VMs need --recipe/--legacy to use it.
   const PA = await import("../../recipes/planner-agent");
@@ -148,7 +152,7 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     const log = join(dir, `${runId}.ndjson`);
     const fd = openSync(log, "a");
     const goalArgs = goalBranch ? ["--goal-branch", goalBranch.branch, "--base", goalBranch.base] : values["no-goal-branch"] ? ["--no-goal-branch"] : [];
-    const [cmd, ...args] = (await import("../../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...goalArgs, ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(plannerModel ? ["--planner-model", plannerModel] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), "--", goal);
+    const [cmd, ...args] = (await import("../../utils/self")).selfArgv("run", "--json", "--run-id", runId, ...(targetBranch ? ["--target-branch", targetBranch] : []), ...goalArgs, ...(planner ? ["--planner", planner] : values.recipe ? ["--recipe"] : values.legacy ? ["--legacy"] : []), ...(driver ? ["--planner-provider", driver] : []), ...(effort ? ["--planner-effort", effort] : []), ...(plannerModel ? ["--planner-model", plannerModel] : []), ...(runSandbox ? ["--sandbox", runSandbox] : []), ...(pluginConfig ? (await import("../../plugins/run-config")).pluginConfigFlags(pluginConfig) : []), "--", goal);
     const child = spawn(cmd!, args, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
     child.unref();
     if (json) out({ runId, detached: true, log, pid: child.pid, ...(goalBranch ? { goalBranch: goalBranch.branch, base: goalBranch.base } : {}) });
@@ -162,6 +166,7 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   if (values.recipe && values.legacy) usage("pass at most one of --recipe / --legacy");
   const runPath = values.recipe ? "recipe" : values.legacy ? "legacy" : (process.env.CAPCOMD_RUN_PATH ?? DEFAULT_RUN_PATH);
   if (runPath !== "recipe" && runPath !== "legacy") usage(`CAPCOMD_RUN_PATH must be recipe or legacy, got ${runPath}`);
+  if (pluginConfig && !planner && runPath === "legacy") usage("--plugin-config needs a planner or recipe run (not the legacy path)");
   let lineSeq = 0;
   const emit = (type: string, data: Record<string, unknown>, human: string) => {
     const now = Date.now();
@@ -169,12 +174,20 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     else console.log(human);
   };
   const result = planner
-    ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}), ...(goalBranch ? { goalBranch } : {}) })
+    ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}), ...(goalBranch ? { goalBranch } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
     : runPath === "recipe"
-    ? await (await import("../../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}) })
+    ? await (await import("../../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
     : await executeRun({ goal, runId, targetBranch, emit });
   if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
   return result.ok ? EXIT.ok : EXIT.run_failed;
+}
+
+/** `--plugin-config <plugin>.<key>=<value>` (repeatable), checked against the plugins' per-run settings; null: none. */
+async function runPluginConfig(values: Cmd["values"]): Promise<Record<string, Record<string, unknown>> | null> {
+  const flags = (values["plugin-config"] as string[] | undefined) ?? [];
+  if (!flags.length) return null;
+  const RC = await import("../../plugins/run-config");
+  return RC.checkRunPluginConfig(RC.parsePluginConfigFlags(flags));
 }
 
 /** `capcomd goal` */

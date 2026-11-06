@@ -60,6 +60,7 @@ Usage:
              [--planner-model ID]          the planner's model (one its provider offers: GET /v1/run-options models;
                                            claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5; codex gpt-5.6)
              [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX)
+             [--plugin-config P.K=V]…      a plugin's per-run setting for this run (also with run new)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages; configure: change settings, set up projects)
   capcomd clients pair --app <name> [--scopes …] [--json]   a token for an app on this computer, printed alone on stdout
@@ -134,7 +135,20 @@ Usage:
                                        Check a plugin's manifest (a directory, or a built-in by name; all
                                        built-ins with neither); --conformance also loads it and runs its
                                        seam's conformance suite against the real backend
-  capcomd ui                             Launch the web UI
+  capcomd plugins show <name> [--json]   One plugin: its state, config (and where each value came from), its source
+  capcomd plugins install <owner/repo>[#<name>][@<ref>] [--project]
+                                       Install a plugin from a git repository (a URL or a local path works too)
+                                       with a LOCK of its files; --project adds it to the project's plugins.use
+                                       (no source: fetch the project's plugins.use)
+  capcomd plugins update <name> [--project] [--dry-run]
+                                       Fetch it again from its source and show what changed (files, hash)
+  capcomd plugins remove <name> [--project]   Remove an installed plugin (its data stays)
+  capcomd plugins trust [<name>] [--yes]
+                                       A project's plugins run only once you trust their content: shows what
+                                       would run and asks; a changed file needs trusting again
+  capcomd plugins allow-version <name>@<version> --accept-risk
+                                       Let that exact version run on a capcomd its engines range leaves out
+  capcomd ui                            Launch the web UI
 
 Options:
   --json        Machine-readable output (schema "${SCHEMA}"); run streams NDJSON

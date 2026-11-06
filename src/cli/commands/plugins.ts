@@ -1,9 +1,12 @@
 // `capcomd plugins list` (docs/spec/plugin-api.md §13.2): what GET /v1/plugins says. The running daemon's own listing
 // when one is up (it keeps it in state/plugins.json for the CLI, which holds no API token); otherwise what the daemon
 // would load, worked out the same way without running any plugin code (discovered, validated, resolved).
+// `capcomd plugins show <name>`: one plugin as GET /v1/plugins/{name} has it, with where it was installed from.
 // `capcomd plugins validate [<dir>|<name>] [--conformance]` (§4.9, §14): a plugin directory's manifest, or a built-in's
 // (all of them with no argument), checked as the host checks it; with --conformance its code is loaded, disposed and
 // loaded again (§14.1), and its seams run their conformance suites (§14.2) against the real backend.
+// `capcomd plugins install|update|remove|trust|allow-version` (§4.4, §4.8, §17.2 step 12): src/plugins/install.ts. They
+// change files the daemon reads at its next start or a plugin's `enable` (the CLI can't reach a running daemon's host).
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { RelayError, SCHEMA, EXIT } from "../../core/errors";
@@ -13,18 +16,43 @@ import type { ConformanceResult, SandboxConformanceOptions } from "../../../pack
 import type { ManifestIssue } from "../../../packages/plugin/src/load";
 import type { AgentProvider, SandboxProvider } from "../../../packages/plugin/src/seams";
 
-const USAGE = "usage: capcomd plugins list [--json] | capcomd plugins validate [<dir>|<name>] [--conformance] [--json]";
+const USAGE = [
+  "usage: capcomd plugins list [--json]",
+  "       capcomd plugins show <name> [--json]",
+  "       capcomd plugins validate [<dir>|<name>] [--conformance] [--json]",
+  "       capcomd plugins install <owner/repo>[#<name>][@<ref>] [--project] [--json]   (a git URL or a local repository path works too)",
+  "       capcomd plugins install --project [--json]   (the project's plugins.use)",
+  "       capcomd plugins update <name> [--project] [--dry-run] [--json]",
+  "       capcomd plugins remove <name> [--project] [--json]",
+  "       capcomd plugins trust [<name>] [--yes] [--json]",
+  "       capcomd plugins allow-version <name>@<version> --accept-risk [--json]",
+].join("\n");
 
-export async function pluginsCommand(positionals: string[], values: { json?: boolean; conformance?: boolean }): Promise<number> {
+type Values = { json?: boolean; conformance?: boolean; project?: boolean; yes?: boolean; acceptRisk?: boolean; dryRun?: boolean };
+const out = (body: Record<string, unknown>) => console.log(JSON.stringify({ schema: SCHEMA, ok: true, ...body }));
+const short = (sha: string) => sha.slice(0, 12);
+/** A manifest's text as the trust prompt prints it: control and format characters (escape sequences, carriage returns,
+ *  bidi overrides) shown as `\u{…}`, so a plugin can't redraw or hide what the operator is asked about. */
+const visible = (s: string) => s.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+
+export async function pluginsCommand(positionals: string[], values: Values): Promise<number> {
   const sub = positionals[1] ?? "list";
-  if (sub === "validate") return validateCommand(positionals.slice(2), values);
+  const args = positionals.slice(2);
+  if (sub === "validate") return validateCommand(args, values);
+  if (sub === "install") return installCommand(args, values);
+  if (sub === "update") return updateCommand(args, values);
+  if (sub === "remove") return removeCommand(args, values);
+  if (sub === "trust") return trustCommand(args, values);
+  if (sub === "allow-version") return allowVersionCommand(args, values);
+  if (sub === "show") return showCommand(args, values);
   if (sub !== "list") throw new RelayError("usage", `unknown plugins command: ${sub}`, USAGE);
   const P = await import("../../plugins/host");
   const snap = P.readSnapshot();
-  const plugins: PluginSummary[] = snap ? snap.plugins : P.kernelHost().plan(P.builtinCandidates());
+  const plugins: PluginSummary[] = snap ? snap.plugins : P.kernelHost({ log: false }).plan(P.builtinCandidates());
   const daemon = snap ? { pid: snap.pid, at: snap.at } : null;
+  const installs = await installedFacts(plugins);
   if (values.json) {
-    console.log(JSON.stringify({ schema: SCHEMA, ok: true, plugins, daemon }));
+    out({ plugins, daemon, installs });
     return EXIT.ok;
   }
   const where = daemon ? `the running daemon (pid ${daemon.pid})` : "no daemon is running; this is what one would load";
@@ -37,8 +65,169 @@ export async function pluginsCommand(positionals: string[], values: { json?: boo
   for (const p of plugins) {
     const state = p.state === "active" && p.hooksSuspended ? "active, hooks suspended" : p.cause ? `${p.state} (${p.cause})` : p.state;
     const what = [p.hooks.length ? `${p.hooks.length} hook${p.hooks.length > 1 ? "s" : ""}` : "", ...p.seams.map((s) => `${s.kind} ${s.name}`)].filter(Boolean).join(", ");
-    console.log(`  ${p.name.padEnd(w)}  ${p.version}  ${p.source}  ${state}${what ? `  ${what}` : ""}${p.stats.failures ? `  ${p.stats.failures}/${p.stats.calls} calls failed` : ""}`);
+    const i = installs[p.name];
+    const note = i?.modified ? "  files changed since it was installed (capcomd plugins update replaces them)" : i?.trust === "changed" ? "  changed since you trusted it (capcomd plugins trust)" : p.cause === "untrusted" ? `  not trusted yet (capcomd plugins trust ${p.name})` : "";
+    console.log(`  ${p.name.padEnd(w)}  ${p.version}  ${p.source}  ${state}${what ? `  ${what}` : ""}${p.stats.failures ? `  ${p.stats.failures}/${p.stats.calls} calls failed` : ""}${note}`);
   }
+  return EXIT.ok;
+}
+
+/** For each third-party plugin listed: where it was installed from (its LOCK), whether its files changed since, and for
+ *  a project's whether the operator trusts it as it is now. */
+async function installedFacts(plugins: PluginSummary[]): Promise<Record<string, { source: string | null; commit: string | null; modified: boolean; trust?: "trusted" | "changed" | "untrusted" }>> {
+  const I = await import("../../plugins/install");
+  const { lockState } = await import("../../install/lock");
+  const facts: Record<string, { source: string | null; commit: string | null; modified: boolean; trust?: "trusted" | "changed" | "untrusted" }> = {};
+  for (const p of plugins.filter((x) => x.source === "user")) {
+    const s = lockState(join(I.userPluginsDir(), p.name));
+    facts[p.name] = { source: s?.lock.source ?? null, commit: s?.lock.commit ?? null, modified: !!s && "modified" in s && s.modified };
+  }
+  const project = I.projectOf();
+  if (project) for (const x of I.projectPluginList(project)) {
+    if (!plugins.some((p) => p.name === x.name && p.source === "project")) continue;
+    const s = lockState(x.dir);
+    facts[x.name] = { source: s?.lock.source ?? null, commit: s?.lock.commit ?? null, modified: !!s && "modified" in s && s.modified, trust: x.trust };
+  }
+  return facts;
+}
+
+/** The project of the working directory, for --project and trust; a usage error outside one. */
+async function project(): Promise<string> {
+  const p = (await import("../../plugins/install")).projectOf();
+  if (!p) throw new RelayError("usage", "not in a project: no .capcomd/config.json here or above", "Run it in the project's checkout (capcomd setup project makes one).");
+  return p;
+}
+
+async function installCommand(args: string[], values: Values): Promise<number> {
+  const I = await import("../../plugins/install");
+  if (!args.length) {
+    if (!values.project) throw new RelayError("usage", "install needs a source", USAGE);
+    const dir = await project();
+    const results = await I.installProjectUses(dir);
+    if (values.json) { out({ project: dir, results }); return results.some((r) => "error" in r) ? EXIT.run_failed : EXIT.ok; }
+    if (!results.length) console.log("The project lists no plugins to fetch (plugins.use in .capcomd/config.json).");
+    for (const r of results) {
+      if ("error" in r) console.log(`✗ ${r.source}: ${r.error}`);
+      else if ("present" in r) console.log(`  ${r.source}: ${r.present} is already fetched`);
+      else console.log(`✓ ${r.name} ${r.version} from ${r.source} (commit ${short(r.commit)}). It runs once you trust it: capcomd plugins trust ${r.name}`);
+    }
+    return results.some((r) => "error" in r) ? EXIT.run_failed : EXIT.ok;
+  }
+  if (args.length > 1) throw new RelayError("usage", "install takes one source", USAGE);
+  const r = await I.installPlugin(args[0]!, { project: values.project ? await project() : null });
+  if (values.json) { out({ installed: r }); return EXIT.ok; }
+  console.log(`Installed ${r.name} ${r.version} from ${r.source} (commit ${short(r.commit)}, ${r.hash}) in ${r.dir}.`);
+  console.log(r.project
+    ? `It is one of this project's plugins (plugins.use): it runs once you trust it, capcomd plugins trust ${r.name}.`
+    : "The daemon runs it from its next start (capcomd service restart), or when it is enabled again.");
+  return EXIT.ok;
+}
+
+async function updateCommand(args: string[], values: Values): Promise<number> {
+  const name = args[0];
+  if (!name || args.length > 1) throw new RelayError("usage", "update takes a plugin's name", USAGE);
+  const I = await import("../../plugins/install");
+  const u = await I.updatePlugin(name, { project: values.project ? await project() : null, dryRun: !!values.dryRun });
+  if (values.json) { out({ update: u }); return EXIT.ok; }
+  const same = u.from.hash === u.to.hash && !u.modified;
+  if (same) {
+    console.log(`${name} is up to date (${u.to.version}, ${u.to.hash})${u.updated ? `; its LOCK now names commit ${short(u.to.commit)}` : ""}.`);
+    return EXIT.ok;
+  }
+  console.log(`${name}: ${u.from.version ?? "?"} → ${u.to.version}, commit ${short(u.from.commit)} → ${short(u.to.commit)}`);
+  console.log(`  hash ${u.from.hash}\n    → ${u.to.hash}`);
+  for (const [k, list] of [["changed", u.changed], ["added", u.added], ["removed", u.removed]] as const) if (list.length) console.log(`  ${k}: ${list.join(", ")}`);
+  if (u.modified) console.log(`  edited since it was installed (replaced by the update): ${[...u.modified.changed, ...u.modified.added, ...u.modified.removed].join(", ")}`);
+  if (!u.updated) { console.log("Nothing was changed (--dry-run)."); return EXIT.ok; }
+  console.log(values.project ? `Updated. Its content changed, so it waits for your trust again: capcomd plugins trust ${name}` : "Updated. The daemon runs the new version from its next start, or when the plugin is enabled again.");
+  return EXIT.ok;
+}
+
+async function removeCommand(args: string[], values: Values): Promise<number> {
+  const name = args[0];
+  if (!name || args.length > 1) throw new RelayError("usage", "remove takes a plugin's name", USAGE);
+  const r = (await import("../../plugins/install")).removePlugin(name, { project: values.project ? await project() : null });
+  if (values.json) { out({ removed: r }); return EXIT.ok; }
+  console.log(`Removed ${name} (${r.dir}). Its data stays in capcomd's state; a running daemon stops it at its next start.`);
+  return EXIT.ok;
+}
+
+/**
+ * `capcomd plugins trust [<name>]` (§4.8): the trust prompt. It shows what would run on this machine (the command, the
+ * scopes its token gets, the hooks it answers, the files and their hash) and asks; --yes trusts without asking. With no
+ * name, the project's plugins and whether each is trusted.
+ */
+async function trustCommand(args: string[], values: Values): Promise<number> {
+  const I = await import("../../plugins/install");
+  const dir = await project();
+  const list = I.projectPluginList(dir);
+  if (!args.length) {
+    if (values.json) { out({ project: dir, plugins: list.map(({ manifest, ...p }) => ({ ...p, version: manifest?.version ?? null })) }); return EXIT.ok; }
+    if (!list.length) { console.log("This project has no plugins (.capcomd/plugins/<name>/, or plugins.use fetched with capcomd plugins install --project)."); return EXIT.ok; }
+    for (const p of list) console.log(`  ${p.name}  ${p.manifest?.version ?? "?"}  ${p.trust}${p.trust === "changed" ? " (its content changed since you trusted it)" : ""}  ${p.dir}`);
+    return EXIT.ok;
+  }
+  const name = args[0]!;
+  const p = list.find((x) => x.name === name);
+  if (!p) throw new RelayError("not_found", `this project has no plugin ${name}`, "capcomd plugins trust lists them.");
+  if (!p.hash || !p.manifest) throw new RelayError("config", `${name} can't be trusted: ${p.issues.join("; ")}`, "Fix the plugin's files first (capcomd plugins validate <dir>).");
+  if (p.trust === "trusted") {
+    if (values.json) out({ trusted: { name, hash: p.hash, dir: p.dir, already: true } }); else console.log(`${name} is trusted as it is (${p.hash}).`);
+    return EXIT.ok;
+  }
+  const m = p.manifest;
+  if (!values.json) {
+    console.log(`${name} ${m.version}: ${visible(m.description)}`);
+    console.log(`  from     ${visible(p.dir)}${p.from === "use" ? " (plugins.use)" : ""}`);
+    if (m.entry.runtime === "process") console.log(`  runs     ${m.entry.command.map((a) => /^[\w./${}=:@%+,-]+$/.test(a) ? a : visible(JSON.stringify(a))).join(" ")}  (on this machine, as you, out of process)`);
+    console.log(`  scopes   ${(m.scopes ?? []).join(", ") || "none"}`);
+    console.log(`  hooks    ${Object.keys(m.contributes?.hooks ?? {}).join(", ") || "none"}`);
+    // Its secrets reach it at its start (§10.3): a manifest's default reference names a variable of yours.
+    const { secretKeys } = await import("../../../packages/plugin/src/host/host");
+    const { secretRef } = await import("../../plugins/secrets");
+    const refs = secretKeys(m, p.dir).map((k) => { try { return `${k} ← ${visible(secretRef(m, k, process.env, p.dir))}`; } catch { return `${k} (none set)`; } });
+    console.log(`  secrets  ${refs.join(", ") || "none"}`);
+    console.log(`  hash     ${p.hash}`);
+    if (p.trust === "changed") console.log(`  You trusted other content before (${p.trustedHash}): its files changed since.`);
+  }
+  if (!values.yes) {
+    const ask = (await import("../prompt")).prompter();
+    if (!ask.interactive) throw new RelayError("usage", `trusting ${name} needs your confirmation`, `Run it in a terminal, or pass --yes to trust ${p.hash}.`);
+    if (!(await ask.confirm(`Run ${name} with this content for this project?`, false))) { console.log("Not trusted."); return EXIT.run_failed; }
+  }
+  I.trustPlugin(name, { project: dir, hash: p.hash });
+  if (values.json) { out({ trusted: { name, hash: p.hash, dir: p.dir, already: false } }); return EXIT.ok; }
+  console.log(`Trusted ${name} (${p.hash}). The daemon runs it from its next start, or when it is enabled again; a changed file needs trusting again.`);
+  return EXIT.ok;
+}
+
+async function allowVersionCommand(args: string[], values: Values): Promise<number> {
+  if (args.length !== 1) throw new RelayError("usage", "allow-version takes <name>@<version>", USAGE);
+  const e = (await import("../../plugins/install")).allowVersion(args[0]!, { acceptRisk: !!values.acceptRisk });
+  if (values.json) { out({ allowed: e }); return EXIT.ok; }
+  console.log(`${e.name}@${e.version} may run on this capcomd although its engines range leaves it out (that version only).`);
+  return EXIT.ok;
+}
+
+async function showCommand(args: string[], values: Values): Promise<number> {
+  const name = args[0];
+  if (!name || args.length > 1) throw new RelayError("usage", "show takes a plugin's name", USAGE);
+  const P = await import("../../plugins/host");
+  const host = P.kernelHost({ log: false });
+  host.plan(P.builtinCandidates());
+  const d = host.detail(name);
+  if (!d) throw new RelayError("not_found", `no plugin ${name}`, "capcomd plugins list names them.");
+  const live = P.readSnapshot()?.plugins.find((p) => p.name === name) ?? null;
+  const facts = (await installedFacts([d]))[name] ?? null;
+  const plugin = { ...d, ...(live ? { state: live.state, cause: live.cause, stats: live.stats, hooksSuspended: live.hooksSuspended } : {}) };
+  if (values.json) { out({ plugin, installed: facts, message: host.message(name) }); return EXIT.ok; }
+  console.log(`${d.name} ${d.version}  ${d.source}  ${plugin.state}${plugin.cause ? ` (${plugin.cause})` : ""}${live ? "" : "  (no daemon is running: what one would do)"}`);
+  if (d.manifest) console.log(`  ${d.manifest.description}`);
+  const why = host.message(name);
+  if (why && plugin.cause) console.log(`  why: ${why}`);
+  if (facts?.source) console.log(`  installed from ${facts.source} (commit ${facts.commit ? short(facts.commit) : "?"})${facts.modified ? "; files changed since" : ""}`);
+  if (facts?.trust) console.log(`  trust: ${facts.trust}`);
+  for (const [k, v] of Object.entries(d.config.values)) console.log(`  config ${k} = ${JSON.stringify(v)}  (${d.config.sources[k] ?? "default"})`);
   return EXIT.ok;
 }
 

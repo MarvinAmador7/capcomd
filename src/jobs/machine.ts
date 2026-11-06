@@ -64,13 +64,15 @@ export async function launch(m: JobMachine, jobId: string, spec: { cmd: string[]
 /** What a look at a job found: still running (with its output's size so far), ended (its exit code), or gone. */
 export type Seen = { state: "running"; out: number; err: number } | { state: "exited"; code: number; at: number | null; out: number; err: number; killed: string | null } | { state: "gone"; why: string };
 
-// One exec for every job of the machine: its exit code, whether its runner is alive, and the size of its output.
+// One exec for every job of the machine: its exit code, whether its runner is alive, and the size of its output. The
+// sizes are read after the exit code: a job that ends between the two reads is then never reported ended with the size
+// its output had before its last writes.
 const LOOK = `D="$1"; shift; for id in "$@"; do j="$D/$id"
   if [ ! -d "$j" ]; then echo "@@J $id none"; continue; fi
-  o=$(wc -c < "$j/out" 2>/dev/null | tr -d ' '); e=$(wc -c < "$j/err" 2>/dev/null | tr -d ' ')
   x=$(cat "$j/exit" 2>/dev/null || true); r=$(cat "$j/rpid" 2>/dev/null || true)
   a=dead; [ -n "$r" ] && kill -0 "$r" 2>/dev/null && a=alive
   [ -z "$x" ] && [ "$a" = dead ] && x=$(cat "$j/exit" 2>/dev/null || true)
+  o=$(wc -c < "$j/out" 2>/dev/null | tr -d ' '); e=$(wc -c < "$j/err" 2>/dev/null | tr -d ' ')
   k=$(head -c 300 "$j/killed" 2>/dev/null | tr '\\n' ' ' || true)
   echo "@@J $id ok \${x:--} $a \${o:-0} \${e:-0} \${r:--} $k"; done`;
 

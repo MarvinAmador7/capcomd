@@ -157,8 +157,9 @@ The host compares `engines.capcomd` with the running version (`src/utils/self.ts
 semantics, prereleases included. Outside the range the plugin is `failed(incompatible)` and a `plugin.version_refused`
 event names both values. An operator MAY record an exemption for one exact `name@version` with
 `capcomd plugins allow-version <name@version> --accept-risk` (kept in `<home>/plugins/compatibility.json`); the
-exemption applies only to that version. The same check runs before `capcomd plugins install`. `*` is refused at
-validation so that "tested with everything" cannot be claimed.
+exemption applies only to that version, and the daemon's host honours it at validation (`src/plugins/install.ts`
+`isExempt`). The same check runs before `capcomd plugins install`, which refuses an incompatible plugin and names the
+`allow-version` command. `*` is refused at validation so that "tested with everything" cannot be claimed.
 
 ### 4.5 Scopes
 
@@ -287,6 +288,40 @@ In this order; a later manifest with a name already seen is refused with `plugin
 `plugins.<name>.enabled: false` in config (§10) keeps a discovered plugin at `validated`. A built-in is enabled by
 default except one a person turns on: the watchdog (§16.4) is listed but held at `validated` (`disabled`) until
 `plugins.watchdog.enabled: true`, which `capcomd setup` writes (`src/plugins/builtins.ts` `off`).
+
+**Installing** (§17.2 step 12, `src/plugins/install.ts`, `src/install/`). The source is `owner/repo` (GitHub), a git URL
+or a local repository path, with `#<name>` choosing one plugin among several (else the repository's root `plugin.json`,
+else its only one) and `@<ref>` a branch, tag or commit (else the remote's `HEAD`). The host fetches it through its own
+host repo (`src/merge/host-git.ts`, §11.7) and writes the plugin directory's files out of the commit itself: no checkout,
+hooks, filters or submodules, no link that leaves the directory, nothing written through a link or over a file already
+written (paths that differ only in case or normalization, which macOS reads as one), at most 5 000 files and 100 MB.
+`install` refuses a
+manifest §4.9 refuses (a `command[0]` or `$ref` resolving outside the directory among it), an `in-process` plugin
+(§5.2), a built-in's name, a name already installed, and an incompatible one (§4.4). `LOCK` (JSON, schema
+`capcomd.lock/v1`) records `kind`, `name`, `version`, `source`, `remote`, `ref`, `commit`, `path` (the directory in the
+repository), `files` (each file's `sha256` and git `mode`) and `hash`, the **content hash**: sha256 over the sorted
+`path, mode, sha256` of every file but `LOCK` (a link counts as its target). `capcomd plugins update <name>` fetches
+again from the LOCK's source and reports the changed, added and removed files, the old and new commit and hash, and any
+file edited since the install, before replacing it (`--dry-run` stops there); a tag or commit stays put, a branch moves.
+`capcomd plugins remove <name>` removes the files and any trust given to them; the plugin's data directory stays. The
+running daemon picks up any of these at its next start or the plugin's `enable` (§5.4: `enable` reads a plugin's
+directory again).
+
+**Trusting** a project's plugins. `capcomd plugins install --project [<source>]` adds the source to `plugins.use` and
+fetches every entry into the user's home (`<home>/plugins/.project/<key>/<name>/`, keyed by the project's directory),
+never into the checkout; an entry not fetched yet isn't discovered. A `.capcomd/plugins/<name>/` that is a link out of
+the checkout (to another project's plugin) isn't one of the project's plugins. Trust is given to one content hash of one
+plugin at one place (its directory, made real) and kept in `<home>/trust.json` (0600), which no project can write: a
+changed file, or the same plugin copied to another project, needs trusting again. In a checkout the hash covers every
+file, a `LOCK` there included (only a copy capcomd installed leaves out the `LOCK` it wrote). `capcomd plugins trust
+<name>` is the prompt: it shows what would run (the command, the scopes its token gets, the hooks it answers, the secret
+references it is given, its directory and hash; the manifest's text with control and format characters shown escaped,
+so it can't redraw the prompt) and asks;
+`--yes` answers for a script (without a terminal it is required). An untrusted project plugin is listed `validated` with
+cause `untrusted` and `enabled: false`, and stays there through `enable`; without a trust check (any host but the
+daemon's) none runs. The daemon writes `plugin.trusted {plugin, source: "project", hash, by}` the first time it runs a
+plugin under a trust (the CLI that records it can't write the daemon's stream); a CLI's listing doesn't use that up. A
+project's `plugins.use` and config are not read with `CAPCOMD_NO_CONFIG`; its own `.capcomd/plugins/` always is.
 
 ### 4.9 Validation
 
@@ -1048,9 +1083,8 @@ is the one it issued and not yet open (409), `manifestHash` is the sha256 of the
 was started from other files), `protocol` is one it speaks (422), `hooks` equals `contributes.hooks` (422). It answers
 `SessionOpened {config, secrets, hookTimeoutsMs, connectWithinMs, daemon}`: the layered config without secret properties,
 the secret values **once** (§10.3), and the deadlines it will apply. The plugin is `active` when the hooks stream (§9.4)
-is open; `connectWithinMs` bounds that too, and a process past it is killed (`handshake_timeout`). Until config layering
-(§10.2) a secret whose reference resolves to nothing is left out of `secrets` with a warning in the daemon's log, not
-`config_invalid`. The plugin's listeners are registered when its first session opens, one per declared hook; they stay
+is open; `connectWithinMs` bounds that too, and a process past it is killed (`handshake_timeout`). A secret whose
+reference resolves to nothing is left out of `secrets` with a warning in the daemon's log (§10.3). The plugin's listeners are registered when its first session opens, one per declared hook; they stay
 through restarts (§9.5), so a gate fired while the process is down is still asked, and fails closed.
 
 ### 9.4 Hook delivery
@@ -1172,33 +1206,47 @@ replace, `null` deletes), as `src/config/store.ts` `applyConfig` and `driverPoli
 
 1. the schema's defaults;
 2. **user**: `~/.capcomd/config.json` `plugins.<name>`;
-3. **project**: `.capcomd/config.json` `plugins.<name>` of the project the daemon serves (or the run's `repo`; a
-   later step's, as is layer 5: since §17.2 step 10 a built-in's config has layers 1, 2 and 4, `src/plugins/host.ts`
-   `configured`, and the user layer is off with `CAPCOMD_NO_CONFIG`);
+3. **project**: `.capcomd/config.json` `plugins.<name>` of the project the daemon serves: the checkout of its working
+   directory (`src/plugins/host.ts` `configured`; a run's own `repo` doesn't change a plugin's config, which is constant
+   for its life). The user and project layers are off with `CAPCOMD_NO_CONFIG`;
 4. **env**: `CAPCOMD_PLUGIN_<NAME>_<KEY>` (name and key upper-cased, `-` and `.` → `_`; a real environment variable
    wins, as `applyConfig` lets one win today);
 5. **run**: `plugins: {<name>: {…}}` in `POST /v1/runs` or `capcomd run --plugin-config name.key=value`, only for
    `x-per-run` properties; refused (422) otherwise.
 
 Layers 1–4 are read at `resolved` (§5.4) and are what `ctx.config.get()` returns; they change only through
-`disable`/`enable` (§5.4). Since §17.2 step 11 the kernel reads them for its built-ins (`src/plugins/config.ts`): the
+`disable`/`enable` (§5.4). Since §17.2 step 11 the kernel reads them for its built-ins, and since step 12 for every plugin (`src/plugins/config.ts`): the
 project layer is the `.capcomd/config.json` found from where the process runs, an environment value that parses as JSON
 is that value (`CAPCOMD_PLUGIN_WATCHDOG_STALLEDAFTERMS=600000` is a number), else a string, and it replaces that key's
 value rather than patch it (`CAPCOMD_PLUGIN_SOURCE_SCHEDULE_SCHEDULES='{}'`: no schedules); `CAPCOMD_NO_CONFIG` skips
-the files, not the environment. A secret property (`x-secret`) is never read from a layer yet: its reference is the
-schema's (§10.3). Layer 5 is run data, not plugin config: the kernel validates it at run creation and stores it
+the files, not the environment. A secret property (`x-secret`) is never part of the config: its reference is read as
+§10.3 says. Layer 5 is run data, not plugin config: the kernel validates it at run creation and stores it
 at `ctx.storage` run scope under the key `config` (readable by the plugin, written only by the kernel), so a listener on
 a run-scoped hook reads `await ctx.storage.get({runId}, "config")` for that run's overrides. Decision: `config.get()`
 is a constant for the plugin's life, which keeps every listener a pure function of its call plus one read.
 
-`enabled` is a reserved key at every layer: `plugins.<name>.enabled: false` holds the plugin at `validated` (§5.4).
+`enabled` is a reserved key at every layer: `plugins.<name>.enabled: false` holds the plugin at `validated` (§5.4). It is
+the user's to set; a project's `enabled: false` turns off only a plugin of that project (a repository can't switch off a
+gate the operator runs, nor switch on what the operator turned off). The project layer, like the run layer, can't set a
+secret property (§10.3). Nor can it fail a plugin that isn't the project's own: settings of the project layer that the
+schema refuses (a wrong type, a secret) for such a plugin are set aside, reported (`plugin.config_refused`, layer
+`project`) and left out, and the plugin runs on its other layers; only the project's own plugins fail `config_invalid`
+on their project layer (§10.4). Layer 5 is checked against the plugins the daemon would load (their manifests, not their code):
+an unknown plugin, a property without `x-per-run` or a value its property's schema refuses is a 422 with `field`
+`plugins.<name>.<path>` (`capcomd run` refuses it as a usage error, reason `plugins`, before the run exists); the stored
+key `config` of the run scope is the kernel's, and a plugin's write or delete of it is `forbidden`
+(`src/plugins/run-config.ts`). Capability `plugins.config` says a daemon takes `plugins` in `POST /v1/runs`.
 
 ### 10.3 Secrets
 
 Config files never hold secret values. A property marked `x-secret` takes a **reference** `{"$secret": "<ref>"}` where
 `ref` is `env:<VAR>` (an environment variable of the daemon) or `keychain:<account>` (the OS keychain through
-`src/config/keychain.ts`, service `capcomd`). The host resolves references at `resolved`; an unresolvable reference is
-`config_invalid`. A plugin reads its own secrets through `ctx.config.secret(key)` (in process) or receives them once in
+`src/config/keychain.ts`, service `capcomd`; not resolved yet: `unsupported`). The reference is the user layer's, else one
+held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else the schema's `default`; a project's or a run's is `config_invalid` (a
+repository must not point a plugin at another of the daemon's variables), and so is a value where a reference belongs. A
+reference that resolves to nothing is the plugin's to report: `ctx.config.secret` rejects `not_found`, and a process
+plugin's is left out of `SessionOpened.secrets` with a warning (§9.3), so a built-in such as `sandbox-boxd` still loads
+without its key and says why it can't run. A plugin reads its own secrets through `ctx.config.secret(key)` (in process) or receives them once in
 `SessionOpened.secrets` (out of process, over the 0600 socket; never in the environment, never in argv). A secret
 property never appears in `ctx.config.get()`, `GET /v1/plugins/{name}`, events or logs. A plugin MAY read only secrets
 declared in **its own** schema; the kernel's secrets (`BOXD_API_KEY`, client tokens, the RPC key, git credentials) are
@@ -1209,9 +1257,9 @@ existing keychain entry is mapped to it by the config migration (§17).
 
 Config is validated against the schema at `resolved` (layers 1–4) and at run creation (layer 5). Invalid config is
 `failed(config_invalid)` with `plugin.config_refused {errors: [{path, message}], layer}`; the plugin is **not** run with
-defaults. Each layer is checked on its own, so an error names its layer (one event per layer); the kernel checks the
+defaults (a project layer for a plugin not the project's is set aside instead, §10.2). Each layer is checked on its own, so an error names its layer (one event per layer); the kernel checks the
 subset of JSON Schema manifests use (`type`, `enum`, `minimum`/`maximum` and their exclusive forms, `minLength`/
-`maxLength`, `items`, `required`, `properties`, `additionalProperties`); a disabled plugin's settings aren't checked. `capcomd plugins validate` and `GET /v1/plugins/{name}` show the errors. A run-layer error is a 422 on `POST
+`maxLength`, `items`, `required`, `properties`, `additionalProperties`); a disabled plugin's settings aren't checked. `plugin.failed`'s message and `capcomd plugins show` show the errors; `GET /v1/plugins/{name}`'s `config.sources` say which layer each value came from. A run-layer error is a 422 on `POST
 /v1/runs` with `field: "plugins.<name>.<path>"`.
 
 ## 11. Security model
@@ -1373,7 +1421,8 @@ is removed from `HOOKS` and a manifest declaring it fails validation (which is t
 
 On the `daemon` stream: `plugin.loaded`, `plugin.failed`, `plugin.disposed`, `plugin.version_refused`,
 `plugin.duplicate_refused`, `plugin.config_refused`, `plugin.hook_failed`, `plugin.suspended`, `plugin.resumed`,
-`plugin.hook_deprecated`, `plugin.process_changed`, `plugin.trusted`. On the run's stream: `plugin.gate_denied` and
+`plugin.hook_deprecated`, `plugin.process_changed`, `plugin.trusted` (`plugin.config_refused` and `plugin.trusted` in the
+contract with capability `plugins.config`). On the run's stream: `plugin.gate_denied` and
 `plugin.gate_bypassed`. Jobs: `job.started`, `job.ended`. Triggers: `trigger.received`, `trigger.subscribed`,
 `trigger.unsubscribed`. Data shapes: `packages/plugin/src/events.ts`, and the contract for those written (§9.9). All durable, written
 by the host, with daemon-written `text`; a plugin's `reason` inside them is untrusted. The run-stream ones are written from
@@ -1932,7 +1981,7 @@ step changes `relay.v1`/`capcomd.v1` output or harness.v1 except by adding featu
 | 9 | Out-of-process runtime (§9): spawn, filtered env, token minting, handshake, hooks stream, answers, restart, `plugins.protocol` routes applied to `contract.ts` (the fragment deleted) | a fixture process plugin (`tests/agents/fake-claude.sh` pattern); chaos killpoints `plugin.hook.mid`, `plugin.process.crash` with the audit "gate denied, nothing landed": `plugin.process.crash` kills the plugin's process, `plugin.hook.mid` the daemon, each with a gate call in flight (`tests/scenarios/plugin-process.test.ts`); the runtime against the fixture (`tests/plugins/process.test.ts`) and its frames (`packages/plugin/test/process.test.ts`) |
 | 10 | Triggers (§16.3): sources, the intake, `triggers.sources.*` config, `observe` default, subscriptions, `trigger.*` events, `capcomd triggers log`; a `schedule` source; the GitHub source | a scenario with a fixture source: deduped, denied, recorded, started, continued; a subscription expires; `observe` runs nothing |
 | 11 | Watchdog built-in (§16.4) enabled by `setup` | a scenario with a scripted agent that stops producing checkpoints: `stalled` raised at the configured time, cancelled after |
-| 12 | Install, trust, update: `capcomd plugins install|trust|update|remove|allow-version`, `LOCK`, the project trust prompt | a local git fixture repository; a manifest escaping its directory refused; a changed hash reported; an untrusted project plugin never activates |
+| 12 | Install, trust, update: `capcomd plugins install|trust|update|remove|allow-version`, `LOCK`, the project trust prompt; with it (the owner's call) config layering: the project layer, validation per layer, the run layer | a local git fixture repository; a manifest escaping its directory refused; a changed hash reported; an untrusted project plugin never activates (`tests/plugins/install.test.ts`, `trust.test.ts`); the layers, a refused layer named, the run layer through a real engine (`tests/plugins/config-layers.test.ts`, `tests/scenarios/plugin-run-config.test.ts`) |
 | 13 | `@capcomd/plugin` published (the client library `connect`, the test kit), `docs/plugins.md`, the Slack example run by CI against the fake sandbox | the examples' conformance in CI |
 
 Steps 1–2 are additions. Steps 3–8 are refactors behind unchanged tests. Steps 9–13 are the third-party surface.
@@ -1975,6 +2024,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.28 | 2026-11-06 | With ADR-025 step 6: the context router attaches the context layer's skills at `agent.preparing` (§6.6.7): `capcomd-context-doctrine` to every agent whose spec has a context block, `capcomd-context-routing` to one of them that may spawn and isn't a reviewer or a report agent, `source: builtin`, pinned by hash, after the orchestration skill and only as many as fit the room the agent's other skills leave; their names are the kernel's and a profile with a context block keeps room for them; `plugin.context.loaded`'s `data.skills` (additive). Inline items and the `context` message kind (§11.5) stay unshipped: the step's eval did not admit them (ADR-025 §13). |
 | 1.0.29 | 2026-11-06 | With groundray's read path (ADR-025 step 4): `ContextScope` gains `settings` (a provider entry's own settings from the pinned spec) and `bundleRoot`, `resolve` may answer a `bundle` (`ContextBundle`, a repository at a commit) when `caps.bundle` (all optional, additive); the router asks a provider once per brief (`skipped (named twice)`) and keeps the bundles its brief cites, which the attempt's runner places in the sandbox through the host's mirror (§6.6.7, §11.7); the conformance suite's bundle case (§14.2). The built-in `context-groundray` provides `context:groundray`. |
 | 1.0.30 | 2026-11-06 | With consolidation and promotion as a merge (ADR-025 step 3): an agent of the `context-consolidator` profile isn't captured; the kernel stages its answer on its branch before recording its end, runs it as a reporting agent with the run's candidates and outcomes in its prompt, and on the run's strongest model when its profile names none (§6.6.8); `plugin.context.staged` on the run's stream (additive); the built-in `context-memory` is a `verify.judging` judge (lint as a check, before the reviewer gate) and a `merge.landing` gate (deny for a branch of any agent but a consolidator that changes `.capcomd/context/`, or one that fails lint; `hold` for a consolidator's under `context.review: human`, the default; allow under `lint`) (§6.6.13, §6.6.15). Both listen in every process, so a verify asks a judge and a merge fires `merge.landing` where none did before. |
+| 1.0.31 | 2026-11-06 | With install, trust and update (§17.2 step 12) and the rest of config layering (the owner approved it with this step): installing from a git repository through the host's own repo, the files written out of the commit (no checkout, no link out, size limits), what `install` refuses, `LOCK`'s fields and the content hash, `update` reporting what changed before replacing, `remove` keeping the data (§4.8); `plugins.use` fetched to the user's home, trust per content hash and place in `<home>/trust.json` (a checkout's link out isn't its plugin; a checkout's `LOCK` is hashed), the trust prompt (with the secret references, its text escaped) and `--yes`, nothing written through a link or over a written file at install, an untrusted project plugin listed `validated`/`untrusted` through `enable` and checked again before every start of its process, `plugin.trusted` written by the daemon the first time it acts on a trust (§4.8); the daemon honours `allow-version` (§4.4); `enable` reads a directory plugin again (§4.8); every plugin's config is layered, not only a built-in's; `enabled` is the user's (a project turns off only its own plugins), a project's refused settings for a plugin not its own set aside rather than failing it, neither the project nor a run sets a secret, and a secret's reference is the user's or the environment's, a value where one belongs refused; `config.sources` per layer; the run layer checked against the manifests and its storage key the kernel's (§10.2, §10.4); a reference resolving to nothing still a warning, keychain references still unresolved (§9.3, §10.3); capability `plugins.config`, `POST /v1/runs` `plugins` and `plugin.trusted` in the contract (all additive, §13.1). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

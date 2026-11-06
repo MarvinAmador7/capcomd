@@ -88,6 +88,11 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   "goal-branch": { type: "string" },
   "no-goal-branch": { type: "boolean" },
   conformance: { type: "boolean" },
+  // capcomd plugins install|update|remove --project, allow-version --accept-risk (plugin API §4.4, §4.8); a run's plugin
+  // config (§10.2 layer 5).
+  project: { type: "boolean" },
+  "accept-risk": { type: "boolean" },
+  "plugin-config": { type: "string", multiple: true },
   ref: { type: "string" },
   id: { type: "string" },
   checks: { type: "string" },

@@ -123,6 +123,8 @@ export interface RunOptions {
   agentWaitMs?: number;
   /** The run's own sandbox (`capcomd run --sandbox`); recorded at `run new` (planner and recipe runs). */
   sandbox?: string;
+  /** The run's plugin config (`capcomd run --plugin-config`, plugin API §10.2 layer 5); recorded at `run new`. */
+  pluginConfig?: Record<string, Record<string, unknown>>;
   emit: Emit;
 }
 
