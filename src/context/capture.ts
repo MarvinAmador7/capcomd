@@ -56,8 +56,8 @@ const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** The proposal in an element, or null when it isn't one: a text, and at most a one-line title, a type, an op and,
- *  for `supersede` and `deprecate`, the item it is about. */
-function proposalOf(v: unknown, by: string): ContextProposal | null {
+ *  for `supersede` and `deprecate`, the item it is about. A consolidator's deltas are read the same way (./consolidate.ts). */
+export function proposalOf(v: unknown, by: string): ContextProposal | null {
   if (!isMap(v)) return null;
   const text = typeof v.text === "string" ? v.text : isMap(v.text) && typeof v.text.text === "string" ? v.text.text : null;
   if (text === null || !text.trim()) return null;

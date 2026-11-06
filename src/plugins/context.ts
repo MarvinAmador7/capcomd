@@ -1,4 +1,4 @@
-// context (ADR-025 §5.1, §6.1, §10, steps 1, 2, 4 and 6): the kernel's context router. As the one agent.preparing
+// context (ADR-025 §5.1, §5.2, §6.1, §10, steps 1-4 and 6): the kernel's context router. As the one agent.preparing
 // listener it composes a profile's context providers into the brief (src/context/brief.ts), appended to the agent's
 // prompt after its profile's own, with the context layer's skills (src/context/skills.ts: the doctrine, and the
 // routing paragraph for an agent that writes run notes), each pinned by the sha256 of its text, and leaves the bundles
@@ -6,9 +6,11 @@
 // no `context` block gets nothing and costs nothing. As an agent.changed
 // listener it collects the lessons an agent proposed in its result (`result.data.context`) when it ends: attributed to
 // the token that wrote the result, checked by the seeded secret scan, kept as candidates of the run in kv
-// `_context/<agentId>` (src/context/capture.ts). Its events, on the run's stream: `plugin.context.loaded` (what a brief
-// held), `plugin.context.skipped` (a provider left out, and why), `plugin.context.proposed` (a candidate kept) and
-// `plugin.context.refused` (one refused, and why, never its text). Its commands:
+// `_context/<agentId>` (src/context/capture.ts); a consolidator's answer isn't collected (the kernel stages it on its
+// branch, src/context/consolidator.ts), only told. Its events, on the run's stream: `plugin.context.loaded` (what a
+// brief held), `plugin.context.skipped` (a provider left out, and why), `plugin.context.proposed` (a candidate kept),
+// `plugin.context.refused` (one refused, and why, never its text) and `plugin.context.staged` (what a consolidator's
+// branch changes in the project's memory). Its commands:
 //   capcomd context brief <profile> [--run <runId>] [--review]   the brief that profile's agents start with now
 //   capcomd context lint [--fix] [--base <ref>] [--run <runId>]  check .capcomd/context/ (src/context/lint.ts)
 //   capcomd context brain add <name> <repo> [--branch <b>] [--bundle <dir>]   map a brain, pinned at the branch's tip
@@ -25,6 +27,7 @@ import { VERSION } from "../utils/self";
 import type { ScopeAgent } from "../actors/scope";
 import type { Brief } from "../context/brief";
 import type { CaptureRecord } from "../context/capture";
+import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
 import { preparingAgent, SKILL_BYTES_MAX, SKILLS_MAX } from "./hooks";
 
 const SUMMARY = "The project's context (ADR-025): the brief a profile's agents start with, and lint for .capcomd/context/; brain mappings";
@@ -49,7 +52,7 @@ export const manifest: PluginManifest = {
   // agent.changed is observe, so open too: collecting an agent's lessons never holds up anything.
   contributes: {
     hooks: { "agent.preparing": { timeoutMs: 30_000, failure: "open" }, "agent.changed": {} },
-    events: ["loaded", "skipped", "proposed", "refused"],
+    events: ["loaded", "skipped", "proposed", "refused", "staged"],
     cli: [{ name: "context", summary: SUMMARY }],
   },
 };
@@ -79,6 +82,8 @@ export const captureKernel = {
     const r = await (await import("../primitives/state")).kvGet(runId, `_result/${agentId}`);
     return r && !(r as { deleted?: boolean }).deleted && r.value !== null ? { writer: (r.writer as string | null) ?? null, value: r.value } : null;
   },
+  /** The agent's result as the kernel recorded it (a consolidator's staging is in it: `context`, `branch`, `commit`). */
+  result: async (runId: string, agentId: string): Promise<Record<string, unknown> | null> => (await (await import("../primitives/ops")).getAgentOrThrow(runId, agentId)).result ?? null,
   /** The agent's pinned spec (its context block's limits). */
   spec: async (runId: string, agentId: string): Promise<PinnedSpec> => {
     const { pinnedOf } = await import("./shapes");
@@ -119,7 +124,7 @@ function serial<T>(runId: string, fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-type Emit = (type: string, text: string, data: Record<string, unknown>) => Promise<unknown>;
+type Emit = (type: string, text: string, data: Record<string, unknown>, key?: string) => Promise<unknown>;
 
 /**
  * The lessons agent `agent` proposed in its result, now that it ended (ADR-025 §5.1): read from the record its token
@@ -165,11 +170,7 @@ async function outcomesOf(runId: string) {
   const { existingActor } = await import("../core/relay");
   const scope = /^run-[A-Za-z0-9_-]+$/.test(runId) ? await existingActor("scope", [runId]) : null;
   if (!scope) throw new RelayError("not_found", `no run ${runId}`, "See your runs with `capcomd runs`.");
-  const ops = new Map(((await scope.listOps({})) as Array<{ id: string; kind: string; state: string }>).map((o) => [o.id, o]));
-  return (o: { kind: "verify" | "merge"; id: string }) => {
-    const op = ops.get(o.id);
-    return !!op && op.kind === o.kind && op.state === (o.kind === "verify" ? "passed" : "merged");
-  };
+  return (await import("../context/consolidator")).outcomeIn((await scope.listOps({})) as import("../context/consolidator").RunOp[]);
 }
 
 /** `capcomd context lint` (src/context/lint.ts): the problems as an error, else the warnings and what it wrote. */
@@ -251,9 +252,28 @@ async function brainCommand(args: string[], flags: Record<string, unknown>): Pro
   throw usage();
 }
 
-/** A context event on the run's stream; one that can't be recorded is logged, never thrown. */
-const emitter = (ctx: PluginContext, runId: string, entity: string): Emit => (type, text, data) =>
-  ctx.events.emit({ type, stream: runId, entity, text, data }).catch((e: unknown) => ctx.log.warn("could not record a context event", { type, error: (e as Error)?.message ?? String(e) }));
+/** A context event on the run's stream; one that can't be recorded is logged, never thrown. `key`: one event per key. */
+const emitter = (ctx: PluginContext, runId: string, entity: string): Emit => (type, text, data, key) =>
+  ctx.events.emit({ type, stream: runId, entity, text, data }, key ? { key } : undefined).catch((e: unknown) => ctx.log.warn("could not record a context event", { type, error: (e as Error)?.message ?? String(e) }));
+
+/**
+ * A consolidator's end (ADR-025 §5.2): what the kernel staged on its branch, from its result (`result.context`, the
+ * kernel's own record of the staging, src/primitives/ops.ts `consolidatedOf`): `plugin.context.staged` with the branch,
+ * the commit and each change, and `plugin.context.refused` per change it refused (a number and a reason). Keyed, so a
+ * replayed change records them once.
+ */
+export async function staged(agent: Pick<Agent, "id" | "profile">, result: Record<string, unknown> | null | undefined, emit: Emit): Promise<void> {
+  const c = result?.context as { applied?: Array<{ op: string; id: string; target?: string }>; refused?: Array<{ n: number; reason: string }> } | undefined;
+  if (!c || typeof c !== "object") return;
+  const commit = typeof result?.commit === "string" ? result.commit : null, branch = typeof result?.branch === "string" ? result.branch : null;
+  const applied = Array.isArray(c.applied) ? c.applied : [], refused = Array.isArray(c.refused) ? c.refused : [];
+  const changes = applied.filter((x) => x.op !== "duplicate");
+  if (commit && branch) {
+    await emit("staged", `${agent.id} staged ${changes.length} change${changes.length === 1 ? "" : "s"} to the project's memory on ${branch}: it lands through a reviewed merge.`,
+      { agentId: agent.id, profile: agent.profile, branch, commit, applied }, `staged:${agent.id}`);
+  }
+  for (const x of refused) await emit("refused", `${agent.id}'s memory change ${x.n} was refused (${x.reason}).`, { agentId: agent.id, profile: agent.profile, n: x.n, reason: x.reason }, `staged-refused:${agent.id}:${x.n}`);
+}
 
 export const plugin = definePlugin({
   activate(ctx) {
@@ -302,6 +322,11 @@ export const plugin = definePlugin({
     ctx.hooks.on("agent.changed", async (call) => {
       const { agent, change } = call.payload;
       if (change.kind !== "ended" || change.status === "cancelled") return;
+      // A consolidator's answer isn't candidates: the kernel staged it on its branch (src/context/consolidator.ts).
+      if (agent.profile === CONSOLIDATOR_PROFILE) {
+        await captureKernel.result(agent.runId, agent.id).then((r) => staged(agent, r, emitter(ctx, agent.runId, agent.id))).catch((e: unknown) => ctx.log.warn("could not record a consolidator's staging", { agentId: agent.id, error: (e as Error)?.message ?? String(e) }));
+        return;
+      }
       const data = change.result?.data as { context?: unknown } | null | undefined;
       if (!data || typeof data !== "object" || !Array.isArray(data.context)) return;
       await collect(agent, emitter(ctx, agent.runId, agent.id)).catch((e: unknown) => ctx.log.warn("could not collect an agent's lessons", { agentId: agent.id, error: (e as Error)?.message ?? String(e) }));

@@ -98,8 +98,8 @@ describe("setup steps (non-interactive)", () => {
       run: { checks: { unit: "bun run test" }, reviewer: "reviewer" },
     });
     const agents = JSON.parse(readFileSync(join(repo, ".capcomd", "agents.json"), "utf8")).agents;
-    expect(Object.keys(agents).sort()).toEqual(["codex-worker", "lead", "planner", "reviewer", "worker"]);
-    expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead"]);
+    expect(Object.keys(agents).sort()).toEqual(["codex-worker", "context-consolidator", "lead", "planner", "reviewer", "worker"]);
+    expect(agents.planner.children.allowedChildProfiles).toEqual(["worker", "codex-worker", "lead", "context-consolidator"]);
     // A module lead: the worker's provider and login, orchestrating (plugin API §16.1) up to 3 worker helpers, one level.
     expect(agents.lead).toEqual({ provider: "claude", auth: "subscription", description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker", "codex-worker"] } });
     // The reviewer runs the check and the package manager's test runner (bun test as well as bun run).
@@ -109,7 +109,7 @@ describe("setup steps (non-interactive)", () => {
     for (const p of Object.values(agents) as any[]) expect([p.maxTurns, p.timeoutMs, p.maxBudgetUsd]).toEqual([undefined, undefined, undefined]);
     // Re-running keeps existing profiles (your edits survive).
     const again = json(run(["setup", "project", "--yes", "--json"], { cwd: repo, env }).out);
-    expect(again.steps.find((s: any) => s.step === "profiles").detail).toContain("kept existing worker, reviewer, lead, planner");
+    expect(again.steps.find((s: any) => s.step === "profiles").detail).toContain("kept existing worker, reviewer, lead, context-consolidator, planner");
   });
 
   test("project: an existing project's agents.json keeps its profiles; setup only adds the missing lead", () => {

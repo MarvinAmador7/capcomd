@@ -2,6 +2,7 @@
 // limits allow spawning. Agents without children.allowSpawn get only the naming lines (capability agents.title) and a
 // local `capcomd` that can do just that (src/primitives/title-rules.mjs).
 import type { Limits, Budget } from "../primitives/policy";
+import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
 
 export const VM_RPC_DIR = "/tmp/capcomd-rpc";
 
@@ -39,6 +40,22 @@ a smoke test of the whole) is a child's task: spawn one, or pin a check. Anythin
 has a changed file or a commit when a turn ends is stopped and fails, and the change is discarded. Run each capcomd
 command on its own and read the ids from its JSON output (a shell variable like \`id=$(capcomd spawn …)\` can't be
 checked, so it is refused).
+`;
+}
+
+/**
+ * ADR-025 §5.2: what an agent that may spawn the consolidator is told. It is the run's last child, so the lessons of
+ * every other agent are in; its branch is the one change to the project's memory, and a person reads it first unless
+ * the project lands memory on lint alone.
+ */
+export function consolidatorRule(mcp: boolean): string {
+  return `- Before you end, when agents of this run proposed lessons (a child's result has a \`context\` list, or
+  \`capcomd kv get _context/<agt>\` has candidates), spawn ${CONSOLIDATOR_PROFILE} as your last child, once every other
+  child has ended: \`capcomd spawn --profile ${CONSOLIDATOR_PROFILE} --task "Consolidate this run's lessons" --key consolidate\`${mcp ? " (capcomd_spawn)" : ""}.
+  It reads every candidate, the project's memory and the run's verifies and merges, and capcomd writes the changes
+  it gives on its branch (only .capcomd/context/). Verify and merge it as any child's work: its merge waits for a
+  person's approval (state "awaiting_approval") unless the project lands memory on lint alone. When it has nothing to
+  change, it ends with no branch: there is nothing to merge.
 `;
 }
 
@@ -146,5 +163,6 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
   do; leave out what the repository or AGENTS.md already says, and anything out of date within a week (that is a
   note). A lesson is a candidate: it reaches the project's memory only through a reviewed change, and one holding a
   secret, a credential or a path to one is refused.
-${o.orchestrate ? orchestrateSkill({ mcp: o.mcp }) : ""}${goal}`;
+- Never change .capcomd/context/ in a child's work: a merge of any branch but a consolidator's that changes it is refused.
+${L.allowedChildProfiles.includes(CONSOLIDATOR_PROFILE) ? consolidatorRule(o.mcp) : ""}${o.orchestrate ? orchestrateSkill({ mcp: o.mcp }) : ""}${goal}`;
 }

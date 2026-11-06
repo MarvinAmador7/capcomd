@@ -48,9 +48,9 @@ test("the reviewer is one judge: the checks, it and every other judge must pass,
   const bad = await spawnDone(run, "b", "write BAD b");
   const vetoed = await spawnDone(run, "c", "write GOOD JUDGE-DENY c");
 
-  // Everything passes: the checks, the test judge, the reviewer (the reviewer gate runs last: order post).
+  // Everything passes: the checks, the test judge, the reviewer (the reviewer gate runs last: order post; context-memory, first by name, lets a branch that doesn't touch .capcomd/context/ through).
   const a = await verify(run, good, "a");
-  expect(a).toMatchObject({ state: "passed", result: { pass: true, checks: { passed: true }, review: { profile: "reviewer", passed: true, reasons: ["does what the task asks"] }, judges: { passed: true, plugins: ["test-gate", "gate-reviewer"], deniedBy: null } } });
+  expect(a).toMatchObject({ state: "passed", result: { pass: true, checks: { passed: true }, review: { profile: "reviewer", passed: true, reasons: ["does what the task asks"] }, judges: { passed: true, plugins: ["context-memory", "test-gate", "gate-reviewer"], deniedBy: null } } });
   const rv = (await agentsOf(run)).find((x: any) => x.agentId === a.result.review.agentId);
   expect(rv.contract.review).toMatchObject({ sha: a.result.commit, targetSha: a.result.tested.targetSha, vfyId: a.id });
 
@@ -73,7 +73,7 @@ test("merge --operator lands past plugin vetoes and records plugin.gate_bypassed
   const run = (await w.cj(["run", "new", "--budget", "usd=10,turns=400,wallSeconds=3600", "--key", `bypass-${Date.now()}`])).j.runId as string;
   const id = await spawnDone(run, "d", "write d");
   const v = await verify(run, id, "d");
-  expect(v).toMatchObject({ state: "passed", result: { pass: true, judges: { passed: true, plugins: ["test-gate", "gate-reviewer"] } } });
+  expect(v).toMatchObject({ state: "passed", result: { pass: true, judges: { passed: true, plugins: ["context-memory", "test-gate", "gate-reviewer"] } } });
 
   // An ordinary merge: test-gate (first by name) denies it; it fails with plugin:test-gate and nothing lands.
   const m = await w.cj(["merge", run, "--ref", id, "--require", v.id, "--key", "m-d"]);

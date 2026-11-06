@@ -8,6 +8,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSyn
 import { dirname, isAbsolute, join, relative } from "path";
 import { configText, mergeConfig, readConfig, userConfigPath, type CapcomdConfig } from "./store";
 import { AGENTS_SCHEMA, readAgentsFile, validateFile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../profiles";
+import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
 
 type Env = Record<string, string | undefined>;
 
@@ -131,13 +132,18 @@ export interface ProjectPlan {
   patch: CapcomdConfig;
   cap: string | null;
   /** The profiles to add, in order: one worker per agent, a read-only reviewer, a lead and a planner that may spawn
-   *  the workers. */
+   *  the workers, and the consolidator the planner spawns last. */
   profiles: Array<[string, Record<string, unknown>]>;
 }
 
 /** What the orchestrate profiles `capcomd setup` writes are for (their `description`; plugin API §16.1). */
 export const LEAD_DESCRIPTION = "Leads a part: splits it among its worker helpers, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs it to run code itself (its helpers write and test the code); its helpers' checks run at verify and merge (and on the combined code with capcomd check), and it reads their results.";
 export const PLANNER_DESCRIPTION = "Plans a goal: splits it among workers and leads, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests); checks run at verify and merge (and on the combined code with capcomd check), and it reads their results.";
+
+/** What the consolidator `capcomd setup` writes is for (ADR-025 §5.2). */
+export const CONSOLIDATOR_DESCRIPTION = "Consolidates a run's lessons into the project's memory (.capcomd/context/): the planner spawns it last. It reads the run's candidate lessons, the memory and the run's verifies and merges, and answers with the changes to make; capcomd writes them on its branch, which a person reviews before it lands. It edits nothing itself.";
+/** What a consolidator may use: reading the checkout and its history, nothing that writes. */
+export const CONSOLIDATOR_TOOLS = ["Read", "Glob", "Grep", "LS", "Bash(git log:*)", "Bash(git show:*)", "Bash(git diff:*)", "Bash(cat:*)", "Bash(ls:*)"];
 
 /** The two files' contents for these answers. No turn, time or money limits on the profiles (ADR-019). */
 export function planProject(a: ProjectAnswers): ProjectPlan {
@@ -152,9 +158,13 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
     // independent sub-parts; it verifies and merges its helpers' work itself (capcomd verify runs the checks). It
     // orchestrates (plugin API §16.1): it sees everything and runs nothing; its helpers do and check the work.
     ["lead", { provider, auth, description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: workers } }],
+    // ADR-025 §5.2: the planner's last child, when the run's agents proposed lessons. Read-only (codex: a read-only
+    // sandbox), briefed with the project's memory, no model of its own (it runs on the run's strongest, D6), and its
+    // branch waits for a person (review: human, D5).
+    [CONSOLIDATOR_PROFILE, { provider, auth, description: CONSOLIDATOR_DESCRIPTION, allowedTools: CONSOLIDATOR_TOOLS, sandbox: "read-only", context: { providers: [{ name: "memory" }], review: "human" } }],
     // No fan-out limits either: the planner may spawn workers, and leads for parts that split further, as it sees fit
     // (set children.* to bound it). It orchestrates too: every change is a worker's.
-    ["planner", { provider, auth, description: PLANNER_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead"] } }],
+    ["planner", { provider, auth, description: PLANNER_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: [...workers, "lead", CONSOLIDATOR_PROFILE] } }],
   ];
   return {
     dir: a.dir, configPath: join(a.dir, ".capcomd", "config.json"), agentsPath: join(a.dir, ".capcomd", "agents.json"), cap: a.cap, profiles,
