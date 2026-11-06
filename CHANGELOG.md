@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
+  `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd profiles list|show`, which also
+  give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether
+  it leads) and a `cost` tier for its model (`low`, `medium`, `high`). `capcomd_profiles` adds each profile's
+  `capacity`: how many of it can start now, 0 while its login waits for a usage limit to reset. `permissions:
+  { report: false }` keeps a profile from being spawned with `report` (refused with `reason: "report_not_allowed"`).
+  A profile's `identity.title` and `identity.avatar` aren't passed to one that `extends` it. See docs/agents.md,
+  "Profile files".
+- Fix: a profile whose allowed tools include a plain `Bash` (any command) is no longer described as read-only (a
+  reviewer) in `capcomd_profiles` and `capcomd profiles list`; a shell limited to commands (`Bash(bun test:*)`) still is.
 - New: `capcomd hermes` says whether Hermes is installed and has capcomd (what `capcomd setup check` says for it), and
   `capcomd hermes add [--approvals elicit|human] [--hermes-entry-per-project] [--yes]` adds capcomd to Hermes on its
   own, as `capcomd setup agent` does: its MCP server entry, the capcomd skills, and who approves merges into protected
@@ -50,7 +60,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.
   A profile can `extends: <another profile>` and change only what differs (`null` removes an inherited value), and an
   `override.yaml` in `<name>/` adjusts a profile without copying it. A prompt can live in a file next to the profile
-  (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd agents list|show|validate` see
+  (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd profiles list|show|validate` see
   these profiles; `.capcomd/agents.json` works as before, and a `profile.yaml` of the same name in the same project
   wins. `--set` takes the new paths too (`--set limits.maxTurns=10`). See docs/agents.md, "Profile files".
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
@@ -62,6 +72,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   copied over; `~/.capcomd/rpc.key` is left as it is). An agent still running across that restart gets a new
   token as soon as capcomd picks it up again; a capcomd call it made with its old token in between fails once with
   "token rejected: bad_signature" and works when tried again.
+- New for contributors: `scripts/eval-context.ts`, the context eval (ADR-025 §12). It generates a fictional company
+  and its repository from a seed and runs agents through capcomd on five kinds of task (a fact one agent finds and the
+  next needs, a convention learned in one run and needed in the next, a superseded business rule, a stale fact in the
+  code, an instruction planted in a data file), scoring each with a hidden check on the agent's branch. Today it
+  compares agents given nothing with agents given an `AGENTS.md`; later arms add capcomd's context layer. Results per
+  model, from live runs on Claude Code and Codex, are in `docs/evidence/context/`; CI runs it on the fake sandbox.
+  See DEVELOPMENT.md, "Context eval".
+- Traces: an agent's span now also records how many of its input tokens were cache reads
+  (`gen_ai.usage.cache_read.input_tokens`) and the model its CLI reported running (`gen_ai.response.model`, Claude
+  Code), when the CLI says.
 - Security: your git credentials never reach an agent's sandbox any more. Before, capcomd's own git commands in an
   agent's VM or container (cloning its checkout, pushing its branch and checkpoints, `capcomd fetch`) ran with your
   GitHub token, so an agent could take it by planting git settings, a hook or a `git` program in its sandbox. Now

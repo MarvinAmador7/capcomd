@@ -1,0 +1,13 @@
+{
+  "schema": "capcomd.context-limits/v1",
+  "model": "claude-opus-5-5",
+  "briefBytes": 25600,
+  "indexLines": 200,
+  "descriptionChars": 150,
+  "itemBytes": null,
+  "proposalsPerRun": null,
+  "inlineItems": 1,
+  "measured": false,
+  "source": "ADR-025 D4 starting values (Claude Code's 25 KB / 200-line memory index, ReasoningBank's k = 1; descriptionChars from the one-line index entries of that index). itemBytes and proposalsPerRun are set by the steps that add capture and consolidation (2-3). Not yet measured: the step-0 baselines have no index arm.",
+  "evidence": []
+}

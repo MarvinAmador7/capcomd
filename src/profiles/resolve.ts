@@ -11,6 +11,8 @@ export interface ResolvedAgent {
   name: string | null; kind: "fake" | (string & {}); spec?: AgentSpec; overridden?: boolean;
   /** The profile resolved by name (absent for a pinned spec, or no profile): its version and where it came from. */
   profile?: { name: string; version: number; source: ProfileLayer };
+  /** Its `permissions` block, when it has one (ADR-024 §2.2): `report: false` refuses a spawn with report. Not pinned. */
+  permissions?: { report?: boolean };
 }
 
 /**
@@ -23,7 +25,10 @@ export function resolveAgent(name?: string | null, source: Record<string, string
   const file = readProfiles(agentsFilePath(source), source);
   const pick = (n: string): ResolvedAgent | null => {
     const r = Object.hasOwn(file.profiles, n) ? file.profiles[n]! : null;
-    return r ? { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source } } : null;
+    if (!r) return null;
+    const pm = r.manifest.permissions as { report?: unknown } | undefined;
+    const permissions = pm && typeof pm === "object" && typeof pm.report === "boolean" ? { permissions: { report: pm.report } } : {};
+    return { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...permissions };
   };
   if (name) {
     const ref = decodeAgentRef(name);

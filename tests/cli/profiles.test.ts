@@ -20,7 +20,7 @@ function world(files: Record<string, string>, agents?: Record<string, unknown>, 
 }
 const worker = { provider: "claude", auth: "subscription", model: "sonnet", maxTurns: 20, appendSystemPrompt: "Be brief.\nReally." };
 const LEAD = ["name: lead", "extends: worker", "version: 2", "description: Leads a part.", "prompt: { append: null }",
-  "tools: { mode: orchestrate }", "children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }", "permissions: { report: true }"].join("\n");
+  "tools: { mode: orchestrate }", "children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }", "skills: [{ name: tdd }]"].join("\n");
 const json = (r: { stdout: string }) => JSON.parse(r.stdout);
 
 describe("capcomd profiles", () => {
@@ -34,7 +34,7 @@ describe("capcomd profiles", () => {
     expect(t.stdout).toMatch(/^ {2}lead {13}project claude/m);
     expect(t.stdout).toContain("(1 warning: `capcomd profiles validate` lists it)");
     const j = json(await capcomd(["profiles", "list", "--json"], w.env));
-    expect(j).toMatchObject({ ok: true, file: w.agentsFile, default: "worker", warnings: ["profiles.lead: permissions.report is read but not used yet by this capcomd"] });
+    expect(j).toMatchObject({ ok: true, file: w.agentsFile, default: "worker", warnings: ["profiles.lead: skills is read but not used yet by this capcomd"] });
     expect(j.agents).toBeUndefined();
     expect(j.profiles.map((p: any) => [p.name, p.source, p.format, p.version, p.toolMode, p.ready])).toEqual([["worker", "project", "v1", 1, "execute", false], ["lead", "project", "v2", 2, "orchestrate", false]]);
     expect(j.profiles[1].applied.map((a: any) => [a.as, a.name, a.path])).toEqual([["extends", "worker", w.agentsFile], ["profile", "lead", w.at("P/lead/profile.yaml")], ["override", "lead", w.at("P/lead/override.yaml")]]);
@@ -45,7 +45,8 @@ describe("capcomd profiles", () => {
     expect(t.code).toBe(0);
     const lines = t.stdout.split("\n");
     expect(lines[0]).toBe("lead: version 2, found in the project's profiles");
-    expect(lines.slice(1, 5)).toEqual([
+    expect(lines.slice(1, 6)).toEqual([
+      "Fit: orchestrates: sees everything, runs nothing; Claude Code, sonnet, high effort, medium cost; up to 30 turns; leads up to 3 worker helpers, any depth",
       "Files, first to last (a later one wins):",
       `   1  extends  worker           project ${w.agentsFile}`,
       `   2  profile  lead             project ${w.at("P/lead/profile.yaml")}`,
@@ -58,13 +59,13 @@ describe("capcomd profiles", () => {
     expect(value("tools.mode")).toEqual(["tools.mode", "orchestrate", "2"]);
     expect(value("children.allowedChildProfiles")).toEqual(["children.allowedChildProfiles", '["worker"]', "2"]);
     expect(value("prompt.append")).toBeUndefined(); // lead removes what it inherits
-    expect(t.stdout).toContain("Read but not used yet by this capcomd: permissions.report");
+    expect(t.stdout).toContain("Read but not used yet by this capcomd: skills");
     expect(t.stdout).toContain("NOT READY: not logged in: capcomd auth login claude");
     // A string is shown by its first line.
     expect((await capcomd(["profiles", "show", "worker"], w.env)).stdout).toMatch(/^ {2}prompt\.append +Be brief\.… +1$/m);
 
     const j = json(await capcomd(["profiles", "show", "lead", "--json"], w.env));
-    expect(j).toMatchObject({ ok: true, name: "lead", default: false, version: 2, source: "project", format: "v2", path: w.at("P/lead/profile.yaml"), notApplied: ["permissions.report"], error: null, ready: false });
+    expect(j).toMatchObject({ ok: true, name: "lead", default: false, version: 2, source: "project", format: "v2", path: w.at("P/lead/profile.yaml"), notApplied: ["skills"], error: null, ready: false, title: null, tags: [], canReport: true, cost: "medium" });
     expect(j.spec).toEqual({ provider: "claude", auth: "subscription", model: "sonnet", effort: "high", description: "Leads a part.", maxTurns: 30, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: ["worker"], maxChildren: 3 } });
     expect(j.values.find((v: any) => v.path === "limits.maxTurns")).toEqual({ path: "limits.maxTurns", value: 30, from: { as: "override", name: "lead", layer: "project", path: w.at("P/lead/override.yaml") } });
     expect(j.effective).toMatchObject({ model: "sonnet", effort: "high", maxTurns: 30 });
@@ -79,7 +80,7 @@ describe("capcomd profiles", () => {
   }, 30_000);
 
   test("validate, and add/set/rm on agents.json, as `capcomd agents` did; hints name `capcomd profiles`", async () => {
-    expect(json(await capcomd(["profiles", "validate", "--json"], w.env))).toMatchObject({ ok: true, errors: [], warnings: ["profiles.lead: permissions.report is read but not used yet by this capcomd"] });
+    expect(json(await capcomd(["profiles", "validate", "--json"], w.env))).toMatchObject({ ok: true, errors: [], warnings: ["profiles.lead: skills is read but not used yet by this capcomd"] });
     const own = world({}, { worker });
     expect((await capcomd(["profiles", "add", "cx", "--provider", "codex", "--auth", "apikey", "--json"], own.env)).code).toBe(0);
     const again = await capcomd(["profiles", "add", "cx", "--provider", "codex", "--auth", "apikey", "--json"], own.env);

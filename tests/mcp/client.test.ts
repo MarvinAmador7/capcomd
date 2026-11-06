@@ -4,9 +4,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { Engine } from "../helpers/test-engine";
 import { CLI, capcomd, testPort } from "../helpers/engine";
 import { bareRepo } from "../merge/gitfixture";
@@ -126,6 +126,32 @@ describe("capcomd mcp: the driver's tools", () => {
     expect(lead.limits).toMatchObject({ allowSpawn: true, maxChildren: 2, maxDepth: 1 });
     expect((await ok("capcomd_spawn", { runId: r.runId, task: "plain", profile: "coder", children: { maxChildren: 0 }, budget: "usd=1,turns=10", key: "plain" })).limits.allowSpawn).toBe(false);
     await ok("capcomd_cancel", { runId: r.runId });
+  }, 60_000);
+
+  test("profiles: title, tags, fit, cost, capacity; a profile whose permissions.report is false is never spawned to report", async () => {
+    // A v2 profile beside the agents file (its layer is the project's): read on each call, removed afterwards.
+    const dir = join(dirname(env.CAPCOMD_AGENTS_FILE!), "profiles");
+    mkdirSync(join(dir, "critic"), { recursive: true });
+    writeFileSync(join(dir, "critic", "profile.yaml"), [
+      "name: critic", "tags: [review]", "identity: { title: Critic }", "harness: { provider: claude, auth: subscription, model: claude-opus-5-5 }",
+      "tools: { allowed: [Read, Grep] }", "permissions: { report: false }",
+    ].join("\n") + "\n");
+    try {
+      const by = Object.fromEntries((await ok("capcomd_profiles")).profiles.map((x: any) => [x.name, x]));
+      expect(by.critic).toMatchObject({
+        title: "Critic", tags: ["review"], canReport: false, cost: "high", fit: "read-only; never spawned with report; Claude Code, claude-opus-5-5, high cost; can't spawn",
+        capacity: { agentsAtOnce: null, detail: "no local cap (test fakes)" },
+      });
+      expect(by.coder).toMatchObject({ title: null, tags: [], canReport: true, cost: null, fit: "edits and runs code; Claude Code, the CLI's default model; up to 20 turns; can't spawn" });
+      const r = await ok("capcomd_run_new", { budget: "usd=5,turns=100", label: "report", key: `rp-${Date.now()}` });
+      const refused = await call("capcomd_spawn", { runId: r.runId, task: "where is sum defined?", profile: "critic", report: true, budget: "usd=1,turns=10", key: "q" });
+      expect(refused.isError).toBe(true);
+      expect(refused.body.error).toMatchObject({ code: "config", reason: "report_not_allowed", message: "profile critic can't be spawned with report (its permissions.report is false)" });
+      // Unset is allowed, as before; the critic itself still spawns without report.
+      expect((await ok("capcomd_spawn", { runId: r.runId, task: "where is sum defined?", profile: "coder", report: true, budget: "usd=1,turns=10", key: "q2" })).agentId).toBeString();
+      expect((await ok("capcomd_spawn", { runId: r.runId, task: "review it", profile: "critic", budget: "usd=1,turns=10", key: "q3" })).agentId).toBeString();
+      await ok("capcomd_cancel", { runId: r.runId });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   }, 60_000);
 
   test("fan-out on a staging target: spawn 3, await, verify, merge each; only verified commits land", async () => {

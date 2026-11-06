@@ -21,11 +21,12 @@ file's).
 
 ### Where a profile comes from: `capcomd profiles show`
 
-`show <name>` prints the files laid together to make the profile, first to last (its `extends` ancestors, the profile
-itself, then its overrides), and every resolved value with the number of the file that set it:
+`show <name>` prints its `fit` line, the files laid together to make the profile, first to last (its `extends`
+ancestors, the profile itself, then its overrides), and every resolved value with the number of the file that set it:
 
 ```text
 lead: version 2, found in the project's profiles
+Fit: orchestrates: sees everything, runs nothing; Claude Code, sonnet, medium cost; up to 30 turns; can't spawn
 Files, first to last (a later one wins):
    1  extends  worker           project /work/app/.capcomd/agents.json
    2  profile  lead             project /work/app/.capcomd/profiles/lead/profile.yaml
@@ -74,9 +75,20 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `agents.json` keeps working as before; a `profile.yaml` of the same name in the same place wins, and `capcomd
   profiles validate` says so. `capcomd profiles list`, `show` and `validate` read both; `add`, `set` and `rm` edit only
   `agents.json`.
-- `identity`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name), `sandbox.provider|environment|size`,
-  `jobs`, `lifecycle.onStart|onEnd` and `permissions` are checked but don't change what an agent does yet; `capcomd
-  profiles validate` lists the ones a profile sets.
+- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`): `identity.title` (the
+  name to show; not passed to a profile that `extends` it, nor is `identity.avatar`), `tags` (lowercase words, what
+  the profile is for: `[review, security]`), `sharing` (`source`, `license`: where an installed profile came from) and
+  `canReport` from `permissions.report`. capcomd adds `fit`, one line it writes from the profile's settings, never
+  from its text ("read-only; Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn"), and
+  `cost`, its model's list price (`low`: Haiku, `-mini`/`-nano`; `medium`: Sonnet, GPT; `high`: Opus, `-pro`; null
+  when the profile leaves the model to the CLI). `capcomd_profiles` also gives each profile's `capacity`: how many of
+  it can start now (the sandbox's slots, which every profile shares, or 0 with `waitsUntil` while its login is at a
+  usage limit).
+- `permissions: { report: false }` keeps a profile from being spawned with `report` (read-only work whose answer is
+  its result): such a spawn is refused (`reason: "report_not_allowed"`). Unset or `true`, it may be, as before.
+- `identity.persona`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name),
+  `sandbox.provider|environment|size`, `jobs` and `lifecycle.onStart|onEnd` are checked but don't change what an agent
+  does yet; `capcomd profiles validate` lists the ones a profile sets.
 - `capcomd profiles schema` prints the JSON Schema of a profile file (id `capcomd.profile/v2`), for an editor.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
 

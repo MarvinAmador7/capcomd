@@ -238,9 +238,19 @@ export function withContext(doc: ProfileDoc): ProfileDoc {
   return { ...rest, context: { providers } };
 }
 
-/** What `base` passes on to a profile that extends it: everything but who it is (name, version, default, sharing). */
+/** `identity` keys a profile keeps to itself: what the app shows it as (a lead that extends worker isn't "Worker"). */
+const OWN_IDENTITY = new Set(["title", "avatar"]);
+/**
+ * What `base` passes on to a profile that extends it: everything but who it is (name, version, default, sharing, and
+ * its title and avatar; its persona is passed on).
+ */
 export function inheritable(base: ProfileDoc): ProfileDoc {
-  return Object.fromEntries(Object.entries(base).filter(([k]) => !OWN.has(k)));
+  const out = Object.fromEntries(Object.entries(base).filter(([k]) => !OWN.has(k)));
+  if (isMap(out.identity)) {
+    const id = Object.fromEntries(Object.entries(out.identity).filter(([k]) => !OWN_IDENTITY.has(k)));
+    if (Object.keys(id).length) out.identity = id; else delete out.identity;
+  }
+  return out;
 }
 
 /** Which of the files laid together set each value (its index among them), by path: `block.key` for a key in a block,
@@ -337,10 +347,10 @@ export function flatOverrides(set: Record<string, unknown>): Record<string, unkn
 export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed"];
 
 /**
- * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 steps 4, 5 and 8; ADR-025
+ * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 steps 5 and 8; ADR-025
  * §13; spec §16.2), so `validate` can say so instead of the setting silently doing nothing.
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion", "skills", "tools.mcp", "context.providers", "sandbox.provider", "sandbox.environment", "sandbox.size", "jobs", "lifecycle.onStart", "lifecycle.onEnd", "permissions.report"].filter(set);
+  return ["identity.persona", "harness.cliVersion", "skills", "tools.mcp", "context.providers", "sandbox.provider", "sandbox.environment", "sandbox.size", "jobs", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
 }

@@ -74,6 +74,11 @@ An orchestrate agent that writes a file or commits anyway fails, and its change 
 
 Shapes combine: contract first, then wide with a lead on each big part, is the usual shape for "build me X".
 
+Each `capcomd_profiles` entry says what the profile is `fit` for (one line capcomd writes from its settings), its
+`cost` (its model's list price: low, medium or high) and its `capacity` (how many of it can start now). When two
+profiles fit a part, give mechanical parts (stubs, renames, boilerplate) the cheaper one; a profile whose capacity is 0
+waits for its login's usage limit to reset, so plan around it rather than spawning it now.
+
 ### What the user says → the shape
 
 | They say | Shape |
@@ -122,7 +127,7 @@ override an explicit request for parallel work.
 
 With the capcomd MCP server (`capcomd mcp`, or the capcomd plugin), the verbs are tools:
 - **Discover:** `capcomd_setup` (call first: readiness, the project's gates, `capacity`), `capcomd_projects` (the
-  projects this capcomd serves; tools take `project`), `capcomd_profiles` (what each can do, `canLead`),
+  projects this capcomd serves; tools take `project`), `capcomd_profiles` (what each can do, `canLead`, `fit`, `cost`, `capacity`),
   `capcomd_runs` (find runs from earlier sessions).
 - **Run:** `capcomd_run_new`, `capcomd_spawn` (`title`: the agent's tab), `capcomd_await` (`mode: all|any`),
   `capcomd_send`, `capcomd_title` (rarely needed: agents name themselves), `capcomd_cancel`, `capcomd_grant`,
