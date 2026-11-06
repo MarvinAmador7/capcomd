@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `capcomd profiles set` changes any profile where it is defined: a profile file (`.capcomd/profiles/<name>.yaml`,
+  `<name>/profile.yaml`, the same in `~/.capcomd/profiles/`) as well as an `agents.json` entry, with the same flags plus
+  `--set path=value` (`--set limits.maxTurns=40 --set tags=review,security`). A YAML file keeps its comments and its
+  `version` goes up by one. A change that would leave a profile unreadable, or that an `override.yaml` would hide, is
+  refused and writes nothing. `capcomd profiles add <name> --extends <parent>` writes a new profile file; `rm` removes
+  a single profile file too (not a package directory, nor a profile another one extends). Before, `add`, `set` and
+  `rm` only edited `agents.json`. See docs/agents.md.
+- New for apps (capability `profiles.edit`): `GET /v1/profiles/{name}` serves one profile as rows to render and edit
+  (each value with its type, the file that sets it and whether it can be changed there; never a prompt's text), and
+  `PUT /v1/profiles/{name}` changes them, with a token that has the `configure` scope, an `Idempotency-Key` and the
+  profile's `rev`. Each change is a `profile.changed` event on the daemon stream. The menu bar app doesn't edit
+  profiles yet.
 - New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
   a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
   `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`

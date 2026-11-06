@@ -62,7 +62,7 @@ for (const ops of Object.values<any>(spec.paths ?? {})) for (const op of Object.
 	if (op.operationId === "health") continue;
 	for (const s of ERROR_STATUSES) op.responses[String(s)] ??= { description: `Error (${s})`, content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Routes that need a scope a token may lack (configure is new in sandboxes.settings): 403 forbidden.
-	if (["sandboxes.settings", "projects.setup", "projects.gitInit", "projects.publish", "plugins.enable", "plugins.disable"].includes(op.operationId)) op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
+	if (["sandboxes.settings", "projects.setup", "projects.gitInit", "projects.publish", "plugins.enable", "plugins.disable", "profiles.update"].includes(op.operationId)) op.responses["403"] ??= { description: "Error (403): the token lacks the configure scope", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// The out-of-process protocol (plugins.protocol): only the plugin's own token.
 	if (/^plugins\.(openSession|hooks|answer|emit|storage)/.test(op.operationId)) op.responses["403"] ??= { description: "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	// Publishing (projects.git): 503 unavailable when the GitHub CLI fails.

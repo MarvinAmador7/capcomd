@@ -367,6 +367,8 @@ export function rivetSource(): HarnessSource {
 		skills: () => listSkills(),
 		runOptions: async (repo) => (await import("./run-options")).runOptionsFor(repo),
 		profiles: async (repo) => (await import("./profiles")).profilesFor(repo),
+		profile: async (name, repo) => (await import("./profiles")).profileFor(name, repo),
+		updateProfile: async (name, repo, body) => (await import("./profiles")).updateProfileFor(name, repo, body),
 		skill: (name) => readSkill(name),
 		logins: async () => (await import("./settings")).logins(),
 		environments: async () => (await import("./settings")).environments(),
