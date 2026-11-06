@@ -64,6 +64,9 @@ export interface ContextOptions<C> {
   hooks: HookRegistry;
   store: ContributionStore;
   config: C;
+  /** The kernel's own front door (a built-in the kernel names, §4.2): its MCP tools are `capcomd_<tool>`, the names
+   *  capcomd's tools have always had, not `capcomd_<plugin>_<tool>`. */
+  kernelSurface?: boolean;
   services?: { [S in ServiceName]?: Partial<PluginContext[S]> };
   secret?(key: string): Promise<string>;
   /** Writes a checked, redacted `plugin.<name>.<type>` event (§4.7.4). */
@@ -199,7 +202,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
       tool(spec) {
         live();
         if (!(declared.mcp ?? []).some((t) => t.name === spec.name)) refuse(`MCP tool ${spec.name}`);
-        const full = `capcomd_${name.replace(/-/g, "_")}_${spec.name}`;
+        const full = o.kernelSurface ? `capcomd_${spec.name}` : `capcomd_${name.replace(/-/g, "_")}_${spec.name}`;
         return contribute({ kind: "mcp", name: full }, full, { kind: "mcp", spec });
       },
       instructions(text) {

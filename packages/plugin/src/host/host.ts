@@ -29,6 +29,9 @@ export interface Candidate {
   enabled?: boolean;
   /** The plugin's config over its schema's defaults (§10.2; layering lands with the config service). */
   config?: Record<string, unknown>;
+  /** One of the kernel's own front doors (§4.2, §4.7.1): its CLI groups take the kernel's command names and its MCP
+   *  tools are `capcomd_<tool>`. The kernel's built-in list sets it; honoured for `source: "builtin"` only. */
+  kernelSurface?: boolean;
 }
 
 /** `GET /v1/plugins` and `capcomd plugins list` (§13.2). */
@@ -95,6 +98,9 @@ export function configDefaults(m: PluginManifest, dir: string | null): Record<st
   const props = (schema as { properties?: Record<string, { default?: unknown; "x-secret"?: boolean }> } | null)?.properties ?? {};
   return Object.fromEntries(Object.entries(props).filter(([, p]) => p && "default" in p && !p["x-secret"]).map(([k, p]) => [k, structuredClone(p.default)]));
 }
+
+/** A candidate the kernel names as one of its own front doors: a built-in only, never a plugin from a directory. */
+const kernelSurfaceOf = (c: Candidate): boolean => c.source === "builtin" && !c.dir && c.kernelSurface === true;
 
 const nameOf = (raw: unknown, dir: string | undefined, i: number): string => {
   const n = raw && typeof raw === "object" ? (raw as { name?: unknown }).name : undefined;
@@ -210,7 +216,8 @@ export class PluginHost {
   /** `discovered → validated` (§4.9, §4.4, §5.2), or `failed`. */
   private validate(r: Rec) {
     const c = r.candidate;
-    const check = (exempt: boolean): LoadedManifest => c.dir ? readManifest(c.dir, { capcomd: this.o.capcomd, exempt }) : loadManifest(c.manifest, { capcomd: this.o.capcomd, exempt });
+    const kernelSurface = kernelSurfaceOf(c);
+    const check = (exempt: boolean): LoadedManifest => c.dir ? readManifest(c.dir, { capcomd: this.o.capcomd, exempt, kernelSurface }) : loadManifest(c.manifest, { capcomd: this.o.capcomd, exempt, kernelSurface });
     let loaded = check(false);
     if (!loaded.ok && loaded.cause === "incompatible" && loaded.manifest && this.o.exempt?.(loaded.manifest.name, loaded.manifest.version)) loaded = check(true);
     if (!loaded.ok) {
@@ -272,7 +279,7 @@ export class PluginHost {
     r.module = mod;
     const config = { ...configDefaults(m, r.dir), ...(r.candidate.config ?? {}) };
     const runtime = createContext({
-      manifest: m, runtime: m.entry.runtime, root: r.dir ?? "", dataDir: this.o.dataDir(r.name),
+      manifest: m, runtime: m.entry.runtime, root: r.dir ?? "", dataDir: this.o.dataDir(r.name), kernelSurface: kernelSurfaceOf(r.candidate),
       hooks: this.hooks, store: this.contributions, config, ...(this.o.services ? { services: this.o.services(m) } : {}), ...this.o.sinks,
       ...(this.o.secret ? { secret: (key: string) => this.o.secret!(m, key) } : {}),
     });

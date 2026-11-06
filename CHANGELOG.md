@@ -5,6 +5,23 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `capcomd hermes` says whether Hermes is installed and has capcomd (what `capcomd setup check` says for it), and
+  `capcomd hermes add [--approvals elicit|human] [--hermes-entry-per-project] [--yes]` adds capcomd to Hermes on its
+  own, as `capcomd setup agent` does: its MCP server entry, the capcomd skills, and who approves merges into protected
+  branches. Both take `--json`.
+- Plugins can add CLI commands and MCP tools. capcomd's own commands and tools are now registered the same way, by
+  built-in plugins (`front-run`, `front-primitives`, `front-profiles`, `front-env`, `front-setup`, `front-mcp`,
+  `front-hermes`; `capcomd plugins list` shows them): every command, flag, tool, tool schema and output is unchanged. A
+  plugin's command answers `capcomd <name> …` with a relay.v1 envelope (printed as JSON with `--json`, else its text),
+  is listed by `capcomd --help` under "Plugin commands" and shows its own usage with `capcomd <name> --help`; a
+  plugin's tool is `capcomd_<plugin>_<tool>` on `capcomd mcp`, checked against its schema, and runs as the driver.
+  Built-in plugins only in this version (third-party plugins come with the out-of-process runtime). `capcomd --version`
+  and `--help` start faster; other commands start about 30 ms slower, the time to load the built-in plugins.
+- Plugins that prepare an agent (`agent.preparing`) can now give it skills and environment variables: a skill (its
+  SKILL.md, pinned by its sha256) goes after the profile's own prompt in the agent's instructions, and a variable is
+  set in the agent's environment, if its name is new (never one capcomd or the agent's provider sets, nor
+  `CAPCOMD_*`) and its value doesn't look like a secret. The orchestration skill that agents allowed to spawn get is
+  now such a skill, from the built-in `skill-orchestration` plugin; agents get the same text as before.
 - Security: your git credentials never reach an agent's sandbox any more. Before, capcomd's own git commands in an
   agent's VM or container (cloning its checkout, pushing its branch and checkpoints, `capcomd fetch`) ran with your
   GitHub token, so an agent could take it by planting git settings, a hook or a `git` program in its sandbox. Now

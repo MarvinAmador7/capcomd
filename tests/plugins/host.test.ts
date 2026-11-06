@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { PluginHost, type Candidate, type HostOptions } from "../../packages/plugin/src/host/host";
 import type { HostEvent } from "../../packages/plugin/src/host/registry";
 import { PluginError } from "../../packages/plugin/src/errors";
-import { KERNEL_COMMANDS, readManifest } from "../../packages/plugin/src/load";
+import { readManifest } from "../../packages/plugin/src/load";
 import { satisfies } from "../../packages/plugin/src/semver";
 import { samplePayload, testkit } from "../../packages/plugin/src/testkit";
 import type { HookCall, HookName } from "../../packages/plugin/src/hooks";
@@ -563,11 +563,7 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
 });
 
 describe("kernel facts the package keeps", () => {
-  test("KERNEL_COMMANDS are the CLI's commands (§4.7.1)", () => {
-    const src = readFileSync(join(ROOT, "src", "cli", "index.ts"), "utf8");
-    const cases = [...src.matchAll(/^ {6}case "([a-z-]+)":/gm)].map((m) => m[1]!);
-    expect([...KERNEL_COMMANDS as readonly string[]].sort()).toEqual([...new Set([...cases, "tui", "version", "help"])].sort());
-  });
+  // KERNEL_COMMANDS against the CLI's commands: tests/plugins/front-doors.test.ts.
 
   test("engines ranges include prereleases (§4.4)", () => {
     expect(satisfies("0.10.0-rc.1", ">=0.9.0 <1.0.0")).toBe(true);

@@ -241,8 +241,9 @@ export type PushBranchParams = {
   goal?: string;
   /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
   fakePath?: string; fakeContent?: string;
-  /** ADR-017: install in-VM capcomd + skill (agents allowed to spawn). `rpcDir`: where its spool is in the VM. */
-  subagents?: { skill: string; kind?: string; rpcDir?: string };
+  /** ADR-017: install in-VM capcomd (agents allowed to spawn). `rpcDir`: where its spool is in the VM. Its skill comes in
+   *  the agent's spec (agent.preparing, src/plugins/skill-orchestration.ts); `skill` only in an attempt pushed before that. */
+  subagents?: { skill?: string; kind?: string; rpcDir?: string };
   conflictFiles?: string[];
   /** Agent profile name for this task. */
   agent?: string;
@@ -412,7 +413,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       // capcomd call from its spool pump (driver.ts).
       ...(scope ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
       ...(items ? { onItems: items } : {}),
-      ...(params.subagents ? { subagents: { skill: params.subagents.skill, cliSource: VM_CLI_SOURCE, rpcDir: params.subagents.rpcDir ?? "/tmp/capcomd-rpc" } } : {}),
+      ...(params.subagents ? { subagents: { ...(params.subagents.skill ? { skill: params.subagents.skill } : {}), cliSource: VM_CLI_SOURCE, rpcDir: params.subagents.rpcDir ?? "/tmp/capcomd-rpc" } } : {}),
       // agents.title: an agent that may not spawn names its tab with a local shim; its `capcomd title …` calls, read
       // from its tool calls, are its own renames (rate limited like any; a refusal goes to its log).
       ...(scope && !params.subagents ? {

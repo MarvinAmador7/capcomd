@@ -76,12 +76,14 @@ src/
   actors/       - Rivet actors (run, scope, worker, verifier, planner, taskboard, judge)
   agents/       - Claude Code / Codex adapters, profiles, credentials, the agent runner
   auth/         - subscription logins (auth login/status/logout)
-  cli/          - CLI commands
+  cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
+                  front door's registration, front-doors.ts); groups/, the kernel's commands by group; flags.ts, help.ts;
+                  commands/, what they call
   core/         - client, errors, preflight, VM cleanup checks
   engine/       - engine launcher (per-port data dir, pid file)
   env/          - env snapshots, secrets sync, doctor
   machines/     - XState state machines
-  mcp/          - MCP server
+  mcp/          - MCP server (server.ts: serves the registered tools; tools.ts: capcomd's own, front-mcp's)
   merge/        - git: direct and PR merge modes, verification runs (checks in a VM with boxd)
   models/       - model client (fake only, see STATUS.md)
   plugins/      - the kernel's plugin host (ADR-023): the built-in list (builtin/: the sandbox providers; gate-reviewer/,
@@ -90,7 +92,9 @@ src/
                   the `*.changed` hooks from the scope actor's events; sandbox.ts, the sandbox hooks around every
                   provider. Tests load a plugin directory as a built-in with CAPCOMD_TEST_PLUGINS (only under `bun test`;
                   a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
-                  for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite)
+                  for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
+                  front doors (the CLI's groups, front-mcp, front-hermes), and skill-orchestration.ts, the orchestration
+                  skill as an agent.preparing patch: every process loads them (host.ts `localHost`)
   primitives/   - ADR-016 operations, policy, task board, kv
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
