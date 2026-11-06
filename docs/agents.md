@@ -86,10 +86,11 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   usage limit).
 - `permissions: { report: false }` keeps a profile from being spawned with `report` (read-only work whose answer is
   its result): such a spawn is refused (`reason: "report_not_allowed"`). Unset or `true`, it may be, as before.
-- `identity.persona`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name),
-  `sandbox.provider|environment|size` and `lifecycle.onStart|onEnd` are checked but don't change what an agent does
-  yet; `capcomd profiles validate` lists the ones a profile sets. `jobs` (`foregroundMs`, `max`, `afterTurnMs`) sets the
-  agent's background jobs (`capcomd job start`), as the flat `jobs` field does in `agents.json`.
+- `skills` gives every agent of the profile skills at its start (below).
+- `identity.persona`, `tools.mcp`, `context` (with `memory` read as its old name), `sandbox.provider|environment|size`
+  and `lifecycle.onStart|onEnd` are checked but don't change what an agent does yet; `capcomd profiles validate` lists
+  the ones a profile sets. `jobs` (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs
+  (`capcomd job start`), as the flat `jobs` field does in `agents.json`.
 - `capcomd profiles schema` prints the JSON Schema of a profile file (id `capcomd.profile/v2`), for an editor.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
 - An agent keeps the profile it was started with: what the profile resolved to then, its `version` (1 when it sets
@@ -97,6 +98,39 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   profile changes the next agents, not the running ones. `capcomd inspect <runId> <agentId>` shows it as
   `[worker v3, project]`; `spawn`, `inspect` and `await --json` and the API's `Agent` carry `profileVersion` and
   `profileSource`.
+
+### Skills in a profile
+
+```yaml
+# .capcomd/profiles/reviewer/profile.yaml
+name: reviewer
+harness: { provider: claude, auth: subscription }
+skills:
+  - name: threat-model            # .capcomd/profiles/reviewer/skills/threat-model/SKILL.md
+  - name: owasp-top-10
+    source: user                  # ~/.claude/skills/owasp-top-10/SKILL.md
+    hash: sha256:9f2c…            # optional: refuse the skill if its SKILL.md has changed
+```
+
+An agent of the profile gets each skill's `SKILL.md` in its instructions when it starts (Claude Code's appended
+system prompt, Codex's prompt), after the profile's `prompt.append`, each in a `<skill name="…">` block, the way
+`capcomd send --skill` sends skills with a message.
+
+- Where a skill comes from (`source`): `package` is the profile's own `skills/<name>/SKILL.md` (an `override.yaml`'s
+  directory first, then the profile's, then the profiles it extends); `user` is your `~/.claude/skills`, as
+  `capcomd skills` lists them; `bundled` is capcomd's. Without `source`: the profile's own, then capcomd's. A
+  single-file profile (`<name>.yaml`) has no `skills/` directory. A `SKILL.md` must stay inside the profile's
+  directory (a link out of it is refused). Only `SKILL.md` goes to the agent, not the files next to it.
+- Skills are read when the agent is spawned, and the agent is pinned to them by the sha256 of each `SKILL.md`: one
+  edited after that changes the next agents, never one already spawned (a retried or resumed agent gets the same
+  text). `capcomd profiles show <name>` prints each skill's source and hash; `hash:` in the profile pins one, and a
+  `SKILL.md` that no longer matches it is refused, never taken silently.
+- `capcomd-orchestration` is capcomd's own: every agent that may spawn (`children.allowSpawn: true`) gets it anyway,
+  written for that agent (its limits, budget and the run's goal branch), so naming it changes nothing and the agent
+  gets it once. Naming it in a profile that can't spawn, or with a `hash`, is refused.
+- At most 8 skills and 256 KB of `SKILL.md` together, as on a message; a profile that may spawn keeps one of the 8 and
+  32 KB for the orchestration skill. A missing, empty or too big skill makes the profile invalid (`capcomd profiles
+  validate` names it), as any other mistake in it does.
 
 ## The planner's provider, model and effort for one run
 
