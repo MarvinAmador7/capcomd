@@ -18,6 +18,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   that plugin, and `plugin.process_changed` events on the daemon stream. Capability `plugins` adds
   `GET /v1/plugins/{name}` (a plugin's manifest and config, never a secret) and `POST /v1/plugins/{name}/enable` and
   `/disable` (the configure scope; for the daemon's life, and a built-in can't be disabled).
+- New: skills in a profile. A `profile.yaml` can list `skills:`, and every agent of that profile gets each skill's
+  `SKILL.md` in its instructions when it starts, the way `capcomd send --skill` sends skills with a message: from the
+  profile's own `skills/<name>/SKILL.md`, or from your `~/.claude/skills` with `source: user`. Skills are read when an
+  agent is spawned and the agent keeps them (pinned by each file's sha256), so editing a skill changes the next agents,
+  not running ones; `hash: sha256:…` in the profile refuses a `SKILL.md` that has changed. `capcomd profiles show`
+  prints each skill's source and hash. Naming `capcomd-orchestration` is allowed in a profile that may spawn, and its
+  agents still get it once. See docs/agents.md, "Skills in a profile".
+- The skills an agent gets when it starts (the orchestration skill, a plugin's) are now each in a `<skill name="…">`
+  block in its instructions, as a message's skills are; their text is unchanged.
 - New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
   `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd profiles list|show`, which also
   give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether

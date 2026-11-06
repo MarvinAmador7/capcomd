@@ -83,7 +83,11 @@ test("a lead gets its profile's prompt, then the orchestration skill, then a plu
   expect(cite).toBeGreaterThan(orch);
   expect(lead.system).toContain(`You are agent ${lead.id}.`);
   expect(lead.system.split("# Orchestrating child agents (capcomd)").length).toBe(2);   // once
-  expect(lead.env).toBe("PLUGIN_TEAM=payments\n");
+  // Each skill in a block named for it, as a message's (src/agents/skills.ts skillBlock).
+  expect(lead.system).toContain('<skill name="capcomd-orchestration">\n# Name your tab (capcomd)');
+  expect(lead.system).toContain(`<skill name="cite-files">\n${SKILL_TEXT}\n</skill>`);
+  // The test plugin saw the orchestration skill, which the built-in plugin added before it.
+  expect(lead.env).toBe("PLUGIN_SAW_SKILLS=capcomd-orchestration\nPLUGIN_TEAM=payments\n");
 
   const worker = await finished(run, "worker", "worker");
   expect(worker.system).not.toContain("Orchestrating child agents");
