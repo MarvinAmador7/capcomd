@@ -4,7 +4,7 @@
 // for a stale item, a long description, a large body and a body that reads like an instruction. Then the command
 // itself on a checkout: its output, its exit code, `--fix` and `--base`.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { INDEX_FILE, lintContext, readContextAt, readContextDir, renderIndex, type LintFile, type LintInput } from "../../src/context/lint";
@@ -117,6 +117,19 @@ describe("lint (ADR-025 §5.3)", () => {
     expect(r.index.text).toContain("- [lesson] shaped → memory/shaped.md (id shaped; draft)");
   });
 
+  test("an item whose id, path or superseded_by holds the secret is in no line of index.md that would show it", () => {
+    const KEY = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const r = lint({
+      "memory/by-id.md": item({ id: KEY, type: "lesson" }),
+      [`memory/${KEY}.md`]: item({ id: "by-path", type: "lesson" }),
+      "memory/by-link.md": item({ id: "by-link", type: "lesson", superseded_by: [KEY] }),
+    }, { fix: true });
+    expect(r.errors.filter((p) => p.rule === "secret").map((p) => p.file.slice(CONTEXT_DIR.length))).toEqual(["memory/by-id.md", "memory/by-link.md", `memory/${KEY}.md`]);
+    expect(r.index.text).not.toContain(KEY);
+    expect(r.index.text).toContain("- [lesson] by-link → memory/by-link.md (id by-link; draft)");
+    expect(r.index.text).not.toContain("by-path");
+  });
+
   test("against a base: an id never changes, an item is never deleted (moving it is fine)", () => {
     const base = files({ ...GOOD, "memory/kept.md": item({ id: "kept", type: "lesson" }), "memory/moved.md": item({ id: "moved", type: "lesson" }) });
     const r = lint({
@@ -196,6 +209,32 @@ describe("capcomd context lint, on a checkout", () => {
       expect(bad.code).toBe(2);
       const none = await capcomd(["context", "lint", "--dir", join(dir, "nowhere"), "--json"]);
       expect(json(none.stdout)).toMatchObject({ ok: true, items: 0 });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 60_000);
+
+  test("--fix never writes through a link: index.md, or .capcomd/context/ itself, pointing outside", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-context-lint-"));
+    try {
+      const repo = join(dir, "repo"), outside = join(dir, "outside");
+      mkdirSync(join(repo, ".git"), { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(join(outside, "precious"), "keep me\n");
+      for (const [p, text] of Object.entries(GOOD)) { mkdirSync(join(repo, CONTEXT_DIR, p, ".."), { recursive: true }); writeFileSync(join(repo, CONTEXT_DIR, p), text); }
+      // index.md is a link to a file outside the repository.
+      symlinkSync(join(outside, "precious"), join(repo, INDEX_FILE));
+      const viaIndex = await capcomd(["context", "lint", "--dir", repo, "--fix", "--json"]);
+      expect(viaIndex.code).toBe(1);
+      expect(json(viaIndex.stdout).error.message).toContain(`${INDEX_FILE}: a link`);
+      expect(readFileSync(join(outside, "precious"), "utf8")).toBe("keep me\n");
+      // .capcomd/context/ is a link to a directory outside it.
+      rmSync(join(repo, ".capcomd"), { recursive: true, force: true });
+      mkdirSync(join(repo, ".capcomd"));
+      symlinkSync(outside, join(repo, CONTEXT_DIR.slice(0, -1)));
+      expect(readContextDir(repo)).toEqual([{ path: ".capcomd/context", text: null, link: true }]);
+      const viaDir = await capcomd(["context", "lint", "--dir", repo, "--fix", "--json"]);
+      expect(viaDir.code).toBe(1);
+      expect(json(viaDir.stdout).error.message).toContain(".capcomd/context: a link");
+      expect(readdirSync(outside)).toEqual(["precious"]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, 60_000);
 });

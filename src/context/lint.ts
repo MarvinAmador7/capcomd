@@ -164,6 +164,9 @@ function baseIds(files: LintFile[]): Map<string, string> {
   return out;
 }
 
+/** Whether `--fix` would write index.md through a link (index.md, or a directory above it, is one): it never does. */
+export const indexLinked = (files: ReadonlyArray<LintFile>) => files.some((f) => f.link && (f.path === INDEX_FILE || INDEX_FILE.startsWith(`${f.path}/`)));
+
 /** Lint `.capcomd/context/` (the module's header says what is checked). */
 export function lintContext(i: LintInput): LintResult {
   const errors: LintProblem[] = [], warnings: LintProblem[] = [];
@@ -172,6 +175,8 @@ export function lintContext(i: LintInput): LintResult {
   const files = [...i.files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const items: Item[] = [];
   const firstById = new Map<string, Item>();
+  /** Items holding a secret in their id or path: in no line of index.md. */
+  const unlisted = new Set<Item>();
   const today = Math.floor((i.now ?? Date.now()) / DAY_MS) * DAY_MS;
   for (const f of files) {
     if (f.link) { err(f.path, "unreadable", "a link: .capcomd/context/ holds files, so every agent reads the same thing"); continue; }
@@ -181,12 +186,18 @@ export function lintContext(i: LintInput): LintResult {
       continue;
     }
     if (f.text === null) { err(f.path, "unreadable", `not text, or over ${MEMORY_MAX_BYTES / 1024} KB: the memory provider leaves it out`); continue; }
-    const hit = i.scan(f.text);
+    // Its name too (as a credential, not as a path: a lesson may live in a folder called secrets/).
+    const named = ((h) => (h?.reason === "path" ? null : h))(i.scan(rel(f.path)));
+    const hit = i.scan(f.text) ?? named;
     if (hit) err(f.path, "secret", `holds ${hit.what}: take it out (the item is refused, never redacted)`);
     const item = readItem(f as LintFile & { text: string }, kind, (rule, message) => err(f.path, rule, message));
     if (!item) continue;
-    // An item holding a secret is in the index by its id alone: `--fix` never copies the secret into index.md.
-    if (hit) Object.assign(item, { description: item.id, paths: [] });
+    // An item holding a secret is in the index by its id alone, or not at all when its id or path holds it: `--fix`
+    // never copies the secret into index.md.
+    if (hit) {
+      Object.assign(item, { description: item.id, paths: [], supersededBy: [] });
+      if (i.scan(item.id) || named) unlisted.add(item);
+    }
     const first = firstById.get(item.id);
     if (first) { err(f.path, "duplicate-id", `id ${item.id} is already ${rel(first.file)}'s`); continue; }
     firstById.set(item.id, item);
@@ -248,15 +259,19 @@ export function lintContext(i: LintInput): LintResult {
   // landed merges.
   if (i.outcome) for (const x of items) if (changed.has(x.file)) for (const o of x.outcomes) if (!i.outcome(o)) err(x.file, "outcome", `${o.kind} ${o.id} isn't a passed verify or a landed merge of the run`);
 
-  const index = renderIndex(items);
+  const index = renderIndex(items.filter((x) => !unlisted.has(x)));
   const have = files.find((f) => f.path === INDEX_FILE);
   const current = have?.text === index;
   if (!current && !i.fix && (items.length || have)) err(INDEX_FILE, "index", have ? "out of date with the items: run `capcomd context lint --fix` to write it" : "missing: run `capcomd context lint --fix` to write it");
   return { items: items.length, errors, warnings, index: { path: INDEX_FILE, text: index, current } };
 }
 
-/** Every file under `<root>/.capcomd/context/`, as lint reads them: text, or null for a binary or one over 64 KB. */
+/** Every file under `<root>/.capcomd/context/`, as lint reads them: text, or null for a binary or one over 64 KB; a
+ *  link is a link, never followed (`.capcomd/` or `.capcomd/context/` itself one too: then that is all there is). */
 export function readContextDir(root: string): LintFile[] {
+  for (const dir of [CONTEXT_DIR.slice(0, CONTEXT_DIR.indexOf("/")), CONTEXT_DIR.slice(0, -1)]) {
+    try { if (lstatSync(join(root, dir)).isSymbolicLink()) return [{ path: dir, text: null, link: true }]; } catch { return []; }
+  }
   const out: LintFile[] = [];
   const visit = (dir: string, prefix: string) => {
     let entries: string[];

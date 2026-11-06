@@ -16,7 +16,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: `capcomd context lint` checks a repository's `.capcomd/context/`: items only, each with an `id` and a `type` and
   well-formed fields, unique ids, reciprocal supersession without cycles, no secrets, and an `index.md` that matches the
   items (`--fix` writes it). `--base <ref>` also refuses a changed id or a deleted item; `--run <runId>` checks that the
-  verifies and merges an item cites are that run's. Problems exit 1, each naming its file.
+  verifies and merges an item cites are that run's. Problems exit 1, each naming its file. A link in the directory is
+  a problem, and `--fix` never writes through one.
 - New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
   a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
   `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`

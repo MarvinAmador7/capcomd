@@ -163,7 +163,7 @@ async function outcomesOf(runId: string) {
 
 /** `capcomd context lint` (src/context/lint.ts): the problems as an error, else the warnings and what it wrote. */
 async function lint(flags: Record<string, string | boolean | string[]>): Promise<Envelope> {
-  const { INDEX_FILE, lintContext, readContextAt, readContextDir } = await import("../context/lint");
+  const { INDEX_FILE, indexLinked, lintContext, readContextAt, readContextDir } = await import("../context/lint");
   const { DEFAULT_LIMITS } = await import("../context/limits");
   const { runSecrets, secretScan } = await import("../context/scan");
   const root = typeof flags.dir === "string" ? resolve(flags.dir) : repoRoot(process.cwd());
@@ -180,7 +180,8 @@ async function lint(flags: Record<string, string | boolean | string[]>): Promise
     itemBytes: DEFAULT_LIMITS.itemBytes, descriptionChars: DEFAULT_LIMITS.descriptionChars,
   });
   let written = false;
-  if (fix && !r.index.current) {
+  // Never through a link (lint has said so already): it could write anywhere the link points.
+  if (fix && !r.index.current && !indexLinked(files)) {
     mkdirSync(dirname(join(root, INDEX_FILE)), { recursive: true });
     writeFileSync(join(root, INDEX_FILE), r.index.text);
     written = true;

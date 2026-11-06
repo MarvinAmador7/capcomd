@@ -592,7 +592,8 @@ this list says why):
   agent's result is its successor's and is collected at the successor's end. A cancelled agent's result isn't
   collected.
 - An element of `result.data.context` is a `ContextProposal`; any other field (`by`, `origin`, `status`, `verified`)
-  is ignored and named on the record (`ignored`). `type` defaults to `lesson`, `op` to `add`; `supersede` and
+  is ignored and named on the record (`ignored`; only a name shaped like a field's and holding no secret, so a key
+  can't carry one in). Every string a candidate keeps is scanned, its `target`'s too. `type` defaults to `lesson`, `op` to `add`; `supersede` and
   `deprecate` need a `target` (its `provider` defaults to `memory`). Provenance is `method: agent-generated`,
   `by: process:<agentId>`, `origin` from the agent's record (`image` null until a run records one).
 - The candidates are kept in kv `_context/<agentId>` (reserved, written by the kernel once, with `expect: 0`, so a
@@ -606,15 +607,18 @@ this list says why):
   the plugins' secrets, every variable of the run's environment named like a credential, the in-VM tokens' signing key
   and the forge's credential for the run's repository; then the redactor's shapes (exported as `PATTERNS`) and a few
   more, words of 32 or more characters with digits and both cases at 4.3 bits a character or more (commit ids and code
-  names stay out), and the path denylist with `~/.ssh`, `id_*` keys, `.netrc` and `.git-credentials` added.
+  names stay out), and the path denylist with `~/.ssh`, `id_*` keys, `.netrc` and `.git-credentials` added. It reads
+  the text with invisible characters dropped and look-alikes folded (NFKC, every dash a hyphen), the seeds too.
 - Budgets: `itemBytes` is 4 KiB in capcomd's defaults and every eval file (half of a result's 8 KB of data);
   `proposalsPerRun` stays null until consolidation (step 3) sets it, and capture honours one a profile sets.
 - `capcomd context lint` is a verb of the router's command group (one group has one owner), over `src/context/lint.ts`,
   which reuses the memory provider's `frontmatter`. It requires an `id` as well as OKF's `type` (an id is what
   supersession, citations and "ids immutable" need); checks ids against `--base <ref>` (local `git ls-tree` and `git
   cat-file`, no network) for "never changes" and "never deleted" (deprecated instead; a moved file keeps its id);
-  resolves `outcomes[]` only with `--run`, and only for items the change touches; and treats a link, a binary or a file
-  over 64 KB as a problem. `index.md` is the items by kind (facts first) and path, with no date of its own, so it is
+  resolves `outcomes[]` only with `--run`, and only for items the change touches; and treats a link (`.capcomd/` or
+  `.capcomd/context/` being one included), a binary or a file over 64 KB as a problem, and `--fix` never writes
+  `index.md` through a link. A file's name is scanned as well as its text; an item holding a secret is in `index.md` by
+  its id alone, or not at all when its id or name holds it. `index.md` is the items by kind (facts first) and path, with no date of its own, so it is
   deterministic; `--fix` writes only it. The imperative-language flag §8 gives step 3 is a warning now, with stale
   items, long descriptions and bodies over `itemBytes`. "No file outside `.capcomd/context/`" is a branch's diff, so it
   waits for step 3's check.

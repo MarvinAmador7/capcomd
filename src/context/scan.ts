@@ -50,8 +50,9 @@ function entropy(s: string): number {
  *  close to random (a 32-character base62 key has about 4.6 bits a character, English and code names under 4). */
 const randomLooking = (w: string) => w.length >= 32 && /\d/.test(w) && /[a-z]/.test(w) && /[A-Z]/.test(w) && entropy(w) >= 4.3;
 
-/** The text as the scan reads it: invisible format characters dropped, so nothing hides behind one. */
-const plain = (t: string) => String(t ?? "").replace(/\p{Cf}+/gu, "");
+/** The text as the scan reads it: invisible format characters dropped, so nothing hides behind one, and look-alikes
+ *  folded (NFKC: full-width letters and digits, no-break spaces; every dash a hyphen), so none passes for another. */
+const plain = (t: string) => String(t ?? "").replace(/\p{Cf}+/gu, "").normalize("NFKC").replace(/\p{Pd}/gu, "-");
 
 /**
  * A scan seeded with `secrets` (values shorter than 8 characters are ignored: they would match too much): `scan(text)`
@@ -59,7 +60,7 @@ const plain = (t: string) => String(t ?? "").replace(/\p{Cf}+/gu, "");
  * string, a credentials path.
  */
 export function secretScan(secrets: ReadonlyArray<string | null | undefined> = []): (text: string) => ScanHit | null {
-  const seeded = [...new Set(secrets.filter((s): s is string => typeof s === "string" && s.trim().length >= 8).map((s) => s.trim()))];
+  const seeded = [...new Set(secrets.filter((s): s is string => typeof s === "string").map((s) => plain(s).trim()).filter((s) => s.length >= 8))];
   const hit = (reason: ScanReason): ScanHit => ({ reason, what: WHAT[reason] });
   return (text: string) => {
     const t = plain(text);

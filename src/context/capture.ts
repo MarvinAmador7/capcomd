@@ -50,6 +50,8 @@ const FIELDS = new Set(["text", "title", "type", "op", "target"]);
 const TYPE = /^[a-z][a-z0-9_-]{0,31}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const OPS = new Set(["add", "supersede", "deprecate"]);
+/** A name `ignored` lists: one shaped like a field's (anything else, a secret used as a key say, isn't repeated). */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 
 const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
@@ -92,10 +94,13 @@ export function capture(i: CaptureInput): { accepted: Candidate[]; refused: Refu
   const list = Array.isArray(i.raw) ? i.raw : [];
   list.forEach((v, k) => {
     const n = k + 1;
-    if (isMap(v)) for (const f of Object.keys(v)) if (!FIELDS.has(f)) ignored.add(f);
+    // A name is listed only when it is a field's and holds no secret: `ignored` is kept and told as the rest is.
+    if (isMap(v)) for (const f of Object.keys(v)) if (!FIELDS.has(f) && FIELD_NAME.test(f) && !i.scan(f)) ignored.add(f);
     const p = proposalOf(v, i.origin.agentId);
     if (!p) return refused.push({ n, reason: "invalid", what: "isn't a lesson: give it a text, and at most a title, a type, an op and a target" });
-    const hit = i.scan([p.title ?? "", p.type ?? "", p.target?.id ?? "", p.text.text].join("\n"));
+    // Every string the candidate keeps is scanned, its target's too.
+    const t = p.target;
+    const hit = i.scan([p.title ?? "", p.type ?? "", t?.provider ?? "", t?.id ?? "", t?.version ?? "", p.text.text].join("\n"));
     if (hit) return refused.push({ n, reason: hit.reason, what: `holds ${hit.what}` });
     const bytes = Buffer.byteLength(p.text.text);
     if (i.itemBytes !== null && bytes > i.itemBytes) return refused.push({ n, reason: "too_large", what: `is over the ${i.itemBytes}-byte limit for one lesson` });

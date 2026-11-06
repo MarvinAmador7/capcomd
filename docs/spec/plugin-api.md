@@ -1217,7 +1217,9 @@ secret. The scan is seeded with every secret value the kernel puts in the run (t
 plugins' secrets of §10.3, every variable of the run's environment named like a credential, the in-VM tokens' signing
 key, the forge's credential for the run's repository), then the redactor's shapes and a few more (AWS, Slack, boxd and
 Google keys, a private key, a URL with a password), a long random-looking string, and the paths credentials are kept
-in (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`). Its reasons are the kernel's words, never the matched text.
+in (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`), over the text with invisible characters dropped and look-alikes
+folded (NFKC, every dash a hyphen). Every string a candidate keeps is scanned, and a field name it ignores is repeated
+only when it holds no secret. Its reasons are the kernel's words, never the matched text.
 
 ### 11.6 Isolation
 

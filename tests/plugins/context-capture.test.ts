@@ -20,8 +20,10 @@ const scan = secretScan([RUN_SECRET]);
 describe("the seeded secret scan (ADR-025 §8): it refuses, it never redacts", () => {
   test("a run's secret, a credential's shape, a random-looking string, a credentials path, each named in the kernel's words", () => {
     expect(scan(`the deploy needs ${RUN_SECRET} first`)).toEqual({ reason: "secret", what: "a secret value of the run" });
-    // Behind an invisible character it is still found.
+    // Behind an invisible character it is still found, and in full-width letters; a token with look-alike dashes too.
     expect(scan(`x ${RUN_SECRET.slice(0, 9)}​${RUN_SECRET.slice(9)} y`)?.reason).toBe("secret");
+    expect(scan(`x ｃｏｒｒｅｃｔ horse battery staple ４４１７ y`)?.reason).toBe("secret");
+    expect(scan(SHAPED.replace(/-/g, "‐"))?.reason).toBe("token");
     expect(scan(`key ${SHAPED}`)?.reason).toBe("token");
     for (const t of ["AKIAABCDEFGHIJKLMNOP", "-----BEGIN OPENSSH PRIVATE KEY-----", "https://deploy:hunter2pass@example.com/repo.git", "ghp_abcdefghijklmnopqrstuvwxyz0123456789"]) expect(scan(t)?.reason).toBe("token");
     expect(scan("token Zx81mQ2rT9vB4nK7wP3sL6yH0cJ5dF1gA8uE")?.reason).toBe("entropy");
@@ -87,6 +89,17 @@ describe("the candidates in one agent's result.data.context (ADR-025 §5.1)", ()
     expect(r.accepted.map((c) => c.id)).toEqual(["agt-test1.8", "agt-test1.9"]);
     expect(r.accepted[1]!.proposal).toMatchObject({ op: "deprecate", target: { provider: "memory", id: "old-rounding", version: "" } });
     expect(input("not a list")).toEqual({ accepted: [], refused: [], ignored: [] });
+  });
+
+  test("every string a candidate keeps is scanned, its target's too; a secret used as a field's name isn't repeated", () => {
+    const r = input([
+      { text: "fine", op: "supersede", target: { id: "old-rounding", version: RUN_SECRET } },
+      { text: "also fine", [RUN_SECRET]: 1, [SHAPED]: 2, note: "x" },
+    ]);
+    expect(r.refused.map((x) => [x.n, x.reason])).toEqual([[1, "secret"]]);
+    expect(r.ignored).toEqual(["note"]);
+    expect(JSON.stringify(r)).not.toContain(RUN_SECRET);
+    expect(JSON.stringify(r)).not.toContain("sk-ant-api03");
   });
 });
 

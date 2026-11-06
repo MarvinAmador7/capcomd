@@ -221,7 +221,8 @@ item has frontmatter with an `id` and a `type`, and well-formed `status`, dates,
 and B `superseded_by: [A]`) and has no cycle; that no file holds a secret (the same check as a proposed lesson's); and
 that `index.md` is what `--fix` writes. An item is never deleted (set `status: deprecated`), and its id never changes
 (supersede it with a new one). Warnings don't fail it: a stale item, a description the brief cuts, a body over 4 KB,
-a body that reads like an instruction or a command.
+a body that reads like an instruction or a command. A link in `.capcomd/context/` (or the directory being one) is a
+problem, and `--fix` never writes `index.md` through one.
 
 ## The planner's provider, model and effort for one run
 
