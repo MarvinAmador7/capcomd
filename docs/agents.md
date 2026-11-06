@@ -92,6 +92,11 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   agent's background jobs (`capcomd job start`), as the flat `jobs` field does in `agents.json`.
 - `capcomd profiles schema` prints the JSON Schema of a profile file (id `capcomd.profile/v2`), for an editor.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
+- An agent keeps the profile it was started with: what the profile resolved to then, its `version` (1 when it sets
+  none, and for every `agents.json` profile) and the layer it came from (`project`, `user` or `bundled`). Editing the
+  profile changes the next agents, not the running ones. `capcomd inspect <runId> <agentId>` shows it as
+  `[worker v3, project]`; `spawn`, `inspect` and `await --json` and the API's `Agent` carry `profileVersion` and
+  `profileSource`.
 
 ## The planner's provider, model and effort for one run
 

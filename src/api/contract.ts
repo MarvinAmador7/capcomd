@@ -3,7 +3,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentProvider, AgentResult, AgentTitleSource, HeldBy, LegacyEventData, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, AgentTitleSource, HeldBy, LegacyEventData, PROFILE_SOURCE_TEXT, PROFILE_VERSION_TEXT, ProfileSource, ProfileVersion, UntrustedText } from "./legacy-events";
 import { RENAME_WINDOW_MS, RENAMES_MAX, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
@@ -87,6 +87,8 @@ export const Agent = z.object({
 	parent: z.string().nullable(),
 	depth: z.number().int(),
 	profile: ProfileName.nullable(),
+	profileVersion: ProfileVersion.nullable().optional().describe(`${PROFILE_VERSION_TEXT}. null without a profile (a fake agent, CAPCOMD_AGENT naming a provider) or for an agent spawned before capcomd recorded it. Older daemons don't send it`),
+	profileSource: ProfileSource.nullable().optional().describe(`${PROFILE_SOURCE_TEXT}. null when profileVersion is. Older daemons don't send it`),
 	status: AgentStatus,
 	text: z.string().describe("Plain-language status line written by the daemon (trusted)"),
 	activity: AgentActivity.nullable().describe("What it is doing now (or, once it stopped, the last thing it did); null until it reports a step. Live updates: agent.activity_changed with ?activity=1 on a run stream"),

@@ -375,6 +375,10 @@ describe("profiles v2: loader and resolution", () => {
     expect(set.agents.m).toEqual({ provider: "claude", auth: "apikey" }); // no behaviour yet: nothing in the pin
     expect(set.warnings).toEqual(["profiles.m: context.providers is read but not used yet by this capcomd", "profiles.n: context.providers is read but not used yet by this capcomd"]);
     expect(checkManifest({ name: "u", memory: { scope: "user" } }, "profile", "u").join()).toContain("memory.scope: user memory isn't built");
+    // An agent records the version (harness.v1 Agent.profileVersion, a safe integer): one past 2^53 is refused here,
+    // not at every read of the agent.
+    for (const version of [0, 1.5, "2", 2 ** 53, 1e300]) expect({ version, e: checkManifest({ name: "u", version }, "profile", "u") }).toEqual({ version, e: ["version: must be an integer >= 1"] });
+    expect(checkManifest({ name: "u", version: Number.MAX_SAFE_INTEGER }, "profile", "u")).toEqual([]);
     expect(checkManifest({ name: "u", memory: { files: ["A.md", "B.md"] } }, "profile", "u").join()).toContain("memory.files: must name one index file");
     expect(checkManifest({ name: "u", memory: {}, context: {} }, "profile", "u").join()).toContain("memory: is the old name of context: set one of them");
     // `memory: null` in a child removes what it inherits, as `context: null` does (the parent's memory is its context).
