@@ -53,6 +53,18 @@ describe("the mode, explained", () => {
     expect(orchestrationSkill({ agentId: "agt-1", limits, budget: {}, mcp: true })).not.toContain("You orchestrate");
   });
 
+  test("notes and lessons (ADR-025 §5.1): working notes in kv notes/<self>, lessons proposed in the result", () => {
+    for (const orchestrate of [true, false]) {
+      const s = orchestrationSkill({ agentId: "agt-1", limits, budget: {}, mcp: true, orchestrate });
+      expect(s).toContain("## Notes and lessons");
+      expect(s).toContain("`capcomd kv put notes/agt-1 '{\"plan\": \"…\"}'`");
+      expect(s).toContain("Every agent of the run can\n  read them, so nothing in them is private.");
+      expect(s).toContain(`--data '{"context": [{"title": "…", "text": "…"}]}'`);
+      expect(s).toContain("it reaches the project's memory only through a reviewed change");
+      expect(s).not.toMatch(RUNS_CODE);
+    }
+  });
+
   test("profile descriptions: setup's templates, capcomd_profiles / agents list `does`", () => {
     const by = Object.fromEntries(planProject({ dir: mkdtempSync(join(tmpdir(), "capcomd-ot-")), repo: "https://github.com/a/b.git", mode: "direct", target: "main", check: "bun test", agents: ["claude"], authOf: () => "subscription", cap: null }).profiles);
     expect(by.lead!.description).toBe(LEAD_DESCRIPTION);

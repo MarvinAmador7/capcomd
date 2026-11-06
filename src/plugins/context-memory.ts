@@ -1,7 +1,8 @@
 // context-memory (ADR-025 §11.1, step 1): the built-in context provider `memory`, the project layer. A profile with
 // `context: {providers: [{name: memory}]}` (or ADR-024's `memory: {scope: project}`) is briefed from the items under
 // `.capcomd/context/` in the run's repository, at the tip of the branch its agents start from (src/context/memory.ts).
-// Read-only in this step: capture, lint and promotion through a reviewed merge come with ADR-025 steps 2-3.
+// Read-only: agents propose lessons as candidates of their run (the context router's capture, src/context/capture.ts),
+// `capcomd context lint` checks the tree, and promotion through a reviewed merge comes with ADR-025 step 3.
 import { definePlugin } from "../../packages/plugin/src/context";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { VERSION } from "../utils/self";

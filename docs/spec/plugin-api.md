@@ -613,6 +613,20 @@ for its own work, its spawner (the parent agent, else the operator) for `spawned
 recorded for a pause, resume, cancel or title; a verification's and merge's changes are their asker's, a decision its
 approver's (`src/plugins/changes.ts` `causeOf`).
 
+The kernel's context capture (ADR-025 §5.1) is the built-in `context` plugin's listener: on `ended` (not `cancelled`)
+of an agent whose result has `data.context`, it reads the result from the record the agent's token wrote (kv
+`_result/<agentId>`, written by `capcomd result` as the token's `sub`; not the payload, which only says there is
+something to read and is redacted on its way), and only when that writer is the agent. Each element is a
+`ContextProposal` (`text`, and at most `title`, `type`, `op`, `target`); its other fields are ignored and named
+(`ignored`), so an agent can't say who wrote a lesson or how far it is trusted. Each is refused when it isn't one, holds
+a secret (§11.5's seeded scan), is over `limits.itemBytes`, or would pass the run's `limits.proposalsPerRun`; else it is
+a candidate whose `provenance` the kernel stamps from its records (`method: agent-generated`, `by: process:<agentId>`,
+`origin: {runId, agentId, profile, model, image}`). The agent's candidates and refusals (a number and a reason, never
+the text) are kept once, in kv `_context/<agentId>` of the run (reserved: only the kernel writes it, every agent of the
+run reads it), with `plugin.context.proposed` per candidate and `plugin.context.refused` per refusal on the run's
+stream. Nothing reaches a shared layer. The listener never throws (a failure is logged): three failed calls would
+suspend the plugin's `agent.preparing` listener with it (§6.5).
+
 #### 6.6.9 `agent.item` · observe · the runner, as it drains the thread (`putItems`)
 `AgentItem {agent: {id, runId, profile}, item: ThreadItem}`, untrusted. The only turn and tool-call surface capcomd can
 offer (ADR-023 §5.3): the host sees tool calls after the fact and cannot block them. High volume: 5 s deadline, bounded
@@ -1208,6 +1222,16 @@ shapes and the agent providers' credentials), neutralised with `fence()`'s rule 
 two fields of one line can't make a marker together), and capped at `limits.descriptionChars`, and so are an item's
 path and `paths`; an item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
 is reserved for ADR-025 §6.3 and not shipped.
+
+What an agent proposes for a durable layer (a candidate lesson, §6.6.8; an item lint checks, ADR-025 §5.3) is not
+redacted but **refused** when it holds a secret (`src/context/scan.ts`): a redacted text could still hold a shorter
+secret. The scan is seeded with every secret value the kernel puts in the run (the agent providers' credentials, the
+plugins' secrets of §10.3, every variable of the run's environment named like a credential, the in-VM tokens' signing
+key, the forge's credential for the run's repository), then the redactor's shapes and a few more (AWS, Slack, boxd and
+Google keys, a private key, a URL with a password), a long random-looking string, and the paths credentials are kept
+in (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`), over the text with invisible characters dropped and look-alikes
+folded (NFKC, every dash a hyphen). Every string a candidate keeps is scanned, and a field name it ignores is repeated
+only when it holds no secret. Its reasons are the kernel's words, never the matched text.
 
 ### 11.6 Isolation
 
@@ -1892,7 +1916,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.23 | 2026-11-06 | With triggers (§17.2 step 10, §16.3): the intake's gate defined exactly (allowed: an allowed actor or an opened thread, `*` patterns; explicit: allowed and addressed; inferred: allowed and not addressed; not allowed: denied), its settings (`triggers.sources` in the user's config or `CAPCOMD_TRIGGERS_FILE`, read per trigger), `trigger.admitting` asked only about an allowed trigger, the planner a continued trigger reaches (and a run with none going on to the gate), a start that fails (logged `failed`, `decision: "failed"` on `trigger.received`, the emit rejecting, the trigger free to come again), `wouldHave` only `start` for now, `Run.trigger` and the capability `triggers` (additive), `TriggerSubscription.until` and `trigger.subscribed`'s `until` null while the run works, what stops a subscription, the sweep, `capcomd triggers log` and `subscriptions`; the built-in `schedule` source and forge-github's `github` source (§16.3.1: an @-mention of the login addresses capcomd only with `sourceMentions`, a retryable refusal is read again, a cancelled timer's settings start a new one); a built-in's config from the user layer and `CAPCOMD_PLUGIN_<NAME>_<KEY>` (§10.2); today's run and message paths don't pass through the intake yet, and a run's pull-request thread subscription is a later step (§16.3.6). |
 | 1.0.24 | 2026-11-06 | With the watchdog (§17.2 step 11): the built-in `watchdog`, off until `plugins.watchdog.enabled: true`, which `capcomd setup` writes (§4.8); its config, its definition of progress (files changed, an agent under it spawned or ended, a job, verification or approval it waited on ended; never tool calls), waiting holding its clock, an agent judged through the agents under it, a reviewer, a report-only and an orchestrate agent not judged (their work is never checkpointed), `stalled` never raised over the kernel's own notice, `stopAfterMs` counted from the last progress like `stalledAfterMs`, its memory across a restart (§16.4; the worked example's `stopAfterMs` now means the same). Config layers 1–4 read for the built-ins, the schema subset checked, one `plugin.config_refused` per layer (a harness.v1 daemon event, additive), secret properties not read from layers yet (§10.2, §10.4). In the daemon: `agents.get`, `agents.tree`, `agents.cancel` and `agents.notice`; a plugin raises and clears only its own notice kinds and the kernel's clear only the kind it raised (§8.4). |
 | 1.0.25 | 2026-11-06 | With ADR-024's writes (its §7 step 6): the `configure` scope's profile writes (§11.1) are `PUT /v1/profiles/{name}` (capability `profiles.edit`; additive, with `GET /v1/profiles/{name}` and the daemon-stream event `profile.changed`); `ctx.profiles` gains no write method yet. A write changes the profile's own file and bumps its `version`; what an agent pinned at spawn (`profileVersion`, §6.6.7) is unchanged. |
-| 1.0.26 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach (an override that makes an agent with MCP servers orchestrate is refused, `orchestrate_mcp`); an agent's machine is on its profile's `sandbox.provider` before the run's, never one that runs it on the host unless the run's does (`sandbox_isolation`, §7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
+| 1.0.26 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
+| 1.0.27 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach (an override that makes an agent with MCP servers orchestrate is refused, `orchestrate_mcp`); an agent's machine is on its profile's `sandbox.provider` before the run's, never one that runs it on the host unless the run's does (`sandbox_isolation`, §7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
