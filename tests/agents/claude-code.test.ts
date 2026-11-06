@@ -62,6 +62,8 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
 
     const span = getFinishedSpans().find((x) => x.name === "agent.claude_code")!;
     expect(span.attributes["agent.cost_usd"]).toBeCloseTo(0.123);
+    // The model claude's init named, and its cache reads (none in a result without usage): the context eval reads both.
+    expect([span.attributes["gen_ai.response.model"], span.attributes["gen_ai.usage.cache_read.input_tokens"]]).toEqual(["fake", 0]);
     const names = span.events.map((e) => e.name);
     expect(names.filter((n) => !n.startsWith("agent.supervisor."))).toEqual(["agent.system.init", "agent.assistant", "agent.user", "agent.result.success"]);
     expect(names).toContain("agent.supervisor.start");
@@ -376,6 +378,9 @@ describe("agent config, redaction, credentials, egress", () => {
     expect(st.inputTokens).toBe(13_000);
     // Cache reads apart, and the model the CLI reported (on the agent span: the context eval reads both).
     expect([st.cacheReadTokens, st.model]).toEqual([10_000, "claude-opus-5-5"]);
+    // A subagent's message (an Explore on haiku) is the session's spend, not its model.
+    claudeAdapter.parse(JSON.stringify({ type: "assistant", parent_tool_use_id: "toolu_1", message: { id: "sub1", model: "claude-haiku-5-5", usage: { input_tokens: 0, output_tokens: 0 }, content: [{ type: "text", text: "x" }] } }), r, st, {} as any);
+    expect(st.model).toBe("claude-opus-5-5");
     claudeAdapter.parse(msg("m2", "claude-haiku-5-5", { input_tokens: 1_000_000, output_tokens: 0 }), r, st, {} as any);
     expect(st.costUsd).toBeCloseTo(0.026 + 0.1, 9);
     expect(claudeCostUsd({ model: "claude-something-new", input: 1e6, cacheWrite: 0, cacheRead: 0, output: 0 })).toBe(5); // unknown: priced high

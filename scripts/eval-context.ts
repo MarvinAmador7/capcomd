@@ -17,7 +17,7 @@
 // Everything else is in one scratch folder (CAPCOMD_EVAL_TMP, else the system temp dir: the engine's data, the bare
 // repositories, the traces), deleted at the end unless --keep. It never uses ~/.capcomd's state or the daemon on :6420.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -39,15 +39,18 @@ const ROOT = resolve(import.meta.dir, "..");
 const CLI = join(ROOT, "src", "cli", "index.ts");
 const LIVE = a.agents === "live";
 if (!LIVE && a.agents !== "fake") fail("--agents is fake or live");
+// Checked before anything starts: a live matrix spends real money, so a flag it can't honour stops it here, not after.
+if (LIVE && a.expect) fail("--expect is for --agents fake");
+const int = (flag: string, v: string, min: number) => { const n = Number(v); if (!Number.isInteger(n) || n < min) fail(`--${flag} is a whole number (at least ${min}), not ${v}`); return n; };
 // A new world per day by default (a model release's run gets names and numbers nobody has seen); CI pins one.
-const SEED = Number(a.seed ?? new Date().toISOString().slice(0, 10).replace(/-/g, ""));
+const SEED = int("seed", a.seed ?? new Date().toISOString().slice(0, 10).replace(/-/g, ""), 0);
 const world = generateWorld(SEED);
 const { chains: ALL_CHAINS, pending } = suite(world);
 const chains = a.chains ? a.chains.split(",").map((id) => ALL_CHAINS.find((c) => c.id === id) ?? fail(`no chain ${id}: ${ALL_CHAINS.map((c) => c.id).join(", ")}`)) : ALL_CHAINS;
 const arms = a.arms!.split(",").map((n) => armNamed(n) ?? fail(`no arm ${n}: ${ARMS.map((x) => x.name).join(", ")}`));
 for (const arm of arms) if (!arm.files) fail(`arm ${arm.name} isn't runnable yet: it needs ${arm.needs}`);
 const models = LIVE ? (a.models ?? fail("--agents live needs --models, e.g. claude-opus-5-5,gpt-6.1-sol")).split(",") : ["fake"];
-const REPS = Number(a.reps);
+const REPS = int("reps", a.reps!, 1), CONCURRENCY = int("concurrency", a.concurrency!, 1);
 function fail(msg: string): never { console.error(`eval-context: ${msg}`); process.exit(2); }
 
 if (a.list) {
@@ -58,13 +61,17 @@ if (a.list) {
   process.exit(0);
 }
 
-const PORT = Number(a.port);
+const PORT = int("port", a.port!, 1024);
 // The engine takes the port, the next one and port+10: keep two evals at least 20 apart, and away from the user's daemon.
 if ([6420, 6421, 6430].some((p) => [PORT, PORT + 1, PORT + 10].includes(p))) fail("6420 is the user's daemon: pick another --port");
+// The scratch folder is deleted at the end (unless --keep) and whatever runs from it is killed: a --work folder must be
+// new or empty, so the eval never takes a folder of the user's with it.
+if (a.work && existsSync(a.work) && readdirSync(a.work).length) fail(`--work ${a.work} isn't empty: the eval deletes its work folder at the end, so give it a new one`);
 const WORK = a.work ? resolve(a.work) : mkdtempSync(join(process.env.CAPCOMD_EVAL_TMP ?? tmpdir(), "capcomd-ctx-"));
 mkdirSync(WORK, { recursive: true });
 const HOME = process.env.CAPCOMD_HOME && LIVE ? process.env.CAPCOMD_HOME : join(WORK, "home");
-if (resolve(HOME) === resolve(homedir(), ".capcomd")) fail("CAPCOMD_HOME is your real ~/.capcomd: give the eval a home of its own (copy the logins into it)");
+const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
+if (real(HOME) === real(join(homedir(), ".capcomd"))) fail("CAPCOMD_HOME is your real ~/.capcomd: give the eval a home of its own (copy the logins into it)");
 mkdirSync(HOME, { recursive: true });
 const log = (s: string) => console.error(`[eval-context ${LIVE ? "live" : "fake"}] ${s}`);
 const sh = (cmd: string[], cwd?: string) => {
@@ -104,13 +111,15 @@ const engine = spawn(process.execPath, [CLI, "serve", "--port", String(PORT)], {
   env: { ...process.env, ...common, CAPCOMD_ENGINE_DATA: join(WORK, "engine"), CAPCOMD_HARNESS_SOCKET: join(WORK, "harness.sock") },
 });
 const stopAll = () => { if (engine.pid) { try { process.kill(-engine.pid, "SIGTERM"); } catch {} } };
+// The engine is detached (its own process group): whatever way this process ends, the engine doesn't outlive it.
+process.on("exit", stopAll);
 // Whatever still runs from the scratch folder (the engine's rivet-engine, a fake agent), by its path; not this process
 // or its parent, whose command line names the folder too when --work does.
 const reap = () => {
   const ps = spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" }).stdout ?? "";
   for (const l of ps.split("\n")) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(l);
-    if (!m || !m[2]!.includes(WORK) || [process.pid, process.ppid].includes(Number(m[1]))) continue;
+    if (!m || !m[2]!.includes(`${WORK}/`) || [process.pid, process.ppid].includes(Number(m[1]))) continue;
     try { process.kill(Number(m[1]), "SIGKILL"); } catch {}
   }
 };
@@ -227,7 +236,7 @@ const jobs = models.flatMap((model) => arms.flatMap((arm) => Array.from({ length
 const results = new Map<string, Row[]>(models.map((m) => [m, []]));
 const t0 = Date.now();
 let next = 0;
-await Promise.all(Array.from({ length: Math.min(Number(a.concurrency), jobs.length) }, async () => {
+await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, async () => {
   while (next < jobs.length) {
     const j = jobs[next++]!;
     try { results.get(j.model)!.push(...(await runChain(j.model, j.arm, j.rep, j.chain))); }
@@ -277,7 +286,6 @@ if (a.evidence) {
 // stale comment and the docs), so any other outcome is the harness breaking.
 let bad: string[] = [];
 if (a.expect) {
-  if (LIVE) fail("--expect is for --agents fake");
   const want = FAKE_EXPECTED;
   for (const r of results.get("fake")!) {
     const exp = want[r.arm]?.[r.step];

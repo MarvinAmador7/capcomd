@@ -229,13 +229,16 @@ CAPCOMD_HOME=<a home with your logins> BOXD_API_KEY=… \
 agent that reads only its checkout (the instruction file when there is one, else the stub's stale comment and the
 docs), so `--expect` knows every verdict and fails when an arm, a checker or a metric stops working. `--agents live`
 runs real Claude Code or Codex agents (one profile per `--models` entry, plan logins) on `--sandbox` (boxd by default,
-or docker); a Codex model must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a `CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`),
-never `~/.capcomd` itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` and, the first time, the
-model's `limits.json` (ADR-025 D4's starting values until an arm measures them), plus the world under `DIR/worlds/`.
-The seed defaults to today's date, so a run on a new model release gets names and numbers no model has seen; re-run
-the live baselines on every release and commit them. Everything else (the engine's data, bare repositories, traces)
-is in one scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp dir), deleted at the end unless `--keep` (which
-keeps `steps/<model>-<arm>-<rep>-<step>.json`: each agent's record and log). Ports as for the team-shape eval.
+or docker); a Codex model must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a
+`CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`), never `~/.capcomd`
+itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` and, the first time, the model's `limits.json`
+(ADR-025 D4's starting values until an arm measures them). The world itself isn't written there: the seed and the
+recorded commit give it back, and its carriers file holds the planted instruction. The seed defaults to today's date
+(UTC), so a run on a new model release gets names and numbers no model has seen; re-run the live baselines on every
+release and commit them. Everything else (the engine's data, bare repositories, traces, `world.yaml`) is in one
+scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp dir, or a new or empty `--work`), deleted at the end unless
+`--keep` (which keeps `steps/<model>-<arm>-<rep>-<step>.json`: each agent's record and log). Ports as for the
+team-shape eval.
 
 ### Killpoints
 

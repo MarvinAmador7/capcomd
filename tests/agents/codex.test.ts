@@ -48,6 +48,9 @@ describe("codex adapter (fake codex exec --json)", () => {
     expect(msg).toContain(`Capcomd-Agent: codex@${CODEX_VERSION}`);
     const span = getFinishedSpans().find((x) => x.name === "agent.codex")!;
     expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(10000);
+    // Of them, the cached input (the context eval's cache ratio); codex names no model, so the span has none.
+    expect(span.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(2000);
+    expect(span.attributes["gen_ai.response.model"]).toBeUndefined();
     expect(span.events.map((e) => e.name)).toContain("agent.item_completed.file_change");
     expect(JSON.stringify(getFinishedSpans())).not.toContain(KEY);
   }, 30_000);

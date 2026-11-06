@@ -133,7 +133,8 @@ export const claude: AgentProvider = {
       state.inputTokens = all.reduce((x, v) => x + v.input + v.cacheWrite + v.cacheRead, 0);
       state.cacheReadTokens = all.reduce((x, v) => x + v.cacheRead, 0);
       state.outputTokens = all.reduce((x, v) => x + v.output, 0);
-      if (typeof m.model === "string" && m.model !== "<synthetic>") state.model = m.model;
+      // The session's model: a subagent's messages (parent_tool_use_id set) may run on another one (Explore on haiku).
+      if (typeof m.model === "string" && m.model !== "<synthetic>" && !raw.parent_tool_use_id) state.model = m.model;
     }
     // Usage limit: a rejected rate_limit_event carries the reset (epoch s); the stop itself is a synthetic assistant
     // message and an is_error result with api_error "usage_limit_reached" (internal, so the text prefix too).
