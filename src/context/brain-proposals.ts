@@ -1,0 +1,92 @@
+// A run's proposals to a company's brain (ADR-025 step 5): what its consolidator proposed for the brain its profile
+// names (a delta with `brain: <name>`, checked by ./consolidate.ts `brainDeltas` when the kernel stages its answer),
+// kept by the kernel in kv `_context/brain/<agentId>.<n>` (reserved: only the kernel writes it), and sent to the brain
+// through its provider's `propose` (groundray: a draft on the run's proposal branch of the brain's repository and a pull
+// request there, ./groundray-write.ts). Each is sent once: the record keeps what came back.
+//
+// Who sends them follows the consolidator's profile's `context.review`, as for the project's memory (ADR-025 §5.3):
+//  - `human` (the default): a person, with `capcomd context brain propose --run <runId> --yes`, who is then the
+//    proposal's actor in the brain (`human:<id>`, ADR-025 §7: the approver forwarded, never an agent's claim);
+//  - `lint`: the kernel, as the consolidator's staging ends (src/primitives/ops.ts), as `capcomd/<version>`.
+// Either way a brain's owners review the pull request; a draft never raises authority there.
+import type { Provenance } from "../../packages/plugin/src/context-layer";
+import type { Principal } from "../../packages/plugin/src/shapes";
+import { RelayError } from "../core/errors";
+import type { BrainDelta } from "./consolidate";
+import { actorOf } from "./groundray-write";
+
+/** Where a run keeps its brain proposals: `_context/brain/<agentId>.<n>`, one record each. */
+export const BRAIN_KV = "_context/brain/";
+
+/** One proposal to a brain, as the kernel keeps it. */
+export interface BrainProposal extends BrainDelta {
+  /** `<agentId>.<n>`: the consolidator and the delta's place in its answer. */
+  id: string;
+  /** The consolidator, from the kernel's records. */
+  origin: NonNullable<Provenance["origin"]>;
+  at: string;
+  /** Once sent: as whom (groundray's actor), when, the item and where it is (the pull request). */
+  sent: { actor: string; at: string; item: string; where: string } | null;
+  /** Why the last send failed, while it isn't sent. */
+  error?: string;
+}
+
+const kv = () => import("../primitives/state");
+
+/** Keep a consolidator's proposals, each once (a replayed staging keeps what the first wrote). */
+export async function keepBrainProposals(runId: string, list: ReadonlyArray<BrainProposal>): Promise<void> {
+  const { kvWrite } = await kv();
+  for (const p of list) {
+    try { await kvWrite(runId, { k: `${BRAIN_KV}${p.id}`, value: p, expect: 0, writer: "capcomd" }); } catch (e) {
+      if (!(e instanceof RelayError && e.code === "conflict")) throw e;
+    }
+  }
+}
+
+/** The run's brain proposals (one consolidator's with `agentId`), in the order they were proposed, with their versions. */
+export async function brainProposals(runId: string, o: { agentId?: string } = {}): Promise<Array<{ version: number; value: BrainProposal }>> {
+  const { kvList } = await kv();
+  const { entries } = await kvList(runId, BRAIN_KV);
+  return (entries as Array<{ k: string; value?: unknown; version?: number; writer?: string | null }>)
+    .filter((e) => e.writer === "capcomd" && e.value && typeof e.value === "object" && typeof (e.value as BrainProposal).brain === "string")
+    .map((e) => ({ version: e.version ?? 0, value: e.value as BrainProposal }))
+    .filter((e) => !o.agentId || e.value.origin.agentId === o.agentId)
+    .sort((a, b) => (a.value.origin.agentId < b.value.origin.agentId ? -1 : a.value.origin.agentId > b.value.origin.agentId ? 1 : a.value.n - b.value.n));
+}
+
+export interface SentProposal { id: string; brain: string; title: string; ok: boolean; already: boolean; item?: string; where?: string; error?: string }
+
+/**
+ * Send the run's proposals not sent yet (one consolidator's with `agentId`) to their brains as `by`, one after the
+ * other, through the active `groundray` provider (this process's: the daemon's or the CLI's): resolved for the
+ * consolidator's run and agent with its brain, then `propose`. A failure is kept on its record and the next one is
+ * tried; a record someone else sent meanwhile is left as they sent it.
+ */
+export async function sendBrainProposals(runId: string, o: { by: Principal; agentId?: string; timeoutMs?: number }): Promise<SentProposal[]> {
+  const { contextProviders } = await import("./providers");
+  const { seamCall } = await import("../plugins/forges");
+  const { kvWrite } = await kv();
+  const provider = (await contextProviders()).get("groundray")?.provider;
+  const out: SentProposal[] = [];
+  for (const { version, value: p } of await brainProposals(runId, o.agentId ? { agentId: o.agentId } : {})) {
+    const said = { id: p.id, brain: p.brain, title: p.title };
+    if (p.sent) { out.push({ ...said, ok: true, already: true, item: p.sent.item, where: p.sent.where }); continue; }
+    const c = seamCall(o.timeoutMs ?? 300_000);
+    let next: BrainProposal;
+    try {
+      if (!provider) throw new Error("the groundray context provider isn't active in this process");
+      const scope = { projectId: null, repo: null, ref: null, profile: { name: p.origin.profile, version: 1 }, runId, agentId: p.origin.agentId, layers: ["project" as const], settings: { brain: p.brain }, bundleRoot: null };
+      const { handle } = await provider.resolve(scope, c);
+      const r = await provider.propose(handle, { text: { text: p.text, untrusted: true, by: p.origin.agentId }, title: p.title, type: p.type, op: "add" }, o.by, c);
+      next = { ...p, sent: { actor: actorOf(o.by), at: new Date().toISOString(), item: r.id, where: r.where } };
+      delete next.error;
+    } catch (e) {
+      next = { ...p, error: String((e as Error)?.message ?? e).slice(0, 500) };
+    } finally { c.done(); }
+    try { await kvWrite(runId, { k: `${BRAIN_KV}${p.id}`, value: next, expect: version, writer: "capcomd" }); } catch (e) {
+      if (!(e instanceof RelayError && e.code === "conflict")) throw e;
+    }
+    out.push(next.sent ? { ...said, ok: true, already: false, item: next.sent.item, where: next.sent.where } : { ...said, ok: false, already: false, error: next.error! });
+  }
+  return out;
+}

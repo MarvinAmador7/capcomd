@@ -9,12 +9,15 @@
 // `_context/<agentId>` (src/context/capture.ts); a consolidator's answer isn't collected (the kernel stages it on its
 // branch, src/context/consolidator.ts), only told. Its events, on the run's stream: `plugin.context.loaded` (what a
 // brief held), `plugin.context.skipped` (a provider left out, and why), `plugin.context.proposed` (a candidate kept),
-// `plugin.context.refused` (one refused, and why, never its text) and `plugin.context.staged` (what a consolidator's
-// branch changes in the project's memory). Its commands:
+// `plugin.context.refused` (one refused, and why, never its text), `plugin.context.staged` (what a consolidator's
+// branch changes in the project's memory), `plugin.context.brain_staged` (its proposals to a company's brain, waiting
+// for a person) and `plugin.context.brain_proposed` (one sent: a draft and a pull request on the brain's repository,
+// src/context/brain-proposals.ts). Its commands:
 //   capcomd context brief <profile> [--run <runId>] [--review]   the brief that profile's agents start with now
 //   capcomd context lint [--fix] [--base <ref>] [--run <runId>]  check .capcomd/context/ (src/context/lint.ts)
 //   capcomd context brain add <name> <repo> [--branch <b>] [--bundle <dir>]   map a brain, pinned at the branch's tip
 //   capcomd context brain list | remove <name>                   the project's brains (src/context/groundray.ts)
+//   capcomd context brain propose --run <runId> [--yes]          a run's proposals to its brains; --yes sends them as you
 // It is loaded in every process an agent is prepared in (the daemon, a run's driver) and in the CLI; agents end in the
 // daemon, so that is where capture runs.
 import { existsSync, mkdirSync, writeFileSync } from "fs";
@@ -37,6 +40,7 @@ const USAGE = [
   "capcomd context brain add <name> <repo> [--branch <branch>] [--bundle <dir>] [--json]",
   "capcomd context brain list [--json]",
   "capcomd context brain remove <name> [--json]",
+  "capcomd context brain propose --run <runId> [--agent <agentId>] [--yes] [--json]",
 ];
 
 export const manifest: PluginManifest = {
@@ -52,7 +56,7 @@ export const manifest: PluginManifest = {
   // agent.changed is observe, so open too: collecting an agent's lessons never holds up anything.
   contributes: {
     hooks: { "agent.preparing": { timeoutMs: 30_000, failure: "open" }, "agent.changed": {} },
-    events: ["loaded", "skipped", "proposed", "refused", "staged"],
+    events: ["loaded", "skipped", "proposed", "refused", "staged", "brain_staged", "brain_proposed"],
     cli: [{ name: "context", summary: SUMMARY }],
   },
 };
@@ -223,8 +227,9 @@ export async function briefFor(o: { runId: string | null; agentId: string | null
 const sha = (r: string) => r.slice(0, 12);
 const usage = () => new RelayError("usage", `usage: ${USAGE.join("\n       ")}`, "Name a profile (`capcomd context brief worker`), check .capcomd/context/ (`capcomd context lint`), or map a brain (`capcomd context brain add acme <repo>`).");
 
-/** `capcomd context brain …`: the brains the project maps (src/context/groundray.ts). */
-async function brainCommand(args: string[], flags: Record<string, unknown>): Promise<Envelope> {
+/** `capcomd context brain …`: the brains the project maps (src/context/groundray.ts), and a run's proposals to them. */
+async function brainCommand(args: string[], flags: Record<string, unknown>, emit: (runId: string, entity: string) => Emit): Promise<Envelope> {
+  if (args[1] === "propose" && args.length === 2) return proposeCommand(flags, emit);
   const G = await import("../context/groundray");
   const verb = args[1];
   if (verb === "list" && args.length === 2) {
@@ -252,6 +257,42 @@ async function brainCommand(args: string[], flags: Record<string, unknown>): Pro
   throw usage();
 }
 
+/**
+ * `capcomd context brain propose --run <runId> [--agent <agentId>] [--yes]` (ADR-025 step 5): the run's proposals to a
+ * company's brain (its consolidators', src/context/brain-proposals.ts); with `--yes`, those not sent yet go to their
+ * brains as you (groundray's actor `human:operator`): a draft each on the run's proposal branch and a pull request on
+ * the brain's repository. Those already sent stay as they were; one that fails can be sent again.
+ */
+async function proposeCommand(flags: Record<string, unknown>, emit: (runId: string, entity: string) => Emit): Promise<Envelope> {
+  const runId = typeof flags.run === "string" ? flags.run : "";
+  const agentId = typeof flags.agent === "string" ? flags.agent : undefined;
+  if (!/^run-[A-Za-z0-9_-]+$/.test(runId)) throw new RelayError("usage", "name the run: capcomd context brain propose --run <runId>", "See your runs with `capcomd runs`.");
+  if (agentId !== undefined && !/^agt-[A-Za-z0-9_-]+$/.test(agentId)) throw new RelayError("usage", `bad --agent ${JSON.stringify(agentId).slice(0, 80)}`, "Name a consolidator of the run: --agent agt-….");
+  const { existingActor } = await import("../core/relay");
+  if (!(await existingActor("scope", [runId]))) throw new RelayError("not_found", `no run ${runId}`, "See your runs with `capcomd runs`.");
+  const P = await import("../context/brain-proposals");
+  const all = await P.brainProposals(runId, agentId ? { agentId } : {});
+  const view = ({ value: p }: { value: import("../context/brain-proposals").BrainProposal }) => ({ id: p.id, brain: p.brain, type: p.type, title: p.title, from: p.from, sent: p.sent, ...(p.error ? { error: p.error } : {}) });
+  const line = (p: ReturnType<typeof view>) => `  ${p.id}  ${p.brain}  [${p.type}] ${p.title}${p.sent ? `  sent: ${p.sent.where}` : p.error ? `  failed: ${p.error}` : ""}`;
+  if (!all.length) return { schema: SCHEMA, ok: true, runId, proposals: [], text: `Run ${runId} proposed nothing to a brain.` };
+  const pending = all.filter((x) => !x.value.sent).length;
+  if (flags.yes !== true) {
+    return {
+      schema: SCHEMA, ok: true, runId, proposals: all.map(view),
+      text: `Run ${runId}'s proposals to a brain (${pending} not sent):\n${all.map((x) => line(view(x))).join("\n")}` +
+        (pending ? `\nEach goes as a draft on the run's proposal branch of the brain's repository, with a pull request for its owners. Send them as you: capcomd context brain propose --run ${runId} --yes` : ""),
+    };
+  }
+  const sent = await P.sendBrainProposals(runId, { by: { kind: "operator", clientId: null }, ...(agentId ? { agentId } : {}) });
+  for (const x of sent.filter((y) => y.ok && !y.already)) {
+    await emit(runId, x.id.split(".")[0]!)("brain_proposed", `Proposal ${x.id} went to brain ${x.brain} as a draft for its owners to review: ${x.where}.`, { agentId: x.id.split(".")[0], proposal: x.id, brain: x.brain, item: x.item, where: x.where, by: "human:operator" }, `brain-proposed:${x.id}`);
+  }
+  const failed = sent.filter((x) => !x.ok);
+  const text = sent.map((x) => `  ${x.id}  ${x.brain}  ${x.title}: ${x.ok ? `${x.already ? "sent already" : "sent"}, ${x.where}` : `failed, ${x.error}`}`).join("\n");
+  if (failed.length) throw new RelayError("run_failed", `${failed.length} of ${sent.length} proposals to a brain couldn't be sent:\n${text}`, "Fix what the failures say and run it again: the ones sent stay sent.");
+  return { schema: SCHEMA, ok: true, runId, sent, text: `Sent to the brain as you (human:operator):\n${text}` };
+}
+
 /** A context event on the run's stream; one that can't be recorded is logged, never thrown. `key`: one event per key. */
 const emitter = (ctx: PluginContext, runId: string, entity: string): Emit => (type, text, data, key) =>
   ctx.events.emit({ type, stream: runId, entity, text, data }, key ? { key } : undefined).catch((e: unknown) => ctx.log.warn("could not record a context event", { type, error: (e as Error)?.message ?? String(e) }));
@@ -262,7 +303,7 @@ const emitter = (ctx: PluginContext, runId: string, entity: string): Emit => (ty
  * the commit and each change, and `plugin.context.refused` per change it refused (a number and a reason). Keyed, so a
  * replayed change records them once.
  */
-export async function staged(agent: Pick<Agent, "id" | "profile">, result: Record<string, unknown> | null | undefined, emit: Emit): Promise<void> {
+export async function staged(agent: Pick<Agent, "id" | "profile"> & { runId?: string }, result: Record<string, unknown> | null | undefined, emit: Emit): Promise<void> {
   const c = result?.context as { applied?: Array<{ op: string; id: string; target?: string }>; refused?: Array<{ n: number; reason: string }> } | undefined;
   if (!c || typeof c !== "object") return;
   const commit = typeof result?.commit === "string" ? result.commit : null, branch = typeof result?.branch === "string" ? result.branch : null;
@@ -273,6 +314,17 @@ export async function staged(agent: Pick<Agent, "id" | "profile">, result: Recor
       { agentId: agent.id, profile: agent.profile, branch, commit, applied }, `staged:${agent.id}`);
   }
   for (const x of refused) await emit("refused", `${agent.id}'s memory change ${x.n} was refused (${x.reason}).`, { agentId: agent.id, profile: agent.profile, n: x.n, reason: x.reason }, `staged-refused:${agent.id}:${x.n}`);
+  // Its proposals to the brain its profile names (src/context/brain-proposals.ts): waiting for a person, or sent.
+  const b = (c as { brain?: { name?: string; proposals?: Array<{ n: number; title: string; type: string }>; awaits?: string | null; sent?: Array<{ id: string; item?: string; where?: string; error?: string }> } }).brain;
+  if (!b?.name || !Array.isArray(b.proposals) || !b.proposals.length) return;
+  if (b.awaits === "person") {
+    const n = b.proposals.length;
+    await emit("brain_staged", `${agent.id} proposed ${n} new draft${n === 1 ? "" : "s"} for brain ${b.name}: a person sends them with capcomd context brain propose --run ${agent.runId ?? "<runId>"} --yes.`,
+      { agentId: agent.id, profile: agent.profile, brain: b.name, proposals: b.proposals }, `brain-staged:${agent.id}`);
+  }
+  for (const x of Array.isArray(b.sent) ? b.sent : []) {
+    if (x.where) await emit("brain_proposed", `Proposal ${x.id} went to brain ${b.name} as a draft for its owners to review: ${x.where}.`, { agentId: agent.id, proposal: x.id, brain: b.name, item: x.item, where: x.where, by: "capcomd" }, `brain-proposed:${x.id}`);
+  }
 }
 
 export const plugin = definePlugin({
@@ -336,7 +388,7 @@ export const plugin = definePlugin({
       name: "context", summary: SUMMARY, usage: USAGE,
       async run({ args, flags }) {
         if (args[0] === "lint" && args.length === 1) return lint(flags);
-        if (args[0] === "brain") return brainCommand(args, flags);
+        if (args[0] === "brain") return brainCommand(args, flags, (runId, entity) => emitter(ctx, runId, entity));
         if (args[0] !== "brief" || args.length !== 2) throw usage();
         const name = args[1]!;
         const runId = typeof flags.run === "string" ? flags.run : null;
