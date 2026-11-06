@@ -1,6 +1,8 @@
-// context (ADR-025 §5.1, §6.1, §10, steps 1-2): the kernel's context router. As the one agent.preparing listener it
-// composes a profile's context providers into the brief (src/context/brief.ts), appended to the agent's prompt after its
-// profile's own; an agent whose profile has no `context` block gets nothing and costs nothing. As an agent.changed
+// context (ADR-025 §5.1, §6.1, §10, steps 1, 2 and 6): the kernel's context router. As the one agent.preparing listener
+// it composes a profile's context providers into the brief (src/context/brief.ts), appended to the agent's prompt after
+// its profile's own, with the context layer's skills (src/context/skills.ts: the doctrine, and the routing paragraph for
+// an agent that writes run notes), each pinned by the sha256 of its text; an agent whose profile has no `context` block
+// gets nothing and costs nothing. As an agent.changed
 // listener it collects the lessons an agent proposed in its result (`result.data.context`) when it ends: attributed to
 // the token that wrote the result, checked by the seeded secret scan, kept as candidates of the run in kv
 // `_context/<agentId>` (src/context/capture.ts). Its events, on the run's stream: `plugin.context.loaded` (what a brief
@@ -20,7 +22,7 @@ import { VERSION } from "../utils/self";
 import type { ScopeAgent } from "../actors/scope";
 import type { Brief } from "../context/brief";
 import type { CaptureRecord } from "../context/capture";
-import { preparingAgent } from "./hooks";
+import { preparingAgent, SKILL_BYTES_MAX, SKILLS_MAX } from "./hooks";
 
 const SUMMARY = "The project's context (ADR-025): the brief a profile's agents start with, and lint for .capcomd/context/";
 const USAGE = [
@@ -33,6 +35,9 @@ export const manifest: PluginManifest = {
   description: "The context router: briefs each agent whose profile has a context block with an index of its providers' items (the project's memory, a company's facts), never their bodies, and keeps the lessons agents propose as candidates of their run.",
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./context.ts" },
   scopes: ["steer"],
+  // After the orchestration skill's listener (§6.3), so the context skills fit in the room that skill leaves: one that
+  // didn't fit would cost the agent a context skill (this listener leaves it out), never its orchestration skill.
+  after: ["skill-orchestration"],
   // Open: a brief that can't be built leaves the agent as it was without one (its providers' failures are already
   // named in the header the router writes; this is the router itself failing), never an agent that can't start.
   // agent.changed is observe, so open too: collecting an agent's lessons never holds up anything.
@@ -46,7 +51,7 @@ export const manifest: PluginManifest = {
 /** What the brief is built from besides the payload (a test replaces it). */
 export const contextKernel = {
   /** The agent's record as the kernel prepares it (src/primitives/ops.ts `agentPreparing`), else read from the engine. */
-  agent: async (runId: string, agentId: string): Promise<Pick<ScopeAgent, "contract">> => {
+  agent: async (runId: string, agentId: string): Promise<Pick<ScopeAgent, "contract"> & { limits?: Pick<ScopeAgent["limits"], "allowSpawn"> }> => {
     const p = preparingAgent.getStore();
     if (p && p.runId === runId && p.agentId === agentId) return p.record as ScopeAgent;
     return (await import("../primitives/ops")).getAgentOrThrow(runId, agentId);
@@ -222,15 +227,33 @@ export const plugin = definePlugin({
       if (!spec.provider || !spec.context?.providers?.length) return { decision: "allow" };
       const a = await contextKernel.agent(agent.runId, agent.id);
       const { roleOf } = await import("../context/brief");
-      const b = await briefFor({ runId: agent.runId, agentId: agent.id, profile: agent.profile, spec, role: roleOf(a) });
+      const role = roleOf(a);
+      const b = await briefFor({ runId: agent.runId, agentId: agent.id, profile: agent.profile, spec, role });
+      // The skills it reads the brief with, so the patch stays one the kernel takes: one the payload already has by name
+      // (an earlier listener's) isn't attached twice, and only those that fit the room the agent's other skills leave
+      // (a profile with a context block keeps room for them, but a plugin's skills or an agent pinned before it did may
+      // fill it): a refused patch would cost the agent its brief too.
+      const { contextSkills } = await import("../context/skills");
+      const has = call.payload.prompt.skills;
+      let slots = SKILLS_MAX - has.length, bytes = SKILL_BYTES_MAX - has.reduce((n, s) => n + Buffer.byteLength(s.text), 0);
+      const wanted = contextSkills({ role, maySpawn: a.limits?.allowSpawn === true }).filter((s) => !has.some((x) => x.name === s.name));
+      const skills = wanted.filter((s) => {
+        const size = Buffer.byteLength(s.text);
+        if (slots < 1 || size > bytes) return false;
+        slots--; bytes -= size;
+        return true;
+      });
+      if (skills.length < wanted.length) ctx.log.warn("an agent's other skills leave no room for a context skill: it starts without it", { agentId: agent.id, left: wanted.filter((s) => !skills.includes(s)).map((s) => s.name) });
       const loaded = b.providers.filter((p) => p.state === "loaded").map((p) => `${p.name} at ${sha(p.revision)}`);
       const emit = emitter(ctx, agent.runId, agent.id);
       await emit("loaded", `${agent.id} starts with ${b.loaded} of ${b.total} context lines${loaded.length ? ` (${loaded.join(", ")})` : ""}.`, {
         agentId: agent.id, profile: agent.profile, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes,
         budget: { briefBytes: b.limits.briefBytes, indexLines: b.limits.indexLines, source: b.source }, providers: b.providers,
+        skills: skills.map(({ name, hash }) => ({ name, hash })),
       });
       for (const p of b.providers) if (p.state === "skipped") await emit("skipped", `${agent.id} starts without the ${p.name} context provider (${p.reason}).`, { agentId: agent.id, profile: agent.profile, provider: p.name, reason: p.reason });
-      return { decision: "allow", patch: { prompt: { append: b.text } } };
+      const attach = skills.map(({ name, hash, text }) => ({ name, hash, source: "builtin" as const, text }));
+      return { decision: "allow", patch: { prompt: { append: b.text, ...(attach.length ? { skills: attach } : {}) } } };
     });
 
     // An agent that ended with lessons in its result (`result.data.context`): collect them. It never throws: a
@@ -257,8 +280,14 @@ export const plugin = definePlugin({
         if (!spec?.context?.providers?.length) {
           return { schema: SCHEMA, ok: true, profile: name, brief: null, text: `Profile ${name} has no context block, so its agents start with no brief. Give it one in its profile: context: {providers: [{name: memory}]}` };
         }
-        const b = await briefFor({ runId, agentId: null, profile: name, spec: { ...spec, ...(resolved.profile ? { profile: resolved.profile } : {}) }, role: flags.review === true ? "review" : "work" });
-        return { schema: SCHEMA, ok: true, profile: name, brief: b.text, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes, budget: { ...b.limits, source: b.source }, providers: b.providers, text: b.text };
+        const role = flags.review === true ? "review" : "work";
+        const b = await briefFor({ runId, agentId: null, profile: name, spec: { ...spec, ...(resolved.profile ? { profile: resolved.profile } : {}) }, role });
+        const { contextSkills } = await import("../context/skills");
+        const skills = contextSkills({ role, maySpawn: spec.children?.allowSpawn === true }).map(({ name: n, hash }) => ({ name: n, hash }));
+        return {
+          schema: SCHEMA, ok: true, profile: name, brief: b.text, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes, budget: { ...b.limits, source: b.source }, providers: b.providers, skills,
+          text: `${b.text}\n\nWith the skills: ${skills.map((s) => `${s.name} (sha256 ${s.hash.slice(0, 12)})`).join(", ")}.`,
+        };
       },
     });
   },

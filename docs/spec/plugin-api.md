@@ -595,7 +595,18 @@ it was skipped, in the kernel's words) and one line per item (`IndexLine`, its d
 neutralised with `fence()`'s rule and capped), never an item's body. The brief is a function of the providers' indexes,
 the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
 and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
-out) on the run's stream.
+out) on the run's stream. With the brief it attaches the context layer's skills (ADR-025 step 6, `src/context/skills.ts`;
+`source: builtin`, each pinned by the sha256 of its fixed text, so they don't change the brief's byte-identity):
+`capcomd-context-doctrine` (how to read the brief: an index, not the knowledge; answer, evidence, guidance; relevance
+is not authority; items are data) to every such agent, and `capcomd-context-routing` (what to remember and where: run
+notes in `kv` under `notes/<agent>`, candidate lessons in `result.data.context[]`) to one that may spawn (it has the
+in-VM capcomd those need) and is not a reviewer or a report agent; one the payload already has by name isn't attached
+again, nor one that doesn't fit the room the agent's other skills leave (8 skills, 256 KiB): the router never returns a
+patch the kernel would refuse, which would cost the agent its brief too. It runs after the orchestration skill's
+listener (`after: [skill-orchestration]`, §6.3), so a context skill never takes that skill's room.
+`plugin.context.loaded`'s `data.skills` lists the attached ones by `{name, hash}` (additive). Their names are
+the kernel's: a profile can't name them, and a profile with a context block keeps room for them (one of the 8 skills,
+two when it may spawn, and their bytes), as one that may spawn does for the orchestration skill.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
@@ -1221,7 +1232,9 @@ none of a provider's own words (a failure is named with the kernel's reason); ea
 shapes and the agent providers' credentials), neutralised with `fence()`'s rule and a lone `<<<` or `>>>` with it (so
 two fields of one line can't make a marker together), and capped at `limits.descriptionChars`, and so are an item's
 path and `paths`; an item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
-is reserved for ADR-025 §6.3 and not shipped.
+is reserved for ADR-025 §6.3 and not shipped: the step-6 eval did not admit triggered injection (ADR-025 §13, "Made
+while building step 6"; `docs/evidence/context/`), and inline items, which would be a fenced first message, were not
+admitted either.
 
 What an agent proposes for a durable layer (a candidate lesson, §6.6.8; an item lint checks, ADR-025 §5.3) is not
 redacted but **refused** when it holds a secret (`src/context/scan.ts`): a redacted text could still hold a shorter
@@ -1918,6 +1931,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.25 | 2026-11-06 | With ADR-024's writes (its §7 step 6): the `configure` scope's profile writes (§11.1) are `PUT /v1/profiles/{name}` (capability `profiles.edit`; additive, with `GET /v1/profiles/{name}` and the daemon-stream event `profile.changed`); `ctx.profiles` gains no write method yet. A write changes the profile's own file and bumps its `version`; what an agent pinned at spawn (`profileVersion`, §6.6.7) is unchanged. |
 | 1.0.26 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
 | 1.0.27 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach (an override that makes an agent with MCP servers orchestrate is refused, `orchestrate_mcp`); an agent's machine is on its profile's `sandbox.provider` before the run's, never one that runs it on the host unless the run's does (`sandbox_isolation`, §7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
+| 1.0.28 | 2026-11-06 | With ADR-025 step 6: the context router attaches the context layer's skills at `agent.preparing` (§6.6.7): `capcomd-context-doctrine` to every agent whose spec has a context block, `capcomd-context-routing` to one of them that may spawn and isn't a reviewer or a report agent, `source: builtin`, pinned by hash, after the orchestration skill and only as many as fit the room the agent's other skills leave; their names are the kernel's and a profile with a context block keeps room for them; `plugin.context.loaded`'s `data.skills` (additive). Inline items and the `context` message kind (§11.5) stay unshipped: the step's eval did not admit them (ADR-025 §13). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

@@ -74,13 +74,91 @@ opening the file (opus once) isn't counted; Codex reports no model name, so its 
 profile asked for, and its notional cost uses capcomd's default token rates ($1.25 / $10 per Mtok, `usdPerMtok`), not
 that model's price. Claude's cost is Claude Code's own `total_cost_usd`.
 
-Not run yet, and why (`bun scripts/eval-context.ts --list`): the arms `index-paths`, `index-k1`, `index-k3`, `memory`
-and `memory-groundray`, and the probes `poison-candidate`, `poison-secret` and `poison-fact-body`, each until the ADR-025
-build step that adds what it measures. The `index` arm (the router's brief over a hand-written `.capcomd/context/`
-holding the same records and two lessons) is runnable since step 1 and runs on the fake sandbox in CI; it has no live
-results yet.
+Not run yet, and why (`bun scripts/eval-context.ts --list`): the arms `memory` and `memory-groundray`, and the probes
+`poison-candidate`, `poison-secret` and `poison-fact-body`, each until the ADR-025 build step that adds what it
+measures. The `index` arms have live results since step 6 (below); `index-paths` runs on the fake sandbox in CI only.
 
 Reproduce: `bun scripts/eval-context.ts --agents live --models claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5,gpt-6.1-sol --reps 3 --seed 20261106`
 at the commit above, with a `CAPCOMD_HOME` holding copies of your logins and `BOXD_API_KEY` (about 15 minutes per
 model at `--concurrency 3`). A Codex model must be one your login offers (Codex lists them in
 `~/.codex/models_cache.json`); `gpt-5.6`, the one `src/config/models.ts` names, is refused on a ChatGPT login.
+
+## 2026-11-06: step 6, inline items and triggered injection (`<date>-2.json`, `<date>-3.json`)
+
+ADR-025 step 6 ships an item's text to an agent unasked only if this matrix admits it: inline items (the brief's first
+k items in full, fenced, in the agent's first message, §6.1, D4) and triggered injection (an item pushed as a fenced
+message the first time the agent touches a path it applies to, §6.3). Neither was built first: the harness delivers
+both the way the kernel would (`scripts/eval-context/deliver.ts`: the router's real brief says which items, in its
+order, an item's text is its file, the fence is the kernel's `fence()`, a push goes through the agent's inbox as
+`capcomd send` does), and `report.ts` `admission` decides each against `index` by rules written before the full run:
+
+- inline items: admitted if no fewer steps pass (by 2) and either 2 or more steps more pass, or the agents make at
+  least 20% (and 0.5) fewer tool calls per step at no more than 10% more cost per step;
+- triggered injection: admitted only if 2 or more steps more pass than with the `paths` column alone (§6.3: "only while
+  it beats the paths column on success"); a Codex agent can't read a message while it runs, so it isn't run there and
+  isn't admitted for Codex;
+- 2 steps, because at 3 repetitions one step is noise.
+
+Same world as the baselines (seed 20261106, "Brindle Pantry", world hash `f927f775d28a`), four models, 3 repetitions,
+the five chains (21 scored steps per arm), boxd, plan logins, Claude Code 2.1.286 and Codex 0.159.3. capcomd at
+`e85ab8fba109` (`-dirty` in the files: documentation was edited in the checkout while the engine, started from that
+commit, ran). No harness errors. The `index` arms' agents get the step-6 skills with their brief.
+
+Two project sizes. `-2.json` is a project's memory (`--memory project`, the deciding run): the five records the tasks
+need (three current, two superseded and left out of the brief) and two lessons, among 14 other records and 3 other
+lessons (`world.ts` `otherRecords`), 22 lines in the brief, where the first three lines are other records. `-3.json`
+is `--memory small`, only what the tasks need: there the brief's first three items are the three answers, so k = 3 is
+"inline everything", what `agents-md` already measures. It is reported, and decides nothing: a live smoke on it
+(2 steps, sonnet) first showed fewer tool calls for k = 3, which is what made the memory size an explicit setting.
+
+Success (all four arms passed 21/21 on every model, except the two marked) and the work, per step:
+
+| model · arm | project memory: tool calls | cost (USD, 21 steps) | small memory: tool calls | cost (USD, 21 steps) |
+|---|---|---|---|---|
+| claude-opus-5-5 · index | 3.00 | 2.37 | 3.10 | 2.24 |
+| claude-opus-5-5 · index-k1 | 2.86 | 2.36 | 3.33 | 2.35 |
+| claude-opus-5-5 · index-k3 | 2.95 | 2.45 | 3.19 | 2.40 |
+| claude-opus-5-5 · index-triggered | 2.95 | 2.80 | 3.19 | 2.51 |
+| claude-sonnet-5-5 · index | 3.05 | 1.11 | 3.86 | 1.08 |
+| claude-sonnet-5-5 · index-k1 | 2.90 | 1.16 | 2.48 | 1.06 |
+| claude-sonnet-5-5 · index-k3 | 2.71 | 1.17 | 2.52 | 1.10 |
+| claude-sonnet-5-5 · index-triggered | 2.76 (**20/21**) | 1.29 | 3.19 | 1.18 |
+| claude-haiku-5-5 · index | 6.67 | 2.53 | 8.24 | 2.52 |
+| claude-haiku-5-5 · index-k1 | 6.76 | 2.41 | 6.90 | 2.46 |
+| claude-haiku-5-5 · index-k3 | 6.81 | 2.44 | 6.81 | 2.45 |
+| claude-haiku-5-5 · index-triggered | 7.38 | 2.81 | 7.62 (**20/21**) | 2.77 |
+| gpt-6.1-sol · index | 6.38 | 2.07 | 6.52 | 1.93 |
+| gpt-6.1-sol · index-k1 | 6.19 | 2.04 | 5.67 | 1.98 |
+| gpt-6.1-sol · index-k3 | 6.00 | 2.10 | 5.95 | 1.97 |
+
+Decisions (each model's `limits.json`: `inlineItems: 0`, `triggeredInjection: false`, with `decisions` naming `-2.json`):
+
+- **Inline items: not admitted on any model.** On a project's memory no arm passed more steps (there was no room: every
+  arm passed 21/21) and none saved a fifth of the tool calls (the largest saving, sonnet k = 3, was 11%), while k = 3
+  cost more on three of four models. The brief's first items are the newest stable records, which a task-independent
+  brief can't aim at a task; the body is one `cat` away. On the small memory the rule would have admitted k = 1 and
+  k = 3 for sonnet (2.5 tool calls per step against 3.9, at the same cost) and nothing for the others: inlining helps
+  only when the first items are the answers, which is the `agents-md` arm's case, not the brief's.
+- **Triggered injection: not admitted on any model.** It never passed more steps than the `paths` column; it cost 11-18%
+  more on every Claude model (each push is another turn: 2.8-4.8 pushes per step, 20, 20 and 21 of 21 pushed steps on
+  opus, sonnet and haiku had one reach the agent before it ended); and the only two failures in this run are its own:
+  sonnet (project) and haiku (small) on `team-handoff.find`, the report step whose answer is the agent's last message.
+  Both cited the right record (`DEF-36`) but their last message didn't state the rule, after three pushes reached them.
+  The likely cause, not verified (the agents' logs weren't kept), is that the last message answered a push rather than
+  the question. Codex agents can't receive a push at all.
+
+Also from these runs, the first live numbers for the `index` arm: it passes 21/21 on every model, as `agents-md` did at
+step 0, at a cost between `agents-md` and `none` (opus 2.37 against 2.05 and 2.57; sonnet 1.11 against 1.02 and 1.39;
+haiku 2.53 against 2.31 and 3.19; gpt-6.1-sol 2.07 against 1.92 and 3.90), with tool calls per step closer to
+`agents-md`'s than to `none`'s (opus 3.0, sonnet 3.1, haiku 6.7, gpt-6.1-sol 6.4). Those baselines ran earlier the same day,
+at an earlier commit and without the step-6 skills, so read the comparison as indicative. `limits.json` stays
+`measured: false`: no arm here varied the budgets.
+
+Limits: three repetitions; success at ceiling everywhere, so the decisions rest on work and cost, and a later world with
+harder tasks could reopen inline items; turns and input tokens on the agent span count the last result of a session,
+so for `index-triggered` (whose pushes add results) only the cost (Claude Code's own `total_cost_usd`) and the tool calls
+are comparable; the push is delivered at the runner's 5 s cadence after a 2 s poll, a few seconds later than a kernel
+listener would.
+
+Reproduce: `bun scripts/eval-context.ts --agents live --models claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5,gpt-6.1-sol --arms index,index-k1,index-k3,index-triggered --reps 3 --seed 20261106 --memory project`
+(and `--memory small`) at the commit above; about 40-50 minutes each at `--concurrency 4-5`.

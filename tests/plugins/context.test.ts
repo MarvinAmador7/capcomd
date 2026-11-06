@@ -19,6 +19,14 @@ import { fence } from "../../src/subagents/results";
 import * as contextPlugin from "../../src/plugins/context";
 import * as memoryPlugin from "../../src/plugins/context-memory";
 import { BUILTINS } from "../../src/plugins/builtins";
+import { applyPreparePatch } from "../../src/plugins/hooks";
+import { CONTEXT_SKILLS, DOCTRINE_SKILL, ROUTING_SKILL } from "../../src/context/skills";
+import { profileSkills } from "../../src/profiles/skills";
+import { frontmatter as skillFrontmatter } from "../../src/agents/skills";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const SECRET = "sk-ant-api03-CONTEXTFIXTURE-abcdefghijklmnopqrstuvwxyz0123456789";
@@ -245,36 +253,133 @@ describe("the router at agent.preparing (ADR-025 §6.1; spec §6.6.7, §14.4)", 
     await testkit.hookContract(contextPlugin.manifest, contextPlugin.plugin as never);
   });
 
-  test("a profile with a context block: the brief is appended (only prompt.append), loaded and skipped events on the run", async () => {
+  /** The router with fixture providers, and `agent` as the agent's record. */
+  async function withRouter<T>(agent: () => Promise<unknown>, fn: (fake: ReturnType<typeof testkit.fakeContext>) => Promise<T>): Promise<T> {
     const saved = { ...contextPlugin.contextKernel };
     Object.assign(contextPlugin.contextKernel, {
-      agent: async () => ({ contract: null }),
+      agent,
       scope: async (runId: string | null, a: { id: string | null; profile: string | null }) => scope({ runId, agentId: a.id }),
       providers: async () => new Map([["memory", active(memoryProvider({ read: tree(FILES) }))]]),
       secrets: async () => [SECRET],
     });
+    const fake = testkit.fakeContext(contextPlugin.manifest);
     try {
-      const fake = testkit.fakeContext(contextPlugin.manifest);
       await testkit.load(fake, contextPlugin.plugin as never);
-      const payload = samplePayload("agent.preparing");
-      payload.spec = { ...payload.spec, context: { providers: [{ name: "memory" }, { name: "groundray" }] } };
+      return await fn(fake);
+    } finally { await fake.dispose(); Object.assign(contextPlugin.contextKernel, saved); }
+  }
+  const briefed = () => {
+    const payload = samplePayload("agent.preparing");
+    payload.spec = { ...payload.spec, context: { providers: [{ name: "memory" }, { name: "groundray" }] } };
+    return payload;
+  };
+  type Patch = { prompt: { append: string; skills?: Array<{ name: string; hash: string; source: string; text: string }> } };
+
+  test("a profile with a context block: the brief is appended with the doctrine skill, loaded and skipped events on the run", async () => {
+    await withRouter(async () => ({ contract: null }), async (fake) => {
+      const payload = briefed();
       const first = await fake.fire("agent.preparing", payload, { runId: "run-test1" });
       const again = await fake.fire("agent.preparing", structuredClone(payload), { runId: "run-test1" });
       expect(first.failure).toBeNull();
-      const patch = (first.result as { patch: { prompt: { append: string } } }).patch;
+      const patch = (first.result as { patch: Patch }).patch;
       expect(Object.keys(patch)).toEqual(["prompt"]);
-      expect(Object.keys(patch.prompt)).toEqual(["append"]);
+      expect(Object.keys(patch.prompt)).toEqual(["append", "skills"]);
       expect(patch.prompt.append).toStartWith("Context: loaded 5 of 5 lines");
       expect(patch.prompt.append).toContain("groundray: skipped (not active)");
-      expect((again.result as { patch: { prompt: { append: string } } }).patch.prompt.append).toBe(patch.prompt.append);
+      // An agent that may not spawn has no in-VM capcomd to write notes with: the doctrine only.
+      expect(patch.prompt.skills).toEqual([{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin", text: DOCTRINE_SKILL.text }]);
+      expect((again.result as { patch: Patch }).patch).toEqual(patch);
+      // The kernel's own rules take the patch (a skill pinned by its text's sha256).
+      expect(applyPreparePatch(payload, patch as never).prompt.skills.map((s) => s.name)).toEqual([DOCTRINE_SKILL.name]);
       const events = fake.emitted();
       expect(events.map((e) => e.type)).toEqual(["plugin.context.loaded", "plugin.context.skipped", "plugin.context.loaded", "plugin.context.skipped"]);
-      expect(events[0]).toMatchObject({ stream: "run-test1", data: { agentId: "agt-test1", loaded: 5, total: 5, budget: { briefBytes: 25600, source: "capcomd's defaults" } } });
+      expect(events[0]).toMatchObject({ stream: "run-test1", data: { agentId: "agt-test1", loaded: 5, total: 5, budget: { briefBytes: 25600, source: "capcomd's defaults" }, skills: [{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash }] } });
       expect(events[1]).toMatchObject({ data: { provider: "groundray", reason: "not active" } });
       const fast = await fake.fire("agent.preparing", structuredClone(payload), { runId: "run-test1", timeoutMs: 100 });
       expect(fast.ms).toBeLessThan(1000);
-      await fake.dispose();
-    } finally { Object.assign(contextPlugin.contextKernel, saved); }
+    });
+  });
+
+  test("the routing paragraph goes to an agent that may spawn and does work; a reviewer gets the doctrine only; none twice", async () => {
+    const names = async (record: unknown, payload = briefed()) => withRouter(async () => record, async (fake) =>
+      ((await fake.fire("agent.preparing", payload, { runId: "run-test1" })).result as { patch: Patch }).patch.prompt.skills?.map((s) => s.name) ?? []);
+    expect(await names({ contract: null, limits: { allowSpawn: true } })).toEqual([DOCTRINE_SKILL.name, ROUTING_SKILL.name]);
+    expect(await names({ contract: { review: { verifyId: "vfy-1" } }, limits: { allowSpawn: true } })).toEqual([DOCTRINE_SKILL.name]);
+    expect(await names({ contract: { report: true }, limits: { allowSpawn: true } })).toEqual([DOCTRINE_SKILL.name]);
+    // A skill of that name the agent already has (attached by an earlier listener) isn't attached again: the patch stays valid.
+    const has = briefed();
+    has.prompt.skills = [{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin", text: DOCTRINE_SKILL.text }];
+    expect(await names({ contract: null, limits: { allowSpawn: true } }, has)).toEqual([ROUTING_SKILL.name]);
+  });
+
+  test("an agent with no room left for a skill still gets its brief: only the skills that fit are attached, never a patch the kernel refuses", async () => {
+    const other = (i: number, bytes = 64) => { const text = `---\nname: other-${i}\n---\n${"x".repeat(bytes)}\n`; return { name: `other-${i}`, hash: createHash("sha256").update(text).digest("hex"), source: "plugin" as const, text }; };
+    const fire = (payload: ReturnType<typeof briefed>) => withRouter(async () => ({ contract: null, limits: { allowSpawn: true } }), async (fake) => {
+      const out = await fake.fire("agent.preparing", payload, { runId: "run-test1" });
+      expect(out.failure).toBeNull();
+      const patch = (out.result as { patch: Patch }).patch;
+      // The kernel takes what the router returns, whatever room the agent had.
+      expect(() => applyPreparePatch(payload, patch as never)).not.toThrow();
+      expect(patch.prompt.append).toStartWith("Context: loaded 5 of 5 lines");
+      const loaded = fake.emitted().find((e) => e.type === "plugin.context.loaded")!;
+      return { names: patch.prompt.skills?.map((s) => s.name) ?? [], logged: (loaded.data as { skills: Array<{ name: string }> }).skills.map((s) => s.name) };
+    });
+    // Seven skills already (a plugin's, an agent pinned before its profile kept room): one slot, the doctrine takes it.
+    const seven = briefed();
+    seven.prompt.skills = Array.from({ length: 7 }, (_, i) => other(i));
+    expect(await fire(seven)).toEqual({ names: [DOCTRINE_SKILL.name], logged: [DOCTRINE_SKILL.name] });
+    // Eight: none fits; the brief goes alone.
+    const eight = briefed();
+    eight.prompt.skills = Array.from({ length: 8 }, (_, i) => other(i));
+    expect(await fire(eight)).toEqual({ names: [], logged: [] });
+    // Bytes, too: skills that leave less than the doctrine's size of the kernel's 256 KiB.
+    const full = briefed();
+    full.prompt.skills = [other(0, 256 * 1024 - 300)];
+    expect((await fire(full)).names).toEqual([]);
+    // The room it fits in is what's left after the orchestration skill: that listener runs first wherever an agent is
+    // prepared, so an agent that may spawn never loses its orchestration skill (closed) to a context skill (open).
+    const { gates, hooks } = await import("../../src/plugins/hooks");
+    await gates();
+    const order = hooks.order("agent.preparing");
+    expect(order.indexOf("skill-orchestration")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("skill-orchestration")).toBeLessThan(order.indexOf("context"));
+  });
+});
+
+describe("the context skills (ADR-025 §5.1, §6.1, step 6)", () => {
+  test("pinned: their text is fixed, so a change is a new hash this test makes you write down", () => {
+    expect(CONTEXT_SKILLS.map((s) => [s.name, s.hash])).toEqual([
+      ["capcomd-context-doctrine", "3ac446432e4b0cc9c96b8d717c46d2f3d9a589dde200db3b717e9281bfab115b"],
+      ["capcomd-context-routing", "de52814243fe090128e13df4faab316efa4c961874e895f9d4b64d20414114ca"],
+    ]);
+  });
+
+  test("each is a SKILL.md with its name, carries no marker and no line the brief's own lines could be confused with", () => {
+    for (const s of CONTEXT_SKILLS) {
+      expect(skillFrontmatter(s.text)).toMatchObject({ name: s.name });
+      expect(s.text).not.toMatch(/<<<|>>>/);
+      expect(s.text).not.toMatch(/^- \[/m);
+      expect(s.text).not.toMatch(/^Context: loaded/m);
+      expect(Buffer.byteLength(s.text)).toBeLessThan(4096);
+    }
+  });
+
+  test("a profile with a context block keeps room for them; their names are capcomd's", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-context-skills-"));
+    const list: Array<{ name: string }> = [];
+    for (let i = 1; i <= 7; i++) {
+      mkdirSync(join(dir, "skills", `s${i}`), { recursive: true });
+      writeFileSync(join(dir, "skills", `s${i}`, "SKILL.md"), `---\nname: s${i}\n---\nSkill ${i}.\n`);
+      list.push({ name: `s${i}` });
+    }
+    const dirs = [{ dir, layer: "project" as const }];
+    expect(profileSkills("profiles.w", list, dirs, false, false).errors).toEqual([]);
+    // One that may not spawn keeps one slot (the doctrine); one that may, three (orchestration, doctrine, routing).
+    expect(profileSkills("profiles.w", list, dirs, false, true).errors).toEqual([]);
+    expect(profileSkills("profiles.w", [...list, { name: "s1" }], dirs, false, true).errors[0]).toBe("profiles.w: skills: at most 7 skills (a profile with a context block keeps room for its context skills), and it names 8");
+    expect(profileSkills("profiles.w", list, dirs, true, true).errors[0]).toBe("profiles.w: skills: at most 5 skills (an agent that may spawn keeps room for capcomd's orchestration skill; a profile with a context block keeps room for its context skills), and it names 7");
+    const taken = profileSkills("profiles.w", [{ name: DOCTRINE_SKILL.name }], dirs, false, true).errors;
+    expect(taken).toEqual([`profiles.w: skills[0] (${DOCTRINE_SKILL.name}): that name is capcomd's own skill, which an agent whose profile has a context block gets by itself; give yours another name`]);
   });
 });
 
