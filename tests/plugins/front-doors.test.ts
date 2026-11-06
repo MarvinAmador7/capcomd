@@ -63,6 +63,19 @@ describe("the kernel's front doors", () => {
     expect(host.contributions.list("instructions").map((i) => i.plugin)).toEqual(["front-mcp", "echo"]);
   });
 
+  test("a tool's arguments are an object schema; a command has a run function and usage lines", async () => {
+    const host = new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: (n) => join(home, "data", n) });
+    const m = (n: string) => ({ schema: "capcomd.plugin/v1", name: n, version: "1.0.0", description: "A test plugin.", apiVersion: 1, engines: { capcomd: ">=0.0.0" }, entry: { runtime: "in-process", module: "./index.ts" }, contributes: { mcp: [{ name: "t", summary: "A tool" }], cli: [{ name: n, summary: "A command" }] } });
+    const run = async () => ({ schema: "relay.v1" as const, ok: true as const });
+    await host.start([
+      { source: "builtin", manifest: m("stringy"), module: { activate: (ctx) => { ctx.mcp.tool({ name: "t", description: "T", inputSchema: { type: "string" }, run }); } } as PluginModule<never> },
+      { source: "builtin", manifest: m("usageless"), module: { activate: (ctx) => { ctx.cli.command({ name: "usageless", summary: "C", usage: undefined as never, run }); } } as PluginModule<never> },
+    ]);
+    expect(host.get("stringy")).toMatchObject({ state: "failed", cause: "activate_threw" });
+    expect(host.message("stringy")).toContain('inputSchema is a JSON Schema of an object (type: "object"');
+    expect(host.get("usageless")).toMatchObject({ state: "failed", cause: "activate_threw" });
+  });
+
   test("every kernel command is registered once, by its group", async () => {
     const host = new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: (n) => join(home, "data", n) });
     await host.start(BUILTINS.filter((b) => b.kernelSurface).map(candidateOf));

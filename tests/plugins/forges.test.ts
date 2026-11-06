@@ -14,7 +14,7 @@ import { taskBranch } from "../../src/merge/config";
 import { produceFakeWork } from "../../src/merge/fakework";
 import { listBranches, resolveGoalBranch } from "../../src/merge/goal";
 import { mergeTask } from "../../src/merge/service";
-import { BUILTINS } from "../../src/plugins/builtins";
+import { BUILTINS, candidateOf } from "../../src/plugins/builtins";
 import { activeForges, forgeFor, forgeLogin, inactiveForge, publishForge, pullRequestLabels, useForges, withForge } from "../../src/plugins/forges";
 import { GitForge } from "../../src/plugins/forges/git";
 import { GitHubForge, resetGitHubLogins } from "../../src/plugins/forges/github";
@@ -36,7 +36,7 @@ beforeAll(async () => {
   // The checks look up the run's sandbox in the engine: a closed port, so these tests never ask a running daemon.
   process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9";
   host = new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: () => "/nonexistent" });
-  await host.start([{ source: "builtin", dir: FAKE }, ...BUILTINS.map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module }))]);
+  await host.start([{ source: "builtin", dir: FAKE }, ...BUILTINS.map(candidateOf)]);
   useForges(host);
 });
 afterAll(async () => {

@@ -228,7 +228,8 @@ CLI connecting as a client (§17.2 step 9), so it cannot be used to run host cod
 #### 4.7.2 MCP tools
 
 `capcomd_<name>_<tool>` on the `capcomd mcp` server (`src/mcp/server.ts`), with a JSON Schema for its arguments (an
-object schema, draft 2020-12 or draft-07), an optional `title` and `_meta`, and the MCP annotations (`readOnlyHint`,
+object schema, draft 2020-12 or draft-07: any other is `invalid` at registration, and one the server can't read leaves
+that tool out of the listing), an optional `title` and `_meta`, and the MCP annotations (`readOnlyHint`,
 `destructiveHint`, `idempotentHint`, `openWorldHint`). The server lists the schema exactly as registered, checks a call's
 arguments against it (the MCP SDK's validation error when they don't fit) and drops properties it doesn't name, so a
 client's extra argument never reaches the handler. The handler runs with the **driver** principal and the driver policy

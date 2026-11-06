@@ -20,7 +20,7 @@ import { claude, ORCHESTRATE_ALLOWED, ORCHESTRATE_DISALLOWED } from "../../src/p
 import { codex, codexDenyRules } from "../../src/plugins/agent-codex";
 import { ORCHESTRATE_DENIED_COMMANDS } from "../../src/plugins/agent-common";
 import { agentProviderNames, agentSeam, useAgentSeams } from "../../src/plugins/agents";
-import { BUILTINS } from "../../src/plugins/builtins";
+import { BUILTINS, candidateOf } from "../../src/plugins/builtins";
 import { VERSION } from "../../src/utils/self";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -32,7 +32,7 @@ const ctx = (cfg: ReturnType<typeof loadAgentConfig>) => ({ bin: "agent", repo: 
 function host() {
   return new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: (n) => join(tmpdir(), "capcomd-agent-seams", n) });
 }
-const builtins = (): Candidate[] => BUILTINS.map((b) => ({ source: "builtin", manifest: b.manifest, module: b.module }));
+const builtins = (): Candidate[] => BUILTINS.map(candidateOf);
 /** A Claude Code Bash rule: `Bash(<prefix>:*)` (the command's first words), `Bash(<exact>)`, or `*` as any text. */
 interface Rule { text: string; prefix: boolean; wild: boolean }
 const ruleOf = (t: string): Rule => {

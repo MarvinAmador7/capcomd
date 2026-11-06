@@ -11,7 +11,7 @@ import { taskBranch, taskKey, loadMergeConfig, type MergeConfig } from "../../sr
 import { produceFakeWork } from "../../src/merge/fakework";
 import { GitHubHttpError } from "../../src/merge/github";
 import { mergeTask } from "../../src/merge/service";
-import { BUILTINS } from "../../src/plugins/builtins";
+import { BUILTINS, candidateOf } from "../../src/plugins/builtins";
 import { activeForges, forgeFor, ForgeNotActive, seamCall, useForges } from "../../src/plugins/forges";
 import { casPush, GitForge } from "../../src/plugins/forges/git";
 import { GitHubForge } from "../../src/plugins/forges/github";
@@ -29,7 +29,7 @@ const endpoint = process.env.CAPCOMD_ENDPOINT;
 beforeAll(async () => {
   process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9";
   host = new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: () => "/nonexistent" });
-  await host.start([{ source: "builtin", dir: FAKE }, ...BUILTINS.map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module }))]);
+  await host.start([{ source: "builtin", dir: FAKE }, ...BUILTINS.map(candidateOf)]);
   useForges(host);
 });
 afterAll(async () => {
@@ -41,7 +41,7 @@ afterEach(() => fake.reset());
 
 describe("the forges and how one is chosen (§7.1)", () => {
   test("the built-in forges are plugins whose manifests validate; git loads last", async () => {
-    for (const b of BUILTINS) expect(loadManifest(b.manifest, { capcomd: VERSION })).toMatchObject({ ok: true });
+    for (const b of BUILTINS) expect(loadManifest(b.manifest, { capcomd: VERSION, kernelSurface: !!b.kernelSurface })).toMatchObject({ ok: true });
     expect((await activeForges()).map((f) => [f.name, f.plugin])).toEqual([["fake", "forge-fake"], ["github", "forge-github"], ["git", "forge-git"]]);
     expect(host.get("forge-git")).toMatchObject({ state: "active", seams: [{ kind: "forge", name: "git" }] });
   });

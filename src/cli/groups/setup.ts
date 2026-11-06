@@ -31,7 +31,7 @@ async function clientsCommand({ positionals, values, json }: Cmd): Promise<numbe
 }
 
 /** `capcomd ui` */
-async function uiCommand({  }: Cmd): Promise<number> {
+async function uiCommand(_c: Cmd): Promise<number> {
   await ui();
   return EXIT.ok;
 }

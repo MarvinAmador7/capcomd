@@ -65,12 +65,20 @@ export function buildServer(served: { tools: ServedTool[]; instructions: string 
   const server = new McpServer({ name: "capcomd", version: VERSION }, { instructions: served.instructions });
   const kids = new ProjectServers(server.server);
   sessions.add(kids);
+  const tools: ServedTool[] = [];
   for (const t of served.tools) {
     const { spec } = t;
+    // The SDK checks the arguments with this; the listing below shows the plugin's own schema. A schema zod can't read
+    // leaves that one tool out, never the server.
+    let check: z.ZodType;
+    try { check = z.fromJSONSchema(spec.inputSchema as Parameters<typeof z.fromJSONSchema>[0]); } catch (e) {
+      console.error(`capcomd mcp: the ${t.plugin} plugin's tool ${t.name} is left out: its inputSchema isn't a JSON Schema capcomd can check (${(e as Error).message})`);
+      continue;
+    }
+    tools.push(t);
     server.registerTool(t.name, {
       ...(spec.title !== undefined ? { title: spec.title } : {}), description: spec.description,
-      // The SDK checks the arguments with this; the listing below shows the plugin's own schema.
-      inputSchema: z.fromJSONSchema(spec.inputSchema as Parameters<typeof z.fromJSONSchema>[0]) as unknown as z.ZodObject<z.ZodRawShape>,
+      inputSchema: check as unknown as z.ZodObject<z.ZodRawShape>,
       ...(spec.annotations ? { annotations: spec.annotations } : {}), ...(spec._meta ? { _meta: spec._meta } : {}),
     }, async (a: Record<string, unknown>, extra: { signal: AbortSignal }): Promise<ToolResult> => {
       inflight++;
@@ -87,7 +95,7 @@ export function buildServer(served: { tools: ServedTool[]; instructions: string 
   // Each tool listed with the JSON Schema its plugin registered, exactly (the SDK would list its own rendering of the
   // schema it checks with); otherwise the SDK's listing, field for field (`registerTool`'s tools run no MCP tasks).
   server.server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: served.tools.map((t) => ({
+    tools: tools.map((t) => ({
       name: t.name, title: t.spec.title, description: t.spec.description, inputSchema: t.spec.inputSchema as { type: "object" },
       annotations: t.spec.annotations, execution: { taskSupport: "forbidden" as const }, _meta: t.spec._meta,
     })),
