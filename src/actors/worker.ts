@@ -242,7 +242,8 @@ export type PushBranchParams = {
   /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
   fakePath?: string; fakeContent?: string;
   /** ADR-017: install in-VM capcomd (agents allowed to spawn). `rpcDir`: where its spool is in the VM. Its skill comes in
-   *  the agent's spec (agent.preparing, src/plugins/skill-orchestration.ts); `skill` only in an attempt pushed before that. */
+   *  the agent's spec (agent.preparing, src/plugins/skill-orchestration.ts); `skill` only for an attempt no plugin prepared
+   *  (src/primitives/ops.ts `unpreparedSkill`). */
   subagents?: { skill?: string; kind?: string; rpcDir?: string };
   conflictFiles?: string[];
   /** Agent profile name for this task. */

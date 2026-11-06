@@ -19,7 +19,8 @@ import { DISPATCHER_COMMANDS, parseLoose } from "../../src/cli/front-doors";
 import { MCP_TOOLS } from "../../src/plugins/front/mcp";
 import { kernelTools } from "../../src/mcp/tools";
 import { SKILL_NAME, plugin as skillPlugin, manifest as skillManifest, skillKernel } from "../../src/plugins/skill-orchestration";
-import { skillHash } from "../../src/plugins/hooks";
+import { preparingAgent, skillHash } from "../../src/plugins/hooks";
+import { unpreparedSkill } from "../../src/primitives/ops";
 import { VERSION } from "../../src/utils/self";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -190,6 +191,24 @@ describe("skill-orchestration: the orchestration skill as an agent.preparing pat
     expect(skill.text).toContain("maxChildren=3 running at once");
     expect(skill.text).toContain("Your merges land on capcomd/add-sum");
     expect(skill.text).toContain("You are the planner");
+  });
+
+  test("on the kernel's own call it reads the agent's record from the call, never the engine again", async () => {
+    skillKernel.agent = was.agent;
+    skillKernel.goal = async () => undefined;
+    const p = samplePayload("agent.preparing");
+    const r = await preparingAgent.run({ runId: p.agent.runId, agentId: p.agent.id, record: record({ agentId: p.agent.id }) }, () => prepare({ provider: "claude", auth: "subscription" }));
+    const skill = (r as { patch: { prompt: { skills: Array<{ text: string }> } } }).patch.prompt.skills[0]!;
+    expect(skill.text).toContain(`You are agent ${p.agent.id}.`);
+  });
+
+  test("an attempt no plugin prepared (its workflow resumed across an upgrade) still gets the skill, from the kernel", async () => {
+    skillKernel.goal = async () => ({ branch: "capcomd/add-sum", base: "main" });
+    const a = record();
+    const text = await unpreparedSkill("run-none", a, null);
+    expect(text).toContain("# Orchestrating child agents (capcomd)");
+    expect(text).toContain("Your merges land on capcomd/add-sum");
+    expect(await unpreparedSkill("run-none", a, { provider: "claude", skills: [{ name: SKILL_NAME }] })).toBeUndefined();
   });
 
   test("an agent that can't spawn, and a fake agent, get nothing", async () => {

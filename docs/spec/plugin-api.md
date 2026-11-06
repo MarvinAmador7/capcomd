@@ -544,12 +544,21 @@ SKILL.md), `source` one of `builtin`, `user`, `project`, `plugin`, and `hash` th
 attached is `invalid`; at most 8 skills and 256 KB of them per agent, as on a message. `env` holds at most 32 variables
 per patch, each value a string of at most 4 096 characters; a name the agent's environment has (the payload's `env`: the
 runner's `HOME`, `PATH`, `CAPCOMD_RPC_DIR` and `CAPCOMD_CHECKOUT`, the provider's own variables and its credential's) or
-any `CAPCOMD_*` is `widening`; a value the redactor would change is `invalid` (secrets reach a sandbox as placeholders,
+a reserved one is `widening`. Reserved (`reservedEnvName`), whether or not the agent has it, is a name that would steer
+the agent without prompt text: the kernel's `CAPCOMD_*`; the agent providers' families `ANTHROPIC_*`, `CLAUDE_*`,
+`OPENAI_*`, `CODEX_*` (where a CLI sends its credential, which login it reads); what a shell or runtime loads first
+(`LD_*`, `DYLD_*`, `NODE_*`, `NPM_CONFIG_*`, `PYTHON*`, `PERL5*`, `RUBY*`, `BASH_ENV`, `ENV`, `SHELL`, `IFS`, `CDPATH`,
+`PS4`, `PROMPT_COMMAND`, `ZDOTDIR`); the proxy and certificates its traffic trusts (`HTTP_PROXY`, `HTTPS_PROXY`,
+`ALL_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`); git's `GIT_*`; and
+`TMPDIR`, `USER`, `LOGNAME`. A value the redactor would change is `invalid` (secrets reach a sandbox as placeholders,
 §11.4). The payload a later listener sees has the earlier skills and the earlier variables' names; their values stay in
 the patches. The kernel then attaches them to the attempt's run: the skills' text after the profile's `append` and the
 plugins' appends, in the order the plugins added them, where the agent reads its instructions (Claude Code's appended
 system prompt, Codex's prompt), and recorded on the attempt's spec by `{name, hash, source}`; the variables in the
-agent's process environment, never in place of the runner's, the provider's or the credential's.
+agent's process environment, never in place of the runner's, the provider's or the credential's. The kernel's own
+listener, `skill-orchestration`, reads the agent's record from the kernel's call rather than the engine, so its `closed`
+failure never trips on a slow engine; an attempt no plugin prepared (a workflow that passed its prepare step under an
+earlier capcomd, started or restarted after an upgrade) gets the orchestration skill from the kernel, as before.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
@@ -1636,7 +1645,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.8 | 2026-11-05 | `merge.landing`'s `hold` takes an optional `holdId` (§6.6.15; additive): an approved hold is matched by plugin and `holdId`, falling back to the reason text without one; `heldBy.holdId` on the record and the approval. A plugin-held merge's approval carries the changed files, as a protected target's does. |
 | 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
 | 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
-| 1.0.11 | 2026-11-06 | With the front doors (§17.2 step 8): the kernel's own front doors keep capcomd's names (`capcomd_<tool>`, the kernel's commands), named by the built-in list (`kernelSurface`), `order: pre` (§4.2); `KERNEL_COMMANDS` is the dispatcher's own commands and the front doors' (§4.7.1); a command's flags, its output, its PluginError's exit code and reason, `--help`, a kernel front door's `{exit}` (`CliExit`, additive), where an in-process command runs (§4.7.1); a tool's `title`, `_meta` and `openWorldHint` (additive), its schema listed as registered, its arguments checked and only the named ones passed on (§4.7.2); the front doors still run in the process that serves them (§6.1); `agent.preparing`'s `skills` and `env` accepted, with the kernel's rules and how they reach the agent, and the payload's `env` filled in (§6.6.7); `front-hermes` adds `capcomd hermes` (§17.1). |
+| 1.0.11 | 2026-11-06 | With the front doors (§17.2 step 8): the kernel's own front doors keep capcomd's names (`capcomd_<tool>`, the kernel's commands), named by the built-in list (`kernelSurface`), `order: pre` (§4.2); `KERNEL_COMMANDS` is the dispatcher's own commands and the front doors' (§4.7.1); a command's flags, its output, its PluginError's exit code and reason, `--help`, a kernel front door's `{exit}` (`CliExit`, additive), where an in-process command runs (§4.7.1); a tool's `title`, `_meta` and `openWorldHint` (additive), its schema listed as registered, its arguments checked and only the named ones passed on (§4.7.2); the front doors still run in the process that serves them (§6.1); `agent.preparing`'s `skills` and `env` accepted, with the kernel's rules (names that steer the agent's provider, loader, proxy or git reserved) and how they reach the agent, and the payload's `env` filled in (§6.6.7); `front-hermes` adds `capcomd hermes` (§17.1). |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 

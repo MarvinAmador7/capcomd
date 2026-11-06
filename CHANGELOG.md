@@ -19,8 +19,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   and `--help` start faster; other commands start about 30 ms slower, the time to load the built-in plugins.
 - Plugins that prepare an agent (`agent.preparing`) can now give it skills and environment variables: a skill (its
   SKILL.md, pinned by its sha256) goes after the profile's own prompt in the agent's instructions, and a variable is
-  set in the agent's environment, if its name is new (never one capcomd or the agent's provider sets, nor
-  `CAPCOMD_*`) and its value doesn't look like a secret. The orchestration skill that agents allowed to spawn get is
+  set in the agent's environment, if its name is new (never one capcomd or the agent's provider sets, nor one that
+  would steer the agent: `CAPCOMD_*`, `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*`, `CODEX_*`, `NODE_*`, `LD_*`, `GIT_*`, the
+  proxy and certificate variables and the like; the plugin API spec §6.6.7 lists them) and its value doesn't look like
+  a secret. The orchestration skill that agents allowed to spawn get is
   now such a skill, from the built-in `skill-orchestration` plugin; agents get the same text as before.
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
   `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of

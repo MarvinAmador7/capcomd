@@ -3,6 +3,7 @@ import { OPEN_EGRESS } from "../providers/sandbox";
 import { agentSeam, orchestrateConfig, providerOfKind } from "../plugins/agents";
 import { CLAUDE_CODE_VERSION } from "../plugins/agent-claude";
 import { CODEX_VERSION } from "../plugins/agent-codex";
+import { reservedEnvName } from "../plugins/hooks";
 export { CLAUDE_USD_PER_MTOK, claudeCostUsd, type ClaudeUsage } from "../plugins/agent-claude";
 export { CLAUDE_CODE_VERSION, CODEX_VERSION };
 
@@ -149,7 +150,7 @@ export interface AgentConfig {
 function pluginEnvOf(spec: unknown): Record<string, string> | null {
   const e = (spec as { pluginEnv?: unknown } | null | undefined)?.pluginEnv;
   if (!e || typeof e !== "object" || Array.isArray(e)) return null;
-  const ok = Object.entries(e).filter((x): x is [string, string] => /^[A-Z][A-Z0-9_]*$/.test(x[0]) && !x[0].startsWith("CAPCOMD_") && typeof x[1] === "string");
+  const ok = Object.entries(e).filter((x): x is [string, string] => /^[A-Z][A-Z0-9_]*$/.test(x[0]) && !reservedEnvName(x[0]) && typeof x[1] === "string");
   return ok.length ? Object.fromEntries(ok) : null;
 }
 

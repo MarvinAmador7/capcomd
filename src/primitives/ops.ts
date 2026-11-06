@@ -31,7 +31,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import { agentSeam } from "../plugins/agents";
 import type { PluginHold } from "../merge/types";
@@ -885,7 +885,7 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
     await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
     return { kind: "ended" };
   }
-  const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId) : null;
+  const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId, prepared) : null;
   const review = reviewOf(a);
   const report = (a.contract as any)?.report === true;
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
@@ -1041,8 +1041,9 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
   let provider = "fake";
   try { provider = (await RS.runSandbox(runId)) ?? sandboxName(); } catch { /* an unknown CAPCOMD_SANDBOX: the run reports it */ }
   const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills: [] }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: null } };
-  const out = await hooks.fire("agent.preparing", "modify", payload, { principal: principalOf(null), entity: `${a.agentId}/e${a.epoch}`, attempt, runId, agentId: a.agentId,
-    apply: (p, patch) => applyPreparePatch(p, patch) });
+  // The kernel's own listener (the orchestration skill) reads the agent's record from here, not the engine again.
+  const out = await preparingAgent.run({ runId, agentId: a.agentId, record: a }, () => hooks.fire("agent.preparing", "modify", payload, { principal: principalOf(null), entity: `${a.agentId}/e${a.epoch}`, attempt, runId, agentId: a.agentId,
+    apply: (p, patch) => applyPreparePatch(p, patch) }));
   // A final error (code config): the attempt isn't retried, the agent fails with the plugin's reason.
   if (out.decision === "deny") throw refusedError("agent.preparing", out, "config");
   if (!out.patches.length) return null;
@@ -1140,7 +1141,7 @@ function fakeFileParams(f: { path?: string; content?: string }) {
 }
 
 /** Real agent allowed to spawn: token + pump on its VM; the runner installs CLI, MCP and skill. */
-async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
+async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, prepared: PreparedSpec) {
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
   if (!vmId) return null;
@@ -1150,9 +1151,18 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string) {
   // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.
   const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
   const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
-  // Its orchestration skill comes with its spec: the skill-orchestration plugin attaches it at agent.preparing.
-  const params = { kind, rpcDir };
+  const skill = await unpreparedSkill(runId, a, prepared);
+  const params = { kind, rpcDir, ...(skill ? { skill } : {}) };
   return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
+}
+
+/**
+ * An agent that may spawn gets its orchestration skill with its spec: the skill-orchestration plugin attaches it at
+ * agent.preparing. An attempt no plugin prepared (`prepared` null: its workflow passed that step under a capcomd before
+ * the skill was a plugin's, and starts or restarts the agent after an upgrade) gets it here instead, as it always did.
+ */
+export async function unpreparedSkill(runId: string, a: ScopeAgent, prepared: PreparedSpec): Promise<string | undefined> {
+  return prepared ? undefined : (await import("../plugins/skill-orchestration")).skillText(runId, a);
 }
 
 export async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {

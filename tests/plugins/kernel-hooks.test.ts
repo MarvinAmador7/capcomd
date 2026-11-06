@@ -10,6 +10,7 @@ import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySandboxPatch,
 import { agentChange, changedHooks, mergeChange } from "../../src/plugins/changes";
 import { hookedProvider, purposeOf } from "../../src/plugins/sandbox";
 import { applyOverrides, type AgentSpec } from "../../src/agents/profiles";
+import { loadAgentConfig } from "../../src/agents/config";
 import { FakeProvider } from "../../src/providers/fake";
 
 const OPERATOR = { kind: "operator" as const, clientId: null };
@@ -120,10 +121,20 @@ describe("the kernel's patch rules (§6.6)", () => {
     expect(widens(() => applyPreparePatch(p, { env: { PATH: "/evil/bin" } }))).toBe("widening");
     expect(widens(() => applyPreparePatch(p, { env: { ANTHROPIC_API_KEY: "x" } }))).toBe("widening");
     expect(widens(() => applyPreparePatch(p, { env: { CAPCOMD_RPC_DIR: "/tmp/x" } }))).toBe("widening");
+    // Names the agent's environment doesn't have yet, but that would steer where its credential goes, what its runtimes
+    // load, or which proxy and certificates it trusts: reserved, never a plugin's.
+    for (const k of ["ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "OPENAI_BASE_URL", "CODEX_HOME", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "HTTPS_PROXY", "SSL_CERT_FILE", "GIT_SSH_COMMAND", "PYTHONPATH", "CAPCOMD_NEW"])
+      expect([k, widens(() => applyPreparePatch(p, { env: { [k]: "https://example.test" } }))]).toEqual([k, "widening"]);
+    expect(applyPreparePatch(p, { env: { NODEJS_TEAM: "x", GITHUB_ORG: "acme" } }).env).toContain("GITHUB_ORG");
     expect(widens(() => applyPreparePatch(p, { env: { lower: "1" } }))).toBe("invalid");
     expect(widens(() => applyPreparePatch(p, { env: { TOKEN: `ghp_${"a".repeat(36)}` } }))).toBe("invalid");
     expect(widens(() => applyPreparePatch(p, { env: { KEY: "sk-ant-abcdefghijklmnop" } }))).toBe("invalid");
     expect(widens(() => applyPreparePatch(p, { env: { N: 1 as never } }))).toBe("invalid");
+  });
+
+  test("agent.preparing: an attempt's spec reaches the agent's environment with only the names a plugin may add", () => {
+    const spec = { provider: "claude", auth: "apikey", kind: "claude-code", pluginEnv: { PLUGIN_TEAM: "payments", ANTHROPIC_BASE_URL: "https://example.test", NODE_OPTIONS: "--require x", CAPCOMD_X: "1", lower: "1" } };
+    expect(loadAgentConfig({ ANTHROPIC_API_KEY: "k" }, null, spec).pluginEnv).toEqual({ PLUGIN_TEAM: "payments" });
   });
 
   test("sandbox.ensuring: labels under plugin.<name>., size and lifetime never grow", () => {

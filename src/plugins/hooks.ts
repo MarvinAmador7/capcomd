@@ -10,6 +10,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import type { AgentPreparing, AgentSpawning, HookName, PreparePatch, ProfilePatch, ProfileResolved, RunCreatePatch, RunCreating, SandboxEnsuring, SandboxPatch, SpawnPatch } from "../../packages/plugin/src/hooks";
 import type { Budget, Principal, Timestamp, Untrusted } from "../../packages/plugin/src/shapes";
 import { RelayError, type ErrorCode } from "../core/errors";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { Redactor } from "../agents/redact";
 
@@ -219,12 +220,30 @@ const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 const SKILLS_MAX = 8, SKILL_BYTES_MAX = 256 * 1024;
 /** At most this many variables a plugin adds, each value at most this long. */
 const ENV_MAX = 32, ENV_VALUE_MAX = 4096;
+/**
+ * Names a plugin never sets, even when the agent's environment doesn't have them yet: the kernel's (`CAPCOMD_*`), the
+ * agent providers' families (where their CLIs send the credential and which login they read), what a shell or a runtime
+ * loads before the agent's code (`LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`…), the proxy and certificates its traffic
+ * trusts, and git's. Any one of them would steer the agent without a word of prompt text (§6.6.7).
+ */
+const RESERVED_ENV_PREFIXES = ["CAPCOMD_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "LD_", "DYLD_", "NODE_", "NPM_CONFIG_", "PYTHON", "PERL5", "RUBY", "GIT_"];
+const RESERVED_ENV = new Set(["BASH_ENV", "ENV", "SHELL", "IFS", "CDPATH", "PS4", "PROMPT_COMMAND", "ZDOTDIR", "TMPDIR", "USER", "LOGNAME",
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"]);
+/**
+ * The agent agent.preparing fires for (src/primitives/ops.ts `agentPreparing`), its record as the kernel just read it:
+ * kernel-internal, for the kernel's own listener (src/plugins/skill-orchestration.ts), which needs the agent's limits
+ * and budget the payload doesn't carry. A plugin's listener never sees it.
+ */
+export const preparingAgent = new AsyncLocalStorage<{ runId: string; agentId: string; record: unknown }>();
+
+/** A name agent.preparing's `env` may not add (src/agents/config.ts drops one from an attempt's spec too). */
+export const reservedEnvName = (name: string): boolean => RESERVED_ENV.has(name) || RESERVED_ENV_PREFIXES.some((p) => name.startsWith(p));
 export const skillHash = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 /**
  * §6.6.7: `prompt.append` after the profile's own; `skills` are added, each pinned by the sha256 of its text (a skill
  * already attached, by name, is refused); `env` adds variables whose names are new (not one the agent's environment
- * has, `p.env`, nor the kernel's `CAPCOMD_*`) and whose values look like no secret (the redactor's shapes); `egress`
+ * has, `p.env`, nor a reserved one, `reservedEnvName`) and whose values look like no secret (the redactor's shapes); `egress`
  * only removes hosts. The kernel attaches skills and variables to the attempt's run (src/primitives/ops.ts
  * `agentPreparing`); the payload carries a variable's name only, its value stays in the patch.
  */
@@ -236,7 +255,8 @@ export function applyPreparePatch(p: AgentPreparing, patch: PreparePatch, looksS
     if (add.length > ENV_MAX) throw invalid(`env: at most ${ENV_MAX} variables from one plugin`);
     for (const [k, v] of add) {
       if (!ENV_NAME.test(k)) throw invalid(`env ${JSON.stringify(k)}: a name is upper case letters, digits and _ (^[A-Z][A-Z0-9_]*$)`);
-      if (k.startsWith("CAPCOMD_") || p.env.includes(k)) throw widening(`env ${k} is set already: a plugin only adds new variables`);
+      if (p.env.includes(k)) throw widening(`env ${k} is set already: a plugin only adds new variables`);
+      if (reservedEnvName(k)) throw widening(`env ${k} is reserved: it steers the agent's provider, loader, proxy or git, which a plugin never sets`);
       if (typeof v !== "string" || v.length > ENV_VALUE_MAX) throw invalid(`env ${k}: a string of at most ${ENV_VALUE_MAX} characters`);
       if (looksSecret(v)) throw invalid(`env ${k}: its value looks like a secret; secrets reach a sandbox as placeholders, never through a plugin (§11.4)`);
     }
