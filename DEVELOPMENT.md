@@ -95,7 +95,7 @@ src/
                   commands/, what they call
   core/         - client, errors, preflight, VM cleanup checks
   engine/       - engine launcher (per-port data dir, pid file)
-  install/      - installable packages (plugins now, profile packages next, ADR-024 step 7): source.ts, owner/repo#name@ref;
+  install/      - installable packages (plugins, and profile packages: ADR-024 step 7): source.ts, owner/repo#name@ref;
                   fetch.ts, a package's directory written out of a fetched commit (host-git.ts fetches); lock.ts, LOCK and
                   the content hash; trust.ts, the operator's trust per content hash and place (~/.capcomd/trust.json)
   env/          - env snapshots, secrets sync, doctor
@@ -136,7 +136,8 @@ src/
                   hashed (skills.ts), what an agent is pinned with beside the flat spec: MCP servers, sandbox,
                   environment, size, lifecycle plugins (runtime.ts), resolution, pins and overrides (resolve.ts), and
                   what `capcomd profiles`, GET /v1/profiles and a planner read of each: the files and values, title,
-                  tags, fit, cost (describe.ts)
+                  tags, fit, cost (describe.ts); profile packages installed, updated and exported with a LOCK
+                  (install.ts, on ../install/), and the operator's trust in a project's profile skills (trust.ts)
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

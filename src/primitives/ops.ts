@@ -22,6 +22,7 @@ import { checkpointRef, stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
 import { skillBlock, type AttachedSkill } from "../agents/skills";
 import { ORCHESTRATION_SKILL_NAME, pinnedSkills } from "../profiles/skills";
+import { untrustedSkillsHint, untrustedSkillsProblem } from "../profiles/trust";
 import { attachmentId } from "../api/inline-cap";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { killpoint } from "../utils/killpoint";
@@ -435,6 +436,9 @@ function resolveProfile(ref: string | null): ResolvedAgent {
 }
 function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string | undefined>) {
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
+  // A project's profile skills reach an agent only once the operator has trusted each (ADR-024 decision 4).
+  const untrustedSkills = resolved.name ? untrustedSkillsProblem(resolved.name, resolved.skills ?? []) : null;
+  if (untrustedSkills) throw new RelayError("config", untrustedSkills, untrustedSkillsHint(resolved.name!), { code: "untrusted" });
   // Its machine's sandbox: its profile's (ADR-024 `sandbox.provider`), else the run's, else this process's.
   const rt = resolved.runtime ?? {};
   // What its profile was checked for, again on the spec as overridden: an override or a profile.resolved patch that

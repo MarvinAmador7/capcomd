@@ -12,3 +12,4 @@ export * from "./resolve";
 export * from "./describe";
 export * from "./fields";
 export * from "./write";
+export * from "./trust";
