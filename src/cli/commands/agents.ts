@@ -1,7 +1,9 @@
-// capcomd agents add|set|list|show|rm|schema|validate — named agent profiles (.capcomd/agents.json).
+// capcomd agents add|set|list|show|rm|schema|validate — named agent profiles (.capcomd/agents.json). list, show and
+// validate read every profile the project sees (v2 ones in .capcomd/profiles/ and ~/.capcomd/profiles/ too, ADR-024);
+// add, set and rm edit the agents file.
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { abilityText, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, leadText, readAgentsFile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../../agents/profiles";
+import { abilityText, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, leadText, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../../profiles";
 import { credentialModeFor, loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -59,26 +61,29 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
   const path = agentsFilePath();
   const need = () => { if (!name) throw new RelayError("usage", `usage: capcomd agents ${sub} <name>`, ""); return name; };
   const guard = <T>(f: () => T): T => { try { return f(); } catch (e) { if (e instanceof AgentConfigError) throw new RelayError("config", e.message, `Fix ${path} or use \`capcomd agents set\`.`); throw e; } };
+  // A v2 profile (a profile.yaml) isn't in the agents file: these commands don't edit it.
+  const v2File = (n: string) => { try { const r = readProfiles(path).profiles[n]; return r?.format === "v2" ? r.path ?? "capcomd's bundled profiles" : null; } catch { return null; } };
 
   switch (sub) {
     case "schema":
       console.log(JSON.stringify(AGENTS_JSON_SCHEMA, null, json ? 0 : 2));
       return 0;
     case "validate": {
-      const errs = values.spec ? validateSpec(name ?? "candidate", specFromFlags(values)) : (() => { try { readAgentsFile(path); return []; } catch (e) { return [(e as Error).message]; } })();
-      console.log(json ? JSON.stringify({ schema: SCHEMA, ok: errs.length === 0, errors: errs }) : errs.length ? errs.join("\n") : "valid");
+      let warnings: string[] = [];
+      const errs = values.spec ? validateSpec(name ?? "candidate", specFromFlags(values)) : (() => { try { warnings = readProfiles(path).warnings; return []; } catch (e) { return [(e as Error).message]; } })();
+      console.log(json ? JSON.stringify({ schema: SCHEMA, ok: errs.length === 0, errors: errs, ...(warnings.length ? { warnings } : {}) }) : errs.length ? errs.join("\n") : ["valid", ...warnings.map((w) => `warning: ${w}`)].join("\n"));
       return errs.length ? 2 : 0;
     }
     case "list": {
-      const f = guard(() => readAgentsFile(path));
+      const f = guard(() => readProfiles(path));
       const rows = Object.entries(f.agents).map(([n, s]) => ({ name: n, provider: s.provider, auth: s.auth, model: s.model ?? null, default: f.default === n, canSpawn: !!s.children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...readiness(n, s) }));
       out({ file: path, default: f.default ?? null, agents: rows }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") : `no agents (${path}); add one: capcomd agents add <name> --provider claude|codex --auth apikey|subscription`);
       return 0;
     }
     case "show": {
       const n = need();
-      const f = guard(() => readAgentsFile(path));
-      const spec = f.agents[n];
+      const f = guard(() => readProfiles(path));
+      const spec = Object.hasOwn(f.agents, n) ? f.agents[n] : undefined;
       if (!spec) throw new RelayError("not_found", `agent "${n}" not found`, "capcomd agents list");
       let effective: unknown = null, error: string | null = null;
       try {
@@ -92,6 +97,8 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
     case "set": {
       const n = need();
       const f = guard(() => readAgentsFile(path));
+      const v2 = v2File(n);
+      if (v2 && !f.agents[n]) throw new RelayError(sub === "add" ? "conflict" : "usage", `profile "${n}" is defined in ${v2}, which \`capcomd agents ${sub}\` doesn't edit`, `Edit ${v2}.`);
       if (sub === "add" && f.agents[n]) throw new RelayError("conflict", `agent "${n}" already exists`, `capcomd agents set ${n} …`);
       if (sub === "set" && !f.agents[n]) throw new RelayError("not_found", `agent "${n}" not found`, `capcomd agents add ${n} …`);
       const next: Record<string, unknown> = { ...(f.agents[n] ?? {}), ...specFromFlags(values) };
@@ -107,6 +114,8 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
     case "rm": {
       const n = need();
       const f = guard(() => readAgentsFile(path));
+      const v2 = v2File(n);
+      if (v2 && !f.agents[n]) throw new RelayError("usage", `profile "${n}" is defined in ${v2}, which \`capcomd agents rm\` doesn't edit`, `Remove ${v2}.`);
       if (!f.agents[n]) throw new RelayError("not_found", `agent "${n}" not found`, "capcomd agents list");
       const { [n]: _, ...rest } = f.agents;
       const file = { ...f, agents: rest, default: f.default === n ? Object.keys(rest)[0] : f.default };

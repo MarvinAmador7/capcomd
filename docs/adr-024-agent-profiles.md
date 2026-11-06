@@ -114,10 +114,11 @@ tools:
       command: [semgrep-mcp]
       trust: untrusted
 
-memory:
-  scope: project                  # none | profile | project | user: which memory dir is mounted read/write
-  files: [MEMORY.md]              # read into the prompt at start; written back by the agent through the supervisor
-  retain: 30d
+memory:                           # superseded by ADR-025's `context` block (its D2), and read as an alias of it:
+  scope: project                  # project → context.providers: [{name: memory, layers: [project, run]}]; none → [];
+                                  # profile | user are refused (ADR-025 D15: those layers wait)
+  files: [MEMORY.md]              # one file: the memory provider's index
+  retain: 30d                     # every item kind's retention
 
 sandbox:
   provider: docker                # a sandbox plugin's name (ADR-020/021 descriptor); absent: the run's, else the daemon's
@@ -367,6 +368,32 @@ Decided by the owner on 2026-11-04:
    found in the same project, the user's profiles or the bundled ones, never in another project's. **A project's skills
    and personas get a one-time trust prompt per content hash** (`capcomd profiles trust`, the same mechanism as a
    project plugin's, spec §4.8).
+
+Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, `src/profiles/v2.ts`):
+
+- **The project's layer is the `profiles/` directory next to the agents file** (`.capcomd/agents.json` →
+  `.capcomd/profiles/`), so `CAPCOMD_AGENTS_FILE`, which a run already carries to the daemon, carries it too; a project
+  with only `.capcomd/profiles/` counts as having profiles (`defaultAgentsFile`). The user's layer is
+  `~/.capcomd/profiles/` (`$CAPCOMD_HOME/profiles`); when the agents file is the user's, there is no project layer.
+- **`agents.json` entries are profiles of the layer their file is in**; there a `profile.yaml` of the same name wins
+  (with a warning), and a v2 profile may `extends` a v1 entry. With no v2 file anywhere, the result is exactly the v1
+  file.
+- **`extends` is looked up like any name** (project, user, bundled), so a profile extending its own name is a cycle;
+  the parent comes with its own overrides applied. `name`, `version`, `default` and `sharing` are not inherited.
+- **Overrides apply from the profile's own layer upward**: a bundled profile gets the user's, then the project's
+  `override.yaml`; a user profile the user's, then the project's; a user override of a name the project defines itself
+  doesn't apply (a warning). An override may not set `name`, `extends`, `version` or `sharing`.
+- **A `prompt.system` or `prompt.append` that is one word ending `.md` or `.txt` names a file** in the profile's
+  directory, read at resolution (step 4's "prompt.* as files", pulled forward: the pin already has a home for the
+  text); a name outside the directory (`..`, absolute, a symlink out of it) or in a single-file profile is refused.
+- **`default: true`**: the highest layer's wins, two in one layer are an error, and it beats `agents.json`'s `default`
+  in the same layer.
+- **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `context`, `sandbox.provider|environment|size`,
+  `jobs`, `lifecycle.onStart|onEnd`, `permissions.report`, `harness.cliVersion`) are checked and kept on the resolved
+  profile, not pinned; `capcomd agents validate` names the ones a profile sets. `sandbox.provider` is checked against
+  the active sandbox seams.
+- **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
+  `agents.json`, and shipping them as data now would make names that are unknown today resolve.
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 

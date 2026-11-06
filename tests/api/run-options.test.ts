@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { credentialReady, plannerDriver } from "../../src/agents/run-driver";
-import { decodeAgentRef, resolveAgent } from "../../src/agents/profiles";
+import { decodeAgentRef, resolveAgent } from "../../src/profiles";
 import { addClient, loadClients } from "../../src/api/clients";
 import { CAPABILITY_NAMES, CreateRunBody, RunOptions } from "../../src/api/contract";
 import { launchContext, startDetachedRun } from "../../src/api/create-run";
@@ -346,7 +346,7 @@ describe("capcomd run --planner-provider / --sandbox (checked before the engine 
 describe("effort (the driver's reasoning effort)", () => {
 	const { claudeAdapter, codexAdapter } = require("../../src/agents/adapters") as typeof import("../../src/agents/adapters");
 	const { loadAgentConfig, agentEffort } = require("../../src/agents/config") as typeof import("../../src/agents/config");
-	const { validateSpec } = require("../../src/agents/profiles") as typeof import("../../src/agents/profiles");
+	const { validateSpec } = require("../../src/profiles") as typeof import("../../src/profiles");
 	const ctx = (cfg: any) => ({ bin: "x", repo: "/r", promptFile: "/p", jsonl: "/j", errFile: "/e", dir: "/w", cfg });
 	const q = (s: string) => `'${s}'`;
 

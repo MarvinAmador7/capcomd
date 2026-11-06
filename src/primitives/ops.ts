@@ -11,7 +11,7 @@ import { dirname, join, resolve } from "path";
 import { tmpdir } from "os";
 import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../agents/profiles";
+import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
@@ -502,7 +502,7 @@ async function profileResolved(o: SpawnOpts, ref: string | null, resolved: Resol
   if (!resolved.spec || !resolved.name) return resolved;
   const name = resolved.name;
   const overrides = ref ? decodeAgentRef(ref).overrides?.set ?? null : null;
-  const out = await hooks.fire("profile.resolved", "modify", { profile: { name, version: 1, source: "user" }, spec: resolved.spec as unknown as import("../../packages/plugin/src/shapes").PinnedSpec, overrides },
+  const out = await hooks.fire("profile.resolved", "modify", { profile: resolved.profile ?? { name, version: 1, source: "user" }, spec: resolved.spec as unknown as import("../../packages/plugin/src/shapes").PinnedSpec, overrides },
     { principal: spawnPrincipal(o), entity: `${o.runId}/${o.parent ?? "operator"}/${o.key ?? name}`, runId: o.runId, agentId: o.parent ?? null,
       apply: (p, patch) => applyProfilePatch(p, patch, (spec, set) => applyOverrides(name, spec as unknown as AgentSpec, { set }) as unknown as Record<string, unknown>) });
   if (out.decision === "deny") throw refusedError("profile.resolved", out);

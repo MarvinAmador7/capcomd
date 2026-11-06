@@ -7,7 +7,7 @@ import { spawnSync } from "child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "fs";
 import { dirname, isAbsolute, join, relative } from "path";
 import { configText, mergeConfig, readConfig, userConfigPath, type CapcomdConfig } from "./store";
-import { AGENTS_SCHEMA, readAgentsFile, validateFile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../agents/profiles";
+import { AGENTS_SCHEMA, readAgentsFile, validateFile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../profiles";
 
 type Env = Record<string, string | undefined>;
 
