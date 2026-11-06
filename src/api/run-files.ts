@@ -159,6 +159,47 @@ export class FilesMirror {
 		});
 	}
 
+	/**
+	 * The regular files under `prefix` (a directory, `.capcomd/context/`) at a branch's tip, fetched now, or at a commit
+	 * the mirror has: the commit, its date, and each file's text. At most `maxFiles` files of at most `maxBytes` each (a
+	 * bigger one is listed with `text: null`); symlinks and submodules are left out. The project layer of the context
+	 * router reads a repository's hand-written memory this way (src/context/memory.ts), without a checkout.
+	 */
+	readTree(at: { branch: string } | { sha: string }, prefix: string, o: { maxFiles: number; maxBytes: number }): Promise<{ sha: string; date: string; files: Array<{ path: string; text: string | null }>; truncated: boolean } | { error: string }> {
+		return this.serial(async () => {
+			if (!SAFE_NAME.test(prefix) || ("branch" in at ? !SAFE_NAME.test(at.branch) : !SHA.test(at.sha))) return { error: "not a branch, commit or directory name" };
+			let git: Git;
+			try { git = await this.git(); } catch { return { error: "could not open a local mirror of the run's repository" }; }
+			let sha: string;
+			if ("branch" in at) {
+				const ref = `refs/remotes/origin/${at.branch}`;
+				const f = await this.fetchIn(git, [`+refs/heads/${at.branch}:${ref}`]);
+				if (f.code !== 0) return { error: f.timedOut ? "fetching from the remote timed out" : `branch ${at.branch} not found on the remote` };
+				const s = await git.revParse(ref);
+				if (!s) return { error: `branch ${at.branch} could not be read` };
+				sha = s;
+			} else {
+				if ((await git.run(["cat-file", "-e", `${at.sha}^{commit}`])).code !== 0 && (await this.fetchIn(git, [at.sha])).code !== 0) return { error: `commit ${at.sha.slice(0, 12)} not found on the remote` };
+				sha = at.sha;
+			}
+			await git.run(["update-ref", `refs/keep/${sha}`, sha]);
+			const date = (await git.run(["show", "-s", "--format=%cI", sha])).stdout.trim();
+			const ls = await git.run(["-c", "core.quotepath=off", "ls-tree", "-r", "-z", "--long", sha, "--", prefix]);
+			if (ls.code !== 0) return { error: "git ls-tree failed" };
+			const files: Array<{ path: string; text: string | null }> = [];
+			let truncated = false;
+			for (const entry of ls.stdout.split("\0")) {
+				const m = /^(\d{6}) (\w+) ([0-9a-f]{40,64}) +(-|\d+)\t([\s\S]+)$/.exec(entry);
+				if (!m || m[2] !== "blob" || (m[1] !== "100644" && m[1] !== "100755")) continue;
+				if (files.length >= o.maxFiles) { truncated = true; break; }
+				if (Number(m[4]) > o.maxBytes) { files.push({ path: m[5]!, text: null }); continue; }
+				const blob = await git.run(["cat-file", "blob", m[3]!]);
+				files.push({ path: m[5]!, text: blob.code === 0 ? blob.stdout : null });
+			}
+			return { sha, date: date ? new Date(date).toISOString() : "", files, truncated };
+		});
+	}
+
 	/** A regular file (no tree, symlink or submodule) of one agent's latest work, at most WORKSPACE_FILE_MAX_BYTES. */
 	readFile(tip: WorkTip, path: string): Promise<WorkspaceFile> {
 		return this.serial(async () => readFileFrom(await this.git().catch(() => null), this.dir, this.env, tip, path, this.remote));

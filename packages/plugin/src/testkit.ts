@@ -15,10 +15,12 @@ import { configDefaults } from "./host/host";
 import { HookRegistry, type HostEvent } from "./host/registry";
 import { sandboxCases, type SandboxConformanceOptions } from "./conformance";
 import { agentCases, type AgentConformanceOptions } from "./agent-conformance";
+import { contextCases, type ContextConformanceOptions } from "./context-conformance";
+import type { ContextProvider } from "./context-layer";
 
 /** A recorded registration, so a test can assert that disposing the plugin removed every one (§14.1). */
 export type Registration =
-  | { kind: "hook"; hook: HookName } | { kind: "seam"; seam: "sandbox" | "agent" | "forge"; name: string }
+  | { kind: "hook"; hook: HookName } | { kind: "seam"; seam: "sandbox" | "agent" | "forge"; name: string } | { kind: "context"; name: string }
   | { kind: "cli"; name: string } | { kind: "mcp"; name: string } | { kind: "api"; method: string; path: string }
   | { kind: "ui"; id: string } | { kind: "capability"; name: string } | { kind: "subscription"; stream: string } | { kind: "instructions" } | { kind: "onDispose" };
 
@@ -35,6 +37,8 @@ export interface FakeContext<C = Record<string, unknown>> {
   dispose(): Promise<Registration[]>;
   /** The seam implementation the plugin registered for `kind`, if any (what the conformance suites run against). */
   seam<K extends "sandbox" | "agent" | "forge">(kind: K): (K extends "sandbox" ? SandboxProvider : K extends "agent" ? AgentProvider : Forge) | undefined;
+  /** The context provider the plugin registered under `name` (ADR-025 §3.1), if any. */
+  contextProvider(name: string): ContextProvider | undefined;
 }
 
 export interface TestKit {
@@ -58,6 +62,8 @@ export interface TestKit {
     sandbox(make: () => SandboxProvider, opts?: SandboxConformanceOptions): void;
     agent(make: () => AgentProvider, fixtures?: AgentConformanceOptions): void;
     forge(make: () => Forge, fixtureRepo: string): void;
+    /** ADR-025 §3.1: a context provider's suite, against the scope a test brings (a fixture repository). */
+    context(make: () => ContextProvider, opts?: ContextConformanceOptions): void;
   };
   /** A HookCall for a unit test of a listener, with a real AbortSignal and a deadline `timeoutMs` ahead. */
   call<N extends HookName>(hook: N, payload: HookPayload<N>, opts?: { timeoutMs?: number; principal?: Principal }): HookCall<N>;
@@ -172,6 +178,7 @@ class Fake<C> implements FakeContext<C> {
   seam<K extends "sandbox" | "agent" | "forge">(kind: K) {
     return this.store.list("seam").find((e) => e.value.seam === kind)?.value.impl as (K extends "sandbox" ? SandboxProvider : K extends "agent" ? AgentProvider : Forge) | undefined;
   }
+  contextProvider(name: string) { return this.store.get("context", name)?.value.impl; }
 }
 
 const fail = (message: string): never => { throw new Error(message); };
@@ -198,7 +205,7 @@ async function loadDisposeOnce<C>(manifest: PluginManifest, module: PluginModule
   if (left.length) fail(`${manifest.name}: registrations left after dispose: ${JSON.stringify(left)} (§5.3)`);
   for (const hook of Object.keys(manifest.contributes?.hooks ?? {}) as HookName[])
     if (fake.hooks.order(hook).length) fail(`${manifest.name}'s ${hook} listener is still registered after dispose`);
-  for (const kind of ["seam", "cli", "mcp", "instructions", "api", "capability", "ui"] as const)
+  for (const kind of ["seam", "context", "cli", "mcp", "instructions", "api", "capability", "ui"] as const)
     if (fake.store.list(kind).length) fail(`${manifest.name}: a ${kind} contribution is still listed after dispose`);
   let refused = false;
   try { fake.ctx.onDispose(() => {}); } catch (e) {
@@ -258,6 +265,12 @@ export const testkit: TestKit = {
       });
     },
     forge() { throw new PluginError("unsupported", "the forge conformance suite lands with forges as plugins (spec §17.2 step 6)"); },
+    context(make, opts = {}) {
+      const { describe, test } = require("bun:test") as typeof import("bun:test");
+      describe(`context provider conformance (ADR-025 §3.1)${opts.name ? `: ${opts.name}` : ""}`, () => {
+        for (const c of contextCases(make(), opts)) (c.skip ? test.skip : test)(c.name, c.run, 60_000);
+      });
+    },
   },
   call(hook, payload, opts = {}) {
     const timeoutMs = opts.timeoutMs ?? HOOKS[hook].timeoutMs.default;

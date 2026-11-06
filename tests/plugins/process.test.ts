@@ -310,8 +310,8 @@ describe("what the runtime stands on", () => {
   test("a process plugin's manifest contributes hooks and events only (§4.9, §9.6)", () => {
     const m = { schema: "capcomd.plugin/v1", name: "remote", version: "1.0.0", description: "x", apiVersion: 1, engines: { capcomd: ">=0.0.0" }, entry: { runtime: "process", command: ["bun", "x.ts"] } };
     expect(loadManifest({ ...m, contributes: { hooks: { "run.changed": {} }, events: ["seen"] } }).ok).toBe(true);
-    for (const c of [{ cli: [{ name: "remote", summary: "x" }] }, { mcp: [{ name: "t", summary: "x" }] }, { seams: [{ kind: "sandbox", name: "remote" }] }]) {
-      const r = loadManifest({ ...m, ...("seams" in c ? { provides: ["seam:sandbox/remote"] } : {}), contributes: c });
+    for (const c of [{ cli: [{ name: "remote", summary: "x" }] }, { mcp: [{ name: "t", summary: "x" }] }, { seams: [{ kind: "sandbox", name: "remote" }] }, { context: [{ name: "remote", kinds: ["memory"] }] }]) {
+      const r = loadManifest({ ...m, ...("seams" in c ? { provides: ["seam:sandbox/remote"] } : "context" in c ? { provides: ["context:remote"] } : {}), contributes: c });
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.issues.map((i) => i.message).join(" ")).toContain("contributes hooks and events only");
     }

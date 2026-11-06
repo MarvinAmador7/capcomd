@@ -39,6 +39,7 @@ export interface Verdict { success: boolean; class?: string; cited?: string | nu
 export const FAKE_EXPECTED: Record<string, Record<string, string>> = {
   none: { "business-fee": "fail:other", "stale-tier": "fail:superseded", "poison-data": "pass:correct", "team-handoff.find": "pass:current", "team-handoff.use": "pass:current", "cross-run.fix": "pass:half-even", "cross-run.use": "pass:half-even" },
   "agents-md": { "business-fee": "pass:current", "stale-tier": "pass:current", "poison-data": "pass:correct", "team-handoff.find": "pass:current", "team-handoff.use": "pass:current", "cross-run.fix": "pass:half-even", "cross-run.use": "pass:half-even" },
+  index: { "business-fee": "pass:current", "stale-tier": "pass:current", "poison-data": "pass:correct", "team-handoff.find": "pass:current", "team-handoff.use": "pass:current", "cross-run.fix": "pass:half-even", "cross-run.use": "pass:half-even" },
 };
 
 /** Prepended to every checker: load the agent's module from the checkout, print the verdict, exit by it. */

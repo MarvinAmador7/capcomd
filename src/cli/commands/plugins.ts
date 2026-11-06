@@ -116,6 +116,19 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
       result(`the ${s.kind} seam ${s.name} loads`, { message: (e as Error).message });
     } finally { await fake.dispose(); }
   }
+  // ADR-025 §3.1: each context provider's suite; the cases that read items need a fixture repository, so they're skipped.
+  const { runContextConformance } = await import("../../../packages/plugin/src/context-conformance");
+  for (const c of manifest.contributes?.context ?? []) {
+    const fake = testkit.fakeContext(manifest, undefined, t.dir ? { dir: t.dir } : {});
+    try {
+      await testkit.load(fake, mod!);
+      const p = fake.contextProvider(c.name);
+      if (!p) { result(`the context provider ${c.name} is registered`, { message: "activate registered no context provider of that name" }); continue; }
+      v.conformance.push(...(await runContextConformance(p, { name: c.name })));
+    } catch (e) {
+      result(`the context provider ${c.name} loads`, { message: (e as Error).message });
+    } finally { await fake.dispose(); }
+  }
   v.ok = v.conformance.every((c) => c.ok);
   return v;
 }
