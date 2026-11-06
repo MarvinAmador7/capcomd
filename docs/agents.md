@@ -46,9 +46,20 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `agents.json` keeps working as before; a `profile.yaml` of the same name in the same place wins, and `capcomd
   agents validate` says so. `capcomd agents list`, `show` and `validate` read both; `add`, `set` and `rm` edit only
   `agents.json`.
-- `identity`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name), `sandbox.provider|environment|size`,
-  `jobs`, `lifecycle.onStart|onEnd` and `permissions` are checked but don't change what an agent does yet; `capcomd
-  agents validate` lists the ones a profile sets.
+- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd agents list --json`): `identity.title` (the
+  name to show; not passed to a profile that `extends` it, nor is `identity.avatar`), `tags` (lowercase words, what
+  the profile is for: `[review, security]`), `sharing` (`source`, `license`: where an installed profile came from) and
+  `canReport` from `permissions.report`. capcomd adds `fit`, one line it writes from the profile's settings, never
+  from its text ("read-only; Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn"), and
+  `cost`, its model's list price (`low`: Haiku, `-mini`/`-nano`; `medium`: Sonnet, GPT; `high`: Opus, `-pro`; null
+  when the profile leaves the model to the CLI). `capcomd_profiles` also gives each profile's `capacity`: how many of
+  it can start now (the sandbox's slots, which every profile shares, or 0 with `waitsUntil` while its login is at a
+  usage limit).
+- `permissions: { report: false }` keeps a profile from being spawned with `report` (read-only work whose answer is
+  its result): such a spawn is refused (`reason: "report_not_allowed"`). Unset or `true`, it may be, as before.
+- `identity.persona`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name),
+  `sandbox.provider|environment|size`, `jobs` and `lifecycle.onStart|onEnd` are checked but don't change what an agent
+  does yet; `capcomd agents validate` lists the ones a profile sets.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
 
 ## The planner's provider, model and effort for one run

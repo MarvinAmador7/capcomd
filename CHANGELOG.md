@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
+  `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd agents list|show --json`, which also
+  give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether
+  it leads) and a `cost` tier for its model (`low`, `medium`, `high`). `capcomd_profiles` adds each profile's
+  `capacity`: how many of it can start now, 0 while its login waits for a usage limit to reset. `permissions:
+  { report: false }` keeps a profile from being spawned with `report` (refused with `reason: "report_not_allowed"`).
+  A profile's `identity.title` and `identity.avatar` aren't passed to one that `extends` it. See docs/agents.md,
+  "Profile files".
 - New: agent profiles as YAML files. Put a profile in `.capcomd/profiles/<name>/profile.yaml` (or
   `.capcomd/profiles/<name>.yaml`; JSON works too), or in `~/.capcomd/profiles/` for every project, with blocks
   (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.

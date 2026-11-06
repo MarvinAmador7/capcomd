@@ -10,13 +10,18 @@ import { leadText, type AgentSpec } from "./v1";
 /** A model's list price, relative to the others a harness offers: a planner gives mechanical parts the low one. */
 export type CostTier = "low" | "medium" | "high";
 
+/** A model id as the CLIs take them (`claude-opus-5-5`, `us.anthropic.claude-…`, `opus[1m]`, `gpt-5.6`). A profile's
+ *  `model` is any string, so fit names one, and cost rates one, only when it is shaped like this (it is the one
+ *  free-text field fit shows). */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}$/;
+
 /**
  * The price tier of a model id, by its family (Anthropic: Haiku, Sonnet, Opus; OpenAI: the -mini/-nano, the base and
- * the -pro models). Null when the model is unset (the CLI picks one, which capcomd doesn't know) or isn't a family
- * listed here.
+ * the -pro models). Null when the model is unset (the CLI picks one, which capcomd doesn't know), isn't shaped like a
+ * model id or isn't a family listed here.
  */
 export function costTier(model: string | undefined | null): CostTier | null {
-  if (!model) return null;
+  if (!model || !MODEL_ID.test(model)) return null;
   const m = model.toLowerCase();
   if (/\bhaiku\b|-(?:mini|nano)\b/.test(m)) return "low";
   if (/\bopus\b|-pro\b/.test(m)) return "high";
@@ -45,7 +50,8 @@ export function fitText(s: AgentSpec, report: boolean | null = null): string {
   if (report === false) parts.push("never spawned with report");
   const cost = costTier(s.model);
   const label = agentSeam(s.provider)?.describe().label ?? s.provider;
-  parts.push([label, s.model ?? "the CLI's default model", ...(s.effort ? [`${s.effort} effort`] : []), ...(cost ? [`${cost} cost`] : [])].join(", "));
+  const model = s.model === undefined ? "the CLI's default model" : MODEL_ID.test(s.model) ? s.model : "a model id capcomd can't show";
+  parts.push([label, model, ...(s.effort ? [`${s.effort} effort`] : []), ...(cost ? [`${cost} cost`] : [])].join(", "));
   const limits = [
     ...(s.maxTurns !== undefined ? [`${s.maxTurns} turns`] : []),
     ...(s.maxBudgetUsd !== undefined ? [`$${s.maxBudgetUsd}`] : []),
