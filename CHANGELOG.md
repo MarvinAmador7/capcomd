@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a background job that ended just as capcomd looked at it could be reported finished with its last output
+  missing from its size; the size is now read after the exit code.
 - New: install plugins from a git repository. `capcomd plugins install <owner/repo>[#<name>][@<ref>]` (a git URL or a
   local repository path works too; `#name` picks one plugin among several, `@ref` a branch, tag or commit) puts it in
   `~/.capcomd/plugins/<name>/` with a `LOCK` file recording where it came from, the commit and a hash of every file;
