@@ -404,6 +404,18 @@ export class Engine {
     throw new Error(`engine not ready: ${detail}`);
   }
 
+  /**
+   * The daemon crashes: SIGKILL of its process group only. What it started in groups of their own (a scripted agent's
+   * "VM", detached as a real VM is) keeps running, as after a real crash; then stop() takes what's left of the daemon
+   * (its engine, by its ports and data files).
+   */
+  async crash(): Promise<void> {
+    const pid = this.child?.pid;
+    if (pid) try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
+    await sleep(300);
+    await this.stop();
+  }
+
   async stop(): Promise<void> {
     this.stopping = true;
     await this.killing?.catch(() => {});

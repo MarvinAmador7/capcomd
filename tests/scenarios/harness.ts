@@ -36,6 +36,8 @@ export interface World {
   /** Write a named script; returns the contract `script` value that runs it. */
   script: (name: string, body: string) => string;
   stop: () => Promise<void>;
+  /** The daemon crashes (scripted agents' "VMs" keep running) and comes back on the same data after `downMs`. */
+  restart: (downMs?: number) => Promise<void>;
   repo: Awaited<ReturnType<typeof bareRepo>>;
 }
 
@@ -81,6 +83,7 @@ export async function world(name: string, extraEnv: Record<string, string> = {},
   };
   return {
     env, dir, cj, script, repo,
+    restart: async (downMs = 1000) => { await engine.crash(); await new Promise((r) => setTimeout(r, downMs)); await engine.start(null); },
     stop: async () => { await engine.stop(); for (const k of Object.keys(env)) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]!; },
   };
 }

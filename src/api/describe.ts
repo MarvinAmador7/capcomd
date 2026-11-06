@@ -60,6 +60,9 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "check.started": return `${agentId && d.askedBy === agentId ? `${a} asked for the checks on` : "Checking"} ${typeof d.branch === "string" ? d.branch : "a branch"}.`;
 		case "check.passed": return `The checks passed on ${typeof d.branch === "string" ? d.branch : "the branch"}.`;
 		case "check.failed": return d.checks?.status === "missing" ? `Couldn't check ${typeof d.branch === "string" ? d.branch : "the branch"}: it isn't on the repository.` : `The checks failed on ${typeof d.branch === "string" ? d.branch : "the branch"}.`;
+		// The label is the starter's words (untrusted): the text names the job by its id only.
+		case "job.started": return d.kind === "timer" ? `A timer (${d.jobId}) was set.` : `${d.plugin || !agentId ? `The ${d.plugin ?? "capcomd"} plugin` : a} started a background job (${d.jobId}).`;
+		case "job.ended": return d.state === "done" ? `Background job ${d.jobId} finished.` : d.state === "failed" ? `Background job ${d.jobId} failed (exit ${d.code ?? "?"}).` : d.state === "killed" ? `Background job ${d.jobId} was stopped.` : `Background job ${d.jobId} was lost.`;
 		case "approval.requested": return `Waiting for your approval (${d.kind ?? "request"}).`;
 		case "approval.decided": return `Approval ${d.status ?? "decided"}.`;
 		case "task.added": return "A task was added.";

@@ -186,7 +186,7 @@ export function writeProject(plan: ProjectPlan, o: { strict?: boolean } = {}): P
   }
   const made: string[] = [], kept: string[] = [];
   for (const [name, spec] of plan.profiles) {
-    // As `capcomd agents add <name> --spec …` (one per profile): an existing name, or a profile the file won't take, is kept.
+    // As `capcomd profiles add <name> --spec …` (one per profile): an existing name, or a profile the file won't take, is kept.
     if (!file || file.agents[name] || validateSpec(name, spec).length) { kept.push(name); continue; }
     const next: AgentsFile = { ...file, schema: AGENTS_SCHEMA, agents: { ...file.agents, [name]: spec as unknown as AgentSpec } };
     if (!next.default) next.default = name;

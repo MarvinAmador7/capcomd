@@ -272,6 +272,28 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "null"
       ]
     },
+    "profileVersion": {
+      "description": "The version of its profile the agent was spawned with: the profile's `version`, else 1 (an agents.json profile is 1). Fixed at spawn, so it says what the agent runs with whatever the profile says now (Agent.profileVersion). null without a profile (a fake agent, or CAPCOMD_AGENT naming a provider). Absent from older daemons",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "profileSource": {
+      "description": "The layer its profile was found in at spawn: project (the project's .capcomd/profiles/ or .capcomd/agents.json), user (~/.capcomd/profiles/ or the user's agents.json) or bundled (shipped with capcomd). More may be added: show an unknown one as it is (Agent.profileSource). null without a profile. Absent from older daemons",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "project",
+        "user",
+        "bundled",
+        null
+      ]
+    },
     "budget": {},
     "limits": {},
     "agent": {
@@ -1599,6 +1621,105 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "branch",
     "commit",
     "checks"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `job.started`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "jobId": {
+      "type": "string",
+      "description": "The job (job-…): background work an agent or a plugin started (`capcomd job start`, plugin API §16.2)"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "exec",
+        "timer"
+      ],
+      "description": "exec: a command in its owner's machine; timer: a clock that fires. More may be added"
+    },
+    "owner": {
+      "type": "string",
+      "description": "Whose it is: an agent id (agt-…; it ends with that agent), run, or plugin"
+    },
+    "label": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text. What it is, in its starter's words (for exec, the command by default)"
+    },
+    "plugin": {
+      "description": "The plugin that started it; null when an agent did",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "jobId",
+    "kind",
+    "owner",
+    "label",
+    "plugin"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `job.ended`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "jobId": {
+      "type": "string",
+      "description": "The job (job-…)"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "done",
+        "failed",
+        "killed",
+        "lost"
+      ],
+      "description": "done: it exited 0 (a timer: it fired its last time); failed: a non-zero exit; killed: stopped (`capcomd job kill`, its timeout, or its agent ended); lost: its process or machine went away with no exit code. More may be added"
+    },
+    "code": {
+      "description": "Its exit code (exec); null for a timer or a job that was lost",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "ms": {
+      "type": "number",
+      "description": "How long it ran, in milliseconds"
+    }
+  },
+  "required": [
+    "jobId",
+    "state",
+    "code",
+    "reason",
+    "ms"
   ],
   "additionalProperties": {}
 }
@@ -3620,6 +3741,28 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             ],
             "pattern": "^[a-z0-9][a-z0-9._-]*$",
             "description": "Profile name, lowercase"
+          },
+          "profileVersion": {
+            "description": "The version of its profile the agent was spawned with: the profile's `version`, else 1 (an agents.json profile is 1). Fixed at spawn, so it says what the agent runs with whatever the profile says now. null without a profile (a fake agent, CAPCOMD_AGENT naming a provider) or for an agent spawned before capcomd recorded it. Older daemons don't send it",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "profileSource": {
+            "description": "The layer its profile was found in at spawn: project (the project's .capcomd/profiles/ or .capcomd/agents.json), user (~/.capcomd/profiles/ or the user's agents.json) or bundled (shipped with capcomd). More may be added: show an unknown one as it is. null when profileVersion is. Older daemons don't send it",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "project",
+              "user",
+              "bundled",
+              null
+            ]
           },
           "status": {
             "type": "string",

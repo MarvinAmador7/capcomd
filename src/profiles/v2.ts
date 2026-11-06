@@ -19,7 +19,7 @@ export const V2_PATH: Readonly<Record<keyof AgentSpec, string>> = {
   maxTurns: "limits.maxTurns", maxBudgetUsd: "limits.maxBudgetUsd", timeoutMs: "limits.timeoutMs", idleAfterMs: "limits.idleAfterMs",
   stuckRepeats: "limits.stuckRepeats", noChangeAfterMs: "limits.noChangeAfterMs",
   checkpointEveryMs: "lifecycle.checkpointEveryMs",
-  children: "children",
+  children: "children", jobs: "jobs",
   context: "context",
 };
 /** A flat field's v2 path, for messages (`maxTurns` → `limits.maxTurns`); a name that isn't one is itself. */
@@ -61,7 +61,7 @@ const BLOCKS: Record<string, Record<string, object>> = {
     egress: v1.egress, codex: v1.sandbox, size: { type: "object", additionalProperties: false, properties: { vcpu: { enum: [1, 2, 4, 8] } } },
   },
   limits: { maxTurns: v1.maxTurns, maxBudgetUsd: v1.maxBudgetUsd, timeoutMs: v1.timeoutMs, idleAfterMs: v1.idleAfterMs, stuckRepeats: v1.stuckRepeats, noChangeAfterMs: v1.noChangeAfterMs },
-  jobs: { foregroundMs: int(0), max: int(1), afterTurnMs: int(1000) },
+  jobs: AGENTS_JSON_SCHEMA.$defs.jobs.properties,
   lifecycle: { checkpointEveryMs: v1.checkpointEveryMs, onStart: strings, onEnd: strings },
   children: AGENTS_JSON_SCHEMA.$defs.children.properties,
   permissions: { report: { type: "boolean" } },
@@ -122,7 +122,8 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
     if (raw.name === undefined) at("name", `is required (${fileName})`);
     else if (raw.name !== fileName) at("name", `is ${JSON.stringify(raw.name)}, but the file is the profile ${fileName}'s`);
   }
-  if (raw.version !== undefined && !isInt(raw.version, 1)) at("version", "must be an integer >= 1");
+  // A safe integer: an agent records it (harness.v1 Agent.profileVersion), and one past 2^53 isn't a version any client reads back.
+  if (raw.version !== undefined && !(isInt(raw.version, 1) && Number.isSafeInteger(raw.version))) at("version", "must be an integer >= 1");
   if (raw.extends !== undefined && (typeof raw.extends !== "string" || !NAME.test(raw.extends)))
     at("extends", "must be a profile's name: one of this project's, your own or a bundled one (never another project's, a path or a repository)");
   if (raw.default !== undefined && raw.default !== null && typeof raw.default !== "boolean") at("default", "must be true or false");
@@ -181,8 +182,6 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
   if (sb.environment != null && (typeof sb.environment !== "string" || !NAME.test(sb.environment))) at("sandbox.environment", "must be an environment's name (capcomd env build --name)");
   if (sb.size != null && !(isMap(sb.size) && Object.keys(sb.size).every((k) => k === "vcpu") && [1, 2, 4, 8].includes(sb.size.vcpu as number))) at("sandbox.size", "must be { vcpu: 1 | 2 | 4 | 8 }");
 
-  const j = block("jobs");
-  for (const [k, min] of [["foregroundMs", 0], ["max", 1], ["afterTurnMs", 1000]] as const) if (j[k] != null && !isInt(j[k], min)) at(`jobs.${k}`, `must be an integer >= ${min}`);
   const l = block("lifecycle");
   for (const k of ["onStart", "onEnd"]) if (l[k] != null && !isStrings(l[k])) at(`lifecycle.${k}`, "must be a list of plugin names");
   const pm = block("permissions");
@@ -240,6 +239,14 @@ export function inheritable(base: ProfileDoc): ProfileDoc {
   return out;
 }
 
+/** Which of the files laid together set each value (its index among them), by path: `block.key` for a key in a block,
+ *  the key itself otherwise (`tags`, `version`). */
+export type SetBy = Record<string, number>;
+/** What a profile that extends `base` keeps of its SetBy: as inheritable does with the values. */
+export function inheritableSetBy(setBy: SetBy): SetBy {
+  return Object.fromEntries(Object.entries(setBy).filter(([p]) => !OWN.has(p.split(".")[0]!)));
+}
+
 const dropNulls = (m: Record<string, unknown>) => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== null));
 
 /**
@@ -252,6 +259,23 @@ export function layerOver(base: ProfileDoc, over: ProfileDoc): ProfileDoc {
     if (v === null) { delete out[k]; continue; }
     const b = out[k];
     out[k] = isMap(v) ? dropNulls(isMap(b) ? { ...b, ...v } : v) : v;
+  }
+  return out;
+}
+
+/**
+ * The SetBy of `layerOver(base, over)` when `over` is the file at index `at` (ADR-024 §2.6: `capcomd profiles show`
+ * says where every value came from): what it writes is its, what it removes (`null`) is no one's, and a block it
+ * writes over a value that wasn't one replaces it whole.
+ */
+export function setByOver(setBy: SetBy, base: ProfileDoc, over: ProfileDoc, at: number): SetBy {
+  const out = { ...setBy };
+  const drop = (k: string) => { delete out[k]; for (const p of Object.keys(out)) if (p.startsWith(`${k}.`)) delete out[p]; };
+  for (const [k, v] of Object.entries(over)) {
+    if (v === null || !isMap(v) || !isMap(base[k])) drop(k);
+    if (v === null) continue;
+    if (!isMap(v)) { out[k] = at; continue; }
+    for (const [sub, x] of Object.entries(v)) { if (x === null) delete out[`${k}.${sub}`]; else out[`${k}.${sub}`] = at; }
   }
   return out;
 }
@@ -310,9 +334,9 @@ export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed"
 
 /**
  * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 steps 5 and 8; ADR-025
- * §13; spec §16.2), so `validate` can say so instead of the setting silently doing nothing.
+ * §13), so `validate` can say so instead of the setting silently doing nothing.
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion", "skills", "tools.mcp", "sandbox.provider", "sandbox.environment", "sandbox.size", "jobs", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
+  return ["identity.persona", "harness.cliVersion", "skills", "tools.mcp", "sandbox.provider", "sandbox.environment", "sandbox.size", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
 }

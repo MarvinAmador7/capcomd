@@ -246,7 +246,7 @@ written back by the agent" (ADR-024 §2.2); it is read from the checkout and cha
 `.capcomd/context/` only (the agent provider's tool policy enforces the path; the kernel's gate re-checks it, §5.3). The
 planner spawns it as the **last child of its run** (an orchestration-skill rule: "before you end, spawn `consolidator`
 with the run's lessons"); an orchestrate profile cannot be the consolidator (it may not write files and ends failed if it
-spawned nothing, spec 1.0.6–1.0.7), and `run.changed ended` is too late to spawn anything. It reads the run's candidates
+spawned nothing, spec 1.0.6 and 1.0.16), and `run.changed ended` is too late to spawn anything. It reads the run's candidates
 (`result.data` of every agent, `kv notes/*`), the verify verdicts and merge outcomes (every capcomd read), and the
 current `.capcomd/context/`, and writes **itemised deltas** (ACE Reflector/Curator): one lesson per subtask with the
 failure case and the guardrail; `supersede` for a contradiction; `deprecate` for an item the repository no longer
@@ -548,7 +548,7 @@ Each step: `bun run typecheck`, `bun run test:fast`, `bun run test:scenarios`, t
 for the models in use, and a CHANGELOG line for what a user sees ("profiles: `context` block; agents see project memory
 at start"; "memory lands through a reviewed merge"; "business context from a groundray brain").
 
-**Made while building step 1** (spec 1.0.16; where the code and §3.2 differ, the code is right and this list says why):
+**Made while building step 1** (spec 1.0.20; where the code and §3.2 differ, the code is right and this list says why):
 
 - The envelope is `packages/plugin/src/context-layer.ts`: `context.ts` is the plugin's `PluginContext`, and the
   glossary keeps "context" for it. The service is `ctx.context.register` all the same.
