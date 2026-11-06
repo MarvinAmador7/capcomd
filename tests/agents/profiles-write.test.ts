@@ -128,6 +128,24 @@ describe("addProfileFile and removeProfile", () => {
     expect(removeProfile("worker", w.o).after.default).toBe("other");
     expect(Object.keys(w.load().profiles)).toEqual(["other", "solo"]);
   });
+
+  test("default: true moves the default, as agents.json's does: the layer's profile file that had it loses it (a write: its version goes up)", () => {
+    // As `capcomd setup project` leaves a project: worker.yaml is the default.
+    const WORKER = "# Mine.\nschema: capcomd.profile/v2\nname: worker\nversion: 1\ndefault: true\nharness: { provider: claude, auth: subscription }\n";
+    const w = world({ "P/worker.yaml": WORKER, "U/mine.yaml": "name: mine\ndefault: true\nharness: { provider: codex, auth: apikey }\n" });
+    expect(w.load().default).toBe("worker");
+    addProfileFile("rev", { provider: "claude", auth: "subscription", default: true }, w.o);
+    expect(w.load().default).toBe("rev");
+    expect(w.read("P/worker.yaml")).toBe("# Mine.\nschema: capcomd.profile/v2\nname: worker\nversion: 2\nharness: { provider: claude, auth: subscription }\n");
+    // set --default on another moves it again, from rev.yaml; the user's own default (another layer) is left alone.
+    editProfile("worker", { default: true }, w.o);
+    expect([w.load().default, w.load().profiles.rev!.version, w.read("P/rev.yaml")]).toEqual(["worker", 2, expect.not.stringContaining("default")]);
+    expect(w.read("U/mine.yaml")).toContain("default: true");
+    // A JSON profile file loses it too; an agents.json entry made the default takes it from a profile file.
+    const j = world({ "P/a.json": JSON.stringify({ name: "a", default: true, harness: { provider: "claude", auth: "subscription" } }) }, { b: { provider: "codex", auth: "apikey" } });
+    editProfile("b", { default: true }, j.o);
+    expect([j.load().default, JSON.parse(j.read("P/a.json"))]).toEqual(["b", { name: "a", version: 2, harness: { provider: "claude", auth: "subscription" } }]);
+  });
 });
 
 describe("profileFields: the rows a client edits", () => {

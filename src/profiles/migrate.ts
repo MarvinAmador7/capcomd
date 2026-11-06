@@ -31,9 +31,9 @@ export interface Migration {
   dryRun: boolean;
 }
 
-/** The note migrate leaves in agents.json: where the profiles went, and that the file is still read. */
-export const migratedNote = (dir: string) =>
-  `Its profiles moved to ${dir} (capcomd profiles migrate). capcomd still reads this file until a later release (see the changelog), and a profile file of the same name wins.`;
+/** The note migrate leaves in agents.json: where the profiles went, and that the file is still read. Relative (the
+ *  layer's profiles/ is always beside its agents file): the file is committed and shared, so no one's home folder in it. */
+export const MIGRATED_NOTE = "Its profiles moved to the profiles/ folder beside this file (capcomd profiles migrate). capcomd still reads this file until a later release (see the changelog), and a profile file of the same name wins.";
 const HEADER = "Moved from agents.json by `capcomd profiles migrate`. `capcomd profiles show <name>` says where each value comes from.";
 
 /**
@@ -75,7 +75,7 @@ export function migrateProfiles(o: { path?: string; source?: Env; keep?: boolean
   // and a default naming one of them are kept.
   const gone = new Set(result.migrated.map((m) => m.name));
   if (!o.keep) {
-    const next: AgentsFile = { $comment: migratedNote(dir), schema: AGENTS_SCHEMA, agents: Object.fromEntries(entries.filter(([n]) => !gone.has(n))), ...(v1.default !== undefined && !gone.has(v1.default) ? { default: v1.default } : {}) };
+    const next: AgentsFile = { $comment: MIGRATED_NOTE, schema: AGENTS_SCHEMA, agents: Object.fromEntries(entries.filter(([n]) => !gone.has(n))), ...(v1.default !== undefined && !gone.has(v1.default) ? { default: v1.default } : {}) };
     overlay.set(path, agentsFileText(next));
   }
 

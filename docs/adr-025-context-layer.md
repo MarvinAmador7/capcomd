@@ -242,7 +242,8 @@ written back by the agent" (ADR-024 §2.2); it is read from the checkout and cha
 
 ### 5.2 Consolidation: a profile, spawned by the run
 
-`context-consolidator` is a bundled profile in **`execute` mode** with read-only tools plus writes under
+`context-consolidator` is a profile (written by `capcomd setup project`, not bundled: §13, "Made while building step
+3") in **`execute` mode** with read-only tools plus writes under
 `.capcomd/context/` only (the agent provider's tool policy enforces the path; the kernel's gate re-checks it, §5.3). The
 planner spawns it as the **last child of its run** (an orchestration-skill rule: "before you end, spawn `consolidator`
 with the run's lessons"); an orchestrate profile cannot be the consolidator (it may not write files and ends failed if it

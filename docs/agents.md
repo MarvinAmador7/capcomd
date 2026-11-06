@@ -86,7 +86,9 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   child wider than the profile that spawns it), or that an `override.yaml` would hide, is refused and nothing is
   written. `capcomd profiles add <name> --extends <parent>` (or with a `--set` only a profile file holds, such as
   `tags`, or in a project whose profiles are files: a `profiles/` folder and no `agents.json` entries) writes
-  `.capcomd/profiles/<name>.yaml` at version 1; otherwise `add` writes `agents.json` as before. `rm`
+  `.capcomd/profiles/<name>.yaml` at version 1; otherwise `add` writes `agents.json` as before. `--default` (on `add`
+  or `set`) moves the default as it does in `agents.json`: the profile file of that place that said `default: true`
+  loses it (a write to that file, so its `version` goes up too). `rm`
   removes an `agents.json` entry, a single profile file or a package `capcomd profiles install` put there (below), but
   not a package you made yourself (a directory with its own files) or a profile another one extends.
 - The harness API does the same: `GET /v1/profiles/{name}` serves a profile as rows an app renders and edits (each

@@ -691,6 +691,11 @@ Made while building migrate and the templates (§7 step 9, 2026-11-06; `src/prof
 - **`capcomd profiles add` follows the project**: a profile file where the project's profiles are files (its
   `profiles/` folder exists and `agents.json` has no entries, as setup and `migrate` leave it), `agents.json` where it
   has entries. Step 6 kept `add` on `agents.json` for scripts that add and then read it; those projects keep that.
+- **`default: true` on `add` or `set` moves the default**, as `agents.json`'s `default` always did: the profile file of
+  that layer that said it loses it (a write to that file too, so its version goes up), since two in one layer are an
+  error and setup's `worker.yaml` says it. Otherwise `capcomd profiles add rev --default`, the first line of
+  docs/agents.md, would be refused in every project set up from now on. An `override.yaml` that sets it is left alone
+  (the write is refused, saying so).
 - **The deprecation is a notice in this release**: the changelog says `agents.json` is read for the next two minor
   releases, then `validate` warns, then it isn't read. Nothing warns yet.
 

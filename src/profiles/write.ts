@@ -1,7 +1,7 @@
 // Writing profiles (ADR-024 §2.4, §5, §7 step 6): `capcomd profiles add|set|rm` and PUT /v1/profiles/{name}. A write
 // changes the one file a profile is defined in (its profile.yaml, <name>.yaml or agents.json entry), never an ancestor
 // it extends or an override.yaml laid over it, and bumps that file's `version` (an agents.json entry has none: it stays
-// 1). Every write is checked as the files would be after it (readProfiles through an overlay): one that would leave any
+// 1); `default: true` also takes it off the profile file of that layer that had it, as agents.json's `default` moves. Every write is checked as the files would be after it (readProfiles through an overlay): one that would leave any
 // profile unreadable, or that a later file would hide, changes nothing. A YAML file keeps its comments and layout.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -161,6 +161,34 @@ export function profileFileText(doc: ProfileDoc, comment?: string): string {
 /** The profile files' layer for new ones: the project's profiles/ (or the user's, when the agents file is). */
 const newFileDir = (path: string, source: Env) => profileLayers(path, source)[0]!.dir;
 
+/**
+ * `default: true` set on profile `name` in `layer` moves the default there, as agents.json's `default` always did: each
+ * other profile file of that layer whose own file says `default: true` loses it (and its version goes up, as any
+ * write's), since two in one layer are an error. The new texts by path, for the write's overlay; empty when the edit
+ * doesn't set it.
+ */
+function defaultMoved(name: string, layer: string, edits: Array<[string[], unknown]>, before: ProfileSet): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!edits.some(([p, v]) => p.length === 1 && p[0] === "default" && v === true)) return out;
+  for (const p of Object.values(before.profiles)) {
+    if (p.name === name || p.format !== "v2" || p.manifest.default !== true) continue;
+    const by = p.applied[p.setBy.default ?? -1];
+    if (!by || by.as !== "profile" || by.layer !== layer || !by.path) continue;
+    const old = readFileSync(by.path, "utf8");
+    if (by.path.endsWith(".json")) {
+      const { default: _, ...doc } = JSON.parse(old) as ProfileDoc;
+      out.set(by.path, JSON.stringify(withVersion(doc, (typeof doc.version === "number" ? doc.version : 1) + 1), null, 2) + "\n");
+    } else {
+      const doc = parseDocument(old);
+      doc.delete("default");
+      const cur = doc.get("version");
+      yamlVersion(doc, (typeof cur === "number" ? cur : 1) + 1);
+      out.set(by.path, String(doc));
+    }
+  }
+  return out;
+}
+
 /** The profiles as they are, or a write's refusal saying why they can't be read. */
 function current(path: string, source: Env): ProfileSet {
   try { return readProfiles(path, source); } catch (e) {
@@ -253,8 +281,11 @@ export function editProfile(name: string, edit: ProfileEdit, o: WriteOptions = {
     text = String(doc);
   }
   if (!changed) return { name, file, format: r.format, changed: false, version: r.version, previousVersion: r.version, before, after: before, changes: [] };
-  const after = checked(path, source, new Map([[file, text]]));
+  const moved = defaultMoved(name, own.layer, edits, before);
+  const after = checked(path, source, new Map([...moved, [file, text]]));
   checkVisible(name, edits, after);
+  // The default's old file first: cut short, the layer has no default rather than two.
+  for (const [f, t] of moved) writeAtomic(f, t);
   writeAtomic(file, text);
   return { name, file, format: r.format, changed: true, version: after.profiles[name]!.version, previousVersion: r.version, before, after, changes: profileChanges(r, after.profiles[name]) };
 }
@@ -271,8 +302,11 @@ export function addProfileFile(name: string, edit: ProfileEdit, o: WriteOptions 
   if (there) throw new ProfileWriteError("conflict", `profile "${name}" already exists (${there.path ?? "bundled with capcomd"})`);
   const file = join(newFileDir(path, source), `${name}.yaml`);
   if (existsSync(file)) throw new ProfileWriteError("conflict", `${file} already exists`);
-  const text = profileFileText(applyToObject({ schema: PROFILE_SCHEMA, name, version: 1 }, editPaths(edit)));
-  const after = checked(path, source, new Map([[file, text]]));
+  const edits = editPaths(edit);
+  const text = profileFileText(applyToObject({ schema: PROFILE_SCHEMA, name, version: 1 }, edits));
+  const moved = defaultMoved(name, profileLayers(path, source)[0]!.layer, edits, before);
+  const after = checked(path, source, new Map([...moved, [file, text]]));
+  for (const [f, t] of moved) writeAtomic(f, t);
   writeAtomic(file, text);
   return { name, file, format: "v2", changed: true, version: 1, previousVersion: 0, before, after, changes: profileChanges(undefined, after.profiles[name]) };
 }

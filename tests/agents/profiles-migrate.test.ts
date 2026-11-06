@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AGENTS_SCHEMA, migrateProfiles, readAgentsFile, readProfiles, type ProfileWriteError } from "../../src/profiles";
+import { AGENTS_SCHEMA, MIGRATED_NOTE, migrateProfiles, readAgentsFile, readProfiles, type ProfileWriteError } from "../../src/profiles";
 import { capcomd } from "../helpers/engine";
 
 /** A project (repo/.capcomd/) and a CAPCOMD_HOME (home/) with these files; `P/` is the project's profiles, `U/` the user's. */
@@ -68,8 +68,10 @@ describe("migrateProfiles", () => {
     expect(w.read("P/planner.yaml")).toContain("jobs:\n  foregroundMs: 5000\n");
     // agents.json stays, with a note and nothing in effect; it still reads as a v1 file.
     expect(JSON.parse(readFileSync(w.agentsFile, "utf8"))).toEqual({
-      $schema: "https://capcomd.dev/schema/agents-v1.json", $comment: expect.stringContaining(`Its profiles moved to ${join(w.dir, "profiles")}`), schema: AGENTS_SCHEMA, agents: {},
+      $schema: "https://capcomd.dev/schema/agents-v1.json", $comment: MIGRATED_NOTE, schema: AGENTS_SCHEMA, agents: {},
     });
+    // The note names no folder of this machine: agents.json is committed and shared.
+    expect(readFileSync(w.agentsFile, "utf8")).not.toContain(w.root);
     expect(readAgentsFile(w.agentsFile).agents).toEqual({});
     // Nothing to do the second time.
     expect(migrateProfiles(w.o)).toMatchObject({ migrated: [], left: [], agentsFile: "none", dryRun: true });

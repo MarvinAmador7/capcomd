@@ -24,7 +24,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   out rather than break the others. Each file starts with a comment saying what the profile is for.
 - Changed: `capcomd profiles add <name>` writes `.capcomd/profiles/<name>.yaml` in a project whose profiles are files
   (a `profiles/` folder and no `agents.json` entries, as `capcomd setup project` and `capcomd profiles migrate` leave
-  it); a project with `agents.json` entries gets another entry, as before.
+  it); a project with `agents.json` entries gets another entry, as before. `--default` (on `add` or `set`) moves the
+  default to that profile there too, taking `default: true` off the profile file that had it.
 - Deprecated: `.capcomd/agents.json` (and `~/.capcomd/agents.json`). capcomd keeps reading it for the next two minor
   releases (0.10 and 0.11); after that `capcomd profiles validate` warns about it, and a later release stops reading
   it. Move your profiles with `capcomd profiles migrate`.
