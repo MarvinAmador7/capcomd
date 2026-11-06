@@ -16,6 +16,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   knowledge: a groundray brain".
 - The context brief names a provider a profile lists twice once (`skipped (named twice)` for the other), and a line's
   file path may now be up to 320 characters.
+- New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
+  `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
+  its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
+  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. If it crashes while deciding, the decision is a deny, and it is started again; after five crashes in ten
+  minutes it stays stopped and its gates deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn
+  it off with `/disable`). What it prints goes to the daemon's log with its token and secrets blanked out.
+  `capcomd plugins list` shows it with `runtime: process`. Such a plugin contributes hooks and events only (no
+  commands, tools or sandboxes), and a CLI never starts one. The client library `connect()` in `@capcomd/plugin` does
+  the talking; the plugin API spec §9 is the protocol.
+- New (harness.v1, capability `plugins.protocol`): the out-of-process protocol's routes (`/v1/plugins/{name}/sessions`,
+  `/hooks` as an event stream, `/hooks/{callId}`, `/events`, `/storage`), usable only with the token capcomd made for
+  that plugin, and `plugin.process_changed` events on the daemon stream. Capability `plugins` adds
+  `GET /v1/plugins/{name}` (a plugin's manifest and config, never a secret) and `POST /v1/plugins/{name}/enable` and
+  `/disable` (the configure scope; for the daemon's life, and a built-in can't be disabled).
 - New: project memory for agents. A profile with a `context` block (`context: {providers: [{name: memory}]}`, in
   `profile.yaml` or an `agents.json` entry) briefs each of its agents, when it starts, with an index of what the project
   keeps under `.capcomd/context/` in its repository: one line per item (a lesson, feedback, a project fact) with what it

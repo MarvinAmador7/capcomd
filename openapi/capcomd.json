@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `runs.options.models`: GET /v1/run-options `drivers[].models`: the models each driver's planner can run on (an id, a display name and a one-line note); POST /v1/runs takes `model`, one of them; `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.known`: GET /v1/projects/known: capcomd's projects with their checkout folders on the daemon's machine, and which is the default; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`; `runs.goal_branch`: Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events; `agents.title`: Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled; `agents.thread_tail`: GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages; `plugins`: GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; plugin.* events on the daemon stream audit the plugin host; `profiles`: GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `runs.options.models`: GET /v1/run-options `drivers[].models`: the models each driver's planner can run on (an id, a display name and a one-line note); POST /v1/runs takes `model`, one of them; `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.known`: GET /v1/projects/known: capcomd's projects with their checkout folders on the daemon's machine, and which is the default; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`; `runs.goal_branch`: Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events; `agents.title`: Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled; `agents.thread_tail`: GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages; `plugins`: GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; GET /v1/plugins/{name} (its manifest and config, never a secret); POST /v1/plugins/{name}/enable and /disable (the configure scope, an Idempotency-Key); plugin.* events on the daemon stream audit the plugin host; `profiles`: GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there; `plugins.protocol`: The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -8714,7 +8714,7 @@
     "/v1/plugins": {
       "get": {
         "operationId": "plugins.list",
-        "description": "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. This capcomd ships no plugins yet, so the list is empty until it does.",
+        "description": "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. The built-in plugins come first; the user's own (out of process, from ~/.capcomd/plugins) after them.",
         "responses": {
           "200": {
             "description": "OK",
@@ -8899,6 +8899,2211 @@
           },
           "401": {
             "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}": {
+      "get": {
+        "operationId": "plugins.get",
+        "description": "Capability plugins. One plugin as GET /v1/plugins lists it, with its validated manifest and its config without any secret. Needs the `read` scope. 404 `not_found` for a name the daemon didn't discover.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                      "description": "The plugin's name: lowercase letters, digits and hyphens"
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "The plugin's own version (0.0.0 when its manifest couldn't be read)"
+                    },
+                    "apiVersion": {
+                      "const": 1,
+                      "description": "The plugin API major it codes against"
+                    },
+                    "runtime": {
+                      "enum": [
+                        "in-process",
+                        "process"
+                      ],
+                      "type": "string",
+                      "description": "in-process: built into capcomd; process: a program capcomd starts"
+                    },
+                    "source": {
+                      "enum": [
+                        "builtin",
+                        "user",
+                        "project"
+                      ],
+                      "type": "string",
+                      "description": "Where it was found: shipped with capcomd, the user's plugins, or the project's"
+                    },
+                    "state": {
+                      "enum": [
+                        "discovered",
+                        "validated",
+                        "resolved",
+                        "loading",
+                        "active",
+                        "disposing",
+                        "disposed",
+                        "failed"
+                      ],
+                      "type": "string",
+                      "description": "Its lifecycle state (spec §5.4): discovered, validated, resolved, loading, active, disposing, disposed or failed. Treat a state you don't know as failed"
+                    },
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "false while config holds it at validated (`plugins.<name>.enabled: false`)"
+                    },
+                    "cause": {
+                      "description": "Why it is failed, disposed or not enabled (spec §5.4, e.g. invalid_manifest, incompatible, untrusted, unresolved, activate_threw, disabled, dispose_timeout); null otherwise. Treat a cause you don't know as a failure for a reason you don't know",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "hooks": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The hooks it listens to (spec §6.6): those it registered while active, those its manifest declares otherwise. Ignore names you don't know"
+                    },
+                    "seams": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "sandbox",
+                              "agent",
+                              "forge"
+                            ],
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "name"
+                        ]
+                      },
+                      "description": "The seams it implements (spec §7), each by the name runs and profiles select it by"
+                    },
+                    "hooksSuspended": {
+                      "type": "boolean",
+                      "description": "The breaker tripped (plugin.suspended): its listeners aren't called, and its gate listeners deny, until it is enabled again or the daemon restarts"
+                    },
+                    "stats": {
+                      "type": "object",
+                      "properties": {
+                        "calls": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Hook calls since the daemon started"
+                        },
+                        "failures": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Calls that failed (plugin.hook_failed)"
+                        },
+                        "dropped": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Observe calls dropped because its queue was full (spec §6.2)"
+                        },
+                        "p50Ms": {
+                          "description": "Median call time over its recent calls; null before the first",
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "p95Ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "lastFailureAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time",
+                          "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                        }
+                      },
+                      "required": [
+                        "calls",
+                        "failures",
+                        "dropped",
+                        "p50Ms",
+                        "p95Ms",
+                        "lastFailureAt"
+                      ]
+                    },
+                    "manifest": {
+                      "description": "The validated manifest (capcomd.plugin/v1); null when it couldn't be read. Its strings are the plugin author's: render them as plain text",
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    "config": {
+                      "type": "object",
+                      "properties": {
+                        "values": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {},
+                          "description": "The plugin's config, every `x-secret` property left out"
+                        },
+                        "sources": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "enum": [
+                              "default",
+                              "user",
+                              "project",
+                              "env"
+                            ],
+                            "type": "string"
+                          },
+                          "description": "Where each value came from"
+                        }
+                      },
+                      "required": [
+                        "values",
+                        "sources"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "apiVersion",
+                    "runtime",
+                    "source",
+                    "state",
+                    "enabled",
+                    "cause",
+                    "hooks",
+                    "seams",
+                    "hooksSuspended",
+                    "stats",
+                    "manifest",
+                    "config"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/enable": {
+      "post": {
+        "operationId": "plugins.enable",
+        "description": "Capability plugins. Run the plugin's lifecycle again from validated (spec §5.4): resolved, loaded, active; for an active plugin, reset a tripped breaker (plugin.resumed). A failed out-of-process plugin (restart_limit) gets a new process. Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. 404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. For this daemon's life: config doesn't record it yet.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                      "description": "The plugin's name: lowercase letters, digits and hyphens"
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "The plugin's own version (0.0.0 when its manifest couldn't be read)"
+                    },
+                    "apiVersion": {
+                      "const": 1,
+                      "description": "The plugin API major it codes against"
+                    },
+                    "runtime": {
+                      "enum": [
+                        "in-process",
+                        "process"
+                      ],
+                      "type": "string",
+                      "description": "in-process: built into capcomd; process: a program capcomd starts"
+                    },
+                    "source": {
+                      "enum": [
+                        "builtin",
+                        "user",
+                        "project"
+                      ],
+                      "type": "string",
+                      "description": "Where it was found: shipped with capcomd, the user's plugins, or the project's"
+                    },
+                    "state": {
+                      "enum": [
+                        "discovered",
+                        "validated",
+                        "resolved",
+                        "loading",
+                        "active",
+                        "disposing",
+                        "disposed",
+                        "failed"
+                      ],
+                      "type": "string",
+                      "description": "Its lifecycle state (spec §5.4): discovered, validated, resolved, loading, active, disposing, disposed or failed. Treat a state you don't know as failed"
+                    },
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "false while config holds it at validated (`plugins.<name>.enabled: false`)"
+                    },
+                    "cause": {
+                      "description": "Why it is failed, disposed or not enabled (spec §5.4, e.g. invalid_manifest, incompatible, untrusted, unresolved, activate_threw, disabled, dispose_timeout); null otherwise. Treat a cause you don't know as a failure for a reason you don't know",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "hooks": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The hooks it listens to (spec §6.6): those it registered while active, those its manifest declares otherwise. Ignore names you don't know"
+                    },
+                    "seams": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "sandbox",
+                              "agent",
+                              "forge"
+                            ],
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "name"
+                        ]
+                      },
+                      "description": "The seams it implements (spec §7), each by the name runs and profiles select it by"
+                    },
+                    "hooksSuspended": {
+                      "type": "boolean",
+                      "description": "The breaker tripped (plugin.suspended): its listeners aren't called, and its gate listeners deny, until it is enabled again or the daemon restarts"
+                    },
+                    "stats": {
+                      "type": "object",
+                      "properties": {
+                        "calls": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Hook calls since the daemon started"
+                        },
+                        "failures": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Calls that failed (plugin.hook_failed)"
+                        },
+                        "dropped": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Observe calls dropped because its queue was full (spec §6.2)"
+                        },
+                        "p50Ms": {
+                          "description": "Median call time over its recent calls; null before the first",
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "p95Ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "lastFailureAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time",
+                          "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                        }
+                      },
+                      "required": [
+                        "calls",
+                        "failures",
+                        "dropped",
+                        "p50Ms",
+                        "p95Ms",
+                        "lastFailureAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "apiVersion",
+                    "runtime",
+                    "source",
+                    "state",
+                    "enabled",
+                    "cause",
+                    "hooks",
+                    "seams",
+                    "hooksSuspended",
+                    "stats"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): the token lacks the configure scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/disable": {
+      "post": {
+        "operationId": "plugins.disable",
+        "description": "Capability plugins. Dispose the plugin (spec §5.4: disposing, then disposed with cause disabled); an out-of-process plugin's process gets session.closing, then SIGTERM, then SIGKILL. A built-in can't be: 409 `conflict`. Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. 404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. For this daemon's life: config doesn't record it yet.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                      "description": "The plugin's name: lowercase letters, digits and hyphens"
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "The plugin's own version (0.0.0 when its manifest couldn't be read)"
+                    },
+                    "apiVersion": {
+                      "const": 1,
+                      "description": "The plugin API major it codes against"
+                    },
+                    "runtime": {
+                      "enum": [
+                        "in-process",
+                        "process"
+                      ],
+                      "type": "string",
+                      "description": "in-process: built into capcomd; process: a program capcomd starts"
+                    },
+                    "source": {
+                      "enum": [
+                        "builtin",
+                        "user",
+                        "project"
+                      ],
+                      "type": "string",
+                      "description": "Where it was found: shipped with capcomd, the user's plugins, or the project's"
+                    },
+                    "state": {
+                      "enum": [
+                        "discovered",
+                        "validated",
+                        "resolved",
+                        "loading",
+                        "active",
+                        "disposing",
+                        "disposed",
+                        "failed"
+                      ],
+                      "type": "string",
+                      "description": "Its lifecycle state (spec §5.4): discovered, validated, resolved, loading, active, disposing, disposed or failed. Treat a state you don't know as failed"
+                    },
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "false while config holds it at validated (`plugins.<name>.enabled: false`)"
+                    },
+                    "cause": {
+                      "description": "Why it is failed, disposed or not enabled (spec §5.4, e.g. invalid_manifest, incompatible, untrusted, unresolved, activate_threw, disabled, dispose_timeout); null otherwise. Treat a cause you don't know as a failure for a reason you don't know",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "hooks": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The hooks it listens to (spec §6.6): those it registered while active, those its manifest declares otherwise. Ignore names you don't know"
+                    },
+                    "seams": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "sandbox",
+                              "agent",
+                              "forge"
+                            ],
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "name"
+                        ]
+                      },
+                      "description": "The seams it implements (spec §7), each by the name runs and profiles select it by"
+                    },
+                    "hooksSuspended": {
+                      "type": "boolean",
+                      "description": "The breaker tripped (plugin.suspended): its listeners aren't called, and its gate listeners deny, until it is enabled again or the daemon restarts"
+                    },
+                    "stats": {
+                      "type": "object",
+                      "properties": {
+                        "calls": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Hook calls since the daemon started"
+                        },
+                        "failures": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Calls that failed (plugin.hook_failed)"
+                        },
+                        "dropped": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Observe calls dropped because its queue was full (spec §6.2)"
+                        },
+                        "p50Ms": {
+                          "description": "Median call time over its recent calls; null before the first",
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "p95Ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "lastFailureAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                          "format": "date-time",
+                          "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                        }
+                      },
+                      "required": [
+                        "calls",
+                        "failures",
+                        "dropped",
+                        "p50Ms",
+                        "p95Ms",
+                        "lastFailureAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "apiVersion",
+                    "runtime",
+                    "source",
+                    "state",
+                    "enabled",
+                    "cause",
+                    "hooks",
+                    "seams",
+                    "hooksSuspended",
+                    "stats"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): the token lacks the configure scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/sessions": {
+      "post": {
+        "operationId": "plugins.openSession",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. The handshake (spec §9.3), within connectWithinMs of the start. 409 `conflict` for a session id the daemon didn't issue for this start, one already open, or a manifestHash that isn't the loaded plugin.json's; 422 `invalid` for a protocol it doesn't speak or hooks that aren't exactly contributes.hooks. Answers the config, the plugin's secrets once, and the deadlines.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session": {
+                    "type": "string",
+                    "description": "CAPCOMD_PLUGIN_SESSION: a new one per start of the process"
+                  },
+                  "protocol": {
+                    "const": 1,
+                    "description": "The protocol version the process speaks"
+                  },
+                  "manifestHash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "sha256 of the plugin.json the process was started from"
+                  },
+                  "pid": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991,
+                    "description": "The process's id"
+                  },
+                  "hooks": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "daemon.started",
+                        "daemon.stopping",
+                        "run.creating",
+                        "run.changed",
+                        "profile.resolved",
+                        "agent.spawning",
+                        "agent.preparing",
+                        "agent.changed",
+                        "agent.item",
+                        "sandbox.ensuring",
+                        "sandbox.changed",
+                        "verify.starting",
+                        "verify.judging",
+                        "verify.changed",
+                        "merge.landing",
+                        "merge.changed",
+                        "approval.deciding",
+                        "approval.changed",
+                        "job.changed",
+                        "trigger.admitting",
+                        "trigger.changed"
+                      ],
+                      "type": "string",
+                      "description": "A hook (spec §6.6). Ignore names you don't know"
+                    },
+                    "description": "The hooks it will answer: exactly its manifest's contributes.hooks"
+                  }
+                },
+                "required": [
+                  "session",
+                  "protocol",
+                  "manifestHash",
+                  "pid",
+                  "hooks"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "type": "string"
+                    },
+                    "protocol": {
+                      "const": 1
+                    },
+                    "plugin": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "scopes": {
+                          "type": "array",
+                          "items": {
+                            "enum": [
+                              "read",
+                              "steer",
+                              "configure"
+                            ],
+                            "type": "string"
+                          },
+                          "description": "The scopes its token carries"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version",
+                        "scopes"
+                      ]
+                    },
+                    "config": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {},
+                      "description": "Its config, secret properties left out"
+                    },
+                    "secrets": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Its own `x-secret` properties' values, sent once, here; never logged, never in events, never in its environment"
+                    },
+                    "hookTimeoutsMs": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "description": "Per hook, the deadline the daemon applies to a call, in ms"
+                    },
+                    "connectWithinMs": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "The hooks stream must be open within this of the start, else the process is stopped"
+                    },
+                    "daemon": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string"
+                        },
+                        "capabilities": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "capabilities"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "session",
+                    "protocol",
+                    "plugin",
+                    "config",
+                    "secrets",
+                    "hookTimeoutsMs",
+                    "connectWithinMs",
+                    "daemon"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/hooks": {
+      "get": {
+        "operationId": "plugins.hooks",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. The session's hook calls (spec §9.4), SSE: `event:` is the frame (hook.call, hook.dropped, session.closing), `id:` its seq, heartbeat comments every 15 s. One stream per session (a second closes the first with session.closing reason replaced). Last-Event-ID resumes: the frames after it again, and the open gate call (same callId); a gap past the 1 000 kept is a hook.dropped. Gate and modify calls come one at a time (the next after this one is answered or its deadline passes); observe calls as they happen, queued while no stream is open (1 000 frames or 4 MB, then the oldest are dropped and counted). Closed for 60 s, the plugin is disconnected: its gate calls fail (denied). 409 `conflict` for a session that isn't this start's, or isn't open.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "session",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "type": "string",
+                          "description": "Frame type: the frame's `frame` (hook.call, hook.dropped, session.closing)"
+                        },
+                        "data": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "frame": {
+                                  "const": "hook.call"
+                                },
+                                "seq": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "call": {
+                                  "type": "object",
+                                  "properties": {
+                                    "callId": {
+                                      "type": "string",
+                                      "description": "The answer's key"
+                                    },
+                                    "hook": {
+                                      "enum": [
+                                        "daemon.started",
+                                        "daemon.stopping",
+                                        "run.creating",
+                                        "run.changed",
+                                        "profile.resolved",
+                                        "agent.spawning",
+                                        "agent.preparing",
+                                        "agent.changed",
+                                        "agent.item",
+                                        "sandbox.ensuring",
+                                        "sandbox.changed",
+                                        "verify.starting",
+                                        "verify.judging",
+                                        "verify.changed",
+                                        "merge.landing",
+                                        "merge.changed",
+                                        "approval.deciding",
+                                        "approval.changed",
+                                        "job.changed",
+                                        "trigger.admitting",
+                                        "trigger.changed"
+                                      ],
+                                      "type": "string",
+                                      "description": "A hook (spec §6.6). Ignore names you don't know"
+                                    },
+                                    "mode": {
+                                      "enum": [
+                                        "observe",
+                                        "veto",
+                                        "modify"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "payloadVersion": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "idempotencyKey": {
+                                      "type": "string",
+                                      "description": "<hook>:<entity id>:<attempt>: the same when the daemon asks the same decision again (spec §6.7)"
+                                    },
+                                    "deadline": {
+                                      "type": "string",
+                                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                                      "description": "Absolute, the daemon's clock: past it the daemon applies the failure policy (a gate denies). Answer with a second to spare",
+                                      "format": "date-time"
+                                    },
+                                    "trace": {
+                                      "type": "object",
+                                      "properties": {
+                                        "traceId": {
+                                          "type": "string"
+                                        },
+                                        "spanId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "traceId",
+                                        "spanId"
+                                      ]
+                                    },
+                                    "principal": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "description": "operator, driver, agent, viewer or plugin: who caused the operation"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind"
+                                      ],
+                                      "additionalProperties": {}
+                                    },
+                                    "runId": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "agentId": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "at": {
+                                      "type": "string",
+                                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+                                      "format": "date-time",
+                                      "description": "RFC 3339 UTC with exactly 3 millisecond digits, e.g. 2026-10-25T07:57:00.000Z"
+                                    },
+                                    "deprecated": {
+                                      "type": "object",
+                                      "properties": {
+                                        "since": {
+                                          "type": "string"
+                                        },
+                                        "replacement": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "since",
+                                        "replacement"
+                                      ]
+                                    },
+                                    "payload": {
+                                      "type": "object",
+                                      "additionalProperties": {},
+                                      "description": "The hook's payload (spec §6.6); agent-written text inside is {text, untrusted: true, by}: plain text"
+                                    }
+                                  },
+                                  "required": [
+                                    "callId",
+                                    "hook",
+                                    "mode",
+                                    "payloadVersion",
+                                    "idempotencyKey",
+                                    "deadline",
+                                    "trace",
+                                    "principal",
+                                    "runId",
+                                    "agentId",
+                                    "at",
+                                    "payload"
+                                  ],
+                                  "additionalProperties": {}
+                                }
+                              },
+                              "required": [
+                                "frame",
+                                "seq",
+                                "call"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "frame": {
+                                  "const": "hook.dropped"
+                                },
+                                "seq": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991,
+                                  "description": "Observe calls not delivered"
+                                },
+                                "hooks": {
+                                  "type": "array",
+                                  "items": {
+                                    "enum": [
+                                      "daemon.started",
+                                      "daemon.stopping",
+                                      "run.creating",
+                                      "run.changed",
+                                      "profile.resolved",
+                                      "agent.spawning",
+                                      "agent.preparing",
+                                      "agent.changed",
+                                      "agent.item",
+                                      "sandbox.ensuring",
+                                      "sandbox.changed",
+                                      "verify.starting",
+                                      "verify.judging",
+                                      "verify.changed",
+                                      "merge.landing",
+                                      "merge.changed",
+                                      "approval.deciding",
+                                      "approval.changed",
+                                      "job.changed",
+                                      "trigger.admitting",
+                                      "trigger.changed"
+                                    ],
+                                    "type": "string",
+                                    "description": "A hook (spec §6.6). Ignore names you don't know"
+                                  },
+                                  "description": "Their hooks, when known"
+                                }
+                              },
+                              "required": [
+                                "frame",
+                                "seq",
+                                "count",
+                                "hooks"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "frame": {
+                                  "const": "session.closing"
+                                },
+                                "seq": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "reason": {
+                                  "enum": [
+                                    "daemon_stopping",
+                                    "disabled",
+                                    "replaced"
+                                  ],
+                                  "type": "string",
+                                  "description": "Finish open calls and exit (replaced: a newer stream of this session took over)"
+                                }
+                              },
+                              "required": [
+                                "frame",
+                                "seq",
+                                "reason"
+                              ]
+                            }
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event",
+                        "data"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "done"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "event": {
+                          "const": "error"
+                        },
+                        "data": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "event"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/hooks/{callId}": {
+      "post": {
+        "operationId": "plugins.answer",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. Answer one gate or modify call (spec §9.4) before its deadline. 204 when it was taken (also for an observe call: no answer is needed, one is taken). 404 `not_found` for a call this session wasn't sent; 409 `conflict` when it was answered already or its deadline passed (the daemon applied its failure policy: log it and move on), or for another session; 422 `invalid` when the result doesn't fit the hook's mode or a modify patch widens (`message` says how): the call failed with invalid_result, which a gate denies.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "callId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session": {
+                    "type": "string"
+                  },
+                  "result": {
+                    "type": "object",
+                    "properties": {
+                      "decision": {
+                        "enum": [
+                          "allow",
+                          "deny",
+                          "hold"
+                        ],
+                        "type": "string",
+                        "description": "hold: merge.landing only"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "maxLength": 500,
+                        "description": "deny and hold: required"
+                      },
+                      "reasons": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                          "type": "string",
+                          "maxLength": 500
+                        }
+                      },
+                      "patch": {
+                        "type": "object",
+                        "additionalProperties": {},
+                        "description": "modify hooks only: what the hook may patch (spec §6.6)"
+                      },
+                      "holdId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "review": {
+                        "type": "object",
+                        "additionalProperties": {},
+                        "description": "verify.judging only: the judge's report (spec §6.6.13)"
+                      }
+                    },
+                    "required": [
+                      "decision"
+                    ],
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "session",
+                  "result"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "not": {}
+                    },
+                    {
+                      "not": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/events": {
+      "post": {
+        "operationId": "plugins.emit",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. ctx.events.emit (spec §9.6): a durable plugin.<name>.<type> event on the daemon stream or a run's. Needs the steer scope (403 `forbidden`), a type in contributes.events (403) and an Idempotency-Key (keyed by the plugin, across its restarts: the same key and body answer the first seq). 404 `not_found` for a run that doesn't exist; 422 `invalid` for text over 500 characters, data over 64 KB or ephemeral.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$",
+                    "description": "Without the plugin prefix: one of its contributes.events (written as plugin.<name>.<type>)"
+                  },
+                  "stream": {
+                    "type": "string",
+                    "description": "daemon, or a run id"
+                  },
+                  "entity": {
+                    "type": "string",
+                    "description": "What the event is about; absent or empty: plugin:<name>"
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "The plugin's own sentence (clients render it as plain text)"
+                  },
+                  "data": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {},
+                    "description": "At most 64 KB; redacted"
+                  },
+                  "durability": {
+                    "enum": [
+                      "durable",
+                      "ephemeral"
+                    ],
+                    "type": "string",
+                    "description": "ephemeral is refused for now (422)"
+                  }
+                },
+                "required": [
+                  "type",
+                  "stream",
+                  "text",
+                  "data"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "seq": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "seq"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/storage": {
+      "get": {
+        "operationId": "plugins.storageList",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. ctx.storage.list (spec §8.4, §9.6): its own keys under `prefix`, in name order, with their values. The storage is private to the plugin. 404 `not_found` for a run that doesn't exist.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "prefix",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "run",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A run id: that run's scope (deleted with the run); absent: the daemon scope"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "value": {},
+                          "rev": {
+                            "type": "string",
+                            "description": "Changes with every write"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "rev"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "entries"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plugins/{name}/storage/{key}": {
+      "get": {
+        "operationId": "plugins.storageGet",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. ctx.storage.get. `key` keeps its `/` as is. 404 `not_found` when it is unset.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$"
+            }
+          },
+          {
+            "name": "run",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A run id: that run's scope (deleted with the run); absent: the daemon scope"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {},
+                    "rev": {
+                      "type": "string",
+                      "description": "Changes with every write"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "rev"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "plugins.storagePut",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. ctx.storage.put and cas: with `expect` (the JSON text of the current value, or null for \"unset\") a compare-and-swap, whose mismatch is 409 `conflict` with `current`, the entry now. Values are JSON of at most 64 KB (422 beyond).",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$"
+            }
+          },
+          {
+            "name": "run",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A run id: that run's scope (deleted with the run); absent: the daemon scope"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "value": {},
+                  "expect": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {},
+                    "rev": {
+                      "type": "string",
+                      "description": "Changes with every write"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "rev"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error (404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error (409)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error (422)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "plugins.storageDelete",
+        "description": "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running. ctx.storage.delete; an unset key is 204 too.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+              "description": "A plugin's name: lowercase letters, digits and hyphens"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$"
+            }
+          },
+          {
+            "name": "run",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A run id: that run's scope (deleted with the run); absent: the daemon scope"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "not": {}
+                    },
+                    {
+                      "not": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error (403): not the token capcomd minted for this plugin's process (or, for events, it lacks the steer scope or the type isn't declared)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13148,6 +15353,52 @@
         "additionalProperties": {},
         "description": "Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. A suspended plugin's listeners are called again",
         "x-event-type": "plugin.resumed"
+      },
+      "PluginProcessChangedData": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string",
+            "description": "started, disconnected (its hooks stream has been closed for 60 s: its gate calls fail), reconnected, exited, restarting (more may come)"
+          },
+          "pid": {
+            "description": "The process's id; null when it couldn't be started",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "code": {
+            "description": "exited: its exit code; null when a signal ended it, and for the other events",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "restarts": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Its exits in the last 10 minutes: at 5 it is failed with cause restart_limit"
+          }
+        },
+        "required": [
+          "plugin",
+          "event",
+          "pid",
+          "code",
+          "restarts"
+        ],
+        "additionalProperties": {},
+        "description": "Capability plugins.protocol. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. An out-of-process plugin's process changed (spec §9.5): each start has a new session and token; a gate call in flight when it exited was denied",
+        "x-event-type": "plugin.process_changed"
       },
       "StreamResetFrame": {
         "type": "object",
