@@ -18,7 +18,7 @@ describe("the profiles setup writes", () => {
   test("a lead: the worker's settings, orchestrating up to 3 worker helpers, one level; a valid agents file", () => {
     const plan = planProject(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-"))));
     const by = Object.fromEntries(plan.profiles);
-    expect(plan.profiles.map(([n]) => n)).toEqual(["worker", "reviewer", "lead", "planner"]);
+    expect(plan.profiles.map(([n]) => n)).toEqual(["worker", "reviewer", "lead", "context-consolidator", "planner"]);
     // Plugin API §16.1: the lead and the planner orchestrate; their workers do the work.
     expect(by.lead).toEqual({ ...by.worker, description: LEAD_DESCRIPTION, toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });
     expect(by.planner!.toolMode).toBe("orchestrate");
@@ -76,7 +76,7 @@ describe("a children grant that would have no effect", () => {
 
   test("a planner may spawn a lead, and the lead keeps its own helpers one level down", () => {
     const by = Object.fromEntries(planProject(answers(mkdtempSync(join(tmpdir(), "capcomd-ts-")))).profiles) as Record<string, any>;
-    expect(by.planner.children.allowedChildProfiles).toEqual(["worker", "lead"]);
+    expect(by.planner.children.allowedChildProfiles).toEqual(["worker", "lead", "context-consolidator"]);
     expect(widenings(by.planner, by.lead)).toEqual([]);
     const underPlanner = childLimits(rootLimits(by.planner.children), by.lead.children);
     expect(applyGrant(underPlanner, { maxChildren: 3, maxDepth: 1 })).toMatchObject({ ok: true, limits: { allowSpawn: true, maxChildren: 3, maxDepth: 1, allowedChildProfiles: ["worker"] } });

@@ -5,6 +5,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: lessons land in the project's memory through a reviewed merge. `capcomd setup project` adds a
+  `context-consolidator` profile, and the planner spawns it as its run's last child when the run's agents proposed
+  lessons. It reads the run's candidates, the project's memory (`.capcomd/context/`) and the run's verifies and merges,
+  and answers with the changes to make (add a lesson, supersede an item a lesson contradicts, deprecate one); capcomd
+  writes them on its branch, with the provenance capcomd records (which agents proposed each, on which model) and the
+  `index.md` that `capcomd context lint --fix` writes. Its merge waits for your approval (`capcomd approve <runId>
+  <mrgId>`), the approval saying what changes and what lint flags; `context.review: lint` in its profile lands it on a
+  clean lint alone. It runs on the run's strongest model unless its profile names one. A run keeps at most 20 lessons
+  (`context.limits.proposalsPerRun`). See docs/agents.md, "How lessons land".
+- Changed: `capcomd verify` checks `.capcomd/context/` for any branch that changes it, and `capcomd merge` refuses one
+  from any agent but a consolidator (`memory lands only from a consolidator or a person`): a worker that edits the
+  project's memory directly now fails its verify. Have it propose the lesson in its result instead
+  (`capcomd result --data '{"context": [...]}'`); `capcomd merge --operator` still lands such a branch, recorded as a
+  bypass. A consolidator's branch must pass `capcomd context lint` against where it left its target.
 - New: a profile file can give its agents MCP servers, its own sandbox, environment and machine size, and plugins that
   must hear them. `tools.mcp: [{name, command, trust}]` starts each server in the agent's sandbox (never on your
   machine) for Claude Code and Codex, beside capcomd's own; `trust: trusted` approves its tools up front, `untrusted`

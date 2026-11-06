@@ -232,8 +232,7 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
   (`--set`, `--overrides`) can remove the block but not change it.
 - ADR-024's `memory:` block is read as `context:` (`memory: {scope: project}` is `context: {providers: [{name:
   memory}]}`). One change from what ADR-024 described: the directory is read from the repository and is never
-  written back by the agent; changes to it are reviewed commits (promotion through a reviewed merge arrives with
-  ADR-025 step 3).
+  written back by the agent; changes to it are reviewed commits (a run's consolidator's, below, or a person's).
 
 ### Lessons agents propose
 
@@ -253,7 +252,7 @@ when it doesn't say), an `op` (`add`, `supersede`, `deprecate`) and the `target`
 - A lesson holding a secret is refused, never redacted: a secret capcomd put in the run (an agent's API key, a token
   in its environment, the forge's credential), anything shaped like a credential or a long random-looking string, or a
   path where credentials are kept (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`). So is one over 4 KB
-  (`context.limits.itemBytes`) and, when a profile sets `context.limits.proposalsPerRun`, one past the run's limit.
+  (`context.limits.itemBytes`), and one past the run's limit of 20 (`context.limits.proposalsPerRun`).
 - `capcomd events <runId>` shows `plugin.context.proposed` for each candidate and `plugin.context.refused` for each
   refusal (its number and reason, never its text); `capcomd kv get <runId> _context/<agentId>` shows an agent's
   candidates.
@@ -275,6 +274,36 @@ that `index.md` is what `--fix` writes. An item is never deleted (set `status: d
 (supersede it with a new one). Warnings don't fail it: a stale item, a description the brief cuts, a body over 4 KB,
 a body that reads like an instruction or a command. A link in `.capcomd/context/` (or the directory being one) is a
 problem, and `--fix` never writes `index.md` through one.
+
+### How lessons land: the consolidator
+
+A run's candidates reach `.capcomd/context/` through one reviewed change, made by the run's last child: an agent of
+the `context-consolidator` profile, which `capcomd setup project` writes (read-only tools, briefed with the project's
+memory) and lets the planner spawn. The planner's orchestration skill tells it to, once every other child has ended,
+when the run's agents proposed lessons:
+
+```bash
+capcomd spawn --profile context-consolidator --task "Consolidate this run's lessons" --key consolidate
+```
+
+- It reads every candidate (in its prompt, fenced as the proposing agent's text), the project's memory and the run's
+  verifies and merges, and answers with the changes to make: add a lesson, supersede an item a candidate contradicts,
+  deprecate one the repository no longer supports, each naming the candidates it comes `from` and the `outcomes` that
+  confirm it. It edits nothing itself, and its checkout isn't kept.
+- capcomd writes its changes on its branch (`capcomd/<run>/<its id>`) when it ends: each new item a draft whose
+  provenance capcomd stamps (the consolidator, the run, the model, and the agents whose candidates it consolidates), a
+  lesson already there counted as `helpful` instead of added twice, one titled as an existing item superseding it, and
+  `index.md` as `capcomd context lint --fix` writes it. Its result has the `branch`, the `commit` and `context` (what
+  was applied and refused); `capcomd events` shows `plugin.context.staged`.
+- It runs on the run's strongest model unless its profile names one (`model:`).
+- Verify and merge its branch as any child's. `capcomd verify` runs `capcomd context lint` as a check (against the
+  commit the branch left its target at). `capcomd merge` then waits for your approval (`awaiting_approval`, held by
+  `context-memory`, the reason listing the items and anything lint flags, such as a lesson that reads like an
+  instruction): approve it with `capcomd approve <runId> <mrgId>` after reading the change. Set `context.review: lint`
+  in the consolidator's profile to land its changes on a clean lint alone.
+- A branch of any other agent that changes `.capcomd/context/` fails its verify and is refused at merge (`memory lands
+  only from a consolidator or a person`); `capcomd merge --operator` lands it anyway, recorded as bypassing the gate.
+  A person's own commits to `.capcomd/context/` aren't capcomd's to judge (run `capcomd context lint` before pushing).
 
 ### Business knowledge: a groundray brain
 

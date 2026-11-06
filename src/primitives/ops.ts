@@ -520,8 +520,10 @@ export async function spawnAgent(o: SpawnOpts) {
   const asksFanOut = grant.allowSpawn === true || (grant.maxChildren ?? 0) > 0 || (grant.maxDepth ?? 0) > 0 || (grant.maxTotalDescendants ?? 0) > 0 || !!grant.allowedChildProfiles?.length;
   if (asksFanOut && !(spec as any)?.children?.allowSpawn) throw new RelayError("config", `profile ${resolved.name} can't spawn, so children (fan-out) would have no effect on it`, "To delegate a part, spawn a profile that can lead (capcomd_profiles canLead, e.g. lead) with children {maxChildren: N, maxDepth: 1}. For an agent that works alone, leave children out.", { code: "cannot_spawn" });
   // Recorded with the agent (agent.spawned, harness.v1 Agent.model): the model it runs with, as the worker decides it
-  // (loadAgentConfig: CAPCOMD_AGENT_MODEL, else the profile's). A fake agent runs no model.
-  const model = isRealAgent(resolved.kind) ? agentModel(resolved.spec) : undefined;
+  // (loadAgentConfig: CAPCOMD_AGENT_MODEL, else the profile's). A fake agent runs no model. A consolidator whose profile
+  // names none runs on the run's strongest (ADR-025 D6: the writer's quality is what transfers).
+  const consolidator = resolved.name === (await import("../context/consolidate")).CONSOLIDATOR_PROFILE;
+  const model = isRealAgent(resolved.kind) ? agentModel(resolved.spec) ?? (consolidator && spec?.provider ? (await (await import("../context/consolidator")).strongestModel(o.runId, String(spec.provider)).catch(() => null)) ?? undefined : undefined) : undefined;
   const effort = isRealAgent(resolved.kind) ? agentEffort(resolved.spec) : undefined;
   const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}) });
   // Its profile's skills (ADR-024 §7 step 5), pinned by hash on its spec; their text is kept with the run, so whoever
@@ -951,13 +953,17 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const review = reviewOf(a);
   const report = (a.contract as any)?.report === true;
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
+  // ADR-025 §5.2: a consolidator answers with deltas, which the kernel stages on its branch when it ends (settlePushed);
+  // a real one reads the run's candidates and outcomes in its prompt (a scripted one reads them with its capcomd).
+  const { isConsolidator, consolidationInputs } = await import("../context/consolidator");
+  const consolidate = isConsolidator(a) && !review && !report ? { inputs: exec && mode !== "script" ? await consolidationInputs(runId) : "" } : null;
   // Children branch from the run's target (a staging branch) when the operator set one.
   const target = await runTarget(runId);
   // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
   const named = shownTitle(a.titleState, a.task);
   const title = named.title && named.titleSource !== "derived" ? named.title : null;
   const machine = pinnedMachine(a.spec);
-  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(consolidate ? { consolidate } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
   return { kind: "pushed", pushed, vmRpc: !!vmRpc };
 }
@@ -1021,8 +1027,38 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const blocked = orchestrate && !limit && !(await s.listAgents({})).some((x: ScopeAgent) => x.parent === agentId)
     ? { error: `${agentId} is an orchestrate agent and spawned no agents, so nothing it did can land${lastWords ? `. It said: ${lastWords.slice(0, 500)}` : ""}`, errorKind: "orchestrate_no_children" } : {};
   const said = orchestrate && !declared.summary && lastWords ? { summary: lastWords } : {};
-  const fin = await s.finish({ agentId, status: limit || "error" in blocked ? "failed" : "done", spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, verification: null, branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+  // ADR-025 §5.2: a consolidator's answer is staged on its branch by the kernel; that branch is its work.
+  const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;
+  // A consolidator's work is only what was staged: no list, nothing to stage or a staging that failed is no branch.
+  const work = consolidated ? { branch: consolidated.staged?.sha ? branch : null, commit: consolidated.staged?.sha ?? null } : { branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null };
+  const fin = await s.finish({ agentId, status: limit || "error" in blocked || consolidated?.error ? "failed" : "done", spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, ...consolidated?.result, verification: null, ...work, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
   return fin.agent;
+}
+
+/**
+ * A consolidator's end (ADR-025 §5.2, §5.3): its `context` list (in its declared result's data, else its final message)
+ * staged on its branch (src/context/consolidator.ts); what was applied and refused goes on its result (`context`),
+ * with a summary in the kernel's words when it gave none. null for any other agent. One it can't stage ends failed.
+ */
+async function consolidatedOf(runId: string, a: ScopeAgent, declared: Record<string, any>, rec: any) {
+  const { isConsolidator, stageOnBranch } = await import("../context/consolidator");
+  if (!isConsolidator(a)) return null;
+  const { deltasIn } = await import("../context/consolidate");
+  const given = declared.data?.context;
+  const raw = Array.isArray(given) ? given : deltasIn(typeof rec.resultText === "string" ? rec.resultText : null);
+  const summary = (text: string) => (declared.summary ? {} : { summary: text });
+  if (!raw) return { staged: null, error: null, result: { ...summary("It gave no list of memory changes, so nothing was staged."), context: { applied: [], refused: [], ignored: [] } } };
+  try {
+    const st = await stageOnBranch(runId, { agentId: a.agentId, profile: a.profile, spec: a.spec, taskId: taskLabelOf(a, a.agentId) }, raw);
+    const changes = st.applied.filter((x) => x.op !== "duplicate").length;
+    const text = st.sha
+      ? `Staged ${changes} memory change${changes === 1 ? "" : "s"} on ${st.branch} (${st.applied.map((x) => (x.op === "supersede" ? `supersede ${x.target} with ${x.id}` : `${x.op} ${x.id}`)).join(", ")})${st.refused.length ? `; ${st.refused.length} refused` : ""}.`
+      : `Nothing to stage: ${st.applied.length ? "the project's memory says it already" : st.refused.length ? `all ${st.refused.length} of its changes were refused` : "it gave no changes"}.`;
+    return { staged: st, error: null, result: { ...summary(text), context: { applied: st.applied, refused: st.refused.map(({ n, reason }) => ({ n, reason })), ignored: st.ignored, lint: { errors: st.lint.errors.length, warnings: st.lint.warnings } } } };
+  } catch (e) {
+    const error = `its memory changes could not be staged: ${String((e as Error)?.message ?? e).slice(0, 500)}`;
+    return { staged: { sha: null }, error, result: { error, context: { applied: [], refused: [], ignored: [] } } };
+  }
 }
 
 async function driveOnce(runId: string, agentId: string, driver = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`, seen: EngineSeen = {}): Promise<ScopeAgent> {

@@ -157,6 +157,11 @@ result="fixed sum"
 if [[ "$prompt" == *"[review-check]"* ]]; then
   if sh ./check.sh >/dev/null 2>&1; then result='{\"passed\":true,\"reasons\":[\"check.sh passes\"]}'; else result='{\"passed\":false,\"reasons\":[\"check.sh fails\"]}'; fi
 fi
+# [consolidate:ID]: a consolidator (ADR-025 §5.2) whose final message is one memory change consolidating candidate ID
+case "$prompt" in *"[consolidate:"*)
+  cid=$(printf '%s' "$prompt" | sed -n 's/.*\[consolidate:\([^]]*\)\].*/\1/p')
+  result="I read the candidates and the memory.\\n\\n\`\`\`json\\n{\\\"context\\\": [{\\\"title\\\": \\\"Sum helper\\\", \\\"text\\\": \\\"src/sum.ts adds numbers; the test in src/sum.test.ts covers negatives.\\\", \\\"from\\\": [\\\"$cid\\\"]}]}\\n\`\`\`";;
+esac
 case "$prompt" in *"[peek:"*)
   ref=$(printf '%s' "$prompt" | sed -n 's/.*\[peek:\([^]]*\)\].*/\1/p')
   git fetch -q origin "$ref" >/dev/null 2>&1 && git checkout -q --detach FETCH_HEAD >/dev/null 2>&1;;

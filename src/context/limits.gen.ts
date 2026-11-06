@@ -6,7 +6,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "indexLines": 200,
     "descriptionChars": 150,
     "itemBytes": 4096,
-    "proposalsPerRun": null,
+    "proposalsPerRun": 20,
     "measured": false
   },
   "claude-opus-5-5": {
@@ -14,7 +14,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "indexLines": 200,
     "descriptionChars": 150,
     "itemBytes": 4096,
-    "proposalsPerRun": null,
+    "proposalsPerRun": 20,
     "measured": false
   },
   "claude-sonnet-5-5": {
@@ -22,7 +22,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "indexLines": 200,
     "descriptionChars": 150,
     "itemBytes": 4096,
-    "proposalsPerRun": null,
+    "proposalsPerRun": 20,
     "measured": false
   },
   "gpt-6.1-sol": {
@@ -30,7 +30,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "indexLines": 200,
     "descriptionChars": 150,
     "itemBytes": 4096,
-    "proposalsPerRun": null,
+    "proposalsPerRun": 20,
     "measured": false
   }
 };

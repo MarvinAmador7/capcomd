@@ -629,6 +629,61 @@ this list says why):
   already says, nothing stale within a week). It reaches agents that may spawn, the ones with an in-VM `capcomd
   result`; Hermes' full routing paragraph as a hash-pinned skill of its own still waits for step 6.
 
+**Made while building step 3** (spec 1.0.30; where the code and §5.2, §5.3 or §11.1 differ, the code is right and
+this list says why):
+
+- **The consolidator writes no file; the kernel stages what it answers.** §5.2 had it write under `.capcomd/context/`
+  with the provider's tool policy holding it to that path. Three things made that the wrong place: `index.md` must be
+  byte for byte what lint writes, which a model can't promise and an agent can't run (there is no `capcomd context` in a
+  VM, D16); an item's provenance has to name the agents whose candidates it consolidates, which only the kernel's
+  records hold; and Codex has no path-scoped write. So its answer is a list of `ContextProposal`s, as a worker's, plus
+  `from` (the candidate ids it consolidates) and `outcomes` (the verifies and merges that confirm it), and the kernel
+  stages them on its branch when it ends (`src/context/consolidator.ts` over `src/context/consolidate.ts`, in a host
+  clone, as `src/merge/fakework.ts` makes a fake agent's commit): §3.2's "Stage only: a file on a branch". "Writes only
+  `.capcomd/context/`" is then true by construction, and the gates check it anyway. The profile is `execute` (`toolMode`
+  unset), but the agent works as a reporting agent does: a read-only checkout of the run's target, nothing of it kept,
+  its final message its answer (a JSON block; a scripted agent's `capcomd result --data`). It reads its run in its
+  prompt (every candidate fenced as its agent's text, refusals by number and reason, the run's verifies and merges by
+  id), since an agent that may not spawn has no in-VM `capcomd` to read kv with.
+- The staging rules (deterministic: a replay stages the same files, and a branch already there is the answer): an `add`
+  whose words are mostly an active item's (Jaccard ≥ 0.8) adds nothing and counts one more `helpful` (a memory item's: a
+  fact's file, counters too, is a person's to change), an `add` titled as an active memory item supersedes it (the
+  planted-contradiction case: the brief never shows two active items with one subject, and the newer wins), `supersede`
+  makes the target `deprecated` and `superseded_by` the new item, `deprecate` deprecates; a target is an active memory
+  item (a fact is a person's to change), changed once per staging; counters alone stage nothing (a person isn't asked to
+  approve a counter). Every string is scanned as a candidate's is, and a delta holding the redactor's placeholder is
+  refused too (the final message and an RPC's arguments are redacted on their way, so a credential's remains could still
+  be there). A new item is a draft, `generated` by the consolidator (`agent-generated`), `origin` the kernel's record of
+  it, `sources` the candidates (who proposed each, with which profile and model), `stale_after` from D8 (lesson 180
+  days, feedback 90, reference none) or the memory provider's `retain` in the profile.
+- The profile is recognised by its name, `context-consolidator`. Until ADR-024 §7 step 9 ships bundled profiles,
+  `capcomd setup project` writes it (read-only tools, a read-only Codex sandbox, briefed with the project's memory,
+  `context.review: human`) and adds it to the planner's `allowedChildProfiles`; the orchestration skill tells an agent
+  that may spawn it to do so last, when the run's agents proposed lessons, and tells every agent that may spawn that a
+  child's work never changes `.capcomd/context/`. With no model in its profile it runs on the run's strongest: the
+  first, in the curated table (`src/config/models.ts`), of the models the run's agents on its provider use.
+- `proposalsPerRun` is 20 in capcomd's defaults and every eval file: the run's candidates (capture) and the changes one
+  consolidator stages, so the one hold a person reads stays one screen.
+- Lint as a check is `context-memory`'s `verify.judging` judge and its `merge.landing` gate, both over
+  `src/context/promotion.ts`: a branch that touches `.capcomd/context/` (a rename out of it too, and the directory or
+  `.capcomd` made a file or a link, which an agent's checkout would follow) is denied unless it is a consolidator's; a
+  consolidator's is denied for a file outside it, for the directory made a file or a link, and for any lint problem,
+  against the commit the branch left its target at (its merge base, not the target's tip: an item another run landed
+  since isn't "deleted"), with `outcomes` resolved against the run. The gate holds a passing consolidator branch for a
+  person (`review: human`; the reason lists the items and lint's warnings, the instruction flag among them) under
+  `holdId memory@<commit>`, or lets it land (`review: lint`, read from the consolidator's pinned `context` block: the
+  per-project switch is the project's consolidator profile). Both read the branch in a clone of the run's repository
+  kept for them (a host repo), fail closed, and are asked about every verify and merge (they let a branch that doesn't
+  touch the directory through without reading further); the judge runs before the reviewer gate, so a memory change that
+  can't land costs no review. A branch that isn't an agent's (a person's) isn't judged.
+- Two runs' consolidators land one at a time under the target's lock, the second integrated on the first. `index.md` is
+  one sorted line per item, so items far apart in it merge cleanly; two that sort next to each other conflict, and the
+  second merge fails (its planner spawns a consolidator again, from the new target). `plugin.context.staged` joins §10's
+  events.
+- Not built in this step: `harmful` counters and outcome-driven deprecation are the consolidator model's to propose
+  (only dedupe moves `helpful`); a stale-item sweep at consolidation is its to propose too; the signing of landed items
+  stays deferred.
+
 **Made while building step 4** (spec 1.0.29; groundray's read path, `src/context/groundray.ts`, the built-in
 `context-groundray`):
 

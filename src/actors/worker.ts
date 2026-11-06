@@ -256,6 +256,9 @@ export type PushBranchParams = {
   review?: { sha: string; branch: string; target: string; targetSha?: string };
   /** Report mode: read-only work; the final message is the result, nothing is pushed. */
   report?: boolean;
+  /** ADR-025 §5.2: a consolidator answers with memory changes, which the kernel stages on its branch when it ends; the
+   *  agent pushes nothing. `inputs`: the run's candidates and outcomes, which its prompt carries. */
+  consolidate?: { inputs: string };
   /** The agent's title when it starts (the driver's, its parent's or the user's): its commit's subject before the brief. */
   title?: string;
   /** What its profile pinned for its machine (as provisionWorker got it): the same sandbox, environment and size. */
@@ -398,7 +401,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     const items = scope ? itemWriter(scope, workerId) : null;
     const res = await runAgent(adapter, provider, vmId, {
       runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
-      goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}), ...(params.report ? { report: true } : {}),
+      goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}),
+      // A consolidator works as a reporting agent does (a read-only checkout of the target; nothing kept or pushed), with its own prompt.
+      ...(params.report || params.consolidate ? { report: true } : {}), ...(params.consolidate ? { consolidate: params.consolidate } : {}),
       ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
     }, setup.config!, {
       apiKey,
@@ -463,8 +468,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     orchestrateWrites = res.orchestrateWrites;
     // The `capcomd run` recipe has no stopped state: its task fails, with the work kept on the branch.
     if (limit && !workerId.startsWith("agt-")) throw new UserError(`agent ${stoppedAt(limit)}; its work so far is on ${branch}`, { code: "limit", metadata: { kind: "limit" } });
-  } else if (params.review || params.report) {
-    // Fake sandbox reviewer/reporter: nothing to run or push (a scripted one declares its result itself).
+  } else if (params.review || params.report || params.consolidate) {
+    // Fake sandbox reviewer/reporter/consolidator: nothing to run or push (a scripted one declares its result itself).
   } else {
     if (fakeDelay > 0) await new Promise((r) => setTimeout(r, fakeDelay)); // test knob: a slow push
     if (process.env.CAPCOMD_FAKE_PUSH_FAIL) throw new Error(process.env.CAPCOMD_FAKE_PUSH_FAIL); // test knob: a push that always fails
@@ -478,7 +483,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused. Never for a real orchestrate agent
   // (plugin API §16.1): it has no work of its own, on a fake sandbox either.
   const orchestrated = isRealAgent(agent) && setup.config?.toolMode === "orchestrate";
-  if (!sha && !params.review && !params.report && !orchestrated && cfg && (sandbox ? sandbox.startsWith("fake") : getDependencies().fakeWork) && params.runId) {
+  if (!sha && !params.review && !params.report && !params.consolidate && !orchestrated && cfg && (sandbox ? sandbox.startsWith("fake") : getDependencies().fakeWork) && params.runId) {
     sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
   }
 
