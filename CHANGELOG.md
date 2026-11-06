@@ -5,6 +5,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: share agent profiles through git. `capcomd profiles install <owner/repo>[#<name>][@<ref>]` (a git URL or a
+  local repository path works too) copies a profile package (a folder with a `profile.yaml`, its prompts and
+  `skills/`) into `~/.capcomd/profiles/<name>/`, or with `--project` into the project's `.capcomd/profiles/<name>/` to
+  commit, with a `LOCK` file recording where it came from, the commit and a hash of every file. Profiles are data:
+  capcomd refuses a package with an executable file, one that points at a file outside its folder, and one your
+  profiles wouldn't work with (it extends a profile you don't have, say). `capcomd profiles update <name>` fetches it
+  again and shows which files, skills (by hash), commit and hash changed before replacing it, keeping an
+  `override.yaml` you put beside it (`--dry-run` only shows); `capcomd profiles show` and `validate` say when you
+  edited an installed package since. `capcomd profiles export <name>` writes a profile as a package to share (`--flat`:
+  resolved into one `profile.yaml` with its skills, no `extends`; `--out DIR`), and `capcomd profiles rm` removes an
+  installed one. See docs/agents.md, "Sharing profiles".
+- Changed: skills in a project's profiles (`.capcomd/profiles/<name>/skills/`, which come with the repository) reach
+  agents only once you trust them: `capcomd profiles trust <name>` shows each skill (description, file, hash) and asks
+  (`--yes` for scripts). Until then spawning that profile is refused (`reason: "untrusted"`), and an edited skill
+  needs trusting again. Your own profiles' skills (`~/.capcomd/profiles/`) and `~/.claude/skills` need no trust.
 - Fix: a background job that ended just as capcomd looked at it could be reported finished with its last output
   missing from its size; the size is now read after the exit code.
 - New: install plugins from a git repository. `capcomd plugins install <owner/repo>[#<name>][@<ref>]` (a git URL or a

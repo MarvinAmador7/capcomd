@@ -83,8 +83,8 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   child wider than the profile that spawns it), or that an `override.yaml` would hide, is refused and nothing is
   written. `capcomd profiles add <name> --extends <parent>` (or with a `--set` only a profile file holds, such as
   `tags`) writes `.capcomd/profiles/<name>.yaml` at version 1; without, `add` writes `agents.json` as before. `rm`
-  removes an `agents.json` entry or a single profile file, but not a package (a directory with its own files) or a
-  profile another one extends.
+  removes an `agents.json` entry, a single profile file or a package `capcomd profiles install` put there (below), but
+  not a package you made yourself (a directory with its own files) or a profile another one extends.
 - The harness API does the same: `GET /v1/profiles/{name}` serves a profile as rows an app renders and edits (each
   value with its type, the file that sets it, and whether it can be changed there; never a prompt's text), and `PUT
   /v1/profiles/{name}` changes them (a token with the `configure` scope, an `Idempotency-Key` and the `rev` it read).
@@ -92,7 +92,8 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   profiles set` or by editing the file isn't (capability `profiles.edit`).
 - What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`): `identity.title` (the
   name to show; not passed to a profile that `extends` it, nor is `identity.avatar`), `tags` (lowercase words, what
-  the profile is for: `[review, security]`), `sharing` (`source`, `license`: where an installed profile came from) and
+  the profile is for: `[review, security]`), `sharing` (`source`, `license`: where the profile is published; an
+  installed one's `LOCK` says where it was installed from) and
   `canReport` from `permissions.report`. capcomd adds `fit`, one line it writes from the profile's settings, never
   from its text ("read-only; Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn"), and
   `cost`, its model's list price (`low`: Haiku, `-mini`/`-nano`; `medium`: Sonnet, GPT; `high`: Opus, `-pro`; null
@@ -171,6 +172,51 @@ system prompt, Codex's prompt), after the profile's `prompt.append`, each in a `
 - At most 8 skills and 256 KB of `SKILL.md` together, as on a message; a profile that may spawn keeps one of the 8 and
   32 KB for the orchestration skill. A missing, empty or too big skill makes the profile invalid (`capcomd profiles
   validate` names it), as any other mistake in it does.
+- A skill from the project's profiles (`.capcomd/profiles/`, which come with the repository) is instructions someone
+  else may have written, so its agents get it only once you have looked at it: `capcomd profiles trust <name>` shows
+  each of the profile's project skills that you haven't trusted as it is (its description, file, size and sha256) and
+  asks (`--yes` for scripts; without a terminal it is required). Until then a spawn of the profile is refused
+  (`reason: "untrusted"`), and `capcomd profiles validate` and `show` say so. Trust is kept per `SKILL.md` content and
+  place in `~/.capcomd/trust.json`: an edited skill, or the same one in another checkout, needs trusting again. Your
+  own profiles' skills (`~/.capcomd/profiles/`) and your `~/.claude/skills` need no trust. `capcomd profiles trust`
+  with no name lists the project's skills and whether each is trusted.
+
+### Sharing profiles: `install`, `update`, `export`
+
+A profile package is a directory with a `profile.yaml` and the text files it names (prompts, a persona,
+`skills/<name>/SKILL.md`), in any git repository.
+
+```bash
+capcomd profiles install acme/capcomd-profiles#security-critic@v1   # a git URL or a local repository path works too
+capcomd profiles install acme/capcomd-profiles#security-critic --project
+capcomd profiles update security-critic --dry-run
+capcomd profiles export lead --flat --out ./shared
+```
+
+- `install <owner/repo>[#<name>][@<ref>]` copies the package into your profiles (`~/.capcomd/profiles/<name>/`), or
+  with `--project` into the project's (`.capcomd/profiles/<name>/`, in the checkout, to commit), with a `LOCK` file:
+  where it came from, the commit, each file's sha256 and a hash of them all (the same `LOCK` as a plugin's, `kind:
+  "profile"`). `#name` picks the package whose `profile.yaml` has that name (else the repository's root one, else its
+  only one); `@ref` is a branch, tag or commit (else the default branch). capcomd fetches it the way it fetches
+  plugins: nothing in it runs, and a link out of the package, more than 5000 files or 100 MB are refused. Profiles are
+  data, so a package with an executable file is refused, and so is one with an `override.yaml` (overrides are yours),
+  one whose manifest names a file outside its directory, and one the profiles here wouldn't resolve with (its
+  `extends` names a profile you don't have, say). A name already in that place is a conflict; one this project
+  defines too is installed and said to be hidden by the project's. A project's installed package is like any other
+  profile there: its skills wait for `capcomd profiles trust`.
+- `update <name>` fetches it again from the `LOCK`'s source (a branch moves, a tag or commit doesn't) and shows what
+  changed before replacing it: the files changed, added and removed, each skill whose `SKILL.md` hash changes, the old
+  and new commit and hash, and any file you edited since it was installed (which the update replaces; `capcomd
+  profiles show` and `validate` say when a package was edited). `--dry-run` stops there. An `override.yaml` you put
+  beside the package stays; an update the profiles wouldn't resolve with is put back. A name installed in both places
+  is the project's, as it resolves (`--project` looks only there).
+- `export <name>` writes the profile as a package to `./<name>/` (`--out DIR` for another place): its own files as
+  they are, `extends` kept (whoever installs it needs a profile of that name), or with `--flat` what it resolves to:
+  one `profile.yaml` with its ancestors and overrides laid in, its prompts as files, and each skill it is pinned with
+  from a package in `skills/`. `default` is never exported, nor the `LOCK`, nor anything of capcomd's state (a profile
+  holds no credential: `auth` is a mode).
+- `rm <name>` of an installed package deletes its directory and the trust given to its skills (refused while it holds
+  your `override.yaml`, or another profile extends it).
 
 ## Project memory: the `context` block
 
