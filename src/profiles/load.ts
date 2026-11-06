@@ -336,7 +336,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       const runtime = runtimeOf(doc);
       e.push(...runtimeProblems(name, runtime, spec));
       // Its skills, read from the nearest directory that has each (an override's, its own, then its ancestors').
-      const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true);
+      const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true, !!spec.context?.providers?.length);
       e.push(...sk.errors);
       e.push(...contextProblems(name, spec));
       if (e.length) return fail(e.join("; "));

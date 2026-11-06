@@ -21,8 +21,9 @@ import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { ARMS, armNamed } from "./eval-context/arms";
-import { actionsFromLogs, spendFromSpans, startingLimits, summarize, type Metrics, type Row } from "./eval-context/report";
+import { ARMS, armNamed, type Arm } from "./eval-context/arms";
+import { briefItems, inlineTask, pushText, triggered, type BriefItem } from "./eval-context/deliver";
+import { actionsFromLogs, admissions, decidedLimits, spendFromSpans, startingLimits, summarize, type Metrics, type Row } from "./eval-context/report";
 import { checkCommand, FAKE_EXPECTED, parseVerdict, suite, type Chain, type Step, type Verdict } from "./eval-context/tasks";
 import { generateWorld, repoFiles, worldHash } from "./eval-context/world";
 
@@ -33,6 +34,7 @@ const { values: a } = parseArgs({
     concurrency: { type: "string", default: "4" }, sandbox: { type: "string" }, "max-turns": { type: "string", default: "80" },
     "agent-timeout-min": { type: "string", default: "30" }, evidence: { type: "string" }, out: { type: "string" }, expect: { type: "boolean", default: false },
     keep: { type: "boolean", default: false }, work: { type: "string" }, list: { type: "boolean", default: false },
+    memory: { type: "string", default: "project" },
   },
 });
 const ROOT = resolve(import.meta.dir, "..");
@@ -49,6 +51,8 @@ const { chains: ALL_CHAINS, pending } = suite(world);
 const chains = a.chains ? a.chains.split(",").map((id) => ALL_CHAINS.find((c) => c.id === id) ?? fail(`no chain ${id}: ${ALL_CHAINS.map((c) => c.id).join(", ")}`)) : ALL_CHAINS;
 const arms = a.arms!.split(",").map((n) => armNamed(n) ?? fail(`no arm ${n}: ${ARMS.map((x) => x.name).join(", ")}`));
 for (const arm of arms) if (!arm.files) fail(`arm ${arm.name} isn't runnable yet: it needs ${arm.needs}`);
+// How much memory the index arms' project keeps (world.ts `contextFiles`): `project` (the default) or `small`.
+const MEMORY = a.memory === "small" || a.memory === "project" ? a.memory : fail(`--memory is small or project, not ${a.memory}`);
 const models = LIVE ? (a.models ?? fail("--agents live needs --models, e.g. claude-opus-5-5,gpt-6.1-sol")).split(",") : ["fake"];
 const REPS = int("reps", a.reps!, 1), CONCURRENCY = int("concurrency", a.concurrency!, 1);
 function fail(msg: string): never { console.error(`eval-context: ${msg}`); process.exit(2); }
@@ -166,19 +170,50 @@ function makeRepo(name: string, files: Record<string, string>): string {
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
 const title = (s: Step) => s.id.replace(/[.-]+/g, " ").split(" ").slice(0, 4).join(" ");
 
-async function runStep(env: Record<string, string>, runId: string, step: Step, profile: string, tag: string): Promise<{ agentId: string | null; status: string; verdict: Verdict; metrics: Row["metrics"]; harnessError?: string; landed?: boolean }> {
+type StepResult = { agentId: string | null; status: string; verdict: Verdict; metrics: Row["metrics"]; harnessError?: string; landed?: boolean; delivered?: Row["delivered"] };
+
+async function runStep(env: Record<string, string>, runId: string, step: Step, profile: string, tag: string, arm: Arm, files: Record<string, string>): Promise<StepResult> {
+  // Inline and triggered arms (step 6's questions): the router's brief for this agent's profile, now, says which items.
+  let items: BriefItem[] = [];
+  if (arm.inline || arm.triggered) {
+    const b = await cli(["context", "brief", profile, "--run", runId], env);
+    if (typeof b.j?.brief !== "string") return { agentId: null, status: "not-spawned", verdict: { success: false }, metrics: null, harnessError: `context brief failed: ${b.text.slice(-400)}` };
+    items = briefItems(b.j.brief);
+  }
   const t0 = Date.now();
-  const sp = await cli(["spawn", runId, "--profile", profile, "--task", step.prompt, "--title", title(step), "--key", step.id, ...(step.report ? ["--report"] : [])], env);
+  const inline = arm.inline ? inlineTask(step.prompt, items, files, arm.inline) : null;
+  const sp = await cli(["spawn", runId, "--profile", profile, "--task", inline?.text ?? step.prompt, "--title", title(step), "--key", step.id, ...(step.report ? ["--report"] : [])], env);
   const agentId: string | null = sp.j?.agentId ?? null;
   if (!agentId) return { agentId, status: "not-spawned", verdict: { success: false }, metrics: null, harnessError: `spawn failed: ${sp.text.slice(-400)}` };
   let agent: any = null;
   const deadline = t0 + Number(a["agent-timeout-min"]) * 60_000;
+  // Triggered: while the agent works, its tool calls are read every 2 s and an item it touched is pushed once.
+  const pushed = new Map<string, string>();
+  let watching = !!arm.triggered;
+  const watcher = (async () => {
+    while (watching) {
+      const l = await cli(["logs", runId, agentId, "--tail", "5000"], env);
+      for (const t of triggered((l.j?.lines ?? []).map((x: any) => String(x.line ?? "")), items, new Set(pushed.keys()))) {
+        const s = await cli(["send", runId, agentId, pushText(t.item, t.file, files)], env);
+        if (s.code === 0) pushed.set(t.item.file, t.file);
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  })();
   while (Date.now() < deadline) {
     const w = await cli(["await", runId, agentId, "--timeout-ms", String(Math.min(300_000, deadline - Date.now()))], env, 330_000);
     agent = w.j?.agents?.[0] ?? agent;
     if (agent && TERMINAL.has(agent.status)) break;
   }
-  if (!agent || !TERMINAL.has(agent.status)) { await cli(["cancel", runId, agentId, "--reason", "eval timeout"], env); return { agentId, status: "timeout", verdict: { success: false, error: "the agent didn't finish in time" }, metrics: null }; }
+  watching = false;
+  await watcher;
+  const delivered = { ...(inline ? { inlined: inline.inlined } : {}), ...(arm.triggered ? { pushed: [...pushed.keys()] } : {}) };
+  if (!agent || !TERMINAL.has(agent.status)) { await cli(["cancel", runId, agentId, "--reason", "eval timeout"], env); return { agentId, status: "timeout", verdict: { success: false, error: "the agent didn't finish in time" }, metrics: null, delivered }; }
+  const res = await scoreStep(env, runId, step, tag, agentId, agent, t0);
+  return { ...res, delivered };
+}
+
+async function scoreStep(env: Record<string, string>, runId: string, step: Step, tag: string, agentId: string, agent: any, t0: number): Promise<StepResult> {
   const wallSeconds = Math.round((Date.now() - t0) / 1000);
   const logs = await cli(["logs", runId, agentId, "--tail", "5000"], env);
   const lines: string[] = (logs.j?.lines ?? []).map((l: any) => String(l.line ?? ""));
@@ -213,7 +248,8 @@ async function runStep(env: Record<string, string>, runId: string, step: Step, p
 
 async function runChain(model: string, armName: string, rep: number, chain: Chain): Promise<Row[]> {
   const arm = armNamed(armName)!;
-  const bare = makeRepo(`${profileOf(model)}-${armName}-${rep}-${chain.id}`, { ...repoFiles(world), ...arm.files!(world) });
+  const files = { ...repoFiles(world), ...arm.files!(world, MEMORY) };
+  const bare = makeRepo(`${profileOf(model)}-${armName}-${rep}-${chain.id}`, files);
   const env = { CAPCOMD_REPO: bare };
   const rows: Row[] = [];
   let runId: string | null = null;
@@ -223,7 +259,7 @@ async function runChain(model: string, armName: string, rep: number, chain: Chai
       runId = r.j?.runId ?? null;
       if (!runId) { rows.push({ arm: armName, rep, chain: chain.id, family: chain.family, step: step.id, runId: null, agentId: null, status: "no-run", verdict: { success: false }, metrics: null, harnessError: `run new failed: ${r.text.slice(-400)}` }); break; }
     }
-    const res = await runStep(env, runId, step, profileFor(model, armName), `${profileOf(model)}-${armName}-${rep}-${step.id}`);
+    const res = await runStep(env, runId, step, profileFor(model, armName), `${profileOf(model)}-${armName}-${rep}-${step.id}`, arm, files);
     rows.push({ arm: armName, rep, chain: chain.id, family: chain.family, step: step.id, runId, ...res });
     log(`${model} ${armName}#${rep} ${step.id}: ${res.harnessError ? `HARNESS ${res.harnessError.slice(0, 160)}` : `${res.verdict.success ? "pass" : "fail"}${res.verdict.class ? ` (${res.verdict.class})` : ""}`}`);
     // A failed first step of a pair leaves nothing for the second to build on: the second isn't run.
@@ -234,7 +270,10 @@ async function runChain(model: string, armName: string, rep: number, chain: Chai
 }
 
 // ── the matrix ───────────────────────────────────────────────────────────────────────────────────
-const jobs = models.flatMap((model) => arms.flatMap((arm) => Array.from({ length: REPS }, (_, rep) => chains.map((chain) => ({ model, arm: arm.name, rep: rep + 1, chain }))).flat()));
+// An arm its delivery can't reach a model's agent with (a push to a Codex agent) isn't run for that model: recorded.
+const deliverable = (model: string, arm: Arm) => !arm.providers || arm.providers.includes(providerOf(model) as "claude" | "codex");
+const notRun = (model: string) => arms.filter((x) => !deliverable(model, x)).map((x) => ({ arm: x.name, why: `${providerOf(model)} agents can't receive it (${x.providers!.join(", ")} only): a Codex agent can't read a message while it runs` }));
+const jobs = models.flatMap((model) => arms.filter((arm) => deliverable(model, arm)).flatMap((arm) => Array.from({ length: REPS }, (_, rep) => chains.map((chain) => ({ model, arm: arm.name, rep: rep + 1, chain }))).flat()));
 const results = new Map<string, Row[]>(models.map((m) => [m, []]));
 const t0 = Date.now();
 let next = 0;
@@ -259,9 +298,12 @@ const reports = models.map((model) => {
   const seen = rows.map((r) => r.metrics?.model).find((m) => m && m !== "fake") ?? null;
   return {
     schema: "capcomd.eval-context.result/v1", date, model, provider: providerOf(model), modelReported: seen, agents: LIVE ? "live" : "fake",
-    sandbox: common.CAPCOMD_SANDBOX, capcomd: { version, commit }, seed: SEED, world: { company: world.company.name, hash: worldHash(world) },
+    sandbox: common.CAPCOMD_SANDBOX, capcomd: { version, commit }, seed: SEED, world: { company: world.company.name, hash: worldHash(world), memory: MEMORY },
     reps: REPS, minutes, arms: arms.map((x) => ({ name: x.name, what: x.what })), chains: chains.map((c) => ({ id: c.id, family: c.family, title: c.title, steps: c.steps.map((s) => ({ id: s.id, prompt: s.prompt })) })),
-    pending, summary: summarize(rows), rows,
+    pending, notRun: notRun(model), summary: summarize(rows),
+    // Step 6's questions (report.ts `admission`): each delivered arm against the one it would replace or extend.
+    admission: admissions(rows, arms, notRun(model).map((x) => x.arm)),
+    rows,
   };
 });
 for (const r of reports) {
@@ -270,15 +312,25 @@ for (const r of reports) {
   console.log(`${"step".padEnd(20)}${arms.map((x) => x.name.padEnd(30)).join("")}`);
   for (const s of stepIds) console.log(`${s.padEnd(20)}${arms.map((x) => { const v = r.summary[x.name]?.steps[s]; return (v ? `${v.success} ${Object.entries(v.classes).map(([k, n]) => `${k}:${n}`).join(",")}${v.probePassed ? ` probe ${v.probePassed}` : ""}${v.factReads ? ` reads ${v.factReads}` : ""}${v.harnessErrors ? ` ERR ${v.harnessErrors}` : ""}` : "-").padEnd(30); }).join("")}`);
   for (const x of arms) console.log(`${x.name}: ${r.summary[x.name]?.success ?? "-"} steps passed, $${r.summary[x.name]?.totalCostUsd ?? 0}, ${r.summary[x.name]?.totalWallSeconds ?? 0} agent-seconds`);
+  for (const d of r.admission) console.log(`${d.arm} against ${d.against}: ${d.admitted === null ? "undecided" : d.admitted ? "ADMITTED" : "not admitted"} (${d.reason})`);
 }
 if (a.out) writeFileSync(resolve(a.out), JSON.stringify(reports.length === 1 ? reports[0] : reports, null, 2));
 if (a.evidence) {
   for (const r of reports) {
     const dir = resolve(a.evidence, r.model);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${date}.json`), `${JSON.stringify(r, null, 2)}\n`);
-    if (!existsSync(join(dir, "limits.json"))) writeFileSync(join(dir, "limits.json"), `${JSON.stringify(startingLimits(r.model), null, 2)}\n`);
-    log(`wrote ${join(dir, `${date}.json`)}`);
+    // A second run on one day is <date>-2.json, and so on: evidence is never overwritten.
+    let name = `${date}.json`;
+    for (let i = 2; existsSync(join(dir, name)); i++) name = `${date}-${i}.json`;
+    writeFileSync(join(dir, name), `${JSON.stringify(r, null, 2)}\n`);
+    // The limits file: D4's starting values the first time; then what this run decided (inline items, triggered
+    // injection), when it ran the arms that decide it on a project's memory (a `small` one holds only what the tasks
+    // need, so its first k items are the answers: it is reported, never decides).
+    const lf = join(dir, "limits.json");
+    const prev = existsSync(lf) ? JSON.parse(readFileSync(lf, "utf8")) : startingLimits(r.model);
+    const next = `${JSON.stringify(MEMORY === "project" ? decidedLimits(prev, r.admission, name) : prev, null, 2)}\n`;
+    if (!existsSync(lf) || readFileSync(lf, "utf8") !== next) writeFileSync(lf, next);
+    log(`wrote ${join(dir, name)}`);
   }
   // The world itself isn't kept with the evidence: the seed and the generator's commit give it back (world.yaml is in
   // the scratch folder with --keep), and its carriers file holds the planted instruction, which has no place in docs.
@@ -297,7 +349,14 @@ if (a.expect) {
     // Re-discovery: without the instruction file the fake reads the meeting note; with it, it never does.
     if (r.step === "team-handoff.use" && r.metrics && (r.arm === "none" ? r.metrics.factReads < 1 : r.metrics.factReads !== 0)) bad.push(`${r.arm} team-handoff.use: factReads ${r.metrics.factReads}`);
     if (r.step === "business-fee" && r.arm !== "none" && r.verdict.cited !== world.shipping.current.id) bad.push(`${r.arm} business-fee: cited ${r.verdict.cited}`);
-    if (r.metrics && (r.metrics.toolCalls < 1 || r.metrics.cacheReadRatio === null)) bad.push(`${r.arm} ${r.step}: metrics not read from the logs (${JSON.stringify(r.metrics)})`);
+    // An item inlined in its first message can leave the fake nothing to read (team-handoff.find with the definition).
+    if (r.metrics && ((r.metrics.toolCalls < 1 && !armNamed(r.arm)?.inline) || r.metrics.cacheReadRatio === null)) bad.push(`${r.arm} ${r.step}: metrics not read from the logs (${JSON.stringify(r.metrics)})`);
+    // Delivery: k items inlined in every first message; a push for the record of the code the fake opened.
+    const k = armNamed(r.arm)?.inline;
+    if (k && r.delivered?.inlined?.length !== k) bad.push(`${r.arm} ${r.step}: inlined ${JSON.stringify(r.delivered?.inlined)}`);
+    const pushedFor = (file: string) => r.delivered?.pushed?.some((p) => p.endsWith(`/${file.toLowerCase()}.md`));
+    if (r.arm === "index-triggered" && r.step === "business-fee" && !pushedFor(world.shipping.current.id)) bad.push(`index-triggered business-fee: pushed ${JSON.stringify(r.delivered?.pushed)}`);
+    if (r.arm === "index-triggered" && r.step === "stale-tier" && !pushedFor(world.tiers.current.id)) bad.push(`index-triggered stale-tier: pushed ${JSON.stringify(r.delivered?.pushed)}`);
   }
   const ran = new Set(results.get("fake")!.map((r) => `${r.arm} ${r.step}`));
   for (const arm of arms) for (const s of chains.flatMap((c) => c.steps)) if (want[arm.name]?.[s.id] && !ran.has(`${arm.name} ${s.id}`)) bad.push(`${arm.name} ${s.id}: not run`);
