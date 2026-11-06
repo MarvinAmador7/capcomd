@@ -22,6 +22,23 @@ export interface GitHubApi {
   mergePull(repo: string, number: number, p: { merge_method: "squash" | "rebase" | "merge"; sha: string; commit_title?: string; commit_message?: string }): Promise<MergeResult>;
   /** Hand the PR to auto-merge / the merge queue. Best effort. */
   enableAutoMerge(repo: string, pr: PullRequest, method: "squash" | "rebase" | "merge"): Promise<boolean>;
+  /** The GitHub source (§16.3): the repository's issue and pull-request comments updated at or after `since`, oldest
+   *  first (at most 100). Optional: an adapter without it feeds no triggers. */
+  listIssueComments?(repo: string, since: string): Promise<IssueComment[]>;
+  /** The login the token belongs to (whose comments the source drops: capcomd's own). */
+  viewer?(): Promise<string>;
+}
+
+/** A comment on an issue or a pull request's conversation (GET /repos/{repo}/issues/comments). */
+export interface IssueComment {
+  id: number;
+  body: string;
+  user: { login: string; type?: string } | null;
+  html_url: string;
+  /** The issue's (or pull request's) API URL; its last segment is the number. */
+  issue_url: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export class GitHubHttpError extends Error {
@@ -98,6 +115,18 @@ export class HttpGitHub implements GitHubApi {
       variables: { id: pr.node_id, m: method.toUpperCase() },
     });
     return r.status === 200 && !r.json?.errors;
+  }
+
+  async listIssueComments(repo: string, since: string): Promise<IssueComment[]> {
+    const r = await this.req("GET", `/repos/${repo}/issues/comments?sort=updated&direction=asc&per_page=100&since=${encodeURIComponent(since)}`);
+    if (r.status !== 200) throw new GitHubHttpError(r.status, r.text, false);
+    return Array.isArray(r.json) ? (r.json as IssueComment[]) : [];
+  }
+
+  async viewer(): Promise<string> {
+    const r = await this.req("GET", "/user");
+    if (r.status !== 200 || typeof r.json?.login !== "string") throw new GitHubHttpError(r.status, r.text, false);
+    return r.json.login;
   }
 }
 

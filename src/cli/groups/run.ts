@@ -426,6 +426,38 @@ async function traceCommand({ positionals, json }: Cmd): Promise<number> {
   return EXIT.ok;
 }
 
+/** `capcomd triggers log|subscriptions` (plugin API §16.3): what the daemon's intake decided about each trigger, and the
+ *  threads runs follow, read from its records on this machine (the daemon need not run). */
+async function triggersCommand({ positionals, values, json }: Cmd): Promise<number> {
+  const sub = positionals[1] ?? "log";
+  const T = await import("../../triggers/intake");
+  if (sub === "subscriptions") {
+    const subs = T.listSubscriptionRecords().filter((s) => (!values.source || s.source === values.source) && (!positionals[2] || s.runId === positionals[2]));
+    if (json) { out({ subscriptions: subs }); return EXIT.ok; }
+    if (!subs.length) console.log("No run follows a thread.");
+    for (const s of subs) console.log(`${s.runId}  ${s.source}  ${s.thread}  ${s.until ? `until ${s.until}` : "while the run works, and 14 days after"}`);
+    return EXIT.ok;
+  }
+  if (sub !== "log") usage("usage: capcomd triggers log [--source S] [--limit N] | capcomd triggers subscriptions [runId] [--source S]");
+  const limit = values.limit !== undefined ? Number(values.limit) : 50;
+  if (!Number.isInteger(limit) || limit < 1) usage("--limit is a whole number of entries, at least 1");
+  const entries = T.readTriggerLog({ ...(values.source ? { source: String(values.source) } : {}), limit });
+  if (json) { out({ triggers: entries }); return EXIT.ok; }
+  if (!entries.length) console.log(values.source ? `No trigger from ${values.source} yet.` : "No trigger yet. Sources (a schedule, GitHub comments) send them once configured; see docs/spec/plugin-api.md §16.3.");
+  for (const e of entries) console.log(`${e.at}  ${e.source}  ${e.actor.id}${e.actor.bot ? " (bot)" : ""}  ${e.thread}  ${triggerOutcome(e.decision)}`);
+  return EXIT.ok;
+}
+function triggerOutcome(d: import("../../triggers/intake").LoggedDecision): string {
+  switch (d.kind) {
+    case "deduped": return `deduped (first seen ${d.first})`;
+    case "denied": return `denied by ${d.by}: ${d.reason}`;
+    case "recorded": return `recorded: would have ${d.wouldHave === "start" ? "started a run" : `continued ${d.runId ?? "a run"}`} (observe mode)`;
+    case "started": return `started ${d.runId}`;
+    case "continued": return `continued ${d.runId} (message ${d.seq})`;
+    case "failed": return `failed: ${d.reason}`;
+  }
+}
+
 /** `capcomd approve` */
 async function approveCommand({ positionals, values, json }: Cmd): Promise<number> {
   const runId = positionals[1] ?? usage("usage: capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]");
@@ -463,4 +495,5 @@ export const COMMANDS: Record<string, KernelCommand> = {
   "replay": eventsCommand,
   "trace": traceCommand,
   "approve": approveCommand,
+  "triggers": triggersCommand,
 };

@@ -104,9 +104,10 @@ src/
                   front doors (the CLI's groups, front-mcp, front-hermes), skill-orchestration.ts, the orchestration
                   skill as an agent.preparing patch, context.ts, the context router's listener and `capcomd context`,
                   and context-memory.ts, the `memory` context provider: every process loads them (host.ts `localHost`);
-                  process.ts, how the daemon starts an out-of-process plugin (filtered env, its token, its log, the chaos
-                  killpoints); storage.ts, a plugin's private storage. The user's plugins (~/.capcomd/plugins/<name>) run
-                  out of process.
+                  sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
+                  setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an
+                  out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's
+                  private storage. The user's plugins (~/.capcomd/plugins/<name>) run out of process.
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and
@@ -116,6 +117,9 @@ src/
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results
+  triggers/     - the trigger intake (plugin API §16.3): intake.ts, what the daemon does with a source's trigger (dedupe,
+                  a followed thread, the operator's gate, trigger.admitting, the accept mode, a run), subscriptions,
+                  ctx.triggers; its records in the daemon's state/triggers/ (`capcomd triggers log` reads log.ndjson)
   utils/        - lifecycle, killpoints, tracing, state paths
 apps/
   canvas/       - web UI (capcomd ui)
