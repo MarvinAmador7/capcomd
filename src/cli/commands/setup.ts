@@ -272,10 +272,11 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd(), l
   // guessed "main". Without one, the person names it (with --yes: --target).
   // Re-running setup keeps the project's target. Unknown: none is written, and each run asks for its base.
   const had = projectValues(dir)?.target ?? "";
-  const remoteHead = had || head || (originUrl(dir) ? (() => {
-    const r = spawnSync("git", ["ls-remote", "--symref", "origin", "HEAD"], { cwd: dir, encoding: "utf8", timeout: 15_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes -o ConnectTimeout=5" } });
-    return /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(r.stdout ?? "")?.[1] ?? "";
-  })() : "");
+  // Asked by origin's URL, outside any repository (src/merge/host-git.ts), so the checkout's git settings play no part.
+  const originAt = /^[a-z+]+:\/\/|^[^/]+@[^:/]+:/i.test(origin) || origin.startsWith("/") ? origin : resolve(dir, origin);
+  const remoteHead = had || head || (origin ? (await (await import("../../merge/host-git")).remoteDefaultBranch(originAt, {
+    timeoutMs: 15_000, env: { GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes -o ConnectTimeout=5" },
+  }).catch(() => null)) ?? "" : "");
   const target = String(v.target ?? await p.ask("Target branch: where runs start from and where their pull requests go (e.g. main, dev or develop; empty: each run asks)", remoteHead)).trim() || null;
   const check = String(v.check ?? await p.ask("The check every change must pass (a command; empty for none)", suggestCheck(dir) ?? ""));
   const agents: string[] = (v as any)._agents ?? String(v.agents ?? "claude").split(",");

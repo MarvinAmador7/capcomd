@@ -3,6 +3,7 @@ import { join } from "path";
 import type { MergeConfig } from "./config";
 import { taskKey } from "./config";
 import { openClone } from "./repo";
+import { remoteGit } from "./host-git";
 
 /**
  * Stand-in for a worker VM's git work when the sandbox is the in-memory fake: cut
@@ -25,6 +26,8 @@ export async function produceFakeWork(cfg: MergeConfig, p: { runId: string; task
   await git.ok(["add", rel]);
   await git.ok(["commit", "-q", ...(cfg.signCommits ? ["-S"] : []), "-m", `${p.taskId}: work for ${p.runId}\n\nCapcomd-Task: ${taskKey(p.runId, p.taskId)}`]);
   const sha = await git.ok(["rev-parse", "HEAD"]);
-  await git.ok(["push", "-q", `--force-with-lease=refs/heads/${p.branch}:${existing ?? ""}`, "origin", `${sha}:refs/heads/${p.branch}`]);
+  const pushed = await remoteGit(git, ["push", "-q", `--force-with-lease=refs/heads/${p.branch}:${existing ?? ""}`, cfg.remote, `${sha}:refs/heads/${p.branch}`], cfg.remote);
+  if (pushed.code !== 0) throw new Error(`git push ${p.branch} failed (${pushed.code}): ${(pushed.stderr || pushed.stdout).trim()}`);
+  await git.ok(["update-ref", `refs/remotes/origin/${p.branch}`, sha]);
   return sha;
 }

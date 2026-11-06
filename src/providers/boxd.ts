@@ -69,16 +69,6 @@ export interface BoxdLike {
   close?(): Promise<void>;
 }
 
-/**
- * Per-task short-lived git credentials. Called before every `git ...` exec; the
- * returned env is passed to that one exec only and never logged or stored.
- * Return null when no credential source is configured (git then runs without one).
- */
-export type GitCredentialHook = (ctx: { vmId: VmId; labels: Record<string, string>; cmd: string[] }) =>
-  Promise<Record<string, string> | null>;
-
-export const noGitCredentials: GitCredentialHook = async () => null;
-
 export interface BoxdProviderOptions {
   /** Injected client (tests). Defaults to `new Boxd({ apiKey })` from @boxd-sh/sdk. */
   client?: BoxdLike;
@@ -86,7 +76,6 @@ export interface BoxdProviderOptions {
   apiKey?: string;
   /** SQLite file for the idemKey → VM id ledger. Default env CAPCOMD_BOXD_DB or .relay/boxd.sqlite. */
   dbPath?: string;
-  gitCredentials?: GitCredentialHook;
   /** Keepalive interval. boxd auto-hibernates idle VMs (4h); default every 30 min. 0 disables. */
   keepaliveMs?: number;
   /** Org to create machines in (optional). */
@@ -119,7 +108,6 @@ export class BoxdProvider implements SandboxProvider {
   private db: Database;
   private keepalives = new Map<VmId, ReturnType<typeof setInterval>>();
   private labels = new Map<VmId, Record<string, string>>();
-  private gitCredentials: GitCredentialHook;
   private keepaliveMs: number;
   private org?: string;
   private prefix: string;
@@ -136,7 +124,6 @@ export class BoxdProvider implements SandboxProvider {
       const { Boxd } = require("@boxd-sh/sdk") as typeof import("@boxd-sh/sdk");
       this.client = new Boxd(apiKey ? { apiKey } : {}) as unknown as BoxdLike;
     }
-    this.gitCredentials = opts.gitCredentials ?? noGitCredentials;
     this.keepaliveMs = opts.keepaliveMs ?? 30 * 60_000;
     this.org = opts.org ?? process.env.BOXD_ORG;
     this.prefix = opts.namePrefix ?? MACHINE_PREFIX;
@@ -276,12 +263,9 @@ export class BoxdProvider implements SandboxProvider {
     }
   }
 
+  /** A command in the VM with exactly `opts.env`: never a git credential (plugin API §11.7, src/merge/transfer.ts). */
   async exec(id: VmId, cmd: string[], opts?: { env?: Record<string, string>; timeoutMs?: number; cwd?: string }): Promise<ExecResult> {
-    let env = opts?.env;
-    if (cmd[0] === "git") {
-      const creds = await this.gitCredentials({ vmId: id, labels: this.labels.get(id) ?? {}, cmd });
-      if (creds) env = { ...(env ?? {}), ...creds };
-    }
+    const env = opts?.env;
     try {
       const r = await this.client.machines.exec(id, {
         command: cmd,

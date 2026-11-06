@@ -9,6 +9,8 @@ import { activeAdapters } from "../agents/adapters";
 import { agentHome, agentPath, detectScript, installScript, parseDetect, sq, templateDir } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { rmSync } from "node:fs";
+import { join } from "node:path";
+import { stateDir } from "../utils/home";
 import { buildMarkerPath, ENV_PREFIX, ENV_SCHEMA, envName, ledgerPath, readBuildMarker, readLedger, writeBuildMarker, writeLedger, type EnvManifest, type EnvRecord } from "./resolve";
 
 import { LOCKFILES, TEMPLATE_LOCKHASH, TEMPLATE_MARKER, type TemplateMarker } from "../agents/workspace";
@@ -46,6 +48,9 @@ export interface BuildOptions {
   warm?: boolean;
   /** The branch the warm template is built from (the project's target; default: the repository's default branch). */
   target?: string;
+  /** Where the host keeps its git repos for `repoUrl` (MergeConfig.workdir): the VM never fetches with credentials,
+   *  the host does and hands it the commits (src/merge/transfer.ts). Default: <state>/host-git. */
+  hostGit?: { workdir: string };
 }
 
 export interface BuildResult { name: string; cached: boolean; record: EnvRecord; snapshot: SnapshotInfo }
@@ -123,16 +128,27 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     let template: EnvManifest["template"];
     if (o.repoUrl) {
       // Warm (Docker): the whole history of the target, so agents branch and rebase in it without cloning. Otherwise
-      // shallow: only its node_modules is reused.
-      const branch = o.warm && o.target ? ["--branch", o.target] : [];
-      const cloneArgs = o.warm ? ["clone", "--no-tags", ...branch, o.repoUrl, T] : ["clone", "--depth", "1", "--no-tags", o.repoUrl, T];
-      let clone = await p.exec(id, ["git", ...cloneArgs], { env: baseEnv, timeoutMs: o.warm ? 900_000 : 300_000 });
-      if (clone.code !== 0 && branch.length) {
-        log(`warm template: no branch ${o.target} to clone; using the repository's default branch`);
-        await sh(`rm -rf ${sq(T)}`);
-        clone = await p.exec(id, ["git", "clone", "--no-tags", o.repoUrl, T], { env: baseEnv, timeoutMs: 900_000 });
+      // only the default branch's tree: only its node_modules is reused. Either way the host fetches it and hands it to
+      // the VM (src/merge/transfer.ts): no git credential enters the VM, whose image runs the project's install next.
+      const T_ = await import("../merge/transfer");
+      const hostGit = { remote: o.repoUrl, workdir: o.hostGit?.workdir ?? join(stateDir(), "host-git") };
+      const box = { exec: (cmd: string[], x?: { cwd?: string; timeoutMs?: number }) => p.exec(id, cmd, { env: baseEnv, ...(x?.timeoutMs ? { timeoutMs: x.timeoutMs } : {}), ...(x?.cwd ? { cwd: x.cwd } : {}) }), upload: (path: string, d: Uint8Array) => p.upload(id, path, d) };
+      const fail = (e: unknown) => new Error(`env build: git clone failed: ${r.text(String((e as Error)?.message ?? e)).slice(-400)}`);
+      const fallback = async () => {
+        const d = await (await import("../merge/host-git")).remoteDefaultBranch(o.repoUrl!, { timeoutMs: 60_000 });
+        if (!d) throw fail(`the repository ${o.repoUrl} has no default branch`);
+        return d;
+      };
+      if (o.warm) {
+        try { await T_.sendToSandbox(hostGit, box, T, { branches: "all", checkout: o.target ?? await fallback(), timeoutMs: 900_000 }, { fresh: true }); }
+        catch (e) {
+          if (!o.target || !(e instanceof T_.TransferError) || !/no branch /.test(e.message)) throw fail(e);
+          log(`warm template: no branch ${o.target} to clone; using the repository's default branch`);
+          try { await T_.sendToSandbox(hostGit, box, T, { branches: "all", checkout: await fallback(), timeoutMs: 900_000 }, { fresh: true }); } catch (e2) { throw fail(e2); }
+        }
+      } else {
+        try { await T_.sendTree(hostGit, box, T, await fallback()); } catch (e) { throw fail(e); }
       }
-      if (clone.code !== 0) throw new Error(`env build: git clone failed: ${r.text(clone.stderr).slice(-400)}`);
       const lock = (await sh(`cd ${sq(T)} && for f in ${LOCKFILES.join(" ")}; do [ -f "$f" ] && { echo "$f $(sha256sum "$f" | cut -c1-64)"; break; }; done; true`)).stdout.trim();
       if (lock) [lockFile, lockHash] = lock.split(/\s+/) as [string, string];
       if (o.warm) {

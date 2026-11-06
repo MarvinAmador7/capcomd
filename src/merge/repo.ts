@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
 import { createHash } from "crypto";
 import { Git } from "./git";
+import { hostRepoProblems, initHostRepo, isHostRepo, lsRemote, remoteGit } from "./host-git";
 import type { MergeConfig } from "./config";
 import { withTargetLock } from "./lock";
 
@@ -27,7 +28,7 @@ export async function openClone(cfg: MergeConfig, name: string, o: { fetch?: boo
   return withCloneLock(cfg, name, async () => {
     const dir = cloneDir(cfg, name);
     // Without a fetch (the caller knows the refs it needs are current, and a push's lease checks it): only clean up.
-    if (o.fetch === false && existsSync(join(dir, ".git"))) { const git = new Git(dir); await clean(git, dir); return git; }
+    if (o.fetch === false && existsSync(join(dir, ".git")) && isHostRepo(dir)) { const git = new Git(dir); await clean(git, dir); return git; }
     return fetchClone(cfg, name, true);
   });
 }
@@ -44,17 +45,18 @@ async function fetchClone(cfg: MergeConfig, name: string, cleanMain: boolean): P
 
 async function fetchInto(cfg: MergeConfig, dir: string, cleanMain: boolean): Promise<Git> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (!existsSync(join(dir, ".git"))) {
+    // A host repo (src/merge/host-git.ts): one capcomd made, else (made before host repos, or something changed its
+    // settings or hooks) started over. The fetch is by the remote's URL, never `origin`.
+    if (!existsSync(join(dir, ".git")) || !isHostRepo(dir)) {
       rmSync(dir, { recursive: true, force: true });
-      mkdirSync(dir, { recursive: true });
-      const git = new Git(dir);
-      await git.ok(["init", "-q"]);
+      const git = await initHostRepo(dir);
       await git.ok(["remote", "add", "origin", cfg.remote]);
     }
     const git = new Git(dir);
     try {
       if (cleanMain) await clean(git, dir);
-      await git.ok(["fetch", "-q", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"]);
+      const f = await remoteGit(git, ["fetch", "-q", "--prune", cfg.remote, "+refs/heads/*:refs/remotes/origin/*"], cfg.remote);
+      if (f.code !== 0) throw new Error(`git fetch ${cfg.remote} failed (${f.code}): ${(f.stderr || f.stdout).trim()}`);
       return git;
     } catch (e) {
       if (attempt === 1) throw e;
@@ -152,33 +154,30 @@ export async function countTaskLandings(git: Git, targetRef: string, key: string
 
 /** Delete a ref on the remote (no clone needed). True when it is gone, including when it never existed. */
 export async function deleteRemoteRef(cfg: MergeConfig, ref: string): Promise<boolean> {
-  const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_refs");
-  if (!existsSync(join(dir, ".git"))) { mkdirSync(dir, { recursive: true }); await new Git(dir).ok(["init", "-q"]); }
-  const res = await new Git(dir).run(["push", "--porcelain", cfg.remote, `:${ref}`]);
+  const res = await remoteGit(await refsRepo(cfg), ["push", "--porcelain", cfg.remote, `:${ref}`], cfg.remote);
   return res.code === 0 || /remote ref does not exist|unable to delete .*: remote ref does not exist/.test(res.stdout + res.stderr);
 }
 
 /** The commit a branch points at on the remote (no clone needed), or null when it doesn't exist. Throws when git fails. */
 export async function remoteBranchSha(cfg: MergeConfig, branch: string, timeoutMs = 30_000): Promise<string | null> {
-  const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_refs");
-  if (!existsSync(join(dir, ".git"))) { mkdirSync(dir, { recursive: true }); await new Git(dir).ok(["init", "-q"]); }
-  const res = await new Git(dir).run(["ls-remote", cfg.remote, `refs/heads/${branch}`], { timeoutMs });
+  const res = await lsRemote(cfg.remote, [`refs/heads/${branch}`], { timeoutMs });
   if (res.code !== 0) throw new Error(`git ls-remote failed${res.timedOut ? " (timed out)" : ""}: ${(res.stderr || res.stdout).trim().slice(-300)}`);
   const sha = res.stdout.trim().split(/\s+/)[0];
   return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
 
-/** The scratch repository per remote that ref-only work runs in (ls-remote, a shallow fetch, a ref push): no clone. */
+/** The scratch host repo per remote that ref-only work runs in (a shallow fetch, a ref push): no clone. Started over
+ *  when it isn't one capcomd made, or fails the host repo check. */
 async function refsRepo(cfg: MergeConfig): Promise<Git> {
   const dir = join(cfg.workdir, createHash("sha1").update(cfg.remote).digest("hex").slice(0, 12), "_refs");
-  if (!existsSync(join(dir, ".git"))) { mkdirSync(dir, { recursive: true }); await new Git(dir).ok(["init", "-q"]); }
-  return new Git(dir);
+  if (existsSync(join(dir, ".git")) && isHostRepo(dir) && !(await hostRepoProblems(new Git(dir))).length) return new Git(dir);
+  rmSync(dir, { recursive: true, force: true });
+  return initHostRepo(dir);
 }
 
 /** Where each of `branches` points on the remote (null: no such branch), in one `git ls-remote`. Throws when git fails. */
 export async function remoteHeads(cfg: MergeConfig, branches: string[], timeoutMs = 20_000): Promise<Record<string, string | null>> {
-  const git = await refsRepo(cfg);
-  const res = await git.run(["ls-remote", cfg.remote, ...branches.map((b) => `refs/heads/${b}`)], { timeoutMs });
+  const res = await lsRemote(cfg.remote, branches.map((b) => `refs/heads/${b}`), { timeoutMs });
   if (res.code !== 0) throw new Error(`git ls-remote failed${res.timedOut ? " (timed out)" : ""}: ${(res.stderr || res.stdout).trim().slice(-300)}`);
   const out: Record<string, string | null> = Object.fromEntries(branches.map((b) => [b, null]));
   // Patterns match ref suffixes: keep exact names only.
@@ -199,7 +198,7 @@ export async function pointRemoteBranch(cfg: MergeConfig, branch: string, from: 
   const timeoutMs = o.timeoutMs ?? 60_000;
   const ref = `refs/capcomd/point-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   try {
-    const f = await git.run(["fetch", "-q", "--no-tags", `--depth=${o.depth ?? 1}`, cfg.remote, `+refs/heads/${from}:${ref}`], { timeoutMs });
+    const f = await remoteGit(git, ["fetch", "-q", "--no-tags", `--depth=${o.depth ?? 1}`, cfg.remote, `+refs/heads/${from}:${ref}`], cfg.remote, { timeoutMs });
     if (f.code !== 0) return { ok: false, reason: "push", detail: `git fetch ${from} failed${f.timedOut ? " (timed out)" : ""}: ${(f.stderr || f.stdout).trim().slice(-300)}` };
     const got = (await git.run(["rev-parse", ref])).stdout.trim();
     if (got !== sha) return { ok: false, reason: "push", detail: `${from} moved while capcomd read it (${sha.slice(0, 12)} → ${got.slice(0, 12)}); try again` };
@@ -208,7 +207,7 @@ export async function pointRemoteBranch(cfg: MergeConfig, branch: string, from: 
       if (anc.code !== 0) return { ok: false, reason: "not_ancestor", detail: `${branch} (${o.expect.slice(0, 12)}) has commits ${from} doesn't have` };
     }
     const lease = `--force-with-lease=refs/heads/${branch}:${o.expect ?? ""}`;
-    const p = await git.run(["push", "--porcelain", lease, cfg.remote, `${sha}:refs/heads/${branch}`], { timeoutMs });
+    const p = await remoteGit(git, ["push", "--porcelain", lease, cfg.remote, `${sha}:refs/heads/${branch}`], cfg.remote, { timeoutMs });
     if (p.code !== 0) return { ok: false, reason: "push", detail: `git push failed${p.timedOut ? " (timed out)" : ""}: ${(p.stdout + p.stderr).trim().slice(-300)}` };
     return { ok: true };
   } finally {

@@ -41,9 +41,8 @@ export function classifyDockerError(e: unknown): ErrorClass {
 const native: NativeSandbox = {
   create() {
     const { DockerProvider } = require("../../providers/docker") as typeof import("../../providers/docker");
-    // Agents push from the container: git network execs get a short-lived GitHub credential (env of that exec only).
-    const { githubGitCredentials } = require("../../agents/credentials") as typeof import("../../agents/credentials");
-    return new DockerProvider({ gitCredentials: githubGitCredentials() });
+    // No git credential ever reaches a container: the host fetches and pushes for its agents (plugin API §11.7).
+    return new DockerProvider();
   },
 };
 

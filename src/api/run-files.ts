@@ -4,9 +4,10 @@
 // from a bare mirror of the run's repository on the daemon host (fetched only for commits it doesn't have yet).
 // A diff is computed once per (commit, base) and kept in memory: both are immutable.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Git } from "../merge/git";
+import { hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
 import { APPROVAL_FILES_MAX, FILES_AGENTS_MAX, FILES_MAX } from "./contract";
 import { dottedType, isoTs } from "./envelope";
 import type { RawEvent } from "./source";
@@ -109,14 +110,20 @@ export class FilesMirror {
 		return p;
 	}
 
+	/** A host repo (src/merge/host-git.ts), started over when it isn't one or fails the check: it is only a cache. */
 	private async git(): Promise<Git> {
 		const git = new Git(this.dir, this.env);
-		if (!existsSync(join(this.dir, "HEAD"))) {
-			mkdirSync(this.dir, { recursive: true });
-			await git.ok(["init", "-q", "--bare"]);
+		if (!existsSync(join(this.dir, "HEAD")) || !isHostRepo(this.dir) || (await hostRepoProblems(git)).length) {
+			rmSync(this.dir, { recursive: true, force: true });
+			await initHostRepo(this.dir, { bare: true });
 			await git.ok(["remote", "add", "origin", this.remote]);
 		}
 		return git;
+	}
+
+	/** `git fetch` from the run's repository by its URL (never `origin`), into this host repo. */
+	private fetchIn(git: Git, args: string[]) {
+		return fetchFrom(git, this.remote, args, this.fetchTimeoutMs);
 	}
 
 	/**
@@ -131,10 +138,10 @@ export class FilesMirror {
 			let git: Git;
 			try { git = await this.git(); } catch { return { error: "could not open a local mirror of the run's repository" }; }
 			const ref = (b: string) => `refs/remotes/origin/${b}`;
-			const f = await git.run(["fetch", "-q", "--no-tags", "origin", `+refs/heads/${base}:${ref(base)}`, `+refs/heads/${head}:${ref(head)}`], { timeoutMs: this.fetchTimeoutMs });
+			const f = await this.fetchIn(git, [`+refs/heads/${base}:${ref(base)}`, `+refs/heads/${head}:${ref(head)}`]);
 			if (f.code !== 0) {
 				// One of them is missing on the remote: say which.
-				for (const b of [base, head]) if ((await git.run(["fetch", "-q", "--no-tags", "origin", `+refs/heads/${b}:${ref(b)}`], { timeoutMs: this.fetchTimeoutMs })).code !== 0)
+				for (const b of [base, head]) if ((await this.fetchIn(git, [`+refs/heads/${b}:${ref(b)}`])).code !== 0)
 					return { error: f.timedOut ? "fetching from the remote timed out" : `branch ${b} not found on the remote` };
 			}
 			const [baseSha, headSha] = [await git.revParse(ref(base)), await git.revParse(ref(head))];
@@ -154,7 +161,7 @@ export class FilesMirror {
 
 	/** A regular file (no tree, symlink or submodule) of one agent's latest work, at most WORKSPACE_FILE_MAX_BYTES. */
 	readFile(tip: WorkTip, path: string): Promise<WorkspaceFile> {
-		return this.serial(async () => readFileFrom(await this.git().catch(() => null), this.dir, this.env, tip, path));
+		return this.serial(async () => readFileFrom(await this.git().catch(() => null), this.dir, this.env, tip, path, this.remote));
 	}
 
 	/** Diff each tip against its base; tips already diffed come from memory without touching git. */
@@ -177,7 +184,7 @@ export class FilesMirror {
 			let stuck = false;
 			const fetch = async (...args: string[]) => {
 				if (stuck) return false;
-				const r = await git.run(["fetch", "-q", "--no-tags", "origin", ...args], { timeoutMs: this.fetchTimeoutMs });
+				const r = await this.fetchIn(git, args);
 				if (r.timedOut) stuck = true;
 				return r.code === 0;
 			};
@@ -246,13 +253,18 @@ async function blobBytes(dir: string, oid: string, env: Record<string, string>):
 	return code === 0 ? new Uint8Array(buf) : null;
 }
 
-async function readFileFrom(git: Git | null, dir: string, env: Record<string, string>, tip: WorkTip, path: string): Promise<WorkspaceFile> {
+/** A fetch from `remote` (its URL) into the host repo `git` (src/merge/host-git.ts); a refused repo is a failed fetch. */
+async function fetchFrom(git: Git, remote: string, args: string[], timeoutMs: number): Promise<{ code: number; timedOut?: boolean }> {
+	return remoteGit(git, ["fetch", "-q", "--no-tags", remote, ...args], remote, { timeoutMs }).catch(() => ({ code: 1 }));
+}
+
+async function readFileFrom(git: Git | null, dir: string, env: Record<string, string>, tip: WorkTip, path: string, remote: string): Promise<WorkspaceFile> {
 	{
 		if (!git) return { error: "unavailable", message: "could not open a local mirror of the run's repository" };
 		const has = async () => (await git.run(["cat-file", "-e", `${tip.sha}^{commit}`])).code === 0;
 		if (!(await has())) {
-			const fetched = tip.ref ? (await git.run(["fetch", "-q", "--no-tags", "origin", `+${tip.ref}:refs/keep/${tip.sha}-fetched`], { timeoutMs: FilesMirror.FETCH_TIMEOUT_MS })).code === 0 : false;
-			if (!fetched) await git.run(["fetch", "-q", "--no-tags", "origin", tip.sha], { timeoutMs: FilesMirror.FETCH_TIMEOUT_MS });
+			const fetched = tip.ref ? (await fetchFrom(git, remote, [`+${tip.ref}:refs/keep/${tip.sha}-fetched`], FilesMirror.FETCH_TIMEOUT_MS)).code === 0 : false;
+			if (!fetched) await fetchFrom(git, remote, [tip.sha], FilesMirror.FETCH_TIMEOUT_MS);
 			if (!(await has())) return { error: "unavailable", message: "the agent's work is not on the remote (yet)" };
 			await git.run(["update-ref", `refs/keep/${tip.sha}`, tip.sha]);
 		}

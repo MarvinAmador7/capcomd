@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Security: your git credentials never reach an agent's sandbox any more. Before, capcomd's own git commands in an
+  agent's VM or container (cloning its checkout, pushing its branch and checkpoints, `capcomd fetch`) ran with your
+  GitHub token, so an agent could take it by planting git settings, a hook or a `git` program in its sandbox. Now
+  capcomd fetches and pushes for the agent from your machine, by the repository's URL, and moves the commits in and
+  out of the sandbox as files; nothing in the agent's checkout decides where a push goes. On your machine capcomd runs
+  git with credentials only in repositories it made itself (a mirror per repository next to its clones, under
+  `~/.capcomd/work`), and refuses one whose git settings or hooks something else changed; the first merge after
+  upgrading makes its clones again. For https://github.com, capcomd uses your GitHub login (`GITHUB_TOKEN`, `GH_TOKEN`
+  or `gh auth login`) and never hands it to your own credential helper to save (such as the macOS keychain); without a
+  login, and for other remotes, your own git credentials (credential helper or ssh key) are used. `capcomd fetch` no
+  longer refuses a checkout because of its git settings. A check that runs on your machine (`CAPCOMD_CHECKS=host`) and
+  changes capcomd's clone's git settings now fails the merge. See docs/spec/plugin-api.md §11.7.
 - A Codex agent whose stream reconnected mid-turn ("Reconnecting... 1/5 (stream disconnected before completion)") and
   then finished is no longer marked failed with its work dropped: an error Codex recovers from is not the run's error.
   A failed turn, or an error the stream ends on, still fails it. Checked against Codex 0.166 as well as 0.163.

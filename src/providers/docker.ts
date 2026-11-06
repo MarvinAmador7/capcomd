@@ -10,7 +10,6 @@ import { dirname, join } from "path";
 import type { SnapshotInfo } from "../env/platform";
 import type { InteractiveSession } from "../auth/interactive";
 import { stateDir } from "../utils/home";
-import { noGitCredentials, type GitCredentialHook } from "./boxd";
 import { SandboxConfigError, SandboxError, SandboxNotFoundError, SandboxNotReadyError, SandboxUnavailableError } from "./boxd-errors";
 import { reportMachineDeleted } from "./machine-audit";
 import { MACHINE_PREFIX, type ExecResult, type SandboxProvider, type VmId, type VmInfo, type VmSpec } from "./sandbox";
@@ -25,7 +24,6 @@ export interface DockerProviderOptions {
   bin?: string;
   /** Image a sandbox starts from when its spec names no snapshot (default CAPCOMD_DOCKER_IMAGE or DOCKER_BASE_IMAGE). */
   image?: string;
-  gitCredentials?: GitCredentialHook;
   /** Container name prefix; `list(prefix)` filters on it. */
   namePrefix?: string;
   /** Delete-after times by container (default <state>/docker-ttl.json). */
@@ -50,7 +48,6 @@ interface Run { code: number; stdout: Uint8Array; stderr: string }
 export class DockerProvider implements SandboxProvider {
   private readonly bin: string;
   private readonly image: string;
-  private readonly gitCredentials: GitCredentialHook;
   private readonly prefix: string;
   private readonly ledgerPath: string;
   private readonly labels = new Map<VmId, Record<string, string>>();
@@ -58,7 +55,6 @@ export class DockerProvider implements SandboxProvider {
   constructor(o: DockerProviderOptions = {}) {
     this.bin = o.bin ?? dockerBin();
     this.image = o.image ?? process.env.CAPCOMD_DOCKER_IMAGE ?? DOCKER_BASE_IMAGE;
-    this.gitCredentials = o.gitCredentials ?? noGitCredentials;
     this.prefix = o.namePrefix ?? MACHINE_PREFIX;
     this.ledgerPath = o.ledgerPath ?? process.env.CAPCOMD_DOCKER_LEDGER ?? join(stateDir(), "docker-ttl.json");
   }
@@ -139,12 +135,9 @@ export class DockerProvider implements SandboxProvider {
     }
   }
 
+  /** A command in the container with exactly `opts.env`: never a git credential (plugin API §11.7, src/merge/transfer.ts). */
   async exec(id: VmId, cmd: string[], opts?: { env?: Record<string, string>; timeoutMs?: number; cwd?: string }): Promise<ExecResult> {
-    let env = opts?.env ?? {};
-    if (cmd[0] === "git") {
-      const creds = await this.gitCredentials({ vmId: id, labels: this.labels.get(id) ?? {}, cmd });
-      if (creds) env = { ...env, ...creds };
-    }
+    const env = opts?.env ?? {};
     // The timeout runs in the container too, so the command itself is killed, not only this client.
     const timed = opts?.timeoutMs ? ["timeout", "-k", "5", String(Math.max(1, Math.ceil(opts.timeoutMs / 1000))), ...cmd] : cmd;
     const args = ["exec", ...(opts?.cwd ? ["-w", opts.cwd] : []), ...Object.keys(env).flatMap((k) => ["-e", k]), id, ...timed];

@@ -72,20 +72,14 @@ boxd auto-hibernates idle machines. While capcomd holds a VM, a keepalive timer 
 inbound, so it resets the idle clock. The timer is unref'd and stops on suspend and destroy. If a VM is
 found `hibernated` or `suspended` anyway, `ensure` and `waitReady` wake or resume it.
 
-## Git credentials (pluggable)
+## Git credentials: never in the VM
 
-There is no credential source in capcomd yet. `BoxdProviderOptions.gitCredentials` is a hook:
-
-```ts
-type GitCredentialHook = (ctx: { vmId; labels; cmd }) => Promise<Record<string,string> | null>;
-```
-
-It is called before every `git …` exec. The env it returns is passed to **that exec only**, and is
-never logged or persisted. The default returns `null`, so git runs with no credentials. A real
-implementation should mint a short-lived, per-task token (for example a GitHub App installation token scoped
-to one repo) and return, for example, `GIT_CONFIG_COUNT/KEY_0/VALUE_0` setting `http.extraheader`.
-Note: the SDK prefixes exec env onto the command line as `K=V`, so it is visible to processes inside
-that VM while the command runs. That is acceptable for single-tenant, isolated VMs, but tokens must stay short-lived.
+No git credential ever reaches a VM (docs/spec/plugin-api.md §11.7). An exec gets exactly the env capcomd passes,
+and capcomd runs no network git in a VM: the host fetches the run's repository into its own mirror (with the host's
+git credentials) and uploads a bundle the VM reads; to push, the VM bundles the commit, the host downloads it into the
+mirror and pushes it to the repository's URL. Before, a git exec got the GitHub token through a per-exec hook
+(`gitCredentials`), so anything an agent planted in its VM (a credential helper, `url.*.insteadOf`, a hook, a `git`
+on its PATH, a process reading another's environment) could take it; the hook is gone.
 
 ## Typed errors (`src/providers/boxd-errors.ts`)
 

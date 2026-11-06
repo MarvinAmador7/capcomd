@@ -46,11 +46,9 @@ export function classifyBoxdError(e: unknown): ErrorClass {
 const native: NativeSandbox = {
   create(_env, secret?: SecretOf) {
     const { BoxdProvider } = require("../../providers/boxd") as typeof import("../../providers/boxd");
-    // Agents push from the VM: give git network execs a short-lived GitHub credential (env of that exec only).
-    // Always on for boxd: the agent kind comes from per-agent profiles, so profile-driven (spawn/recipe) agents need it too.
-    const { githubGitCredentials } = require("../../agents/credentials") as typeof import("../../agents/credentials");
+    // No git credential ever reaches a VM: the host fetches and pushes for its agents (plugin API §11.7).
     const apiKey = secret?.("apiKey");
-    return new BoxdProvider({ gitCredentials: githubGitCredentials(), ...(apiKey ? { apiKey } : {}) });
+    return new BoxdProvider({ ...(apiKey ? { apiKey } : {}) });
   },
 };
 

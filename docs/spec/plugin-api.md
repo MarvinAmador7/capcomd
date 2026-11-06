@@ -1020,7 +1020,8 @@ wants to act on its own behalf uses `ctx` from a hook or a timer, with its own p
 A plugin never receives a value for a credential that is not its own declared secret (§10.3). `ctx.auth` answers with
 facts (`credentialMode`, `loginPresent`) and offers the redactor. Sandbox-bound secrets stay placeholders
 (`bxds_…`, ADR-015 §3); the git credentials the kernel pushes with stay on the host and are configured into the forge's
-`workdir` by the kernel, not handed to the forge as a string.
+`workdir` by the kernel, not handed to the forge as a string. They never reach a sandbox, and never meet a checkout an
+agent can edit (§11.7).
 
 ### 11.5 Untrusted text and redaction
 
@@ -1037,6 +1038,39 @@ In-process plugins are built-ins: the trust boundary is the capcomd package. Out
 environment (§9.2), a scoped token (§9.3), secrets once over a 0600 socket (§10.3), and nothing else; their calls are
 authorised and audited by the gateway like any client's (`client.action` events carry the plugin's client id). As with
 drivers (ADR-018 §4), a process running as the same OS user is a guardrail against mistakes, not a containment boundary.
+
+### 11.7 Git credentials and agent-editable checkouts
+
+An agent can write anything in its sandbox: its checkout's `.git/config`, hooks and remotes, its `HOME`'s `.gitconfig`,
+a `git` earlier on its `PATH`, and processes that read other processes' environments. Git reads all of these, and some
+run commands (a credential helper, `core.sshCommand`, `core.fsmonitor`, hooks, filters, `include.path`) or send the
+credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.proxy`). So:
+
+1. **No git credential enters a sandbox.** The sandbox providers pass an exec exactly the env capcomd gives it, and
+   capcomd runs no network git in a sandbox (no clone, fetch, push or ls-remote). Objects move through the host
+   (`src/merge/transfer.ts`): to fetch (an agent's clone, `capcomd fetch`, a review's target, a continued agent's work,
+   an env build's template), the host fetches the run's repository into its mirror and uploads a bundle of what the
+   sandbox lacks, which the sandbox reads and whose refs the host names; to push (an agent's branch, its checkpoints),
+   the sandbox bundles the commit, the host downloads it into its mirror, checks it is the commit asked for, and pushes
+   it to the repository's URL with a lease. In the sandbox git only makes and reads bundle files.
+2. **On the host, network git runs only through `src/merge/host-git.ts`**: `remoteGit` in a *host repo* (one capcomd
+   made with `initHostRepo`: the mirror, the merge clones, the scratch and files repos), checked before every call: its
+   local settings are only those `git init`, `git remote add`, a fetch and `git worktree add` write, its hooks are the
+   ones it had when it was made, and it has no alternates; else it is refused (`HostRepoRefused`) and a disposable one is
+   made again. `lsRemote` runs outside any repository. The remote is always the repository's URL as capcomd knows it,
+   never a remote's name. Git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_ALLOW_PROTOCOL=file:git:http:https:ssh` (no
+   `ext::`); the user's own git settings (their credential helper, ssh keys, global `url.*` rewrites) apply, except that
+   for an https remote on github.com, when capcomd has the user's GitHub token (`GITHUB_TOKEN`, `GH_TOKEN` or
+   `gh auth token`), it is the only credential helper for `https://github.com` (the helper list is reset first, so git
+   never hands the token to the user's own helpers, such as `osxkeychain`, to store), in that one process's environment.
+3. `tests/unit/host-git-lint.test.ts` fails when a network git command is spelled anywhere else, or a credential helper
+   is built outside `host-git.ts`; `tests/unit/host-git-credentials.test.ts` plants each vector above and checks that
+   no planted command sees a token and nothing goes anywhere but the run's repository.
+
+Checks that run on the host (`CAPCOMD_CHECKS=host`, or the test sandboxes) run agent-written code as the operator, which
+no git setting can contain: there a planted setting or hook in the merge clone is refused (the merge fails), but the
+check is a tripwire, not a boundary (that code can also rewrite the host repo's marker, or race the check), and the
+code could read the operator's credentials directly. Use a real sandbox for agents you don't trust.
 
 ## 12. Versioning and compatibility
 
@@ -1273,11 +1307,11 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    `agent.preparing`: `allowed` replaces the profile's allowlist or narrows it, `disallowed` joins its denylist,
    `denyCommands` joins `AgentConfig.denyCommands`, `sandbox` is the loosest the CLI runs in. A profile cannot widen
    them (`widenings()` treats mode as a limit; a child's own mode is its own, as its provider is).
-   **`capcomd fetch [branch…]`** (`capcomd_fetch`; an in-VM op, `fetch`): the host fetches the run's repository into
-   the agent's checkout as `refs/remotes/origin/*`, with the sandbox's git credentials, which the agent's own shell
-   never has (so a private repository's branches are readable too), by the repository's URL and not the checkout's
-   `origin`; a checkout whose git settings could send those credentials elsewhere or run a command (`url.*`,
-   `credential.*`, `http.*`, `include*`, `core.sshCommand`, …) is refused. It answers each branch's commit.
+   **`capcomd fetch [branch…]`** (`capcomd_fetch`; an in-VM op, `fetch`): the host fetches the run's repository (by its
+   URL, with the host's git credentials, which the agent never has, so a private repository's branches are readable
+   too) into its mirror and brings the new commits into the agent's checkout as `refs/remotes/origin/*` with a bundle
+   (§11.7): nothing in the checkout takes part in the fetch from the remote, so whatever its git settings say, they see
+   no credential and change nothing. It answers each branch's commit.
    **A merge says whether its checks ran on the combined code**: a verify's and a merge's result gain `combined`
    (additive): `{checked, passed, at: "verify" | "merge", on, earlierMerges, text}`, `on` the target commit the change
    was put on and `earlierMerges` the run's merges into that target already on it; `text` says it plainly ("checks ran
@@ -1552,6 +1586,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.7 | 2026-11-05 | The rest of the forge's logic in the forge (§7.4): `listBranches` (replacing the unused `defaultBranch`) for a run's base and the setup screen's branches; `login` (`ForgeLogin`, `ForgeAccount`, `ForgeLoginUse`) for the logins the app shows and who you publish as; `describe().publish` choosing the forge that creates repositories; "pr mode" and "isn't on GitHub" said in the active forges' words. An inactive `merge.forge` is refused at `POST /v1/runs`, `capcomd run` and `capcomd_run_new` (§7.1); every forge method goes through the kernel's wrapper (§7.1); one local host for the gates and the forges. |
 | 1.0.8 | 2026-11-05 | `merge.landing`'s `hold` takes an optional `holdId` (§6.6.15; additive): an approved hold is matched by plugin and `holdId`, falling back to the reason text without one; `heldBy.holdId` on the record and the approval. A plugin-held merge's approval carries the changed files, as a protected target's does. |
 | 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
+| 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 
