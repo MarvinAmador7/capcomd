@@ -71,7 +71,8 @@ export const plugin = definePlugin({
       const { roleOf } = await import("../context/brief");
       const role = roleOf(a);
       const b = await briefFor({ runId: agent.runId, agentId: agent.id, profile: agent.profile, spec, role });
-      // The skills it reads the brief with; one its profile already gave it, by name, isn't attached twice.
+      // The skills it reads the brief with; one the payload already has by name (an earlier listener's) isn't attached
+      // twice, so the patch stays one the kernel takes.
       const { contextSkills } = await import("../context/skills");
       const skills = contextSkills({ role, maySpawn: a.limits?.allowSpawn === true }).filter((s) => !call.payload.prompt.skills.some((x) => x.name === s.name));
       const loaded = b.providers.filter((p) => p.state === "loaded").map((p) => `${p.name} at ${sha(p.revision)}`);

@@ -6,8 +6,21 @@
   "descriptionChars": 150,
   "itemBytes": null,
   "proposalsPerRun": null,
-  "inlineItems": 1,
+  "inlineItems": 0,
   "measured": false,
   "source": "ADR-025 D4 starting values (Claude Code's 25 KB / 200-line memory index, ReasoningBank's k = 1; descriptionChars from the one-line index entries of that index). itemBytes and proposalsPerRun are set by the steps that add capture and consolidation (2-3). Not yet measured: the step-0 baselines have no index arm.",
-  "evidence": []
+  "evidence": [
+    "2026-11-06-2.json"
+  ],
+  "triggeredInjection": false,
+  "decisions": {
+    "inlineItems": {
+      "evidence": "2026-11-06-2.json",
+      "reason": "index-k1: not admitted, success 21/21 against 21/21 (+0 steps); 2.857 tool calls per step against 3, $0.112 per step against $0.113: no gain in success or work; index-k3: not admitted, success 21/21 against 21/21 (+0 steps); 2.952 tool calls per step against 3, $0.117 per step against $0.113: no gain in success or work"
+    },
+    "triggeredInjection": {
+      "evidence": "2026-11-06-2.json",
+      "reason": "index-triggered: not admitted, success 21/21 against 21/21 (+0 steps): no gain in success over the paths column, which §6.3 requires (a push reached the agent in 20 of the 21 steps that had one)"
+    }
+  }
 }

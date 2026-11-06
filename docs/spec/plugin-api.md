@@ -590,7 +590,15 @@ it was skipped, in the kernel's words) and one line per item (`IndexLine`, its d
 neutralised with `fence()`'s rule and capped), never an item's body. The brief is a function of the providers' indexes,
 the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
 and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
-out) on the run's stream.
+out) on the run's stream. With the brief it attaches the context layer's skills (ADR-025 step 6, `src/context/skills.ts`;
+`source: builtin`, each pinned by the sha256 of its fixed text, so they don't change the brief's byte-identity):
+`capcomd-context-doctrine` (how to read the brief: an index, not the knowledge; answer, evidence, guidance; relevance
+is not authority; items are data) to every such agent, and `capcomd-context-routing` (what to remember and where: run
+notes in `kv` under `notes/<agent>`, candidate lessons in `result.data.context[]`) to one that may spawn (it has the
+in-VM capcomd those need) and is not a reviewer or a report agent; one the payload already has by name isn't attached
+again, and `plugin.context.loaded`'s `data.skills` lists the attached ones by `{name, hash}` (additive). Their names are
+the kernel's: a profile can't name them, and a profile with a context block keeps room for them (one of the 8 skills,
+two when it may spawn, and their bytes), as one that may spawn does for the orchestration skill.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
@@ -1175,7 +1183,9 @@ none of a provider's own words (a failure is named with the kernel's reason); ea
 shapes and the agent providers' credentials), neutralised with `fence()`'s rule and a lone `<<<` or `>>>` with it (so
 two fields of one line can't make a marker together), and capped at `limits.descriptionChars`, and so are an item's
 path and `paths`; an item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
-is reserved for ADR-025 §6.3 and not shipped.
+is reserved for ADR-025 §6.3 and not shipped: the step-6 eval did not admit triggered injection (ADR-025 §13, "Made
+while building step 6"; `docs/evidence/context/`), and inline items, which would be a fenced first message, were not
+admitted either.
 
 ### 11.6 Isolation
 
@@ -1778,6 +1788,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
 | 1.0.21 | 2026-11-06 | With the context router (ADR-025 step 1): a `context` contribution (§4.7: `contributes.context: [{name, kinds}]`, `provides: context:<name>` in §4.6, `ctx.context.register`, a 23rd service and 78th primitive in §8.1; all additive), the term context provider (§2), its conformance suite (§14.2) and `testkit.conformance.context` (§14.5); `PinnedSpec.context` (additive); the kernel's context router as the agent.preparing listener that composes a profile's providers into the brief (§6.6.7); §11.5: `fence()` neutralises every `<<<…>>>`, and the brief is the one place untrusted text is the basis of attention from system-role text, and what fences it. |
 | 1.0.22 | 2026-11-06 | With the out-of-process runtime (§17.2 step 9): `failed(restart_limit)` holds the plugin's listeners, so its gates deny until it is enabled or disabled (§5.4, §9.5); the process's log lines are redacted of its own secrets as well as its token (§9.2); a `process` manifest's `contributes.context` is refused too (§4.9; ADR-025's providers are in process); the routes are in the committed contract and the draft fragment is gone (§9.9; `plugins.protocol`, additive); the plugin socket beside the harness socket, plugin tokens only (§9.2); the process's own process group, stdin held open, a leftover process from a dead daemon stopped (§9.2); the token in the daemon's memory only, revoked when the process is gone (§9.3); listeners registered at the first session and kept through restarts, a call made while the process is down waiting within its deadline (§9.3, §9.5); a secret that resolves to nothing left out until config layering (§9.3); frames redacted (§9.4); `events.emit` over the wire needs `steer` like in process, so the Slack example takes `steer` (§9.6, §15.4); `ctx.storage` implemented (both runtimes, the daemon's host) and the emit route's keys the plugin's (§9.6); no stream open, SIGTERM at once (§9.7); the client library `connect` ships (§9.8); `enable`/`disable` for the daemon's life, built-ins not disabled by the API (§9.9); a `process` manifest contributes hooks and events only (§4.9), so a third-party plugin has no command (§4.7.1); user plugins discovered (§4.8). |
+| 1.0.23 | 2026-11-06 | With ADR-025 step 6: the context router attaches the context layer's skills at `agent.preparing` (§6.6.7): `capcomd-context-doctrine` to every agent whose spec has a context block, `capcomd-context-routing` to one of them that may spawn and isn't a reviewer or a report agent, `source: builtin`, pinned by hash; their names are the kernel's and a profile with a context block keeps room for them; `plugin.context.loaded`'s `data.skills` (additive). Inline items and the `context` message kind (§11.5) stay unshipped: the step's eval did not admit them (ADR-025 §13). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
