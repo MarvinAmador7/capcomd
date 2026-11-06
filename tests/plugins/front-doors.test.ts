@@ -133,7 +133,7 @@ describe("a plugin's command answers with the envelope and the caller's principa
     expect(all.out).toContain("capcomd serve");
     // After the built-ins' own plugin commands (capcomd context, the context router's).
     expect(all.out).toMatch(/Plugin commands:\n(?: {2}capcomd .+\n)* {2}capcomd echo\s+Say who called and what it was given {2}\(echo\)/);
-    expect(all.out).toMatch(/ {2}capcomd context\s+The context brief a profile's agents start with.* {2}\(context\)/);
+    expect(all.out).toMatch(/ {2}capcomd context\s+The project's context \(ADR-025\): the brief a profile's agents start with, and lint.* {2}\(context\)/);
     // Without the plugin, the help is the kernel's and the built-ins' alone.
     const p = Bun.spawnSync([process.execPath, CLI, "--help"], { env: { ...childEnv(), CAPCOMD_TEST_PLUGINS: "" }, stdout: "pipe" });
     expect(p.stdout.toString()).not.toContain("capcomd echo");

@@ -5,7 +5,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "briefBytes": 25600,
     "indexLines": 200,
     "descriptionChars": 150,
-    "itemBytes": null,
+    "itemBytes": 4096,
     "proposalsPerRun": null,
     "measured": false
   },
@@ -13,7 +13,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "briefBytes": 25600,
     "indexLines": 200,
     "descriptionChars": 150,
-    "itemBytes": null,
+    "itemBytes": 4096,
     "proposalsPerRun": null,
     "measured": false
   },
@@ -21,7 +21,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "briefBytes": 25600,
     "indexLines": 200,
     "descriptionChars": 150,
-    "itemBytes": null,
+    "itemBytes": 4096,
     "proposalsPerRun": null,
     "measured": false
   },
@@ -29,7 +29,7 @@ export const EVAL_LIMITS: Readonly<Record<string, { briefBytes: number | null; i
     "briefBytes": 25600,
     "indexLines": 200,
     "descriptionChars": 150,
-    "itemBytes": null,
+    "itemBytes": 4096,
     "proposalsPerRun": null,
     "measured": false
   }

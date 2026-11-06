@@ -599,6 +599,20 @@ for its own work, its spawner (the parent agent, else the operator) for `spawned
 recorded for a pause, resume, cancel or title; a verification's and merge's changes are their asker's, a decision its
 approver's (`src/plugins/changes.ts` `causeOf`).
 
+The kernel's context capture (ADR-025 §5.1) is the built-in `context` plugin's listener: on `ended` (not `cancelled`)
+of an agent whose result has `data.context`, it reads the result from the record the agent's token wrote (kv
+`_result/<agentId>`, written by `capcomd result` as the token's `sub`; not the payload, which only says there is
+something to read and is redacted on its way), and only when that writer is the agent. Each element is a
+`ContextProposal` (`text`, and at most `title`, `type`, `op`, `target`); its other fields are ignored and named
+(`ignored`), so an agent can't say who wrote a lesson or how far it is trusted. Each is refused when it isn't one, holds
+a secret (§11.5's seeded scan), is over `limits.itemBytes`, or would pass the run's `limits.proposalsPerRun`; else it is
+a candidate whose `provenance` the kernel stamps from its records (`method: agent-generated`, `by: process:<agentId>`,
+`origin: {runId, agentId, profile, model, image}`). The agent's candidates and refusals (a number and a reason, never
+the text) are kept once, in kv `_context/<agentId>` of the run (reserved: only the kernel writes it, every agent of the
+run reads it), with `plugin.context.proposed` per candidate and `plugin.context.refused` per refusal on the run's
+stream. Nothing reaches a shared layer. The listener never throws (a failure is logged): three failed calls would
+suspend the plugin's `agent.preparing` listener with it (§6.5).
+
 #### 6.6.9 `agent.item` · observe · the runner, as it drains the thread (`putItems`)
 `AgentItem {agent: {id, runId, profile}, item: ThreadItem}`, untrusted. The only turn and tool-call surface capcomd can
 offer (ADR-023 §5.3): the host sees tool calls after the fact and cannot block them. High volume: 5 s deadline, bounded
@@ -1137,6 +1151,14 @@ shapes and the agent providers' credentials), neutralised with `fence()`'s rule 
 two fields of one line can't make a marker together), and capped at `limits.descriptionChars`, and so are an item's
 path and `paths`; an item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
 is reserved for ADR-025 §6.3 and not shipped.
+
+What an agent proposes for a durable layer (a candidate lesson, §6.6.8; an item lint checks, ADR-025 §5.3) is not
+redacted but **refused** when it holds a secret (`src/context/scan.ts`): a redacted text could still hold a shorter
+secret. The scan is seeded with every secret value the kernel puts in the run (the agent providers' credentials, the
+plugins' secrets of §10.3, every variable of the run's environment named like a credential, the in-VM tokens' signing
+key, the forge's credential for the run's repository), then the redactor's shapes and a few more (AWS, Slack, boxd and
+Google keys, a private key, a URL with a password), a long random-looking string, and the paths credentials are kept
+in (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`). Its reasons are the kernel's words, never the matched text.
 
 ### 11.6 Isolation
 
@@ -1738,6 +1760,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.19 | 2026-11-06 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
 | 1.0.21 | 2026-11-06 | With the context router (ADR-025 step 1): a `context` contribution (§4.7: `contributes.context: [{name, kinds}]`, `provides: context:<name>` in §4.6, `ctx.context.register`, a 23rd service and 78th primitive in §8.1; all additive), the term context provider (§2), its conformance suite (§14.2) and `testkit.conformance.context` (§14.5); `PinnedSpec.context` (additive); the kernel's context router as the agent.preparing listener that composes a profile's providers into the brief (§6.6.7); §11.5: `fence()` neutralises every `<<<…>>>`, and the brief is the one place untrusted text is the basis of attention from system-role text, and what fences it. |
+| 1.0.22 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

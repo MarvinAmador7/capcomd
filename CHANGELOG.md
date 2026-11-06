@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: agents propose lessons for the project's memory. A planner or lead ends with lessons in its result
+  (`capcomd result --data '{"context": [{"title": "…", "text": "…"}]}'`, which its orchestration skill now teaches,
+  along with keeping working notes in kv under `notes/<its id>`), and capcomd keeps each as a candidate of the run,
+  attributed to the agent that declared it whatever the lesson says about itself. A lesson holding a secret (one capcomd
+  put in the run, anything shaped like a credential, a path like `.env` or `~/.aws`) is refused, never redacted, and so
+  is one over 4 KB. `capcomd events` shows `plugin.context.proposed` and `plugin.context.refused`; `capcomd kv get <runId>
+  _context/<agentId>` shows an agent's candidates. Candidates reach `.capcomd/context/` only through a reviewed change
+  (the next step). See docs/agents.md, "Lessons agents propose".
+- New: `capcomd context lint` checks a repository's `.capcomd/context/`: items only, each with an `id` and a `type` and
+  well-formed fields, unique ids, reciprocal supersession without cycles, no secrets, and an `index.md` that matches the
+  items (`--fix` writes it). `--base <ref>` also refuses a changed id or a deleted item; `--run <runId>` checks that the
+  verifies and merges an item cites are that run's. Problems exit 1, each naming its file.
 - New: project memory for agents. A profile with a `context` block (`context: {providers: [{name: memory}]}`, in
   `profile.yaml` or an `agents.json` entry) briefs each of its agents, when it starts, with an index of what the project
   keeps under `.capcomd/context/` in its repository: one line per item (a lesson, feedback, a project fact) with what it

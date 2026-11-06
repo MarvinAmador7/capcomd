@@ -8,8 +8,9 @@ import { EVAL_LIMITS } from "./limits.gen";
 export type ContextLimits = Record<ContextLimitName, number | null>;
 
 /** D4's starting values (Claude Code's 25 KB / 200-line memory index; one-line descriptions), for a model the eval
- *  hasn't run on. `itemBytes` and `proposalsPerRun` arrive with capture and consolidation (ADR-025 steps 2-3). */
-export const DEFAULT_LIMITS: ContextLimits = { briefBytes: 25_600, indexLines: 200, descriptionChars: 150, itemBytes: null, proposalsPerRun: null };
+ *  hasn't run on. `itemBytes` since capture (ADR-025 step 2): a proposed lesson over it is refused, and lint flags an
+ *  item's body over it. `proposalsPerRun` arrives with consolidation (step 3); capture honours one a profile sets. */
+export const DEFAULT_LIMITS: ContextLimits = { briefBytes: 25_600, indexLines: 200, descriptionChars: 150, itemBytes: 4096, proposalsPerRun: null };
 
 /** The kernel's floor and ceiling for each budget: a profile or an eval file can't make the brief useless or huge. */
 export const LIMIT_BOUNDS: Record<ContextLimitName, [number, number]> = {
