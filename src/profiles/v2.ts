@@ -2,7 +2,7 @@
 // or a single file (`<name>.yaml`) holds, how one is laid over another (`extends`, an `override.yaml`; §2.3, §2.6),
 // and the flat v1 spec it resolves to, which is what an agent is pinned with (./v1.ts AgentSpec). Pure: reading the
 // files and the layers is ./load.ts.
-import { AGENTS_JSON_SCHEMA, NAME, type AgentSpec } from "./v1";
+import { AGENTS_JSON_SCHEMA, CONTEXT_LIMITS, NAME, validateContext, type AgentSpec } from "./v1";
 
 export const PROFILE_SCHEMA = "capcomd.profile/v2";
 
@@ -20,6 +20,7 @@ export const V2_PATH: Readonly<Record<keyof AgentSpec, string>> = {
   stuckRepeats: "limits.stuckRepeats", noChangeAfterMs: "limits.noChangeAfterMs",
   checkpointEveryMs: "lifecycle.checkpointEveryMs",
   children: "children", jobs: "jobs",
+  context: "context",
 };
 /** A flat field's v2 path, for messages (`maxTurns` → `limits.maxTurns`); a name that isn't one is itself. */
 export const v2Path = (field: string): string => (V2_PATH as Record<string, string>)[field] ?? field;
@@ -32,8 +33,7 @@ const v1 = AGENTS_JSON_SCHEMA.$defs.agent.properties;
 /** A file next to the manifest, by a relative name (`SOUL.md`, `prompts/review.md`): never absolute, never `..`. */
 export const FILE_REF = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9_][A-Za-z0-9._/-]*\.(?:md|txt)$/;
 const fileRef = { type: "string", pattern: FILE_REF.source };
-/** ADR-025 §6.4 `ContextLimits`: null is the eval's default for the profile's model. */
-export const CONTEXT_LIMITS = ["briefBytes", "indexLines", "descriptionChars", "itemBytes", "proposalsPerRun"] as const;
+export { CONTEXT_LIMITS };
 const DAYS = /^[1-9][0-9]*d$/;
 
 /** Each block and its keys. Fields the flat spec has are checked once resolved (./v1.ts validateSpec); the rest here. */
@@ -67,10 +67,16 @@ const BLOCKS: Record<string, Record<string, object>> = {
   permissions: { report: { type: "boolean" } },
   sharing: { source: text, license: text },
 };
+/** Where a `skills[].source` looks (./skills.ts): the profile's own `skills/<name>/SKILL.md`, the user's
+ *  `~/.claude/skills` (as `capcomd send --skill`), capcomd's bundled ones. Unset: the package, then bundled. */
+export const SKILL_SOURCES = ["package", "user", "bundled"] as const;
 const TOP: Record<string, object> = {
   $schema: str, schema: { const: PROFILE_SCHEMA }, name, version: int(1), extends: name, default: { type: "boolean" },
   description: str, tags: names,
-  skills: { type: "array", items: { type: "object", additionalProperties: false, required: ["name"], properties: { name, source: text, hash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" } } } },
+  skills: { type: "array", items: { type: "object", additionalProperties: false, required: ["name"], properties: {
+    name, source: { enum: SKILL_SOURCES, description: "package: the profile's skills/<name>/SKILL.md; user: ~/.claude/skills; bundled: capcomd's. Unset: package, then bundled" },
+    hash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$", description: "The SKILL.md's sha256: a changed file is refused, never taken silently" },
+  } } },
 };
 /** Keys a profile doesn't pass to one that extends it: who it is, not what it does. */
 const OWN = new Set(["$schema", "schema", "name", "extends", "version", "default", "sharing"]);
@@ -149,7 +155,7 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
         if (!isMap(s)) { at(p, "must be { name, source?, hash? }"); return; }
         for (const k of Object.keys(s)) if (!["name", "source", "hash"].includes(k)) at(`${p}.${k}`, "unknown field");
         if (typeof s.name !== "string" || !NAME.test(s.name)) at(`${p}.name`, "must be a skill's name");
-        if (s.source !== undefined && (typeof s.source !== "string" || !s.source)) at(`${p}.source`, "must be a non-empty string");
+        if (s.source !== undefined && !(SKILL_SOURCES as readonly unknown[]).includes(s.source)) at(`${p}.source`, `must be ${SKILL_SOURCES.join(", ")} (unset: the profile's own skills/, then capcomd's)`);
         if (s.hash !== undefined && (typeof s.hash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(s.hash))) at(`${p}.hash`, "must be sha256:<64 hex digits>");
       });
       const n = raw.skills.filter(isMap).map((s) => String(s.name));
@@ -191,23 +197,10 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
   return e;
 }
 
-/** ADR-025 §10: `context.providers` (each a provider's name and its own settings), `limits`, `review`. */
-function checkContext(c: Record<string, unknown>): string[] {
-  const e: string[] = [];
-  if (c.providers != null) {
-    if (!Array.isArray(c.providers) || c.providers.some((p) => !isMap(p) || typeof p.name !== "string" || !NAME.test(p.name))) e.push("context.providers: must be a list of { name: <a context provider>, … its settings }");
-    else { const d = dupes(c.providers.map((p) => p.name as string)); if (d.length) e.push(`context.providers: names ${d.join(", ")} more than once`); }
-  }
-  if (c.limits != null) {
-    if (!isMap(c.limits)) e.push("context.limits: must be a map");
-    else for (const [k, v] of Object.entries(c.limits)) {
-      if (!(CONTEXT_LIMITS as readonly string[]).includes(k)) e.push(`context.limits.${k}: unknown field (${CONTEXT_LIMITS.join(", ")})`);
-      else if (v !== null && !isInt(v, 1)) e.push(`context.limits.${k}: must be an integer >= 1, or null for the default`);
-    }
-  }
-  if (c.review != null && c.review !== "human" && c.review !== "lint") e.push(`context.review: must be "human" or "lint"`);
-  return e;
-}
+/** ADR-025 §10: `context.providers` (each a provider's name, the layers it reads and its own settings), `limits`,
+ *  `review`: the pinned spec's own check (./v1.ts), so a v2 file and an agents.json entry say the same. Its unknown
+ *  keys are the block check's above. */
+const checkContext = (c: Record<string, unknown>): string[] => validateContext(Object.fromEntries(Object.entries(c).filter(([k]) => has(BLOCKS.context!, k))));
 
 /** ADR-024's `memory` block, read as `context` (ADR-025 D2): the layers it names must exist. */
 function checkMemory(m: Record<string, unknown>): string[] {
@@ -346,10 +339,10 @@ export function flatOverrides(set: Record<string, unknown>): Record<string, unkn
 export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed", "tags"];
 
 /**
- * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 steps 5 and 8; ADR-025
+ * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 step 8; ADR-025
  * §13), so `validate` can say so instead of the setting silently doing nothing.
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion", "skills", "tools.mcp", "context.providers", "sandbox.provider", "sandbox.environment", "sandbox.size", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
+  return ["identity.persona", "harness.cliVersion", "tools.mcp", "sandbox.provider", "sandbox.environment", "sandbox.size", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
 }

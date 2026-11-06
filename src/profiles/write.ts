@@ -118,10 +118,12 @@ function yamlVersion(doc: Document, n: number) {
   root.items.splice(at + 1, 0, doc.createPair("version", n));
 }
 
-/** A v2 path as the v1 field it is in an agents.json entry: [field] or [block, key] for `children`/`jobs`; null: none. */
-function v1Field(path: string[]): string[] | null {
+/** A v2 path as the v1 field it is in an agents.json entry: [field], or [block, key] in a block kept whole; null: none. */
+export function v1Field(path: string[]): string[] | null {
   const [a, b] = path;
-  if (a === "children" || a === "jobs") return b === undefined ? [a] : [a, b];
+  // A block the flat spec keeps whole (`children`, `jobs`, `context`), or one key of it.
+  const whole = Object.entries(V2_PATH).find(([, p]) => p === a)?.[0];
+  if (whole) return b === undefined ? [whole] : [whole, b];
   const field = Object.entries(V2_PATH).find(([, p]) => p === path.join("."))?.[0];
   return field ? [field] : null;
 }

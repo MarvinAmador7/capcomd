@@ -44,6 +44,7 @@ Each term is used in exactly one sense in this document and in the types.
 | **gate** | A hook whose denial stops a kernel operation that lands or releases something: `verify.*`, `merge.*`, `approval.*`, `trigger.admitting`. Gates always fail closed (§6.5). |
 | **seam** | A kernel-defined interface with exactly one implementation chosen by name per use: the sandbox provider, the agent provider and the forge (§7). |
 | **source** | A plugin contribution that turns an external system's events into **triggers** (§16.3). Many may be active at once. |
+| **context provider** | A plugin contribution that serves items of the context layer (a project's memory, a company's facts; ADR-025) under a name a profile's `context.providers` lists. Many may be active and a profile may name several; the kernel's **router** composes them into an agent's brief at `agent.preparing` (§6.6.7). Not a seam (§7.1): no use selects exactly one. |
 | **job** | Kernel-tracked work that outlives the call that started it and reports back as events: an `exec` in a sandbox machine or a `timer` (§16.2). |
 | **principal** | Who acts: `operator`, `driver`, `agent`, `viewer` or `plugin` (§3.2). |
 | **scope** | A harness.v1 token scope: `read`, `steer`, `approve`, `configure` (`src/api/clients.ts` `CLIENT_SCOPES`). The word is used in no other sense here; the event envelope's `scope` field is called a **stream** below, and `src/actors/scope.ts` is "the scope actor". |
@@ -174,12 +175,14 @@ A capability id is one of:
 |---|---|
 | `seam:sandbox/<n>`, `seam:agent/<n>`, `seam:forge/<n>` | An implementation of that seam under name `n` (§7). |
 | `source:<n>` | A trigger source named `n` (§16.3). |
+| `context:<n>` | A context provider named `n` (ADR-025 §3.1), what a profile's `context.providers[].name` selects. |
 | `plugin:<n>` | The plugin `n`, active. Every plugin provides `plugin:<own name>` implicitly. |
 | `kernel:<feature>` | A kernel feature by its harness.v1 feature-flag name (`kernel:runs.goal_branch`). |
 
 Resolution (§5.4) fails a plugin whose `requires` names a capability no active plugin or the kernel provides
 (`unresolved`), and orders providers before requirers (§6.3). Two active plugins MUST NOT provide the same `seam:` or
-`source:` id (`seam_conflict`; the later one in load order fails).
+`source:` id (`seam_conflict`; the later one in load order fails), nor register the same context provider name (`conflict`
+at `ctx.context.register`, so the later one in load order fails activation).
 
 ### 4.7 Contributions
 
@@ -194,6 +197,7 @@ suite (§14.1).
 | `hooks` | `{ [hook]: { timeoutMs?, failure? } }` (§6) | `ctx.hooks.on` |
 | `seams` | `{ kind, name }`, at most one per kind (§7) | `ctx.seams.sandbox/agent/forge` |
 | `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source) |
+| `context` | `{ name, kinds: ("fact" \| "memory")[] }`, each also in `provides` as `context:<name>` (ADR-025 §3.1) | `ctx.context.register(impl)`: `impl.describe().name` is the declared name; in process only in protocol v1, like the seams |
 | `cli` | `{ name, summary }` (§4.7.1) | `ctx.cli.command` |
 | `mcp` | `{ name, summary }` (§4.7.2) | `ctx.mcp.tool` |
 | `api` | `{ method, path, scope }` (§4.7.3) | `ctx.api.route` |
@@ -554,13 +558,36 @@ the agent without prompt text: the kernel's `CAPCOMD_*`; the agent providers' fa
 `ALL_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`); git's `GIT_*`; and
 `TMPDIR`, `USER`, `LOGNAME`. A value the redactor would change is `invalid` (secrets reach a sandbox as placeholders,
 §11.4). The payload a later listener sees has the earlier skills and the earlier variables' names; their values stay in
-the patches. The kernel then attaches them to the attempt's run: the skills' text after the profile's `append` and the
-plugins' appends, in the order the plugins added them, where the agent reads its instructions (Claude Code's appended
-system prompt, Codex's prompt), and recorded on the attempt's spec by `{name, hash, source}`; the variables in the
-agent's process environment, never in place of the runner's, the provider's or the credential's. The kernel's own
-listener, `skill-orchestration`, reads the agent's record from the kernel's call rather than the engine, so its `closed`
-failure never trips on a slow engine; an attempt no plugin prepared (a workflow that passed its prepare step under an
-earlier capcomd, started or restarted after an upgrade) gets the orchestration skill from the kernel, as before.
+the patches. The kernel then attaches them to the attempt's run: each skill's text in a `<skill name="…">` block, as a
+message's skills are (`src/agents/skills.ts` `skillBlock`), after the profile's `append` and the plugins' appends (the
+profile's skills first, then the plugins' in the order they added them), where the agent reads its instructions (Claude
+Code's appended system prompt, Codex's prompt), and recorded on the attempt's spec by `{name, hash, source}`; the
+variables in the agent's process environment, never in place of the runner's, the provider's or the credential's. The
+kernel's own listener, `skill-orchestration`, reads the agent's record from the kernel's call rather than the engine, so
+its `closed` failure never trips on a slow engine; an attempt no plugin prepared (a workflow that passed its prepare step
+under an earlier capcomd, started or restarted after an upgrade), or one prepared without it (only its profile's skills,
+no plugin listening), gets the orchestration skill from the kernel, as before.
+
+The profile's skills (ADR-024 `skills`, §7 step 5): the payload's `prompt.skills` starts with them, so a plugin sees them
+and can't attach one again. They are resolved with the profile (`src/profiles/skills.ts`: the profile's package
+`skills/<name>/SKILL.md`, the user's `~/.claude/skills` for `source: user`), pinned on the agent at spawn by
+`{name, hash, source}` (`PinnedSpec.skills`, additive; `source` `project` or `user`, the layer it came from), and their
+text is kept with the run (the scope's content-addressed attachments, `att-<sha256 prefix>`), never in an event. Each
+attempt reads the text there and checks it against the pin; one that isn't there as pinned fails the attempt for good
+(code `config`), so a retried or resumed agent gets exactly what it was spawned with, and an edit to a `SKILL.md`
+reaches only agents spawned after it. The orchestration skill (`capcomd-orchestration`) is never pinned: a profile that
+may spawn may name it, and `skill-orchestration` attaches it, written for the agent, so the agent gets it once; a
+profile that can't spawn, or that pins its hash, is refused when it resolves.
+
+The kernel's context router (ADR-025 §6.1) is the one listener that composes context providers into `prompt.append`: the
+built-in `context` plugin (`src/plugins/context.ts`, failure open), for an agent whose pinned spec has a `context` block
+with providers (an agent without one gets no patch). Its append is the brief: a kernel-written header in plain prose
+(how many index lines of how many it loaded, the budget and where it came from, each provider's revision or the reason
+it was skipped, in the kernel's words) and one line per item (`IndexLine`, its description made one line, redacted,
+neutralised with `fence()`'s rule and capped), never an item's body. The brief is a function of the providers' indexes,
+the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
+and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
+out) on the run's stream.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
@@ -812,7 +839,7 @@ caller's environment (`CAPCOMD_GH_CLI`, `GITHUB_TOKEN`) from the kernel for the 
 
 ### 8.1 Shape
 
-`PluginContext<C>` has 22 services. Everything a plugin can do is a method on one of them; there is no second entry
+`PluginContext<C>` has 23 services. Everything a plugin can do is a method on one of them; there is no second entry
 point, no global, no ambient state. The full signatures are `packages/plugin/src/context.ts`; this section states the
 rules the signatures cannot.
 
@@ -825,6 +852,7 @@ rules the signatures cannot.
 | `trace` | `span` | | §13.4 |
 | `hooks` | `on` | | §6 |
 | `seams` | `sandbox`, `agent`, `forge` | | §7 |
+| `context` | `register` | | ADR-025 §3.1 (`search`, `get`, `propose` for plugins once a consumer exists) |
 | `cli` | `command` | | §4.7.1 |
 | `mcp` | `tool`, `instructions` | | §4.7.2 |
 | `api` | `route`, `capability` | | §4.7.3 |
@@ -844,7 +872,7 @@ rules the signatures cannot.
 | `triggers` | `emit`, `subscribe`, `unsubscribe`, `subscriptions` | `emit`: the plugin must contribute the source; `subscribe`: steer | new (§16.3) |
 | `onDispose` | | | §5.3 |
 
-77 primitives in all (69 on the services above plus `log` ×5, `trace.span`, `ui.descriptor`, `onDispose`).
+78 primitives in all (70 on the services above plus `log` ×5, `trace.span`, `ui.descriptor`, `onDispose`).
 
 ### 8.2 Call options
 
@@ -1098,6 +1126,18 @@ notice details, descriptor strings) are `Untrusted`: clients render them as plai
 `cct1.`, `bxd_`) before it reaches a plugin or a stream. A plugin SHOULD run `ctx.auth.redact` on anything it writes
 itself; the kernel runs it again on what the plugin emits.
 
+Untrusted text another agent reads arrives inside a fence naming its author (`src/subagents/results.ts` `fence()`), and
+every `<<<…>>>` on one line inside it is neutralised, whatever it says, so no marker, today's or a later one, can be
+forged from inside (and, as before, an `end` or `untrusted` one split over lines). The context brief (§6.6.7, ADR-025 §6.1) is the one place untrusted text is the basis of a model's
+attention from system-role text (Claude Code's appended system prompt; Codex's prompt): an item's description, written
+by whoever wrote the item. What fences it there: the header is the kernel's, in plain prose, with no marker syntax and
+none of a provider's own words (a failure is named with the kernel's reason); each description is first made one line
+(invisible format characters dropped, control characters and line breaks made spaces), then redacted (the kernel's
+shapes and the agent providers' credentials), neutralised with `fence()`'s rule and a lone `<<<` or `>>>` with it (so
+two fields of one line can't make a marker together), and capped at `limits.descriptionChars`, and so are an item's
+path and `paths`; an item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
+is reserved for ADR-025 §6.3 and not shipped.
+
 ### 11.6 Isolation
 
 In-process plugins are built-ins: the trust boundary is the capcomd package. Out-of-process plugins get a filtered
@@ -1244,6 +1284,14 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
   allowlist, has `sandbox: "read-only"` or `denyCommands` that refuse `git commit` and `git push`). The suite is `packages/plugin/src/agent-conformance.ts`; every method it calls
   is pure, so `capcomd plugins validate --conformance` runs it with no streams, and a plugin's own tests pass theirs to
   `testkit.conformance.agent`.
+- **context** (ADR-025 §3.1): `describe` names the declared provider with kinds and layers the kernel knows,
+  `available` never rejects, `classifyError` classifies anything (its own `not_found` as `not_found`), `propose` is
+  refused `unsupported` unless `caps.writable`, a call whose signal is already aborted rejects; with a scope that has
+  items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time,
+  `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
+  kind, untrusted description), `get` returns an indexed item with untrusted text and rejects an id that isn't there
+  `not_found`, and `search` answers at most `limit` hits. `packages/plugin/src/context-conformance.ts`; `capcomd plugins
+  validate --conformance` runs it without a scope (the item cases skipped).
 - **forge**: against a local bare repository (`tests/merge/gitfixture.ts`): `land direct` is a CAS (a moved target is
   `conflict`), `land` twice with the same `mrgId` is `already: true`, `pr` mode without `pullRequests` rejects
   `unsupported`, `matches` is pure; `remoteCredential`, when present, answers null for a remote the forge's service
@@ -1268,7 +1316,7 @@ checks the mode against `HOOKS` (ADR-023 step 1).
 ### 14.5 The test kit
 
 `@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext`, `load`,
-`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge}`, `call`. Implemented with ADR-023
+`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge, context}`, `call`. Implemented with ADR-023
 step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what `test:fast` runs on
 `packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` needs the kernel's hook sites and the
 `conformance` suites the seams as plugins: they reject `unsupported` until §17.2 steps 2, 3, 4 and 6.
@@ -1688,7 +1736,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.17 | 2026-11-05 | With the jobs service (§17.2 step 7, §16.2): `exec` runs in the owner agent's machine through its spool pump's exec, as a detached runner whose files (`<spool>/jobs/<id>/`) outlive the daemon; the machine is attached while the agent runs, so re-attaching after a restart is the agent's pump starting again; a job whose agent ended unwatched settles `lost` when it is next read. A run-owned job machine (`owner: {run: true}` for `exec`) is refused `unsupported` until a later step; a job's `env` values are not kept on its record. The in-VM ops are `job.start`, `job.output`, `job.list`, `job.kill`, in every agent token (where an in-VM capcomd runs); a start's answer is the job as its agent reads it, and a job the agent stops itself sends no message. A single-string `cmd` runs with `sh -c`, more are argv. `afterTurnMs` is a job's default timeout (from its start), not yet counted from the agent's last step; daemon defaults are `CAPCOMD_JOBS_MAX`, `CAPCOMD_JOBS_FOREGROUND_MS`, `CAPCOMD_JOBS_AFTER_TURN_MS` (config `env`). The `jobs` block is pinned as is (`PinnedSpec.jobs`), from a v2 profile and as the flat field of a `capcomd.agents/v1` entry. A settled record keeps the last 48 KB of stdout and 16 KB of stderr; a job no message comes for is marked `quiet` in its directory, so the supervisor doesn't keep the CLI's input open for one. An agent's timers end with it (`killed`; one whose agent ended where no pump saw it, at its next fire). A timer may set both `at` (its first fire) and `everyMs`. An orchestrate agent starts no `exec` job (§16.1 item 6). The Docker sweep is `sandbox-docker`'s own timer (§15.1). `job.started`/`job.ended` are run events (additive), on the daemon stream for a plugin's timer. |
 | 1.0.18 | 2026-11-06 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
 | 1.0.19 | 2026-11-06 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
-| 1.0.20 | 2026-11-06 | With ADR-024's writes (its §7 step 6): the `configure` scope's profile writes (§11.1) are `PUT /v1/profiles/{name}` (capability `profiles.edit`; additive, with `GET /v1/profiles/{name}` and the daemon-stream event `profile.changed`); `ctx.profiles` gains no write method yet. A write changes the profile's own file and bumps its `version`; what an agent pinned at spawn (`profileVersion`, §6.6.7) is unchanged. |
+| 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
+| 1.0.21 | 2026-11-06 | With the context router (ADR-025 step 1): a `context` contribution (§4.7: `contributes.context: [{name, kinds}]`, `provides: context:<name>` in §4.6, `ctx.context.register`, a 23rd service and 78th primitive in §8.1; all additive), the term context provider (§2), its conformance suite (§14.2) and `testkit.conformance.context` (§14.5); `PinnedSpec.context` (additive); the kernel's context router as the agent.preparing listener that composes a profile's providers into the brief (§6.6.7); §11.5: `fence()` neutralises every `<<<…>>>`, and the brief is the one place untrusted text is the basis of attention from system-role text, and what fences it. |
+| 1.0.22 | 2026-11-06 | With ADR-024's writes (its §7 step 6): the `configure` scope's profile writes (§11.1) are `PUT /v1/profiles/{name}` (capability `profiles.edit`; additive, with `GET /v1/profiles/{name}` and the daemon-stream event `profile.changed`); `ctx.profiles` gains no write method yet. A write changes the profile's own file and bumps its `version`; what an agent pinned at spawn (`profileVersion`, §6.6.7) is unchanged. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

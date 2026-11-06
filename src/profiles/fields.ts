@@ -8,7 +8,7 @@ import { agentSeams } from "../plugins/agents";
 import { profileValues } from "./describe";
 import type { ResolvedProfile } from "./load";
 import { providerEfforts } from "./v1";
-import { V2_PATH } from "./v2";
+import { v1Field } from "./write";
 
 /** How a row is rendered and what PUT takes for it. A client renders a type it doesn't know as a read-only `info` row. */
 export type FieldType = "choice" | "toggle" | "number" | "text" | "list" | "info";
@@ -130,7 +130,7 @@ function shown(v: unknown): string {
 /** Can a write to the profile's own file hold this path? (A v2 file holds every path; an agents.json entry its v1 fields.) */
 function holds(p: ResolvedProfile, id: string): boolean {
   if (p.format === "v2") return true;
-  return id.startsWith("children.") || id.startsWith("jobs.") || Object.values(V2_PATH).includes(id);
+  return v1Field(id.split(".")) !== null;
 }
 
 /** Every row of a resolved profile: the catalog's, then each other value it sets (read-only, as its file has it). */

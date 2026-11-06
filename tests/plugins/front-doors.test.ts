@@ -131,10 +131,13 @@ describe("a plugin's command answers with the envelope and the caller's principa
     expect(cli("echo", "--help")).toMatchObject({ code: 0, out: expect.stringContaining("Usage (the echo plugin):\n  capcomd echo [words…] [--flag value]") });
     const all = cli("--help");
     expect(all.out).toContain("capcomd serve");
-    expect(all.out).toMatch(/Plugin commands:\n {2}capcomd echo\s+Say who called and what it was given {2}\(echo\)/);
-    // Without the plugin, the help is the kernel's alone.
+    // After the built-ins' own plugin commands (capcomd context, the context router's).
+    expect(all.out).toMatch(/Plugin commands:\n(?: {2}capcomd .+\n)* {2}capcomd echo\s+Say who called and what it was given {2}\(echo\)/);
+    expect(all.out).toMatch(/ {2}capcomd context\s+The context brief a profile's agents start with.* {2}\(context\)/);
+    // Without the plugin, the help is the kernel's and the built-ins' alone.
     const p = Bun.spawnSync([process.execPath, CLI, "--help"], { env: { ...childEnv(), CAPCOMD_TEST_PLUGINS: "" }, stdout: "pipe" });
-    expect(p.stdout.toString()).not.toContain("Plugin commands");
+    expect(p.stdout.toString()).not.toContain("capcomd echo");
+    expect(p.stdout.toString()).toMatch(/Plugin commands:\n {2}capcomd context .*\(context\)\n\n$/);
   });
 
   test("a kernel command is the kernel's as before: its flags are checked, its output its own", () => {
@@ -216,9 +219,14 @@ describe("skill-orchestration: the orchestration skill as an agent.preparing pat
     skillKernel.goal = async () => ({ branch: "capcomd/add-sum", base: "main" });
     const a = record();
     const text = await unpreparedSkill("run-none", a, null);
+    // In its block, as a prepared attempt reads it (ADR-024 §7 step 5).
+    expect(text).toStartWith(`<skill name="${SKILL_NAME}">\n`);
+    expect(text).toEndWith("\n</skill>");
     expect(text).toContain("# Orchestrating child agents (capcomd)");
     expect(text).toContain("Your merges land on capcomd/add-sum");
     expect(await unpreparedSkill("run-none", a, { provider: "claude", skills: [{ name: SKILL_NAME }] })).toBeUndefined();
+    // Prepared with only its profile's skills (no plugin attached it): the kernel's, still.
+    expect(await unpreparedSkill("run-none", a, { provider: "claude", skills: [{ name: "tdd" }] })).toBe(text);
   });
 
   test("an agent that can't spawn, and a fake agent, get nothing", async () => {

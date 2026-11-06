@@ -2,6 +2,7 @@
 import type { PluginManifest } from "./manifest";
 import type { HookListener, HookName, Grant } from "./hooks";
 import type { AgentProvider, Forge, SandboxProvider } from "./seams";
+import type { ContextProvider } from "./context-layer";
 import type { Agent, AgentNotice, Approval, AttachedSkill, Budget, Job, JobSpec, Merge, PinnedSpec, Principal, Run, Timestamp, Trigger, TriggerDecision, TriggerSubscription, Untrusted, Verification } from "./shapes";
 
 /** Every registration returns one. Disposing twice is a no-op. The host disposes every outstanding one on unload, in
@@ -63,6 +64,11 @@ export interface SeamService {
   agent(impl: AgentProvider): Disposable;
   forge(impl: Forge): Disposable;
 }
+
+/** The context layer (ADR-025 §3.1): a provider a profile names in `context.providers`, under the name declared in
+ *  `contributes.context` (its `describe().name`). The kernel's router composes them; a second registration of the same
+ *  name, by any plugin, is `conflict`. In process only in protocol v1, like the seams. */
+export interface ContextService { register(impl: ContextProvider): Disposable }
 
 /** The relay.v1 envelope a command or tool answers with (`src/core/errors.ts` SCHEMA). */
 export type Envelope = { schema: "relay.v1"; ok: true } & Record<string, unknown>;
@@ -262,6 +268,7 @@ export interface PluginContext<C = Record<string, unknown>> {
   readonly trace: Tracer;
   readonly hooks: HookService;
   readonly seams: SeamService;
+  readonly context: ContextService;
   readonly cli: CliService;
   readonly mcp: McpService;
   readonly api: ApiService;
