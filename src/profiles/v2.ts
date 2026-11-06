@@ -2,7 +2,7 @@
 // or a single file (`<name>.yaml`) holds, how one is laid over another (`extends`, an `override.yaml`; §2.3, §2.6),
 // and the flat v1 spec it resolves to, which is what an agent is pinned with (./v1.ts AgentSpec). Pure: reading the
 // files and the layers is ./load.ts.
-import { AGENTS_JSON_SCHEMA, NAME, type AgentSpec } from "./v1";
+import { AGENTS_JSON_SCHEMA, CONTEXT_LIMITS, NAME, validateContext, type AgentSpec } from "./v1";
 
 export const PROFILE_SCHEMA = "capcomd.profile/v2";
 
@@ -20,6 +20,7 @@ export const V2_PATH: Readonly<Record<keyof AgentSpec, string>> = {
   stuckRepeats: "limits.stuckRepeats", noChangeAfterMs: "limits.noChangeAfterMs",
   checkpointEveryMs: "lifecycle.checkpointEveryMs",
   children: "children", jobs: "jobs",
+  context: "context",
 };
 /** A flat field's v2 path, for messages (`maxTurns` → `limits.maxTurns`); a name that isn't one is itself. */
 export const v2Path = (field: string): string => (V2_PATH as Record<string, string>)[field] ?? field;
@@ -32,8 +33,7 @@ const v1 = AGENTS_JSON_SCHEMA.$defs.agent.properties;
 /** A file next to the manifest, by a relative name (`SOUL.md`, `prompts/review.md`): never absolute, never `..`. */
 export const FILE_REF = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9_][A-Za-z0-9._/-]*\.(?:md|txt)$/;
 const fileRef = { type: "string", pattern: FILE_REF.source };
-/** ADR-025 §6.4 `ContextLimits`: null is the eval's default for the profile's model. */
-export const CONTEXT_LIMITS = ["briefBytes", "indexLines", "descriptionChars", "itemBytes", "proposalsPerRun"] as const;
+export { CONTEXT_LIMITS };
 const DAYS = /^[1-9][0-9]*d$/;
 
 /** Each block and its keys. Fields the flat spec has are checked once resolved (./v1.ts validateSpec); the rest here. */
@@ -209,23 +209,10 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
   return e;
 }
 
-/** ADR-025 §10: `context.providers` (each a provider's name and its own settings), `limits`, `review`. */
-function checkContext(c: Record<string, unknown>): string[] {
-  const e: string[] = [];
-  if (c.providers != null) {
-    if (!Array.isArray(c.providers) || c.providers.some((p) => !isMap(p) || typeof p.name !== "string" || !NAME.test(p.name))) e.push("context.providers: must be a list of { name: <a context provider>, … its settings }");
-    else { const d = dupes(c.providers.map((p) => p.name as string)); if (d.length) e.push(`context.providers: names ${d.join(", ")} more than once`); }
-  }
-  if (c.limits != null) {
-    if (!isMap(c.limits)) e.push("context.limits: must be a map");
-    else for (const [k, v] of Object.entries(c.limits)) {
-      if (!(CONTEXT_LIMITS as readonly string[]).includes(k)) e.push(`context.limits.${k}: unknown field (${CONTEXT_LIMITS.join(", ")})`);
-      else if (v !== null && !isInt(v, 1)) e.push(`context.limits.${k}: must be an integer >= 1, or null for the default`);
-    }
-  }
-  if (c.review != null && c.review !== "human" && c.review !== "lint") e.push(`context.review: must be "human" or "lint"`);
-  return e;
-}
+/** ADR-025 §10: `context.providers` (each a provider's name, the layers it reads and its own settings), `limits`,
+ *  `review`: the pinned spec's own check (./v1.ts), so a v2 file and an agents.json entry say the same. Its unknown
+ *  keys are the block check's above. */
+const checkContext = (c: Record<string, unknown>): string[] => validateContext(Object.fromEntries(Object.entries(c).filter(([k]) => has(BLOCKS.context!, k))));
 
 /** ADR-024's `memory` block, read as `context` (ADR-025 D2): the layers it names must exist. */
 function checkMemory(m: Record<string, unknown>): string[] {
@@ -364,11 +351,11 @@ export function flatOverrides(set: Record<string, unknown>): Record<string, unkn
 export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed"];
 
 /**
- * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-025 §13), so
- * `validate` can say so instead of the setting silently doing nothing. `tools.mcp`, `sandbox.provider|environment|size`
- * and `lifecycle.onStart|onEnd` apply since step 8 (./runtime.ts).
+ * What a resolved manifest sets that this capcomd reads but doesn't apply yet, so `validate` can say so instead of the
+ * setting silently doing nothing. `tools.mcp`, `sandbox.provider|environment|size` and `lifecycle.onStart|onEnd` apply
+ * since ADR-024 §7 step 8 (./runtime.ts), `context` since ADR-025's router.
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion", "context.providers"].filter(set);
+  return ["identity.persona", "harness.cliVersion"].filter(set);
 }

@@ -34,9 +34,9 @@ export const PLUGIN_SCOPES = ["read", "steer", "configure"] as const;
 export const PluginScope = z.enum(PLUGIN_SCOPES);
 
 /** What a plugin provides or requires: a capability id (§4.6). */
-export const CAPABILITY_ID_PATTERN = "^(seam:(sandbox|agent|forge)/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$";
+export const CAPABILITY_ID_PATTERN = "^(seam:(sandbox|agent|forge)/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|context:[a-z0-9][a-z0-9_-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$";
 export const CapabilityId = z.string().regex(new RegExp(CAPABILITY_ID_PATTERN))
-  .describe("seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)");
+  .describe("seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), context:<name> (a context provider a profile names, ADR-025 §3.1), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)");
 
 /** One hook listener declared in the manifest (§4.7). The code must register exactly the hooks declared here. */
 export const HookDeclaration = z.object({
@@ -76,11 +76,19 @@ export const SourceContribution = z.object({
   summary: z.string().min(1).max(200),
 }).strict();
 
+/** A context provider (ADR-025 §3.1): what a profile's `context.providers[].name` selects. Named like a profile, since
+ *  a profile names it. */
+export const ContextContribution = z.object({
+  name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/).describe("The provider's name: what a profile's `context.providers[].name` selects (`memory`, `groundray`)"),
+  kinds: z.array(z.enum(["fact", "memory"])).min(1).describe("The kinds of item it serves: fact (owned, sourced business knowledge) and memory (lessons a project learned)"),
+}).strict();
+
 /** Declarative contributions: scanned at `validated`, before any code runs (§4.7). The code may register only these. */
 export const Contributions = z.object({
   hooks: z.partialRecord(HookNameSchema, HookDeclaration).optional().describe("Hook listeners by hook name (§6). One listener per hook per plugin"),
   seams: z.array(SeamContribution).max(3).optional().describe("Seam implementations (§7). At most one per kind"),
   sources: z.array(SourceContribution).optional().describe("Trigger sources this plugin feeds (§16.3); each must be listed in provides as source:<name>"),
+  context: z.array(ContextContribution).optional().describe("Context providers (ADR-025 §3.1); each must be listed in provides as context:<name>"),
   cli: z.array(CliCommandContribution).optional(),
   mcp: z.array(McpToolContribution).optional(),
   api: z.array(ApiRouteContribution).optional(),
@@ -142,6 +150,14 @@ export const PluginManifest = z.object({
   const sources = m.contributes?.sources ?? [];
   for (const s of sources) if (!provided.has(`source:${s.name}`)) ctx.addIssue({ code: "custom", path: ["provides"], message: `a source contribution must be listed in provides: source:${s.name}` });
   for (const id of provided) if (id.startsWith("source:") && !sources.some((s) => `source:${s.name}` === id)) ctx.addIssue({ code: "custom", path: ["provides"], message: `${id} is provided but not contributed (contributes.sources)` });
+  const contexts = m.contributes?.context ?? [];
+  const contextNames = new Set<string>();
+  for (const c of contexts) {
+    if (contextNames.has(c.name)) ctx.addIssue({ code: "custom", path: ["contributes", "context"], message: `the context provider ${c.name} is listed twice` });
+    contextNames.add(c.name);
+    if (!provided.has(`context:${c.name}`)) ctx.addIssue({ code: "custom", path: ["provides"], message: `a context contribution must be listed in provides: context:${c.name}` });
+  }
+  for (const id of provided) if (id.startsWith("context:") && !contextNames.has(id.slice("context:".length))) ctx.addIssue({ code: "custom", path: ["provides"], message: `${id} is provided but not contributed (contributes.context)` });
   if (provided.has(`plugin:${m.name}`)) ctx.addIssue({ code: "custom", path: ["provides"], message: "a plugin provides itself implicitly; do not list plugin:<own name>" });
   for (const id of m.requires ?? []) if (id === `plugin:${m.name}` || provided.has(id)) ctx.addIssue({ code: "custom", path: ["requires"], message: `a plugin cannot require what it provides: ${id}` });
   if (m.scopes?.includes("approve" as never)) ctx.addIssue({ code: "custom", path: ["scopes"], message: "approve is not grantable to a plugin (§11.1)" });
@@ -149,7 +165,7 @@ export const PluginManifest = z.object({
     const gate = /^(verify|merge|approval|trigger\.admitting)/.test(hook);
     if (gate && decl.failure === "open") ctx.addIssue({ code: "custom", path: ["contributes", "hooks", hook, "failure"], message: `${hook} is a gate hook: failure is always closed (§6.5)` });
   }
-  if (m.entry.runtime === "in-process" && (m.contributes?.hooks ? Object.keys(m.contributes.hooks).length : 0) === 0 && !seams.length && !sources.length && !m.contributes?.cli?.length && !m.contributes?.mcp?.length && !m.contributes?.api?.length && !m.contributes?.ui?.length && !m.contributes?.events?.length)
+  if (m.entry.runtime === "in-process" && (m.contributes?.hooks ? Object.keys(m.contributes.hooks).length : 0) === 0 && !seams.length && !sources.length && !contexts.length && !m.contributes?.cli?.length && !m.contributes?.mcp?.length && !m.contributes?.api?.length && !m.contributes?.ui?.length && !m.contributes?.events?.length)
     ctx.addIssue({ code: "custom", path: ["contributes"], message: "a plugin must contribute something (§4.7)" });
 });
 
@@ -159,6 +175,7 @@ export type CapabilityId = z.infer<typeof CapabilityId>;
 export type Contributions = z.infer<typeof Contributions>;
 export type HookDeclaration = z.infer<typeof HookDeclaration>;
 export type SeamKind = z.infer<typeof SeamKind>;
+export type ContextContribution = z.infer<typeof ContextContribution>;
 export type Entry = z.infer<typeof Entry>;
 
 /** Parse and validate a manifest; the structured issues are what `capcomd plugins validate` prints (§4.9). */

@@ -1,6 +1,7 @@
 // harness.v1 shapes the hooks and primitives carry (spec §3). These mirror the daemon's zod schemas in
 // src/api/contract.ts (Run, Agent, Approval) and the primitives' option types in src/primitives/ops.ts; the kernel's
 // schemas stay the source of truth and test/shapes.test.ts asserts the mirrors are assignable from them.
+import type { ContextSpec } from "./context-layer";
 
 /** RFC 3339 UTC with exactly three millisecond digits (`src/api/envelope.ts` Timestamp). */
 export type Timestamp = string;
@@ -89,6 +90,9 @@ export interface PinnedSpec {
   size?: { vcpu: 1 | 2 | 4 | 8 };
   /** ADR-024 `lifecycle.onStart|onEnd`: plugins that must be active for it; its `agent.changed` carries them (§6.6.8). */
   lifecycle?: { onStart: string[]; onEnd: string[] };
+  /** ADR-025 §10 (ADR-024's `memory`, read as it): the context providers the router briefs the agent from, and their
+   *  budgets. */
+  context?: ContextSpec;
   profile?: { name: string; version: number; source: "project" | "user" | "bundled" | "installed" };
   /** ADR-024 `skills` (§7 step 5): the profile's skills, pinned at spawn by the sha256 of each SKILL.md; agent.preparing
    *  (§6.6.7) has their text in `prompt.skills`. */

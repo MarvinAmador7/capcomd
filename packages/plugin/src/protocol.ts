@@ -1,5 +1,7 @@
 // The out-of-process protocol (spec §9): a third-party plugin is a process the host starts, which connects to the
-// harness.v1 socket as a client. These are the wire shapes; openapi/drafts/plugin-api.fragment.json is the OpenAPI.
+// daemon's plugin socket as a harness.v1 client. These are the wire shapes; their OpenAPI is in openapi/capcomd.json
+// (capability plugins.protocol, generated from src/api/contract.ts), the host's side is ./host/process.ts and the client
+// library is ./client.ts.
 import type { HookCall, HookName, HookResult } from "./hooks";
 import type { PluginScope } from "./manifest";
 
@@ -84,15 +86,16 @@ export interface PluginSummary {
   stats: { calls: number; failures: number; p50Ms: number | null; p95Ms: number | null; lastFailureAt: string | null };
 }
 
-/** How a plugin's runtime talks to the host, as an interface a client library implements (§9.8). The Slack example
- *  codes against this; no implementation ships yet. */
+/** How a plugin's runtime talks to the host (§9.8): `connect` in ./client.ts implements it; the Slack example codes
+ *  against it. */
 export interface PluginClient {
   open(body: SessionOpen): Promise<SessionOpened>;
   /** Yields frames in order; resumes from the last `seq` on reconnect. Ends when the session closes. */
   hooks(signal: AbortSignal): AsyncIterable<HookFrame>;
   answer<N extends HookName>(callId: string, answer: HookAnswer<N>): Promise<void>;
   emit(body: EmitBody): Promise<{ seq: number }>;
-  storage: { get(key: string): Promise<StorageEntry | null>; put(key: string, body: StoragePutBody): Promise<StorageEntry>; delete(key: string): Promise<void>; list(prefix: string): Promise<StorageEntry[]> };
+  /** The plugin's storage (§8.4): the daemon scope, or with `run` that run's. */
+  storage: { get(key: string, run?: string): Promise<StorageEntry | null>; put(key: string, body: StoragePutBody, run?: string): Promise<StorageEntry>; delete(key: string, run?: string): Promise<void>; list(prefix: string, run?: string): Promise<StorageEntry[]> };
   /** Any other harness.v1 route, with the plugin's token (§9.6). */
   fetch(path: string, init?: { method?: string; body?: unknown; idempotencyKey?: string }): Promise<Response>;
 }

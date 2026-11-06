@@ -76,6 +76,11 @@ src/
   actors/       - Rivet actors (run, scope, worker, verifier, planner, taskboard, judge)
   agents/       - Claude Code / Codex adapters, credentials, the agent runner
   auth/         - subscription logins (auth login/status/logout)
+  context/      - the context layer (ADR-025): brief.ts, the router that builds an agent's brief from its profile's
+                  context providers; memory.ts, the project layer's provider (`.capcomd/context/` read through the
+                  files mirror); limits.ts, the brief's budgets (limits.gen.ts: the eval's docs/evidence/context/
+                  <model>/limits.json, regenerated with `bun scripts/gen-context-limits.ts`); providers.ts, the active
+                  providers by name
   cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
                   front door's registration, front-doors.ts); groups/, the kernel's commands by group; flags.ts, help.ts;
                   commands/, what they call
@@ -96,9 +101,13 @@ src/
                   provider. Tests load a plugin directory as a built-in with CAPCOMD_TEST_PLUGINS (only under `bun test`;
                   a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
-                  front doors (the CLI's groups, front-mcp, front-hermes), and skill-orchestration.ts, the orchestration
-                  skill as an agent.preparing patch: every process loads them (host.ts `localHost`); lifecycle.ts, whether
-                  the plugins a profile's `lifecycle` names are there to hear its agents
+                  front doors (the CLI's groups, front-mcp, front-hermes), skill-orchestration.ts, the orchestration
+                  skill as an agent.preparing patch, context.ts, the context router's listener and `capcomd context`,
+                  and context-memory.ts, the `memory` context provider: every process loads them (host.ts `localHost`);
+                  process.ts, how the daemon starts an out-of-process plugin (filtered env, its token, its log, the chaos
+                  killpoints); storage.ts, a plugin's private storage; lifecycle.ts, whether the plugins a profile's
+                  `lifecycle` names are there to hear its agents. The user's plugins (~/.capcomd/plugins/<name>) run
+                  out of process.
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and
@@ -120,7 +129,8 @@ packages/
   bot-avatar/   - (proposal) deterministic pixel bot avatars: agent id + role + size → SVG, from a parts catalog;
                   pure, no dependencies; catalog.json and golden bots for the Swift renderer
   plugin/       - @capcomd/plugin (private): the plugin API's manifest schema and loading, context, hook registry,
-                  seams, protocol, the host's machinery (src/host/: states, order, dispatch, breaker) and the test
+                  seams, protocol and its client library (client.ts `connect`), the host's machinery (src/host/: states,
+                  order, dispatch, breaker, process.ts the out-of-process runtime) and the test
                   kit, with worked examples; normative spec in docs/spec/plugin-api.md. The kernel fires hooks only
                   as `hooks.fire("<hook>", "<mode>", …)`; `bun scripts/check-hook-modes.ts` (run by test:fast)
                   checks each site's mode against HOOKS
@@ -147,7 +157,7 @@ What CI runs, and where (`.github/workflows/`):
 |---|---|
 | `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
-| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect`, below) |
+| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect --arms none,agents-md,index`, below) |
 | `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
 | `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
@@ -233,21 +243,23 @@ re-discovery (reads of the fact's file) from `capcomd logs`, turns, tokens, the 
 a plan login) and the model the CLI reported, from the agent's span.
 
 ```bash
-bun scripts/eval-context.ts --seed 1 --expect          # fake sandbox and scripted agent (what CI runs, ~30 s)
+bun scripts/eval-context.ts --seed 1 --expect --arms none,agents-md,index   # fake sandbox and scripted agent (CI, ~30 s)
 bun scripts/eval-context.ts --list                     # the arms, chains and pending probes, and which are runnable
 CAPCOMD_HOME=<a home with your logins> BOXD_API_KEY=… \
   bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-6.1-sol --reps 3 --port 6571 --evidence docs/evidence/context
 ```
 
 `--agents fake` runs on the fake-host sandbox with `scripts/eval-context/fake-agent.ts` as `claude`: a deterministic
-agent that reads only its checkout (the instruction file when there is one, else the stub's stale comment and the
-docs), so `--expect` knows every verdict and fails when an arm, a checker or a metric stops working. `--agents live`
+agent that reads only its checkout and its prompt (the instruction file when there is one, the context brief's lines and
+the files they name when its profile has one, else the stub's stale comment and the docs), so `--expect` knows every verdict and fails when an arm, a checker or a metric stops working. `--agents live`
 runs real Claude Code or Codex agents (one profile per `--models` entry, plan logins) on `--sandbox` (boxd by default,
 or docker); a Codex model must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a
 `CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`), never `~/.capcomd`
 itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` and, the first time, the model's `limits.json`
 (ADR-025 D4's starting values until an arm measures them). The world itself isn't written there: the seed and the
-recorded commit give it back, and its carriers file holds the planted instruction. The seed defaults to today's date
+recorded commit give it back, and its carriers file holds the planted instruction. The router reads a model's
+`limits.json` from a generated copy: after the eval writes one, run `bun scripts/gen-context-limits.ts` (CI checks
+it with `--check`). The seed defaults to today's date
 (UTC), so a run on a new model release gets names and numbers no model has seen; re-run the live baselines on every
 release and commit them. Everything else (the engine's data, bare repositories, traces, `world.yaml`) is in one
 scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp dir, or a new or empty `--work`), deleted at the end unless
@@ -264,6 +276,8 @@ and workflow tests use to check that a crashed step resumes. Named killpoints:
 - `merge.before_cas` - Kill before merge CAS
 - `merge.after_cas.before_event` - Kill after CAS, before event
 - `push.mid`, `push.after.before_event` - Kill during or after a branch push
+- `plugin.hook.mid` - Kill the daemon right after it sent a gate or modify call to an out-of-process plugin
+- `plugin.process.crash` - Kill the plugin's process (not the daemon) at the same point: the call is `crashed`, denied
 - `vm.create.after_request.before_record` - Kill during VM creation
 - `lease.expire.mid` - Kill during lease expiry
 - `budget.charge.mid` - Kill during budget charge

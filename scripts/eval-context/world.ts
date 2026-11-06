@@ -188,11 +188,20 @@ export function brainFiles(w: World): Record<string, string> {
 
 /** Project memory as a person would hand-write it under `.capcomd/context/` (ADR-025 §3.3), for the memory arms. */
 export function memoryFiles(w: World): Record<string, string> {
-  const lesson = (slug: string, paths: string[], text: string) => [`memory/${slug}.md`, `---\n${Bun.YAML.stringify({ id: slug, type: "lesson", status: "stable", generated: { by: "human:maintainer", method: "human-authored", at: w.meetings.at(-1)!.date }, paths }, null, 2).trimEnd()}\n---\n\n${text}\n`] as const;
+  const lesson = (slug: string, description: string, paths: string[], text: string) => [`memory/${slug}.md`, `---\n${Bun.YAML.stringify({ id: slug, type: "lesson", status: "stable", description, generated: { by: "human:maintainer", method: "human-authored", at: w.meetings.at(-1)!.date }, paths }, null, 2).trimEnd()}\n---\n\n${text}\n`] as const;
   return Object.fromEntries([
-    lesson("money-rounding", ["src/**"], "Money is rounded with roundHalfEven (src/money.js); Math.round on money is the cause of one-cent reconciliation errors."),
-    lesson("active-customer-definition", ["src/customers.js"], `"Active customer" is defined in ${w.active.note} (${w.active.id}), not in the earlier ${w.active.proposedDays}-day proposal.`),
+    lesson("money-rounding", "Money is rounded with roundHalfEven (src/money.js), never Math.round", ["src/**"], "Money is rounded with roundHalfEven (src/money.js); Math.round on money is the cause of one-cent reconciliation errors."),
+    lesson("active-customer-definition", "Where \"active customer\" is defined", ["src/customers.js"], `"Active customer" is defined in ${w.active.note} (${w.active.id}), not in the earlier ${w.active.proposedDays}-day proposal.`),
   ]);
+}
+
+/** A project's hand-written `.capcomd/context/` (ADR-025 §3.3), for the index arm: the business records as the project's
+ *  own facts (each its title for a description, supersession in its frontmatter) and the memory lessons. */
+export function contextFiles(w: World): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [p, s] of Object.entries(brainFiles(w))) if (p !== "index.md") out[`.capcomd/context/facts/${p}`] = s;
+  for (const [p, s] of Object.entries(memoryFiles(w))) out[`.capcomd/context/${p}`] = s;
+  return out;
 }
 
 /** A short stable id of the world, for results: the same seed and generator give the same hash. */

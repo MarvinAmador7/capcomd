@@ -17,6 +17,38 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   "lifecycle_inactive"`), and so is one whose environment its sandbox doesn't have (`reason: "environment"`).
   `capcomd profiles validate` says both before you spawn. None of these can be changed with `--set` or by a parent
   spawning a child; agents already running keep what they started with. See docs/agents.md, "Profile files".
+- New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
+  `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
+  its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
+  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. If it crashes while deciding, the decision is a deny, and it is started again; after five crashes in ten
+  minutes it stays stopped and its gates deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn
+  it off with `/disable`). What it prints goes to the daemon's log with its token and secrets blanked out.
+  `capcomd plugins list` shows it with `runtime: process`. Such a plugin contributes hooks and events only (no
+  commands, tools or sandboxes), and a CLI never starts one. The client library `connect()` in `@capcomd/plugin` does
+  the talking; the plugin API spec §9 is the protocol.
+- New (harness.v1, capability `plugins.protocol`): the out-of-process protocol's routes (`/v1/plugins/{name}/sessions`,
+  `/hooks` as an event stream, `/hooks/{callId}`, `/events`, `/storage`), usable only with the token capcomd made for
+  that plugin, and `plugin.process_changed` events on the daemon stream. Capability `plugins` adds
+  `GET /v1/plugins/{name}` (a plugin's manifest and config, never a secret) and `POST /v1/plugins/{name}/enable` and
+  `/disable` (the configure scope; for the daemon's life, and a built-in can't be disabled).
+- New: project memory for agents. A profile with a `context` block (`context: {providers: [{name: memory}]}`, in
+  `profile.yaml` or an `agents.json` entry) briefs each of its agents, when it starts, with an index of what the project
+  keeps under `.capcomd/context/` in its repository: one line per item (a lesson, feedback, a project fact) with what it
+  is about, the file that holds it and the paths it applies to, after the profile's own prompt. The agent opens the
+  files it needs; the brief never holds their text. Every agent of a profile gets the same brief until the run's target
+  branch changes; superseded, deprecated and stale items are left out; reviewers and report agents get no memory lines;
+  the brief stays within a size budget (`context.limits`, default 25,600 bytes and 200 lines) and says how much it
+  loaded. `capcomd context brief <profile>` prints it. See docs/agents.md, "Project memory: the `context` block".
+- Profiles: ADR-024's `memory:` block now means `context:` (`memory: {scope: project}` is the project's memory). Its
+  directory is read from the repository and is never written back by an agent; changes to it are commits.
+- Profiles: naming a context provider that isn't active (`context.providers`) is refused by `capcomd profiles validate` and
+  at spawn, and `--set`/`--overrides` can remove a profile's `context` block but not change it.
+- For contributors: the context eval has an `index` arm (`--arms index`): agents whose profile's brief lists the same
+  records as the `agents-md` arm's `AGENTS.md`, as a project's `.capcomd/context/`. CI runs it on the fake sandbox.
+- Plugins can provide context providers (`contributes.context`, `provides: context:<name>`, `ctx.context.register`;
+  `capcomd plugins validate --conformance` runs their suite). Text that looks like any fence marker (`<<<…>>>`, not only
+  the `end` and `untrusted` ones) is now neutralised in what one agent shows another.
 - New: skills in a profile. A `profile.yaml` can list `skills:`, and every agent of that profile gets each skill's
   `SKILL.md` in its instructions when it starts, the way `capcomd send --skill` sends skills with a message: from the
   profile's own `skills/<name>/SKILL.md`, or from your `~/.claude/skills` with `source: user`. Skills are read when an

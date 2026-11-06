@@ -74,9 +74,11 @@ opening the file (opus once) isn't counted; Codex reports no model name, so its 
 profile asked for, and its notional cost uses capcomd's default token rates ($1.25 / $10 per Mtok, `usdPerMtok`), not
 that model's price. Claude's cost is Claude Code's own `total_cost_usd`.
 
-Not run yet, and why (`bun scripts/eval-context.ts --list`): the arms `index`, `index-paths`, `index-k1`, `index-k3`,
-`memory` and `memory-groundray`, and the probes `poison-candidate`, `poison-secret` and `poison-fact-body`, each until
-the ADR-025 build step that adds what it measures.
+Not run yet, and why (`bun scripts/eval-context.ts --list`): the arms `index-paths`, `index-k1`, `index-k3`, `memory`
+and `memory-groundray`, and the probes `poison-candidate`, `poison-secret` and `poison-fact-body`, each until the ADR-025
+build step that adds what it measures. The `index` arm (the router's brief over a hand-written `.capcomd/context/`
+holding the same records and two lessons) is runnable since step 1 and runs on the fake sandbox in CI; it has no live
+results yet.
 
 Reproduce: `bun scripts/eval-context.ts --agents live --models claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5,gpt-6.1-sol --reps 3 --seed 20261106`
 at the commit above, with a `CAPCOMD_HOME` holding copies of your logins and `BOXD_API_KEY` (about 15 minutes per

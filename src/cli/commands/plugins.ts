@@ -83,7 +83,7 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
   const manifest = loaded.manifest;
   const result = (name: string, r: Partial<ConformanceResult>) => v.conformance.push({ name, ok: false, skipped: false, ms: 0, message: null, ...r });
   if (manifest.entry.runtime !== "in-process") {
-    result("conformance", { ok: true, skipped: true, message: "out-of-process plugins are run with the process runtime (spec §17.2 step 9)" });
+    result("conformance", { ok: true, skipped: true, message: "an out-of-process plugin is checked by its own tests (the client library and test kit, spec §9.8, §14.5)" });
     return v;
   }
   let mod = t.module as PluginModule<unknown> | null;
@@ -114,6 +114,19 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
       else v.conformance.push(...(await runSandboxConformance(seam as SandboxProvider, { name: s.name, ...(t.conformance ?? {}) })));
     } catch (e) {
       result(`the ${s.kind} seam ${s.name} loads`, { message: (e as Error).message });
+    } finally { await fake.dispose(); }
+  }
+  // ADR-025 §3.1: each context provider's suite; the cases that read items need a fixture repository, so they're skipped.
+  const { runContextConformance } = await import("../../../packages/plugin/src/context-conformance");
+  for (const c of manifest.contributes?.context ?? []) {
+    const fake = testkit.fakeContext(manifest, undefined, t.dir ? { dir: t.dir } : {});
+    try {
+      await testkit.load(fake, mod!);
+      const p = fake.contextProvider(c.name);
+      if (!p) { result(`the context provider ${c.name} is registered`, { message: "activate registered no context provider of that name" }); continue; }
+      v.conformance.push(...(await runContextConformance(p, { name: c.name })));
+    } catch (e) {
+      result(`the context provider ${c.name} loads`, { message: (e as Error).message });
     } finally { await fake.dispose(); }
   }
   v.ok = v.conformance.every((c) => c.ok);

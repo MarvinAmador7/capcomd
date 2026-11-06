@@ -1,9 +1,9 @@
 # capcomd plugin API, version 1 (normative)
 
 Status: **accepted** with [ADR-023](../adr-023-plugin-core.md) and [ADR-024](../adr-024-agent-profiles.md), 2026-11-04.
-Types: [`packages/plugin`](../../packages/plugin) (`@capcomd/plugin`, private). Draft API additions:
-[`openapi/drafts/plugin-api.fragment.json`](../../openapi/drafts/plugin-api.fragment.json). Research:
-[plugin-architecture.md](../research/plugin-architecture.md).
+Types: [`packages/plugin`](../../packages/plugin) (`@capcomd/plugin`, private). API additions: in
+[`openapi/capcomd.json`](../../openapi/capcomd.json) (capabilities `plugins` and `plugins.protocol`, generated from
+`src/api/contract.ts`). Research: [plugin-architecture.md](../research/plugin-architecture.md).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be read as in RFC 2119. Sections are numbered so ADRs,
 code and tests can cite them (`§6.6.15`). Where this document and the types in `packages/plugin` disagree, the types are
@@ -44,6 +44,7 @@ Each term is used in exactly one sense in this document and in the types.
 | **gate** | A hook whose denial stops a kernel operation that lands or releases something: `verify.*`, `merge.*`, `approval.*`, `trigger.admitting`. Gates always fail closed (§6.5). |
 | **seam** | A kernel-defined interface with exactly one implementation chosen by name per use: the sandbox provider, the agent provider and the forge (§7). |
 | **source** | A plugin contribution that turns an external system's events into **triggers** (§16.3). Many may be active at once. |
+| **context provider** | A plugin contribution that serves items of the context layer (a project's memory, a company's facts; ADR-025) under a name a profile's `context.providers` lists. Many may be active and a profile may name several; the kernel's **router** composes them into an agent's brief at `agent.preparing` (§6.6.7). Not a seam (§7.1): no use selects exactly one. |
 | **job** | Kernel-tracked work that outlives the call that started it and reports back as events: an `exec` in a sandbox machine or a `timer` (§16.2). |
 | **principal** | Who acts: `operator`, `driver`, `agent`, `viewer` or `plugin` (§3.2). |
 | **scope** | A harness.v1 token scope: `read`, `steer`, `approve`, `configure` (`src/api/clients.ts` `CLIENT_SCOPES`). The word is used in no other sense here; the event envelope's `scope` field is called a **stream** below, and `src/actors/scope.ts` is "the scope actor". |
@@ -174,12 +175,14 @@ A capability id is one of:
 |---|---|
 | `seam:sandbox/<n>`, `seam:agent/<n>`, `seam:forge/<n>` | An implementation of that seam under name `n` (§7). |
 | `source:<n>` | A trigger source named `n` (§16.3). |
+| `context:<n>` | A context provider named `n` (ADR-025 §3.1), what a profile's `context.providers[].name` selects. |
 | `plugin:<n>` | The plugin `n`, active. Every plugin provides `plugin:<own name>` implicitly. |
 | `kernel:<feature>` | A kernel feature by its harness.v1 feature-flag name (`kernel:runs.goal_branch`). |
 
 Resolution (§5.4) fails a plugin whose `requires` names a capability no active plugin or the kernel provides
 (`unresolved`), and orders providers before requirers (§6.3). Two active plugins MUST NOT provide the same `seam:` or
-`source:` id (`seam_conflict`; the later one in load order fails).
+`source:` id (`seam_conflict`; the later one in load order fails), nor register the same context provider name (`conflict`
+at `ctx.context.register`, so the later one in load order fails activation).
 
 ### 4.7 Contributions
 
@@ -194,6 +197,7 @@ suite (§14.1).
 | `hooks` | `{ [hook]: { timeoutMs?, failure? } }` (§6) | `ctx.hooks.on` |
 | `seams` | `{ kind, name }`, at most one per kind (§7) | `ctx.seams.sandbox/agent/forge` |
 | `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source) |
+| `context` | `{ name, kinds: ("fact" \| "memory")[] }`, each also in `provides` as `context:<name>` (ADR-025 §3.1) | `ctx.context.register(impl)`: `impl.describe().name` is the declared name; in process only in protocol v1, like the seams |
 | `cli` | `{ name, summary }` (§4.7.1) | `ctx.cli.command` |
 | `mcp` | `{ name, summary }` (§4.7.2) | `ctx.mcp.tool` |
 | `api` | `{ method, path, scope }` (§4.7.3) | `ctx.api.route` |
@@ -222,8 +226,8 @@ built-ins every process loads, the front doors among them). A kernel front door'
 own flag table (a misspelled flag is a usage error before anything runs), prints its own output (the kernel's text, its
 streams, its prompts) and MAY answer `{exit: number}` (`CliExit`) instead of an envelope; from any other plugin that is an
 error. An in-process command runs in the CLI's own process, so only a built-in's (or, under `bun test`, a
-`CAPCOMD_TEST_PLUGINS` directory's) can; a third-party command (out of process, §9) runs only when the daemon is up, the
-CLI connecting as a client (§17.2 step 9), so it cannot be used to run host code without the host.
+`CAPCOMD_TEST_PLUGINS` directory's) can. A third-party plugin runs out of process, and protocol 1 carries no command (§9.6):
+its manifest can't declare one (§4.9), so no command of it can run host code, with or without the host.
 
 #### 4.7.2 MCP tools
 
@@ -273,7 +277,8 @@ In this order; a later manifest with a name already seen is refused with `plugin
 1. **Built-ins**: a static list in the capcomd package, bundled into the single executable (`src/utils/assets.ts` rule:
    import, never `readFileSync` a package file).
 2. **User**: `<home>/plugins/<name>/plugin.json`, installed by `capcomd plugins install <owner/repo>[#<name>][@<ref>]`,
-   with a `LOCK` file (source, commit, per-file sha256).
+   with a `LOCK` file (source, commit, per-file sha256). The daemon discovers them from §17.2 step 9 (in name order; the
+   operator put them there), and runs them out of process; a CLI's local host lists them and runs none (§9.2).
 3. **Project**: `.capcomd/plugins/<name>/plugin.json`, or `.capcomd/config.json` `plugins.use: ["owner/repo#name@ref"]`.
    A project plugin is `validated` but not `resolved` until the operator trusts its content hash once
    (`capcomd plugins trust <name>`; event `plugin.trusted`), because opening a repository MUST NOT run code on the host.
@@ -285,8 +290,10 @@ In this order; a later manifest with a name already seen is refused with `plugin
 
 `capcomd plugins validate [dir]` (and the test kit, §14.5) runs the schema, the cross-field rules in
 `PluginManifest.superRefine`, path containment (a `module`, `$ref` or `command[0]` under `./` MUST resolve inside the
-plugin's directory), the `engines` check, the kernel-command collision check and, with `--conformance`, the seam suites
-(§14.2). Output is a list of `{path, message}`; the exit code is 1 on any error.
+plugin's directory), the `engines` check, the kernel-command collision check, the out-of-process rule (a `process`
+plugin contributes hooks and events only: `seams`, `sources`, `context`, `cli`, `mcp`, `api` and `ui` are refused, as protocol 1
+carries none of them, §9.6) and, with `--conformance`, the seam suites (§14.2). Output is a list of `{path, message}`;
+the exit code is 1 on any error.
 
 ## 5. Plugin lifecycle
 
@@ -348,7 +355,7 @@ discovered → validated → resolved → loading → active → disposing → d
 | `active` | the breaker (§6.5) suspends the plugin's hooks without leaving this state | `capcomd plugins disable`, daemon stop, a replaced out-of-process session → `disposing`; the process crashed past its restart budget (§9.5) → `failed(restart_limit)` |
 | `disposing` | §5.3 is running | done → `disposed`; over budget → `disposed` with `dispose_timeout` recorded |
 | `disposed` | terminal for this daemon lifetime, except: | `capcomd plugins enable` → back to `validated` and onward (a fresh module import is **not** performed in-process: the same module instance's `activate` runs again; out of process a new child runs, so its code may differ) |
-| `failed` | with a `PluginFailureCause` | `capcomd plugins enable` → `validated` and onward; a `failed` plugin's partial registrations are disposed as in §5.3 before the state is entered |
+| `failed` | with a `PluginFailureCause` | `capcomd plugins enable` → `validated` and onward; a `failed` plugin's partial registrations are disposed as in §5.3 before the state is entered, except `restart_limit`'s listeners, which stay held until `enable` or `disable` (§9.5) |
 
 A plugin in `failed` or `disposed` keeps appearing in `GET /v1/plugins` with its `cause`, so an app can explain why a
 feature is missing. **There is no hot reload of code.** A changed in-process module takes effect at the next daemon
@@ -403,7 +410,7 @@ everything an agent asks from its VM run in the daemon. An operation a CLI or th
 itself (`capcomd run new`, `spawn`, `verify`, `merge`, `approve` from the host shell or `capcomd mcp`) fires its
 `ops.ts` gates in that process, where nothing listens. Since §17.2 step 8 those commands and tools are front doors'
 registrations, but they still run in the process that serves them; sending their operations through the daemon is not
-part of this version (§17.2 step 9 and later; until then a third-party plugin's gates judge only what the daemon runs).
+part of this version (a later step; until then a third-party plugin's gates judge only what the daemon runs).
 The exception is the built-in gates the kernel's own contract depends on (the reviewer gate, §15.3): before a verify
 runs, a process that isn't the daemon starts them in a local host of its own (`src/plugins/hooks.ts` `gates()`; in
 tests also `CAPCOMD_TEST_PLUGINS`), so a run's reviewer judges every verify wherever it runs; the daemon's verifies wait
@@ -577,6 +584,16 @@ attempt reads the text there and checks it against the pin; one that isn't there
 reaches only agents spawned after it. The orchestration skill (`capcomd-orchestration`) is never pinned: a profile that
 may spawn may name it, and `skill-orchestration` attaches it, written for the agent, so the agent gets it once; a
 profile that can't spawn, or that pins its hash, is refused when it resolves.
+
+The kernel's context router (ADR-025 §6.1) is the one listener that composes context providers into `prompt.append`: the
+built-in `context` plugin (`src/plugins/context.ts`, failure open), for an agent whose pinned spec has a `context` block
+with providers (an agent without one gets no patch). Its append is the brief: a kernel-written header in plain prose
+(how many index lines of how many it loaded, the budget and where it came from, each provider's revision or the reason
+it was skipped, in the kernel's words) and one line per item (`IndexLine`, its description made one line, redacted,
+neutralised with `fence()`'s rule and capped), never an item's body. The brief is a function of the providers' indexes,
+the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
+and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
+out) on the run's stream.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
@@ -837,7 +854,7 @@ caller's environment (`CAPCOMD_GH_CLI`, `GITHUB_TOKEN`) from the kernel for the 
 
 ### 8.1 Shape
 
-`PluginContext<C>` has 22 services. Everything a plugin can do is a method on one of them; there is no second entry
+`PluginContext<C>` has 23 services. Everything a plugin can do is a method on one of them; there is no second entry
 point, no global, no ambient state. The full signatures are `packages/plugin/src/context.ts`; this section states the
 rules the signatures cannot.
 
@@ -850,6 +867,7 @@ rules the signatures cannot.
 | `trace` | `span` | | §13.4 |
 | `hooks` | `on` | | §6 |
 | `seams` | `sandbox`, `agent`, `forge` | | §7 |
+| `context` | `register` | | ADR-025 §3.1 (`search`, `get`, `propose` for plugins once a consumer exists) |
 | `cli` | `command` | | §4.7.1 |
 | `mcp` | `tool`, `instructions` | | §4.7.2 |
 | `api` | `route`, `capability` | | §4.7.3 |
@@ -869,7 +887,7 @@ rules the signatures cannot.
 | `triggers` | `emit`, `subscribe`, `unsubscribe`, `subscriptions` | `emit`: the plugin must contribute the source; `subscribe`: steer | new (§16.3) |
 | `onDispose` | | | §5.3 |
 
-77 primitives in all (69 on the services above plus `log` ×5, `trace.span`, `ui.descriptor`, `onDispose`).
+78 primitives in all (70 on the services above plus `log` ×5, `trace.span`, `ui.descriptor`, `onDispose`).
 
 ### 8.2 Call options
 
@@ -925,14 +943,27 @@ The host spawns `entry.command` with cwd = the plugin's root, `${PLUGIN_ROOT}` a
 (`ProcessEnvironment`) `CAPCOMD_PLUGIN_NAME`, `CAPCOMD_PLUGIN_ROOT`, `CAPCOMD_PLUGIN_DATA`, `CAPCOMD_PLUGIN_SOCKET`,
 `CAPCOMD_PLUGIN_SESSION`, `CAPCOMD_PLUGIN_TOKEN`, `CAPCOMD_PLUGIN_PROTOCOL=1`. No `CAPCOMD_*` of the daemon's, no
 `BOXD_*`, no `GITHUB_TOKEN`. stdout and stderr are captured: a line that parses as JSON with a `level` field is a
-structured log (§13.3), any other line is logged at `info`, both under the plugin's name, redacted. A runtime on the
-user's machine is the plugin's concern (the launcher pattern in `plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
+structured log (§13.3), any other line is logged at `info`, both under the plugin's name, redacted (its own token and
+its secrets' values among what is redacted). A runtime on the user's machine is the plugin's concern (the launcher pattern in
+`plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
+
+The kernel's launcher is `src/plugins/process.ts`. The process leads a process group of its own (the daemon's terminal
+signals don't reach it; a kill takes what it started too). Its stdin is a pipe the daemon holds and never writes: it
+closes when the daemon is gone, and the process SHOULD exit then (the client library ends its hooks stream, §9.8). Each
+start is recorded in `<data>/process.json`; a process an earlier daemon started and never stopped (it died) is killed
+before the next start, only while that pid still runs the recorded command. `CAPCOMD_PLUGIN_SOCKET` is the daemon's
+**plugin socket**, `<harness socket without .sock>-plugins.sock` (`src/api/socket.ts` `pluginSocketPath`, 0600), bound
+before the plugins load (§5.5 step 4): it serves the harness.v1 API to plugin tokens only (401 for any other,
+`src/api/server.ts` `pluginsOnly`). Only the daemon starts processes: a CLI's local host has no launcher, so a
+`process` plugin stays `validated` there.
 
 ### 9.3 Handshake and token
 
-Before spawning, the host mints a client token (`src/api/clients.ts` `addClient`) named `plugin:<name>` with the
-manifest's `scopes` and a marker that lets the gateway recognise it as *that plugin's* token. The token is revoked when
-the plugin disposes or the daemon stops; a new one is minted per start. A session id is generated per start.
+Before spawning, the host mints a client token (`src/api/clients.ts` `mintPluginClient`: `addClient`'s shape) named
+`plugin:<name>` with the manifest's `scopes` and a marker (`plugin`) that lets the gateway recognise it as *that plugin's*
+token. It lives in the daemon's memory only, never in `harness-clients.json`, so a daemon that dies leaves no working
+token behind. The token is revoked when the process is gone (it exited, or the plugin disposed); a new one is minted per
+start. A session id is generated per start.
 
 The process MUST `POST /v1/plugins/{name}/sessions` within `connectWithinMs` (30 s) with `SessionOpen {session,
 protocol: 1, manifestHash, pid, hooks}`. The host checks: the token is the plugin's own (403 otherwise), the session id
@@ -940,7 +971,10 @@ is the one it issued and not yet open (409), `manifestHash` is the sha256 of the
 was started from other files), `protocol` is one it speaks (422), `hooks` equals `contributes.hooks` (422). It answers
 `SessionOpened {config, secrets, hookTimeoutsMs, connectWithinMs, daemon}`: the layered config without secret properties,
 the secret values **once** (§10.3), and the deadlines it will apply. The plugin is `active` when the hooks stream (§9.4)
-is open; `connectWithinMs` bounds that too.
+is open; `connectWithinMs` bounds that too, and a process past it is killed (`handshake_timeout`). Until config layering
+(§10.2) a secret whose reference resolves to nothing is left out of `secrets` with a warning in the daemon's log, not
+`config_invalid`. The plugin's listeners are registered when its first session opens, one per declared hook; they stay
+through restarts (§9.5), so a gate fired while the process is down is still asked, and fails closed.
 
 ### 9.4 Hook delivery
 
@@ -959,7 +993,9 @@ and the patch (§6.2) and answers 204, or 409 when the call was already answered
 is sent after the previous is answered or timed out (the chain in §6.2 needs it). Observe calls are sent as they happen,
 interleaved. **Deadlines** are absolute daemon-clock timestamps; the process SHOULD answer with ≥ 1 s margin. **Retries:**
 the host never re-asks a timed-out gate call (the policy applied); a reconnecting process is re-sent the calls still open
-(same `callId`); the client library retries a failed `POST …/hooks/{callId}` until the deadline.
+(same `callId`); the client library retries a failed `POST …/hooks/{callId}` until the deadline. The answer route's 422
+is the registry's own judgement of the answer (its shape for the mode, a modify patch's rule): the call fails
+`invalid_result`, which a gate turns into a deny. Every frame passes the kernel's redactor before it is written (§11.5).
 
 ### 9.5 Backpressure, disconnects, restarts
 
@@ -970,9 +1006,15 @@ the host never re-asks a timed-out gate call (the policy applied); a reconnectin
   plugin **disconnected** (`plugin.process_changed {event: disconnected}`): gate calls fail with kind `disconnected`, observe
   calls queue. The process may reconnect with `Last-Event-ID` within the same session (`reconnected`).
 - A process that exits is restarted with backoff 1 s, 2 s, 4 s … 60 s (`plugin.process_changed {event: restarting, restarts}`),
-  with a **new session and token**. Five exits within 10 minutes → `failed(restart_limit)`. A gate call in flight when
-  the process exited is `crashed` (denied).
+  with a **new session and token**. Five exits within 10 minutes → `failed(restart_limit)`; its listeners stay **held**
+  until `capcomd plugins enable` (a new process) or `disable` (the operator's call): each gate or modify call to it fails
+  `crashed` at once (a gate denies, an open modify is skipped, §6.5) and observe calls are dropped, so a crash-looping
+  gate denies, as a suspended one does (§11.3), instead of letting operations pass unjudged. A gate call in flight when
+  the process exited is `crashed` (denied). A gate or modify call made while the process is down (between an exit and the
+  next start's stream) waits for that start, within its deadline (`timeout`, denied, past it); observe calls queue.
+  `restarts` in the event is the number of exits in the window. A start that never connects is killed and counts as an exit.
 - The breaker (§6.5) counts crashes and disconnected gate calls as failures.
+- The process runtime is `packages/plugin/src/host/process.ts` (transport-agnostic); the gateway maps the routes onto it.
 
 ### 9.6 Reverse calls: `ctx` over the API
 
@@ -991,32 +1033,44 @@ primitive without a route in protocol v1 rejects `unsupported` out of process (i
 | `agents.spawn/await/grant/notice`, `gates.verify/merge`, `board.*`, `kv.*`, `jobs.*`, `triggers.*`, `profiles.resolve`, `sandboxes.provider/forRun`, `seams.*`, `cli`, `mcp`, `api`, `ui` | **protocol v1: in-process only** (`unsupported`). Routes for spawn, gates, board, kv, jobs and triggers are the next protocol version's additions (§9.10); front-door and seam contributions stay in-process by design (a seam call must not cross a process boundary per `exec`). |
 
 The caller's principal on these calls is the plugin's token's, so `ops.ts` and `policy.ts` enforce as for any client.
+`events.emit` and `storage` over the wire go through the plugin's own context on the host (`PluginProtocol.context`), so
+they are checked exactly as in process: `emit` needs the `steer` scope (§11.1) and a declared type, `storage` needs no
+scope. `ctx.storage` is the kernel's in process too from §17.2 step 9 (`src/plugins/storage.ts`; the daemon's host only:
+one process writes a plugin's storage). The `emit` route's Idempotency-Key is the plugin's, not the start's token's, so a
+retry after a restart is answered with the first `seq`. The `storage/{key}` routes take the key with its `/` as is; a
+compare-and-swap's 409 carries `current`, the entry now.
 
 ### 9.7 Shutdown
 
 On dispose the host sends `session.closing`, keeps the API open for the process for 5 s, then SIGTERM, then SIGKILL
 after 5 s more (§5.3). The process SHOULD answer open gate calls (deny with "plugin stopping" is acceptable) and exit 0.
+A process with no hooks stream open can't hear `session.closing`: it gets SIGTERM at once. Its token is revoked once it
+is gone; calls still open fail `disconnected`.
 
 ### 9.8 The client library
 
-`@capcomd/plugin` will ship `connect(env: ProcessEnvironment): PluginClient` implementing `PluginClient`
-(`packages/plugin/src/protocol.ts`): `open`, `hooks` (an `AsyncIterable<HookFrame>` with reconnect and resume),
-`answer`, `emit`, `storage`, `fetch`. The Slack example (§15.4) codes against it. Not shipped yet (ADR-023 step 10).
+`@capcomd/plugin` ships `connect(env?: ProcessEnvironment): PluginClient` (`packages/plugin/src/client.ts`) implementing
+`PluginClient` (`packages/plugin/src/protocol.ts`): `open`, `hooks` (an `AsyncIterable<HookFrame>` with reconnect and
+resume by `Last-Event-ID`, ending on `session.closing`, on the caller's signal and when stdin closes), `answer` (retried
+until the call's deadline while the daemon can't be reached; a refusal is final), `emit` (with an Idempotency-Key),
+`storage` (with an optional run) and `fetch`. It uses `node:http` over the plugin socket, so a plugin runs on Bun or Node.
+The Slack example (§15.4) and the test fixture (`tests/plugins/fixtures/proc-gate`) code against it. Publishing it is
+§17.2 step 13.
 
 ### 9.9 OpenAPI additions
 
-The exact routes, parameters, bodies, responses and status codes are in
-`openapi/drafts/plugin-api.fragment.json`: `GET /v1/plugins`, `GET /v1/plugins/{name}`, `POST
-/v1/plugins/{name}/enable|disable`, `POST /v1/plugins/{name}/sessions`, `GET /v1/plugins/{name}/hooks`, `POST
-/v1/plugins/{name}/hooks/{callId}`, `POST /v1/plugins/{name}/events`, `GET /v1/plugins/{name}/storage`,
-`GET|PUT|DELETE /v1/plugins/{name}/storage/{key}`, with components `PluginSummary`, `PluginDetail`, `SessionOpen`,
-`SessionOpened`, `HookCall`, `HookFrame`, `HookAnswer`, `EmitBody`, `StorageEntry`, and the `plugin.*`, `job.*` and
-`trigger.*` event data under `x-events`. Feature flags: `plugins` (listing and controls) and `plugins.protocol` (the
-process routes). **They are not applied to `openapi/capcomd.json`**: ADR-023 steps 1 and 8 move them into
-`src/api/contract.ts`, from which the committed contract is generated, and delete the fragment. Step 1 moved
-`GET /v1/plugins` (and its `PluginSummary`, the `plugins` flag and the host's daemon-stream `plugin.*` events); the
-fragment keeps the rest. `packages/plugin/test/protocol.test.ts` checks the fragment is well-formed and that what it
-still holds is unapplied.
+The routes are in the committed contract, `openapi/capcomd.json`, generated from `src/api/contract.ts` (`plugins.*`):
+`GET /v1/plugins`, `GET /v1/plugins/{name}`, `POST /v1/plugins/{name}/enable|disable` (feature flag `plugins`), and
+`POST /v1/plugins/{name}/sessions`, `GET /v1/plugins/{name}/hooks`, `POST /v1/plugins/{name}/hooks/{callId}`, `POST
+/v1/plugins/{name}/events`, `GET /v1/plugins/{name}/storage`, `GET|PUT|DELETE /v1/plugins/{name}/storage/{key}` (feature
+flag `plugins.protocol`), with their bodies (`PluginDetail`, `SessionOpen`, `SessionOpened`, `HookFrame`, `HookAnswer`,
+`EmitBody`, `StorageEntry`) and the `plugin.*` events the host writes. The draft fragment they were specified in
+(`openapi/drafts/plugin-api.fragment.json`) is deleted (§17.2 step 9). `enable` and `disable` act for the daemon's life
+(config doesn't record `plugins.<name>.enabled` until §10.2's layering), and a built-in can't be disabled through the
+API (409: the kernel runs on its places, agents, forges and front doors). The events not written yet
+(`plugin.config_refused`, `plugin.hook_deprecated`, `plugin.trusted`, `trigger.*`) join the contract with the steps that
+write them; their data shapes are `packages/plugin/src/events.ts`. `packages/plugin/test/protocol.test.ts` checks the
+contract holds every route and that its frames and hook names are the package's.
 
 ### 9.10 Protocol versioning
 
@@ -1123,6 +1177,18 @@ notice details, descriptor strings) are `Untrusted`: clients render them as plai
 `cct1.`, `bxd_`) before it reaches a plugin or a stream. A plugin SHOULD run `ctx.auth.redact` on anything it writes
 itself; the kernel runs it again on what the plugin emits.
 
+Untrusted text another agent reads arrives inside a fence naming its author (`src/subagents/results.ts` `fence()`), and
+every `<<<…>>>` on one line inside it is neutralised, whatever it says, so no marker, today's or a later one, can be
+forged from inside (and, as before, an `end` or `untrusted` one split over lines). The context brief (§6.6.7, ADR-025 §6.1) is the one place untrusted text is the basis of a model's
+attention from system-role text (Claude Code's appended system prompt; Codex's prompt): an item's description, written
+by whoever wrote the item. What fences it there: the header is the kernel's, in plain prose, with no marker syntax and
+none of a provider's own words (a failure is named with the kernel's reason); each description is first made one line
+(invisible format characters dropped, control characters and line breaks made spaces), then redacted (the kernel's
+shapes and the agent providers' credentials), neutralised with `fence()`'s rule and a lone `<<<` or `>>>` with it (so
+two fields of one line can't make a marker together), and capped at `limits.descriptionChars`, and so are an item's
+path and `paths`; an item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
+is reserved for ADR-025 §6.3 and not shipped.
+
 ### 11.6 Isolation
 
 In-process plugins are built-ins: the trust boundary is the capcomd package. Out-of-process plugins get a filtered
@@ -1211,7 +1277,7 @@ On the `daemon` stream: `plugin.loaded`, `plugin.failed`, `plugin.disposed`, `pl
 `plugin.duplicate_refused`, `plugin.config_refused`, `plugin.hook_failed`, `plugin.suspended`, `plugin.resumed`,
 `plugin.hook_deprecated`, `plugin.process_changed`, `plugin.trusted`. On the run's stream: `plugin.gate_denied` and
 `plugin.gate_bypassed`. Jobs: `job.started`, `job.ended`. Triggers: `trigger.received`, `trigger.subscribed`,
-`trigger.unsubscribed`. Data shapes: `packages/plugin/src/events.ts` and the fragment's `x-events`. All durable, written
+`trigger.unsubscribed`. Data shapes: `packages/plugin/src/events.ts`, and the contract for those written (§9.9). All durable, written
 by the host, with daemon-written `text`; a plugin's `reason` inside them is untrusted. The run-stream ones are written from
 §17.2 step 5 (the gates), as scope events (`PLUGIN_GATE_DENIED`, `PLUGIN_GATE_BYPASSED` in capcomd.v1) by whichever
 process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin's own events (`plugin.<name>.<type>`,
@@ -1269,6 +1335,14 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
   allowlist, has `sandbox: "read-only"` or `denyCommands` that refuse `git commit` and `git push`). The suite is `packages/plugin/src/agent-conformance.ts`; every method it calls
   is pure, so `capcomd plugins validate --conformance` runs it with no streams, and a plugin's own tests pass theirs to
   `testkit.conformance.agent`.
+- **context** (ADR-025 §3.1): `describe` names the declared provider with kinds and layers the kernel knows,
+  `available` never rejects, `classifyError` classifies anything (its own `not_found` as `not_found`), `propose` is
+  refused `unsupported` unless `caps.writable`, a call whose signal is already aborted rejects; with a scope that has
+  items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time,
+  `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
+  kind, untrusted description), `get` returns an indexed item with untrusted text and rejects an id that isn't there
+  `not_found`, and `search` answers at most `limit` hits. `packages/plugin/src/context-conformance.ts`; `capcomd plugins
+  validate --conformance` runs it without a scope (the item cases skipped).
 - **forge**: against a local bare repository (`tests/merge/gitfixture.ts`): `land direct` is a CAS (a moved target is
   `conflict`), `land` twice with the same `mrgId` is `already: true`, `pr` mode without `pullRequests` rejects
   `unsupported`, `matches` is pure; `remoteCredential`, when present, answers null for a remote the forge's service
@@ -1293,7 +1367,7 @@ checks the mode against `HOOKS` (ADR-023 step 1).
 ### 14.5 The test kit
 
 `@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext`, `load`,
-`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge}`, `call`. Implemented with ADR-023
+`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge, context}`, `call`. Implemented with ADR-023
 step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what `test:fast` runs on
 `packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` needs the kernel's hook sites and the
 `conformance` suites the seams as plugins: they reject `unsupported` until §17.2 steps 2, 3, 4 and 6.
@@ -1346,7 +1420,7 @@ waits (bounded) for the reviewer it started or stops before it exits.
 
 ### 15.4 A Slack notifier (`slack-notifier`, out of process)
 
-`examples/slack-notifier`. `entry.runtime: process`, scope `read` only, observe hooks `run.changed`, `agent.changed`,
+`examples/slack-notifier`. `entry.runtime: process`, scopes `read` and `steer` (steer only to emit its own event, §11.1), observe hooks `run.changed`, `agent.changed`,
 `merge.changed`; the webhook is an `x-secret`. The process opens its session, iterates the hooks stream, renders a
 sentence from daemon-written fields (agent text escaped as plain text), posts within the call's deadline, and emits
 `plugin.slack-notifier.posted`. It follows §16.5: it speaks on failures, attention and landed work, and is quiet otherwise.
@@ -1678,7 +1752,7 @@ step changes `relay.v1`/`capcomd.v1` output or harness.v1 except by adding featu
 | 6 | Forges: `forge-github`, `forge-git`, `forge-fake`; `mergeTask` → `forge.land` under the kernel lock | `tests/merge/*` with `forge-fake`; `tests/api/project-git.test.ts` |
 | 7 | Jobs (§16.2): the service, `_jobs/` records, `exec` on the owner's machine via the spool, timers, `job.*` events, in-VM `capcomd job`, slots | a scenario: a scripted agent starts a 10 s job with `foregroundMs: 1000`, gets `running`, its result arrives as a message; restart mid-job settles it; the Docker sweep as a timer |
 | 8 | Front doors: MCP tools and CLI groups as registrations; `front-hermes`; `skill-orchestration` on `agent.preparing`, with `skills` and `env` attached to the agent's run (§6.6.7) | `tests/mcp/client.test.ts` lists the same tools; `tests/cli` passes; a test plugin's command and tool answer with the envelope and the caller's principal (`tests/plugins/front-doors.test.ts`); a test plugin's skill and variable reach the agent (`tests/subagents/prepare-skills.test.ts`) |
-| 9 | Out-of-process runtime (§9): spawn, filtered env, token minting, handshake, hooks stream, answers, restart, `plugins.protocol` routes applied to `contract.ts` (the fragment deleted) | a fixture process plugin (`tests/agents/fake-claude.sh` pattern); chaos killpoints `plugin.hook.mid`, `plugin.process.crash` with the audit "gate denied, nothing landed" |
+| 9 | Out-of-process runtime (§9): spawn, filtered env, token minting, handshake, hooks stream, answers, restart, `plugins.protocol` routes applied to `contract.ts` (the fragment deleted) | a fixture process plugin (`tests/agents/fake-claude.sh` pattern); chaos killpoints `plugin.hook.mid`, `plugin.process.crash` with the audit "gate denied, nothing landed": `plugin.process.crash` kills the plugin's process, `plugin.hook.mid` the daemon, each with a gate call in flight (`tests/scenarios/plugin-process.test.ts`); the runtime against the fixture (`tests/plugins/process.test.ts`) and its frames (`packages/plugin/test/process.test.ts`) |
 | 10 | Triggers (§16.3): sources, the intake, `triggers.sources.*` config, `observe` default, subscriptions, `trigger.*` events, `capcomd triggers log`; a `schedule` source; the GitHub source | a scenario with a fixture source: deduped, denied, recorded, started, continued; a subscription expires; `observe` runs nothing |
 | 11 | Watchdog built-in (§16.4) enabled by `setup` | a scenario with a scripted agent that stops producing checkpoints: `stalled` raised at the configured time, cancelled after |
 | 12 | Install, trust, update: `capcomd plugins install|trust|update|remove|allow-version`, `LOCK`, the project trust prompt | a local git fixture repository; a manifest escaping its directory refused; a changed hash reported; an untrusted project plugin never activates |
@@ -1714,7 +1788,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.18 | 2026-11-06 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
 | 1.0.19 | 2026-11-06 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
-| 1.0.21 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach; an agent's machine is on its profile's `sandbox.provider` before the run's (§7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
+| 1.0.21 | 2026-11-06 | With the context router (ADR-025 step 1): a `context` contribution (§4.7: `contributes.context: [{name, kinds}]`, `provides: context:<name>` in §4.6, `ctx.context.register`, a 23rd service and 78th primitive in §8.1; all additive), the term context provider (§2), its conformance suite (§14.2) and `testkit.conformance.context` (§14.5); `PinnedSpec.context` (additive); the kernel's context router as the agent.preparing listener that composes a profile's providers into the brief (§6.6.7); §11.5: `fence()` neutralises every `<<<…>>>`, and the brief is the one place untrusted text is the basis of attention from system-role text, and what fences it. |
+| 1.0.22 | 2026-11-06 | With the out-of-process runtime (§17.2 step 9): `failed(restart_limit)` holds the plugin's listeners, so its gates deny until it is enabled or disabled (§5.4, §9.5); the process's log lines are redacted of its own secrets as well as its token (§9.2); a `process` manifest's `contributes.context` is refused too (§4.9; ADR-025's providers are in process); the routes are in the committed contract and the draft fragment is gone (§9.9; `plugins.protocol`, additive); the plugin socket beside the harness socket, plugin tokens only (§9.2); the process's own process group, stdin held open, a leftover process from a dead daemon stopped (§9.2); the token in the daemon's memory only, revoked when the process is gone (§9.3); listeners registered at the first session and kept through restarts, a call made while the process is down waiting within its deadline (§9.3, §9.5); a secret that resolves to nothing left out until config layering (§9.3); frames redacted (§9.4); `events.emit` over the wire needs `steer` like in process, so the Slack example takes `steer` (§9.6, §15.4); `ctx.storage` implemented (both runtimes, the daemon's host) and the emit route's keys the plugin's (§9.6); no stream open, SIGTERM at once (§9.7); the client library `connect` ships (§9.8); `enable`/`disable` for the daemon's life, built-ins not disabled by the API (§9.9); a `process` manifest contributes hooks and events only (§4.9), so a third-party plugin has no command (§4.7.1); user plugins discovered (§4.8). |
+| 1.0.23 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach; an agent's machine is on its profile's `sandbox.provider` before the run's (§7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

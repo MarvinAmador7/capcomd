@@ -37,11 +37,13 @@ export interface World {
   script: (name: string, body: string) => string;
   stop: () => Promise<void>;
   /** The daemon crashes (scripted agents' "VMs" keep running) and comes back on the same data after `downMs`. */
-  restart: (downMs?: number) => Promise<void>;
+  restart: (downMs?: number, killpoint?: string | null) => Promise<void>;
+  /** The engine host died (a killpoint fired in it). */
+  killed: () => boolean;
   repo: Awaited<ReturnType<typeof bareRepo>>;
 }
 
-export async function world(name: string, extraEnv: Record<string, string> = {}, opts: { engineOmit?: string[]; envFor?: (repo: Awaited<ReturnType<typeof bareRepo>>) => Promise<Record<string, string>> | Record<string, string> } = {}): Promise<World> {
+export async function world(name: string, extraEnv: Record<string, string> = {}, opts: { killpoint?: string; engineOmit?: string[]; envFor?: (repo: Awaited<ReturnType<typeof bareRepo>>) => Promise<Record<string, string>> | Record<string, string> } = {}): Promise<World> {
   const repo = await bareRepo({ mode: "direct", extraEnv: { CAPCOMD_MERGE_TARGET: "trunk" } });
   await repo.seed.ok(["push", "-q", "origin", "main:trunk"]);
   // Settings that need the repository first (a fake GitHub backed by it), for the engine and the CLI alike.
@@ -65,7 +67,7 @@ export async function world(name: string, extraEnv: Record<string, string> = {},
   // An engine started without some settings (e.g. a background service without CAPCOMD_REPO); the CLI keeps them.
   const omitted: Record<string, string | undefined> = {};
   for (const k of opts.engineOmit ?? []) { omitted[k] = process.env[k]; delete process.env[k]; }
-  await engine.start(null);
+  await engine.start(opts.killpoint ?? null);
   for (const [k, v] of Object.entries(omitted)) if (v !== undefined) process.env[k] = v;
   env.CAPCOMD_ENDPOINT = `http://127.0.0.1:${port}`;
   process.env.CAPCOMD_ENDPOINT = env.CAPCOMD_ENDPOINT;
@@ -83,7 +85,8 @@ export async function world(name: string, extraEnv: Record<string, string> = {},
   };
   return {
     env, dir, cj, script, repo,
-    restart: async (downMs = 1000) => { await engine.crash(); await new Promise((r) => setTimeout(r, downMs)); await engine.start(null); },
+    restart: async (downMs = 1000, killpoint: string | null = null) => { await engine.crash(); await new Promise((r) => setTimeout(r, downMs)); await engine.start(killpoint); },
+    killed: () => engine.sawKill,
     stop: async () => { await engine.stop(); for (const k of Object.keys(env)) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]!; },
   };
 }

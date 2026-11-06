@@ -3,27 +3,39 @@
 // the host's events go (the daemon stream, `harnessState().recordDaemonEvent`; a gate's on the run's). `capcomd serve`
 // starts it after the actors answer and before the harness.v1 socket opens (§5.5); the kernel fires its hooks through
 // its registry (src/plugins/hooks.ts). Another process that runs a gate starts a local one with the built-in gates.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { PluginHost, type Candidate, type PluginSummary } from "../../packages/plugin/src/host/host";
 import { PluginError } from "../../packages/plugin/src/errors";
 import { eventTypeOwner } from "../../packages/plugin/src/event-type";
 import { CAPABILITY_NAMES } from "../api/contract";
 import { Redactor } from "../agents/redact";
-import { stateDir } from "../utils/home";
+import { capcomdHome, stateDir } from "../utils/home";
 import { VERSION } from "../utils/self";
 import { BUILTINS, candidateOf } from "./builtins";
 import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 import { pluginJobs } from "../jobs/service";
+import { pluginStore, storageService } from "./storage";
+import { processLauncher } from "./process";
+import type { ProcessTimings } from "../../packages/plugin/src/host/process";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
 export type DaemonEventSink = (e: { type: string; entity: string; text: string; data: Record<string, unknown> }) => { seq: number };
 
-/** What the daemon discovers (§4.8). Built-ins only in this version: user and project plugins arrive with the
- *  out-of-process runtime and `capcomd plugins install|trust` (§17.2 steps 9 and 12). */
+/** What the daemon discovers (§4.8): the built-ins, then the user's plugins (<home>/plugins/<name>/plugin.json, run out
+ *  of process: a third-party plugin never runs in process, §5.2). Project plugins wait for `capcomd plugins trust`
+ *  (§17.2 step 12). */
 export function builtinCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.map(candidateOf), ...testPlugins(env)];
+  return [...BUILTINS.map(candidateOf), ...testPlugins(env), ...userPlugins(env)];
+}
+
+/** The user's plugins (§4.8 step 2), in name order: each directory of <home>/plugins holding a plugin.json. */
+export function userPlugins(env: Record<string, string | undefined> = process.env): Candidate[] {
+  const dir = join(capcomdHome(env), "plugins");
+  let names: string[] = [];
+  try { names = readdirSync(dir).sort(); } catch { return []; }
+  return names.filter((n) => !n.startsWith(".") && existsSync(join(dir, n, "plugin.json"))).map((n) => ({ source: "user" as const, dir: join(dir, n) }));
 }
 
 /** Tests only (`bun test` sets NODE_ENV=test): CAPCOMD_TEST_PLUGINS, `:`-separated plugin directories, load in process
@@ -32,6 +44,9 @@ function testPlugins(env: Record<string, string | undefined>): Candidate[] {
   if (env.NODE_ENV !== "test" || !env.CAPCOMD_TEST_PLUGINS) return [];
   return env.CAPCOMD_TEST_PLUGINS.split(":").filter(Boolean).map((dir) => ({ source: "builtin" as const, dir }));
 }
+
+/** A plugin's data directory (§4.2): <home>/state/plugins/<name>/, made by whoever writes there first. */
+export const pluginDataDir = (name: string, env: Record<string, string | undefined> = process.env) => join(stateDir(env), "plugins", name);
 
 /** Where the running daemon keeps its plugin listing for `capcomd plugins list` (the CLI has no API token). */
 export const pluginsSnapshotPath = (env: Record<string, string | undefined> = process.env) => join(stateDir(env), "plugins.json");
@@ -89,14 +104,21 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
   };
 }
 
-/** `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2; a CLI's local host has none: `unsupported`). */
-export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean } = {}): PluginHost {
+/**
+ * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2) and `ctx.storage` (§8.4; one process writes a
+ * plugin's storage: a CLI's local host has neither, `unsupported`). `process`: the plugin socket out-of-process plugins
+ * connect to (§9.2); without it they stay `validated` (a CLI's local host).
+ */
+export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
     if (e.stream !== "daemon") throw new PluginError("unsupported", `the host writes its own events on the daemon stream only (${e.type})`);
     return o.record?.({ type: e.type, entity: e.entity, text: e.text, data: e.data }) ?? { seq: 0 };
   };
   const pluginEvent = pluginEventWriter({ ...(o.record ? { daemon: o.record } : {}), ...(o.run ? { run: o.run } : {}) });
+  const dataDir = pluginDataDir;
+  // §13.3: one JSON line per log call in the daemon's log, never an event. A CLI's local host keeps its output clean.
+  const log = (l: { plugin: string; level: string; message: string; fields: Record<string, unknown> }) => { if (o.log !== false) console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })); };
   return new PluginHost({
     capcomd: VERSION,
     kernel: CAPABILITY_NAMES.map((n) => `kernel:${n}`),
@@ -108,15 +130,11 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
       }
       try { record(e); } catch { /* not a daemon-stream event */ }
     },
-    dataDir: (name) => join(stateDir(), "plugins", name),
-    ...(o.jobs ? { services: (m) => ({ jobs: pluginJobs(m.name) }) } : {}),
+    dataDir,
+    ...(o.jobs ? { services: (m) => ({ jobs: pluginJobs(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) }) } : {}),
     secret: async (m, key) => resolveSecret(m, key),
-    sinks: {
-      redact: (t) => redactor.text(t),
-      // §13.3: one JSON line per log call in the daemon's log, never an event. A CLI's local host keeps its output clean.
-      log: (l) => { if (o.log !== false) console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })); },
-      emit: pluginEvent,
-    },
+    sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent },
+    ...(o.process ? { launcher: processLauncher({ socket: o.process.socket, log }), ...(o.process.timings ? { processTimings: o.process.timings } : {}) } : {}),
     ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins) } : {}),
   });
 }

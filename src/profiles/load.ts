@@ -139,6 +139,15 @@ function readFiles(doc: ProfileDoc, dir: string | null, errs: string[], where: s
   return out;
 }
 
+/** ADR-025 §3.1: a profile naming a context provider no active plugin provides fails here, as a sandbox's name does. */
+function contextProblems(name: string, spec: AgentSpec, label = `profiles.${name}`): string[] {
+  const named = (spec.context?.providers ?? []).map((p) => p.name);
+  if (!named.length) return [];
+  const { contextProviderNames } = require("../context/providers") as typeof import("../context/providers");
+  const active = contextProviderNames();
+  return named.filter((n) => !active.includes(n)).map((n) => `${label}: context.providers names "${n}", which isn't an active context provider (${active.join(", ") || "none"}; see \`capcomd plugins list\`)`);
+}
+
 /** One layer's directory: `<name>/profile.yaml` (a package), `<name>.yaml` (a single file), `<name>/override.yaml`. */
 function scanLayer(layer: "project" | "user", dir: string, errs: string[]): Layer {
   const out: Layer = { layer, profiles: new Map(), overrides: new Map() };
@@ -207,6 +216,8 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
 
   if (!errs.length && layers.every((l) => !l.profiles.size && !l.overrides.size)) {
     const f = readAgentsFile(path);
+    const bad = Object.entries(f.agents).flatMap(([name, spec]) => contextProblems(name, spec, `${path}: agents.${name}`));
+    if (bad.length) throw new AgentConfigError(bad.join("; "));
     const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => {
       const manifest = fromFlat(name, spec);
       return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [], runtime: {} }];
@@ -296,6 +307,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       // Its skills, read from the nearest directory that has each (an override's, its own, then its ancestors').
       const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true);
       e.push(...sk.errors);
+      e.push(...contextProblems(name, spec));
       if (e.length) return fail(e.join("; "));
       dirsOf.set(name, dirs);
       if (def?.on) defaults.push({ name, at: def.at, v1: false });

@@ -125,6 +125,13 @@ describe("children policy + narrowing overrides", () => {
     expect(widenings(worker as any, { ...worker, children: { allowSpawn: true, allowedChildProfiles: ["x"] } } as any)).toContain("children.allowSpawn false → true");
     expect(applyOverrides("parent", parent as any, { set: { maxTurns: 99 }, operator: true }).maxTurns).toBe(99);
     expect(() => applyOverrides("parent", parent as any, { set: { maxTurns: -1 }, operator: true })).toThrow("override invalid");
+    // ADR-025 §8: what an agent is briefed with is its profile's: an override removes the block, never adds or changes it;
+    // a child profile may have its own (D12).
+    const briefed = { ...parent, context: { providers: [{ name: "memory" }] } };
+    expect(() => applyOverrides("parent", parent as any, { set: { context: { providers: [{ name: "memory" }] } } })).toThrow("context changed");
+    expect(() => applyOverrides("parent", briefed as any, { set: { context: { providers: [{ name: "memory" }], limits: { briefBytes: 100000 } } } })).toThrow("context changed");
+    expect(applyOverrides("parent", briefed as any, { set: { context: null } }).context).toBeUndefined();
+    expect(validateFile({ schema: AGENTS_SCHEMA, agents: { parent: briefed, worker: { ...worker, context: { providers: [{ name: "memory", layers: ["project"] }] } } } })).toEqual([]);
     const ref = encodeAgentRef("parent", { set: { children: { maxDepth: 1 } }, operator: true });
     expect(decodeAgentRef(ref)).toEqual({ name: "parent", overrides: { set: { children: { maxDepth: 1 } }, operator: true } });
     expect(parseAgentDirective(`[agent:${ref}] go`)).toEqual({ agent: ref, goal: "go" });
@@ -364,16 +371,26 @@ describe("profiles v2: loader and resolution", () => {
     expect(msg).not.toContain("codex");
   });
 
-  test("memory is read as context (ADR-025 D2); the layers that aren't built are refused", () => {
+  test("memory is read as context (ADR-025 D2), pinned with the profile; the layers that aren't built are refused", () => {
     const set = world({
       "P/m.yaml": yaml(["name: m", "harness: { provider: claude, auth: apikey }", "memory: { scope: project, files: [MEMORY.md], retain: 30d }"]),
-      "P/n.yaml": yaml(["name: n", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: groundray, brain: acme, allowStale: warn }], limits: { briefBytes: null, indexLines: 200 }, review: human }"]),
+      "P/n.yaml": yaml(["name: n", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: memory, layers: [project], brain: acme }], limits: { briefBytes: null, indexLines: 200 }, review: human }"]),
     }).load();
-    expect(set.profiles.m!.manifest.context).toEqual({ providers: [{ name: "memory", layers: ["project", "run"], index: "MEMORY.md", retain: { lesson: "30d", feedback: "30d", reference: "30d" } }] });
+    const m = { providers: [{ name: "memory", layers: ["project", "run"], index: "MEMORY.md", retain: { lesson: "30d", feedback: "30d", reference: "30d" } }] };
+    expect(set.profiles.m!.manifest.context).toEqual(m);
     expect(set.profiles.m!.manifest.memory).toBeUndefined();
-    expect(set.profiles.n!.manifest.context).toEqual({ providers: [{ name: "groundray", brain: "acme", allowStale: "warn" }], limits: { briefBytes: null, indexLines: 200 }, review: "human" });
-    expect(set.agents.m).toEqual({ provider: "claude", auth: "apikey" }); // no behaviour yet: nothing in the pin
-    expect(set.warnings).toEqual(["profiles.m: context.providers is read but not used yet by this capcomd", "profiles.n: context.providers is read but not used yet by this capcomd"]);
+    const n = { providers: [{ name: "memory", layers: ["project"], brain: "acme" }], limits: { briefBytes: null, indexLines: 200 }, review: "human" };
+    expect(set.profiles.n!.manifest.context).toEqual(n);
+    // The router reads the block from the pin (ADR-025 step 1), so it is the agent's from its spawn on.
+    expect(set.agents.m as unknown).toEqual({ provider: "claude", auth: "apikey", context: m });
+    expect(set.agents.n as unknown).toEqual({ provider: "claude", auth: "apikey", context: n });
+    expect(set.warnings).toEqual([]);
+    // A provider no active plugin provides is refused when profiles are read, as a sandbox's name is (ADR-025 §3.1).
+    expect(errorOf(() => world({ "P/g.yaml": yaml(["name: g", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: groundray, brain: acme }] }"]) }).load()))
+      .toContain(`profiles.g: context.providers names "groundray", which isn't an active context provider (memory; see \`capcomd plugins list\`)`);
+    expect(errorOf(() => world({}, { v: { provider: "claude", auth: "apikey", context: { providers: [{ name: "groundray" }] } } }).load())).toContain(`agents.v: context.providers names "groundray"`);
+    expect(errorOf(() => world({ "P/l.yaml": yaml(["name: l", "harness: { provider: claude, auth: apikey }", "context: { providers: [{ name: memory, layers: [user] }] }"]) }).load()))
+      .toContain("context.providers.memory.layers: must be a list of project, run");
     expect(checkManifest({ name: "u", memory: { scope: "user" } }, "profile", "u").join()).toContain("memory.scope: user memory isn't built");
     // An agent records the version (harness.v1 Agent.profileVersion, a safe integer): one past 2^53 is refused here,
     // not at every read of the agent.
