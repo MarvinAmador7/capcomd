@@ -22,7 +22,8 @@ Run the CLI from the checkout with `bun capcomd â€¦` (or `bun src/cli/index.ts â
 
 A git checkout keeps state next to the code: `.relay/` (auth profiles, env snapshot ledger, boxd VM ledger, run
 logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json`. An installed CLI, or any CLI with
-`CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`). `src/utils/home.ts` decides; the
+`CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`). The daemon's `harness-state.json` and the
+engine autostart's `engine.log` follow the same rule: `.relay/` in a checkout, the top of `~/.capcomd` otherwise. `src/utils/home.ts` decides; the
 per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_LEDGER`, `CAPCOMD_TRACE_DIR`,
 `CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`, `CAPCOMD_RUNS_INDEX`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
 
@@ -37,7 +38,8 @@ Nothing reads or writes `~/.rivetkit`. When you run a daemon by hand, give it `C
 Persisted settings (`capcomd setup` writes them): `~/.capcomd/config.json` and the nearest `.capcomd/config.json` from
 the current directory are environment defaults, applied by `src/cli/apply-config.ts` before anything else loads
 (a real env var wins; the boxd key comes from the OS keychain). `bun test` preloads `tests/helpers/isolate-config.ts`
-(`CAPCOMD_NO_CONFIG=1`), so a developer's own settings never reach the engines and CLIs tests start.
+(`CAPCOMD_NO_CONFIG=1`), so a developer's own settings never reach the engines and CLIs tests start (Testing, below, has
+the rest of what it isolates).
 
 ## Architecture
 
@@ -146,11 +148,13 @@ Each scenarios shard uploads the per-file times it measured (artifact `scenario-
 balanced by the runner's times (a file without one gets an estimate; `--check` lists those).
 
 Both scripts run with `bun test --isolate`: every file gets a fresh global, module registry and environment, and the
-preload (`tests/helpers/isolate-config.ts`) runs again for it, so nothing one file sets leaks into the next. The tests
-isolate themselves without a `CAPCOMD_HOME` (temp dirs, the checkout's `.relay/`, their own ports), as CI runs them; a
-`CAPCOMD_HOME` in the environment that runs them is replaced by a fresh temp dir per file, never shared. Engine-free
-tests that reach the merge checks point `CAPCOMD_ENDPOINT` at a closed port (`withoutEngine()` in
-`tests/merge/gitfixture.ts`), so they never ask a developer's daemon on :6420.
+preload (`tests/helpers/isolate-config.ts`) runs again for it, so nothing one file sets leaks into the next. For each
+file it sets a scratch `CAPCOMD_HOME` (a fresh temp dir, whatever the environment had), `CAPCOMD_ENDPOINT` to a closed
+port and `CAPCOMD_NO_ENGINE_AUTOSTART=1` (a test that forgets its engine fails as "engine unreachable" instead of asking
+a developer's daemon on :6420, and nothing starts an engine for it), and it installs `tests/helpers/guard.ts` there and,
+through `BUN_OPTIONS`, in every bun process a test starts: a connection to 127.0.0.1:6420, :6421 or :6430, or a write
+under the real `~/.capcomd`, throws, and fails the file even when the code swallowed the error
+(`tests/unit/test-isolation.test.ts` shows it). A test that needs its own home, endpoint or the autostart sets them.
 
 `packages/agent-thread` has no install of its own: its dependencies are the root's (one zod for the daemon's contract
 and the package), and `bun run typecheck` / `test:fast` cover it. Its golden files

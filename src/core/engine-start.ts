@@ -2,18 +2,18 @@
 // Runs outlive the agent session that started them (ADR-018 §2), so the engine is never stopped from here.
 import { spawn } from "child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname } from "path";
 import { RelayError } from "./errors";
 import { endpoint } from "./relay";
-import { capcomdHome } from "../utils/home";
+import { homeFile } from "../utils/home";
 import { selfArgv } from "../utils/self";
 
 const up = async (url: string) => fetch(url + "/", { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Where an auto-started engine logs, and the marker that says one is starting (so callers don't start two). */
-export const engineLog = () => join(capcomdHome(), "engine.log");
-const startingMarker = () => join(capcomdHome(), "engine.starting");
+export const engineLog = () => homeFile("engine.log");
+const startingMarker = () => homeFile("engine.starting");
 const STARTING_FOR_MS = 120_000;
 
 /** The local port of the endpoint, or null when it isn't this machine (then we never start anything). */

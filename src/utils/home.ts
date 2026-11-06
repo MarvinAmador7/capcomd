@@ -26,6 +26,12 @@ export function stateDir(source: Source = process.env): string {
   return useHome(source) ? join(capcomdHome(source), "state") : join(PACKAGE_ROOT, ".relay");
 }
 
+/** A file at the top of the capcomd home (~/.capcomd/<name>, or $CAPCOMD_HOME/<name>): the daemon's harness-state.json,
+ *  the engine autostart's engine.log. A dev checkout keeps it with its other state, <repo>/.relay/<name>. */
+export function homeFile(name: string, source: Source = process.env): string {
+  return useHome(source) ? join(capcomdHome(source), name) : join(PACKAGE_ROOT, ".relay", name);
+}
+
 /** Span files (`<runId>.ndjson`). */
 export function tracesDir(source: Source = process.env): string {
   return useHome(source) ? join(capcomdHome(source), "traces") : join(PACKAGE_ROOT, ".traces");

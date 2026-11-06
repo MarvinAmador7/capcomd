@@ -51,6 +51,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   optional `holdId` (`{decision: "hold", reason, holdId}`): once the person approves it, a later hold from your plugin
   with the same `holdId` doesn't ask them again, even if its reason changed. Without a `holdId` the hold is still
   matched by its exact reason. Approvals show it as `subject.heldBy.holdId`.
+- An agent whose daemon restarted under it no longer loses one of its three attempts when the restarted engine is
+  still getting ready: its attempt runs again without a `DRIVE_FAILED` event, as after any other restart.
 - When a plugin holds a merge for your approval, the approval now says which plugin held it and why: in the question
   and `subject.heldBy` the apps show, in `capcomd approve`'s output, in the prompt `capcomd_approve` asks under
   `driver.approvals: "elicit"`, and as `heldBy` on the `merge.approval_requested` event. Approving satisfies only that
