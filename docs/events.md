@@ -1436,6 +1436,174 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `check.started`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The check (chk-…)"
+    },
+    "ref": {
+      "type": "string",
+      "description": "What was asked for: an agent id (its pushed branch) or a branch name"
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch checked"
+    },
+    "sha": {
+      "type": "string",
+      "description": "The commit checked: the branch's tip when the check was asked for"
+    },
+    "agentId": {
+      "description": "The agent whose branch it is, when ref named one",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "askedBy": {
+      "description": "The agent that asked for it (an in-VM `capcomd check`); absent for the operator's and the driver's",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "ref",
+    "branch",
+    "sha",
+    "agentId"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `check.passed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The check (chk-…)"
+    },
+    "pass": {
+      "type": "boolean",
+      "description": "Whether the checks passed on that commit"
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch checked"
+    },
+    "commit": {
+      "type": "string",
+      "description": "The commit checked"
+    },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "description": "passed, failed, or missing (the branch or commit isn't on the repository)"
+        },
+        "where": {
+          "description": "Where they ran: vm (a fresh sandbox), host, reused (this tree already passed this command in the run), none (no check command)",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why they didn't pass, when they didn't",
+          "type": "string"
+        }
+      },
+      "required": [
+        "passed",
+        "status"
+      ],
+      "additionalProperties": {},
+      "description": "How the checks went. Their output is on the check's record (`capcomd check <runId> --id <chk>`), not on the event"
+    }
+  },
+  "required": [
+    "id",
+    "pass",
+    "branch",
+    "commit",
+    "checks"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `check.failed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The check (chk-…)"
+    },
+    "pass": {
+      "type": "boolean",
+      "description": "Whether the checks passed on that commit"
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch checked"
+    },
+    "commit": {
+      "type": "string",
+      "description": "The commit checked"
+    },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "description": "passed, failed, or missing (the branch or commit isn't on the repository)"
+        },
+        "where": {
+          "description": "Where they ran: vm (a fresh sandbox), host, reused (this tree already passed this command in the run), none (no check command)",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why they didn't pass, when they didn't",
+          "type": "string"
+        }
+      },
+      "required": [
+        "passed",
+        "status"
+      ],
+      "additionalProperties": {},
+      "description": "How the checks went. Their output is on the check's record (`capcomd check <runId> --id <chk>`), not on the event"
+    }
+  },
+  "required": [
+    "id",
+    "pass",
+    "branch",
+    "commit",
+    "checks"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `plugin.gate_denied`
 
 ```json

@@ -5,9 +5,29 @@ import { db } from "rivetkit/db";
 import { setupLifecycleTables, transitionLifecycle, getLifecycle } from "../utils/lifecycle";
 import { mergeTask } from "../merge/service";
 import type { MergeOutcome } from "../merge/types";
+import type { CheckOutcome } from "../merge/check";
 
 /** The verify/merge runs in progress in this process, by (run, op). */
 const running = new Map<string, Promise<{ verifierId: string; passed: boolean; commitSha: string; outcome: MergeOutcome }>>();
+/** The checks (`capcomd check`) in progress in this process, by (run, check). */
+const checking = new Map<string, Promise<CheckResult>>();
+
+/** A check's outcome and how long it waited for a machine slot. */
+export interface CheckResult { outcome: CheckOutcome; slotWaitMs: number }
+
+/**
+ * A machine slot for a check's sandbox where the run's place has a cap (src/providers/capacity.ts: Docker's memory over
+ * the per-agent budget), as an agent waits for one: held while the command runs, given back after. Gives up after
+ * CAPCOMD_CHECK_SLOT_WAIT_MS (20 minutes), and the check fails saying so.
+ */
+async function checkSlot(runId: string, checkId: string, source: Record<string, string | undefined>): Promise<{ waitedMs: number; release: () => void }> {
+  let place: string | null = null;
+  // `source` is the run's sandbox env (verify.ts runTests): its place is the run's own, else this process's.
+  try { place = (await import("../providers/registry")).sandboxName(source); } catch { /* unknown: no cap */ }
+  const { holdSlot } = await import("../providers/capacity");
+  return holdSlot(place, `capcomd-check-${runId}-${checkId}`, { pollMs: Number(process.env.CAPCOMD_CHECK_SLOT_POLL_MS ?? 2000), waitMs: Number(process.env.CAPCOMD_CHECK_SLOT_WAIT_MS ?? 20 * 60_000) })
+    .catch((e) => { throw new Error(`${(e as Error).message}, so the checks didn't run`); });
+}
 
 export const verifierActor = actor({
   // PR mode can wait on required checks / merge queue (CAPCOMD_GITHUB_TIMEOUT_MS).
@@ -90,6 +110,43 @@ export const verifierActor = actor({
       }, { name: "completeVerify" });
 
       return { verifierId, passed: state === "passed", commitSha, outcome };
+      }
+    },
+
+    /**
+     * `capcomd check` (plugin API §16.1): the run's checks on one commit as it is (src/merge/check.ts), merging nothing.
+     * One per check id in the engine, whoever asks (the operator's CLI, a driver, an agent in its VM): a second call while
+     * it runs shares that run, a call after it ended gets its recorded outcome, and one after an engine restart runs it
+     * again. The command waits for a machine slot where the run's sandbox has a cap (Docker's memory), as an agent does.
+     */
+    async check(c, params: { checkId: string; runId: string; branch: string; sha: string; testCommand?: string }) {
+      const key = `${params.runId}\0${params.checkId}`;
+      const live = checking.get(key);
+      if (live) return live;
+      const p = run().finally(() => checking.delete(key));
+      checking.set(key, p);
+      return p;
+      async function run(): Promise<CheckResult> {
+        const existing = await getLifecycle(c.db, params.checkId);
+        if (existing && ["passed", "failed"].includes(existing.state)) return JSON.parse(existing.context as string).result as CheckResult;
+        if (!existing) await c.db.transaction(async (tx: RawAccess) => {
+          await transitionLifecycle(tx, params.checkId, "check", "checking", { runId: params.runId, branch: params.branch, sha: params.sha }, { type: "START_CHECK" }, `check-${params.checkId}-start`);
+        }, { name: "startCheck" });
+        const { checkCommit } = await import("../merge/check");
+        const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
+        let slotWaitMs = 0;
+        // It couldn't run (no slot came free, the sandbox or git failed): a failed check that says why, never a crash.
+        const outcome: CheckOutcome = !cfg
+          ? { status: "passed", sha: params.sha, command: "", output: "(no repository configured)", where: "none", fetchMs: 0, checksMs: 0 }
+          : await withSpan("git.check", { "relay.run_id": params.runId, "git.operation": "check", "git.ref": params.branch, "git.sha": params.sha, "relay.check_id": params.checkId },
+            () => checkCommit(cfg, { ...params, beforeRun: async (_where, source) => { const s = await checkSlot(params.runId, params.checkId, source); slotWaitMs = s.waitedMs; return s.release; } }))
+            .catch((e): CheckOutcome => ({ status: "error", reason: String((e as Error)?.message ?? e).slice(0, 1000), fetchMs: 0 }));
+        const result: CheckResult = { outcome, slotWaitMs };
+        const state = outcome.status === "passed" ? "passed" : "failed";
+        await c.db.transaction(async (tx: RawAccess) => {
+          await transitionLifecycle(tx, params.checkId, "check", state, { runId: params.runId, branch: params.branch, sha: params.sha, result, checkedAt: Date.now() }, { type: state === "passed" ? "CHECK_PASS" : "CHECK_FAIL" }, `check-${params.checkId}-${state}`);
+        }, { name: "completeCheck" });
+        return result;
       }
     },
 

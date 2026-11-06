@@ -48,6 +48,7 @@ it running: runs outlive the session that started them. `CAPCOMD_NO_ENGINE_AUTOS
 | `capcomd_grant` | `runId`, `agent?`, `budget`, `key?` | `{agentId, budget, from, left}`: more budget for a live agent, from its parent's (or, without `agent`, a higher run budget, within `driver.maxRunBudget`) |
 | `capcomd_verify` | `runId`, `ref`, `check?`, `acceptance?`, `key?`, `timeoutMs?` | `{id: "vfy-…", state: passed\|failed\|running, result, next}` |
 | `capcomd_merge` | `runId`, `ref`, `require`, `key?`, `timeoutMs?` | `{id: "mrg-…", state: merged\|failed\|awaiting_approval\|running, result, next}` |
+| `capcomd_check` | `runId`, `ref?` (default: the run's target), `id?`, `check?`, `key?`, `timeoutMs?` | `{id: "chk-…", state: passed\|failed\|running, result: {pass, text, commit, checks: {status, where, output}}, next}`: the checks on that branch's commit as it is; merges nothing |
 | `capcomd_approve` | `runId`, `merge`, `deny?`, `reason?` | the merge record, a `forbidden` error (below), or, under `elicit`, "No decision" |
 | `capcomd_task` | `runId`, `action`, … | the task board (`add\|list\|show\|claim\|renew\|release\|done`) |
 | `capcomd_kv` | `runId`, `action`, `k?`, `value?`, `expect?`, `prefix?`, `key?` | the blackboard (`get\|put\|cas\|del\|list`) |
@@ -175,6 +176,7 @@ command_allowlist:                              # …except these, which run wit
   - "mcp:capcomd/capcomd_resume"
   - "mcp:capcomd/capcomd_grant"
   - "mcp:capcomd/capcomd_verify"
+  - "mcp:capcomd/capcomd_check"
   - "mcp:capcomd/capcomd_task"
   - "mcp:capcomd/capcomd_kv"
 

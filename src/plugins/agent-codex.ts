@@ -51,7 +51,7 @@ const DESCRIPTION = {
 
 /** The codex execpolicy rules (`$CODEX_HOME/rules/*.rules`, Starlark) that forbid `denyCommands`. */
 export function codexDenyRules(denyCommands: readonly string[]): string {
-  const why = "capcomd orchestrate mode: this agent sees everything and runs nothing that changes or runs code. Spawn a worker for it; checks run at capcomd verify and merge, and their output is readable.";
+  const why = "capcomd orchestrate mode: this agent sees everything and runs nothing that changes or runs code. Spawn a worker for it; checks run at capcomd verify and merge, `capcomd check` runs them on any branch, and their output is readable.";
   return denyCommands.map((c) => `prefix_rule(pattern = ${JSON.stringify(c.split(/\s+/))}, decision = "forbidden", justification = ${JSON.stringify(why)})`).join("\n") + "\n";
 }
 const CODEX_RULES = '"${CODEX_HOME:-$HOME/.codex}/rules"';

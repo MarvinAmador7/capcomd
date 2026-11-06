@@ -274,9 +274,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   );
   if (already.length > 0) {
     // Replay: return what the first push recorded (a resumed driver needs the commit).
-    let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number } = {};
+    let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number; orchestrateWrites?: unknown } = {};
     try { prev = JSON.parse(String(already[0]!.event)); } catch {}
-    return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+    return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}), ...(prev.orchestrateWrites ? { orchestrateWrites: prev.orchestrateWrites } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
   }
 
   const workerLife = await getLifecycle(c.db, workerId);
@@ -297,9 +297,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   for (let waited = 0; ; waited += 500) {
     const done = await c.db.execute("SELECT event FROM lifecycle_events WHERE idem_key = ?", idemKey);
     if (done.length) {
-      let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number } = {};
+      let prev: { sha?: string; costUsd?: number; notionalCostUsd?: number; billing?: string; resultText?: string; turns?: number; wallSeconds?: number; adopted?: boolean; limit?: string; resetAt?: number; orchestrateWrites?: unknown } = {};
       try { prev = JSON.parse(String(done[0]!.event)); } catch {}
-      return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
+      return { workerId, taskId, pushed: true, already: true, sha: prev.sha ?? "", costUsd: 0, recorded: { costUsd: prev.costUsd ?? 0, turns: prev.turns ?? 0, wallSeconds: prev.wallSeconds ?? 0, ...(prev.notionalCostUsd ? { notionalCostUsd: prev.notionalCostUsd } : {}), ...(prev.billing ? { billing: prev.billing } : {}), ...(prev.resultText ? { resultText: prev.resultText } : {}), ...(prev.limit ? { limit: prev.limit } : {}), ...(prev.resetAt ? { resetAt: prev.resetAt } : {}), ...(prev.orchestrateWrites ? { orchestrateWrites: prev.orchestrateWrites } : {}) }, ...(prev.adopted ? { adopted: true } : {}) };
     }
     const now = Date.now();
     const rows = await c.db.execute("SELECT * FROM push_locks WHERE idem_key = ?", idemKey);
@@ -350,6 +350,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   let resultText: string | undefined; // a reviewer's final message (its verdict)
   let limit: string | undefined; // stopped at a limit: the branch holds the work so far
   let resetAt: number | undefined; // limit "quota": when the provider said the usage limit resets (ms epoch)
+  let orchestrateWrites: import("../agents/runner").OrchestrateWrites | undefined; // §16.1: an orchestrate agent wrote files (it fails)
   let adopted = false;
   // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
@@ -443,6 +444,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     resultText = res.resultText;
     limit = res.limit;
     resetAt = res.resetAt;
+    orchestrateWrites = res.orchestrateWrites;
     // The `capcomd run` recipe has no stopped state: its task fails, with the work kept on the branch.
     if (limit && !workerId.startsWith("agt-")) throw new UserError(`agent ${stoppedAt(limit)}; its work so far is on ${branch}`, { code: "limit", metadata: { kind: "limit" } });
   } else if (params.review || params.report) {
@@ -457,8 +459,10 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   }
 
   // In-memory sandbox + a configured repo: produce the task's commit on the orchestrator host
-  // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused.
-  if (!sha && !params.review && !params.report && cfg && (sandbox ? sandbox.startsWith("fake") : getDependencies().fakeWork) && params.runId) {
+  // (a real VM pushes its own branch). Idempotent: an already-pushed branch is reused. Never for a real orchestrate agent
+  // (plugin API §16.1): it has no work of its own, on a fake sandbox either.
+  const orchestrated = isRealAgent(agent) && setup.config?.toolMode === "orchestrate";
+  if (!sha && !params.review && !params.report && !orchestrated && cfg && (sandbox ? sandbox.startsWith("fake") : getDependencies().fakeWork) && params.runId) {
     sha = await produceFakeWork(cfg, { runId: params.runId, taskId, branch, target: params.target ?? cfg.target, epoch, rework: params.rework, ...(params.fakePath ? { path: params.fakePath, content: params.fakeContent ?? "" } : {}) });
   }
 
@@ -472,13 +476,13 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       "worker",
       workerLife.state,
       { ...workerContext, vmId },
-      { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(adopted ? { adopted: true } : {}), ...(setup.record ? { agent: setup.record } : {}) },
+      { type: "PUSHED", taskId, epoch, branch, sha, costUsd, turns, wallSeconds, ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(billing ? { billing } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(orchestrateWrites ? { orchestrateWrites } : {}), ...(adopted ? { adopted: true } : {}), ...(setup.record ? { agent: setup.record } : {}) },
       idemKey
     );
     await tx.execute("UPDATE push_locks SET state = 'done', sha = ?, adopted = ?, until = 0, updated_at = ? WHERE idem_key = ?", sha || null, adopted ? 1 : 0, Date.now(), idemKey);
   }, { name: "pushBranch" });
 
-  return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}) };
+  return { workerId, taskId, pushed: true, already: false, sha, costUsd, turns, wallSeconds, adopted, ...(billing ? { billing } : {}), ...(notionalCostUsd ? { notionalCostUsd } : {}), ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...(resetAt ? { resetAt } : {}), ...(orchestrateWrites ? { orchestrateWrites } : {}) };
   } catch (error) {
     // Release so a retry can take over at once (the attempt count records the retry).
     await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});

@@ -66,8 +66,11 @@ merge reports with their full check output) and run nothing themselves (no edits
 A lead still takes a part as before: its helpers write and test the code. Just give it no task that needs it to run code
 itself, and don't ask it to "run the tests" or "try the CLI": its helpers' checks run at verify and merge, and it reads
 the results. A merge's result says whether the checks ran on the combined code
-(`result.combined.text`, e.g. "checks ran on the combined code (… with 1 earlier merge from this run): pass"). Work
-that must run code (a smoke test of the whole, an end-to-end check) is a worker's task: spawn one, or pin a check.
+(`result.combined.text`, e.g. "checks ran on the combined code (… with 1 earlier merge from this run): pass"), and
+`capcomd_check` (`capcomd check` in its VM) runs the run's checks on the combined code as it is (the target, or any
+branch) on demand, merging nothing: that is how a lead or planner knows the combined code works. Work that must run
+code beyond the checks (a smoke test of the whole, an end-to-end run) is a worker's task: spawn one, or pin a check.
+An orchestrate agent that writes a file or commits anyway fails, and its change is discarded.
 
 Shapes combine: contract first, then wide with a lead on each big part, is the usual shape for "build me X".
 
@@ -124,7 +127,8 @@ With the capcomd MCP server (`capcomd mcp`, or the capcomd plugin), the verbs ar
 - **Run:** `capcomd_run_new`, `capcomd_spawn` (`title`: the agent's tab), `capcomd_await` (`mode: all|any`),
   `capcomd_send`, `capcomd_title` (rarely needed: agents name themselves), `capcomd_cancel`, `capcomd_grant`,
   `capcomd_resume`.
-- **Gates:** `capcomd_verify`, `capcomd_merge`, `capcomd_approve`, `capcomd_goal`, `capcomd_pr_open`.
+- **Gates:** `capcomd_verify`, `capcomd_merge`, `capcomd_approve`, `capcomd_goal`, `capcomd_pr_open`; and
+  `capcomd_check` (the run's checks on a branch as it is, e.g. the goal branch after merges; it lands nothing).
 - **Shared state and history:** `capcomd_task`, `capcomd_kv`, `capcomd_budget`, `capcomd_tree`, `capcomd_inspect`,
   `capcomd_events`, `capcomd_trace`.
 
@@ -165,7 +169,8 @@ propagates); profiles come from `capcomd agents list --json` (or `capcomd_profil
   (`--follow --until TYPE --json`).
 - Gates: `verify <runId> --ref agt [--check NAME | --checks CMD] [--review-profile P] [--acceptance …]` runs the
   checks, then the reviewer (`run new --reviewer P` or `--review-profile`); both must pass, and no verdict is a fail.
-  `merge <runId> --ref agt --require vfy`.
+  `merge <runId> --ref agt --require vfy`. `check <runId> [branch|agt] [--check NAME]` runs the checks on that
+  branch's commit as it is (default: the run's target) and prints pass/fail and the output; it merges nothing.
 - Task board: `task add|claim|renew|release|done|list <runId>`. Leases have epochs: pass back the `--epoch` your claim
   returned, and stop working if you get "lease lost". `task add --after tsk,…` orders tasks (claim-next only hands out
   ready ones).

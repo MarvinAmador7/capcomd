@@ -135,8 +135,8 @@ export interface ProjectPlan {
 }
 
 /** What the orchestrate profiles `capcomd setup` writes are for (their `description`; plugin API §16.1). */
-export const LEAD_DESCRIPTION = "Leads a part: splits it among its worker helpers, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs it to run code itself (its helpers write and test the code); its helpers' checks run at verify and merge, and it reads their results.";
-export const PLANNER_DESCRIPTION = "Plans a goal: splits it among workers and leads, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests); checks run at verify and merge, and it reads their results.";
+export const LEAD_DESCRIPTION = "Leads a part: splits it among its worker helpers, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs it to run code itself (its helpers write and test the code); its helpers' checks run at verify and merge (and on the combined code with capcomd check), and it reads their results.";
+export const PLANNER_DESCRIPTION = "Plans a goal: splits it among workers and leads, then verifies and merges their work. Orchestrates: sees everything (code, git history, every agent's logs and check output) and runs nothing (no edits, commits, installs, builds or tests); checks run at verify and merge (and on the combined code with capcomd check), and it reads their results.";
 
 /** The two files' contents for these answers. No turn, time or money limits on the profiles (ADR-019). */
 export function planProject(a: ProjectAnswers): ProjectPlan {

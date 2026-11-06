@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { admits, agentMemory, agentSlots, AgentSlots, releaseSlot, slotsFor } from "../../src/providers/capacity";
+import { admits, agentMemory, agentSlots, AgentSlots, holdSlot, releaseSlot, slotsFor } from "../../src/providers/capacity";
 import { agentSlotsField } from "../../src/api/sandboxes";
 
 const GB = 1024 ** 3;
@@ -120,4 +120,43 @@ test("the Agents at once row: the cap from Docker's memory and the budget, and w
   expect(env).toMatchObject({ value: "5", display: "5 (7.8 GB ÷ 1.5 GB per agent)", source: "env" });
   expect(env.help).toContain("Set by CAPCOMD_DOCKER_AGENT_MEMORY_MB");
   expect(agentSlotsField({ memTotal: 8 * GB, memory: { mb: 512, source: "config" } })).toMatchObject({ value: "16", display: "16 (8 GB ÷ 512 MB per agent)", help: expect.stringContaining("Change it with Memory per agent.") });
+});
+
+describe("holdSlot (a check's machine, capcomd check)", () => {
+  test("it waits its turn behind the agents holding the place's slots, holds one while it runs, and gives it back", async () => {
+    const before = process.env.CAPCOMD_FAKE_MEMORY_MB;
+    process.env.CAPCOMD_FAKE_MEMORY_MB = "1024"; // the test fakes' cap: one slot at 1 GB per agent
+    try {
+      const slots = slotsFor("fake")!;
+      expect((await slots.request("agent-a", Date.now())).admitted).toBe(true);
+      let held: { waitedMs: number; release: () => void } | null = null;
+      const p = holdSlot("fake", "check-1", { pollMs: 20, waitMs: 5_000 }).then((h) => (held = h));
+      await new Promise((r) => setTimeout(r, 150));
+      expect(held).toBeNull(); // the agent has the only slot
+      slots.release("agent-a");
+      await p;
+      expect(held!.waitedMs).toBeGreaterThanOrEqual(100);
+      // While the check holds it, an agent waits.
+      expect((await slots.request("agent-b", Date.now())).admitted).toBe(false);
+      held!.release();
+      expect((await slots.request("agent-b", Date.now())).admitted).toBe(true);
+      slots.release("agent-b");
+      // No slot in time: it says so. A place with no cap never waits.
+      expect((await slots.request("agent-c", Date.now())).admitted).toBe(true);
+      await expect(holdSlot("fake", "check-2", { pollMs: 20, waitMs: 100 })).rejects.toThrow("no machine slot came free on fake");
+      slots.release("agent-c");
+      expect((await holdSlot("boxd", "check-3")).waitedMs).toBe(0);
+    } finally { if (before === undefined) delete process.env.CAPCOMD_FAKE_MEMORY_MB; else process.env.CAPCOMD_FAKE_MEMORY_MB = before; }
+  });
+
+  test("renew: a held machine that never shows up among the running ones keeps its slot past the grace", async () => {
+    let t = 0;
+    const s = new AgentSlots({ memTotal: async () => GB, running: async () => [], perAgentMb: () => 1024, now: () => t, graceMs: 1000 });
+    expect((await s.request("check", 0)).admitted).toBe(true);
+    t = 900; s.renew("check");
+    t = 1500; // past the grace from its admission, not from its renewal
+    expect((await s.request("agent", 1500)).admitted).toBe(false);
+    t = 2000; // past the grace from the renewal too
+    expect((await s.request("agent", 1500)).admitted).toBe(true);
+  });
 });
