@@ -10,7 +10,9 @@ import { dirname, join } from "path";
 import { ARMS, armNamed } from "../../scripts/eval-context/arms";
 import { actionsFromLogs, spendFromSpans, startingLimits, summarize, type Row } from "../../scripts/eval-context/report";
 import { checkCommand, FAKE_EXPECTED, parseVerdict, suite, type Step } from "../../scripts/eval-context/tasks";
-import { agentsMd, brainFiles, facts, generateWorld, memoryFiles, repoFiles, worldHash } from "../../scripts/eval-context/world";
+import { agentsMd, brainFiles, contextFiles, facts, generateWorld, memoryFiles, repoFiles, worldHash } from "../../scripts/eval-context/world";
+import { buildBrief } from "../../src/context/brief";
+import { memoryProvider } from "../../src/context/memory";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 const FAKE = join(ROOT, "scripts", "eval-context", "fake-agent.ts");
@@ -64,6 +66,13 @@ describe("the world", () => {
     expect(md).toContain(`superseded by ${w.shipping.current.id}`);
     expect(armNamed("agents-md")!.files!(w)).toEqual({ "AGENTS.md": md, "CLAUDE.md": "@AGENTS.md\n" });
     expect(armNamed("none")!.files!(w)).toEqual({});
+    // The index arm: the same records as the project's own facts, and the lessons, all under .capcomd/context/, with a
+    // profile that names the memory provider (ADR-025 step 1).
+    const ctx = armNamed("index")!.files!(w);
+    expect(Object.keys(ctx).every((f) => f.startsWith(".capcomd/context/facts/") || f.startsWith(".capcomd/context/memory/"))).toBe(true);
+    expect(Object.keys(ctx).length).toBe(facts(w).length + Object.keys(memoryFiles(w)).length);
+    expect(contextFiles(w)).toEqual(ctx);
+    expect(armNamed("index")!.context).toEqual({ providers: [{ name: "memory" }] });
     // The arms later steps add are listed, not runnable.
     expect(ARMS.filter((a) => !a.files).every((a) => /ADR-025 step/.test(a.needs ?? ""))).toBe(true);
   });
@@ -83,12 +92,24 @@ describe("the checkers", () => {
   const w = generateWorld(11);
   const base = repoFiles(w);
 
-  test("the fake agent scores what --expect requires, in both runnable arms", () => {
-    for (const arm of ["none", "agents-md"]) {
+  /** The brief the router gives an agent of the arm's profile over these files (what the runner appends for it). */
+  const briefOf = async (arm: string, files: Record<string, string>) => {
+    const context = armNamed(arm)!.context;
+    if (!context) return [];
+    const read = async () => ({ sha: "f".repeat(40), date: "2026-11-06T00:00:00.000Z", truncated: false, files: Object.entries(files).filter(([f]) => f.startsWith(".capcomd/context/")).map(([path, text]) => ({ path, text })) });
+    const p = memoryProvider({ read });
+    const b = await buildBrief({ context, model: null, role: "work", scope: { projectId: null, repo: "/srv/eval.git", ref: "main", profile: { name: "eval", version: 1 }, runId: null, agentId: null }, providers: new Map([["memory", { name: "memory", plugin: "context-memory", kinds: ["memory", "fact"], provider: p }]]) });
+    return ["--append-system-prompt", b.text];
+  };
+
+  test("the fake agent scores what --expect requires, in every runnable arm", async () => {
+    for (const arm of ["none", "agents-md", "index"]) {
       for (const chain of suite(w).chains) {
-        const dir = checkout({ ...base, ...armNamed(arm)!.files!(w) });
+        const files = { ...base, ...armNamed(arm)!.files!(w) };
+        const dir = checkout(files);
+        const appended = await briefOf(arm, files);
         for (const step of chain.steps) {
-          const r = spawnSync(process.execPath, [FAKE, "-p", step.prompt, "--output-format", "stream-json"], { cwd: dir, encoding: "utf8" });
+          const r = spawnSync(process.execPath, [FAKE, "-p", step.prompt, "--output-format", "stream-json", ...appended], { cwd: dir, encoding: "utf8" });
           const result = r.stdout.trim().split("\n").map((l) => JSON.parse(l)).find((e) => e.type === "result");
           const v = step.checker ? check(dir, step) : step.scoreSummary!(String(result?.result ?? ""));
           expect(`${arm} ${step.id} ${v.success ? "pass" : "fail"}:${v.class}`).toBe(`${arm} ${step.id} ${FAKE_EXPECTED[arm]![step.id]}`);

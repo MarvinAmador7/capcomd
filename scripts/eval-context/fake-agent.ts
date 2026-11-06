@@ -38,17 +38,27 @@ const read = (f: string) => { const s = existsSync(f) ? readFileSync(f, "utf8") 
 const write = (f: string, s: string) => { writeFileSync(f, s); tool("Write", { file_path: f }, "ok"); };
 
 emit({ type: "system", subtype: "init", session_id: "eval", tools: ["Read", "Write", "Edit", "Bash", "Grep"], model: "fake" });
+// The context brief its profile gives it (ADR-025 §6.1, the index arm), from its appended system prompt: one line per
+// item, `- [type] <description> → <file> (…)`. Bodies are files it opens when a line applies.
+const appended = argv.indexOf("--append-system-prompt") >= 0 ? argv[argv.indexOf("--append-system-prompt") + 1] ?? "" : "";
+const brief = [...appended.matchAll(/^- \[[a-z0-9_-]+\] (.+?) → (\S+) \(/gm)].map((m) => ({ description: m[1]!, path: m[2]! }));
 // What the instruction file says (Claude Code loads it through CLAUDE.md's import), by rule title.
 const md = existsSync("AGENTS.md") ? read("AGENTS.md") : "";
-const current = md.split("## Decision log")[0] ?? "";
+const current = (md.split("## Decision log")[0] ?? "") + brief.map((b) => b.description).join("\n");
 const rule = (title: string) => {
   const m = new RegExp(`^- \\*\\*([A-Z]+-\\d+)\\*\\* \\([^)]*\\): ${title}\\. (.*)$`, "m").exec(current);
-  return m ? { id: m[1]!, text: m[2]! } : null;
+  if (m) return { id: m[1]!, text: m[2]! };
+  // The brief's line for the record, then its file: its id in the frontmatter, the rule in the body.
+  const line = brief.find((b) => b.description === title);
+  if (!line) return null;
+  const s = read(line.path);
+  const id = /^id: "?([A-Z]+-\d+)"?$/m.exec(s)?.[1];
+  return id ? { id, text: s.slice(s.indexOf("\n---", 3) + 4).trim(), where: line.path } : null;
 };
 /** "Active customer": the instruction file, else a search of the docs for the decision (the re-discovery). */
 const activeDefinition = () => {
   const r = rule("Active customer");
-  if (r) return { days: Number(/last (\d+) days/.exec(r.text)?.[1]), id: r.id, where: "AGENTS.md" };
+  if (r) return { days: Number(/last (\d+) days/.exec(r.text)?.[1]), id: r.id, where: "where" in r ? r.where : "AGENTS.md" };
   tool("Grep", { pattern: "active", path: "docs" }, "");
   for (const f of existsSync("docs/meetings") ? readdirSync("docs/meetings").sort() : []) {
     const s = readFileSync(`docs/meetings/${f}`, "utf8");

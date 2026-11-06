@@ -8,12 +8,14 @@ import type { PluginManifest, PluginScope } from "../manifest";
 import type { Registration } from "../testkit";
 import type { ApiRouteSpec, CliCommandSpec, Disposable, EmittedEvent, HarnessEventEnvelope, LogLevel, McpToolSpec, PluginContext, Span, UiDescriptor } from "../context";
 import type { AgentProvider, Forge, SandboxProvider } from "../seams";
+import type { ContextProvider } from "../context-layer";
 import type { HookRegistry } from "./registry";
 
 /** Named contributions every plugin shares one namespace of (§4.2): a second registration of a key is `conflict`. */
-export type ContributionKind = "seam" | "cli" | "mcp" | "instructions" | "api" | "capability" | "ui";
+export type ContributionKind = "seam" | "context" | "cli" | "mcp" | "instructions" | "api" | "capability" | "ui";
 export type Contribution =
   | { kind: "seam"; seam: "sandbox" | "agent" | "forge"; impl: SandboxProvider | AgentProvider | Forge }
+  | { kind: "context"; kinds: readonly ("fact" | "memory")[]; impl: ContextProvider }
   | { kind: "cli"; spec: CliCommandSpec } | { kind: "mcp"; spec: McpToolSpec } | { kind: "instructions"; text: string }
   | { kind: "api"; spec: ApiRouteSpec } | { kind: "capability"; doc: string } | { kind: "ui"; descriptor: UiDescriptor };
 
@@ -191,6 +193,17 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     },
     hooks: { on: hooksOn as PluginContext["hooks"]["on"] },
     seams: { sandbox: seam("sandbox"), agent: seam("agent"), forge: seam("forge") },
+    context: {
+      register(impl) {
+        live();
+        const named = impl?.describe?.().name;
+        const d = (declared.context ?? []).find((c) => c.name === named);
+        if (!d) refuse(`context provider ${String(named)}`);
+        if (["resolve", "index", "search", "get", "propose", "available", "classifyError"].some((k) => typeof (impl as unknown as Record<string, unknown>)[k] !== "function"))
+          throw new PluginError("invalid", `context provider ${d!.name}: describe, available, classifyError, resolve, index, search, get and propose are functions (ADR-025 §3.2)`);
+        return contribute({ kind: "context", name: d!.name }, d!.name, { kind: "context", kinds: d!.kinds, impl });
+      },
+    },
     cli: {
       command(spec) {
         live();
@@ -288,6 +301,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
       return [
         ...Object.keys(declared.hooks ?? {}).filter((h) => !has((r) => r.kind === "hook" && r.hook === h)).map((h) => `hook ${h}`),
         ...(declared.seams ?? []).filter((s) => !has((r) => r.kind === "seam" && r.seam === s.kind)).map((s) => `${s.kind} seam ${s.name}`),
+        ...(declared.context ?? []).filter((c) => !has((r) => r.kind === "context" && r.name === c.name)).map((c) => `context provider ${c.name}`),
         ...(declared.cli ?? []).filter((c) => !has((r) => r.kind === "cli" && r.name === c.name)).map((c) => `CLI command ${c.name}`),
         ...(declared.mcp ?? []).filter((t) => !has((r) => r.kind === "mcp" && r.name.endsWith(`_${t.name}`))).map((t) => `MCP tool ${t.name}`),
         ...(declared.api ?? []).filter((a) => !has((r) => r.kind === "api" && r.method === a.method && r.path === `/v1/x/${name}${a.path}`)).map((a) => `API route ${a.method} ${a.path}`),

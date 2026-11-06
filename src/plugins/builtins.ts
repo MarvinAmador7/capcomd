@@ -15,12 +15,15 @@ import { FRONT_GROUPS } from "./front/groups";
 import * as frontMcp from "./front/mcp";
 import * as frontHermes from "./front/hermes";
 import * as skillOrchestration from "./skill-orchestration";
+import * as contextRouter from "./context";
+import * as contextMemory from "./context-memory";
 import * as sourceSchedule from "./sources/schedule";
 
 export type Builtin = Required<Pick<Candidate, "manifest" | "module">> & {
   /** A plugin the kernel needs in every process, not only the daemon: a gate wherever a verify runs (src/plugins/hooks.ts
    *  `gates`), a forge wherever work lands or a pull request opens (src/plugins/forges), a front door wherever a command
-   *  or a tool is served (the CLI, `capcomd mcp`), the orchestration skill wherever an agent is prepared. See host.ts
+   *  or a tool is served (the CLI, `capcomd mcp`), the orchestration skill and the context router wherever an agent is
+   *  prepared. See host.ts
    *  `localHost`. */
   everyProcess?: boolean;
   /** One of the kernel's own front doors (§4.2, §4.7.1): its CLI groups are the kernel's commands and its MCP tools are
@@ -45,6 +48,10 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   { manifest: frontMcp.manifest, module: frontMcp.plugin as Builtin["module"], everyProcess: true, kernelSurface: true },
   { manifest: frontHermes.manifest, module: frontHermes.plugin as Builtin["module"], everyProcess: true, kernelSurface: true },
   { manifest: skillOrchestration.manifest, module: skillOrchestration.plugin as Builtin["module"], everyProcess: true },
+  // The context layer (ADR-025 step 1): project memory as a context provider, and the router that briefs an agent from
+  // the providers its profile names, wherever an agent is prepared or a brief printed.
+  { manifest: contextMemory.manifest, module: contextMemory.plugin as Builtin["module"], everyProcess: true },
+  { manifest: contextRouter.manifest, module: contextRouter.plugin as Builtin["module"], everyProcess: true },
   // Trigger sources (§16.3, step 10): schedules. GitHub's comments are forge-github's own source.
   { manifest: sourceSchedule.manifest, module: sourceSchedule.plugin as Builtin["module"] },
 ];
