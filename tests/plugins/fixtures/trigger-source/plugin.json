@@ -1,0 +1,24 @@
+{
+  "schema": "capcomd.plugin/v1",
+  "name": "trigger-source",
+  "version": "1.0.0",
+  "description": "Test plugin: the trigger source fixture. On its own timer it reads new lines of the file CAPCOMD_TEST_TRIGGER_INBOX names (emit a trigger, subscribe or unsubscribe a run), keeping its place in ctx.storage, denies at trigger.admitting a trigger whose data says policy deny, and writes what it got and heard to CAPCOMD_TEST_TRIGGER_LOG.",
+  "apiVersion": 1,
+  "engines": {
+    "capcomd": ">=0.0.0"
+  },
+  "entry": {
+    "runtime": "in-process",
+    "module": "./index.ts"
+  },
+  "provides": ["source:fixture"],
+  "scopes": ["read", "steer"],
+  "contributes": {
+    "sources": [{ "name": "fixture", "summary": "Lines of a test's inbox file" }],
+    "hooks": {
+      "job.changed": {},
+      "trigger.admitting": {},
+      "trigger.changed": {}
+    }
+  }
+}

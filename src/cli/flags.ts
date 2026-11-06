@@ -58,6 +58,7 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   continue: { type: "string" },
   "dry-run": { type: "boolean" },
   to: { type: "string" },
+  source: { type: "string" },
   yes: { type: "boolean", short: "y" },
   demo: { type: "boolean" },
   "skip-demo": { type: "boolean" },

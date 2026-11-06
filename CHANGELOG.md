@@ -19,6 +19,26 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   "lifecycle_inactive"`), and so is one whose environment its sandbox doesn't have (`reason: "environment"`).
   `capcomd profiles validate` says both before you spawn. None of these can be changed with `--set` or by a parent
   spawning a child; agents already running keep what they started with. See docs/agents.md, "Profile files".
+- New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
+  a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
+  `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`
+  allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
+  (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
+  starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
+  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
+  there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
+  `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
+  `capcomd triggers subscriptions` the threads runs follow; the daemon stream has `trigger.received`,
+  `trigger.subscribed` and `trigger.unsubscribed`, and a started run's `trigger` says where it came from (capability
+  `triggers`). Schedules: `"plugins": {"source-schedule": {"schedules": {"nightly": {"text": "update the
+  dependencies", "everyMs": 86400000}}}}` (or `at` for once), allowed as `schedule:nightly`. GitHub comments:
+  `"plugins": {"forge-github": {"sourceRepos": ["acme/app"]}}`, read every minute with your GitHub login (comments
+  from before you set it are not read; an @-mention of that login addresses you, not capcomd, unless you set
+  `"sourceMentions": true` for a login that is capcomd's own account). Plugins can add their own sources (`ctx.triggers`) and turn a trigger down
+  (the `trigger.admitting` hook).
+- New: built-in plugins take settings from `~/.capcomd/config.json` (`"plugins": {"<name>": {…}}`, and
+  `"enabled": false` to turn one off) or from `CAPCOMD_PLUGIN_<NAME>_<KEY>` environment variables.
 - New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
   `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
   its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once

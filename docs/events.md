@@ -3198,6 +3198,142 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `trigger.received`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "string",
+      "description": "The source that sent it (a plugin's `sources` name: github, schedule, …)"
+    },
+    "id": {
+      "type": "string",
+      "description": "The trigger's id at its source; (source, id) is its dedupe key"
+    },
+    "thread": {
+      "type": "string",
+      "description": "The conversation it belongs to, in the source's terms (a pull request, an issue, a schedule)"
+    },
+    "actor": {
+      "type": "string",
+      "description": "Who sent it, as the source names them (never mapped across sources)"
+    },
+    "addressed": {
+      "description": "Whether it addressed capcomd: a mention, a direct message, or neither (null)",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "mention",
+        "direct",
+        null
+      ]
+    },
+    "decision": {
+      "type": "string",
+      "description": "What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId), failed (a run could not start; it may come again). More may be added"
+    },
+    "runId": {
+      "description": "The run it started or continued; null otherwise",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "source",
+    "id",
+    "thread",
+    "actor",
+    "addressed",
+    "decision",
+    "runId"
+  ],
+  "additionalProperties": {},
+  "description": "Capability triggers. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon); the envelope text is daemon-written; the source's ids and thread are its own words. One per trigger a source handed to the intake (spec §16.3.2); `entity` is trigger:<source>/<hash of id>"
+}
+```
+
+## `trigger.subscribed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "string"
+    },
+    "thread": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "until": {
+      "description": "When the subscription ends; null while the run works and nobody set one (it ends 14 days after the run does)",
+      "type": [
+        "string",
+        "null"
+      ],
+      "allOf": [
+        {
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+        },
+        {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        }
+      ]
+    }
+  },
+  "required": [
+    "source",
+    "thread",
+    "runId",
+    "until"
+  ],
+  "additionalProperties": {},
+  "description": "Capability triggers. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon); the envelope text is daemon-written; the source's ids and thread are its own words. A run follows a thread: later triggers on it reach the run's planner as messages, without a new decision (spec §16.3.5). A run a trigger started follows that trigger's thread. `entity` is run:<runId>"
+}
+```
+
+## `trigger.unsubscribed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "string"
+    },
+    "thread": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "cause": {
+      "type": "string",
+      "description": "expired (its time ran out, or its run is gone), stopped (a person stopped the run), unsubscribed (a plugin ended it). More may be added"
+    }
+  },
+  "required": [
+    "source",
+    "thread",
+    "runId",
+    "cause"
+  ],
+  "additionalProperties": {},
+  "description": "Capability triggers. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon); the envelope text is daemon-written; the source's ids and thread are its own words. A run no longer follows a thread. `entity` is run:<runId>"
+}
+```
+
 ## `plugin.loaded`
 
 ```json
@@ -3733,6 +3869,66 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "state",
             "readyAt",
             "pullRequest"
+          ]
+        },
+        "trigger": {
+          "description": "Capability triggers. The external event this run was started from (plugin API §16.3: a source's trigger the intake acted on); null for a run someone started. Older daemons don't send it",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "The source (github, schedule, …)"
+            },
+            "id": {
+              "type": "string",
+              "description": "The trigger's id at its source"
+            },
+            "thread": {
+              "type": "string",
+              "description": "The conversation it came from; the run follows it (trigger.subscribed)"
+            },
+            "actor": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "display": {
+                  "type": "string",
+                  "x-untrusted": true,
+                  "description": "Agent-written text (here the source's name for the sender): render as plain text"
+                },
+                "bot": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "display",
+                "bot"
+              ]
+            },
+            "at": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                },
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "id",
+            "thread",
+            "actor",
+            "at"
           ]
         }
       },
