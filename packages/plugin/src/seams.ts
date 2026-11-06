@@ -116,6 +116,10 @@ export interface AgentCommandCtx {
   dir: string;
   cfg: AgentConfig;
   capcomd?: { cli: string; mcpConfig: string };
+  /** The profile's MCP servers (ADR-024 `tools.mcp`), which the CLI starts in the sandbox: `config` is a file holding
+   *  them and capcomd's own (when `capcomd` is set) as `{mcpServers: {<name>: {command, args}}}`; `servers` is the list,
+   *  for a CLI that takes servers as flags. A `trusted` server's tools are approved up front, as capcomd's own are. */
+  mcp?: { config: string; servers: Array<{ name: string; command: string[]; trust: "trusted" | "untrusted" }> };
   stdinPrompt?: boolean;
 }
 

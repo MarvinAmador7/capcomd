@@ -111,14 +111,16 @@ src/
                   out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's
                   private storage; watchdog.ts, the daemon's watchdog (off until `capcomd setup` turns it on); config.ts,
                   a plugin's settings from the user's and the project's config and CAPCOMD_PLUGIN_<NAME>_<KEY>;
-                  services.ts, the daemon's `ctx.agents`. The user's plugins (~/.capcomd/plugins/<name>) run out of
+                  services.ts, the daemon's `ctx.agents`; lifecycle.ts, whether the plugins a profile's `lifecycle`
+                  names are there to hear its agents. The user's plugins (~/.capcomd/plugins/<name>) run out of
                   process.
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and
-                  hashed (skills.ts), resolution, pins and overrides (resolve.ts), and what `capcomd profiles`,
-                  GET /v1/profiles and a planner read of each: the files and values, title, tags, fit, cost
-                  (describe.ts)
+                  hashed (skills.ts), what an agent is pinned with beside the flat spec: MCP servers, sandbox,
+                  environment, size, lifecycle plugins (runtime.ts), resolution, pins and overrides (resolve.ts), and
+                  what `capcomd profiles`, GET /v1/profiles and a planner read of each: the files and values, title,
+                  tags, fit, cost (describe.ts)
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

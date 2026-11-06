@@ -79,6 +79,17 @@ export interface PinnedSpec {
   toolMode?: "execute" | "orchestrate";
   /** ADR-024 `jobs` block (§16.2): the agent's background-job limits. */
   jobs?: { foregroundMs?: number; max?: number; afterTurnMs?: number };
+  /** ADR-024 `tools.mcp` (its §7 step 8): MCP servers the agent's CLI starts in its sandbox, beside capcomd's own;
+   *  `trusted` ones have their tools approved up front. */
+  mcp?: Array<{ name: string; command: string[]; trust: "trusted" | "untrusted" }>;
+  /** ADR-024 `sandbox.provider`: the sandbox its machine is made on, instead of the run's (or the daemon's). */
+  sandboxProvider?: string;
+  /** ADR-024 `sandbox.environment`: what its machine boots from there (`default`, `image`, or a build's name). */
+  environment?: string;
+  /** ADR-024 `sandbox.size`: its machine's size (`VmSpec.size`). */
+  size?: { vcpu: 1 | 2 | 4 | 8 };
+  /** ADR-024 `lifecycle.onStart|onEnd`: plugins that must be active for it; its `agent.changed` carries them (§6.6.8). */
+  lifecycle?: { onStart: string[]; onEnd: string[] };
   /** ADR-025 §10 (ADR-024's `memory`, read as it): the context providers the router briefs the agent from, and their
    *  budgets. */
   context?: ContextSpec;
