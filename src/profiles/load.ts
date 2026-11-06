@@ -11,6 +11,7 @@ import { env as envVar } from "../utils/env";
 import { defaultAgentsFile, userProfilesDir } from "../utils/home";
 import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile } from "./v1";
 import { FILE_REF, checkManifest, fromFlat, inheritable, layerOver, notApplied, toFlat, v2Path, withContext, type ProfileDoc } from "./v2";
+import { profileSkills, type ProfileSkill } from "./skills";
 
 export function agentsFilePath(source: Record<string, string | undefined> = process.env): string {
   return envVar("AGENTS_FILE", source) ?? defaultAgentsFile(source);
@@ -52,6 +53,9 @@ export interface ResolvedProfile {
   manifest: ProfileDoc;
   /** What it pins (./v1.ts AgentSpec). */
   spec: AgentSpec;
+  /** Its `skills`, read and hashed (./skills.ts), which an agent of it is pinned with too; not capcomd's orchestration
+   *  skill, which every agent that may spawn gets by itself. */
+  skills: ProfileSkill[];
 }
 /** Every profile a project sees, resolved: `agents` and `default` read as a v1 file's do, so every reader of
  *  `readAgentsFile(…).agents[name]` reads v2 profiles the same way. */
@@ -71,7 +75,8 @@ export function profileLayers(path = agentsFilePath(), source: Record<string, st
   return root === user ? [{ layer: "user", dir: user }] : [{ layer: "project", dir: root }, { layer: "user", dir: user }];
 }
 
-interface Entry { name: string; layer: ProfileLayer; path: string | null; format: "v1" | "v2"; doc: ProfileDoc; spec?: AgentSpec }
+/** `dir`: the package directory (`<name>/`) its file is in, where its `skills/` are; null for a single file. */
+interface Entry { name: string; layer: ProfileLayer; path: string | null; dir: string | null; format: "v1" | "v2"; doc: ProfileDoc; spec?: AgentSpec }
 interface Layer { layer: ProfileLayer; profiles: Map<string, Entry>; overrides: Map<string, Entry> }
 
 const MANIFEST = /^(.+)\.(ya?ml|json)$/;
@@ -159,7 +164,7 @@ function scanLayer(layer: "project" | "user", dir: string, errs: string[]): Laye
     const e = checkManifest(raw, as, name);
     if (e.length) { errs.push(...e.map((x) => `${path}: ${x}`)); return null; }
     const doc = readFiles(withContext(raw as ProfileDoc), pdir, errs, path);
-    return { name, layer, path, format: "v2", doc };
+    return { name, layer, path, dir: pdir, format: "v2", doc };
   };
   for (const [name, list] of found) {
     if (list.length > 1) { errs.push(`profile ${name} is defined more than once in ${dir} (${list.map((x) => x.path).join(", ")}): keep one`); continue; }
@@ -187,14 +192,14 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
   for (const [name, doc] of Object.entries(bundled)) {
     const e = checkManifest(doc, "profile", name);
     if (e.length) errs.push(...e.map((x) => `bundled profile ${name}: ${x}`));
-    else bottom.profiles.set(name, { name, layer: "bundled", path: null, format: "v2", doc: withContext(doc) });
+    else bottom.profiles.set(name, { name, layer: "bundled", path: null, dir: null, format: "v2", doc: withContext(doc) });
   }
   const v1Layer = dirs[0]!.layer;
 
   if (!errs.length && layers.every((l) => !l.profiles.size && !l.overrides.size)) {
     const f = readAgentsFile(path);
     const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => [name, {
-      name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest: fromFlat(name, spec), spec,
+      name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest: fromFlat(name, spec), spec, skills: [],
     }]));
     return { ...f, profiles, warnings };
   }
@@ -210,7 +215,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       else v1 = raw as AgentsFile;
     }
   }
-  const v1Entries = new Map(Object.entries(v1?.agents ?? {}).map(([name, spec]): [string, Entry] => [name, { name, layer: v1Layer, path, format: "v1", doc: fromFlat(name, spec), spec }]));
+  const v1Entries = new Map(Object.entries(v1?.agents ?? {}).map(([name, spec]): [string, Entry] => [name, { name, layer: v1Layer, path, dir: null, format: "v1", doc: fromFlat(name, spec), spec }]));
   for (const name of v1Entries.keys()) {
     const v2 = layers.find((l) => l.layer === v1Layer)!.profiles.get(name);
     if (v2) warnings.push(`${path}: agents.${name} is hidden by ${v2.path} (a v2 profile wins over agents.json)`);
@@ -226,6 +231,10 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
   };
 
   const done = new Map<string, ResolvedProfile | "failed">(), resolving: string[] = [];
+  /** Each resolved profile's package directories, root first (its ancestors', its own, its overrides'): its skills'. */
+  type Dir = { dir: string; layer: "project" | "user" };
+  const dirsOf = new Map<string, Dir[]>();
+  const dirOf = (e: Entry): Dir[] => (e.dir && e.layer !== "bundled" ? [{ dir: e.dir, layer: e.layer }] : []);
   const defaults: Array<{ name: string; at: number; v1: boolean }> = [];
   const resolveName = (name: string): ResolvedProfile | "failed" | undefined => {
     const known = done.get(name);
@@ -241,7 +250,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     try {
       const { entry, at } = src;
       let doc: ProfileDoc = {};
-      const applied: AppliedFile[] = [];
+      const applied: AppliedFile[] = [], dirs: Dir[] = [];
       const parent = entry.doc.extends as string | undefined;
       if (parent !== undefined) {
         const p = resolveName(parent);
@@ -249,9 +258,11 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
         if (p === "failed") return fail(); // its own error says why
         doc = inheritable(p.manifest);
         applied.push(...p.applied.map((a): AppliedFile => ({ ...a, as: "extends" })));
+        dirs.push(...(dirsOf.get(parent) ?? []));
       }
       doc = layerOver(doc, entry.doc);
       applied.push({ as: "profile", name, layer: entry.layer, path: entry.path });
+      dirs.push(...dirOf(entry));
       let def: { at: number; on: boolean } | null = typeof entry.doc.default === "boolean" ? { at, on: entry.doc.default } : null;
       // Overrides: this layer's, then each one above it, so the project's comes last (§2.6).
       for (let i = at; i >= 0; i--) {
@@ -259,6 +270,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
         if (!ov) continue;
         doc = layerOver(doc, ov.doc);
         applied.push({ as: "override", name, layer: ov.layer, path: ov.path });
+        dirs.push(...dirOf(ov));
         if (typeof ov.doc.default === "boolean") def = { at: i, on: ov.doc.default };
       }
       const plainV1 = entry.format === "v1" && applied.length === 1;
@@ -269,11 +281,15 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
         const { sandboxSeam } = require("../plugins/sandboxes") as typeof import("../plugins/sandboxes");
         if (!sandboxSeam(sandbox)) e.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't an active sandbox provider (see \`capcomd plugins list\`)`);
       }
+      // Its skills, read from the nearest directory that has each (an override's, its own, then its ancestors').
+      const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true);
+      e.push(...sk.errors);
       if (e.length) return fail(e.join("; "));
+      dirsOf.set(name, dirs);
       if (def?.on) defaults.push({ name, at: def.at, v1: false });
       const notYet = notApplied(doc);
       if (notYet.length) warnings.push(`profiles.${name}: ${notYet.join(", ")} ${notYet.length > 1 ? "are" : "is"} read but not used yet by this capcomd`);
-      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, spec };
+      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, spec, skills: sk.skills };
       done.set(name, r);
       return r;
     } finally { resolving.pop(); }

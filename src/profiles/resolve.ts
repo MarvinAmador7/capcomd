@@ -4,6 +4,7 @@
 import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
 import { env as envVar } from "../utils/env";
 import { agentsFilePath, readProfiles, type ProfileLayer } from "./load";
+import type { ProfileSkill } from "./skills";
 import { AgentConfigError, validateSpec, widenings, type AgentSpec } from "./v1";
 import { LIST_PATHS, flatOverrides } from "./v2";
 
@@ -11,6 +12,9 @@ export interface ResolvedAgent {
   name: string | null; kind: "fake" | (string & {}); spec?: AgentSpec; overridden?: boolean;
   /** The profile resolved by name (absent for a pinned spec, or no profile): its version and where it came from. */
   profile?: { name: string; version: number; source: ProfileLayer };
+  /** Its profile's skills (./skills.ts), resolved by name: pinned on the agent at spawn (src/primitives/ops.ts
+   *  `spawnAgent`), its spec's `skills` then. */
+  skills?: ProfileSkill[];
 }
 
 /**
@@ -23,7 +27,7 @@ export function resolveAgent(name?: string | null, source: Record<string, string
   const file = readProfiles(agentsFilePath(source), source);
   const pick = (n: string): ResolvedAgent | null => {
     const r = Object.hasOwn(file.profiles, n) ? file.profiles[n]! : null;
-    return r ? { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source } } : null;
+    return r ? { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...(r.skills.length ? { skills: r.skills } : {}) } : null;
   };
   if (name) {
     const ref = decodeAgentRef(name);

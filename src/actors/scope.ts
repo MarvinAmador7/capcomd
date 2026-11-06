@@ -6,7 +6,7 @@ import { redactShapes } from "../agents/redact";
 import { strictEventData, type ScopeEventType } from "../api/legacy-events";
 import { dottedType } from "../api/envelope";
 import { eventTypeOwner } from "../../packages/plugin/src/event-type";
-import { inlineOrAttach } from "../api/inline-cap";
+import { attach, inlineOrAttach } from "../api/inline-cap";
 import { workspaceOf, type AgentWorkspace } from "../api/workspace";
 import { RUN_REPO_KV } from "../merge/run-config";
 import { env as envVar } from "../utils/env";
@@ -571,6 +571,9 @@ export const scopeActor = actor({
         driveEnv?: Record<string, string>;
         /** Its title, from its spawner (`spawn --title`; already normalized). Not part of the params hash: a retry is the same spawn. */
         title?: { title: string; by: "parent" | "driver"; setBy: string };
+        /** Its profile's skills' SKILL.md texts (ADR-024 §7 step 5), pinned by hash in `spec.skills`: kept as attachments
+         *  (content-addressed), so whoever prepares the agent gives it exactly what was resolved at spawn. */
+        skillTexts?: string[];
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -641,6 +644,10 @@ export const scopeActor = actor({
         if (titled) await tx.execute("UPDATE agents_v2 SET title = ? WHERE agent_id = ?", JSON.stringify(titled.next), params.agentId);
         const shown = titled ?? shownTitle(null, redacted);
         if (taskInl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", taskInl.attachment.id, taskInl.attachment.sha256, taskInl.attachment.bytes, taskInl.attachment.mediaType, taskInl.body, now);
+        for (const text of params.skillTexts ?? []) {
+          const a = attach(String(text), "text/markdown; charset=utf-8");
+          await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", a.id, a.sha256, a.bytes, a.mediaType, String(text), now);
+        }
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
           parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
           agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),

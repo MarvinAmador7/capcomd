@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: skills in a profile. A `profile.yaml` can list `skills:`, and every agent of that profile gets each skill's
+  `SKILL.md` in its instructions when it starts, the way `capcomd send --skill` sends skills with a message: from the
+  profile's own `skills/<name>/SKILL.md`, or from your `~/.claude/skills` with `source: user`. Skills are read when an
+  agent is spawned and the agent keeps them (pinned by each file's sha256), so editing a skill changes the next agents,
+  not running ones; `hash: sha256:…` in the profile refuses a `SKILL.md` that has changed. `capcomd agents show`
+  prints each skill's source and hash. Naming `capcomd-orchestration` is allowed in a profile that may spawn, and its
+  agents still get it once. See docs/agents.md, "Skills in a profile".
+- The skills an agent gets when it starts (the orchestration skill, a plugin's) are now each in a `<skill name="…">`
+  block in its instructions, as a message's skills are; their text is unchanged.
 - New: `capcomd hermes` says whether Hermes is installed and has capcomd (what `capcomd setup check` says for it), and
   `capcomd hermes add [--approvals elicit|human] [--hermes-entry-per-project] [--yes]` adds capcomd to Hermes on its
   own, as `capcomd setup agent` does: its MCP server entry, the capcomd skills, and who approves merges into protected

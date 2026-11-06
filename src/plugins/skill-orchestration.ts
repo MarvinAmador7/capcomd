@@ -7,10 +7,12 @@ import { definePlugin } from "../../packages/plugin/src/context";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { VERSION } from "../utils/self";
 import type { ScopeAgent } from "../actors/scope";
+import { ORCHESTRATION_SKILL_NAME } from "../profiles/skills";
 import { preparingAgent, skillHash } from "./hooks";
 
-/** The skill's name: the capcomd plugin's own orchestration skill (plugins/capcomd/skills/capcomd-orchestration). */
-export const SKILL_NAME = "capcomd-orchestration";
+/** The skill's name: the capcomd plugin's own orchestration skill (plugins/capcomd/skills/capcomd-orchestration). A
+ *  profile may name it in its `skills` (src/profiles/skills.ts): it is this plugin's to attach, so the agent gets it once. */
+export const SKILL_NAME = ORCHESTRATION_SKILL_NAME;
 
 export const manifest: PluginManifest = {
   schema: "capcomd.plugin/v1", name: "skill-orchestration", version: VERSION,

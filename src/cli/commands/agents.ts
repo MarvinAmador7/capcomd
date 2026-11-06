@@ -90,7 +90,10 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
         const c = loadAgentConfig(process.env, n);
         effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
-      out({ name: n, default: f.default === n, spec, effective, error, ...readiness(n, spec) }, JSON.stringify({ name: n, spec, effective, error }, null, 2));
+      // Its skills as an agent of it is pinned with them: where each came from and the sha256 of its SKILL.md.
+      const pins = f.profiles[n]?.skills.map((s) => ({ name: s.name, source: s.source, hash: `sha256:${s.hash}`, path: s.path })) ?? [];
+      const skills = pins.length ? { skills: pins } : {};
+      out({ name: n, default: f.default === n, spec, ...skills, effective, error, ...readiness(n, spec) }, JSON.stringify({ name: n, spec, ...skills, effective, error }, null, 2));
       return error ? 1 : 0;
     }
     case "add":

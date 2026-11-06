@@ -553,13 +553,26 @@ the agent without prompt text: the kernel's `CAPCOMD_*`; the agent providers' fa
 `ALL_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`); git's `GIT_*`; and
 `TMPDIR`, `USER`, `LOGNAME`. A value the redactor would change is `invalid` (secrets reach a sandbox as placeholders,
 §11.4). The payload a later listener sees has the earlier skills and the earlier variables' names; their values stay in
-the patches. The kernel then attaches them to the attempt's run: the skills' text after the profile's `append` and the
-plugins' appends, in the order the plugins added them, where the agent reads its instructions (Claude Code's appended
-system prompt, Codex's prompt), and recorded on the attempt's spec by `{name, hash, source}`; the variables in the
-agent's process environment, never in place of the runner's, the provider's or the credential's. The kernel's own
-listener, `skill-orchestration`, reads the agent's record from the kernel's call rather than the engine, so its `closed`
-failure never trips on a slow engine; an attempt no plugin prepared (a workflow that passed its prepare step under an
-earlier capcomd, started or restarted after an upgrade) gets the orchestration skill from the kernel, as before.
+the patches. The kernel then attaches them to the attempt's run: each skill's text in a `<skill name="…">` block, as a
+message's skills are (`src/agents/skills.ts` `skillBlock`), after the profile's `append` and the plugins' appends (the
+profile's skills first, then the plugins' in the order they added them), where the agent reads its instructions (Claude
+Code's appended system prompt, Codex's prompt), and recorded on the attempt's spec by `{name, hash, source}`; the
+variables in the agent's process environment, never in place of the runner's, the provider's or the credential's. The
+kernel's own listener, `skill-orchestration`, reads the agent's record from the kernel's call rather than the engine, so
+its `closed` failure never trips on a slow engine; an attempt no plugin prepared (a workflow that passed its prepare step
+under an earlier capcomd, started or restarted after an upgrade), or one prepared without it (only its profile's skills,
+no plugin listening), gets the orchestration skill from the kernel, as before.
+
+The profile's skills (ADR-024 `skills`, §7 step 5): the payload's `prompt.skills` starts with them, so a plugin sees them
+and can't attach one again. They are resolved with the profile (`src/profiles/skills.ts`: the profile's package
+`skills/<name>/SKILL.md`, the user's `~/.claude/skills` for `source: user`), pinned on the agent at spawn by
+`{name, hash, source}` (`PinnedSpec.skills`, additive; `source` `project` or `user`, the layer it came from), and their
+text is kept with the run (the scope's content-addressed attachments, `att-<sha256 prefix>`), never in an event. Each
+attempt reads the text there and checks it against the pin; one that isn't there as pinned fails the attempt for good
+(code `config`), so a retried or resumed agent gets exactly what it was spawned with, and an edit to a `SKILL.md`
+reaches only agents spawned after it. The orchestration skill (`capcomd-orchestration`) is never pinned: a profile that
+may spawn may name it, and `skill-orchestration` attaches it, written for the agent, so the agent gets it once; a
+profile that can't spawn, or that pins its hash, is refused when it resolves.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
@@ -1659,6 +1672,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.12 | 2026-11-05 | The last forge logic in the forges (§7.4, §11.7): the optional `remoteCredential` (`ForgeRemoteCredential`; additive) supplies the credential host git uses for an https remote, which `host-git.ts` applies as the only helper for the remote's own origin (forge-github: the GitHub token for `https://github.com`, as before); `GET /v1/projects/branches` `source` is a string, the forge's name when its service answered; where a goal branch's pull request is merged is said with the run's forge's label. |
 | 1.0.13 | 2026-11-06 | With the front doors (§17.2 step 8): the kernel's own front doors keep capcomd's names (`capcomd_<tool>`, the kernel's commands), named by the built-in list (`kernelSurface`), `order: pre` (§4.2); `KERNEL_COMMANDS` is the dispatcher's own commands and the front doors' (§4.7.1); a command's flags, its output, its PluginError's exit code and reason, `--help`, a kernel front door's `{exit}` (`CliExit`, additive), where an in-process command runs (§4.7.1); a tool's `title`, `_meta` and `openWorldHint` (additive), its schema listed as registered, its arguments checked and only the named ones passed on (§4.7.2); the front doors still run in the process that serves them (§6.1); `agent.preparing`'s `skills` and `env` accepted, with the kernel's rules (names that steer the agent's provider, loader, proxy or git reserved) and how they reach the agent, and the payload's `env` filled in (§6.6.7); `front-hermes` adds `capcomd hermes` (§17.1). |
 | 1.0.14 | 2026-11-06 | With the context eval (ADR-025 step 0): §7.3's `AgentRunState` gains the optional `cacheReadTokens` and `model` (additive), which the kernel records on the agent's span (`gen_ai.usage.cache_read.input_tokens`, `gen_ai.response.model`): the eval's cache-read ratio and the model a result was measured on. |
+| 1.0.15 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 
