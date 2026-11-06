@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: a run's consolidator can propose new facts to the company brain its profile names (`context.providers: [{name:
+  groundray, brain: acme}]` in the `context-consolidator` profile), besides lessons for the project's memory. Each
+  becomes a draft made by the groundray CLI on the branch `groundray/capcomd-<runId>-<agentId>` of the brain's
+  repository, with one pull request per run for the brain's owners; the brain's own branch, and what agents read, never
+  change. Under `review: human` (the default) nothing is sent until you run `capcomd context brain propose --run
+  <runId> --yes` (without `--yes` it lists them), and groundray records you as the producer; under `review: lint`
+  capcomd sends them itself, for up to 4 minutes (any it couldn't send wait for that command). Needs the groundray CLI on your machine (or `CAPCOMD_GROUNDRAY=<path>`); your own groundray
+  setup is never read or changed. Drafts only: capcomd never supersedes, deprecates or verifies an item in a brain.
+
 - Fix: a background job that ended just as capcomd looked at it could be reported finished with its last output
   missing from its size; the size is now read after the exit code.
 - New: install plugins from a git repository. `capcomd plugins install <owner/repo>[#<name>][@<ref>]` (a git URL or a
