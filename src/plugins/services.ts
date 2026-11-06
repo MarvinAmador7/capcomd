@@ -45,6 +45,15 @@ async function agentRecord(runId: string, agentId: string) {
   return a;
 }
 
+/** Whether the agent's work shows as its files changing, for the built-in watchdog (§16.4): not a reviewer's, a
+ *  report-only agent's or an orchestrate agent's, which change no files by design and are never checkpointed
+ *  (src/agents/runner.ts). */
+export async function showsFileChanges(runId: string, agentId: string): Promise<boolean> {
+  const a = await agentRecord(runId, agentId);
+  const contract = (a.contract ?? {}) as { review?: unknown; report?: unknown };
+  return !contract.review && contract.report !== true && (a.spec as { toolMode?: string } | null)?.toolMode !== "orchestrate";
+}
+
 /** `ctx.agents` for one plugin (§8.1, §8.4). */
 export function pluginAgents(plugin: string): Partial<AgentsService> {
   return {

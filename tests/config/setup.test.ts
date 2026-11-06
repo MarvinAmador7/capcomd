@@ -231,5 +231,8 @@ describe("setup steps (non-interactive)", () => {
     writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ plugins: { watchdog: { enabled: true, stalledAfterMs: 1_200_000, everyMs: 5 } } }));
     expect(json(run(["setup", "service", "--yes", "--no-service", "--json"], { cwd: h, env: e }).out).steps[0].detail).toBe("on: an agent whose work hasn't changed for 20 min gets a stalled notice, and is stopped after 45 min");
     expect(json(run(["setup", "check", "--json"], { cwd: h, env: { ...e, BOXD_API_KEY: "" } }).out).steps.find((s: any) => s.step === "watchdog")).toMatchObject({ ok: false, detail: expect.stringContaining("user: plugins.watchdog.everyMs must be at least 1000") });
+    // A stop before the notice: the schema takes it, the watchdog's activation doesn't, and check says so.
+    writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ plugins: { watchdog: { enabled: true, stalledAfterMs: 1_200_000, stopAfterMs: 600_000 } } }));
+    expect(json(run(["setup", "check", "--json"], { cwd: h, env: { ...e, BOXD_API_KEY: "" } }).out).steps.find((s: any) => s.step === "watchdog")).toMatchObject({ ok: false, detail: "it won't load: plugins.watchdog.stopAfterMs is 600000: it must be 0 (never stop) or more than stalledAfterMs (1200000), since both count from the last progress" });
   }, 60_000);
 });

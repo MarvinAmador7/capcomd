@@ -14,7 +14,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import type { Agent, Job, JobSpec, Principal } from "../../packages/plugin/src/shapes";
 import type { AgentChange } from "../../packages/plugin/src/hooks";
 import type { StorageService } from "../../packages/plugin/src/context";
-import { manifest, plugin, stalledDetail, watchdog, type WatchdogConfig } from "../../src/plugins/watchdog";
+import { manifest, plugin, stalledDetail, watchdog, watchdogPlugin, type WatchdogConfig, type WatchdogOptions } from "../../src/plugins/watchdog";
 import { pluginStorage } from "../../src/plugins/services";
 
 const MIN = 60_000;
@@ -59,11 +59,11 @@ function kernel() {
   return { agents, notices, cancels, timers, agent, services };
 }
 
-async function boot(k: ReturnType<typeof kernel>, o: { cfg?: Partial<WatchdogConfig>; storage?: StorageService } = {}) {
+async function boot(k: ReturnType<typeof kernel>, o: { cfg?: Partial<WatchdogConfig>; storage?: StorageService; options?: WatchdogOptions } = {}) {
   const root = join(mkdtempSync(join(tmpdir(), "capcomd-wd-")), "storage");
   const storage = o.storage ?? pluginStorage("watchdog", () => root);
   const fake = testkit.fakeContext(manifest, { ...CFG, ...o.cfg }, { services: { ...k.services, storage } as never });
-  const w = watchdog(fake.ctx as never);
+  const w = watchdog(fake.ctx as never, o.options);
   await w.start();
   const changed = (a: Agent, change: AgentChange, principal?: Principal) => fake.fire("agent.changed", { agent: a, change }, principal ? { principal } : {});
   return { fake, w, storage, changed, tick: async () => { await w.tick(); await w.flushed(); } };
@@ -197,7 +197,7 @@ describe("the watchdog", () => {
     const a = k.agent("agt-z1");
     const root = mkdtempSync(join(tmpdir(), "capcomd-wd-"));
     const fake = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 0 }, { services: { ...k.services, storage: pluginStorage("watchdog", () => root) } as never });
-    await testkit.load(fake, plugin as never);
+    await testkit.load(fake, watchdogPlugin({ showsWork: async () => true }) as never);
     await fake.fire("agent.changed", { agent: a, change: started() });
     at(500 * MIN);
     const clock = k.timers[0]!;
@@ -208,6 +208,52 @@ describe("the watchdog", () => {
     await fake.dispose();
     const bad = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 10 * MIN }, { services: k.services as never });
     await expect(testkit.load(bad, plugin as never)).rejects.toThrow(/stopAfterMs is 600000: it must be 0 \(never stop\) or more than stalledAfterMs \(900000\)/);
+  });
+
+  test("an agent whose work never shows as files changing (a reviewer, a report, an orchestrate agent) isn't judged", async () => {
+    const k = kernel();
+    const rev = k.agent("agt-rev"), wrk = k.agent("agt-wrk");
+    const asked: string[] = [];
+    let answering = false;
+    const showsWork = async (_run: string, id: string) => { asked.push(id); if (!answering) throw new PluginError("unavailable", "no engine"); return id !== "agt-rev"; };
+    const { changed, tick } = await boot(k, { options: { showsWork } });
+    await changed(rev, started()); await changed(wrk, started());
+    // The kernel didn't answer: nobody is judged this time, and it is asked again at the next look.
+    at(16 * MIN); await tick();
+    expect(asked).toEqual(["agt-rev", "agt-wrk"]);
+    expect(k.notices).toEqual([]);
+    answering = true;
+    at(17 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-wrk:stalled"]);
+    at(46 * MIN); await tick();
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-wrk"]);
+    // Asked once each: the reviewer stays unjudged however long it reads.
+    at(300 * MIN); await tick();
+    expect(asked).toEqual(["agt-rev", "agt-wrk", "agt-rev", "agt-wrk"]);
+    expect(kinds(k)).toEqual(["agt-wrk:stalled"]);
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-wrk"]);
+  });
+
+  test("while the kernel's own notice shows, stalled isn't raised over it; the stop still comes", async () => {
+    const k = kernel();
+    const a = k.agent("agt-n1");
+    const { changed, tick } = await boot(k);
+    const kernelNotice = (kind: "idle" | "spinning" | null) => changed(a, { kind: "notice", notice: kind ? { kind, detail: "x" as never, at: new Date(now).toISOString() } : null });
+    await changed(a, started());
+    at(5 * MIN); await kernelNotice("idle");
+    at(20 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    // The kernel clears its own: the watchdog's comes at its next look.
+    at(25 * MIN); await kernelNotice(null);
+    at(26 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-n1:stalled"]);
+    // The kernel raises another over it: not raised back over that one.
+    at(27 * MIN); await kernelNotice("spinning");
+    at(28 * MIN); await tick();
+    at(40 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-n1:stalled"]);
+    at(45 * MIN); await tick();
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-n1"]);
   });
 
   test("it loads and disposes cleanly, and answers every hook it declares", async () => {

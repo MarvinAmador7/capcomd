@@ -20,8 +20,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agent sees it too), and after 45 minutes without progress it is stopped, with one line on the run's stream saying
   so. Tool calls alone don't count as progress; waiting on a job, a check, an approval or a usage limit doesn't count
   against it; a planner is judged through the agents it started, so a stuck worker is stopped rather than its planner.
+  Reviewers, report-only agents (`--report`) and orchestrate agents, whose work never changes files, aren't judged by
+  it, and it doesn't put "stalled" over capcomd's own "idle", "spinning" or "failing" notice.
   It is off until you turn it on: `capcomd setup service` (and the full `capcomd setup`) turns it on unless you pass
-  `--no-watchdog` or turned it off yourself; `capcomd setup check` says whether it is on. Tune it in
+  `--no-watchdog` or turned it off yourself; `capcomd setup check` says whether it is on, and when its settings
+  would keep it from loading. Tune it in
   `~/.capcomd/config.json`: `"plugins": {"watchdog": {"stalledAfterMs": 900000, "stopAfterMs": 2700000}}` (`"enabled":
   false` turns it off; `stopAfterMs: 0` never stops an agent), then restart the engine.
 - New: plugin settings live in `plugins.<name>` of `~/.capcomd/config.json` and a project's `.capcomd/config.json`, or

@@ -7,7 +7,10 @@
 //  - a job, verification or approval it waited on ended.
 // Tool calls alone (`step`) are not progress. While it waits on something that reports back (a background job, a
 // verification, an approval, a paused agent under it) its clock doesn't run, and an agent with agents of its own
-// running is judged through them: they stall first, and their end is its progress. No progress for `stalledAfterMs`
+// running is judged through them: they stall first, and their end is its progress. An agent whose work never shows as
+// files changing (a reviewer, a report-only agent, an orchestrate agent: none is checkpointed) isn't judged at all; the
+// kernel's own notices still watch its process. While the kernel's own notice shows on an agent, `stalled` isn't raised
+// over it (the stop still comes). No progress for `stalledAfterMs`
 // (15 min) raises the `stalled` notice (the app's amber hand; a parent sees it on its child); for `stopAfterMs` (45 min,
 // both counted from the last progress) cancels the agent and its descendants, and says so once on the run's stream
 // (`plugin.watchdog.stopped`, the one message §16.5 allows). Progress clears the notice.
@@ -56,6 +59,10 @@ export interface Watched {
   stopping?: boolean;
   /** When the kernel last confirmed it exists and how it is (ms). */
   checkedAt?: number;
+  /** Its work never shows as files changing (the kernel said so when it was first judged): it isn't judged. */
+  blind?: boolean;
+  /** The kind of a notice of the kernel's that shows on it (`idle`, `spinning`, …); `stalled` isn't raised over it. */
+  other?: string | null;
 }
 
 const ACTIVE = new Set(["pending", "running", "paused"]);
@@ -72,10 +79,23 @@ export function stalledDetail(quietMs: number, cfg: WatchdogConfig): string {
   return `no progress for ${spoken(quietMs)} (no file changed; no agent, job, check or approval of its own finished)${next}`;
 }
 
-export function watchdog(ctx: PluginContext<WatchdogConfig>) {
+/** What's wrong with settings the schema accepts (null: nothing): the stop comes after the notice, or never. */
+export function configProblem(cfg: WatchdogConfig): string | null {
+  return cfg.stopAfterMs !== 0 && cfg.stopAfterMs <= cfg.stalledAfterMs
+    ? `plugins.watchdog.stopAfterMs is ${cfg.stopAfterMs}: it must be 0 (never stop) or more than stalledAfterMs (${cfg.stalledAfterMs}), since both count from the last progress`
+    : null;
+}
+
+export interface WatchdogOptions {
+  /** Whether the agent's work shows as its files changing (the kernel's answer, src/plugins/services.ts
+   *  `showsFileChanges`); without it every agent is judged. A rejection: ask again at the next look. */
+  showsWork?: (runId: string, agentId: string) => Promise<boolean>;
+}
+
+export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions = {}) {
   const cfg = ctx.config.get();
-  if (cfg.stopAfterMs !== 0 && cfg.stopAfterMs <= cfg.stalledAfterMs)
-    throw new PluginError("invalid", `plugins.watchdog.stopAfterMs is ${cfg.stopAfterMs}: it must be 0 (never stop) or more than stalledAfterMs (${cfg.stalledAfterMs}), since both count from the last progress`);
+  const problem = configProblem(cfg);
+  if (problem) throw new PluginError("invalid", problem);
   const watched = new Map<string, Watched>();
   const keyOf = (runId: string, agentId: string) => `${runId}/${agentId}`;
 
@@ -146,6 +166,7 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>) {
       case "started": case "resumed": {
         const w = learnAgent(agent);
         if (w.waits.includes("paused")) { w.waits = w.waits.filter((x) => x !== "paused"); save(w); }
+        if (w.other) { w.other = null; save(w); } // a pause took the kernel's notice away
         progress(agent.runId, agent.id);
         return;
       }
@@ -153,13 +174,19 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>) {
         learnAgent(agent);
         progress(agent.runId, agent.id);
         return;
-      case "paused":
-        wait(learnAgent(agent), "paused");
+      case "paused": {
+        const w = learnAgent(agent);
+        if (w.other) { w.other = null; save(w); }
+        wait(w, "paused");
         return;
+      }
       case "notice": {
-        // Its stalled notice went (cleared, or the kernel raised its own over it): raise it again if still quiet.
+        // Its stalled notice went (cleared, or the kernel raised its own over it): raise it again once it is quiet and
+        // shows none of the kernel's.
         const w = learnAgent(agent);
         if (w.stalledAt !== null && change.notice?.kind !== "stalled") { w.stalledAt = null; save(w); }
+        const other = change.notice && change.notice.kind !== "stalled" ? change.notice.kind : null;
+        if ((w.other ?? null) !== other) { w.other = other; save(w); }
         return;
       }
       default:
@@ -221,8 +248,16 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>) {
         if (!a || !ACTIVE.has(a.status)) { forget(w.runId, w.agentId); continue; }
         if (a.parent !== w.parent) { w.parent = a.parent; save(w); }
         if (!judged || a.status !== "running") continue;
+        // One whose work can't show as files changing (a reviewer, a report, an orchestrate agent) isn't judged.
+        if (w.blind === undefined && o.showsWork) {
+          const shows = await o.showsWork(w.runId, w.agentId).catch(() => undefined);
+          if (shows === undefined) continue; // the engine didn't answer: next time
+          w.blind = !shows;
+          save(w);
+        }
+        if (w.blind) continue;
         if (cfg.stopAfterMs > 0 && quiet >= cfg.stopAfterMs) await stop(w, quiet);
-        else if (w.stalledAt === null) await stalled(w, quiet);
+        else if (w.stalledAt === null && !w.other) await stalled(w, quiet);
       }
     } finally { ticking = false; }
   }
@@ -284,10 +319,13 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>) {
   };
 }
 
-export const plugin = definePlugin<WatchdogConfig>({
+/** The plugin, with what it asks the kernel (tests pass their own). */
+export const watchdogPlugin = (o: WatchdogOptions = {}) => definePlugin<WatchdogConfig>({
   async activate(ctx) {
-    const w = watchdog(ctx);
+    const w = watchdog(ctx, o);
     await w.start();
     ctx.onDispose(() => w.flushed());
   },
 });
+
+export const plugin = watchdogPlugin({ showsWork: async (runId, agentId) => (await import("./services")).showsFileChanges(runId, agentId) });

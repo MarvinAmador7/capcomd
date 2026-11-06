@@ -617,7 +617,11 @@ export async function checkSetup(cwd = process.cwd(), o: { mcpClient?: boolean }
   // The watchdog (plugin API §16.4) as the engine loads it: the user's, the project's and the environment's settings.
   const W = await import("../../plugins/watchdog");
   const wd = (await import("../../plugins/config")).pluginSettings(W.manifest, { cwd });
+  // What the schema accepts but activation refuses (a stop before the notice), over the schema's defaults.
+  const defaults = Object.fromEntries(Object.entries((W.manifest.config as { properties: Record<string, { default: number }> }).properties).map(([k, p]) => [k, p.default]));
+  const problem = wd.enabled && !wd.errors.length ? W.configProblem({ ...defaults, ...wd.config } as unknown as import("../../plugins/watchdog").WatchdogConfig) : null;
   if (wd.enabled && wd.errors.length) out.push({ step: "watchdog", ok: false, detail: `its settings are refused, so it won't load: ${wd.errors.map((e) => `${e.layer}: plugins.watchdog.${e.path} ${e.message}`).join("; ")}`, hint: "Fix plugins.watchdog in your config, then restart the engine." });
+  else if (problem) out.push({ step: "watchdog", ok: false, detail: `it won't load: ${problem}`, hint: "Fix plugins.watchdog in your config, then restart the engine." });
   else out.push({ step: "watchdog", ok: true, detail: wd.enabled ? "on" : "off (`capcomd setup service` turns it on)" });
   return out;
 }

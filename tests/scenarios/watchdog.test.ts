@@ -4,8 +4,9 @@
 // would (the scope's `checkpoint`, what src/actors/worker.ts records for a supervisor's report): one worker's files keep
 // changing until it finishes, the other's stop changing after a moment. That one gets `stalled` at the configured
 // time after its last checkpoint and is stopped at the configured time after; its parent sees the notice on its child
-// and is never judged itself while its children run; the busy one is never noticed. The stop is said once on the run's
-// stream (`plugin.watchdog.stopped`).
+// and is never judged itself while its children run; the busy one is never noticed. A third, a report-only agent
+// (whose files are never checkpointed, by design), outlives both windows without a checkpoint and is never judged. The
+// stop is said once on the run's stream (`plugin.watchdog.stopped`).
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "crypto";
 import { world, newRun, spawnRoot, trajectory, waitAll, agentsOf, type World } from "./harness";
@@ -47,21 +48,26 @@ test("a worker whose files stop changing is stalled at the configured time and s
   // Activity, never progress by itself: a capcomd call every 0.3 s.
   const busy = w.script("wd-busy", `i=0; while [ $i -lt 40 ]; do capcomd heartbeat "step $i" >/dev/null; sleep 0.3; i=$((i+1)); done
 capcomd result --summary "kept working" >/dev/null`);
+  // Reads for longer than both windows, with no checkpoint (a report's never come), then answers.
+  const reader = w.script("wd-reader", `i=0; while [ $i -lt 30 ]; do capcomd heartbeat "reading $i" >/dev/null; sleep 0.3; i=$((i+1)); done
+capcomd result --summary "read it all" >/dev/null`);
   const stuck = w.script("wd-stuck", `i=0; while [ $i -lt 300 ]; do capcomd heartbeat "still busy" >/dev/null; sleep 0.3; i=$((i+1)); done
 echo "never stopped"; exit 3`);
   const planner = await spawnRoot(w, run, "planner", w.script("wd-planner", `a=$(capcomd spawn --profile worker --task "keeps changing files" --key busy --contract "$($S/json script='${busy}')" | $S/jget agentId)
 b=$(capcomd spawn --profile worker --task "stops changing files" --key stuck --contract "$($S/json script='${stuck}')" | $S/jget agentId)
-echo "children: $a $b"
+c=$(capcomd spawn --profile worker --task "reads and reports" --key reader --report --children.maxChildren=0 --contract "$($S/json script='${reader}')" | $S/jget agentId)
+echo "children: $a $b $c"
 while :; do
-  out=$(capcomd await $a $b --timeout-ms 120000)
+  out=$(capcomd await $a $b $c --timeout-ms 120000)
   case "$out" in *'"notices"'*) echo "noticed: $(printf "%s" "$out" | $S/jget notices.0.kind) $(printf "%s" "$out" | $S/jget notices.0.agentId)"; continue;; esac
   break
 done
 capcomd result --summary "watched" >/dev/null`), { task: "watch two workers" });
   // The two workers, as the planner spawned them.
   let kids: Array<{ agentId: string; task: string }> = [];
-  for (let i = 0; i < 200 && kids.length < 2; i++) { kids = (await agentsOf(run)).filter((a: any) => a.parent === planner); if (kids.length < 2) await sleep(100); }
+  for (let i = 0; i < 200 && kids.length < 3; i++) { kids = (await agentsOf(run)).filter((a: any) => a.parent === planner); if (kids.length < 3) await sleep(100); }
   const busyId = kids.find((k) => k.task === "keeps changing files")!.agentId, stuckId = kids.find((k) => k.task === "stops changing files")!.agentId;
+  const readerId = kids.find((k) => k.task === "reads and reports")!.agentId;
   // Their files change every half second; the stuck one's stop after 1.5 s.
   const started = Date.now();
   let lastStuck = 0;
@@ -83,7 +89,8 @@ capcomd result --summary "watched" >/dev/null`), { task: "watch two workers" });
 
   const evs = await trajectory(w, run);
   const notices = evs.filter((e) => e.type === "AGENT_NOTICE" && e.data.kind === "stalled");
-  // Only the stuck worker: the busy one kept changing files, and the planner had children running.
+  // Only the stuck worker: the busy one kept changing files, the reader's work never shows as files changing, and the
+  // planner had children running.
   expect(notices.map((e) => e.agentId)).toEqual([stuckId]);
   const raisedAfter = notices[0]!.data.at - lastStuck;
   expect(raisedAfter).toBeGreaterThanOrEqual(STALLED_MS - 600);
@@ -106,6 +113,7 @@ capcomd result --summary "watched" >/dev/null`), { task: "watch two workers" });
   expect(logs).toContain(`noticed: stalled ${stuckId}`);
   const final = new Map((await agentsOf(run)).map((a: any) => [a.agentId, a.status]));
   expect(final.get(busyId)).toBe("done");
+  expect(final.get(readerId)).toBe("done");
   expect(final.get(stuckId)).toBe("cancelled");
   expect((await logsOf(run, stuckId))).not.toContain("never stopped");
 }, 200_000);

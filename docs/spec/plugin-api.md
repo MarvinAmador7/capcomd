@@ -1642,10 +1642,14 @@ the planner can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one 
 confirms the agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in
 `detail`) or cancels (`agents.cancel`, then `plugin.watchdog.stopped {agentId, quietMs, stalledAt}` on the run's
 stream: the one message). Progress clears its notice; a notice that went some other way is raised again while the agent
-stays quiet. What it knows of each agent is in its daemon storage (`agents/<runId>/<agentId>`), with the time of its
-last look (`clock`): after a restart the time the daemon was down is added to every agent's clock, so downtime never
-counts as an agent's quiet. Agents that never change files by design (a reviewer, a report-only task) are judged by the
-same clock.
+stays quiet, but never over a notice of the kernel's (`idle`, `spinning`, `failing`, …) while that one shows: the stop
+still comes. An agent whose work never shows as files changing isn't judged at all: a reviewer (`contract.review`), a
+report-only agent (`contract.report`) and an orchestrate agent (`toolMode: orchestrate`) are never checkpointed, so the
+watchdog can't see their progress (the kernel's own notices still watch their process); the built-in asks the kernel
+once per agent, when the agent is first due (`src/plugins/services.ts` `showsFileChanges`, a kernel helper outside
+`ctx`, as `skill-orchestration` reads the kernel's record). What it knows of each agent is in its daemon storage
+(`agents/<runId>/<agentId>`), with the time of its last look (`clock`): after a restart the time the daemon was down is
+added to every agent's clock, so downtime never counts as an agent's quiet.
 
 ### 16.5 The attention budget
 
@@ -1744,7 +1748,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.18 | 2026-11-06 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
 | 1.0.19 | 2026-11-06 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
-| 1.0.21 | 2026-11-06 | With the watchdog (§17.2 step 11): the built-in `watchdog`, off until `plugins.watchdog.enabled: true`, which `capcomd setup` writes (§4.8); its config, its definition of progress (files changed, an agent under it spawned or ended, a job, verification or approval it waited on ended; never tool calls), waiting holding its clock, an agent judged through the agents under it, `stopAfterMs` counted from the last progress like `stalledAfterMs`, its memory across a restart (§16.4; the worked example's `stopAfterMs` now means the same). Config layers 1–4 read for the built-ins, the schema subset checked, one `plugin.config_refused` per layer (a harness.v1 daemon event, additive), secret properties not read from layers yet (§10.2, §10.4). In the daemon: `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice` and daemon-scope `storage`; a plugin raises and clears only its own notice kinds and the kernel's clear only the kind it raised (§8.4). |
+| 1.0.21 | 2026-11-06 | With the watchdog (§17.2 step 11): the built-in `watchdog`, off until `plugins.watchdog.enabled: true`, which `capcomd setup` writes (§4.8); its config, its definition of progress (files changed, an agent under it spawned or ended, a job, verification or approval it waited on ended; never tool calls), waiting holding its clock, an agent judged through the agents under it, a reviewer, a report-only and an orchestrate agent not judged (their work is never checkpointed), `stalled` never raised over the kernel's own notice, `stopAfterMs` counted from the last progress like `stalledAfterMs`, its memory across a restart (§16.4; the worked example's `stopAfterMs` now means the same). Config layers 1–4 read for the built-ins, the schema subset checked, one `plugin.config_refused` per layer (a harness.v1 daemon event, additive), secret properties not read from layers yet (§10.2, §10.4). In the daemon: `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice` and daemon-scope `storage`; a plugin raises and clears only its own notice kinds and the kernel's clear only the kind it raised (§8.4). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
