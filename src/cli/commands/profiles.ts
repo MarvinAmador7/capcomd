@@ -2,11 +2,13 @@
 // every profile the project sees (.capcomd/agents.json, and the v2 ones in .capcomd/profiles/ and ~/.capcomd/profiles/);
 // show prints the files laid together and which one set each value; set and rm change the file a profile is defined in
 // (its agents.json entry or its profile file, ../../profiles/write.ts), add writes agents.json or, for what only a
-// profile file holds (--extends, tags, a title), a profile file.
+// profile file holds (--extends, tags, a title), a profile file. install, update and export move profile packages
+// between a git repository and the profiles here (ADR-024 §2.5, §7 step 7: ../../profiles/install.ts, with a LOCK as a
+// plugin's); trust is the prompt a project's profile skills wait for (decision 4: ../../profiles/trust.ts).
 // `capcomd agents …` is the same command under its old name, for one minor release.
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { addProfileFile, agentsEntryOf, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, readProfiles, removeProfile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet } from "../../profiles";
+import { addProfileFile, agentsEntryOf, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -143,7 +145,13 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       let errs: string[], set: ProfileSet | null = null;
       if (values.spec) errs = validateSpec(name ?? "candidate", specFromFlags(values));
       else { try { set = readProfiles(path); warnings = set.warnings; errs = []; } catch (e) { errs = [(e as Error).message]; } }
-      if (set) { const host = await hostChecks(set); errs.push(...host.errors); warnings = [...warnings, ...host.warnings]; }
+      if (set) {
+        const host = await hostChecks(set);
+        errs.push(...host.errors);
+        // ADR-024 §7 step 7: an installed package edited since, and a project's skills not trusted yet.
+        const { packageWarnings } = await import("../../profiles/install");
+        warnings = [...warnings, ...host.warnings, ...packageWarnings(set), ...trustWarnings(set)];
+      }
       console.log(json ? JSON.stringify({ schema: SCHEMA, ok: errs.length === 0, errors: errs, ...(warnings.length ? { warnings } : {}) }) : errs.length ? errs.join("\n") : ["valid", ...warnings.map((w) => `warning: ${w}`)].join("\n"));
       return errs.length ? 2 : 0;
     }
@@ -166,22 +174,27 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
         effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
       const facts = profileFacts(r), vals = profileValues(r), unused = notApplied(r.manifest), ready = readiness(n, spec), isDefault = f.default === n;
-      // Its skills as an agent of it is pinned with them: where each came from and the sha256 of its SKILL.md.
-      const pins = r.skills.map((s) => ({ name: s.name, source: s.source, hash: `sha256:${s.hash}`, path: s.path }));
+      // Its skills as an agent of it is pinned with them: where each came from and the sha256 of its SKILL.md; a
+      // project's, whether you trust it (ADR-024 decision 4).
+      const trust = new Map(projectSkillTrust(r.skills).map((t) => [t.name, t.trust]));
+      const pins = r.skills.map((s) => ({ name: s.name, source: s.source, hash: `sha256:${s.hash}`, path: s.path, ...(trust.has(s.name) ? { trust: trust.get(s.name)! } : {}) }));
+      // Where an installed package came from (its LOCK), and whether its files changed since.
+      const installed = (await import("../../profiles/install")).installedFacts(r);
       const text = [
         `${n}: version ${r.version}, found in ${{ project: "the project's profiles", user: "your profiles", bundled: "capcomd's bundled profiles" }[r.source]}${isDefault ? ", the default" : ""}`,
+        ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces them)` : ""}`] : []),
         ...(facts.title || facts.tags.length ? [[facts.title, facts.tags.length ? `tags: ${facts.tags.join(", ")}` : null].filter(Boolean).join(" · ")] : []),
         `Fit: ${facts.fit}`,
         "Files, first to last (a later one wins):",
         ...r.applied.map((a, i) => `  ${String(i + 1).padStart(2)}  ${appliedText(a)}`),
         "Values (the number is the file that set it):",
         ...vals.map((v) => `  ${v.path.padEnd(30)} ${shown(v.value).padEnd(48)} ${v.from ? r.applied.indexOf(v.from) + 1 : "-"}`),
-        ...(pins.length ? ["Skills (an agent of it is pinned with these SKILL.md files):", ...pins.map((s) => `  ${s.name.padEnd(24)} ${s.source.padEnd(7)} ${s.hash.slice(0, 19)}…  ${s.path ?? "~/.claude/skills"}`)] : []),
+        ...(pins.length ? ["Skills (an agent of it is pinned with these SKILL.md files):", ...pins.map((s) => `  ${s.name.padEnd(24)} ${s.source.padEnd(7)} ${s.hash.slice(0, 19)}…  ${s.path ?? "~/.claude/skills"}${s.trust && s.trust !== "trusted" ? `  NOT TRUSTED${s.trust === "changed" ? " (changed since you trusted it)" : ""}: ${cmd} trust ${n}` : ""}`)] : []),
         ...(unused.length ? [`Read but not used yet by this capcomd: ${unused.join(", ")}`] : []),
         error ? `Effective config: ${error}` : `Effective config (with capcomd's defaults): ${JSON.stringify(effective)}`,
         `${ready.ready ? "Ready" : "NOT READY"}: ${ready.detail}`,
       ].join("\n");
-      out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, ...(pins.length ? { skills: pins } : {}), effective, error, ...ready }, text);
+      out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, ...(pins.length ? { skills: pins } : {}), ...(installed ? { installed } : {}), effective, error, ...ready }, text);
       return error ? 1 : 0;
     }
     case "add": {
@@ -226,10 +239,125 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
     }
     case "rm": {
       const n = need();
+      // An installed package (one with the LOCK `install` wrote) goes whole, with any trust given to its skills.
+      const I = await import("../../profiles/install");
+      let pkg: ResolvedProfile | undefined;
+      try { pkg = readProfiles(path).profiles[n]; } catch { /* removeProfile says why */ }
+      if (pkg && I.installedFacts(pkg)) {
+        const g = I.removeInstalledProfile(n, { path, project: pkg.source === "project" });
+        out({ removed: n, path: g.dir, installed: true }, `removed ${n} (${g.dir})`);
+        return 0;
+      }
       const w = written(() => removeProfile(n, { path }), n);
       out({ removed: n, default: w.after.default ?? null, path: w.file }, `removed ${n} (${w.file})`);
       return 0;
     }
+    case "install": return installCommand(pos.slice(2), values, cmd, path);
+    case "update": return updateCommand(pos.slice(2), values, cmd, path);
+    case "export": return exportCommand(pos.slice(2), values, cmd, path);
+    case "trust": return trustCommand(pos.slice(2), values, cmd, path);
   }
-  throw new RelayError("usage", `usage: ${cmd} list|show|add|set|rm|schema|validate`, "");
+  throw new RelayError("usage", `usage: ${cmd} list|show|add|set|rm|schema|validate|install|update|export|trust`, "");
+}
+
+const short = (sha: string) => sha.slice(0, 12);
+const ok = (body: Record<string, unknown>) => console.log(JSON.stringify({ schema: SCHEMA, ok: true, ...body }));
+/** Text a repository wrote, as the trust prompt prints it: control and format characters shown as `\u{…}` (as
+ *  `capcomd plugins trust` does), so a skill can't redraw or hide what the operator is asked about. */
+const visible = (s: string) => s.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+
+/** `trust` warnings for `validate`: each profile with skills from the project that aren't trusted as they are. */
+function trustWarnings(set: ProfileSet): string[] {
+  return Object.entries(set.profiles).flatMap(([n, r]) => {
+    const bad = projectSkillTrust(r.skills).filter((t) => t.trust !== "trusted");
+    return bad.length ? [`profiles.${n}: its project skill${bad.length > 1 ? "s" : ""} ${bad.map((t) => t.name).join(", ")} ${bad.length > 1 ? "aren't" : "isn't"} trusted${bad.some((t) => t.trust === "changed") ? " as it is now" : ""}: capcomd profiles trust ${n} (a spawn of it is refused until then)`] : [];
+  });
+}
+
+/** `capcomd profiles install <owner/repo>[#<name>][@<ref>] [--project]` (ADR-024 §2.5): ../../profiles/install.ts. */
+async function installCommand(args: string[], values: Record<string, any>, cmd: string, path: string): Promise<number> {
+  if (args.length !== 1) throw new RelayError("usage", "install takes one source", `${cmd} install <owner/repo>[#<name>][@<ref>] [--project] (a git URL or a local repository path works too)`);
+  const r = await (await import("../../profiles/install")).installProfile(args[0]!, { project: !!values.project, path });
+  if (values.json) { ok({ installed: r }); return 0; }
+  console.log(`Installed ${r.name}${r.version ? ` version ${r.version}` : ""} from ${r.source} (commit ${short(r.commit)}, ${r.hash}) in ${r.dir}.`);
+  if (r.hiddenBy) console.log(`This project uses another profile named ${r.name} (${r.hiddenBy}), which comes first.`);
+  if (r.layer === "project") console.log(`It is in the project's profiles: commit it to share it. Its skills reach its agents once you trust them: ${cmd} trust ${r.name}`);
+  return 0;
+}
+
+/** `capcomd profiles update <name> [--project] [--dry-run]`: what changed, then (without --dry-run) the new files. */
+async function updateCommand(args: string[], values: Record<string, any>, cmd: string, path: string): Promise<number> {
+  const name = args[0];
+  if (!name || args.length > 1) throw new RelayError("usage", "update takes a profile's name", `${cmd} update <name> [--project] [--dry-run]`);
+  const u = await (await import("../../profiles/install")).updateProfile(name, { project: !!values.project, path, dryRun: !!values["dry-run"] });
+  if (values.json) { ok({ update: u }); return 0; }
+  if (u.from.hash === u.to.hash && !u.modified) {
+    console.log(`${name} is up to date (${u.to.hash})${u.updated ? `; its LOCK now names commit ${short(u.to.commit)}` : ""}.`);
+    return 0;
+  }
+  console.log(`${name}: version ${u.from.version ?? "?"} → ${u.to.version ?? "?"}, commit ${short(u.from.commit)} → ${short(u.to.commit)}`);
+  console.log(`  hash ${u.from.hash}\n    → ${u.to.hash}`);
+  for (const s of u.skills) console.log(`  skill ${s.name}: ${s.from ?? "(new)"} → ${s.to ?? "(removed)"}`);
+  for (const [k, list] of [["changed", u.changed], ["added", u.added], ["removed", u.removed]] as const) if (list.length) console.log(`  ${k}: ${list.join(", ")}`);
+  if (u.modified) console.log(`  edited since it was installed (replaced by the update): ${[...u.modified.changed, ...u.modified.added, ...u.modified.removed].join(", ")}`);
+  if (!u.updated) { console.log("Nothing was changed (--dry-run)."); return 0; }
+  console.log(`Updated ${u.dir}.${u.layer === "project" && u.skills.length ? ` Its changed skills reach its agents once you trust them: ${cmd} trust ${name}` : ""}`);
+  return 0;
+}
+
+/** `capcomd profiles export <name> [--flat] [--out DIR]`: the profile as a package directory to share. */
+async function exportCommand(args: string[], values: Record<string, any>, cmd: string, path: string): Promise<number> {
+  const name = args[0];
+  if (!name || args.length > 1) throw new RelayError("usage", "export takes a profile's name", `${cmd} export <name> [--flat] [--out DIR]`);
+  const e = (await import("../../profiles/install")).exportProfile(name, { flat: !!values.flat, out: values.out, path });
+  if (values.json) { ok({ exported: e }); return 0; }
+  console.log(`Exported ${name}${e.flat ? " (flat: resolved, no extends)" : ""} to ${e.dir}: ${e.files.join(", ")}.`);
+  if (e.extends) console.log(`It extends ${e.extends}: whoever installs it needs a profile of that name (or export it with --flat).`);
+  return 0;
+}
+
+/**
+ * `capcomd profiles trust [<name>] [--yes]` (ADR-024 decision 4): the trust prompt for a project profile's skills. It
+ * shows each one that isn't trusted as it is (its name, description, file, size and sha256) and asks; --yes trusts
+ * without asking. With no name, every profile with project skills and whether each is trusted.
+ */
+async function trustCommand(args: string[], values: Record<string, any>, cmd: string, path: string): Promise<number> {
+  let set: ProfileSet;
+  try { set = readProfiles(path); } catch (e) { if (e instanceof AgentConfigError) throw new RelayError("config", e.message, `${cmd} validate says what is wrong.`); throw e; }
+  if (!args.length) {
+    const rows = Object.entries(set.profiles).map(([n, r]) => ({ name: n, skills: projectSkillTrust(r.skills) })).filter((x) => x.skills.length);
+    if (values.json) { ok({ profiles: rows }); return 0; }
+    if (!rows.length) { console.log("No profile here has skills from the project's profiles (.capcomd/profiles/<name>/skills/)."); return 0; }
+    for (const row of rows) for (const s of row.skills) console.log(`  ${row.name.padEnd(16)} ${s.name.padEnd(24)} ${s.trust.padEnd(9)} ${s.hash.slice(0, 19)}…  ${s.path}`);
+    return 0;
+  }
+  const name = args[0]!;
+  if (args.length > 1) throw new RelayError("usage", "trust takes a profile's name", `${cmd} trust [<name>] [--yes]`);
+  const r = Object.hasOwn(set.profiles, name) ? set.profiles[name]! : undefined;
+  if (!r) throw new RelayError("not_found", `profile "${name}" not found`, `${cmd} list`);
+  const all = projectSkillTrust(r.skills), todo = all.filter((s) => s.trust !== "trusted");
+  if (!todo.length) {
+    if (values.json) ok({ trusted: { name, skills: all, already: true } });
+    else console.log(all.length ? `${name}'s project skills are trusted as they are (${all.map((s) => s.name).join(", ")}).` : `${name} has no skills from the project's profiles: nothing to trust.`);
+    return 0;
+  }
+  if (!values.json) {
+    console.log(`${name}: ${todo.length} project skill${todo.length > 1 ? "s" : ""} its agents would read as instructions:`);
+    for (const s of todo) {
+      const text = r.skills.find((x) => x.name === s.name)!.text;
+      const description = /^description:\s*(.+)$/m.exec(text.split(/^---\s*$/m)[1] ?? "")?.[1]?.trim();
+      console.log(`  ${s.name}${description ? `: ${visible(description).slice(0, 200)}` : ""}`);
+      console.log(`    file  ${visible(s.path)} (${Buffer.byteLength(text)} bytes)`);
+      console.log(`    hash  ${s.hash}${s.trust === "changed" ? `  (you trusted ${s.trustedHash} before: it changed since)` : ""}`);
+    }
+  }
+  if (!values.yes) {
+    const ask = (await import("../prompt")).prompter();
+    if (!ask.interactive) throw new RelayError("usage", `trusting ${name}'s skills needs your confirmation`, `Read them, then run it in a terminal, or pass --yes to trust them as they are.`);
+    if (!(await ask.confirm(`Give ${name}'s agents these skills as they are?`, false))) { console.log("Not trusted."); return 1; }
+  }
+  const trusted = trustProfileSkills(r.skills);
+  if (values.json) { ok({ trusted: { name, skills: trusted, already: false } }); return 0; }
+  console.log(`Trusted ${todo.map((s) => s.name).join(", ")} for ${name}. A changed SKILL.md needs trusting again.`);
+  return 0;
 }

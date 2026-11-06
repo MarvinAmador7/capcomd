@@ -64,7 +64,7 @@ describe("capcomd profiles", () => {
     expect(value("prompt.append")).toBeUndefined(); // lead removes what it inherits
     expect(t.stdout).toContain("Read but not used yet by this capcomd: harness.cliVersion");
     // Its skills (ADR-024 §7 step 5): each one's source, hash and file.
-    expect(t.stdout).toContain(`Skills (an agent of it is pinned with these SKILL.md files):\n  tdd                      project ${tddHash.slice(0, 19)}…  ${w.at("P/lead/skills/tdd/SKILL.md")}\n`);
+    expect(t.stdout).toContain(`Skills (an agent of it is pinned with these SKILL.md files):\n  tdd                      project ${tddHash.slice(0, 19)}…  ${w.at("P/lead/skills/tdd/SKILL.md")}  NOT TRUSTED: capcomd profiles trust lead\n`);
     expect(t.stdout).toContain("NOT READY: not logged in: capcomd auth login claude");
     // A string is shown by its first line.
     expect((await capcomd(["profiles", "show", "worker"], w.env)).stdout).toMatch(/^ {2}prompt\.append +Be brief\.… +1$/m);
@@ -72,7 +72,7 @@ describe("capcomd profiles", () => {
     const j = json(await capcomd(["profiles", "show", "lead", "--json"], w.env));
     expect(j).toMatchObject({ ok: true, name: "lead", default: false, version: 2, source: "project", format: "v2", path: w.at("P/lead/profile.yaml"), notApplied: ["harness.cliVersion"], error: null, ready: false, title: null, tags: [], canReport: true, cost: "medium" });
     expect(j.spec).toEqual({ provider: "claude", auth: "subscription", model: "sonnet", effort: "high", description: "Leads a part.", maxTurns: 30, toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: ["worker"], maxChildren: 3 } });
-    expect(j.skills).toEqual([{ name: "tdd", source: "project", hash: tddHash, path: w.at("P/lead/skills/tdd/SKILL.md") }]);
+    expect(j.skills).toEqual([{ name: "tdd", source: "project", hash: tddHash, path: w.at("P/lead/skills/tdd/SKILL.md"), trust: "untrusted" }]);
     expect(j.values.find((v: any) => v.path === "limits.maxTurns")).toEqual({ path: "limits.maxTurns", value: 30, from: { as: "override", name: "lead", layer: "project", path: w.at("P/lead/override.yaml") } });
     expect(j.effective).toMatchObject({ model: "sonnet", effort: "high", maxTurns: 30 });
     const missing = await capcomd(["profiles", "show", "nobody", "--json"], w.env);
@@ -86,7 +86,7 @@ describe("capcomd profiles", () => {
   }, 30_000);
 
   test("validate, and add/set/rm on agents.json, as `capcomd agents` did; hints name `capcomd profiles`", async () => {
-    expect(json(await capcomd(["profiles", "validate", "--json"], w.env))).toMatchObject({ ok: true, errors: [], warnings: ["profiles.lead: harness.cliVersion is read but not used yet by this capcomd"] });
+    expect(json(await capcomd(["profiles", "validate", "--json"], w.env))).toMatchObject({ ok: true, errors: [], warnings: ["profiles.lead: harness.cliVersion is read but not used yet by this capcomd", "profiles.lead: its project skill tdd isn't trusted: capcomd profiles trust lead (a spawn of it is refused until then)"] });
     const own = world({}, { worker });
     expect((await capcomd(["profiles", "add", "cx", "--provider", "codex", "--auth", "apikey", "--json"], own.env)).code).toBe(0);
     const again = await capcomd(["profiles", "add", "cx", "--provider", "codex", "--auth", "apikey", "--json"], own.env);

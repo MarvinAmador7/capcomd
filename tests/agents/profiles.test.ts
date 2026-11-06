@@ -469,8 +469,8 @@ describe("profiles v2: loader and resolution", () => {
     const show = JSON.parse(cli(["agents", "show", "critic", "--json"], env).out);
     expect(show.spec).toEqual({ provider: "claude", auth: "apikey", description: "Reviews.", allowedTools: ["Read", "Grep"] });
     const tdd = readFileSync(w.at("P/critic/skills/tdd/SKILL.md"), "utf8");
-    expect(show.skills).toEqual([{ name: "tdd", source: "project", hash: `sha256:${new Bun.CryptoHasher("sha256").update(tdd).digest("hex")}`, path: w.at("P/critic/skills/tdd/SKILL.md") }]);
-    expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: harness.cliVersion is read but not used yet by this capcomd"] });
+    expect(show.skills).toEqual([{ name: "tdd", source: "project", hash: `sha256:${new Bun.CryptoHasher("sha256").update(tdd).digest("hex")}`, path: w.at("P/critic/skills/tdd/SKILL.md"), trust: "untrusted" }]);
+    expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: harness.cliVersion is read but not used yet by this capcomd", "profiles.critic: its project skill tdd isn't trusted: capcomd profiles trust critic (a spawn of it is refused until then)"] });
     const set = cli(["agents", "set", "critic", "--model", "opus", "--json"], env);
     expect(set.code).toBe(0);
     expect(JSON.parse(set.out)).toMatchObject({ path: w.at("P/critic/profile.yaml"), version: 2, spec: { model: "opus" } });
