@@ -13,7 +13,7 @@
 // the header in the kernel's own words, never its error text, so an empty brief is never mistaken for "no facts".
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { SeamCall } from "../../packages/plugin/src/seams";
-import type { ContextKind, ContextLayer, ContextScope, ContextSpec, IndexLine } from "../../packages/plugin/src/context-layer";
+import type { ContextKind, ContextLayer, ContextProviderSpec, ContextScope, ContextSpec, IndexLine } from "../../packages/plugin/src/context-layer";
 import { Redactor } from "../agents/redact";
 import { unmark } from "../subagents/results";
 import { limitsFor, type ContextLimits } from "./limits";
@@ -46,6 +46,8 @@ export type ProviderOutcome =
   | { name: string; state: "loaded"; revision: string; modified: string | null; lines: number; shown: number }
   | { name: string; state: "skipped"; reason: "timeout" | "not active" | "not found" | "not configured" | "unavailable" | "failed" };
 
+type SkipReason = Extract<ProviderOutcome, { state: "skipped" }>["reason"];
+
 export interface Brief {
   text: string;
   /** Lines in the brief, and lines that could have been (after supersession and freshness). */
@@ -76,7 +78,7 @@ function bounded<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /** A provider's failure in the kernel's words (its own text is untrusted and never reaches the brief). */
-function reasonOf(p: ActiveProvider, e: unknown, timedOut: boolean): Extract<ProviderOutcome, { state: "skipped" }>["reason"] {
+function reasonOf(p: ActiveProvider, e: unknown, timedOut: boolean): SkipReason {
   if (timedOut) return "timeout";
   let kind: string;
   try { kind = p.provider.classifyError(e)?.kind ?? "unknown"; } catch { kind = "unknown"; }
@@ -149,9 +151,10 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
   const per = new Map<string, number>();
   // Every provider at once, each within its own deadline (so a slow one costs the brief one deadline, not one each, and
   // the listener's own timeout is never what leaves the brief out); the answers are then taken in the profile's order.
-  const answers = await Promise.all((i.context.providers ?? []).map(async (entry) => {
+  type Answer = { entry: ContextProviderSpec; reason: SkipReason } | { entry: ContextProviderSpec; p: ActiveProvider; lines: readonly IndexLine[]; revision: string; modified: string | null };
+  const answers = await Promise.all((i.context.providers ?? []).map(async (entry): Promise<Answer> => {
     const p = i.providers.get(entry.name);
-    if (!p) return { entry, reason: "not active" as const };
+    if (!p) return { entry, reason: "not active" };
     const { call, done } = seamCall(i.deadlineMs ?? PROVIDER_DEADLINE_MS);
     try {
       const scope: ContextScope = { ...i.scope, layers: entry.layers?.length ? [...entry.layers] : [...DEFAULT_LAYERS] };
