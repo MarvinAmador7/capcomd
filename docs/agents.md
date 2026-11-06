@@ -87,8 +87,9 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `permissions: { report: false }` keeps a profile from being spawned with `report` (read-only work whose answer is
   its result): such a spawn is refused (`reason: "report_not_allowed"`). Unset or `true`, it may be, as before.
 - `identity.persona`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name),
-  `sandbox.provider|environment|size`, `jobs` and `lifecycle.onStart|onEnd` are checked but don't change what an agent
-  does yet; `capcomd profiles validate` lists the ones a profile sets.
+  `sandbox.provider|environment|size` and `lifecycle.onStart|onEnd` are checked but don't change what an agent does
+  yet; `capcomd profiles validate` lists the ones a profile sets. `jobs` (`foregroundMs`, `max`, `afterTurnMs`) sets the
+  agent's background jobs (`capcomd job start`), as the flat `jobs` field does in `agents.json`.
 - `capcomd profiles schema` prints the JSON Schema of a profile file (id `capcomd.profile/v2`), for an editor.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
 

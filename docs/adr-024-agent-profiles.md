@@ -393,8 +393,8 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
 - **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
 - **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `context`, `sandbox.provider|environment|size`,
-  `jobs`, `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4) are checked and kept on the resolved
-  profile, not pinned; `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is checked against
+  `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4) are checked and kept on the resolved
+  profile, not pinned (`jobs` is pinned as is since the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is checked against
   the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.

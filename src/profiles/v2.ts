@@ -19,7 +19,7 @@ export const V2_PATH: Readonly<Record<keyof AgentSpec, string>> = {
   maxTurns: "limits.maxTurns", maxBudgetUsd: "limits.maxBudgetUsd", timeoutMs: "limits.timeoutMs", idleAfterMs: "limits.idleAfterMs",
   stuckRepeats: "limits.stuckRepeats", noChangeAfterMs: "limits.noChangeAfterMs",
   checkpointEveryMs: "lifecycle.checkpointEveryMs",
-  children: "children",
+  children: "children", jobs: "jobs",
 };
 /** A flat field's v2 path, for messages (`maxTurns` → `limits.maxTurns`); a name that isn't one is itself. */
 export const v2Path = (field: string): string => (V2_PATH as Record<string, string>)[field] ?? field;
@@ -61,7 +61,7 @@ const BLOCKS: Record<string, Record<string, object>> = {
     egress: v1.egress, codex: v1.sandbox, size: { type: "object", additionalProperties: false, properties: { vcpu: { enum: [1, 2, 4, 8] } } },
   },
   limits: { maxTurns: v1.maxTurns, maxBudgetUsd: v1.maxBudgetUsd, timeoutMs: v1.timeoutMs, idleAfterMs: v1.idleAfterMs, stuckRepeats: v1.stuckRepeats, noChangeAfterMs: v1.noChangeAfterMs },
-  jobs: { foregroundMs: int(0), max: int(1), afterTurnMs: int(1000) },
+  jobs: AGENTS_JSON_SCHEMA.$defs.jobs.properties,
   lifecycle: { checkpointEveryMs: v1.checkpointEveryMs, onStart: strings, onEnd: strings },
   children: AGENTS_JSON_SCHEMA.$defs.children.properties,
   permissions: { report: { type: "boolean" } },
@@ -181,8 +181,6 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
   if (sb.environment != null && (typeof sb.environment !== "string" || !NAME.test(sb.environment))) at("sandbox.environment", "must be an environment's name (capcomd env build --name)");
   if (sb.size != null && !(isMap(sb.size) && Object.keys(sb.size).every((k) => k === "vcpu") && [1, 2, 4, 8].includes(sb.size.vcpu as number))) at("sandbox.size", "must be { vcpu: 1 | 2 | 4 | 8 }");
 
-  const j = block("jobs");
-  for (const [k, min] of [["foregroundMs", 0], ["max", 1], ["afterTurnMs", 1000]] as const) if (j[k] != null && !isInt(j[k], min)) at(`jobs.${k}`, `must be an integer >= ${min}`);
   const l = block("lifecycle");
   for (const k of ["onStart", "onEnd"]) if (l[k] != null && !isStrings(l[k])) at(`lifecycle.${k}`, "must be a list of plugin names");
   const pm = block("permissions");
@@ -348,9 +346,9 @@ export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed"
 
 /**
  * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 steps 5 and 8; ADR-025
- * §13; spec §16.2), so `validate` can say so instead of the setting silently doing nothing.
+ * §13), so `validate` can say so instead of the setting silently doing nothing.
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion", "skills", "tools.mcp", "context.providers", "sandbox.provider", "sandbox.environment", "sandbox.size", "jobs", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
+  return ["identity.persona", "harness.cliVersion", "skills", "tools.mcp", "context.providers", "sandbox.provider", "sandbox.environment", "sandbox.size", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
 }

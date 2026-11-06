@@ -78,7 +78,9 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   capcomd fetch [branch…]                                               # the latest branches as origin/<branch>, to read
   capcomd check [branch|agt]                                            # the checks on that commit as it is (default: your target)
   capcomd result --summary "<what you did, what landed>"                # last thing before you exit
-
+${o.orchestrate ? "" : `  capcomd job start -- <command>                                        # a long command (tests, a build) in the background:
+                                                                        # "running" at once, its result comes as a message
+`}
 ## Sizing fan-out (you decide per child, at spawn time)
 - Split your task into parts that can run at once, and spawn them together (wait-any, verify each as it finishes):
   parts that share an interface get a tiny contract child first, then everything else starts against it.

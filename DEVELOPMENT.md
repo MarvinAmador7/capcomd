@@ -82,6 +82,9 @@ src/
   core/         - client, errors, preflight, VM cleanup checks
   engine/       - engine launcher (per-port data dir, pid file)
   env/          - env snapshots, secrets sync, doctor
+  jobs/         - background jobs and timers (plugin API §16.2): service.ts, the records (a run's kv `_jobs/`, the
+                  daemon's state/jobs/), limits, ctx.jobs, the job.changed hook, timers; machine.ts, a job's detached
+                  runner in its agent's machine, reached through the agent's spool pump's exec (subagents/driver.ts)
   machines/     - XState state machines
   mcp/          - MCP server (server.ts: serves the registered tools; tools.ts: capcomd's own, front-mcp's)
   merge/        - git: direct and PR merge modes, verification runs (checks in a VM with boxd)

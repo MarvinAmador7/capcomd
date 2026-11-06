@@ -205,6 +205,18 @@ describe("profiles v2: loader and resolution", () => {
     expect(resolveAgent("security-critic", w.source)).toEqual({ name: "security-critic", kind: "claude-code", spec: set.agents["security-critic"]!, profile: { name: "security-critic", version: 3, source: "project" }, permissions: { report: true } });
   });
 
+  test("the jobs block (spec §16.2) is pinned as is, from a v2 profile and an agents.json entry, and checked once", () => {
+    const w = world({ "P/builder.yaml": yaml(["name: builder", "harness: { provider: claude, auth: apikey }", "jobs: { foregroundMs: 1000, max: 2 }"]) },
+      { flat: { provider: "codex", auth: "apikey", jobs: { afterTurnMs: 60000 } } });
+    const set = w.load();
+    expect(set.agents.builder).toEqual({ provider: "claude", auth: "apikey", jobs: { foregroundMs: 1000, max: 2 } });
+    expect(set.agents.flat).toEqual({ provider: "codex", auth: "apikey", jobs: { afterTurnMs: 60000 } });
+    expect(set.warnings).toEqual([]);
+    expect(validateSpec("j", { provider: "codex", auth: "apikey", jobs: { max: 0, every: 1 } })).toEqual(['agents.j: jobs: unknown field "every"', "agents.j: jobs.max must be an integer >= 1"]);
+    const bad = world({ "P/b.yaml": yaml(["name: b", "harness: { provider: claude, auth: apikey }", "jobs: { max: 0 }"]) });
+    expect(errorOf(() => bad.load()).split("jobs.max").length).toBe(2);
+  });
+
   test("extends: a child widens its parent (authoring), `null` removes what it inherits; a v1 entry can be the parent", () => {
     const worker = { provider: "claude", auth: "subscription", model: "sonnet", maxTurns: 20, timeoutMs: 600000, egress: ["github.com"], appendSystemPrompt: "Be brief." };
     const w = world({

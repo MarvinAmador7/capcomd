@@ -1,0 +1,21 @@
+{
+  "schema": "capcomd.plugin/v1",
+  "name": "job-starter",
+  "version": "1.0.0",
+  "description": "Test plugin: when an agent whose task asks for [plugin-jobs] names its tab, starts a timer and a command for it (ctx.jobs), and writes what it got and heard to the file CAPCOMD_TEST_JOB_LOG names.",
+  "apiVersion": 1,
+  "engines": {
+    "capcomd": ">=0.0.0"
+  },
+  "entry": {
+    "runtime": "in-process",
+    "module": "./index.ts"
+  },
+  "scopes": ["read", "steer"],
+  "contributes": {
+    "hooks": {
+      "agent.changed": {},
+      "job.changed": {}
+    }
+  }
+}

@@ -100,24 +100,34 @@ export function sandboxAuthError(e: unknown, name: string | null = current()): E
   return (classes(e, name).find((c) => c.kind === "auth") as Extract<ErrorClass, { kind: "auth" }> | undefined) ?? null;
 }
 
-const SWEEP_EVERY_MS = 5 * 60_000;
-const swept = new Set<string>();
+const SWEEP_DEADLINE_MS = 5 * 60_000 - 10_000;
+const sweeping = new Set<string>();
+const used = new Set<string>();
+/** A run uses this place (a run on another sandbox than the daemon's): it is swept too, now and on its timer. */
+export function placeInUse(name: string): void {
+  if (used.has(name)) return;
+  used.add(name);
+  void sweepPlace(name);
+}
+/** Whether this process uses the place: the daemon's own (CAPCOMD_SANDBOX), or one a run asked for. */
+export function inUse(name: string): boolean {
+  if (used.has(name)) return true;
+  try { return (require("../providers/registry") as typeof import("../providers/registry")).sandboxName() === name; } catch { return false; }
+}
 /**
- * Delete the place's machines past their idle lifetime now and every 5 minutes, when its seam sweeps (§7.2: `sweep`,
- * `caps.idleLifetime === "sweep"`: Docker doesn't delete containers by itself, ADR-020). Once per place per process;
- * each round asks for the seam again, so a plugin that was disabled is no longer swept.
+ * Delete the place's machines past their idle lifetime, when its seam sweeps (§7.2: `sweep`, `caps.idleLifetime ===
+ * "sweep"`: Docker doesn't delete containers by itself, ADR-020): one round, through the kernel's wrapper. Its plugin
+ * calls it on its own timer (§15.1, §16.2); a round still going when the next is due is not started twice. Returns the
+ * names it removed.
  */
-export function keepTidy(name: string, log: (line: string) => void = (l) => console.log(l)): void {
-  if (swept.has(name)) return;
-  const first = sandboxSeam(name);
-  if (!first?.sweep || first.describe().caps.idleLifetime !== "sweep") return;
-  swept.add(name);
-  const round = () => {
-    const seam = sandboxSeam(name);
-    if (!seam?.sweep) return;
-    const { call, done } = seamCall(SWEEP_EVERY_MS - 10_000);
-    seam.sweep(call).then((r) => { if (r.deleted.length) log(`  removed ${r.deleted.length} expired sandbox machine(s) (${name})`); }, () => {}).finally(done);
-  };
-  round();
-  setInterval(round, SWEEP_EVERY_MS).unref?.();
+export async function sweepPlace(name: string, log: (line: string) => void = (l) => console.log(l)): Promise<string[]> {
+  const seam = sandboxSeam(name);
+  if (!seam?.sweep || seam.describe().caps.idleLifetime !== "sweep" || sweeping.has(name)) return [];
+  sweeping.add(name);
+  const { call, done } = seamCall(SWEEP_DEADLINE_MS);
+  try {
+    const r = await seam.sweep(call);
+    if (r.deleted.length) log(`  removed ${r.deleted.length} expired sandbox machine(s) (${name})`);
+    return r.deleted;
+  } catch { return []; } finally { done(); sweeping.delete(name); }
 }
