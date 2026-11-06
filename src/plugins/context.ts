@@ -25,7 +25,7 @@ import type { Brief } from "../context/brief";
 import type { CaptureRecord } from "../context/capture";
 import { preparingAgent } from "./hooks";
 
-const SUMMARY = "The project's context (ADR-025): the brief a profile's agents start with, lint for .capcomd/context/, and the business brains the project maps";
+const SUMMARY = "The project's context (ADR-025): the brief a profile's agents start with, and lint for .capcomd/context/; brain mappings";
 const USAGE = [
   "capcomd context brief <profile> [--run <runId>] [--review] [--json]",
   "capcomd context lint [--fix] [--base <ref>] [--run <runId>] [--dir <repo>] [--json]",
