@@ -3,7 +3,7 @@
 // come back a chunk at a time from disk; and a long transfer reports its progress (to its caller, as `git.progress`
 // events on its span, and in one line for a log). The sandbox is FakeProvider's host mode, so its commands run here.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "fs";
 import { randomBytes } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -14,7 +14,7 @@ import { Git } from "../../src/merge/git";
 import { progressLine, pushFromSandbox, sendToSandbox, TransferError, type SandboxGit, type TransferProgress } from "../../src/merge/transfer";
 import { getFinishedSpans } from "../../src/utils/tracing-simple";
 
-const KNOBS = ["CAPCOMD_TRANSFER_CHUNK_BYTES", "CAPCOMD_TRANSFER_PROGRESS_SECONDS", "CAPCOMD_GIT_STALL_SECONDS", "GIT_SSH_COMMAND"];
+const KNOBS = ["CAPCOMD_TRANSFER_CHUNK_BYTES", "CAPCOMD_TRANSFER_PROGRESS_SECONDS", "CAPCOMD_GIT_STALL_SECONDS", "GIT_SSH_COMMAND", "GIT_PROGRESS_DELAY"];
 let saved: Record<string, string | undefined> = {};
 beforeEach(() => { saved = Object.fromEntries(KNOBS.map((k) => [k, process.env[k]])); });
 afterEach(() => { for (const k of KNOBS) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; });
@@ -40,7 +40,10 @@ async function bigRepo(bytes: number) {
   const r = await bareRepo();
   const seed = join(r.root, "seed");
   writeFileSync(join(seed, "big.bin"), randomBytes(bytes));
-  await r.seed.ok(["add", "big.bin"]);
+  // Over git's unpack limit (100 objects), so the fetch indexes a pack and says so ("Receiving objects").
+  mkdirSync(join(seed, "many"));
+  for (let i = 0; i < 150; i++) writeFileSync(join(seed, "many", `f${i}.txt`), `${i}\n`);
+  await r.seed.ok(["add", "big.bin", "many"]);
   await r.seed.ok(["commit", "-q", "-m", "big"]);
   await r.seed.ok(["push", "-q", "origin", "main"]);
   return r;
@@ -50,6 +53,8 @@ describe("bundles a chunk at a time", () => {
   test("a clone bigger than a chunk is uploaded in chunks, joined in the sandbox, and reported", async () => {
     process.env.CAPCOMD_TRANSFER_CHUNK_BYTES = String(CHUNK);
     process.env.CAPCOMD_TRANSFER_PROGRESS_SECONDS = "0";
+    // git shows progress only after 2 s; this fetch is quicker.
+    process.env.GIT_PROGRESS_DELAY = "0";
     const r = await bigRepo(5 * CHUNK);
     const { box, seen } = await sandbox();
     const work = mkdtempSync(join(tmpdir(), "capcomd-xfer-"));
@@ -70,6 +75,8 @@ describe("bundles a chunk at a time", () => {
     expect(uploads.every((p) => p.total === res.bytes)).toBe(true);
     expect(uploads.at(-1)).toMatchObject({ done: true, bytes: res.bytes });
     expect(heard.some((p) => p.phase === "fetch" && p.done)).toBe(true);
+    // The objects arriving are progress too (`-q` would hide them, and a long receive would look like a stall).
+    expect(heard.some((p) => p.phase === "fetch" && /^(Receiving objects|Unpacking objects|Resolving deltas)/.test(p.line ?? ""))).toBe(true);
     // The span says how much went, and carries the reports.
     const span = getFinishedSpans().filter((s) => s.name === "git.clone").at(-1)!;
     expect(span.attributes["git.bytes"]).toBe(res.bytes);

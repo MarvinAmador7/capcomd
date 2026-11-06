@@ -195,7 +195,7 @@ async function fetchMirror(h: HostRemote, m: Git, branches: "all" | string[], o:
   const bound = { timeoutMs: o.timeoutMs ?? FETCH_MAX_MS(), stallMs: STALL_MS(), ...(o.report ? { onProgress: (line: string) => o.report!(0, { line }) } : {}) };
   const specs = branches === "all" ? ["+refs/heads/*:refs/remotes/origin/*"] : branches.map((b) => `+refs/heads/${b}:refs/remotes/origin/${b}`);
   if (specs.length) {
-    const f = await remoteGit(m, ["fetch", "-q", "--progress", "--no-tags", "--no-write-fetch-head", ...(branches === "all" ? ["--prune"] : []), h.remote, ...specs], h.remote, bound);
+    const f = await remoteGit(m, ["fetch", "--progress", "--no-tags", "--no-write-fetch-head", ...(branches === "all" ? ["--prune"] : []), h.remote, ...specs], h.remote, bound);
     if (f.code !== 0) throw new TransferError(`git fetch from ${h.remote} failed${ended(f)}: ${tail(f)}`);
   }
   let ref: string | undefined;
@@ -204,7 +204,7 @@ async function fetchMirror(h: HostRemote, m: Git, branches: "all" | string[], o:
     const have = HEX.test(o.ref) && (await m.run(["cat-file", "-e", `${o.ref}^{commit}`])).code === 0;
     if (have) ref = o.ref;
     else {
-      const f = await remoteGit(m, ["fetch", "-q", "--progress", "--no-tags", "--no-write-fetch-head", h.remote, `+${o.ref}:${o.tmpRef}/ref`], h.remote, bound);
+      const f = await remoteGit(m, ["fetch", "--progress", "--no-tags", "--no-write-fetch-head", h.remote, `+${o.ref}:${o.tmpRef}/ref`], h.remote, bound);
       if (f.code !== 0) throw new TransferError(`git fetch ${o.ref} from ${h.remote} failed${ended(f)}: ${tail(f)}`);
       ref = (await m.ok(["rev-parse", `${o.tmpRef}/ref^{commit}`])).trim();
     }

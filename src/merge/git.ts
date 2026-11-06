@@ -19,14 +19,15 @@ export interface GitRunOptions {
   onProgress?: (line: string) => void;
 }
 
-/** stderr read as it comes: every chunk is activity, and its last line is git's latest progress. All of it is kept. */
-async function watchedText(stream: ReadableStream<Uint8Array>, onChunk: (lastLine: string) => void): Promise<string> {
+/** stderr read as it comes: every chunk is activity, and each line in it (git ends a progress update with \r) is heard.
+ *  All of it is kept. */
+async function watchedText(stream: ReadableStream<Uint8Array>, onChunk: (lines: string[]) => void): Promise<string> {
   const dec = new TextDecoder();
   let text = "";
   for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) {
     const part = dec.decode(chunk, { stream: true });
     text += part;
-    onChunk(part.split(/[\r\n]/).map((l) => l.trim()).filter(Boolean).at(-1) ?? "");
+    onChunk(part.split(/[\r\n]/).map((l) => l.trim()).filter(Boolean));
   }
   return text + dec.decode();
 }
@@ -73,7 +74,7 @@ export class Git {
     const watched = !!opts.stallMs || !!opts.onProgress;
     const done = Promise.all([
       new Response(proc.stdout).text(),
-      watched ? watchedText(proc.stderr, (line) => { poke(); if (line) opts.onProgress?.(line); }) : new Response(proc.stderr).text(),
+      watched ? watchedText(proc.stderr, (lines) => { poke(); for (const l of lines) opts.onProgress?.(l); }) : new Response(proc.stderr).text(),
       proc.exited,
     ]);
     if (!bounded) {
