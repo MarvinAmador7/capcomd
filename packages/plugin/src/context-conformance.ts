@@ -59,6 +59,17 @@ export const CONTEXT_CASES: readonly Case[] = [
     if (typeof a.handle !== "string" || !a.handle || typeof a.revision !== "string" || !a.revision) fail(`resolve answered ${JSON.stringify(a)}`);
     equal(b, a, "a second resolve of the same scope");
   } },
+  { name: "resolve names a bundle only when the provider serves one: a repository at a full commit, under a plain name", needsScope: true, async run(p, o) {
+    const s = scopeOf(o);
+    const r = await p.resolve({ ...s, bundleRoot: s.bundleRoot ?? "/var/tmp/capcomd/context" }, conformanceCall());
+    if (r.bundle === undefined) return;
+    if (!p.describe().caps.bundle) fail("resolve named a bundle, but caps.bundle is false");
+    const b = r.bundle;
+    if (typeof b.remote !== "string" || !b.remote) fail("bundle.remote is the repository's URL or path");
+    if (typeof b.commit !== "string" || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(b.commit)) fail(`bundle.commit ${JSON.stringify(b.commit)} is a full commit`);
+    if (typeof b.name !== "string" || !/^[a-z0-9][a-z0-9_-]{0,62}$/.test(b.name)) fail(`bundle.name ${JSON.stringify(b.name)} is a plain name`);
+    if (b.branch !== null && typeof b.branch !== "string") fail("bundle.branch is a branch name or null");
+  } },
   { name: "index is deterministic for a handle, at the revision resolve named, every line well-formed", needsScope: true, async run(p, o) {
     const d = p.describe();
     const r = await p.resolve(scopeOf(o), conformanceCall());
