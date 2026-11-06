@@ -1,6 +1,6 @@
 import type { RawAccess } from "rivetkit/db";
 import { agentFromEnv, isRealAgent } from "../agents/config";
-import { effectiveAgentRecord, parseAgentDirective } from "../agents/profiles";
+import { effectiveAgentRecord, parseAgentDirective } from "../profiles";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
 import { db } from "rivetkit/db";

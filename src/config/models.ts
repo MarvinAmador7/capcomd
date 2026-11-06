@@ -3,7 +3,7 @@
 // any id. This is the one curated table; the project's own profiles add the models they name (so a model the project
 // already runs on is always offered), and a chosen model reaches the CLI as the profile's `model` does: Claude Code
 // `--model <id>`, Codex `-m <id>` (src/agents/adapters.ts).
-import { agentsFilePath, readAgentsFile, type Provider } from "../agents/profiles";
+import { agentsFilePath, readProfiles, type Provider } from "../profiles";
 import type { Driver } from "../agents/run-driver";
 import { agentSeam } from "../plugins/agents";
 
@@ -39,7 +39,7 @@ export const HARNESS_MODELS: Record<Driver, readonly HarnessModel[]> = {
 export function harnessModels(provider: Provider, source: Env = process.env): HarnessModel[] {
 	const out: HarnessModel[] = [...((HARNESS_MODELS as Record<Provider, readonly HarnessModel[] | undefined>)[provider] ?? [])];
 	let agents: Record<string, { provider?: string; model?: string }> = {};
-	try { agents = readAgentsFile(agentsFilePath(source)).agents; } catch { /* no profiles: the table alone */ }
+	try { agents = readProfiles(agentsFilePath(source), source).agents; } catch { /* no profiles: the table alone */ }
 	for (const [name, spec] of Object.entries(agents)) {
 		if (spec.provider !== provider || !spec.model || out.some((m) => m.id === spec.model)) continue;
 		out.push({ id: spec.model, name: spec.model, note: `From the ${name} profile` });

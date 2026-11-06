@@ -482,7 +482,7 @@ async function main(argv: string[]): Promise<number> {
         let goal = rawGoal;
         if (agentFlag) {
           if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(agentFlag)) usage(`invalid --profile ${agentFlag}`);
-          const P = await import("../agents/profiles");
+          const P = await import("../profiles");
           let set: Record<string, unknown> = {};
           try {
             if (values.overrides) set = JSON.parse(values.overrides as string);
@@ -632,7 +632,7 @@ async function main(argv: string[]): Promise<number> {
         let set: Record<string, unknown> = {};
         try {
           if (values.overrides) set = JSON.parse(values.overrides as string);
-          set = deepMerge(set, (await import("../agents/profiles")).parseSetPairs(sets));
+          set = deepMerge(set, (await import("../profiles")).parseSetPairs(sets));
         } catch (e) { usage(`bad override: ${(e as Error).message}`); }
         if ((Object.keys(set).length) && !profile) usage("--set/--overrides need --profile NAME");
         let contract: Record<string, unknown> | undefined;

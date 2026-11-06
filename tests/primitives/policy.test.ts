@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { available, checkSpawn, childLimits, paramsHash, rootLimits, stableId, type AgentRow } from "../../src/primitives/policy";
-import type { AgentSpec } from "../../src/agents/profiles";
+import type { AgentSpec } from "../../src/profiles";
 
 const sup: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 40, children: { allowSpawn: true, maxDepth: 2, maxChildren: 2, maxTotalDescendants: 3, allowedChildProfiles: ["coder", "sup"], budgetShare: 0.5 } } as AgentSpec;
 const coder: AgentSpec = { provider: "claude", auth: "subscription", maxTurns: 20 } as AgentSpec;

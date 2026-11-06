@@ -4,7 +4,7 @@
 // written here from what kind of login it is, not from what the ledger holds.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { providerKind } from "../agents/profiles";
+import { providerKind } from "../profiles";
 import { BUILTIN_AGENTS } from "../plugins/agents";
 import { profileFor } from "../auth/profiles";
 import { env as envVar } from "../utils/env";
