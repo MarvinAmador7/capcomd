@@ -2,7 +2,7 @@
 // failure policy and the per-plugin circuit breaker (§6.5). The kernel fires hooks only through `fire`, with the mode
 // spelled at the call site so `scripts/check-hook-modes.ts` can check it against HOOKS (§14.4).
 import { createHash, randomBytes } from "node:crypto";
-import { PluginError, type HookFailureKind } from "../errors";
+import { HookFailure, PluginError, type HookFailureKind } from "../errors";
 import { HOOKS, PATCH_KEYS, type HookCall, type HookListener, type HookName, type HookPatch, type HookPayload, type ModifyHook, type ObserveHook, type ReviewReport, type VetoHook } from "../hooks";
 import type { PluginEventData, PluginEventType } from "../events";
 import type { Disposable } from "../context";
@@ -66,7 +66,13 @@ type PluginHooks = {
   lastFailureAt: number | null;
   queue: Array<() => Promise<void>>;
   pump: Promise<void> | null;
+  settled: ((callId: string, failure: { kind: HookFailureKind; message: string } | null) => void) | null;
 };
+
+/** What `attach` takes beside the plugin's signal. `settled` hears how each call's answer was judged once the host has
+ *  checked it (§6.2: its shape, a modify patch's rule): null when it was used, else why not. An out-of-process plugin's
+ *  answer route says 422 with it (§9.4). */
+export interface AttachOptions { settled?(callId: string, failure: { kind: HookFailureKind; message: string } | null): void }
 
 const DURATIONS = 256;
 const TIMEOUT = Symbol("timeout");
@@ -96,9 +102,16 @@ export class HookRegistry {
   }
 
   /** Start tracking a plugin; `signal` is its `ctx.signal`, composed into every call's signal (§5.3). Resets the breaker. */
-  attach(plugin: string, signal: AbortSignal): void {
+  attach(plugin: string, signal: AbortSignal, o: AttachOptions = {}): void {
     const prev = this.plugins.get(plugin);
-    this.plugins.set(plugin, { signal, consecutive: 0, suspended: false, calls: prev?.calls ?? 0, failures: prev?.failures ?? 0, dropped: prev?.dropped ?? 0, ms: prev?.ms ?? [], lastFailureAt: prev?.lastFailureAt ?? null, queue: [], pump: null });
+    this.plugins.set(plugin, { signal, consecutive: 0, suspended: false, calls: prev?.calls ?? 0, failures: prev?.failures ?? 0, dropped: prev?.dropped ?? 0, ms: prev?.ms ?? [], lastFailureAt: prev?.lastFailureAt ?? null, queue: [], pump: null, settled: o.settled ? (id, f) => o.settled!(id, f) : null });
+  }
+
+  /** Observe calls dropped on the way to a plugin (an out-of-process plugin's full frame queue, §9.5): counted in its
+   *  stats like the registry's own drops (§6.2). */
+  dropped(plugin: string, n: number): void {
+    const p = this.plugins.get(plugin);
+    if (p && n > 0) p.dropped += n;
   }
 
   /** Stop delivering to a plugin (§5.3 step 2): queued observe calls are dropped; calls in flight run to their deadline. */
@@ -198,6 +211,7 @@ export class HookRegistry {
     const mode = HOOKS[hook].mode;
     const v = !r.ok ? r : mode === "veto" ? checkVeto(hook as VetoHook, r.value) : mode === "modify" ? checkModify(hook as ModifyHook, r.value) : { ok: true as const, result: undefined };
     const ms = this.now() - started;
+    p.settled?.(r.callId, v.ok ? null : { kind: v.kind, message: v.message });
     if (!v.ok) { this.failed(l, p, r.callId, v.kind, v.message); return { result: undefined, failure: { kind: v.kind, message: v.message }, ms }; }
     this.succeeded(p);
     return { result: v.result, failure: null, ms };
@@ -217,6 +231,7 @@ export class HookRegistry {
         // Disposed, or suspended since it was queued (§6.5: an open listener of a suspended plugin is skipped).
         if (!l.live || p.suspended) return;
         const r = await this.invoke(l, p, value, o, at);
+        p.settled?.(r.callId, r.ok ? null : { kind: r.kind, message: r.message });
         if (r.ok) this.succeeded(p); else this.failed(l, p, r.callId, r.kind, r.message);
       });
       if (!p.pump) p.pump = this.drain(p);
@@ -247,6 +262,7 @@ export class HookRegistry {
       if (pre) { if (stop(this.refuse(l, o, pre))) break; continue; }
       const r = await this.invoke(l, p, structuredClone(payload), o, at);
       const v = r.ok ? checkVeto(hook, r.value) : r;
+      p.settled?.(r.callId, v.ok ? null : { kind: v.kind, message: v.message });
       if (!v.ok) {
         const effect = this.failed(l, p, r.callId, v.kind, v.message);
         if (effect === "denied" && stop(this.refuse(l, o, { kind: v.kind, message: v.message }))) break;
@@ -285,6 +301,7 @@ export class HookRegistry {
           v = { ok: false, kind: "invalid_result", message: `${code === "widening" ? "widening" : "invalid patch"}: ${(e as Error).message}` };
         }
       }
+      p.settled?.(r.callId, v.ok ? null : { kind: v.kind, message: v.message });
       if (!v.ok) {
         const effect = this.failed(l, p, r.callId, v.kind, v.message);
         if (effect === "denied") return this.refuse(l, o, { kind: v.kind, message: v.message });
@@ -343,7 +360,7 @@ export class HookRegistry {
       }
       return { ok: true, value: v, callId };
     } catch (e) {
-      return { ok: false, kind: "threw", message: e instanceof Error ? e.message : String(e), callId };
+      return { ok: false, kind: e instanceof HookFailure ? e.kind : "threw", message: e instanceof Error ? e.message : String(e), callId };
     } finally {
       clearTimeout(timer);
       p.ms.push(this.now() - started);

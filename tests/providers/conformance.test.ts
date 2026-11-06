@@ -9,7 +9,7 @@ import { SandboxNotFoundError } from "../../src/providers/boxd-errors";
 import type { SandboxProvider } from "../../src/providers/sandbox";
 
 const IMAGE = process.env.CAPCOMD_TEST_DOCKER_IMAGE ?? "debian:bookworm-slim";
-const dockerUp = (() => { try { return Bun.spawnSync([dockerBin(), "version", "--format", "{{.Server.Version}}"]).exitCode === 0; } catch { return false; } })();
+const dockerUp = (() => { try { return Bun.spawnSync([dockerBin(), "version", "--format", "{{.Server.Version}}"], { timeout: 15_000 }).exitCode === 0; } catch { return false; } })();
 
 interface Subject { name: string; make: () => SandboxProvider & Record<string, any>; available: boolean; snapshots: boolean; interactive: boolean }
 const subjects: Subject[] = [

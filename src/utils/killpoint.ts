@@ -35,6 +35,20 @@ export function killpoint(name: string): void {
   }
 }
 
+/**
+ * A killpoint whose victim is another process: `kill` runs (once) the n-th time this point is reached, instead of this
+ * process dying. `plugin.process.crash` kills a plugin's process with a gate call in flight (src/plugins/process.ts).
+ */
+export function killpointOf(name: string, kill: () => void): void {
+  const config = parseKillpoint();
+  if (!config || config.name !== name) return;
+  const count = (killpointCounts.get(name) || 0) + 1;
+  killpointCounts.set(name, count);
+  if (count !== config.n) return;
+  console.error(`[KILLPOINT-VICTIM] ${name}:${count}`);
+  kill();
+}
+
 export function resetKillpointCounts(): void {
   killpointCounts.clear();
 }

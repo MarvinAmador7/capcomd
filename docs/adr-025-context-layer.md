@@ -580,7 +580,7 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   `scripts/gen-context-limits.ts`): the package ships `src/`, not `docs/evidence/`. Kernel floors and ceilings:
   `briefBytes` 1 KiB-100 KiB, `indexLines` 1-1000, `descriptionChars` 20-500.
 
-**Made while building step 2** (spec 1.0.22; where the code and §3.2, §5.1, §8 or §11.1 differ, the code is right and
+**Made while building step 2** (spec 1.0.23; where the code and §3.2, §5.1, §8 or §11.1 differ, the code is right and
 this list says why):
 
 - Capture is the `context` plugin's (the router's), not `context-memory`'s: the events §10 names are
