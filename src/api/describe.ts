@@ -75,6 +75,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "sandbox.resource_action": return "A machine was acted on from capcomd.";
 		case "sandbox.resource_deleted": return "A machine was deleted.";
 		case "project.configured": return "A project was set up.";
+		case "profile.changed": return "An agent profile was changed.";
 		case "project.git_initialized": return "A git repository was started in a folder.";
 		case "project.published": return "A project was published to GitHub.";
 		// A source's name is [a-z0-9-] (the manifest's pattern) and a run id capcomd's; the source's ids and threads stay in data.
@@ -97,6 +98,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "plugin.disposed": return "A plugin was unloaded.";
 		case "plugin.version_refused": return "A plugin doesn't support this capcomd.";
 		case "plugin.duplicate_refused": return "A second plugin of the same name was refused.";
+		case "plugin.config_refused": return `${d.plugin ? `The ${d.plugin} plugin's` : "A plugin's"} settings were refused.`;
 		case "plugin.hook_failed": return "A plugin's hook listener failed.";
 		case "plugin.suspended": return "A plugin's hooks were suspended.";
 		case "plugin.resumed": return "A plugin's hooks were resumed.";

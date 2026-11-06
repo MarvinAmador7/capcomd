@@ -45,8 +45,11 @@ export interface CapcomdConfig {
    * CAPCOMD_TRIGGERS_FILE names a JSON file of this object instead. See src/triggers/intake.ts.
    */
   triggers?: { sources?: Record<string, { allowed?: string[]; opened?: string[]; mode?: "off" | "observe" | "auto"; project?: string }> };
-  /** A built-in plugin's settings (plugin API §10.2), by plugin name: what its manifest's config schema names, and
-   *  `enabled: false` to turn it off. CAPCOMD_PLUGIN_<NAME>_<KEY> wins. */
+  /**
+   * Plugin settings by plugin name (plugin API §10.2, src/plugins/config.ts): `enabled`, and the plugin's own keys
+   * (its manifest's config schema), e.g. `{"watchdog": {"enabled": true, "stalledAfterMs": 900000}}`. A project's
+   * .capcomd/config.json, then CAPCOMD_PLUGIN_<NAME>_<KEY>, win.
+   */
   plugins?: Record<string, Record<string, unknown>>;
 }
 
@@ -79,11 +82,16 @@ export function readConfig(path: string | null): CapcomdConfig {
   try { const v = JSON.parse(readFileSync(path, "utf8")); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
 
-/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key; other keys are replaced). */
+/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key, plugins plugin by plugin and then key
+ *  by key; other keys are replaced). */
 export function mergeConfig(cur: CapcomdConfig, patch: CapcomdConfig): CapcomdConfig {
-  const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) } };
+  const plugins: Record<string, Record<string, unknown>> = { ...(cur.plugins ?? {}) };
+  // A plugin's settings merge key by key; a list (a project's `plugins.use`, plugin API §4.8) is replaced.
+  for (const [name, p] of Object.entries(patch.plugins ?? {})) plugins[name] = Array.isArray(p) ? p : { ...(plugins[name] ?? {}), ...p };
+  const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) }, plugins };
   if (!Object.keys(next.env!).length) delete next.env;
   if (!Object.keys(next.run!).length) delete next.run;
+  if (!Object.keys(next.plugins!).length) delete next.plugins;
   return next;
 }
 /** A config file's bytes. */

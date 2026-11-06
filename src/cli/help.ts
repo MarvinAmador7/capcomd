@@ -29,12 +29,16 @@ Usage:
                                        (profile.yaml) in .capcomd/profiles/ and ~/.capcomd/profiles/ (docs/agents.md).
                                        show <name>: the files laid together and which one set each value;
                                        schema: a profile file's JSON Schema (schema v1: agents.json's).
-                                       add, set and rm edit agents.json: provider, auth
+                                       set and rm change the file a profile is defined in (its agents.json
+                                       entry or its profile file; a profile file's version goes up); add
+                                       writes agents.json, or a profile file with --extends P (or a --set
+                                       only a profile file holds, e.g. tags): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --effort --max-turns --budget
                                        --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
                                        --append-system-prompt --allowed-tools --disallowed-tools
-                                       --description --default --spec JSON --unset k1,k2
+                                       --description --default --spec JSON --set path=value (limits.maxTurns=40,
+                                       tags=a,b) --unset k1,k2 --extends P (add)
   capcomd agents …                     The old name of capcomd profiles, until the next minor release
                                        (agents schema: agents.json's; agents list --json: the rows under "agents")
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
@@ -108,6 +112,8 @@ Usage:
         [--mode pr|direct] [--target B] [--check CMD] [--budget USD] [--service|--no-service] [--no-plugin] [--no-store]
         [--org NAME]                   (the boxd org for the key setup creates with your boxd CLI login)
         [--sandbox docker|boxd]        (setup project: where this project's agents run, over your user config's)
+        [--no-watchdog]                (setup service: leave the watchdog off; on, it notices an agent whose work
+                                       hasn't changed for 15 min and stops it after 45 min)
         [--env-build|--no-env-build]   (setup project on Docker: build the env image with a warm checkout now, or don't ask)
         [--default-project]            (setup project/agent: make this checkout the default project of capcomd's MCP tools)
         [--no-hermes] [--approvals elicit|human] [--hermes-entry-per-project]

@@ -16,10 +16,9 @@ import { BUILTINS, candidateOf } from "./builtins";
 import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 import { pluginJobs } from "../jobs/service";
+import { mergePatch, pluginConfigFiles, pluginSettings } from "./config";
+import { pluginAgents } from "./services";
 import { pluginTriggers } from "../triggers/intake";
-import { projectConfigPath, readConfig, userConfigPath } from "../config/store";
-import { configSchema, type ConfigLayer } from "../../packages/plugin/src/config";
-import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { announce } from "../install/trust";
 import { isExempt, projectOf, projectPluginDirs, projectPluginTrusted } from "./install";
 import { pluginStore, storageService } from "./storage";
@@ -31,10 +30,11 @@ export type DaemonEventSink = (e: { type: string; entity: string; text: string; 
 
 /** What the daemon discovers (§4.8), in this order: the built-ins, the user's plugins (<home>/plugins/<name>/plugin.json)
  *  and the plugins of the project it serves (the checkout of its working directory: `.capcomd/plugins/<name>/` and the
- *  `plugins.use` entries fetched for it), each with its config's layers. The third-party ones run out of process (§5.2);
- *  a project's only once the operator trusted its content (`trusted` in kernelHost). */
+ *  `plugins.use` entries fetched for it), each with its settings. The third-party ones run out of process (§5.2); a
+ *  project's only once the operator trusted its content (`trusted` in kernelHost). */
 export function builtinCandidates(env: Record<string, string | undefined> = process.env, cwd = process.cwd()): Candidate[] {
-  return [...BUILTINS.map(candidateOf), ...testPlugins(env), ...userPlugins(env), ...projectPlugins(env, cwd)].map((c) => configured(c, env, cwd));
+  const files = pluginConfigFiles({ env, cwd });
+  return [...BUILTINS.map(candidateOf), ...testPlugins(env), ...userPlugins(env), ...projectPlugins(env, cwd)].map((c) => configured(c, env, files));
 }
 
 /** The user's plugins (§4.8 step 2), in name order: each directory of <home>/plugins holding a plugin.json. */
@@ -54,47 +54,21 @@ export function projectPlugins(env: Record<string, string | undefined> = process
   return projectPluginDirs(project, env, !env.CAPCOMD_NO_CONFIG).map((dir) => ({ source: "project" as const, dir }));
 }
 
-/** A candidate's manifest as it stands, without checking it: its name and config schema pick its layers. */
-function rawManifest(c: Candidate): PluginManifest | null {
-  const raw = c.manifest ?? (c.dir ? (() => { try { return JSON.parse(readFileSync(join(c.dir!, "plugin.json"), "utf8")); } catch { return null; } })() : null);
-  return raw && typeof raw === "object" && typeof (raw as { name?: unknown }).name === "string" ? raw as PluginManifest : null;
-}
-
 /**
- * A plugin's config layers (§10.2) over its schema's defaults (the host merges and checks them, §10.4): `plugins.<name>`
- * in the user's ~/.capcomd/config.json, then in the project's .capcomd/config.json (both off with CAPCOMD_NO_CONFIG, as
- * every config file), then CAPCOMD_PLUGIN_<NAME>_<KEY> for each property its schema names (upper-cased, `-` and `.` as
- * `_`; a value that parses as JSON is that JSON, else the string). `enabled` is the user's to set; a project may only
- * turn off a plugin of its own (a repository can't switch off a gate the operator runs). A run's layer is run data
- * (src/plugins/run-config.ts).
+ * A candidate with its settings (§10.2, src/plugins/config.ts) over its schema's defaults (the host's): `plugins.<name>`
+ * in the user's, then the project's config (neither under CAPCOMD_NO_CONFIG), then CAPCOMD_PLUGIN_<NAME>_<KEY>.
+ * `enabled` from the last layer that says (false holds it at `validated`; true turns on a built-in that is off until
+ * asked for, the watchdog); what its schema refuses is `configErrors` (the host fails it `config_invalid`). A plugin
+ * from a directory (a user's, a project's) is read for its name and schema; one that can't be read is as it was (the
+ * host fails it). `source` limits what a project may set (src/plugins/config.ts).
  */
-export function configured(c: Candidate, env: Record<string, string | undefined> = process.env, cwd = process.cwd()): Candidate {
-  const m = rawManifest(c);
-  if (!m) return c;
-  const layers: ConfigLayer[] = [];
-  let enabled = c.enabled;
-  const take = (layer: "user" | "project", v: unknown): boolean | undefined => {
-    if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
-    const { enabled: on, ...values } = v as Record<string, unknown>;
-    if (Object.keys(values).length) layers.push({ layer, values });
-    return typeof on === "boolean" ? on : undefined;
-  };
-  if (!env.CAPCOMD_NO_CONFIG) {
-    const mine = (path: string | null) => (readConfig(path).plugins as Record<string, unknown> | undefined)?.[m.name];
-    const user = take("user", mine(userConfigPath(env)));
-    const project = take("project", mine(projectConfigPath(cwd, env)));
-    if (user !== undefined) enabled = user;
-    else if (project === false && c.source === "project") enabled = false;
-  }
-  const values: Record<string, unknown> = {};
-  const envName = (k: string) => `CAPCOMD_PLUGIN_${`${m.name}_${k}`.toUpperCase().replace(/[-.]/g, "_")}`;
-  for (const k of Object.keys(configSchema(m, c.dir ?? null)?.properties ?? {})) {
-    const v = env[envName(k)];
-    if (v === undefined) continue;
-    try { values[k] = JSON.parse(v); } catch { values[k] = v; }
-  }
-  if (Object.keys(values).length) layers.push({ layer: "env", values });
-  return { ...c, ...(layers.length ? { layers } : {}), ...(enabled !== undefined ? { enabled } : {}) };
+export function configured(c: Candidate, env: Record<string, string | undefined> = process.env, files = pluginConfigFiles({ env })): Candidate {
+  const raw = c.manifest ?? (c.dir ? (() => { try { return JSON.parse(readFileSync(join(c.dir!, "plugin.json"), "utf8")) as unknown; } catch { return null; } })() : null);
+  const m = raw as { name?: unknown; config?: unknown } | null;
+  if (!m || typeof m !== "object" || typeof m.name !== "string") return c;
+  const s = pluginSettings(m as { name: string; config?: unknown }, { env, files, dir: c.dir ?? null, source: c.source });
+  const config = mergePatch(c.config ?? {}, s.config) as Record<string, unknown>;
+  return { ...c, ...(Object.keys(config).length ? { config } : {}), ...(s.enabled !== undefined ? { enabled: s.enabled } : {}), ...(s.errors.length ? { configErrors: s.errors } : {}), ...(Object.keys(s.sources).length ? { configSources: s.sources } : {}) };
 }
 
 /** Tests only (`bun test` sets NODE_ENV=test): CAPCOMD_TEST_PLUGINS, `:`-separated plugin directories, load in process
@@ -164,10 +138,10 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
 }
 
 /**
- * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2) and `ctx.storage` (§8.4; one process writes a
- * plugin's storage: a CLI's local host has neither, `unsupported`). `triggers`: they get `ctx.triggers` too (§16.3; the
- * daemon's only). `process`: the plugin socket out-of-process plugins connect to (§9.2); without it they stay
- * `validated` (a CLI's local host).
+ * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2), `ctx.agents` (§8.4, src/plugins/services.ts) and
+ * `ctx.storage` (§8.4; one process writes a plugin's storage): a CLI's local host has none of them, `unsupported`.
+ * `triggers`: they get `ctx.triggers` too (§16.3; the daemon's only). `process`: the plugin socket out-of-process
+ * plugins connect to (§9.2); without it they stay `validated` (a CLI's local host).
  */
 export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
   const redactor = new Redactor();
@@ -192,7 +166,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
     },
     dataDir,
     ...(o.jobs || o.triggers ? { services: (m) => ({
-      ...(o.jobs ? { jobs: pluginJobs(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
+      ...(o.jobs ? { jobs: pluginJobs(m.name), agents: pluginAgents(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
       ...(o.triggers ? { triggers: pluginTriggers(m.name, m.scopes ?? []) } : {}),
     }) } : {}),
     secret: async (m, key, dir) => resolveSecret(m, key, process.env, dir),
@@ -216,7 +190,8 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
 /** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges, the
  *  front doors, the orchestration skill), and in tests CAPCOMD_TEST_PLUGINS. */
 export function localCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.filter((b) => b.everyProcess).map(candidateOf), ...testPlugins(env)].map((c) => configured(c, env));
+  const files = pluginConfigFiles({ env });
+  return [...BUILTINS.filter((b) => b.everyProcess).map(candidateOf), ...testPlugins(env)].map((c) => configured(c, env, files));
 }
 
 let local: Promise<PluginHost> | null = null;

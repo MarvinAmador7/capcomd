@@ -7,9 +7,30 @@
 // without running them).
 import { RelayError } from "../core/errors";
 import { readManifest, loadManifest } from "../../packages/plugin/src/load";
-import { runConfigIssues } from "../../packages/plugin/src/config";
 import { PLUGIN_NAME_PATTERN, type PluginManifest } from "../../packages/plugin/src/manifest";
 import { VERSION } from "../utils/self";
+import { checkSchema, schemaOf } from "./config";
+
+type Prop = Parameters<typeof checkSchema>[0] & { "x-per-run"?: unknown; "x-secret"?: unknown };
+
+/** The `x-per-run` settings of a plugin's schema: what a run may set (§10.2 layer 5); never a secret. */
+export function perRunKeys(m: { config?: unknown }, dir: string | null): string[] {
+  return Object.entries((schemaOf(m, dir)?.properties ?? {}) as Record<string, Prop>).filter(([, p]) => p?.["x-per-run"] === true && p["x-secret"] !== true).map(([k]) => k);
+}
+
+/** What's wrong with a run's settings for plugin `m`: each key one of its per-run settings, each value fitting its own
+ *  schema (null: the plugin's own value for this run). Paths are under the setting. */
+export function runConfigIssues(m: PluginManifest, dir: string | null, values: unknown): Array<{ path: string; message: string }> {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return [{ path: "(root)", message: "an object of the plugin's per-run settings" }];
+  const props = (schemaOf(m, dir)?.properties ?? {}) as Record<string, Prop>;
+  const per = perRunKeys(m, dir);
+  const issues: Array<{ path: string; message: string }> = [];
+  for (const [k, v] of Object.entries(values)) {
+    if (!per.includes(k)) { issues.push({ path: k, message: per.length ? `${k} can't be set per run (the ${m.name} plugin's per-run settings: ${per.join(", ")})` : `the ${m.name} plugin has no setting a run may override` }); continue; }
+    if (v !== null) issues.push(...checkSchema(props[k]!, v, k));
+  }
+  return issues;
+}
 
 type Env = Record<string, string | undefined>;
 export type RunPluginConfig = Record<string, Record<string, unknown>>;

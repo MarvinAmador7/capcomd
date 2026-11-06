@@ -1,19 +1,18 @@
-// Plugin API §10: a plugin's config is its schema's defaults, then the user's config, the project's and the
-// environment (layers 1-4, merge-patch, later winning), checked against the schema after each layer (an invalid one is
-// named: config_invalid with plugin.config_refused, never run with defaults); secrets are references, never a project's;
-// a run may set only x-per-run settings (layer 5), kept in the plugin's run storage under `config`.
+// Plugin API §10, what step 12 adds to the layers (src/plugins/config.ts): every plugin's config is layered, a
+// directory's too; `enabled` is the user's (a project turns off only its own plugins); secrets are references, the
+// user's or the environment's, never a project's; `config.sources` per layer; a run may set only x-per-run settings
+// (layer 5), kept in the plugin's run storage under `config`.
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { layerConfig, mergePatch, runConfigIssues } from "../../packages/plugin/src/config";
 import { PluginHost, type Candidate } from "../../packages/plugin/src/host/host";
-import type { HostEvent } from "../../packages/plugin/src/host/registry";
 import { definePlugin } from "../../packages/plugin/src/context";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { configured } from "../../src/plugins/host";
 import { resolveSecret } from "../../src/plugins/secrets";
-import { checkRunPluginConfig, parsePluginConfigFlags, pluginConfigFlags, RunConfigError } from "../../src/plugins/run-config";
+import { checkRunPluginConfig, parsePluginConfigFlags, pluginConfigFlags, runConfigIssues, RunConfigError } from "../../src/plugins/run-config";
+import { pluginConfigFiles, pluginSettings } from "../../src/plugins/config";
 import { pluginStore } from "../../src/plugins/storage";
 import { addClient, loadClients } from "../../src/api/clients";
 import { harnessApp } from "../../src/api/server";
@@ -36,48 +35,43 @@ const M = {
 } as unknown as PluginManifest;
 
 describe("layers 1-4 (§10.2)", () => {
-  test("defaults, then user, project and env, key by key with merge-patch; sources say where each value came from", () => {
-    const r = layerConfig(M, null, [
-      { layer: "user", values: { channel: "#ops", limits: { burst: 3 } } },
-      { layer: "project", values: { tags: ["x", "y"], limits: { perHour: 5 } } },
-      { layer: "env", values: { quiet: true, tags: null } },
-    ]);
-    expect(r).toEqual({ ok: true, values: { channel: "#ops", quiet: true, limits: { perHour: 5, burst: 3 } }, sources: { channel: "user", quiet: "env", limits: "project" } });
-    expect(mergePatch({ a: { b: 1, c: [1] } }, { a: { c: [2], d: null } })).toEqual({ a: { b: 1, c: [2] } });
+  const files = (user: Record<string, unknown> = {}, project: Record<string, unknown> = {}) => ({ user, project });
+  test("user, project and env over each other; sources say where each value came from", () => {
+    const s = pluginSettings(M, { env: { CAPCOMD_PLUGIN_NOTIFY_QUIET: "true" }, files: files({ notify: { channel: "#ops", limits: { burst: 3 } } }, { notify: { tags: ["x", "y"], limits: { perHour: 5 } } }) });
+    expect(s).toEqual({ config: { channel: "#ops", limits: { burst: 3, perHour: 5 }, tags: ["x", "y"], quiet: true }, errors: [], sources: { channel: "user", limits: "project", tags: "project", quiet: "env" } });
   });
 
-  test("an invalid layer is named; a secret takes a reference, and never a project's", () => {
-    expect(layerConfig(M, null, [{ layer: "user", values: { channel: "#ok" } }, { layer: "project", values: { limits: { perHour: 0 } } }]))
-      .toEqual({ ok: false, layer: "project", errors: [{ path: "limits.perHour", message: expect.stringContaining(">=1") }] });
-    expect(layerConfig(M, null, [{ layer: "env", values: { nope: 1 } }])).toMatchObject({ ok: false, layer: "env", errors: [{ path: "(root)", message: expect.stringContaining("nope") }] });
-    expect(layerConfig(M, null, [{ layer: "user", values: { webhook: "https://hooks.slack.com/T0/B0/xyz" } }])).toMatchObject({ ok: false, layer: "user", errors: [{ path: "webhook", message: expect.stringContaining("never the value") }] });
-    expect(layerConfig(M, null, [{ layer: "project", values: { webhook: { $secret: "env:GITHUB_TOKEN" } } }])).toMatchObject({ ok: false, layer: "project", errors: [{ path: "webhook", message: expect.stringContaining("only your own config") }] });
-    // A user's reference is fine, and never among the values.
-    const ok = layerConfig(M, null, [{ layer: "user", values: { webhook: { $secret: "env:MY_HOOK" } } }]);
-    expect(ok).toMatchObject({ ok: true });
-    expect(ok.ok && "webhook" in ok.values).toBe(false);
+  test("enabled is the user's (or the environment's); a project may only turn off a plugin of its own", () => {
+    const on = (user: Record<string, unknown>, project: Record<string, unknown>, source?: "builtin" | "project") => pluginSettings(M, { env: {}, files: files({ notify: user }, { notify: project }), ...(source ? { source } : {}) }).enabled;
+    expect(on({}, { enabled: false }, "builtin")).toBeUndefined();
+    expect(on({}, { enabled: true }, "project")).toBeUndefined();
+    expect(on({}, { enabled: false }, "project")).toBe(false);
+    expect(on({ enabled: true }, { enabled: false }, "project")).toBe(true);
+    expect(on({ enabled: false }, { enabled: true }, "builtin")).toBe(false);
+    expect(pluginSettings(M, { env: { CAPCOMD_PLUGIN_NOTIFY_ENABLED: "false" }, files: files({ notify: { enabled: true } }) }).enabled).toBe(false);
   });
 
-  test("the kernel reads the user's and the project's config files and the environment; enabled is the user's (a project may turn off only its own)", () => {
+  test("a secret takes a reference, never a value, and never a project's; it is never in the config", () => {
+    const errs = (user: Record<string, unknown>, project: Record<string, unknown> = {}) => pluginSettings(M, { env: {}, files: files({ notify: user }, { notify: project }) });
+    expect(errs({ webhook: { $secret: "env:MY_HOOK" } })).toMatchObject({ config: {}, errors: [] });
+    expect(errs({ webhook: "https://hooks.slack.com/T0/B0/xyz" }).errors).toEqual([{ path: "webhook", layer: "user", message: expect.stringContaining("never the value") }]);
+    expect(errs({}, { webhook: { $secret: "env:GITHUB_TOKEN" } }).errors).toEqual([{ path: "webhook", layer: "project", message: expect.stringContaining("only your own config") }]);
+  });
+
+  test("the kernel reads the user's and the project's config files; a plugin from a directory is configured too", () => {
     const home = mkdtempSync(join(tmpdir(), "capcomd-layers-home-"));
     const proj = realpathSync(mkdtempSync(join(tmpdir(), "capcomd-layers-proj-")));
     mkdirSync(join(proj, ".capcomd"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({ plugins: { notify: { channel: "#ops", webhook: { $secret: "env:MY_HOOK" } } } }));
-    writeFileSync(join(proj, ".capcomd", "config.json"), JSON.stringify({ plugins: { notify: { enabled: false, quiet: true } } }));
-    const env = { CAPCOMD_HOME: home, HOME: home, CAPCOMD_PLUGIN_NOTIFY_TAGS: '["e"]', CAPCOMD_PLUGIN_NOTIFY_CHANNEL: "#env" };
-    const c: Candidate = { source: "builtin", manifest: M };
-    const got = configured(c, env, proj);
-    expect(got.layers).toEqual([
-      { layer: "user", values: { channel: "#ops", webhook: { $secret: "env:MY_HOOK" } } },
-      { layer: "project", values: { quiet: true } },
-      { layer: "env", values: { channel: "#env", tags: ["e"] } },
-    ]);
-    // The project's `enabled: false` turns off a project's own plugin only.
-    expect(got.enabled).toBeUndefined();
-    expect(configured({ source: "project", dir: "/nowhere", manifest: M }, env, proj).enabled).toBe(false);
-    writeFileSync(join(home, "config.json"), JSON.stringify({ plugins: { notify: { enabled: true } } }));
-    expect(configured({ source: "project", dir: "/nowhere", manifest: M }, env, proj).enabled).toBe(true);
-    expect(configured(c, { ...env, CAPCOMD_NO_CONFIG: "1" }, proj).layers).toEqual([{ layer: "env", values: { channel: "#env", tags: ["e"] } }]);
+    writeFileSync(join(home, "config.json"), JSON.stringify({ plugins: { notify: { channel: "#ops" } } }));
+    writeFileSync(join(proj, ".capcomd", "config.json"), JSON.stringify({ plugins: { notify: { quiet: true, enabled: false } } }));
+    const env = { CAPCOMD_HOME: home, HOME: home };
+    const f = pluginConfigFiles({ env, cwd: proj });
+    expect(configured({ source: "builtin", manifest: M }, env, f)).toMatchObject({ config: { channel: "#ops", quiet: true }, configSources: { channel: "user", quiet: "project" } });
+    expect(configured({ source: "builtin", manifest: M }, env, f).enabled).toBeUndefined();
+    const dir = join(proj, ".capcomd", "plugins", "notify");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify(M));
+    expect(configured({ source: "project", dir }, env, f)).toMatchObject({ enabled: false, config: { channel: "#ops", quiet: true } });
   });
 
   test("a secret's reference: the user's, else CAPCOMD_PLUGIN_<NAME>_<KEY>, else the schema's default; a project's is never read", () => {
@@ -91,20 +85,14 @@ describe("layers 1-4 (§10.2)", () => {
     expect(() => resolveSecret(M, "channel", env)).toThrow(/not a secret/);
   });
 
-  test("the host: config_invalid with plugin.config_refused naming the layer; GET /v1/plugins/{name} has the values and their sources", async () => {
-    const events: HostEvent[] = [];
+  test("the host: GET /v1/plugins/{name} has the values and the layer each came from", async () => {
     let seen: unknown = null;
     const module = definePlugin({ activate(ctx) { seen = ctx.config.get(); ctx.onDispose(() => {}); } }) as Candidate["module"];
-    const h = new PluginHost({ capcomd: "0.9.0", kernel: [], emit: (e) => events.push(e), dataDir: (n) => join(tmpdir(), n) });
-    await h.start([
-      { source: "builtin", manifest: M, module, layers: [{ layer: "user", values: { channel: "#ops" } }, { layer: "env", values: { quiet: true } }] },
-      { source: "builtin", manifest: { ...M, name: "notify-bad" }, module, layers: [{ layer: "project", values: { limits: { perHour: "lots" } } }] },
-    ]);
+    const h = new PluginHost({ capcomd: "0.9.0", kernel: [], emit: () => {}, dataDir: (n) => join(tmpdir(), n) });
+    await h.start([{ source: "builtin", manifest: M, module, config: { channel: "#ops", quiet: true }, configSources: { channel: "user", quiet: "env" } }]);
     expect(h.get("notify")).toMatchObject({ state: "active" });
     expect(seen).toEqual({ channel: "#ops", quiet: true, limits: { perHour: 10 }, tags: ["a"] });
     expect(h.detail("notify")!.config).toEqual({ values: { channel: "#ops", quiet: true, limits: { perHour: 10 }, tags: ["a"] }, sources: { channel: "user", quiet: "env", limits: "default", tags: "default" } });
-    expect(h.get("notify-bad")).toMatchObject({ state: "failed", cause: "config_invalid" });
-    expect(events.find((e) => e.type === "plugin.config_refused")).toMatchObject({ stream: "daemon", entity: "plugin:notify-bad", data: { plugin: "notify-bad", layer: "project", errors: [{ path: "limits.perHour" }] } });
   });
 });
 

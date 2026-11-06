@@ -19,15 +19,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   --project`) never run just because you opened the project: `capcomd plugins trust <name>` shows what would run (the
   command, its scopes and hooks, the hash of its files) and asks first (`--yes` for scripts). A changed file, or the same
   plugin in another project, needs trusting again; until then `capcomd plugins list` shows it `validated (untrusted)`.
-- New: plugin settings in layers. A plugin's settings are its defaults, then `"plugins": {"<name>": {…}}` in
-  `~/.capcomd/config.json`, then in the project's `.capcomd/config.json`, then `CAPCOMD_PLUGIN_<NAME>_<KEY>`; turning a
-  plugin on or off and its secrets (`{"$secret": "env:VAR"}`) are yours to set, not a project's. A run can set a plugin's
-  per-run settings: `capcomd run --plugin-config <plugin>.<key>=<value>` (also `run new`), or `plugins` in
-  `POST /v1/runs` (capability `plugins.config`); anything else is refused before the run starts.
-- **Breaking:** a plugin whose settings don't fit what it accepts is no longer started with them: it is listed failed
-  with cause `config_invalid` (and `plugin.config_refused` on the daemon stream names the layer). This includes the
-  built-in ones, e.g. a `"plugins": {"forge-github": {"pollMs": 5}}` below its minimum. Fix the setting; `capcomd
-  plugins show <name>` and the `plugin.failed` event say what is wrong.
+- New: a run can set a plugin's per-run settings (the ones its schema marks `x-per-run`): `capcomd run
+  --plugin-config <plugin>.<key>=<value>` (also `run new`), or `plugins` in `POST /v1/runs` (capability
+  `plugins.config`); any other setting is refused before the run starts. A plugin's secrets take a reference you set in
+  `~/.capcomd/config.json` (`{"$secret": "env:VAR"}`), never a value. A project's `.capcomd/config.json` can't turn a
+  plugin on, turn off one that isn't the project's own, or set a secret; `capcomd plugins show <name>` says where each
+  setting came from.
+- New: `capcomd profiles set` changes any profile where it is defined: a profile file (`.capcomd/profiles/<name>.yaml`,
+  `<name>/profile.yaml`, the same in `~/.capcomd/profiles/`) as well as an `agents.json` entry, with the same flags plus
+  `--set path=value` (`--set limits.maxTurns=40 --set tags=review,security`). A YAML file keeps its comments and its
+  `version` goes up by one. A change that would leave a profile unreadable, or that an `override.yaml` would hide, is
+  refused and writes nothing. `capcomd profiles add <name> --extends <parent>` writes a new profile file; `rm` removes
+  a single profile file too (not a package directory, nor a profile another one extends). Before, `add`, `set` and
+  `rm` only edited `agents.json`. See docs/agents.md.
+- New for apps (capability `profiles.edit`): `GET /v1/profiles/{name}` serves one profile as rows to render and edit
+  (each value with its type, the file that sets it and whether it can be changed there; never a prompt's text), and
+  `PUT /v1/profiles/{name}` changes them, with a token that has the `configure` scope, an `Idempotency-Key` and the
+  profile's `rev`. Each change is a `profile.changed` event on the daemon stream. The menu bar app doesn't edit
+  profiles yet.
 - New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
   a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
   `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`
@@ -89,6 +98,25 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agents still get it once. See docs/agents.md, "Skills in a profile".
 - The skills an agent gets when it starts (the orchestration skill, a plugin's) are now each in a `<skill name="…">`
   block in its instructions, as a message's skills are; their text is unchanged.
+- New: a watchdog for agents that keep busy but get nowhere. It watches the work, not the process: an agent whose
+  files haven't changed for 15 minutes, and that hasn't spawned or heard back from an agent of its own or finished a
+  background job, check or approval it was waiting on, gets a "stalled" notice (the amber hand in the app; its parent
+  agent sees it too), and after 45 minutes without progress it is stopped, with one line on the run's stream saying
+  so. Tool calls alone don't count as progress; waiting on a job, a check, an approval or a usage limit doesn't count
+  against it; a planner is judged through the agents it started, so a stuck worker is stopped rather than its planner.
+  Reviewers, report-only agents (`--report`) and orchestrate agents, whose work never changes files, aren't judged by
+  it, and it doesn't put "stalled" over capcomd's own "idle", "spinning" or "failing" notice.
+  It is off until you turn it on: `capcomd setup service` (and the full `capcomd setup`) turns it on unless you pass
+  `--no-watchdog` or turned it off yourself; `capcomd setup check` says whether it is on, and when its settings
+  would keep it from loading. Tune it in
+  `~/.capcomd/config.json`: `"plugins": {"watchdog": {"stalledAfterMs": 900000, "stopAfterMs": 2700000}}` (`"enabled":
+  false` turns it off; `stopAfterMs: 0` never stops an agent), then restart the engine.
+- New: plugin settings live in `plugins.<name>` of `~/.capcomd/config.json` and a project's `.capcomd/config.json`, or
+  in `CAPCOMD_PLUGIN_<NAME>_<KEY>` environment variables; `"enabled": false` turns a plugin off. Settings its schema
+  refuses keep the plugin from loading (`capcomd plugins list` shows it failed with `config_invalid`) and are recorded
+  as a `plugin.config_refused` event naming each bad setting.
+- Fix: capcomd clearing its own "idle", "spinning" or "failing" notice on an agent no longer takes away a different
+  notice a plugin raised on it.
 - New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
   `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd profiles list|show`, which also
   give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether

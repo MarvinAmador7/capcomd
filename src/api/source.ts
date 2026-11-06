@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Agent, AgentStatus, Attachment, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Profiles, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { WorkspaceFile } from "./run-files";
+import type { ProfileLookup, ProfileUpdate } from "./profiles";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
 import { runTitle } from "./run-title";
@@ -78,6 +79,10 @@ export interface HarnessSource {
 	/** GET /v1/profiles: every agent profile a run can use; with `repo`, a run of that project (throws CreateRunError, a
 	 *  422, when it isn't one). */
 	profiles(repo?: string): Promise<O<typeof Profiles>>;
+	/** GET /v1/profiles/{name}: one profile as rows (capability profiles.edit); `repo` as profiles(). */
+	profile(name: string, repo?: string): Promise<ProfileLookup>;
+	/** PUT /v1/profiles/{name}: change it in its own file; the event to record when something changed. */
+	updateProfile(name: string, repo: string | undefined, body: { values: Record<string, string | null>; rev: string }): Promise<ProfileUpdate>;
 	/** GET /v1/logins: claude then codex, each in docker then boxd. Local state only; never a credential. */
 	logins(): Promise<O<typeof Login>[]>;
 	/** GET /v1/environments: docker then boxd. */
@@ -379,6 +384,8 @@ export function memorySource(seed: Partial<{
 		skills: async () => (seed.skills ?? []).map(({ content: _, ...s }) => s),
 		runOptions: optionsOf,
 		profiles: async () => seed.profiles ?? { file: "/nonexistent/.capcomd/agents.json", layers: [], default: null, profiles: [], warnings: [], error: null },
+		profile: async (name) => ({ ok: false, status: 404, code: "not_found", message: `profile "${name}" not found` }),
+		updateProfile: async (name) => ({ ok: false, status: 404, code: "not_found", message: `profile "${name}" not found` }),
 		logins: loginsOf,
 		...surface,
 		environments: async () => seed.environments ?? LISTED_PROVIDERS.map((sandbox) => ({ sandbox, status: "missing" as const, name: null, versions: {}, builtAt: null, command: `capcomd env build --sandbox ${sandbox}` })),

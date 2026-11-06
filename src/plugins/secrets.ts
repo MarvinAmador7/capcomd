@@ -6,8 +6,7 @@
 // `keychain:<account>` isn't resolved yet: the boxd key `capcomd setup` keeps in the OS keychain still reaches the daemon
 // as BOXD_API_KEY (src/config/store.ts applyConfig), which is what sandbox-boxd's default reference names.
 import { PluginError } from "../../packages/plugin/src/errors";
-import { configSchema, secretRefOf } from "../../packages/plugin/src/config";
-import type { PluginManifest } from "../../packages/plugin/src/manifest";
+import { envName, schemaOf, secretRefOf } from "./config";
 import { readConfig, userConfigPath } from "../config/store";
 
 type Env = Record<string, string | undefined>;
@@ -17,10 +16,10 @@ type Manifest = { name: string; config?: unknown };
 /** The reference `key` holds, when `key` is a secret `m` declares; a PluginError otherwise. `dir`: the plugin's
  *  directory, where a `$ref` schema is read from. */
 export function secretRef(m: Manifest, key: string, env: Env = process.env, dir: string | null = null): string {
-  const prop = configSchema(m as PluginManifest, dir)?.properties?.[key] as Prop;
+  const prop = schemaOf(m, dir)?.properties?.[key] as Prop;
   if (!prop || prop["x-secret"] !== true) throw new PluginError("forbidden", `${key} is not a secret the ${m.name} plugin declares (§10.3)`);
   const user = env.CAPCOMD_NO_CONFIG ? undefined : ((readConfig(userConfigPath(env)).plugins as Record<string, unknown> | undefined)?.[m.name] as Record<string, unknown> | undefined)?.[key];
-  const fromEnv = (() => { const v = env[`CAPCOMD_PLUGIN_${`${m.name}_${key}`.toUpperCase().replace(/[-.]/g, "_")}`]; try { return v === undefined ? undefined : JSON.parse(v); } catch { return undefined; } })();
+  const fromEnv = (() => { const v = env[envName(m.name, key)]; try { return v === undefined ? undefined : JSON.parse(v); } catch { return undefined; } })();
   for (const v of [user, fromEnv]) {
     const ref = secretRefOf(v);
     if (ref) return ref;

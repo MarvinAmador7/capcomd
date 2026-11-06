@@ -110,8 +110,11 @@ src/
                   sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
                   setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an
                   out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's
-                  private storage. The user's plugins (~/.capcomd/plugins/<name>) run out of process. install.ts,
-                  `capcomd plugins install|update|remove|trust|allow-version` (plugin API §4.8): ~/.capcomd/plugins/
+                  private storage; watchdog.ts, the daemon's watchdog (off until `capcomd setup` turns it on); config.ts,
+                  a plugin's settings from the user's and the project's config and CAPCOMD_PLUGIN_<NAME>_<KEY>;
+                  services.ts, the daemon's `ctx.agents`. The user's plugins (~/.capcomd/plugins/<name>) run out of
+                  process; install.ts, `capcomd plugins install|update|remove|trust|allow-version` (plugin API §4.8):
+                  ~/.capcomd/plugins/
                   <name>/ with its LOCK, a project's `plugins.use` fetched to ~/.capcomd/plugins/.project/<key>/,
                   exemptions in ~/.capcomd/plugins/compatibility.json; run-config.ts, a run's per-run plugin settings
                   (`--plugin-config`, POST /v1/runs `plugins`) in the plugin's run storage
