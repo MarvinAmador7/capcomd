@@ -426,7 +426,7 @@ export async function agentIntegrationStep(p: Prompter, v: Values, cwd = process
  * capcomd asks you itself in Hermes (elicit, recommended), or you in a terminal). Null when there's no Hermes.
  */
 export async function hermesStep(p: Prompter, v: Values, cwd = process.cwd(), machine: KeyDeps["machine"] = realKeyDeps.machine): Promise<Step | null> {
-  const H = await import("./hermes");
+  const H = await import("../../plugins/front/hermes-config");
   const P = await import("../../config/projects");
   const h = H.detectHermes();
   if (!h.found) return null;
@@ -580,7 +580,7 @@ export async function checkSetup(cwd = process.cwd(), o: { mcpClient?: boolean }
   if (sandbox === "docker" && projPath) out.push(...(await envImageCheck(dirname(dirname(projPath)))));
   const plugin = runs(claudeBin()) && claudePluginInstalled();
   const skill = existsSync(join(legacySkill(), "SKILL.md"));
-  const hermes = (await import("./hermes")).hermesStatus();
+  const hermes = (await import("../../plugins/front/hermes-config")).hermesStatus();
   // Any agent that has capcomd counts: the plugin in Claude Code, the skill, or capcomd in Hermes.
   const any = plugin || skill || (hermes.found && hermes.ok);
   const pluginHint = `Run \`capcomd setup agent\`, or in Claude Code: \`/plugin install capcomd --marketplace ${pluginMarketplace()}\`.`;

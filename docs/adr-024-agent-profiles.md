@@ -252,7 +252,7 @@ with the same schema and no `name`; it is applied last, as `extends` would be. T
 
 The planner (a Claude Code or Codex session driving `capcomd mcp`, or the `planner` profile in its VM) chooses by
 reading, not by magic. Today `capcomd_profiles` returns `{name, provider, auth, model, canSpawn, canLead, ready, does}`
-(`src/cli/commands/agents.ts` `list`, `abilityText`), and the orchestration skill says "any profile whose entry has
+(`src/cli/commands/profiles.ts` `list`, `abilityText`), and the orchestration skill says "any profile whose entry has
 `canLead` can lead". v2 adds, per profile:
 
 - `tags` and `description` as written;

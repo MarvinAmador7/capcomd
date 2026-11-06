@@ -7,13 +7,14 @@ import { HOOKS, type HookName } from "./hooks";
 import { parseManifest, type PluginManifest } from "./manifest";
 import { parseRange, satisfies } from "./semver";
 
-/** The kernel's own commands (the `case` labels in `src/cli/index.ts`, plus `tui`, `version`, `help` and `plugins`):
- *  a plugin's CLI group may not take one (§4.7.1). `tests/plugins/host.test.ts` keeps it equal to the CLI's. */
+/** The kernel's own commands: the ones its dispatcher answers itself (`src/cli/front-doors.ts` `DISPATCHER_COMMANDS`)
+ *  and the ones its built-in front doors register (`front-*`): a plugin's CLI group may not take one (§4.7.1).
+ *  `tests/plugins/front-doors.test.ts` keeps it equal to the CLI's. */
 export const KERNEL_COMMANDS = [
   "agent-drive", "agents", "approve", "auth", "await", "budget", "cancel", "clients", "doctor", "env", "events", "goal",
   "grant", "help", "inspect", "kv", "logs", "mcp", "merge", "pause", "plugins", "pr", "profiles", "replay", "resume", "run", "sandbox",
   "secrets", "send", "serve", "service", "setup", "skills", "spawn", "status", "task", "title", "token", "trace", "tree",
-  "tui", "ui", "upgrade", "verify", "version", "wait-any", "check",
+  "tui", "ui", "upgrade", "verify", "version", "wait-any", "check", "hermes",
 ] as const;
 
 /** The plugin API majors this host serves (§12.1). */
@@ -32,6 +33,9 @@ export interface CheckOptions {
   capcomd?: string;
   /** An operator's exemption for this exact `name@version` (§4.4 `allow-version`). */
   exempt?: boolean;
+  /** One of the kernel's own front doors (a built-in the kernel names, `Candidate.kernelSurface`): its CLI groups are
+   *  the kernel's commands, so the collision check doesn't apply to it. */
+  kernelSurface?: boolean;
 }
 
 /** Inside `dir` after resolving symlinks (a path that does not exist yet is compared as written). */
@@ -52,7 +56,7 @@ export function checkManifest(m: PluginManifest, o: CheckOptions = {}): { invali
       warnings.push({ path: `contributes.hooks.${hook}.failure`, message: `${hook} is an observe hook: failure is always open (§6.5)` });
   }
   for (const [i, c] of (m.contributes?.cli ?? []).entries())
-    if ((KERNEL_COMMANDS as readonly string[]).includes(c.name)) invalid.push({ path: `contributes.cli.${i}.name`, message: `\`capcomd ${c.name}\` is a kernel command (§4.7.1)` });
+    if (!o.kernelSurface && (KERNEL_COMMANDS as readonly string[]).includes(c.name)) invalid.push({ path: `contributes.cli.${i}.name`, message: `\`capcomd ${c.name}\` is a kernel command (§4.7.1)` });
   if (!parseRange(m.engines.capcomd)) invalid.push({ path: "engines.capcomd", message: `not a semver range: ${JSON.stringify(m.engines.capcomd)}` });
   else if (o.capcomd && !o.exempt && !satisfies(o.capcomd, m.engines.capcomd))
     incompatible.push({ path: "engines.capcomd", message: `capcomd ${o.capcomd} is outside ${m.engines.capcomd} (§4.4)` });

@@ -1,0 +1,19 @@
+{
+  "schema": "capcomd.plugin/v1",
+  "name": "test-preparer",
+  "version": "1.0.0",
+  "description": "Test plugin (tests/subagents/prepare-skills.test.ts): prepares every real agent with a skill of its own and a variable.",
+  "apiVersion": 1,
+  "engines": {
+    "capcomd": ">=0.0.0"
+  },
+  "entry": {
+    "runtime": "in-process",
+    "module": "./index.ts"
+  },
+  "contributes": {
+    "hooks": {
+      "agent.preparing": {}
+    }
+  }
+}
