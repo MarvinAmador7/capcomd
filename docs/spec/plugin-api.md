@@ -494,8 +494,8 @@ refuses the spawn with `plugin:<name>`. Team-shape policies, fan-out caps. Once 
 #### 6.6.7 `agent.preparing` · modify · workflow `prepare` (`agent-workflow.ts`), before the machine is ensured
 `AgentPreparing {agent, spec, prompt: {system, append, skills[]}, env: names[], egress[], credentialMode, sandbox}`.
 `spec` is the agent's pinned spec with `profile: {name, version, source}` when the agent recorded one at spawn (as
-`profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same). Patch `{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after the profile's own (never replaces);
-`skills` are added (pinned by hash, `src/agents/skills.ts`); `env` adds variables whose names match `^[A-Z][A-Z0-9_]*$`
+`profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same). Patch
+`{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after the profile's own (never replaces); `skills` are added (pinned by hash, `src/agents/skills.ts`); `env` adds variables whose names match `^[A-Z][A-Z0-9_]*$`
 and are not already set, and whose values match no secret pattern (`src/agents/redact.ts`); `egress` may only remove
 hosts. **The only place a plugin adds prompt text**: the orchestration skill (`src/subagents/skill.ts`) and ADR-024's
 `skills` and `identity.persona` land here. Fires per attempt (a retried agent prepares again), in the attempt's

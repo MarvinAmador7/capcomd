@@ -122,7 +122,8 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
     if (raw.name === undefined) at("name", `is required (${fileName})`);
     else if (raw.name !== fileName) at("name", `is ${JSON.stringify(raw.name)}, but the file is the profile ${fileName}'s`);
   }
-  if (raw.version !== undefined && !isInt(raw.version, 1)) at("version", "must be an integer >= 1");
+  // A safe integer: an agent records it (harness.v1 Agent.profileVersion), and one past 2^53 isn't a version any client reads back.
+  if (raw.version !== undefined && !(isInt(raw.version, 1) && Number.isSafeInteger(raw.version))) at("version", "must be an integer >= 1");
   if (raw.extends !== undefined && (typeof raw.extends !== "string" || !NAME.test(raw.extends)))
     at("extends", "must be a profile's name: one of this project's, your own or a bundled one (never another project's, a path or a repository)");
   if (raw.default !== undefined && raw.default !== null && typeof raw.default !== "boolean") at("default", "must be true or false");

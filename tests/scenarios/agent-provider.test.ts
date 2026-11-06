@@ -131,6 +131,10 @@ test("profileVersion and profileSource: the version and layer of the profile eac
     // An edit after the spawn: the next agent gets the new version, the one already spawned keeps its own.
     writeFileSync(join(project, "tester", "profile.yaml"), tester(4));
     const t4 = await spawnJ("t4", "tester");
+    // A keyed retry of the first spawn after the edit is the same spawn (the version is outside its params hash): the
+    // same agent, still at the version it was first recorded with.
+    const retried = await spawnJ("t3", "tester");
+    expect({ id: retried.agentId, created: retried.created, version: retried.profileVersion }).toEqual({ id: t3.agentId, created: false, version: 3 });
     const want = new Map<string, [number, string]>([[t3.agentId, [3, "project"]], [t4.agentId, [4, "project"]], [scout.agentId, [2, "user"]], [worker.agentId, [1, "project"]]]);
     const ids = [...want.keys()];
     expect((await waitAll(w, run, ids)).agents.map((a: any) => a.status)).toEqual(ids.map(() => "done"));

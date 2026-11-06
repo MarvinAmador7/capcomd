@@ -27,7 +27,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `inspect` and `await` carry `profileVersion` and `profileSource`. For apps: `Agent.profileVersion` and
   `Agent.profileSource` on `GET /v1/runs/{runId}/agents` and the `snapshot.agents` frame, and the same two fields on
   `agent.spawned` events (both null for an agent without a profile). A profile's version is its `version:` field,
-  else 1; `agents.json` profiles are version 1.
+  else 1 (a whole number up to 2^53 - 1; a larger one is refused when the profile loads); `agents.json` profiles are
+  version 1.
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
   `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of
   always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. An installed
