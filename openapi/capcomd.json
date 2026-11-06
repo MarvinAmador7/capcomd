@@ -1770,13 +1770,8 @@
                       ]
                     },
                     "source": {
-                      "enum": [
-                        "github",
-                        "git",
-                        "local"
-                      ],
                       "type": "string",
-                      "description": "Where the branches were read: github (the GitHub API with the user's own gh login), git (`git ls-remote origin`), local (the checkout's own refs: the remote couldn't be asked; see note)"
+                      "description": "Where the branches were read: the name of the project's forge when its service answered (github: the GitHub API with the user's own gh login; a forge plugin says its own name, so expect values beyond these), git (`git ls-remote origin`), local (the checkout's own refs: the remote couldn't be asked; see note)"
                     },
                     "note": {
                       "description": "Why a better source wasn't used (daemon-written, trusted), e.g. \"GitHub: no login (GITHUB_TOKEN, GH_TOKEN or `gh auth login`)\"; null when it was",

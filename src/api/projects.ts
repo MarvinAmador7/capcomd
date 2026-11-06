@@ -122,11 +122,13 @@ export async function inspectProject(path: string, deps: ProjectDeps): Promise<P
 /** GET /v1/projects/branches (capability runs.goal_branch): the run setup screen's base menu and goal branch. */
 export interface ProjectBranchesQuery { path: string; goal?: string; goalBranch?: string; base?: string }
 export interface ProjectBranchesResult {
-	path: string; root: string | null; github: string | null; source: "github" | "git" | "local"; note: string | null;
+	/** source: the name of the forge whose service answered (github, or another forge plugin's own), git, or local. */
+	path: string; root: string | null; github: string | null; source: string; note: string | null;
 	defaultBranch: string | null; branches: string[]; projectTarget: string | null; suggestedBase: string | null;
 	suggestedGoalBranch: string | null; goalBranchProblem: string | null; baseProblem: string | null;
 }
-/** What the branches route reads the remote with (tests pass a stand-in; the daemon: GitHub, then git, then local refs). */
+/** What the branches route reads the remote with (tests pass a stand-in; the daemon: the project's forge, its service
+ *  then the remote itself, else the checkout's local refs). */
 export type BranchLister = (o: Parameters<typeof listBranches>[0]) => Promise<BranchListing>;
 
 export async function projectBranches(q: ProjectBranchesQuery, deps: ProjectDeps & { listBranches?: BranchLister }): Promise<ProjectBranchesResult> {
@@ -149,8 +151,8 @@ export async function projectBranches(q: ProjectBranchesQuery, deps: ProjectDeps
 	const goalBranchProblem = q.goalBranch === undefined ? null : (G.goalBranchProblem(q.goalBranch, { base: suggestedBase, env })
 		?? (G.collides(q.goalBranch, listing.branches) ? `${q.goalBranch} already exists on the remote (or clashes with a branch there): each run's work lands on a branch of its own. Pick another name.` : null));
 	return {
-		// The built-in forges say github or git; another forge says its own name (the contract lists the built-ins').
-		path: q.path, root, github, source: listing.source as ProjectBranchesResult["source"], note: listing.note, defaultBranch: listing.defaultBranch, branches: listing.branches, projectTarget, suggestedBase,
+		// The forge's name when its service answered (github, or a forge plugin's own), else git or local.
+		path: q.path, root, github, source: listing.source, note: listing.note, defaultBranch: listing.defaultBranch, branches: listing.branches, projectTarget, suggestedBase,
 		suggestedGoalBranch: q.goal !== undefined && q.goal.trim() ? G.suggestGoalBranch(q.goal, listing.branches) : null, goalBranchProblem, baseProblem,
 	};
 }

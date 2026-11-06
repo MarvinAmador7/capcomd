@@ -107,10 +107,11 @@ public struct GoalBranchSetup: Sendable, Hashable {
     if refusedField == "goalBranch", let r = refusal { return GoalSetupLine(r, warn: true) }
     return branchProblem.map { GoalSetupLine($0, warn: true) }
   }
-  /// Where the branches came from when it isn't GitHub (the daemon's note), or why they couldn't be read: dimmed.
+  /// Where the branches came from when the forge's service didn't answer (`git` or `local`: the daemon's note), or why
+  /// they couldn't be read: dimmed. Any other source is the forge's name (github, or a forge plugin's own): no note.
   public var note: GoalSetupLine? {
     if let f = failure { return GoalSetupLine(f, warn: false) }
-    guard let a = answer, a.source != "github", let n = a.note else { return nil }
+    guard let a = answer, a.source == "git" || a.source == "local", let n = a.note else { return nil }
     return GoalSetupLine(n, warn: false)
   }
 
