@@ -2,7 +2,7 @@
 // carries a recording plugin (tests/plugins/fixtures/hook-recorder, loaded through CAPCOMD_TEST_PLUGINS) that listens
 // to every hook, allows everything and writes each call to a file; a scripted planner spawns one worker, verifies it
 // and merges it from its VM (calls the daemon serves). The calls come in the kernel's order, the run ends as it would
-// with no plugin, and a hook whose kernel site isn't there yet (jobs, triggers) never fires.
+// with no plugin, and a hook whose kernel site isn't there yet (triggers), or that nothing here causes (jobs), never fires.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -110,7 +110,7 @@ capcomd result --summary done >/dev/null`);
   expect(all[landing]!.key).toBe(`merge.landing:${mrg}:1`);
   expect(all.filter(of("merge.landing", mrg)).length).toBe(1);
 
-  // Nothing parked, nothing to decide; no job or trigger exists yet (§17.2 steps 7 and 10).
+  // Nothing parked, nothing to decide, no job started (tests/scenarios/jobs.test.ts has them); no trigger exists yet (§17.2 step 10).
   for (const h of ["approval.deciding", "approval.changed", "job.changed", "trigger.admitting", "trigger.changed"]) expect(all.filter((c) => c.hook === h).length).toBe(0);
   // Every call was made in the daemon, about this run (but the daemon's start and machines a restart forgot).
   expect(all.filter((c) => c.runId && c.runId !== run).length).toBe(0);
