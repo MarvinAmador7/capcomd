@@ -1,6 +1,7 @@
 // Skills an operator can attach to a message (harness.v1 GET /v1/skills, POST …/messages `skills`, `capcomd send
 // --skill`): the bundled capcomd skills and the user's ~/.claude/skills/<dir>/SKILL.md. An attached skill's SKILL.md
-// goes to the agent with the message, the way a spawner's orchestration skill goes with its prompt.
+// goes to the agent with the message, the way a profile's skills and a spawner's orchestration skill go with its
+// prompt (agent.preparing, src/primitives/ops.ts `agentPreparing`): each in a `<skill name="…">` block (skillBlock).
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -23,9 +24,9 @@ export function frontmatter(md: string): { name?: string; description?: string }
 }
 
 /** Every skill by name (lowercase), bundled first; a user skill with a bundled skill's name is left out. */
-async function registry(): Promise<Map<string, SkillInfo & { read: () => string }>> {
+function registry(): Map<string, SkillInfo & { read: () => string }> {
   const out = new Map<string, SkillInfo & { read: () => string }>();
-  const { ORCHESTRATION_SKILL } = await import("../utils/assets");
+  const { ORCHESTRATION_SKILL } = require("../utils/assets") as typeof import("../utils/assets");
   for (const md of [ORCHESTRATION_SKILL]) {
     const f = frontmatter(md);
     if (f.name) out.set(f.name.toLowerCase(), { name: f.name.toLowerCase(), description: f.description ?? "", source: "bundled", read: () => md });
@@ -45,14 +46,20 @@ async function registry(): Promise<Map<string, SkillInfo & { read: () => string 
 
 /** GET /v1/skills. */
 export async function listSkills(): Promise<SkillInfo[]> {
-  return [...(await registry()).values()].map(({ name, description, source }) => ({ name, description, source }));
+  return [...registry().values()].map(({ name, description, source }) => ({ name, description, source }));
 }
 
 /** One skill's SKILL.md by name; null when there is no such skill. */
 export async function readSkill(name: string): Promise<AttachedSkill | null> {
-  const s = (await registry()).get(name.toLowerCase());
+  const s = readSkillSync(name);
+  return s && { name: s.name, content: s.content };
+}
+/** readSkill for a caller that can't wait (a profile's `source: user` skill, src/profiles/skills.ts), with where the
+ *  skill was found. */
+export function readSkillSync(name: string): (AttachedSkill & { source: SkillInfo["source"] }) | null {
+  const s = registry().get(name.toLowerCase());
   if (!s) return null;
-  try { return { name: s.name, content: s.read() }; } catch { return null; }
+  try { return { name: s.name, content: s.read(), source: s.source }; } catch { return null; }
 }
 
 /**
@@ -76,9 +83,12 @@ export async function resolveSkills(names: string[], o: { read?: (name: string) 
   return { skills };
 }
 
+/** One skill as the agent reads it, with a message or in its prompt: its SKILL.md in a block named for it. */
+export const skillBlock = (name: string, content: string): string => `<skill name="${name}">\n${content.trim()}\n</skill>`;
+
 /** A message as the agent reads it: the text, then each attached skill's SKILL.md. */
 export function withSkills(text: string, skills: AttachedSkill[] | null | undefined): string {
   if (!skills?.length) return text;
-  const parts = skills.map((s) => `<skill name="${s.name}">\n${s.content.trim()}\n</skill>`);
+  const parts = skills.map((s) => skillBlock(s.name, s.content));
   return `${text}\n\nThe sender attached ${skills.length === 1 ? "this skill" : "these skills"} to the message: read ${skills.length === 1 ? "it" : "them"} and use ${skills.length === 1 ? "it" : "them"} for this request.\n\n${parts.join("\n\n")}`;
 }
