@@ -3,7 +3,8 @@
 // the pull requests of a run's goal branch (POST /v1/runs/{runId}/pull-request, capcomd_pr_open, `capcomd pr open`),
 // `gh repo create` for POST /v1/projects/publish, a remote's branches and default branch (the GitHub API with the
 // user's own login, else `git ls-remote`), and whether that login is on this machine (`gh auth status` for the GitHub
-// CLI, a token for the API; `gh api user` for who it is). A direct land is the same CAS push as forge-git's. The REST
+// CLI, a token for the API; `gh api user` for who it is), and that token as the credential for the kernel's host git
+// over https to github.com (`remoteCredential`). A direct land is the same CAS push as forge-git's. The REST
 // adapter is ./github-rest.ts (tests inject a fake one with setGitHubApi); the project's settings (CAPCOMD_GITHUB_API,
 // _POLL_MS, _TIMEOUT_MS, _REPO) and the caller's environment (CAPCOMD_GH_CLI, GITHUB_TOKEN) reach it through the
 // kernel's forge scope.
@@ -12,7 +13,7 @@ import { homedir } from "node:os";
 import { definePlugin, type PluginModule } from "../../../packages/plugin/src/context";
 import { PluginError } from "../../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../../packages/plugin/src/manifest";
-import type { ErrorClass, Forge, ForgeAccount, ForgeBranches, ForgeLogin, ForgeLoginUse, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
+import type { ErrorClass, Forge, ForgeAccount, ForgeBranches, ForgeLogin, ForgeLoginUse, ForgeRemoteCredential, LandOutcome, LandRequest, PullRequestRef, SeamCall } from "../../../packages/plugin/src/seams";
 import type { Untrusted } from "../../../packages/plugin/src/shapes";
 import { githubRepoFromRemote } from "../../merge/config";
 import { GitHubHttpError, githubAt, hasGitHubOverride, type GitHubApi, type PullRequest } from "./github-rest";
@@ -159,6 +160,17 @@ export class GitHubForge implements Forge {
     }
     try { return { ...(await lsRemoteBranches(input, c)), note: notes.join("; ") || null }; }
     catch (e) { throw new PluginError("unavailable", [...notes, (e as Error).message].join("; "), undefined, true); }
+  }
+
+  /**
+   * For git over https to github.com (§11.7): the user's token (GITHUB_TOKEN, GH_TOKEN or `gh auth token`) as the
+   * password for https://github.com. null for any other remote (ssh, another host, a URL with a user in it) or without a
+   * token. The kernel's host git applies it; nothing here runs git.
+   */
+  async remoteCredential(input: { remote: string }, _c: SeamCall): Promise<ForgeRemoteCredential | null> {
+    if (!/^https:\/\/github\.com\//i.test(input.remote.trim())) return null;
+    const token = await userToken(scopedEnv());
+    return token ? { origin: "https://github.com", username: "x-access-token", password: token } : null;
   }
 
   /** The API (CAPCOMD_GITHUB_API, the project's when the kernel gave it) and the user's token for it; null without one. */

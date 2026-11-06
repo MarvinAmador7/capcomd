@@ -32,7 +32,8 @@ export function remoteBranches(dir: string, max = 200): string[] {
   return [...new Set(r.out.split("\n").map((s) => s.trim().replace(/^origin\//, "")).filter((s) => s && s !== "HEAD" && s !== "origin"))].sort().slice(0, max);
 }
 
-/** git@github.com:o/r.git → https://github.com/o/r.git (VMs clone over https with a per-push credential). */
+/** git@github.com:o/r.git → https://github.com/o/r.git, for any host (capcomd's host git uses the https remote, where a
+ *  forge's credential for it applies: docs/spec/plugin-api.md §7.4 remoteCredential). */
 export function httpsRemote(url: string): string {
   const m = /^git@([^:]+):(.+?)(\.git)?$/.exec(url.trim());
   if (m) return `https://${m[1]}/${m[2]}.git`;

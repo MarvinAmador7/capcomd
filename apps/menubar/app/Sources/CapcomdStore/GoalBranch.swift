@@ -233,7 +233,8 @@ public struct GoalView: Decodable, Sendable, Hashable {
 /// `GET /v1/projects/branches`: the setup screen's base menu and goal branch field.
 public struct ProjectBranches: Decodable, Sendable, Hashable {
   public var path: String; public var root: String?; public var github: String?
-  /// "github" (the GitHub API with the person's gh login), "git" (`git ls-remote`), "local" (the checkout's refs; `note` says why).
+  /// The project's forge's name when its service answered ("github": the GitHub API with the person's gh login; a forge
+  /// plugin says its own, so any string), "git" (`git ls-remote`), "local" (the checkout's refs; `note` says why).
   public var source: String
   public var note: String?
   /// The repository's default branch as the remote reports it; nil when it doesn't (never a guessed main).

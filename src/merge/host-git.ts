@@ -15,6 +15,7 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
+import type { ForgeRemoteCredential } from "../../packages/plugin/src/seams";
 import { Git, type GitResult } from "./git";
 
 /** The git subcommands that talk to a remote. */
@@ -115,46 +116,52 @@ export function assertRemoteUrl(remote: string): void {
 
 // ---- credentials -------------------------------------------------------------------------------------------------
 
-let tokenCache: { at: number; token: string | null } | null = null;
-
-/** A GitHub token for git over https to github.com: GITHUB_TOKEN / GH_TOKEN, else `gh auth token` (cached a minute). */
-async function githubTokenForGit(): Promise<string | null> {
-  const t = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
-  if (t) return t;
-  if (tokenCache && Date.now() - tokenCache.at < 60_000) return tokenCache.token;
-  let token: string | null = null;
-  try {
-    const proc = Bun.spawn([process.env.CAPCOMD_GH_CLI || "gh", "auth", "token"], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const out = (await new Response(proc.stdout).text()).trim();
-    if ((await proc.exited) === 0 && out) token = out;
-  } catch { /* no gh */ }
-  tokenCache = { at: Date.now(), token };
-  return token;
-}
+/** The active forges' credential for `remote` (docs/spec/plugin-api.md §7.4 `remoteCredential`), or null. */
+const forgeCredential = async (remote: string): Promise<ForgeRemoteCredential | null> => (await import("../plugins/forges")).remoteCredentialFor(remote);
 
 /**
- * The environment host git gets for `remote`: no prompts, only the plain protocols, and, for an https remote on
- * github.com, the user's GitHub token as the only credential helper for https://github.com, with the token in this one
- * process's environment, never in a file or a URL. The helper list is reset first: git hands a credential that worked to
- * every helper in the list to `store`, so with the user's own helpers still listed (macOS git's system config lists
+ * The origin a forge's credential applies to, as git's config names it (`https://github.com`), when it is one and
+ * `remote` is on it: both https, the same host and port, no user in either, no path in the credential's. Else null.
+ */
+export function credentialOrigin(cred: Pick<ForgeRemoteCredential, "origin">, remote: string): string | null {
+  let o: URL, r: URL;
+  try { o = new URL(cred.origin); r = new URL(remote.trim()); } catch { return null; }
+  if (o.protocol !== "https:" || r.protocol !== "https:") return null;
+  if (o.username || o.password || r.username || r.password || o.search || o.hash || (o.pathname !== "/" && o.pathname !== "")) return null;
+  if (!o.host || o.host !== r.host) return null;
+  return `https://${o.host}`;
+}
+
+/** A value the git credential protocol reads line by line: one line, no NUL. */
+const oneLine = (s: unknown): s is string => typeof s === "string" && s.length > 0 && s.length <= 8192 && !/[\r\n\0]/.test(s);
+
+/**
+ * The environment host git gets for `remote`: no prompts, only the plain protocols, and, for an https remote whose
+ * forge has the user's credential for it (§7.4 `remoteCredential`; forge-github: the user's GitHub token for
+ * https://github.com), that credential as the only credential helper for the remote's origin, kept in this one process's
+ * environment, never in a file or a URL. The helper list is reset first: git hands a credential that worked to every
+ * helper in the list to `store`, so with the user's own helpers still listed (macOS git's system config lists
  * `osxkeychain`) the token would be saved in their keychain or credential store, and a saved copy, once the token
- * changes, would be offered first and fail. Without a token, or for another remote, the user's own helpers apply.
+ * changes, would be offered first and fail. Without one, or for another remote, the user's own helpers apply. The forge
+ * supplies data only: the helper is built here, and a credential for another origin than the remote's is ignored.
  */
 export async function hostCredentialEnv(remote: string, source: Record<string, string | undefined> = process.env): Promise<Record<string, string>> {
   const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: ALLOWED_PROTOCOLS };
-  if (!/^https:\/\/github\.com\//i.test(remote.trim())) return env;
-  const token = await githubTokenForGit();
-  if (!token) return env;
+  if (!/^https:\/\//i.test(remote.trim())) return env;
+  const cred = await forgeCredential(remote).catch(() => null);
+  const origin = cred ? credentialOrigin(cred, remote) : null;
+  if (!cred || !origin || !oneLine(cred.username) || !oneLine(cred.password)) return env;
   const n = Number(source.GIT_CONFIG_COUNT ?? 0) || 0;
   return {
     ...env,
-    CAPCOMD_GIT_TOKEN: token,
+    CAPCOMD_GIT_USERNAME: cred.username,
+    CAPCOMD_GIT_TOKEN: cred.password,
     GIT_CONFIG_COUNT: String(n + 2),
-    // An empty helper clears the helpers listed before it (system, global, local) for https://github.com.
-    [`GIT_CONFIG_KEY_${n}`]: "credential.https://github.com.helper",
+    // An empty helper clears the helpers listed before it (system, global, local) for the origin.
+    [`GIT_CONFIG_KEY_${n}`]: `credential.${origin}.helper`,
     [`GIT_CONFIG_VALUE_${n}`]: "",
-    [`GIT_CONFIG_KEY_${n + 1}`]: "credential.https://github.com.helper",
-    [`GIT_CONFIG_VALUE_${n + 1}`]: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=$CAPCOMD_GIT_TOKEN"; }; f',
+    [`GIT_CONFIG_KEY_${n + 1}`]: `credential.${origin}.helper`,
+    [`GIT_CONFIG_VALUE_${n + 1}`]: '!f() { test "$1" = get || exit 0; echo "username=$CAPCOMD_GIT_USERNAME"; echo "password=$CAPCOMD_GIT_TOKEN"; }; f',
   };
 }
 

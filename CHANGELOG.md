@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Forge plugins: a forge can now supply the credential capcomd's git uses on your machine for its https remotes (the
+  optional `remoteCredential` method, docs/spec/plugin-api.md §7.4), so a GitLab or Gitea forge plugin can push and
+  fetch with your login there. The built-in GitHub forge supplies your GitHub login for https://github.com as before;
+  nothing changes for GitHub users, and capcomd still never hands the credential to your own credential helper to save.
+- `GET /v1/projects/branches` `source` is now any forge's name (the forge whose service listed the branches), not only
+  `github`, `git` or `local`; a client that checks it should accept other names. Where a goal branch's pull request is
+  merged ("They review and merge it on GitHub", in `capcomd_goal`, `capcomd_pr_open` and the pull request's text) names
+  the run's forge.
 - Security: your git credentials never reach an agent's sandbox any more. Before, capcomd's own git commands in an
   agent's VM or container (cloning its checkout, pushing its branch and checkpoints, `capcomd fetch`) ran with your
   GitHub token, so an agent could take it by planting git settings, a hook or a `git` program in its sandbox. Now

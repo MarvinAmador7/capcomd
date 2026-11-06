@@ -91,6 +91,11 @@ final class GoalSetupTests: XCTestCase {
     XCTAssertEqual(s.note, GoalSetupLine("GitHub: no login (GITHUB_TOKEN, GH_TOKEN or `gh auth login`)", warn: false))
     s.receive(.loaded(answer(source: "github", note: "ignored")), for: s.query!)
     XCTAssertNil(s.note)
+    // Another forge's service answered (its own name): no note either; the remote's own refs: the note.
+    s.receive(.loaded(answer(source: "gitea", note: "ignored")), for: s.query!)
+    XCTAssertNil(s.note)
+    s.receive(.loaded(answer(source: "local", note: "the remote couldn't be read")), for: s.query!)
+    XCTAssertEqual(s.note?.text, "the remote couldn't be read")
     // An answer about another checkout is dropped; opening another one starts over, the same one keeps the choices.
     s.pickBase("main")
     s.receive(.loaded(answer(base: "other")), for: .init(path: "/src/other"))
