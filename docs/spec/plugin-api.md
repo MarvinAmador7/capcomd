@@ -1416,7 +1416,7 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    nothing it did can land, so a run whose planner did that doesn't report ok. Its final message is its `summary` when
    it declared none.
 4. Everyone who hands an orchestrate agent work is told what the mode means: the profile's `description` and `does`
-   (`capcomd_profiles`, `capcomd agents list`, which also show `toolMode`), the MCP server's instructions, the driver
+   (`capcomd_profiles`, `capcomd profiles list`, which also show `toolMode`), the MCP server's instructions, the driver
    skill, the planner's brief and the orchestration skill an orchestrate agent gets. They say: it sees everything and
    runs nothing; give it no task that needs it to run code itself (its helpers write and test the code); checks happen at verify and merge, and their results are
    readable.

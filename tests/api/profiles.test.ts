@@ -66,6 +66,20 @@ describe("GET /v1/profiles (capability profiles)", () => {
 		expect(o.error).toBe(`${w.at("P/lead/profile.yaml")}: extends "nobody", which isn't a profile here (this project's, your own or a bundled one; a profile never extends another project's)`);
 	});
 
+	test("an agents.json that isn't JSON: the error says where, never what is there (it may be a link to a token file)", async () => {
+		const w = world({ "P/solo.yaml": "name: solo\nharness: { provider: claude, auth: subscription }\n" });
+		writeFileSync(w.agentsFile, "ghp_SECRETTOKEN123\n");
+		const o = profilesOf(w.project);
+		expect(o.error).toBe(`${w.agentsFile}: invalid JSON (JSON Parse error: Unexpected identifier)`);
+		// Over HTTP it is a 200 with that error, and the body holds nothing of the file.
+		const app = harnessApp({ source: { ...memorySource(), profiles: (repo?: string) => profilesFor(repo, w.env) }, clients: () => loadClients(cpath), state: harnessState(null) });
+		const r = await app.request(`/v1/profiles?repo=${encodeURIComponent(w.repo)}`, { headers: { authorization: `Bearer ${reader}` } });
+		expect(r.status).toBe(200);
+		const text = await r.text();
+		expect(Profiles.parse(JSON.parse(text))).toMatchObject({ profiles: [], error: o.error });
+		expect(text).not.toContain("SECRETTOKEN");
+	});
+
 	test("repo: that project's profiles, as POST /v1/runs resolves them; not a project is CreateRunError", async () => {
 		const w = world({ "P/solo.yaml": "name: solo\nharness: { provider: claude, auth: subscription }\n" });
 		const o = await profilesFor(w.repo, w.env);

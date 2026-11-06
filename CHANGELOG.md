@@ -43,6 +43,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New on the harness API: `GET /v1/profiles` (capability `profiles`, the `read` scope) lists every agent profile a run
   can use, the daemon's or, with `?repo=`, a project's: each one's version, layer and files, provider, model, tool
   mode, what it does, and whether its login is there. Profiles that can't be read come back with `error` saying why.
+- Fix: an `agents.json` that isn't valid JSON is reported by where it goes wrong, without quoting what is in the file
+  (as profile files already were), so an error shown in the app or to an agent never repeats the file's text.
 - New: agent profiles as YAML files. Put a profile in `.capcomd/profiles/<name>/profile.yaml` (or
   `.capcomd/profiles/<name>.yaml`; JSON works too), or in `~/.capcomd/profiles/` for every project, with blocks
   (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.

@@ -12,6 +12,9 @@ import { defaultAgentsFile, userProfilesDir } from "../utils/home";
 import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile } from "./v1";
 import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layerOver, notApplied, setByOver, toFlat, v2Path, withContext, type ProfileDoc, type SetBy } from "./v2";
 
+/** A JSON parse error as a profile file's error says it: where it went wrong, never what is there (readDoc). */
+const jsonError = (e: unknown) => (e as Error).message.replace(/\s*["'`][^]*$/, "");
+
 export function agentsFilePath(source: Record<string, string | undefined> = process.env): string {
   return envVar("AGENTS_FILE", source) ?? defaultAgentsFile(source);
 }
@@ -19,7 +22,7 @@ export function agentsFilePath(source: Record<string, string | undefined> = proc
 export function readAgentsFile(path = agentsFilePath()): AgentsFile {
   if (!existsSync(path)) return { schema: AGENTS_SCHEMA, agents: {} };
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { throw new AgentConfigError(`${path}: invalid JSON (${(e as Error).message})`); }
+  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { throw new AgentConfigError(`${path}: invalid JSON (${jsonError(e)})`); }
   const errs = validateFile(raw);
   if (errs.length) throw new AgentConfigError(`${path}: ${errs.join("; ")}`);
   return raw as AgentsFile;
@@ -85,7 +88,7 @@ const MANIFEST = /^(.+)\.(ya?ml|json)$/;
 function readDoc(path: string): unknown {
   const text = readFileSync(path, "utf8");
   if (path.endsWith(".json")) {
-    try { return JSON.parse(text); } catch (e) { throw new Error(`invalid JSON: ${(e as Error).message.replace(/\s*["'`][^]*$/, "")}`); }
+    try { return JSON.parse(text); } catch (e) { throw new Error(`invalid JSON: ${jsonError(e)}`); }
   }
   try { return parseYaml(text, { uniqueKeys: true, maxAliasCount: 100, prettyErrors: false }); } catch (e) {
     const at = (e as { pos?: [number, number] }).pos?.[0];
@@ -206,7 +209,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
   let v1: AgentsFile | null = null;
   if (existsSync(path)) {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { errs.push(`${path}: invalid JSON (${(e as Error).message})`); }
+    try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { errs.push(`${path}: invalid JSON (${jsonError(e)})`); }
     if (raw !== undefined) {
       const e = validateFileShape(raw, () => true);
       if (e.length) errs.push(`${path}: ${e.join("; ")}`);
