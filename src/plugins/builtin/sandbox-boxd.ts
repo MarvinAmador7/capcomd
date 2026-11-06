@@ -9,6 +9,7 @@ import type { ErrorClass, SandboxDescriptor } from "../../../packages/plugin/src
 import { BOXD_AUTH_HINT, isBoxdAuthError, mapBoxdError } from "../../providers/boxd-errors";
 import { builtinSandbox, classifySandboxError, type NativeSandbox, type SecretOf } from "../../providers/seam";
 import { VERSION } from "../../utils/self";
+import { env as envVar } from "../../utils/env";
 
 export const DESCRIPTOR = {
   name: "boxd", descriptorVersion: 1, label: "Cloud", kind: "cloud", vendor: "boxd", title: "Cloud · boxd", mark: "boxd", listed: true,
@@ -21,7 +22,8 @@ export const manifest = {
   description: "boxd cloud VMs: isolated machines with snapshots, checkpoints, host-bound secrets and an egress allowlist; boxd deletes idle ones itself.",
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./sandbox-boxd.ts" },
   // After docker: the order clients list places in (docker, then boxd) is the load order (§6.3).
-  provides: ["seam:sandbox/boxd"], after: ["sandbox-docker"], contributes: { seams: [{ kind: "sandbox", name: "boxd" }] },
+  provides: ["seam:sandbox/boxd"], after: ["sandbox-docker"], scopes: ["steer"],
+  contributes: { seams: [{ kind: "sandbox", name: "boxd" }], hooks: { "job.changed": {} } },
   config: {
     type: "object", additionalProperties: false,
     properties: {
@@ -32,6 +34,21 @@ export const manifest = {
     },
   },
 } as const;
+
+/** The project templates' refresh timer (§16.2; src/env/templates.ts refreshTemplates): one per daemon, kept across
+ *  restarts by its key, daily unless CAPCOMD_TEMPLATE_REFRESH_HOURS says otherwise (0: no timer). */
+export const REFRESH_LABEL = "refresh project templates";
+export const refreshEveryMs = (source: Record<string, string | undefined> = process.env) => Number(envVar("TEMPLATE_REFRESH_HOURS", source) ?? 24) * 3600_000;
+
+/** One refresh, with the daemon's boxd place and the agent CLI pins its builds use. Nothing when it has no templates. */
+async function refreshIfKept(log: (l: string) => void): Promise<void> {
+  const T = await import("../../env/templates");
+  const source = { ...process.env, CAPCOMD_SANDBOX: "boxd" };
+  if (!T.keepsProjectTemplates(source)) return;
+  const { providerNamed } = await import("../../dependencies");
+  const { loadAgentConfig } = await import("../../agents/config");
+  await T.refreshTemplates({ provider: () => providerNamed("boxd") as any, cfg: () => loadAgentConfig({ ...process.env, CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT: "fake" }), source, log });
+}
 
 /** What a run that failed on a rejected key says (the reason `capcomd run` prints). */
 export const BOXD_AUTH_REASON = `boxd rejected BOXD_API_KEY (invalid or expired). ${BOXD_AUTH_HINT}`;
@@ -67,6 +84,18 @@ export const plugin = definePlugin({
         return native.create(process.env, () => key);
       },
     }));
+    // The project templates' refresh: its timer fires (daily by default) and the refresh runs on its own (it fetches
+    // every templated repository's mirror, longer than an observe call's deadline), starting builds in the background.
+    const everyMs = refreshEveryMs();
+    if (!(everyMs > 0)) return;
+    const log = (l: string) => ctx.log.info(l);
+    ctx.hooks.on("job.changed", (call) => {
+      const { job, change } = call.payload;
+      if (job.plugin === ctx.plugin.name && change.kind === "fired" && job.spec.label === REFRESH_LABEL) void refreshIfKept(log).catch(() => {});
+    });
+    // Only the daemon has jobs (a CLI's plugins are refused `unsupported`).
+    ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: REFRESH_LABEL, everyMs }, { key: "refresh-templates" })
+      .catch((e) => { if (!(e instanceof PluginError && e.code === "unsupported")) ctx.log.warn("the project templates' refresh timer did not start", { error: String((e as Error)?.message ?? e) }); });
   },
 });
 

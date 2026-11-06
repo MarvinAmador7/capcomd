@@ -11,7 +11,8 @@ import { Redactor } from "../agents/redact";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { stateDir } from "../utils/home";
-import { buildMarkerPath, ENV_PREFIX, ENV_SCHEMA, envName, ledgerPath, readBuildMarker, readLedger, writeBuildMarker, writeLedger, type EnvManifest, type EnvRecord } from "./resolve";
+import { baseEnvHash, buildMarkerPath, ENV_PREFIX, ENV_SCHEMA, envName, ledgerPath, projectKey, readBuildMarker, readLedger, readTemplates, templateName, writeBuildMarker, writeLedger, writeTemplates, type EnvManifest, type EnvRecord, type ProjectTemplate } from "./resolve";
+import { createHash } from "node:crypto";
 
 import { LOCKFILES, TEMPLATE_LOCKHASH, TEMPLATE_MARKER, type TemplateMarker } from "../agents/workspace";
 export { LOCKFILES };
@@ -51,6 +52,13 @@ export interface BuildOptions {
   /** Where the host keeps its git repos for `repoUrl` (MergeConfig.workdir): the VM never fetches with credentials,
    *  the host does and hands it the commits (src/merge/transfer.ts). Default: <state>/host-git. */
   hostGit?: { workdir: string };
+  /**
+   * A project template (src/env/templates.ts; with `warm`): every branch's history, the project's `setup` step (else
+   * the lockfile's install) run with the place's secret placeholders unset and their domains out of the VM's egress
+   * (plus `egress`), at most `maxBytes`, named `capcomd-env-<base>-<project>-<build>` and recorded in the templates
+   * ledger (`ledger`; the env ledger's current build is left alone), its build marker at `marker`.
+   */
+  project?: { setup: string | null; egress: string[]; maxBytes: number; marker: string; ledger: string };
 }
 
 export interface BuildResult { name: string; cached: boolean; record: EnvRecord; snapshot: SnapshotInfo }
@@ -61,7 +69,7 @@ export interface BuildResult { name: string; cached: boolean; record: EnvRecord;
  * throws (GET /v1/environments `status`). A marker another build has since taken over is left alone.
  */
 export async function envBuild(p: SandboxProvider & SnapshotPlatform, o: BuildOptions): Promise<BuildResult> {
-  const marker = buildMarkerPath(o.ledgerPath ?? ledgerPath());
+  const marker = o.project?.marker ?? buildMarkerPath(o.ledgerPath ?? ledgerPath());
   const mine = { state: "building" as const, pid: process.pid, startedAt: new Date().toISOString() };
   const ours = () => { const m = readBuildMarker(marker); return !m || (m.pid === mine.pid && m.startedAt === mine.startedAt); };
   const clear = () => { try { if (ours()) rmSync(marker, { force: true }); } catch { /* best effort */ } };
@@ -107,10 +115,17 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
   const { sandboxName } = await import("../providers/registry");
   let place: string | null = null;
   try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
+  // A project template's setup runs the repository's own code: the VM reaches none of the domains a host-bound secret
+  // is swapped in for, so a placeholder it can read is no use to it, and the setup runs without them in its env.
+  const exposure = o.project ? await (await import("./templates")).secretExposure(p) : { domains: [], names: [] };
+  const egress = [...new Set([...BASE_EGRESS, ...(o.project?.egress ?? [])])].filter((d) => !exposure.domains.includes(d.toLowerCase()));
+  if (o.project) for (const d of [...BASE_EGRESS, ...o.project.egress]) if (exposure.domains.includes(d.toLowerCase())) log(`egress: ${d} left out of the build VM (a host-bound secret is bound to it)`);
   const release = recordJobMachine({ idemKey, sandbox: place, kind: "env_build", purpose: "env-build", ttlSeconds: 3600 });
   let id: string;
-  try { ({ id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 3600, egressAllow: [...BASE_EGRESS], labels: { purpose: "env-build" } })); } catch (e) { release(); throw e; }
+  try { ({ id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: o.project ? 3 * 3600 : 3600, egressAllow: egress.length ? egress : [...BASE_EGRESS], labels: { purpose: "env-build" } })); } catch (e) { release(); throw e; }
   const sh = (s: string, timeoutMs = 120_000) => p.exec(id, ["sh", "-c", s], { env: baseEnv, timeoutMs });
+  /** The repository's own code (its install or setup step), without the place's secret placeholders. */
+  const untrusted = (cmd: string) => `${exposure.names.length ? `env ${exposure.names.map((n) => `-u ${sq(n)}`).join(" ")} ` : ""}sh -c ${sq(cmd)}`;
   const must = async (what: string, s: string, timeoutMs?: number) => {
     const res = await sh(s, timeoutMs);
     if (res.code !== 0) throw new Error(`env build: ${what} failed (exit ${res.code}): ${r.text(res.stderr || res.stdout).slice(-600)}`);
@@ -160,11 +175,32 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
       }
     } else log("no repo given: baking CLIs + git config only (set CAPCOMD_REPO to bake deps)");
     const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl ?? "", ...(template ? { template } : {}) };
-    const name = envName(manifest);
+    // A project template: every branch's tip as built (an agent's delta is counted from them), and a name per project,
+    // base env and build.
+    let heads: Record<string, string> = {};
+    if (o.project) {
+      if (!template) throw new Error("env build: the project template has no checkout to keep");
+      const refs = (await must("branches", `cd ${sq(T)} && git for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/`)).stdout;
+      for (const line of refs.split("\n")) { const [sha, ref] = line.trim().split(" "); if (sha && ref && ref !== "refs/remotes/origin/HEAD") heads[ref.slice("refs/remotes/origin/".length)] = sha; }
+    }
+    const build = createHash("sha256").update(JSON.stringify({ commit: template?.commit, heads, lockHash, setup: o.project?.setup ?? null, ...(o.force ? { at: t0 } : {}) })).digest("hex").slice(0, 8);
+    const name = o.project ? templateName(manifest.pins, o.repoUrl!, build) : envName(manifest);
     log(`content hash → ${name} (lockfile ${lockFile})`);
 
     const existing = await p.snapshotGet(name);
-    if (existing?.status === "ready" && !o.force) {
+    if (o.project && existing) {
+      const tl = readTemplates(o.project.ledger);
+      // Never overwrite a snapshot capcomd didn't make as a template; one it made that is still there is this build.
+      if (existing.status !== "ready" && !tl.created.includes(name)) throw new Error(`env build: a snapshot named ${name} exists (${existing.status}) and capcomd didn't make it; not overwriting it`);
+      if (existing.status === "ready") {
+        const record: EnvRecord = { name, manifest, versions: {}, builtAt: new Date().toISOString(), buildMs: 0, depsInstalled: false };
+        await recordTemplate(p, o, { record, heads, template: template!, sizeBytes: existing.sizeBytes ?? null, made: false }, log);
+        log(`snapshot ${name} already ready; skipping build`);
+        return { name, cached: true, record, snapshot: existing };
+      }
+      await p.snapshotDelete(name);
+    }
+    if (!o.project && existing?.status === "ready" && !o.force) {
       const l = readLedger(o.ledgerPath);
       const record = l.history.find((h) => h.name === name) ?? { name, manifest, versions: {}, builtAt: new Date().toISOString(), buildMs: 0, depsInstalled: false };
       writeLedger({ current: record, history: l.history.some((h) => h.name === name) ? l.history : [...l.history, record] }, o.ledgerPath);
@@ -193,14 +229,24 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     // 4. Repo dependencies into the template (workers use them in place, or copy node_modules, when the lockfile
     //    matches). A warm template gets the package manager its lockfile needs when the image lacks it (pinned).
     let depsInstalled = false;
-    if (lockFile !== "none") {
+    if (o.project?.setup) {
+      // The project's own setup step (CAPCOMD_SETUP_COMMAND), as Conductor's: from the checkout, once per build. It
+      // failing fails the build: the template stays what it was.
+      const t = now();
+      log(`setup: ${o.project.setup}`);
+      const res = await sh(`cd ${sq(T)} && ${untrusted(o.project.setup)}`, 60 * 60_000);
+      if (res.code !== 0) throw new Error(`env build: the setup step failed (exit ${res.code}): ${r.text(res.stderr || res.stdout).slice(-600)}`);
+      depsInstalled = true;
+      log(`setup: ok (${now() - t}ms)`);
+      if (lockFile !== "none") await must("lockhash", `printf %s ${sq(lockHash)} > ${sq(`${T}/${TEMPLATE_LOCKHASH}`)}`);
+    } else if (lockFile !== "none") {
       const pm = o.warm ? await packageManager(sh, T, lockFile, home, log) : null;
       const cmd = pm ?? defaultInstall(lockFile);
       const tool = cmd.split(" ")[0]!;
       const has = (await sh(`command -v ${tool} >/dev/null && echo yes; true`)).stdout.includes("yes");
       if (has) {
         const t = now();
-        const res = await sh(`cd ${sq(T)} && ${cmd}`, 900_000);
+        const res = await sh(`cd ${sq(T)} && ${o.project ? untrusted(cmd) : cmd}`, 900_000);
         depsInstalled = res.code === 0;
         log(depsInstalled ? `deps: ${cmd} ok (${now() - t}ms)` : `deps: ${cmd} failed (exit ${res.code}): ${r.text(res.stderr || res.stdout).slice(-400)}; workers will install themselves`);
       } else log(`deps: ${tool} not in image; skipped (workers install themselves)`);
@@ -215,6 +261,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
       if (depsInstalled) await must("exclude", `cd ${sq(T)} && grep -qx node_modules .git/info/exclude 2>/dev/null || echo node_modules >> .git/info/exclude`);
       const dirty = (await sh(`cd ${sq(T)} && git status --porcelain | head -5`)).stdout.trim();
       if (dirty) {
+        if (o.project) throw new Error(`env build: the setup step changed the checkout (${dirty.split("\n").join(", ")}): agents couldn't work in it as a fresh clone (ignore what it writes in .gitignore, or write it outside the checkout)`);
         log(`warm template: the dependency install changed the checkout (${dirty.split("\n").join(", ")}); workers will clone`);
         template = undefined;
         delete manifest.template;
@@ -239,7 +286,17 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     }
     log("scrub: clean");
 
+    // 5b. A project template has a size cap (CAPCOMD_TEMPLATE_MAX_GB): what the build added, the checkout and the home.
+    let sizeBytes: number | null = null;
+    if (o.project) {
+      const du = (await sh(`du -sk ${sq(T)} ${sq(home)} 2>/dev/null | awk '{s+=$1} END {print s}'`)).stdout.trim();
+      sizeBytes = Number(du) > 0 ? Number(du) * 1024 : null;
+      if (sizeBytes !== null && sizeBytes > o.project.maxBytes) throw new Error(`env build: the template is ${(sizeBytes / 1024 ** 3).toFixed(1)} GB, over the ${(o.project.maxBytes / 1024 ** 3).toFixed(0)} GB cap (CAPCOMD_TEMPLATE_MAX_GB); not snapshotting it`);
+      log(`size: ${sizeBytes === null ? "unknown" : `${(sizeBytes / 1024 ** 2).toFixed(0)} MB`}`);
+    }
+
     // 6. Snapshot (VM must be running), wait until ready.
+    if (o.project) { const tl = readTemplates(o.project.ledger); writeTemplates({ ...tl, created: [...new Set([...tl.created, name])] }, o.project.ledger); }
     const created = await p.snapshotCreate(id, name);
     log(`snapshot ${name} ${created.status}`);
     const deadline = now() + (o.snapshotTimeoutMs ?? 15 * 60_000);
@@ -251,6 +308,15 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
       snap = await p.snapshotGet(name);
     }
     const record: EnvRecord = { name, manifest, versions, builtAt: new Date().toISOString(), buildMs: now() - t0, depsInstalled };
+    if (o.project) {
+      if (snap.sizeBytes && snap.sizeBytes > o.project.maxBytes) {
+        await p.snapshotDelete(name).catch(() => {});
+        throw new Error(`env build: the template's snapshot is ${(snap.sizeBytes / 1024 ** 3).toFixed(1)} GB, over the ${(o.project.maxBytes / 1024 ** 3).toFixed(0)} GB cap (CAPCOMD_TEMPLATE_MAX_GB); deleted it`);
+      }
+      await recordTemplate(p, o, { record, heads, template: template!, sizeBytes: snap.sizeBytes ?? sizeBytes, made: true }, log);
+      log(`ready: ${name} in ${record.buildMs}ms`);
+      return { name, cached: false, record, snapshot: snap };
+    }
     const l = readLedger(o.ledgerPath);
     writeLedger({ current: record, history: [...l.history.filter((h) => h.name !== name), record] }, o.ledgerPath);
     log(`ready: ${name} in ${record.buildMs}ms`);
@@ -259,6 +325,28 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     if (!keep) await p.destroy(id).catch(() => {});
     release();
   }
+}
+
+/**
+ * A project template built (or found ready) becomes its project's: the one it replaces is kept as `previous` (agents
+ * may be booting from it right now), and the one before that is deleted, only if capcomd made it as a template.
+ */
+async function recordTemplate(p: SnapshotPlatform, o: BuildOptions, b: { record: EnvRecord; heads: Record<string, string>; template: NonNullable<EnvManifest["template"]>; sizeBytes: number | null; made: boolean }, log: (l: string) => void) {
+  const path = o.project!.ledger;
+  const l = readTemplates(path);
+  const key = projectKey(o.repoUrl!);
+  const old = l.templates[key];
+  const m = b.record.manifest;
+  const replaced = !!old && old.name !== b.record.name;
+  const previous = replaced ? old!.name : old?.previous;
+  const drop = replaced && old!.previous && old!.previous !== b.record.name && l.created.includes(old!.previous) ? [old!.previous] : [];
+  const t: ProjectTemplate = {
+    project: key, repo: o.repoUrl!, name: b.record.name, ...(previous && previous !== b.record.name ? { previous } : {}), base: baseEnvHash(m.pins), pins: m.pins,
+    target: b.template.target, commit: b.template.commit, heads: b.heads, lockFile: m.lockFile, lockHash: m.lockHash, depsInstalled: b.record.depsInstalled,
+    setup: o.project!.setup, ...(o.project!.egress.length ? { egress: o.project!.egress } : {}), ...(o.hostGit ? { hostGit: o.hostGit.workdir } : {}), versions: b.record.versions, builtAt: b.record.builtAt, buildMs: b.record.buildMs, sizeBytes: b.sizeBytes,
+  };
+  writeTemplates({ templates: { ...l.templates, [key]: t }, created: l.created.filter((n) => !drop.includes(n)) }, path);
+  for (const n of drop) await p.snapshotDelete(n).then(() => log(`deleted the template before last: ${n}`), (e) => log(`couldn't delete ${n}: ${String((e as Error)?.message ?? e).slice(0, 200)}`));
 }
 
 type Sh = (s: string, timeoutMs?: number) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -311,5 +399,9 @@ export async function envRm(p: SnapshotPlatform, name: string | undefined, ledge
     await p.snapshotDelete(n);
   }
   writeLedger({ current: l.current && names.includes(l.current.name) ? undefined : l.current, history: l.history.filter((h) => !names.includes(h.name)) }, ledgerPath);
+  // A project template removed this way is forgotten too, so no agent boots from a snapshot that is gone.
+  const tl = readTemplates();
+  const gone = Object.entries(tl.templates).filter(([, t]) => names.includes(t.name));
+  if (gone.length) writeTemplates({ templates: Object.fromEntries(Object.entries(tl.templates).filter(([, t]) => !names.includes(t.name))), created: tl.created.filter((n) => !names.includes(n)) });
   return names;
 }

@@ -92,6 +92,55 @@ log (`capcomd logs <run> <agent>`: `[capcomd] git clone: uploading 120.0 MB of 4
 at 0.39 MB/s`), in engine.log, and as `git.progress` events on its `git.clone`/`git.fetch`/`git.push` span, which also
 records the bytes moved (`git.bytes`). `capcomd env build` prints the same lines.
 
+## Project templates
+
+Set a project up once, and every agent after that starts on a ready checkout: the counterpart of Docker's warm
+workspace (docs/providers.md), and of Conductor's cloud snapshot plus setup script.
+
+```bash
+capcomd env build --project        # in the project's checkout, or --repo URL; prints its progress as it goes
+capcomd env templates              # each project's template: age, size, commits behind, the delta an agent gets now
+capcomd env templates rm --repo URL
+```
+
+- **What it is.** A snapshot per project (`capcomd-env-<base>-<project>-<build>`, where `<base>` is the env build of
+  the same agent CLI pins without a repository, so the existing `capcomd-env-…` snapshots keep working) whose VM has
+  the project's whole history (every branch, as a bundle from the host's mirror: no git credential in the VM or the
+  snapshot), the default branch checked out at `/var/tmp/capcomd/template`, the agent CLIs, and the project's setup
+  step run in it: `CAPCOMD_SETUP_COMMAND` (put it in the project's `.capcomd/config.json` `env`, like
+  `CAPCOMD_TEST_COMMAND`; a run records it), else the lockfile's install. The setup step must leave the tracked tree
+  as it was (write dependencies to ignored paths); if it fails, the build fails and the template stays what it was.
+  `CAPCOMD_SETUP_EGRESS` (comma-separated) adds hosts it may reach to github.com, registry.npmjs.org and nodejs.org.
+- **Agents.** An agent's VM boots from its project's template (unless its profile names an environment, its plan login
+  is kept in a snapshot, or `CAPCOMD_ENV_SNAPSHOT`/`CAPCOMD_ENV=image` is set), and the host sends it only what changed
+  since the template was built: a bundle of `<template's branch tips>..<their tips now>` plus the ref it needs. It works
+  in the template's checkout in place, exactly as a fresh clone would (same branch, tree and commit). Its log says
+  `[capcomd] workspace: the project template's warm checkout, in place (… ms, 0.4 MB from the host)`.
+- **When an agent clones instead.** Without a template it can boot from (none yet, or one built for other agent CLI
+  versions) its VM boots from the base env and clones the whole repository, as before. On a template it can't use in
+  place (its lockfile no longer matches, the target's history lost its commit, or a retry in the same VM finds it used
+  by the first attempt) the clone borrows the template's objects, so the host still sends only what they lack. Except
+  for the retry, the worker then starts a rebuild in the background; the run never waits for it.
+- **Refresh.** A template is rebuilt in the background (one build per project at a time, none within an hour after
+  one failed) when an agent couldn't use it, when an agent's delta passed `CAPCOMD_TEMPLATE_REBUILD_MB` (default 50),
+  and once a day for every template whose repository moved (the daemon's timer, `CAPCOMD_TEMPLATE_REFRESH_HOURS`, 0 to
+  turn it off). `CAPCOMD_PROJECT_TEMPLATES=manual` leaves rebuilds to `capcomd env build --project`; `off` stops using
+  templates. A rebuild never overwrites a snapshot: it makes a new one, keeps the one it replaced (agents may be booting
+  from it), and deletes the one before that. capcomd deletes only snapshots its templates ledger (`templates.json` next
+  to `envs.json`) says it made as templates.
+- **Size.** At most `CAPCOMD_TEMPLATE_MAX_GB` (default 10): a bigger checkout plus home is refused before the
+  snapshot, and a snapshot boxd reports as bigger is deleted.
+- **The setup step runs the repository's code.** The build VM is isolated like an agent's, holds no git credential,
+  and passes the env build's secret scan before it is snapshotted. An org-scoped host-bound secret (`capcomd secrets
+  sync`, a Claude login kept as a boxd secret) still puts its placeholder (`bxds_…`) in every VM of the org, the build
+  VM's too. The placeholder isn't the secret: boxd swaps in the value only on a request to the domain the secret is
+  bound to, from a VM allowed to reach that domain. So a malicious install script that reads it could, at most, spend
+  it against that domain (call the Anthropic API on your key, say), or write it into the snapshot, where agents' VMs
+  have it in their environment anyway. capcomd closes the first: the build VM's egress leaves out every domain a
+  secret of the place is bound to (the build says which it left out), and the setup step runs with those variables
+  unset. What a repository's install can always do is plant files in the checkout and its dependencies that run later
+  in agents' VMs, which the repository's own code can do anyway: agents work on it.
+
 ## Typed errors (`src/providers/boxd-errors.ts`)
 
 | class | from |

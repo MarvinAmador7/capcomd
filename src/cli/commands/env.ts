@@ -9,7 +9,7 @@ import { doctor, formatDoctor } from "../../env/doctor";
 import { resolveEnvSnapshot } from "../../env/resolve";
 import { RelayError, SCHEMA } from "../../core/errors";
 import { activeAdapters } from "../../agents/adapters";
-import { sandboxName } from "../../providers/registry";
+import { sandboxCaps, sandboxName } from "../../providers/registry";
 
 /** env/auth/doctor work on the CLIs, not one agent's credentials: don't apply the strict auth check. */
 const toolCfg = () => loadAgentConfig({ ...process.env, CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT: "fake" });
@@ -66,6 +66,8 @@ export async function envCommand(command: string, pos: string[], values: Record<
     return ok ? 0 : 1;
   }
   const sub = pos[1];
+  if (sub === "build" && values.project) return templateBuild(values, log);
+  if (sub === "templates") return templatesCommand(pos, values);
   if (sub === "build") {
     const repo = loadMergeConfig();
     // A sandbox per container (Docker) keeps a warm template agents use in place; a VM's snapshot stays shallow.
@@ -93,7 +95,54 @@ export async function envCommand(command: string, pos: string[], values: Record<
     emit(json, { removed }, `removed: ${removed.join(", ")}`);
     return 0;
   }
-  throw new RelayError("usage", "usage: capcomd env build [--force] | env status | env rm [name|all]", "");
+  throw new RelayError("usage", "usage: capcomd env build [--force] [--project [--repo URL]] | env status | env templates [rm --repo URL] | env rm [name|all]", "");
+}
+
+/** The project `--repo` names, else this checkout's (CAPCOMD_REPO), with its host repos and setup step. */
+function projectOf(values: Record<string, any>) {
+  const cfg = loadMergeConfig(values.repo ? { ...process.env, CAPCOMD_REPO: String(values.repo) } : process.env);
+  if (!cfg) throw new RelayError("usage", "no project: run it in a project set up with `capcomd setup project`, or pass --repo URL", "");
+  return cfg;
+}
+
+/** `capcomd env build --project`: the project's template, built now (its progress as it goes), on a place that keeps
+ *  them (src/env/templates.ts). */
+async function templateBuild(values: Record<string, any>, log: (l: string) => void): Promise<number> {
+  const json = !!values.json;
+  const T = await import("../../env/templates");
+  if (sandboxCaps().isolation !== "vm") throw new RelayError("usage", `the ${sandboxName()} sandbox keeps no project templates`, sandboxCaps().isolation === "container" ? "On Docker, `capcomd env build` keeps the project's warm checkout in the env image." : "Use the boxd sandbox (CAPCOMD_SANDBOX=boxd, or --sandbox boxd).");
+  const cfg = projectOf(values);
+  const setup = process.env.CAPCOMD_SETUP_COMMAND?.trim() || undefined;
+  const egress = (process.env.CAPCOMD_SETUP_EGRESS ?? "").split(",").map((d) => d.trim()).filter(Boolean);
+  const res = await T.buildProjectTemplate({ provider: platform(), repo: cfg.remote, cfg: toolCfg(), hostGit: { workdir: cfg.workdir }, ...(setup ? { setup } : {}), egress, force: !!values.force, log });
+  const t = (await import("../../env/resolve")).readTemplates().templates[(await import("../../env/resolve")).projectKey(cfg.remote)];
+  emit(json, { name: res.name, cached: res.cached, template: t ?? null }, `${res.cached ? "up to date" : "built"}: ${res.name}  ${cfg.remote}${t ? ` at ${t.commit.slice(0, 12)} (${t.target})${t.sizeBytes ? `, ${fmtBytes(t.sizeBytes)}` : ""}` : ""}${res.record.buildMs ? `  ${(res.record.buildMs / 1000).toFixed(0)}s` : ""}`);
+  return 0;
+}
+
+const fmtBytes = (n: number) => n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${(n / 1024 ** 2).toFixed(1)} MB`;
+const fmtAge = (ms: number) => ms < 3600_000 ? `${Math.max(1, Math.round(ms / 60_000))}m` : ms < 86_400_000 ? `${Math.round(ms / 3600_000)}h` : `${Math.round(ms / 86_400_000)}d`;
+
+/** `capcomd env templates`: every project template with its age, size, how far behind and the delta an agent gets now;
+ *  `rm --repo URL` forgets one and deletes the snapshots capcomd made for it. */
+async function templatesCommand(pos: string[], values: Record<string, any>): Promise<number> {
+  const json = !!values.json;
+  const T = await import("../../env/templates");
+  if (pos[2] === "rm") {
+    const removed = await T.removeProjectTemplate(platform(), projectOf(values).remote);
+    emit(json, { removed }, removed.length ? `removed: ${removed.join(", ")}` : "no template for that project");
+    return 0;
+  }
+  const workdir = loadMergeConfig()?.workdir;
+  const views = await T.templateViews(platform(), { delta: !values.quick, ...(workdir ? { workdir: () => workdir } : {}) });
+  const rebuild = T.rebuildBytes();
+  const text = views.length ? views.map((v) => [
+    `${v.repo}`,
+    `  ${v.name}  ${v.status}${v.building ? " (rebuilding)" : ""}  ${v.target} at ${v.commit.slice(0, 12)}, built ${fmtAge(v.ageMs)} ago${v.sizeBytes ? `, ${fmtBytes(v.sizeBytes)}` : ""}`,
+    `  ${v.behind === null ? "delta unknown" : `${v.behind} commit${v.behind === 1 ? "" : "s"} behind, an agent gets ${fmtBytes(v.deltaBytes ?? 0)}${(v.deltaBytes ?? 0) > rebuild ? ` (over ${fmtBytes(rebuild)}: the next agent rebuilds it)` : ""}`}${v.lastFailure ? `; last build failed ${v.lastFailure}` : ""}`,
+  ].join("\n")).join("\n") : "no project templates (capcomd env build --project makes one)";
+  emit(json, { templates: views, rebuildBytes: rebuild, mode: T.templateMode() }, text);
+  return 0;
 }
 
 /** The warm template's drift (Docker env builds) and plan logins saved on an older image: lines for status/doctor. */

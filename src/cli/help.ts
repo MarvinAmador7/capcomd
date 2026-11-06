@@ -22,6 +22,10 @@ Usage:
   capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]
                                        Approve (or deny) a merge parked in awaiting_approval
   capcomd env build [--force]            Bake agent CLIs + repo deps into a snapshot (no secrets)
+  capcomd env build --project [--repo URL] [--force]
+                                       boxd: the project's template (its whole history, setup step run), which
+                                       each agent's VM boots from and then gets only what changed since
+  capcomd env templates [rm --repo URL]  The project templates: age, size, how far behind, the delta an agent gets
   capcomd env status | env rm [name|all] List / delete env snapshots (env, auth, doctor: --sandbox docker|boxd
                                        works on that sandbox instead of CAPCOMD_SANDBOX)
   capcomd profiles list|show|add|set|rm|schema|validate

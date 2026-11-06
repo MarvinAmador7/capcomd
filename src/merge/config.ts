@@ -41,7 +41,7 @@ export interface MergeConfig {
 
 /** The settings a run's repository needs (CAPCOMD_<key>); `run new` records them so the engine needn't have them. */
 export const REPO_ENV_KEYS = ["REPO", "MERGE_MODE", "MERGE_STRATEGY", "MERGE_TARGET", "MERGE_MAX_RETRIES", "TEST_COMMAND", "SIGN_COMMITS",
-  "GITHUB_REPO", "GITHUB_API", "GITHUB_POLL_MS", "GITHUB_TIMEOUT_MS", "PROTECTED_BRANCHES", "WORKDIR", "MERGE_FORGE"] as const;
+  "GITHUB_REPO", "GITHUB_API", "GITHUB_POLL_MS", "GITHUB_TIMEOUT_MS", "PROTECTED_BRANCHES", "WORKDIR", "MERGE_FORGE", "SETUP_COMMAND", "SETUP_EGRESS"] as const;
 
 /** The repo settings present in `source`, as CAPCOMD_* names (deprecated RELAY_* aliases resolved). */
 export function repoEnvOf(source: Record<string, string | undefined> = process.env): Record<string, string> {

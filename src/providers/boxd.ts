@@ -312,7 +312,7 @@ export class BoxdProvider implements SandboxProvider {
   // ---- EnvPlatform (capcomd env|secrets|doctor) ----
   private snapInfo(x: any, name: string) {
     const st = String(x?.status ?? "unknown");
-    return { name: String(x?.name ?? name), id: x?.id ? String(x.id) : undefined, status: (["pending", "ready", "failed"].includes(st) ? st : "unknown") as any, createdAt: x?.createdAt ? String(x.createdAt) : undefined };
+    return { name: String(x?.name ?? name), id: x?.id ? String(x.id) : undefined, status: (["pending", "ready", "failed"].includes(st) ? st : "unknown") as any, createdAt: x?.createdAt ? String(x.createdAt) : undefined, ...(Number(x?.sizeBytes) > 0 ? { sizeBytes: Number(x.sizeBytes) } : {}) };
   }
   async snapshotCreate(id: VmId, name: string) {
     const r = await this.client.snapshots.create(id, name).catch((e) => { throw mapBoxdError(e, id, "snapshots.create"); });

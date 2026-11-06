@@ -156,9 +156,13 @@ export interface AgentRunOptions {
   onRenew?: (seconds: number) => void;
   /**
    * The sandbox is this agent's own copy of its image (Docker): a warm template baked in by `capcomd env build` may be
-   * used in place instead of a fresh clone (src/agents/workspace.ts). Off: always the clone, as before.
+   * used in place instead of a fresh clone (src/agents/workspace.ts). Off: always the clone, as before. `"vm"`: a VM
+   * booted from its project's template (src/env/templates.ts), each its own copy of the snapshot, so the same holds.
    */
-  warmTemplate?: boolean;
+  warmTemplate?: boolean | "vm";
+  /** Which workspace the agent got with a warm template allowed, and the bytes the host sent for it (a delta in place,
+   *  the whole repository for a clone): the worker rebuilds a project template from this. */
+  onWorkspace?: (w: { path: "in_place" | "clone"; reason?: string; bytes: number; ms: number }) => void;
 }
 
 export class AgentError extends Error {
@@ -567,6 +571,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     // 1. The workspace: the image's warm template in place when it fits (Docker), else a fresh clone. Either way the
     //    branch and tree the agent starts from are the same.
     const wsStarted = now();
+    let wsBytes = 0;
     // A reviewer reads one commit and never pushes: its own branch doesn't matter, so no round trip to ask for it.
     const existing = task.review ? null : await viaHost("git ls-remote", () => gitSpan("ls-remote", undefined, async () => {
       const l = await lsRemote(task.repoUrl, ["--heads", `refs/heads/${task.branch}`], { timeoutMs: 120_000 });
@@ -591,7 +596,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
       const early = chooseWorkspace({ ...facts, fetched: true, ancestor: true, startFound: true, startLockHash: facts.marker?.lockHash ?? "none" });
       if (early.path === "clone" || !facts.marker) return early;
       // The refs a fresh clone has (every branch, as remote-tracking refs), and the continued agent's work.
-      const fetched = await sendToSandbox(host, box, T, { branches: "all", onProgress: progress("git fetch (warm template)") }).then(async () => { if (startFrom) await bringFrom(T); return true; }, () => false);
+      const fetched = await sendToSandbox(host, box, T, { branches: "all", onProgress: progress("git fetch (warm template)") }).then(async (res) => { wsBytes += res.bytes; if (startFrom) await bringFrom(T); return true; }, () => false);
       if (!fetched) return chooseWorkspace({ ...facts, fetched });
       const ref = start(startRef(task, branchExists));
       const look = await sh(`cd ${sq(T)} || exit 1
@@ -613,7 +618,9 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
       must(await sh(`rm -rf ${sq(repo)}`), "clean");
       // What `git clone --no-tags --branch <target>` made, from the host's mirror: every branch as origin/*, the
       // target checked out tracking origin/<target>, origin's URL without credentials.
-      await viaHost("git clone", () => sendToSandbox(host, box, repo, { branches: "all", checkout: task.target, onProgress: progress("git clone") }, { fresh: true }));
+      // On a VM booted from its project's template that can't be used in place (a retry in the same VM, a changed
+      // lockfile, a rewritten target), the clone borrows the template's objects: only what they lack is sent.
+      wsBytes += (await viaHost("git clone", () => sendToSandbox(host, box, repo, { branches: "all", checkout: task.target, onProgress: progress("git clone"), ...(opts.warmTemplate === "vm" ? { seed: T } : {}) }, { fresh: true }))).bytes;
     }
 
     if (task.review) {
@@ -660,9 +667,12 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     setSpanAttributes(span, { "agent.workspace_ms": wsMs });
     if (workspace) {
       const ms = wsMs;
-      addSpanEvent(span, "agent.workspace", { "agent.workspace": workspace.path, ...(workspace.path === "clone" ? { "agent.workspace_reason": workspace.reason } : {}), "agent.workspace_ms": ms });
-      setSpanAttributes(span, { "agent.workspace": workspace.path });
-      opts.onLog?.([workspace.path === "in_place" ? `[capcomd] workspace: the env image's warm checkout, in place (${ms} ms)` : `[capcomd] workspace: a fresh clone, ${workspace.reason} (${ms} ms)`]);
+      // In place, only the delta since the template came from the host; a clone brought everything.
+      const sent = ` (${ms} ms, ${(wsBytes / 1024 ** 2).toFixed(1)} MB from the host)`;
+      addSpanEvent(span, "agent.workspace", { "agent.workspace": workspace.path, ...(workspace.path === "clone" ? { "agent.workspace_reason": workspace.reason } : {}), "agent.workspace_ms": ms, "agent.workspace_bytes": wsBytes });
+      setSpanAttributes(span, { "agent.workspace": workspace.path, "agent.workspace_bytes": wsBytes });
+      opts.onLog?.([workspace.path === "in_place" ? `[capcomd] workspace: the ${opts.warmTemplate === "vm" ? "project template" : "env image"}'s warm checkout, in place${sent}` : `[capcomd] workspace: a fresh clone, ${workspace.reason}${sent}`]);
+      opts.onWorkspace?.({ path: workspace.path, ...(workspace.path === "clone" ? { reason: workspace.reason } : {}), bytes: wsBytes, ms });
     }
     // The context bundles its brief cites (ADR-025 §6.2: a brain at the commit its lines name), beside the checkout.
     for (const b of cfg.contextBundles ?? []) await placeBundle(b, { remote: b.remote, workdir: host.workdir }, box, span, r, opts.onLog);

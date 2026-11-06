@@ -41,8 +41,9 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
   lockfile of the tree the agent starts from is the one its dependencies were installed for, it is of the run's
   repository, and no earlier run in that container used it (a retry); otherwise it clones and copies the template's
   `node_modules` when the lockfile matches, as before (src/agents/workspace.ts `chooseWorkspace`). The agent's log
-  says which (`[capcomd] workspace: …`), and so does its span (`agent.workspace`, `agent.workspace_ms`). boxd VMs
-  always clone; their snapshot keeps a shallow template for `node_modules` only.
+  says which (`[capcomd] workspace: …`, with the bytes the host sent), and so does its span (`agent.workspace`,
+  `agent.workspace_ms`, `agent.workspace_bytes`). boxd gets the same from a per-project template instead of the env
+  image (`capcomd env build --project`, docs/boxd.md "Project templates"); the rules for using it in place are these.
 - **Drift.** Images change only on `capcomd env build`, never by themselves. `capcomd env status` and `capcomd env
   doctor` say how far the template is behind the target (agents fetch the difference), when the lockfile changed
   (agents then clone and install their own dependencies) and when the target was rewritten, and suggest `capcomd env
@@ -130,7 +131,10 @@ with `--sandbox docker`, or Local in the menu bar app), pass the sandbox instead
      `agentSlots` (Agents at once) is for a local place whose agents share one machine's memory: give it a memory probe
      in `src/providers/capacity.ts` (`PLACES`), and the engine caps its agents the same way as Docker's.
    - A sandbox that is each agent's own copy of its image (`isolation: "container"`) gets the warm workspace: `env
-     build` keeps a warm template in its snapshot and the runner may use it in place (`warmTemplate`).
+     build` keeps a warm template in its snapshot and the runner may use it in place (`warmTemplate`). A VM per agent
+     with snapshots (`isolation: "vm"`, `snapshots`) gets project templates instead (`src/env/templates.ts`): one
+     snapshot per project, which its agents boot from, and the runner uses its checkout in place the same way.
+     `snapshotGet` may say `sizeBytes` (the template size cap checks it).
 
    **Settings** (`PATCH /v1/sandboxes/{name}/settings`, the `configure` scope; `src/providers/settings.ts`). Two today.
    `agentMemory` (Docker; with the `agentSlots` info row): how much of the machine's memory each agent gets, in MB,

@@ -1,7 +1,7 @@
 // Snapshot and host-bound secret operations used by `capcomd env|secrets|auth|doctor` (ADR-020: a provider has
 // snapshots, secrets, both or neither). BoxdProvider has both, DockerProvider snapshots (images), FakeProvider both.
 export type SnapshotStatus = "pending" | "ready" | "failed" | "unknown";
-export interface SnapshotInfo { name: string; status: SnapshotStatus; id?: string; createdAt?: string }
+export interface SnapshotInfo { name: string; status: SnapshotStatus; id?: string; createdAt?: string; sizeBytes?: number }
 export interface SecretInfo { name: string; scope: string; domains: string[] }
 
 export interface SnapshotPlatform {
