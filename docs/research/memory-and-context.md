@@ -346,7 +346,7 @@ run-scope `kv` (versioned, writer-tagged, 64 KB cap, `src/actors/scope.ts:1296-1
 (`src/agents/profiles.ts:371`); agent/attempt; session inside the sandbox, destroyed at `drainWorker`
 (`src/primitives/ops.ts:917`). Only run-scoped stores and the git branch are durable and agent-writable; the supervisor
 checkpoints the worktree into the branch (`src/agents/supervisor.mjs` `checkpoint`), so a file an agent writes in its
-checkout survives the machine; an orchestrate agent is never checkpointed and fails if it wrote files (spec 1.0.7).
+checkout survives the machine; an orchestrate agent is never checkpointed and fails if it wrote files (spec 1.0.11).
 
 Read path: `agent.preparing` is the only hook that adds prompt text; `applyPreparePatch` accepts `prompt.append` and
 egress removal and refuses `prompt.skills` and `env` until spec §17.2 step 8 (`src/plugins/hooks.ts:212-219`); it fires

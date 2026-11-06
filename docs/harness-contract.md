@@ -1229,6 +1229,8 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 - [`check.started`](events.md#checkstarted)
 - [`check.passed`](events.md#checkpassed)
 - [`check.failed`](events.md#checkfailed)
+- [`job.started`](events.md#jobstarted)
+- [`job.ended`](events.md#jobended)
 - [`plugin.gate_denied`](events.md#plugingate_denied)
 - [`plugin.gate_bypassed`](events.md#plugingate_bypassed)
 - [`task.added`](events.md#taskadded)

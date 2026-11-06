@@ -2,14 +2,17 @@
 // ADR-019 §1, §3: the in-VM supervisor. It runs next to the agent CLI (run.sh starts it when the VM has node), and
 // reports up through an outbox the engine drains: heartbeats while it is alive, and checkpoints of the workspace.
 // Dependency-free, like vm-cli.mjs. Config (JSON file, argv[2]):
-//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree? }
+//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree?, jobs? }
 // With `reportTree`, each heartbeat carries the workspace's tree hash (for "no change in the workspace", ADR-019 §2).
+// With `jobs` (the agent's background jobs' directory, plugin API §16.2), each heartbeat says how many run, and the
+// agent's input stays open while one runs or one ended whose result message hasn't reached it yet: the CLI is still
+// there to read the result when it comes, and the agent keeps its slot.
 // It never pushes: the agent must not hold push credentials, so the engine pushes the checkpoint ref it reports.
 // With `input` ({ prompt, inbox }), the agent CLI reads user messages on stdin (claude --input-format stream-json):
 // the supervisor sends the prompt, then each message the engine appends to `inbox`, and closes stdin once the agent
 // has finished (a result) with nothing sent since, which ends the CLI.
 import { spawn, execFileSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync } from "node:fs";
 
 const cfg = JSON.parse(readFileSync(process.argv[2], "utf8"));
 let seq = 0;
@@ -77,6 +80,31 @@ function workTree() {
   } catch { return undefined; }
 }
 
+// Its background jobs (src/jobs/machine.ts): running (a runner alive and no exit code yet), and ended ones whose result
+// message hasn't been delivered (its `from` is the job id). One that ended more than JOB_GRACE_MS ago is let go: its
+// message may never come (capcomd was down).
+const JOB_GRACE_MS = 60_000;
+const deliveredJobs = new Set();
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const readText = (f) => { try { return readFileSync(f, "utf8"); } catch { return ""; } };
+function jobs() {
+  const out = { running: 0, waiting: 0 };
+  if (!cfg.jobs) return out;
+  let ids = [];
+  try { ids = readdirSync(cfg.jobs).filter((f) => /^job-[A-Za-z0-9]+$/.test(f)); } catch { return out; }
+  for (const id of ids) {
+    const d = `${cfg.jobs}/${id}`;
+    let ended = 0;
+    try { ended = statSync(`${d}/exit`).mtimeMs; } catch { /* still running, or never started */ }
+    // Stopped by the agent itself: no message comes (capcomd notes who stopped it in `killed`).
+    if (ended) { if (!deliveredJobs.has(id) && !/^by agt-/.test(readText(`${d}/killed`)) && Date.now() - ended < JOB_GRACE_MS) out.waiting++; continue; }
+    let rpid = 0;
+    try { rpid = Number(readFileSync(`${d}/rpid`, "utf8")); } catch { /* just launched */ }
+    if (!rpid || alive(rpid)) out.running++;
+  }
+  return out;
+}
+
 // The baseline, before the agent starts: an unchanged tree isn't a checkpoint.
 checkpoint("start");
 const child = spawn("/bin/sh", [cfg.script], { stdio: [cfg.input ? "pipe" : "inherit", "inherit", "inherit"] });
@@ -115,19 +143,24 @@ if (cfg.input) {
       if (typeof m.text !== "string") continue;
       say(m.text);
       sentAt = Date.now();
+      if (typeof m.from === "string" && m.from.startsWith("job-")) deliveredJobs.add(m.from);
       report("delivered", { seq: m.seq ?? null });
     }
     [lines, outRead] = tail(cfg.jsonl, outRead);
     if (lines.some((l) => { try { return JSON.parse(l).type === "result"; } catch { return false; } })) resultAt = Date.now();
     // Finished, and nothing sent since: end its input so it exits. A message sent before that result but not yet
-    // read is still in the pipe: the CLI reads it, answers, and then sees the end.
-    if (resultAt && sentAt <= resultAt && Date.now() - resultAt >= 1000) { closed = true; try { child.stdin.end(); } catch {} }
+    // read is still in the pipe: the CLI reads it, answers, and then sees the end. Not while a job of its runs, or
+    // the result of one is on its way: that message starts its next turn.
+    if (resultAt && sentAt <= resultAt && Date.now() - resultAt >= 1000) {
+      const j = jobs();
+      if (!j.running && !j.waiting) { closed = true; try { child.stdin.end(); } catch {} }
+    }
   }, 500);
 }
 
 const beat = setInterval(() => {
   sample();
-  report("heartbeat", { events, lastEventAt, ...(cfg.reportTree ? { tree: workTree() } : {}) });
+  report("heartbeat", { events, lastEventAt, ...(cfg.reportTree ? { tree: workTree() } : {}), ...(cfg.jobs ? { jobs: jobs().running } : {}) });
   // The agent committed (claude and codex may): checkpoint the new HEAD now rather than at the next interval.
   try { const h = git(["rev-parse", "HEAD"]); if (lastHead && h !== lastHead) checkpoint("commit"); } catch {}
   // The engine asks for one (the file says why): the agent looks stuck (ADR-019 §2), so the work is safe before

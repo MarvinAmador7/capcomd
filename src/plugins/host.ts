@@ -15,6 +15,7 @@ import { VERSION } from "../utils/self";
 import { BUILTINS } from "./builtins";
 import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
+import { pluginJobs } from "../jobs/service";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
 export type DaemonEventSink = (e: { type: string; entity: string; text: string; data: Record<string, unknown> }) => { seq: number };
@@ -88,7 +89,8 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
   };
 }
 
-export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink } = {}): PluginHost {
+/** `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2; a CLI's local host has none: `unsupported`). */
+export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
     if (e.stream !== "daemon") throw new PluginError("unsupported", `the host writes its own events on the daemon stream only (${e.type})`);
@@ -107,6 +109,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
       try { record(e); } catch { /* not a daemon-stream event */ }
     },
     dataDir: (name) => join(stateDir(), "plugins", name),
+    ...(o.jobs ? { services: (m) => ({ jobs: pluginJobs(m.name) }) } : {}),
     secret: async (m, key) => resolveSecret(m, key),
     sinks: {
       redact: (t) => redactor.text(t),

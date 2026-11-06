@@ -585,8 +585,9 @@ no `merge.landing`.
 
 #### 6.6.19 `job.changed` · observe · the jobs service (§16.2)
 `JobChanged {job, change: started|output{stdout, stderr}|fired{n}|ended{state}}`. Results of background work arrive
-here; timers tick here. 5 s deadline. Its site arrives with the jobs service (§17.2 step 7), `trigger.*`'s with the
-intake (step 10).
+here; timers tick here. 5 s deadline. Fired by `src/jobs/service.ts` in the process that watches the job (the daemon,
+where agents' spools are pumped and timers armed); `output` frames are read only while a plugin listens. `trigger.*`'s
+sites arrive with the intake (step 10).
 
 #### 6.6.20 `trigger.admitting` · veto · gate · the intake (§16.3), after the kernel's gate, before any action
 `TriggerAdmitting {trigger, gate: {allowed, strength, mode, subscribed}}`. A listener may only **deny**; it cannot
@@ -1212,9 +1213,12 @@ against the JSON Schema.
 
 `examples/sandbox-docker`. `src/providers/docker.ts` `DockerProvider` becomes the module; the descriptor from
 `registry.ts` is `describe()`; `available()` is `run-options.ts`'s `docker version` probe; `classifyError` replaces
-regexes elsewhere; the 5-minute sweep `serve.ts` started is the seam's `sweep`, which the kernel calls every 5
-minutes for a place in use (§7.2; the example schedules its own from a `daemon.started` listener instead, which a
-third-party plugin MAY do). Config: `bin`, `image`, `agentMemoryMb` (the `agentMemory` setting, with a `settings` descriptor),
+regexes elsewhere; the 5-minute sweep `serve.ts` started is the seam's `sweep`, which the plugin runs on its own
+timer (§16.2: a plugin-owned `timer` job with the key `sweep`, everyMs 300 000, started in `activate` and re-armed by
+the daemon after a restart) when the daemon starts and when the timer fires, for a place in use (the daemon's, or one
+a run asked for) through the kernel's wrapper (`src/plugins/sandboxes.ts` `sweepPlace`); the example schedules its own
+from a `daemon.started` listener, which a third-party plugin MAY do. Outside the daemon `ctx.jobs` is `unsupported`,
+so a CLI's plugins sweep nothing. Config: `bin`, `image`, `agentMemoryMb` (the `agentMemory` setting, with a `settings` descriptor),
 `idleLifetimeSeconds` (`x-per-run`). Nothing in `worker.ts`, `agent-workflow.ts` or the API changes.
 
 ### 15.2 The GitHub forge (`forge-github`, in-process)
@@ -1358,7 +1362,9 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    next to the `[capcomd] <op> → …` lines, planners and leads included. A provider whose CLI reports refusals only on
    stderr implements `refusal(line)` (§7.3; codex 0.163 leaves a command its rules forbid out of `--json`).
 6. `jobs.foregroundMs` defaults to 5 000 for `orchestrate` agents and 60 000 otherwise (§16.2), matching the prototype's
-   router and `standard` presets, so a planner's shell never blocks its inbox.
+   router and `standard` presets, so a planner's shell never blocks its inbox. An orchestrate agent starts no `exec` job
+   (`capcomd job start` is refused, `forbidden`): it runs nothing, in the background either; a long command is a
+   helper's, and `capcomd check` runs the checks.
 
 Enforcement is the agent provider (its CLI's permission system inside the sandbox) and the kernel's refusal to land an
 orchestrator's branch: no special case in the planner recipe. The `planner` and `lead` profiles `capcomd setup project`
@@ -1385,33 +1391,48 @@ kinds:
 Rules:
 
 1. **Start returns at once.** `jobs.start` of an `exec` waits `foregroundMs` (the spec's, else the owner's
-   `jobs.foregroundMs`, else 60 000); a job that ends within it returns `done` with its result; otherwise `running`.
+   `jobs.foregroundMs`, else 60 000; never more than 90 000, an in-VM call's hold); a job that ends within it returns
+   `done` (or `failed`) with its result; otherwise `running`.
    The in-VM `capcomd` CLI exposes the same to agents as `capcomd job start -- <cmd>`, `job output`, `job list`,
-   `job kill` (spool ops `job.*`, ADR-017), so an agent's long command returns "started" and its result arrives as an
-   inbox message the supervisor delivers at the next step (as dsh's completion notice). The agent CLI's own shell tool is
-   not changed (ADR-023 §5.3): auto-backgrounding applies to commands run through capcomd's wrapper, which the
-   orchestration skill tells planners to use.
-2. **Limits** (profile `jobs` block, ADR-024; daemon defaults in config `jobs.*`): `max` running jobs per owner (8),
-   `foregroundMs` (60 000; 5 000 for `orchestrate`), `afterTurnMs` (1 800 000): an agent's `exec` jobs are killed this
-   long after the agent's last step ended, and always when the agent ends; `timeoutMs` per job (default `afterTurnMs`).
-   Output ring 64 KB. A `timer`'s `everyMs` ≥ 1 000.
+   `job kill` (spool ops `job.start`, `job.output`, `job.list`, `job.kill`, ADR-017; MCP tools `capcomd_job_*`), so an
+   agent's long command returns "running" and its result arrives as an inbox message from the job (`from: <jobId>`)
+   that the supervisor delivers at the next step (as dsh's completion notice); a job the agent stops itself sends
+   none. The agent CLI's own shell tool is not changed (ADR-023 §5.3): auto-backgrounding applies to commands run
+   through capcomd's wrapper, which the orchestration skill tells agents to use. A single-string command runs with
+   `sh -c`; more strings are argv. The job runs in the agent's machine with the agent's working directory and `PATH`
+   (no credential: the exec carries none) as a detached runner (`src/jobs/machine.ts`) whose files,
+   `<spool>/jobs/<id>/{spec.json, out, err, exit, killed}`, outlive the daemon.
+2. **Limits** (profile `jobs` block, ADR-024; daemon defaults `CAPCOMD_JOBS_MAX`, `CAPCOMD_JOBS_FOREGROUND_MS`,
+   `CAPCOMD_JOBS_AFTER_TURN_MS`, settable in config `env`): `max` running jobs per owner (8), `foregroundMs` (60 000;
+   5 000 for `orchestrate`), `afterTurnMs` (1 800 000): an agent's `exec` jobs are killed when the agent ends;
+   `timeoutMs` per job (default `afterTurnMs`, counted from the job's start; counting it from the agent's last step
+   is a later refinement). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
+   to 64 KB of each from the machine while it runs). A `timer`'s `everyMs` ≥ 1 000; `at` with `everyMs` is the first
+   fire.
 3. **Slots.** An agent with a running `exec` job keeps its slot (`src/providers/capacity.ts`): it is not `idle` and the
-   kernel's idle notice is not raised while jobs run. A run-owned job holds no agent slot but counts against the run's
-   machine count.
+   kernel's idle notice is not raised while jobs run. Its supervisor keeps the agent CLI's input open while one of its
+   jobs runs or a result message is on its way (so the CLI is there to read it), and says in each heartbeat how many
+   run; the runner's stuck watch starts again on each. A run-owned job holds no agent slot but counts against the run's
+   machine count (run-owned job machines are a later step: `owner: {run: true}` for `exec` is refused
+   `unsupported` until then).
 4. **Handoff** (`capcomd spawn --continue`): the agent's `exec` jobs are **killed** with its machine when it ends
    (today its machine is destroyed after its push, `ops.ts` → `worker.ts`); a job meant to outlive the agent (a server
    kept for review) is started `owner: {run: true}` and lives until the run ends or its `timeoutMs`. Timers owned by an
    agent end with it; run-owned and plugin-owned timers do not.
 5. **Cancel**: `jobs.cancel` and an agent's cancel kill its jobs (SIGTERM, SIGKILL after 5 s; state `killed`).
-6. **Daemon restart**: job records are durable. `exec` jobs keep running inside their machine (the supervisor holds the
-   process); on restart the kernel re-attaches by reading the job's result file through the spool and settles it; a job
-   whose machine is gone settles `lost`. Timers are re-armed from their records; a missed `at` fires once on restart.
+6. **Daemon restart**: job records are durable. `exec` jobs keep running inside their machine (their runner holds the
+   process, in a session of its own); on restart the kernel re-attaches when the agent's spool pump starts again, by
+   reading the job's files through the same exec, and settles it (its end time is the runner's); a job whose machine
+   or runner is gone settles `lost`, as does one whose agent ended while nobody watched (when it is next read). Timers
+   are re-armed from their records once the daemon's plugins have loaded; a missed `at` (or interval) fires once on
+   restart. A plugin's timer is a file in the daemon's state (`state/jobs/<id>.json`); a run's job is kv `_jobs/<id>`,
+   with a pointer there for `get` by id and re-arming.
 7. **Events**: results arrive as `job.changed` hook calls and `job.started`/`job.ended` events; nobody polls. `wait` is
    a convenience bounded by its deadline.
 
-Why one primitive: the watchdog's clock (§16.4), a source's poll loop (§16.3), the Docker sweep (§15.1, which SHOULD
-move to a plugin-owned timer once jobs ship) and background shell are all "work that reports back later"; one durable
-record, one owner rule, one event shape.
+Why one primitive: the watchdog's clock (§16.4), a source's poll loop (§16.3), the Docker sweep (§15.1, `sandbox-docker`'s
+own timer) and background shell are all "work that reports back later"; one durable record, one owner rule, one event
+shape.
 
 ### 16.3 Triggers
 
@@ -1528,7 +1549,7 @@ manifest declares a notifier-shaped plugin (`run.changed` + `agent.changed` obse
 
 | Today | Becomes | Kind | Spec |
 |---|---|---|---|
-| `src/providers/docker.ts`, `registry.ts` descriptor, `serve.ts` sweep | `sandbox-docker` | seam: sandbox | §15.1 |
+| `src/providers/docker.ts`, `registry.ts` descriptor, `serve.ts` sweep | `sandbox-docker` (the sweep on its own timer job) | seam: sandbox | §15.1 |
 | `src/providers/boxd.ts`, `boxd-machine.ts`, `boxd-errors.ts`, `isBoxdAuthError` | `sandbox-boxd` (`apiKey` as `x-secret`; `classifyError`) | seam: sandbox | §7.2 |
 | `src/providers/fake.ts`, `fake-host` | `sandbox-fake`, `sandbox-fake-host` (`listed: false`) | seam: sandbox | |
 | `src/agents/adapters.ts` `claudeAdapter`, `codexAdapter`, `claude-code.ts`, the `PROVIDER_*` tables | `agent-claude`, `agent-codex` | seam: agent | §7.3 |
@@ -1587,8 +1608,8 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.8 | 2026-11-05 | `merge.landing`'s `hold` takes an optional `holdId` (§6.6.15; additive): an approved hold is matched by plugin and `holdId`, falling back to the reason text without one; `heldBy.holdId` on the record and the approval. A plugin-held merge's approval carries the changed files, as a protected target's does. |
 | 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
 | 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
-
-| 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
+| 1.0.11 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6 (numbered 1.0.7 by mistake when it landed, next to the forge row): `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
+| 1.0.12 | 2026-11-05 | With the jobs service (§17.2 step 7, §16.2): `exec` runs in the owner agent's machine through its spool pump's exec, as a detached runner whose files (`<spool>/jobs/<id>/`) outlive the daemon; the machine is attached while the agent runs, so re-attaching after a restart is the agent's pump starting again; a job whose agent ended unwatched settles `lost` when it is next read. A run-owned job machine (`owner: {run: true}` for `exec`) is refused `unsupported` until a later step; a job's `env` values are not kept on its record. The in-VM ops are `job.start`, `job.output`, `job.list`, `job.kill`, in every agent token (where an in-VM capcomd runs); a start's answer is the job as its agent reads it, and a job the agent stops itself sends no message. A single-string `cmd` runs with `sh -c`, more are argv. `afterTurnMs` is a job's default timeout (from its start), not yet counted from the agent's last step; daemon defaults are `CAPCOMD_JOBS_MAX`, `CAPCOMD_JOBS_FOREGROUND_MS`, `CAPCOMD_JOBS_AFTER_TURN_MS` (config `env`). Today's `capcomd.agents/v1` file takes the profile's `jobs` block as is (`PinnedSpec.jobs`). A settled record keeps the last 48 KB of stdout and 16 KB of stderr. A timer may set both `at` (its first fire) and `everyMs`. An orchestrate agent starts no `exec` job (§16.1 item 6). The Docker sweep is `sandbox-docker`'s own timer (§15.1). `job.started`/`job.ended` are run events (additive), on the daemon stream for a plugin's timer. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

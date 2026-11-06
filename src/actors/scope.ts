@@ -1315,6 +1315,26 @@ export const scopeActor = actor({
       return out;
     },
 
+    /**
+     * A background job's record (plugin API §16.2): kv `_jobs/<id>`, written by the kernel only (src/jobs/service.ts),
+     * with its `job.started` or `job.ended` event in the same transaction. A record that already ended stays as it is
+     * (a second settle, after a restart or from another watcher, changes nothing); `ended` says whether it had.
+     */
+    async jobWrite(c, params: { job: Record<string, any>; event?: "JOB_STARTED" | "JOB_ENDED"; agentId?: string | null; data?: Record<string, unknown> }) {
+      const k = `_jobs/${params.job.jobId}`;
+      let ended = false, version = 0;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = await tx.execute("SELECT v, version FROM kv WHERE k = ? AND deleted = 0", k);
+        const cur = r.length ? (JSON.parse(r[0]!.v as string) as Record<string, any> | null) : null;
+        if (cur && !["running", "stopping"].includes(String(cur.state))) { ended = true; version = Number(r[0]!.version); return; }
+        version = (r.length ? Number(r[0]!.version) : 0) + 1;
+        await tx.execute("INSERT INTO kv (k, v, version, writer, updated_at, deleted) VALUES (?, ?, ?, 'capcomd', ?, 0) ON CONFLICT(k) DO UPDATE SET v = excluded.v, version = excluded.version, writer = excluded.writer, updated_at = excluded.updated_at, deleted = 0",
+          k, JSON.stringify(params.job), version, Date.now());
+        if (params.event) await addEvent(tx, params.event, params.agentId ?? null, params.data ?? {}, `${params.event === "JOB_STARTED" ? "job-start" : "job-end"}-${params.job.jobId}`);
+      }, { name: "scopeJobWrite" });
+      return { version, ended };
+    },
+
     async kvGet(c, params: { k: string }) {
       const r = await c.db.execute("SELECT * FROM kv WHERE k = ?", params.k);
       return r.length ? kvRow(r[0]) : null;

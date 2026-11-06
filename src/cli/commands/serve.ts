@@ -277,7 +277,10 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // actors answer and before the API opens, so a client never sees a half-loaded daemon. A plugin that fails is listed
   // with its cause and the daemon goes on.
   const P = await import("../../plugins/host");
-  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath() });
+  // Background jobs and timers (§16.2): a plugin's timer is on the daemon's stream; plugins start theirs as they load.
+  const J = await import("../../jobs/service");
+  J.useDaemonEvents((e) => harnessStore.recordDaemonEvent(e));
+  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath(), jobs: true });
   process.on("exit", () => P.releaseSnapshot());
   let started = false;
   try { await host.start(P.builtinCandidates()); started = true; } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }
@@ -289,9 +292,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   H.useHooks(host.hooks);
   const SB = await import("../../plugins/sandboxes");
   if (started) SB.useSandboxHost(host);
-  // A place that doesn't delete idle machines by itself (Docker, ADR-020): its seam sweeps capcomd's expired ones, now
-  // and every 5 minutes.
-  try { SB.keepTidy((await import("../../providers/registry")).sandboxName()); } catch { /* an unknown CAPCOMD_SANDBOX fails the first run instead */ }
+  // The timers of the daemon and its runs, from their records (§16.2 rule 6), now that their listeners are loaded. (A
+  // place that doesn't delete idle machines by itself, Docker, sweeps on its plugin's own timer.)
+  await J.resumeTimers().catch((e) => console.error(`capcomd serve: re-arming timers: ${(e as Error).message}`));
   // And the agent providers are the ones its plugins registered (§7.3, §17.2 step 4); a host that didn't start leaves
   // the built-ins.
   if (started) (await import("../../plugins/agents")).useAgentSeams(host.contributions);

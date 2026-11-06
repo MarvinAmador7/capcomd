@@ -9,7 +9,7 @@ export type Recorded = { hook: HookName; mode: string; at: string; key: string; 
 
 function record(call: HookCall): Recorded {
   const p = call.payload as Record<string, any>;
-  const subject = p.merge?.mrgId ?? p.verification?.vfyId ?? p.approval?.approvalId ?? p.agent?.id ?? p.machine?.id ?? (call.hook === "agent.spawning" ? p.spawn?.profile : null) ?? (call.hook === "profile.resolved" ? p.profile?.name : null) ?? null;
+  const subject = p.job?.jobId ?? p.merge?.mrgId ?? p.verification?.vfyId ?? p.approval?.approvalId ?? p.agent?.id ?? p.machine?.id ?? (call.hook === "agent.spawning" ? p.spawn?.profile : null) ?? (call.hook === "profile.resolved" ? p.profile?.name : null) ?? null;
   return { hook: call.hook, mode: call.mode, at: call.at, key: call.idempotencyKey, runId: call.runId, agentId: call.agentId, principal: call.principal.kind, change: p.change?.kind ?? null, subject };
 }
 

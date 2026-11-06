@@ -1,14 +1,14 @@
 // ADR-019 §1, §3: the in-VM supervisor runs the agent, reports heartbeats to its outbox, and checkpoints the workspace
 // without touching the agent's working tree, index or history. Run directly with node against a scratch repo.
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Git } from "../../src/merge/git";
 
 const SUPERVISOR = new URL("../../src/agents/supervisor.mjs", import.meta.url).pathname;
 
-async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boolean } = {}) {
+async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boolean; jobs?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-sup-"));
   const repo = join(dir, "repo");
   const g = new Git(dir);
@@ -23,6 +23,7 @@ async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boo
     script: join(dir, "agent.sh"), dir, repo, jsonl, outbox, ref: "refs/capcomd/checkpoints/agt-1", agentId: "agt-1",
     heartbeatMs: 150, checkpointEveryMs: o.checkpointEveryMs ?? 400,
     ...(o.input ? { input: { prompt: join(dir, "prompt.txt"), inbox: join(dir, "inbox.jsonl") } } : {}),
+    ...(o.jobs ? { jobs: join(dir, "jobs") } : {}),
   }));
   if (o.input) writeFileSync(join(dir, "prompt.txt"), "do the thing");
   const run = async () => {
@@ -85,4 +86,28 @@ while IFS= read -r m; do echo "$m" >> seen.txt; echo '{"type":"result"}' >> $JSO
     { type: "user", message: { role: "user", content: "also this" } },
   ]);
   expect(reports.filter((x) => x.type === "delivered")).toEqual([expect.objectContaining({ seq: 7 })]);
+}, 30_000);
+
+test("jobs: its input stays open while a background job runs and until the job's result message reaches it", async () => {
+  // A CLI that answers each message at once, and exits when its input ends; a job of its runs (a live runner, no exit
+  // code) when its first turn ends.
+  const s = await setup(`IFS= read -r p; echo "$p" > seen.txt; echo '{"type":"result"}' >> $JSONL
+while IFS= read -r m; do echo "$m" >> seen.txt; echo '{"type":"result"}' >> $JSONL; done; exit 0`, { input: true, checkpointEveryMs: 0, jobs: true });
+  const job = join(s.dir, "jobs", "job-ktest1");
+  mkdirSync(job, { recursive: true });
+  const runner = Bun.spawn(["sleep", "30"]);
+  writeFileSync(join(job, "rpid"), String(runner.pid));
+  const t0 = Date.now();
+  // The job ends after 2.5 s; its result message comes 1.5 s later (capcomd's poll and delivery).
+  setTimeout(() => { writeFileSync(join(job, "exit"), "0"); runner.kill(); }, 2500);
+  setTimeout(() => writeFileSync(join(s.dir, "inbox.jsonl"), JSON.stringify({ seq: 3, from: "job-ktest1", text: "your job finished" }) + "\n"), 4000);
+  const { code, reports } = await s.run();
+  expect(code).toBe(0);
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(4000);
+  const seen = readFileSync(join(s.repo, "seen.txt"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  expect(seen.map((m) => m.message.content)).toEqual(["do the thing", "your job finished"]);
+  // Its heartbeats said a job ran, then none.
+  const beats = reports.filter((x) => x.type === "heartbeat").map((x) => x.jobs);
+  expect(beats).toContain(1);
+  expect(beats.at(-1)).toBe(0);
 }, 30_000);

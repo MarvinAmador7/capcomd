@@ -195,6 +195,8 @@ const INLINE_APPEND_MAX = 32 * 1024;
 
 /** A message sent to a running agent (`capcomd send`), as the agent reads it: from its parent or the operator. */
 export function messageText(m: { from: string; body: string; skills?: AttachedSkill[] }): string {
+  // Plugin API §16.2: a background job of its own ended (the body says how; src/jobs/service.ts jobMessage).
+  if (m.from.startsWith("job-")) return `From capcomd, about your background job (capcomd job):\n\n${m.body}`;
   const who = m.from === "operator" || m.from === "driver" ? "the operator" : `agent ${m.from} (your parent or an ancestor)`;
   return `Message from ${who}, sent while you work (capcomd send):\n\n${withSkills(m.body, m.skills)}`;
 }
@@ -695,6 +697,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         ...(orchestrate ? { checkpoints: false } : {}),
         ...(cfg.noChangeAfterMs ? { reportTree: true } : {}),
         ...(streaming ? { input: { prompt: `${W}/prompt.txt`, inbox: inboxFile } } : {}),
+        // Plugin API §16.2: its background jobs (in-VM `capcomd job`, next to its spool) keep it here while they run.
+        ...(opts.subagents ? { jobs: `${opts.subagents.rpcDir}/jobs` } : {}),
       })));
     }
     setSpanAttributes(span, { "agent.supervised": supervised, "agent.reads_messages": streaming });
@@ -801,6 +805,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         // Its start is a heartbeat too: the first interval hasn't passed yet.
         if (rep.type === "heartbeat" || rep.type === "start") opts.onReport?.({ type: "heartbeat", events: Number(rep.events ?? 0), lastEventAt: Number(rep.lastEventAt ?? now()), source: "supervisor" });
         if (rep.type === "heartbeat" && typeof rep.tree === "string") watch.observeTree(rep.tree, now());
+        // §16.2 rule 3: an agent waiting on its background job isn't idle: no notice is raised while one runs.
+        if (rep.type === "heartbeat" && Number(rep.jobs) > 0) watch.reset(now());
         if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
         else if (rep.type === "delivered") addSpanEvent(span, "agent.message_delivered", { "agent.message_seq": Number(rep.seq ?? 0) });
         else if (rep.type === "error" || rep.type === "start" || rep.type === "exit") addSpanEvent(span, `agent.supervisor.${rep.type}`, { ...(rep.message ? { "agent.text": r.text(String(rep.message)) } : {}), ...(rep.code !== undefined ? { "agent.exit_code": rep.code } : {}) });
@@ -896,7 +902,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         // message means someone looked at the agent: its stuck window starts again (ADR-019 §2).
         const msgs = (rep?.messages ?? []).filter((m) => m.seq > inboxSeq);
         if (msgs.length) {
-          const lines = msgs.map((m) => JSON.stringify({ seq: m.seq, text: messageText(m) })).join("\n") + "\n";
+          const lines = msgs.map((m) => JSON.stringify({ seq: m.seq, from: m.from, text: messageText(m) })).join("\n") + "\n";
           // A long one (a big body, attached skills) goes up as a file: a shell argument can't hold it (128 KB on Linux).
           const part = `${inboxFile}.part`;
           const put = Buffer.byteLength(lines) <= INLINE_APPEND_MAX

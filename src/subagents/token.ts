@@ -12,6 +12,8 @@ import { env } from "../utils/env";
 export const ALL_OPS = [
   "spawn", "await", "wait-any", "status", "tree", "cancel", "send", "inbox", "handoff", "events",
   "budget", "task", "kv", "verify", "merge", "inspect", "logs", "heartbeat", "result", "grant", "title", "fetch", "check",
+  // Plugin API §16.2: background jobs in the agent's own machine.
+  "job.start", "job.output", "job.list", "job.kill",
 ] as const;
 export type Op = (typeof ALL_OPS)[number];
 
@@ -70,5 +72,5 @@ export function verifyToken(token: string, key = signingKey(), now = Date.now())
 
 /** Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator). */
 export function opsFor(limits: { allowSpawn: boolean }): Op[] {
-  return limits.allowSpawn ? [...ALL_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result", "title"];
+  return limits.allowSpawn ? [...ALL_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result", "title", "job.start", "job.output", "job.list", "job.kill"];
 }

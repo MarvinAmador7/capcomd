@@ -20,6 +20,7 @@ import { env } from "../utils/env";
 import type { SandboxProvider, VmId } from "../providers/sandbox";
 import { rawProvider } from "../providers/resilient";
 import { VM_RPC_DIR } from "./skill";
+import { attachMachine, type JobMachine } from "../jobs/service";
 
 
 const NODE_BIN = Bun.which("node") ?? "node";
@@ -27,23 +28,27 @@ const NODE_BIN = Bun.which("node") ?? "node";
 /**
  * `steps`: also record its step history (agent.step) from these ops. Only for scripted agents, whose ops are all the
  * daemon sees of them; a real agent's steps come from its own events (worker.ts), which include its capcomd calls.
+ * `jobs`: where its background jobs run by default, and its node (plugin API §16.2): the machine is attached to the
+ * jobs service while the pump runs, so jobs it started before a restart are watched again.
  */
-function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number, o: { steps?: boolean } = {}) {
+function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number, o: { steps?: boolean; jobs?: { cwd: string; node?: string } } = {}) {
   const s = client().scope.getOrCreate([runId]);
   const ttlMs = Number(env("TOKEN_TTL_MS") ?? 30 * 60_000);
   let jti: string | null = null;
   // The capcomd ops it calls (spawn, await, send, …) are what it is doing too (harness.v1 Agent.activity).
   const activity = activityReporter((act) => s.setActivity({ agentId: a.agentId, activity: act }),
     o.steps ? { onStep: (st) => s.recordStep({ agentId: a.agentId, ...st }) } : {});
+  // The agent's machine: its VM, or this host for a scripted agent on a local spool.
+  const exec = spool instanceof VmSpool ? (cmd: string[], o: { cwd?: string; timeoutMs?: number }) => spool.provider.exec(spool.vmId, cmd, o) : localExec;
+  const upload = spool instanceof VmSpool ? (path: string, data: Uint8Array) => spool.provider.upload(spool.vmId, path, data) : localUpload;
+  const machine: JobMachine = { runId, agentId: a.agentId, dir: `${spool.dir}/jobs`, cwd: o.jobs?.cwd ?? "/", ...(o.jobs?.node ? { node: o.jobs.node } : {}), exec };
+  const attached = attachMachine(machine).catch((e) => { console.error(`[jobs] ${a.agentId}: ${(e as Error)?.message ?? e}`); return null; });
   const pump = startPump({
     spool, intervalMs, refreshMs: Math.max(1000, ttlMs / 2),
     mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits), ttlMs }); jti = t.claims.jti; return t.token; },
     handle: async (req) => {
       driverKillpoint(`rpc.${req.op}.before`);
-      // The agent's machine: its VM, or this host for a scripted agent on a local spool.
-      const exec = spool instanceof VmSpool ? (cmd: string[], o: { cwd?: string; timeoutMs?: number }) => spool.provider.exec(spool.vmId, cmd, o) : localExec;
-      const upload = spool instanceof VmSpool ? (path: string, data: Uint8Array) => spool.provider.upload(spool.vmId, path, data) : localUpload;
-      const r = await handleRpc(req, { runId, agentId: a.agentId, exec, upload });
+      const r = await handleRpc(req, { runId, agentId: a.agentId, exec, upload, jobs: machine });
       // Counted by request: each spawn/send/verify/merge is one more; polls of await are the same wait.
       if (r.ok) activity.op(req.op, ["spawn", "send", "verify", "merge"].includes(req.op) ? String(req.id) : "");
       driverKillpoint(`rpc.${req.op}.before_reply`); // handled (e.g. child spawned) but the VM never got the answer
@@ -52,9 +57,11 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
     onLog: (lines) => { s.appendLog({ agentId: a.agentId, stream: "agent", lines }).catch(() => {}); },
   });
   return {
-    /** `finished`: the agent ended by itself, so its last step is recorded (a cancelled one's is dropped). */
-    stop: async (f: { finished?: boolean } = {}) => {
+    /** `finished`: the agent ended by itself, so its last step is recorded (a cancelled one's is dropped). `ended`: its
+     *  run in this machine is over (finished or cancelled), so its background jobs end too (§16.2 rule 4). */
+    stop: async (f: { finished?: boolean; ended?: boolean } = {}) => {
       await pump.stop();
+      await (await attached)?.detach({ ended: f.ended ?? false });
       if (f.finished) await activity.finish(); else activity.stop();
       // The agent is done with its token: revoke it so a copy left in the VM is dead now, not at exp.
       if (jti) await s.revokeToken({ jti, agentId: a.agentId, reason: `agent ${a.agentId} finished` }).catch(() => {});
@@ -81,7 +88,10 @@ export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: Sandb
   // The pump has its own backoff and never ends the agent: it uses the provider as is (rawProvider), so a call during an
   // outage fails and is tried again next tick instead of holding up the pump (and its stop) for the outage window.
   const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, rpcDir, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
-  try { return await work(); } finally { await p.stop(); }
+  // Its CLI ran to its end (the work returned): its jobs end with it. A failed attempt may run again on the same
+  // machine (a restarted engine), so its jobs are left to the next pump, or settle `lost` once the agent ended.
+  let ended = false;
+  try { const r = await work(); ended = true; return r; } finally { await p.stop({ ended }); }
 }
 
 export class ScriptFailed extends Error { constructor(msg: string, readonly exitCode: number) { super(msg); } }
@@ -120,7 +130,7 @@ export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitC
   // The PATH below is minimal; node may live elsewhere on the host (Homebrew, nvm): link it in.
   if (NODE_BIN !== "node" && !existsSync(join(bin, "node"))) symlinkSync(NODE_BIN, join(bin, "node"));
   const s = client().scope.getOrCreate([runId]);
-  const p = pumpFor(runId, a, new LocalSpool(dir, [{ file: out, stream: "stdout" }, { file: err, stream: "stderr" }]), Number(env("SCRIPT_RPC_POLL_MS") ?? 100), { steps: true });
+  const p = pumpFor(runId, a, new LocalSpool(dir, [{ file: out, stream: "stdout" }, { file: err, stream: "stderr" }]), Number(env("SCRIPT_RPC_POLL_MS") ?? 100), { steps: true, jobs: { cwd: home, node: NODE_BIN } });
   let cancelled = false;
   try {
     for (let i = 0; i < 100 && !(existsSync(join(dir, "token")) && statSync(join(dir, "token")).size); i++) await new Promise((r) => setTimeout(r, 20));
@@ -151,5 +161,5 @@ export async function runScripted(runId: string, a: ScopeAgent): Promise<{ exitC
       await new Promise((r) => setTimeout(r, 150));
     }
     return { exitCode: Number(readFileSync(exitFile, "utf8").trim() || 1) };
-  } finally { await p.stop({ finished: !cancelled }); }
+  } finally { await p.stop({ finished: !cancelled, ended: true }); }
 }
