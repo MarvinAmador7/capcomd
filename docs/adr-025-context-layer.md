@@ -548,6 +548,38 @@ Each step: `bun run typecheck`, `bun run test:fast`, `bun run test:scenarios`, t
 for the models in use, and a CHANGELOG line for what a user sees ("profiles: `context` block; agents see project memory
 at start"; "memory lands through a reviewed merge"; "business context from a groundray brain").
 
+**Made while building step 1** (spec 1.0.21; where the code and §3.2 differ, the code is right and this list says why):
+
+- The envelope is `packages/plugin/src/context-layer.ts`: `context.ts` is the plugin's `PluginContext`, and the
+  glossary keeps "context" for it. The service is `ctx.context.register` all the same.
+- `ContextScope` gains `ref` (the branch the agent's checkout starts from, the run's target: the project layer is read
+  at its tip, so a provider needs it), and its `projectId` and `runId` may be null (a run without a repository;
+  `capcomd context brief` outside a run).
+- The router is the built-in plugin `context` (`src/plugins/context.ts`, over `src/context/brief.ts`), so its events
+  are `plugin.context.loaded` and `plugin.context.skipped` as §10 names them; it also owns the command group `capcomd
+  context` (`brief` now; `lint` joins it in step 2, calling `context-memory`), since one group has one owner. The
+  provider is the built-in `context-memory` (`context:memory`, `src/context/memory.ts`), and both load in every process
+  that prepares an agent.
+- `context-memory` serves `memory/` (kind `memory`) and a project's own `facts/` (kind `fact`), as §3.3 lays out, so
+  D11 is testable now: a reviewer or report agent gets the fact lines and none of the memory ones. It reads the tree at
+  the tip of the run's target through the daemon's files mirror (one fetch per brief, through host-git, shared by the
+  briefs of agents prepared together; a tree is parsed once per commit). An item without `status` is `draft` (saving never raises authority); `description` falls back to
+  `title`, then the id, never the body; `A supersedes B` hides `B` even when `B` doesn't say so.
+- Freshness is judged against the UTC day, not the instant, so two agents prepared the same day get the same brief.
+  The router drops a line superseded by one in the same index, deprecated lines, stale ones (counted in the header) and,
+  for a reviewer, memory ones (counted too); a provider's failure is named with one of the kernel's reasons (`timeout`,
+  `not active`, `not found`, `not configured`, `unavailable`, `failed`), never its own message. The providers are
+  asked at once, each within its own 10 s, so the listener's own deadline never leaves the brief (and its header) out.
+- A line of the brief joins several untrusted fields (description, path, `paths`), so each is made one line before it
+  is redacted and neutralised (a marker split by a line break or hidden behind an invisible character is caught), and a
+  lone `<<<` or `>>>` is neutralised too: half a marker in one field and half in the next can't make a whole one.
+- `context` is pinned on the agent with its flat spec (`PinnedSpec.context`, `AgentSpec.context`, also allowed in an
+  `agents.json` entry); an override may remove it but not change it (a widening), and a child profile has its own
+  (D12). A provider entry's `layers` default to `[project, run]`.
+- The budgets the router reads are a generated copy of the eval's `limits.json` files (`src/context/limits.gen.ts`,
+  `scripts/gen-context-limits.ts`): the package ships `src/`, not `docs/evidence/`. Kernel floors and ceilings:
+  `briefBytes` 1 KiB-100 KiB, `indexLines` 1-1000, `descriptionChars` 20-500.
+
 ## 14. What the review changed
 
 | Lens | Blocking point | Resolution |

@@ -35,6 +35,9 @@ jobs:
       - name: src/primitives/title-shim.gen.ts matches title-rules.mjs
         run: bun scripts/gen-title-shim.ts --check
 
+      - name: src/context/limits.gen.ts matches docs/evidence/context
+        run: bun scripts/gen-context-limits.ts --check
+
       - name: Type check
         run: bun run typecheck
 
@@ -109,7 +112,7 @@ jobs:
       # task chain, the hidden checkers through `capcomd check`, the metrics); --expect fails on any verdict the fake
       # agent's policy doesn't produce. The live baselines per model are in docs/evidence/context/.
       - name: Context eval (fake sandbox and agent)
-        run: bun scripts/eval-context.ts --seed 1 --expect --port 6571
+        run: bun scripts/eval-context.ts --seed 1 --expect --port 6571 --arms none,agents-md,index
 
   # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
   # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that

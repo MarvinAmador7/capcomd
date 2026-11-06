@@ -392,13 +392,18 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   asked for a spawn, and the file may be a link to anything on the host).
 - **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
-- **Blocks with no runtime yet** (`identity.persona`, `tools.mcp`, `context`, `sandbox.provider|environment|size`,
-  `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4, `skills` until step 5) are checked
-  and kept on the resolved profile, not pinned (`jobs` is pinned as is since the jobs service, spec §17.2 step 7);
-  `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is checked against the active sandbox
-  seams.
+- **Blocks with no runtime yet** (`identity.persona`, `tools.mcp`, `sandbox.provider|environment|size`,
+  `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4, `skills` until step 5, `context`
+  until ADR-025 step 1, below) are checked and kept on the resolved profile, not pinned (`jobs` is pinned as is since
+  the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is
+  checked against the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.
+- **`context` (and `memory`, read as it) has a runtime since ADR-025 step 1**: it is pinned with the flat spec
+  (`AgentSpec.context`, a field an `agents.json` entry may hold too), its provider names are checked against the active
+  context providers when profiles are read, and an override may remove it but never change it. The behaviour change
+  from §2.2: the memory directory is no longer mounted read/write and written back by the agent; it is the repository's
+  `.capcomd/context/`, read at the run's target and changed by reviewed commits (ADR-025 §4, D2).
 
 Made while building the CLI and `GET /v1/profiles` (§7 step 2, 2026-11-05; `src/cli/commands/profiles.ts`,
 `src/api/profiles.ts`, `src/profiles/describe.ts`):

@@ -118,8 +118,8 @@
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^(seam:(sandbox|agent|forge)\\/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$",
-        "description": "seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)"
+        "pattern": "^(seam:(sandbox|agent|forge)\\/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|context:[a-z0-9][a-z0-9_-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$",
+        "description": "seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), context:<name> (a context provider a profile names, ADR-025 §3.1), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)"
       }
     },
     "requires": {
@@ -127,8 +127,8 @@
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^(seam:(sandbox|agent|forge)\\/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$",
-        "description": "seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)"
+        "pattern": "^(seam:(sandbox|agent|forge)\\/[a-z0-9][a-z0-9-]{0,62}|source:[a-z0-9][a-z0-9-]{0,62}|context:[a-z0-9][a-z0-9_-]{0,62}|plugin:[a-z0-9][a-z0-9-]{0,62}|kernel:[a-z][a-z0-9_.-]*)$",
+        "description": "seam:sandbox/<name>, seam:agent/<name>, seam:forge/<name> (an implementation of a seam under that name), source:<name> (a trigger source, §16.3), context:<name> (a context provider a profile names, ADR-025 §3.1), plugin:<name> (another plugin, active), or kernel:<feature> (a kernel feature by its harness.v1 capability name)"
       }
     },
     "order": {
@@ -250,6 +250,37 @@
             "required": [
               "name",
               "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "context": {
+          "description": "Context providers (ADR-025 §3.1); each must be listed in provides as context:<name>",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+                "description": "The provider's name: what a profile's `context.providers[].name` selects (`memory`, `groundray`)"
+              },
+              "kinds": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "fact",
+                    "memory"
+                  ]
+                },
+                "description": "The kinds of item it serves: fact (owned, sourced business knowledge) and memory (lessons a project learned)"
+              }
+            },
+            "required": [
+              "name",
+              "kinds"
             ],
             "additionalProperties": false
           }
