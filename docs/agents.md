@@ -73,8 +73,23 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   capcomd. An `override.yaml` in `<name>/` changes a profile without copying it (same blocks, no `name`): yours over a
   bundled one, the project's over yours or a bundled one.
 - `agents.json` keeps working as before; a `profile.yaml` of the same name in the same place wins, and `capcomd
-  profiles validate` says so. `capcomd profiles list`, `show` and `validate` read both; `add`, `set` and `rm` edit only
-  `agents.json`.
+  profiles validate` says so. `capcomd profiles list`, `show` and `validate` read both.
+- `capcomd profiles set <name>` changes the file the profile is defined in, wherever it is: its `profile.yaml` (or
+  `<name>.yaml`) or its `agents.json` entry, never a profile it `extends` or an `override.yaml` laid over it. It takes
+  the flags (`--model`, `--max-turns`, …), `--set` with the v2 paths (`--set limits.maxTurns=40 --set
+  tags=review,security`) and `--unset` (which removes the profile's own value, so an inherited one shows again). A YAML
+  file keeps its comments, and its `version` goes up by one (an `agents.json` entry has none: it stays 1). The change
+  is checked as the files would be after it: one that would leave any profile unreadable (a value out of range, a
+  child wider than the profile that spawns it), or that an `override.yaml` would hide, is refused and nothing is
+  written. `capcomd profiles add <name> --extends <parent>` (or with a `--set` only a profile file holds, such as
+  `tags`) writes `.capcomd/profiles/<name>.yaml` at version 1; without, `add` writes `agents.json` as before. `rm`
+  removes an `agents.json` entry or a single profile file, but not a package (a directory with its own files) or a
+  profile another one extends.
+- The harness API does the same: `GET /v1/profiles/{name}` serves a profile as rows an app renders and edits (each
+  value with its type, the file that sets it, and whether it can be changed there; never a prompt's text), and `PUT
+  /v1/profiles/{name}` changes them (a token with the `configure` scope, an `Idempotency-Key` and the `rev` it read).
+  Every change made through the API is a `profile.changed` event on the daemon stream; a change made with `capcomd
+  profiles set` or by editing the file isn't (capability `profiles.edit`).
 - What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`): `identity.title` (the
   name to show; not passed to a profile that `extends` it, nor is `identity.avatar`), `tags` (lowercase words, what
   the profile is for: `[review, security]`), `sharing` (`source`, `license`: where an installed profile came from) and

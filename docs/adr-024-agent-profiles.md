@@ -196,7 +196,8 @@ treats a distribution-owned `SOUL.md` that way).
 
 - `version` is an integer the tooling bumps on every write (`capcomd profiles set`, the app, `PUT /v1/profiles/{name}`).
   A hand edit without a bump is detected by a content hash in `LOCK` (installed packages) or in the agents index (local
-  ones) and treated as a bump with a notice.
+  ones) and treated as a bump with a notice. (Step 6 bumps on writes and catches a hand edit between a read and a
+  write by the profile's `rev`; the recorded hash waits for step 7's `LOCK`: §9.)
 - An agent records `profile: name`, `profileVersion`, and the resolved spec (the pin), so a run that outlives an edit
   shows what it actually ran with (`harness.v1` `Agent.profile`, `Agent.profileVersion`; both already planned in
   harness-architecture.md §5.1), and the layer the profile came from (`Agent.profileSource`). Done in §7 step 3.
@@ -337,7 +338,8 @@ Each step ships alone, with tests, and leaves every existing test green.
    `withSkills`), pinned by hash, at the agent's start. Tests: `tests/api/steer-skills-agent-pause.test.ts` pattern, a
    scenario that asserts the prompt file has the skill once.
 6. **Writes**: `PUT /v1/profiles/{name}`, `capcomd profiles set`, `profile.changed` events, the app's Crew screen.
-   Tests: `tests/api` idempotency and scope tests as for `PATCH /v1/sandboxes`.
+   Tests: `tests/api` idempotency and scope tests as for `PATCH /v1/sandboxes`. Done but the Crew screen, which has no
+   approved design yet (§9, "Made while building the writes").
 7. **Install/export/update** with `LOCK`. Tests: a local git fixture repository (the `tests/merge/gitfixture.ts`
    pattern), a package that names a file outside its directory is refused, a hash change is reported.
 8. **`memory`, `tools.mcp`, `sandbox.provider|environment|size`, `lifecycle.onStart|onEnd`**: each needs the plugin
@@ -415,7 +417,7 @@ Made while building the CLI and `GET /v1/profiles` (§7 step 2, 2026-11-05; `src
   whose stdout is a reader's), and keeps the two outputs that would otherwise change under a script: `agents list
   --json` lists its rows under `agents` (`profiles list --json` under `profiles`), and `agents schema` prints the
   `agents.json` schema. `profiles schema` prints a profile file's (`capcomd.profile/v2`), `profiles schema v1`
-  `agents.json`'s. `add`, `set` and `rm` still edit only `agents.json` until step 6.
+  `agents.json`'s. `add`, `set` and `rm` still edit only `agents.json` until step 6 (which changed that: below).
 - **`show` numbers the files laid together and gives each value the number of the file that set it** (§2.6's "the
   three layers and the result"). The loader records it as it lays the files (`ResolvedProfile.setBy`, by v2 path,
   one level deep as `layerOver` merges); what a child removes with `null` is no file's, and what isn't inherited
@@ -428,7 +430,7 @@ Made while building the CLI and `GET /v1/profiles` (§7 step 2, 2026-11-05; `src
   repository, which agents change); `does` and `canLead` are daemon-written; no prompt text and no credential is
   served. A layer is a string, not an enum, so step 7's `installed` adds no breaking value. `ready` is the login
   for the daemon's own sandbox, as `capcomd profiles list` says it; `GET /v1/logins` has every sandbox's.
-- **`GET /v1/profiles/{name}` waits for step 6**: §3's descriptor (`fields[]` with `editable` and `source`, the
+- **`GET /v1/profiles/{name}` waits for step 6** (shipped there: below): §3's descriptor (`fields[]` with `editable` and `source`, the
   ADR-021 rows) is what the Crew screen edits through `PUT`, so it ships with the writes; until then a row's `applied`
   says where a profile came from, and `capcomd profiles show` where each value did.
 
@@ -539,6 +541,54 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
   `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
   warning when no daemon runs.
+
+Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`, `src/profiles/fields.ts`,
+`src/api/profiles.ts`):
+
+- **A write changes the profile's own file and nothing else**: its `profile.yaml`, `<name>.yaml` or `agents.json`
+  entry, never an ancestor it `extends` (a change there is every child's) or an `override.yaml` (the user's or the
+  project's own). A value a later file sets is refused (`editable: false` on its row, and from `capcomd profiles set`),
+  because writing it would change a file and not the profile. `null` (`--unset`) removes the profile's own value, so
+  an inherited one shows again; removing an inherited value outright (`key: null` in the file) is for the file.
+- **Checked before anything is written**: the loader reads through an overlay of the files as the write would leave
+  them (`readProfiles(…, overlay)`), so a write that would make any profile unreadable (a value out of range, a child
+  wider than its parent, an orphaned `extends`) is refused with `validate`'s message and the disk is untouched. Files
+  are written whole (a temporary file renamed over).
+- **`version` is the file's own and goes up by one on a write that changed something** (a write that sets what is
+  there writes nothing). An `agents.json` entry has no `version` (its schema has none) and stays 1 until it moves to a
+  profile file (step 9's `migrate`). A profile that extends an edited one keeps its version: its pin and `rev` change,
+  its version doesn't. **No content hash is recorded next to an agent's `profile_version`** (the question step 3 left):
+  the API's `rev` (a hash of the files laid together, hand edits included) stops a write made from a stale read, and a
+  hash per file arrives with step 7's `LOCK`, where §2.4's notice belongs.
+- **YAML is edited in place** (the `yaml` document model): comments and layout stay; a scalar replaced by a scalar
+  keeps its comment; a new `version` goes right after `name`. A JSON profile file stays JSON.
+- **`capcomd profiles add` writes a profile file only when it needs one**: `--extends`, or a `--set` path an
+  `agents.json` entry can't hold (`tags`, `identity.title`, `permissions.report`), as `<the project's
+  profiles>/<name>.yaml` (the user's when the agents file is). Otherwise it writes `agents.json` as before, so scripts
+  that add and then read `agents.json` keep working. `rm` removes an entry or a single profile file; a package (a
+  directory, which holds its own files) is the user's to delete.
+- **The descriptor**: `GET /v1/profiles/{name}` serves rows typed like ADR-021's settings (`type`, `label`, `help`,
+  `value`, `display`, `choices`, `source`, `editable`), plus `from` (the index in `applied`) and `untrusted` (the
+  `description`, `identity.title` and any row outside capcomd's catalog are the file's text). Every `value` is a string
+  in the encoding `PUT` takes (a list as a JSON array), as the settings rows' are. A prompt row says whether it is set
+  and how long, never its text (`GET /v1/profiles` serves no prompt; neither does this). Values capcomd has no row for
+  (`skills`, `tools.mcp`, `x-` fields) are read-only rows labelled by their path, so they show without an app release;
+  `tools.mcp` shows its servers' names only, since a command line may carry a token.
+- **`PUT` takes an `Idempotency-Key` and the `rev`**: the key makes a retry after a lost response replay its first
+  answer (the write-route rules), the `rev` refuses a change made from a read that is out of date (409 with the current
+  one), as `PATCH /v1/sandboxes/{name}/settings` does. The `configure` scope, as project setup. Writes in the daemon
+  run one at a time.
+- **The capability is `profiles.edit`**, not `profiles`: `profiles` already names `GET /v1/profiles`, and a client
+  has to know whether it may offer editing.
+- **`profile.changed` is the API's**: the daemon records it (entity `profile:<name>`, data `{name, version,
+  previousVersion, layer, path, changes, clientId}`), so a change made with `capcomd profiles set`, which runs without
+  a daemon and inside agents' VMs, or by editing the file, isn't on the stream. Its text names every changed value and
+  says the values only where capcomd wrote them (numbers, toggles, choices, names): free text (a description, a
+  title, a prompt) is "changed".
+- **Not in this step**: creating a profile with `PUT` (a name that isn't a profile is 404) and `DELETE
+  /v1/profiles/{name}` (§5), which have no client yet; `ctx.profiles` gains no write method (spec §11.1's `configure`
+  writes wait for it). **The app's Crew screen isn't built**: no approved mockup covers it (apps/menubar/design), so the
+  API ships first and the screen waits for a design.
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 

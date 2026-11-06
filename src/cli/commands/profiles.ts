@@ -1,10 +1,12 @@
 // capcomd profiles list|show|add|set|rm|schema|validate — named agent profiles (ADR-024 §5). list, show and validate read
 // every profile the project sees (.capcomd/agents.json, and the v2 ones in .capcomd/profiles/ and ~/.capcomd/profiles/);
-// show prints the files laid together and which one set each value; add, set and rm edit the agents file.
+// show prints the files laid together and which one set each value; set and rm change the file a profile is defined in
+// (its agents.json entry or its profile file, ../../profiles/write.ts), add writes agents.json or, for what only a
+// profile file holds (--extends, tags, a title), a profile file.
 // `capcomd agents …` is the same command under its old name, for one minor release.
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, lifecyclePlugins, notApplied, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileSet } from "../../profiles";
+import { addProfileFile, agentsEntryOf, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, readProfiles, removeProfile, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -43,6 +45,24 @@ export function specFromFlags(v: Record<string, any>): Partial<AgentSpec> {
   set("allowedTools", list(v["allowed-tools"]));
   set("disallowedTools", list(v["disallowed-tools"]));
   return s as Partial<AgentSpec>;
+}
+
+/**
+ * What `add`/`set` change (./write.ts ProfileEdit): the flags and `--spec` (v1 names), each `--set path=value` (v2 paths
+ * or v1 names: limits.maxTurns=40, tags=review,security), `--unset` (removed from the profile's own file) and
+ * `--default`.
+ */
+export function editFromFlags(v: Record<string, any>): ProfileEdit {
+  const edit: ProfileEdit = { ...specFromFlags(v) };
+  let pairs: Record<string, unknown> = {};
+  try { pairs = parseSetPairs(v.set ?? []); } catch (e) { throw new RelayError("usage", (e as Error).message, "--set path=value, e.g. --set limits.maxTurns=40"); }
+  for (const [k, x] of Object.entries(pairs)) {
+    if (x && typeof x === "object" && !Array.isArray(x) && !k.startsWith("x-")) for (const [sub, y] of Object.entries(x)) edit[`${k}.${sub}`] = y;
+    else edit[k] = x;
+  }
+  for (const k of list(v.unset) ?? []) edit[k] = null;
+  if (v.default) edit.default = true;
+  return edit;
 }
 
 /** Is this profile's single credential actually present? (never reads values out) */
@@ -101,8 +121,17 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
   const path = agentsFilePath();
   const need = () => { if (!name) throw new RelayError("usage", `usage: ${cmd} ${sub} <name>`, ""); return name; };
   const guard = <T>(f: () => T): T => { try { return f(); } catch (e) { if (e instanceof AgentConfigError) throw new RelayError("config", e.message, `Fix the file it names (${path} or a profile file), or use \`${cmd} set\` for agents.json.`); throw e; } };
-  // A v2 profile (a profile.yaml) isn't in the agents file: these commands don't edit it.
+  // A v2 profile (a profile.yaml) isn't in the agents file: `add` doesn't add one of its name there.
   const v2File = (n: string) => { try { const r = readProfiles(path).profiles[n]; return r?.format === "v2" ? r.path ?? "capcomd's bundled profiles" : null; } catch { return null; } };
+  // A write's refusal as the CLI says it.
+  const written = <T>(f: () => T, n: string): T => {
+    try { return f(); } catch (e) {
+      if (!(e instanceof ProfileWriteError)) throw e;
+      if (e.code === "not_found") throw new RelayError("not_found", e.message, `${cmd} list`);
+      if (e.code === "conflict") throw new RelayError("conflict", e.message, `${cmd} set ${n} …`);
+      throw new RelayError(e.code === "invalid" ? "config" : "usage", e.message, `${cmd} validate says what is wrong with the files as they are; ${cmd} show ${n} where each value comes from.`);
+    }
+  };
 
   switch (sub) {
     case "schema":
@@ -155,35 +184,50 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, ...(pins.length ? { skills: pins } : {}), effective, error, ...ready }, text);
       return error ? 1 : 0;
     }
-    case "add":
-    case "set": {
+    case "add": {
       const n = need();
+      const edit = editFromFlags(values);
+      // A profile that needs what agents.json can't hold (extends, tags, a title, …) is added as a profile file.
+      if (values.extends !== undefined || onlyInProfileFile(edit).length) {
+        const w = written(() => addProfileFile(n, { ...(values.extends !== undefined ? { extends: values.extends } : {}), ...edit }, { path }), n);
+        const isDefault = w.after.default === n;
+        out({ name: n, spec: w.after.agents[n], default: isDefault, file: path, path: w.file, version: w.version }, `added ${n}${isDefault ? " (default)" : ""} → ${w.file}`);
+        return 0;
+      }
       const f = guard(() => readAgentsFile(path));
       const v2 = v2File(n);
-      if (v2 && !f.agents[n]) throw new RelayError(sub === "add" ? "conflict" : "usage", `profile "${n}" is defined in ${v2}, which \`${cmd} ${sub}\` doesn't edit`, `Edit ${v2}.`);
-      if (sub === "add" && f.agents[n]) throw new RelayError("conflict", `profile "${n}" already exists`, `${cmd} set ${n} …`);
-      if (sub === "set" && !f.agents[n]) throw new RelayError("not_found", `profile "${n}" not found`, `${cmd} add ${n} …`);
-      const next: Record<string, unknown> = { ...(f.agents[n] ?? {}), ...specFromFlags(values) };
-      for (const k of list(values.unset) ?? []) delete next[k];
+      if (v2 && !f.agents[n]) throw new RelayError("conflict", `profile "${n}" is defined in ${v2}`, `${cmd} set ${n} …`);
+      if (f.agents[n]) throw new RelayError("conflict", `profile "${n}" already exists`, `${cmd} set ${n} …`);
+      const next = agentsEntryOf(edit);
       const errs = validateSpec(n, next);
       if (errs.length) throw new RelayError("config", errs.join("; "), "Each agent needs provider (claude|codex) and exactly one auth (apikey|subscription).");
       const file: AgentsFile = { ...f, schema: AGENTS_SCHEMA, agents: { ...f.agents, [n]: next as unknown as AgentSpec } };
       if (values.default || !file.default) file.default = n;
       guard(() => writeAgentsFile(file, path));
-      out({ name: n, spec: next, default: file.default === n, file: path }, `${sub === "add" ? "added" : "updated"} ${n}${file.default === n ? " (default)" : ""} → ${path}`);
+      out({ name: n, spec: next, default: file.default === n, file: path, path, version: 1 }, `added ${n}${file.default === n ? " (default)" : ""} → ${path}`);
+      return 0;
+    }
+    case "set": {
+      // The profile's own file, wherever it is (an agents.json entry or a profile file); its version goes up.
+      const n = need();
+      const f = guard(() => readProfiles(path));
+      const r = Object.hasOwn(f.profiles, n) ? f.profiles[n]! : undefined;
+      if (!r) throw new RelayError("not_found", `profile "${n}" not found`, `${cmd} add ${n} …`);
+      const edit = editFromFlags(values);
+      // As before profile files: an agents.json without a default gets the profile set.
+      if (r.format === "v1" && r.path === path && guard(() => readAgentsFile(path)).default === undefined) edit.default = true;
+      if (!Object.keys(edit).length) throw new RelayError("usage", `nothing to set: give the values to change`, `${cmd} set ${n} --max-turns 40, or --set limits.maxTurns=40 (--unset limits.maxTurns removes one)`);
+      const w = written(() => editProfile(n, edit, { path }), n);
+      const isDefault = w.after.default === n;
+      const said = w.changes.map((c) => c.path).join(", ");
+      out({ name: n, spec: w.after.agents[n], default: isDefault, file: path, path: w.file, changed: w.changed, version: w.version, previousVersion: w.previousVersion, changes: w.changes },
+        w.changed ? `updated ${n}${isDefault ? " (default)" : ""}${w.version !== w.previousVersion ? `, version ${w.previousVersion} → ${w.version}` : ""}${said ? `: ${said}` : ""} → ${w.file}` : `${n}: nothing changed (${w.file})`);
       return 0;
     }
     case "rm": {
       const n = need();
-      const f = guard(() => readAgentsFile(path));
-      const v2 = v2File(n);
-      if (v2 && !f.agents[n]) throw new RelayError("usage", `profile "${n}" is defined in ${v2}, which \`${cmd} rm\` doesn't edit`, `Remove ${v2}.`);
-      if (!f.agents[n]) throw new RelayError("not_found", `profile "${n}" not found`, `${cmd} list`);
-      const { [n]: _, ...rest } = f.agents;
-      const file = { ...f, agents: rest, default: f.default === n ? Object.keys(rest)[0] : f.default };
-      if (!file.default) delete (file as any).default;
-      guard(() => writeAgentsFile(file, path));
-      out({ removed: n, default: file.default ?? null }, `removed ${n}`);
+      const w = written(() => removeProfile(n, { path }), n);
+      out({ removed: n, default: w.after.default ?? null, path: w.file }, `removed ${n} (${w.file})`);
       return 0;
     }
   }
