@@ -1,6 +1,7 @@
 // Secret redaction for anything that may reach logs, traces, events or prompts.
 // Known secret *values* (exact match) are replaced, plus well-known token shapes.
-const PATTERNS: RegExp[] = [
+/** The token shapes the redactor replaces (src/context/scan.ts refuses text that has one). */
+export const PATTERNS: readonly RegExp[] = [
   /sk-ant-[A-Za-z0-9_\-]{8,}/g,             // Anthropic API keys
   /sk-proj-[A-Za-z0-9_\-]{8,}/g,            // OpenAI project keys
   /gh[pousr]_[A-Za-z0-9]{20,}/g,            // GitHub tokens

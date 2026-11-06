@@ -5,6 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: agents propose lessons for the project's memory. A planner or lead ends with lessons in its result
+  (`capcomd result --data '{"context": [{"title": "…", "text": "…"}]}'`, which its orchestration skill now teaches,
+  along with keeping working notes in kv under `notes/<its id>`), and capcomd keeps each as a candidate of the run,
+  attributed to the agent that declared it whatever the lesson says about itself. A lesson holding a secret (one capcomd
+  put in the run, anything shaped like a credential, a path like `.env` or `~/.aws`) is refused, never redacted, and so
+  is one over 4 KB. `capcomd events` shows `plugin.context.proposed` and `plugin.context.refused`; `capcomd kv get <runId>
+  _context/<agentId>` shows an agent's candidates. Candidates reach `.capcomd/context/` only through a reviewed change
+  (the next step). See docs/agents.md, "Lessons agents propose".
+- New: `capcomd context lint` checks a repository's `.capcomd/context/`: items only, each with an `id` and a `type` and
+  well-formed fields, unique ids, reciprocal supersession without cycles, no secrets, and an `index.md` that matches the
+  items (`--fix` writes it). `--base <ref>` also refuses a changed id or a deleted item; `--run <runId>` checks that the
+  verifies and merges an item cites are that run's. Problems exit 1, each naming its file. A link in the directory is
+  a problem, and `--fix` never writes through one.
 - New: `capcomd profiles set` changes any profile where it is defined: a profile file (`.capcomd/profiles/<name>.yaml`,
   `<name>/profile.yaml`, the same in `~/.capcomd/profiles/`) as well as an `agents.json` entry, with the same flags plus
   `--set path=value` (`--set limits.maxTurns=40 --set tags=review,security`). A YAML file keeps its comments and its
