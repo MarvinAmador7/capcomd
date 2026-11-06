@@ -20,6 +20,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import { RelayError } from "../core/errors";
 import { client } from "../core/relay";
 import { hooks, iso } from "../plugins/hooks";
+import { asPluginError } from "../plugins/services";
 import { paramsHash, stableId, TERMINAL_AGENT } from "../primitives/policy";
 import { env } from "../utils/env";
 import { stateDir } from "../utils/home";
@@ -544,16 +545,6 @@ export async function waitJob(jobId: string, o: { runId?: string | null; timeout
 }
 
 // ---- ctx.jobs ---------------------------------------------------------------------------------------------------------
-
-/** A kernel error as a plugin sees it (§8.3). */
-function asPluginError(e: unknown): never {
-  if (e instanceof PluginError) throw e;
-  if (e instanceof RelayError) {
-    const code = e.reason === "unsupported" ? "unsupported" : e.code === "usage" || e.code === "config" ? "invalid" : e.code === "not_found" ? "not_found" : e.code === "engine_unreachable" ? "unavailable" : e.reason === "forbidden" ? "forbidden" : "conflict";
-    throw new PluginError(code, e.message, e.hint, code === "unavailable");
-  }
-  throw e;
-}
 
 /** `ctx.jobs` for one plugin (§8.1): its jobs are `plugin:<name>`'s; only the daemon has it. */
 export function pluginJobs(plugin: string): JobsService {
