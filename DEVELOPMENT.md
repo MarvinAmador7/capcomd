@@ -80,7 +80,8 @@ src/
                   context providers; memory.ts, the project layer's provider (`.capcomd/context/` read through the
                   files mirror); limits.ts, the brief's budgets (limits.gen.ts: the eval's docs/evidence/context/
                   <model>/limits.json, regenerated with `bun scripts/gen-context-limits.ts`); providers.ts, the active
-                  providers by name
+                  providers by name; capture.ts, the candidates an agent's result.data.context makes; scan.ts, the
+                  seeded secret scan that refuses (capture and lint); lint.ts, `capcomd context lint` and index.md
   cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
                   front door's registration, front-doors.ts); groups/, the kernel's commands by group; flags.ts, help.ts;
                   commands/, what they call
@@ -105,25 +106,28 @@ src/
                   a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), skill-orchestration.ts, the orchestration
-                  skill as an agent.preparing patch, context.ts, the context router's listener and `capcomd context`,
-                  and context-memory.ts, the `memory` context provider: every process loads them (host.ts `localHost`);
+                  skill as an agent.preparing patch, context.ts, the context router's listeners (the brief, capture)
+                  and `capcomd context`, and context-memory.ts, the `memory` context provider: every process loads them
+                  (host.ts `localHost`);
                   sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
                   setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an
                   out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's
                   private storage; watchdog.ts, the daemon's watchdog (off until `capcomd setup` turns it on); config.ts,
                   a plugin's settings from the user's and the project's config and CAPCOMD_PLUGIN_<NAME>_<KEY>;
-                  services.ts, the daemon's `ctx.agents`. The user's plugins (~/.capcomd/plugins/<name>) run out of
-                  process; install.ts, `capcomd plugins install|update|remove|trust|allow-version` (plugin API §4.8):
-                  ~/.capcomd/plugins/
-                  <name>/ with its LOCK, a project's `plugins.use` fetched to ~/.capcomd/plugins/.project/<key>/,
-                  exemptions in ~/.capcomd/plugins/compatibility.json; run-config.ts, a run's per-run plugin settings
-                  (`--plugin-config`, POST /v1/runs `plugins`) in the plugin's run storage
+                  services.ts, the daemon's `ctx.agents`; lifecycle.ts, whether the plugins a profile's `lifecycle`
+                  names are there to hear its agents. The user's plugins (~/.capcomd/plugins/<name>) run out of
+                  process; install.ts, `capcomd plugins install|update|remove|trust|allow-version` (plugin API
+                  §4.8): ~/.capcomd/plugins/<name>/ with its LOCK, a project's `plugins.use` fetched to
+                  ~/.capcomd/plugins/.project/<key>/, exemptions in ~/.capcomd/plugins/compatibility.json;
+                  run-config.ts, a run's per-run plugin settings (`--plugin-config`, POST /v1/runs `plugins`) in the
+                  plugin's run storage
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and
-                  hashed (skills.ts), resolution, pins and overrides (resolve.ts), and what `capcomd profiles`,
-                  GET /v1/profiles and a planner read of each: the files and values, title, tags, fit, cost
-                  (describe.ts)
+                  hashed (skills.ts), what an agent is pinned with beside the flat spec: MCP servers, sandbox,
+                  environment, size, lifecycle plugins (runtime.ts), resolution, pins and overrides (resolve.ts), and
+                  what `capcomd profiles`, GET /v1/profiles and a planner read of each: the files and values, title,
+                  tags, fit, cost (describe.ts)
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

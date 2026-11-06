@@ -344,7 +344,9 @@ Each step ships alone, with tests, and leaves every existing test green.
    pattern), a package that names a file outside its directory is refused, a hash change is reported.
 8. **`memory`, `tools.mcp`, `sandbox.provider|environment|size`, `lifecycle.onStart|onEnd`**: each needs the plugin
    core's hook or wiring (ADR-023 §4.5, §5) and ships after that step of ADR-023 lands. Tests: the scenarios suite with
-   scripted agents (`CAPCOMD_SPAWN_EXEC=script`), one per block.
+   scripted agents (`CAPCOMD_SPAWN_EXEC=script`), one per block. `memory` isn't built here: ADR-025 D2 folds it into
+   `context`, whose steps build it (it stays read as `context`'s alias). Done for the others (2026-11-06; §9, "Made while
+   building the runtime blocks").
 9. **`capcomd profiles migrate`** and the `setup project` templates in v2 form; `agents.json` v1 stays readable for two
    minor releases, then `validate` warns and a later release stops reading it (breaking, changelog).
 
@@ -353,7 +355,8 @@ Each step ships alone, with tests, and leaves every existing test green.
 - **Two sources of truth during the overlap.** Mitigated by "directory wins, validate warns", and by `show` printing
   where every value came from.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
-  environment is a readiness problem shown before the run (`GET /v1/run-options`), not a spawn failure.
+  environment is warned about by `capcomd profiles validate` and refused at spawn (`reason: environment`, §9), not left
+  to the provider's boot error; showing it as readiness before the run (`GET /v1/run-options`) is still to do.
 - **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
   per hash (decision 4 below).
 - A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam
@@ -394,11 +397,11 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   asked for a spawn, and the file may be a link to anything on the host).
 - **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
-- **Blocks with no runtime yet** (`identity.persona`, `tools.mcp`, `sandbox.provider|environment|size`,
-  `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4, `skills` until step 5, `context`
-  until ADR-025 step 1, below) are checked and kept on the resolved profile, not pinned (`jobs` is pinned as is since
-  the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is
-  checked against the active sandbox seams.
+- **Blocks with no runtime yet** (`identity.persona`, `harness.cliVersion`; `permissions.report` until step 4, `skills`
+  until step 5, `context` until ADR-025 step 1, below, `tools.mcp`, `sandbox.provider|environment|size` and
+  `lifecycle.onStart|onEnd` until step 8) are checked and kept on the resolved profile, not pinned (`jobs` is pinned as
+  is since the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets.
+  `sandbox.provider` is checked against the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.
 - **`context` (and `memory`, read as it) has a runtime since ADR-025 step 1**: it is pinned with the flat spec
@@ -493,12 +496,57 @@ Made while building skills in the profile (§7 step 5, 2026-11-06; `src/profiles
   orchestration skill included.
 - **The trust prompt for a project's skills (decision 4) waits for step 7** (`capcomd profiles trust`, with the plugin
   trust mechanism, spec §4.8). Until then a project's skills are used as its `prompt.append` and `agents.json` prompts
-  always were: as text the project supplies. The mechanism landed with the plugin core's step 12 (spec 1.0.26) as
+  always were: as text the project supplies. The mechanism landed with the plugin core's step 12 (spec 1.0.28) as
   `src/install/`, for step 7 to reuse: `source.ts` parses `<owner/repo>[#<name>][@<ref>]`, `fetch.ts` fetches a package
   directory out of a commit through the host's repo (`pick` chooses it, here by `profile.yaml`), `lock.ts` writes and
   checks `LOCK` (`kind: "profile"`, every file's sha256 and mode, the content hash) and `diffTrees` is what `update`
   shows before it applies, and `trust.ts` keeps trust per content hash and place (`kind: "profile"` beside the
   plugins'); `src/plugins/install.ts` is how the plugins use them.
+
+Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/runtime.ts`, `src/plugins/lifecycle.ts`,
+`src/env/resolve.ts` `bootSnapshot`):
+
+- **Pinned beside the flat spec, not in it.** `tools.mcp`, `sandbox.provider|environment|size` and `lifecycle` are read
+  from the resolved manifest (`ResolvedProfile.runtime`) and recorded on the agent's spec at spawn as `mcp`,
+  `sandboxProvider`, `environment`, `size` and `lifecycle` (`PinnedSpec`, additive), so the daemon runs what was
+  resolved. They aren't `AgentSpec` fields: `agents.json` (v1) has none of them, and no `--set`, `--overrides`, `;ov=`
+  ref or `profile.resolved` patch reaches them (refused as unknown fields). A parent can't add an MCP server to its
+  child, move it to another sandbox (`fake-host` is this host), give it another image or drop the plugin that must hear
+  it; narrowing them would need a rule each, and nothing asks for one yet.
+- **`tools.mcp`**: each server is started by the agent's CLI in its sandbox. Claude Code gets one `--mcp-config` file
+  with the profile's servers and capcomd's own (when the agent may spawn), Codex `-c mcp_servers.<name>.command|args`.
+  `trust` (default `untrusted`) is whether its tools are approved up front: `trusted` adds `mcp__<name>` to a Claude
+  Code allowlist and sets Codex's `default_tools_approval_mode="approve"`, as capcomd's own server has; `untrusted`
+  leaves them to the profile's tool rules (no allowlist is every tool, as for every other tool). `capcomd` is
+  reserved. **An orchestrate profile can't have servers** (spec §16.1: it runs nothing, and a server is a program its
+  sandbox runs), nor an agent that an override makes orchestrate (refused at spawn, `reason: orchestrate_mcp`). A
+  program the sandbox doesn't have is the CLI's to report; the runner logs it first. Nothing is installed for a server:
+  its environment must have it.
+- **`sandbox.provider` wins over the run's sandbox** for that profile's agents (§2.2 "absent: the run's, else the
+  daemon's"): the machine is made, run, pushed from and destroyed there (`providerForAgent`, recorded on the worker as
+  its `sandbox`, which `capcomd sandbox shell` and the drain read), its idle lifetime is that place's current setting (a
+  run records its own place's), and its slot is that place's. A run's checks stay on the run's sandbox. **It never
+  takes an agent out of isolation**: a sandbox that runs its agents on this host (`isolation: host`, the test fakes) is
+  refused at spawn (`reason: sandbox_isolation`) unless the run's own sandbox is one too, since a profile is data
+  (§2.5) and its agent's commands and MCP servers run in a sandbox, never on the host.
+- **`sandbox.environment` names an environment of the agent's sandbox**: `default` (or unset) is the current build, as
+  for every agent; `image` is the provider's plain image (the CLI is installed at start, as `CAPCOMD_ENV=image`); any
+  other name is a build in that sandbox's env ledger (`capcomd env status`), by its name. `capcomd env build --name`
+  isn't built: a build's content is its pins and the project's lockfile, so a second name for the same content would
+  pin nothing a build's own name doesn't. A plan login kept in an image wins (the agent boots from one image), so a
+  named environment must be the one the login's image was made from; otherwise the spawn is refused. A scripted or fake
+  agent boots a named environment too (it is the profile's machine), and `default` as before (none). A missing one is
+  refused at spawn (`reason: environment`) and warned about by `validate`, not left to the provider's boot error.
+- **`sandbox.size` is `VmSpec.size`**, which boxd applies; Docker doesn't (containers share the host's CPUs, and `--cpus`
+  above the Docker host's count fails the start). `sandbox.ensuring` may still lower it.
+- **`lifecycle.onStart|onEnd` is a guarantee and a field.** The kernel refuses a spawn (`reason: lifecycle_inactive`)
+  and an agent's start (its claim, before its machine) while a named plugin isn't active and listening to
+  `agent.changed`: in the daemon its own host says, in the CLI or a run's driver the running daemon's listing (no daemon
+  running: nobody to ask, the daemon asks at the start). `agent.changed` carries `lifecycle: {onStart, onEnd}` when the
+  agent's profile names any, so a plugin filters on its own name instead of keeping a list of profiles. The two lists
+  differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
+  `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
+  warning when no daemon runs.
 
 Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`, `src/profiles/fields.ts`,
 `src/api/profiles.ts`):

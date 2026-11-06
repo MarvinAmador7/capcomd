@@ -96,7 +96,8 @@ export const claude: AgentProvider = {
     (ctx.cfg.effort ? ` --effort ${q(ctx.cfg.effort)}` : "") +
     (ctx.systemFile ? ` --system-prompt "$(cat ${q(ctx.systemFile)})"` : "") +
     (ctx.appendSystemFile ? ` --append-system-prompt "$(cat ${q(ctx.appendSystemFile)})"` : "") +
-    (ctx.capcomd ? ` --mcp-config ${q(ctx.capcomd.mcpConfig)}` : "") +
+    // The profile's MCP servers' file holds capcomd's own too (ctx.mcp.config); else capcomd's alone.
+    (ctx.mcp || ctx.capcomd ? ` --mcp-config ${q(ctx.mcp?.config ?? ctx.capcomd!.mcpConfig)}` : "") +
     ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)}${ctx.stdinPrompt ? "" : " < /dev/null"}`,
   parse(line, redact, run) {
     const state = run as ClaudeState;

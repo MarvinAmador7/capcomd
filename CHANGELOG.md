@@ -25,6 +25,33 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `~/.capcomd/config.json` (`{"$secret": "env:VAR"}`), never a value. A project's `.capcomd/config.json` can't turn a
   plugin on, turn off one that isn't the project's own, or set a secret; `capcomd plugins show <name>` says where each
   setting came from.
+- New: a profile file can give its agents MCP servers, its own sandbox, environment and machine size, and plugins that
+  must hear them. `tools.mcp: [{name, command, trust}]` starts each server in the agent's sandbox (never on your
+  machine) for Claude Code and Codex, beside capcomd's own; `trust: trusted` approves its tools up front, `untrusted`
+  (the default) leaves them to the profile's tool rules. An orchestrate profile can't have any, and spawning one with
+  `--set toolMode=orchestrate` is refused (`reason: "orchestrate_mcp"`). `sandbox.provider`
+  runs the profile's agents on that sandbox (`docker`, `boxd`) whatever the run's is (never on your machine: a
+  sandbox that runs agents on the host is refused, `reason: "sandbox_isolation"`); `sandbox.environment`
+  is what their machines boot from there: `default` (the current `capcomd env build`), `image` (the provider's plain
+  image) or a build's name from `capcomd env status`; `sandbox.size: { vcpu: 1 | 2 | 4 | 8 }` sizes their machines on
+  boxd (Docker containers share your CPUs). `lifecycle.onStart` and `lifecycle.onEnd` name plugins that must be active
+  and listening to `agent.changed`: a spawn of a profile that names one that isn't is refused (`reason:
+  "lifecycle_inactive"`), and so is one whose environment its sandbox doesn't have (`reason: "environment"`).
+  `capcomd profiles validate` says both before you spawn. None of these can be changed with `--set` or by a parent
+  spawning a child; agents already running keep what they started with. See docs/agents.md, "Profile files".
+- New: agents propose lessons for the project's memory. A planner or lead ends with lessons in its result
+  (`capcomd result --data '{"context": [{"title": "…", "text": "…"}]}'`, which its orchestration skill now teaches,
+  along with keeping working notes in kv under `notes/<its id>`), and capcomd keeps each as a candidate of the run,
+  attributed to the agent that declared it whatever the lesson says about itself. A lesson holding a secret (one capcomd
+  put in the run, anything shaped like a credential, a path like `.env` or `~/.aws`) is refused, never redacted, and so
+  is one over 4 KB. `capcomd events` shows `plugin.context.proposed` and `plugin.context.refused`; `capcomd kv get <runId>
+  _context/<agentId>` shows an agent's candidates. Candidates reach `.capcomd/context/` only through a reviewed change
+  (the next step). See docs/agents.md, "Lessons agents propose".
+- New: `capcomd context lint` checks a repository's `.capcomd/context/`: items only, each with an `id` and a `type` and
+  well-formed fields, unique ids, reciprocal supersession without cycles, no secrets, and an `index.md` that matches the
+  items (`--fix` writes it). `--base <ref>` also refuses a changed id or a deleted item; `--run <runId>` checks that the
+  verifies and merges an item cites are that run's. Problems exit 1, each naming its file. A link in the directory is
+  a problem, and `--fix` never writes through one.
 - New: `capcomd profiles set` changes any profile where it is defined: a profile file (`.capcomd/profiles/<name>.yaml`,
   `<name>/profile.yaml`, the same in `~/.capcomd/profiles/`) as well as an `agents.json` entry, with the same flags plus
   `--set path=value` (`--set limits.maxTurns=40 --set tags=review,security`). A YAML file keeps its comments and its

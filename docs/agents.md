@@ -102,10 +102,35 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `permissions: { report: false }` keeps a profile from being spawned with `report` (read-only work whose answer is
   its result): such a spawn is refused (`reason: "report_not_allowed"`). Unset or `true`, it may be, as before.
 - `skills` gives every agent of the profile skills at its start (below).
-- `identity.persona`, `tools.mcp`, `sandbox.provider|environment|size` and `lifecycle.onStart|onEnd` are checked but
-  don't change what an agent does yet; `capcomd profiles validate` lists the ones a profile sets. `context` (with
-  `memory` read as its old name) does: see "Project memory" below. `jobs` (`foregroundMs`, `max`, `afterTurnMs`) sets
-  the agent's background jobs (`capcomd job start`), as the flat `jobs` field does in `agents.json`.
+- `identity.persona` is checked but doesn't change what an agent does yet; `capcomd profiles validate` lists it when a
+  profile sets it. `context` (with `memory` read as its old name) does: see "Project memory" below. `jobs`
+  (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
+  field does in `agents.json`.
+- `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
+  untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
+  (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says
+  when it isn't). `trust: trusted` approves the server's tools up front, as capcomd's are; `untrusted` (the default)
+  leaves them to the profile's tool rules: with `tools.allowed`, Claude Code runs only the ones it names
+  (`mcp__semgrep`, or `mcp__semgrep__<tool>`), Codex asks its own approval rules (which refuse what needs asking). An
+  orchestrate profile can't have servers: it runs nothing, so give them to the profiles it spawns (an override that
+  makes one orchestrate is refused: `reason: "orchestrate_mcp"`).
+- `sandbox.provider` runs the profile's agents on that sandbox (`docker`, `boxd`), whatever the run's is (`capcomd run
+  --sandbox`) or the daemon's; it must be an active sandbox plugin, and it can't take them out of isolation (a sandbox
+  that runs agents on your machine, as the test ones do, is refused unless the run's is one too: `reason:
+  "sandbox_isolation"`). `sandbox.environment` is what their machines boot
+  from there: `default` (the current `capcomd env build`, as for every agent), `image` (the provider's plain image: the
+  agent CLI is installed at start) or a build's name from `capcomd env status --sandbox <name>`. With a plan login kept
+  in an image (`capcomd auth login`), that image is the one used, so the environment must be `default` or the one it
+  was made from. `sandbox.size: { vcpu: 1 | 2 | 4 | 8 }` is the machine's size on boxd; Docker containers share your
+  CPUs and don't take it.
+- `lifecycle.onStart` and `lifecycle.onEnd` name plugins that must be active for the profile's agents: each one hears
+  the agent's `agent.changed` (its start, steps, end), which carries the names (`lifecycle`), so it knows it was named.
+  A spawn of a profile that names a plugin that isn't active and listening to `agent.changed` is refused (`reason:
+  "lifecycle_inactive"`), and an agent whose plugin was turned off since doesn't start.
+- These runtime blocks are fixed when the agent is spawned and can't be changed with `--set`, `--overrides` or by a
+  parent spawning a child. `capcomd profiles validate` checks them against this host too: a lifecycle plugin the
+  running daemon doesn't have is an error, an environment the sandbox doesn't have a warning (a spawn refuses it,
+  `reason: "environment"`).
 - `capcomd profiles schema` prints the JSON Schema of a profile file (id `capcomd.profile/v2`), for an editor.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
 - An agent keeps the profile it was started with: what the profile resolved to then, its `version` (1 when it sets
@@ -195,7 +220,49 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
   (`--set`, `--overrides`) can remove the block but not change it.
 - ADR-024's `memory:` block is read as `context:` (`memory: {scope: project}` is `context: {providers: [{name:
   memory}]}`). One change from what ADR-024 described: the directory is read from the repository and is never
-  written back by the agent; changes to it are reviewed commits (capture and review arrive with ADR-025 steps 2-3).
+  written back by the agent; changes to it are reviewed commits (promotion through a reviewed merge arrives with
+  ADR-025 step 3).
+
+### Lessons agents propose
+
+An agent that may spawn (a planner, a lead) is told, in its orchestration skill, to keep its working notes in kv under
+`notes/<its id>` (every agent of the run can read them) and to propose what the project should remember in its result:
+
+```bash
+capcomd result --summary "…" --data '{"context": [{"title": "Rounding", "text": "Money is rounded half-even in src/money.js; Math.round caused one-cent errors."}]}'
+```
+
+When the agent ends, capcomd collects each lesson as a candidate of the run, nothing more: it reaches
+`.capcomd/context/` only through a reviewed change. A lesson is a `text`, and at most a `title`, a `type` (`lesson`
+when it doesn't say), an `op` (`add`, `supersede`, `deprecate`) and the `target` item it supersedes or deprecates.
+
+- Who proposed it is capcomd's to say: the agent whose token declared the result, its run, profile and model. Anything
+  else a lesson says about itself (`by`, `origin`, `status`, `verified`) is ignored.
+- A lesson holding a secret is refused, never redacted: a secret capcomd put in the run (an agent's API key, a token
+  in its environment, the forge's credential), anything shaped like a credential or a long random-looking string, or a
+  path where credentials are kept (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`). So is one over 4 KB
+  (`context.limits.itemBytes`) and, when a profile sets `context.limits.proposalsPerRun`, one past the run's limit.
+- `capcomd events <runId>` shows `plugin.context.proposed` for each candidate and `plugin.context.refused` for each
+  refusal (its number and reason, never its text); `capcomd kv get <runId> _context/<agentId>` shows an agent's
+  candidates.
+
+### Checking `.capcomd/context/`: `capcomd context lint`
+
+```bash
+capcomd context lint                 # in the repository: problems exit 1, each with its file
+capcomd context lint --fix           # also (re)writes .capcomd/context/index.md from the items
+capcomd context lint --base main     # also: no id changed and no item deleted since main
+capcomd context lint --run <runId>   # also: every outcome an item names is a passed verify or landed merge of the run
+```
+
+It checks that `.capcomd/context/` holds items only (`memory/<slug>.md`, `facts/…`, `index.md`, `log.md`); that each
+item has frontmatter with an `id` and a `type`, and well-formed `status`, dates, `supersedes`/`superseded_by`,
+`paths`, `outcomes`, `helpful`/`harmful`; that ids are unique; that supersession is reciprocal (A `supersedes: [B]`
+and B `superseded_by: [A]`) and has no cycle; that no file holds a secret (the same check as a proposed lesson's); and
+that `index.md` is what `--fix` writes. An item is never deleted (set `status: deprecated`), and its id never changes
+(supersede it with a new one). Warnings don't fail it: a stale item, a description the brief cuts, a body over 4 KB,
+a body that reads like an instruction or a command. A link in `.capcomd/context/` (or the directory being one) is a
+problem, and `--fix` never writes `index.md` through one.
 
 ## The planner's provider, model and effort for one run
 

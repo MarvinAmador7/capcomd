@@ -59,6 +59,9 @@ export async function gates(): Promise<void> {
 
 const current = (): HookRegistry | null => registry ?? local?.registry ?? null;
 
+/** This process is the daemon: its hooks are its own host's, where every `*.changed` hook fires (§6.1). */
+export const inDaemon = (): boolean => daemon !== null || registry !== null;
+
 const fire = ((hook: HookName, mode: "observe" | "veto" | "modify", payload: unknown, o: unknown) => {
   const r = current();
   if (!r) return mode === "observe" ? undefined : Promise.resolve(mode === "modify" ? { decision: "allow", payload, patches: [] } : { decision: "allow" });

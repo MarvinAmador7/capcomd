@@ -46,7 +46,13 @@ const BLOCKS: Record<string, Record<string, object>> = {
   },
   tools: {
     mode: v1.toolMode, allowed: v1.allowedTools, disallowed: v1.disallowedTools,
-    mcp: { type: "array", items: { type: "object", additionalProperties: false, required: ["name", "command"], properties: { name, command: { ...strings, minItems: 1 }, trust: { enum: ["trusted", "untrusted"] } } } },
+    mcp: {
+      type: "array", description: "MCP servers the agent's CLI starts inside its sandbox (never on the host)",
+      items: { type: "object", additionalProperties: false, required: ["name", "command"], properties: {
+        name, command: { ...strings, minItems: 1, description: "The program and its arguments, as the sandbox runs it" },
+        trust: { enum: ["trusted", "untrusted"], default: "untrusted", description: "trusted: its tools are approved up front, as capcomd's own; untrusted: the profile's tool rules decide" },
+      } },
+    },
   },
   context: {
     providers: { type: "array", items: { type: "object", required: ["name"], properties: { name }, description: "A context provider (context:<name>) and its own settings" } },
@@ -57,12 +63,18 @@ const BLOCKS: Record<string, Record<string, object>> = {
     scope: { enum: ["none", "profile", "project", "user"] }, files: { ...strings, maxItems: 1 }, retain: { type: "string", pattern: DAYS.source },
   },
   sandbox: {
-    provider: { ...name, description: "A sandbox plugin's name (capcomd plugins list)" }, environment: name,
-    egress: v1.egress, codex: v1.sandbox, size: { type: "object", additionalProperties: false, properties: { vcpu: { enum: [1, 2, 4, 8] } } },
+    provider: { ...name, description: "A sandbox plugin's name (capcomd plugins list): this profile's agents run there, whatever the run's sandbox" },
+    environment: { ...name, description: "What its machines boot from on that sandbox: default (the current `capcomd env build`), image (the provider's plain image), or a build's name from `capcomd env status`" },
+    egress: v1.egress, codex: v1.sandbox,
+    size: { type: "object", additionalProperties: false, properties: { vcpu: { enum: [1, 2, 4, 8] } }, description: "The machine's size, on a sandbox that sizes its machines (boxd); Docker containers share the host's CPUs" },
   },
   limits: { maxTurns: v1.maxTurns, maxBudgetUsd: v1.maxBudgetUsd, timeoutMs: v1.timeoutMs, idleAfterMs: v1.idleAfterMs, stuckRepeats: v1.stuckRepeats, noChangeAfterMs: v1.noChangeAfterMs },
   jobs: AGENTS_JSON_SCHEMA.$defs.jobs.properties,
-  lifecycle: { checkpointEveryMs: v1.checkpointEveryMs, onStart: strings, onEnd: strings },
+  lifecycle: {
+    checkpointEveryMs: v1.checkpointEveryMs,
+    onStart: { ...names, description: "Plugins that must be active for this profile's agents; they hear each agent's agent.changed" },
+    onEnd: { ...names, description: "Plugins that must be active for this profile's agents; they hear each agent's agent.changed" },
+  },
   children: AGENTS_JSON_SCHEMA.$defs.children.properties,
   permissions: { report: { type: "boolean" } },
   sharing: { source: text, license: text },
@@ -189,7 +201,7 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
   if (sb.size != null && !(isMap(sb.size) && Object.keys(sb.size).every((k) => k === "vcpu") && [1, 2, 4, 8].includes(sb.size.vcpu as number))) at("sandbox.size", "must be { vcpu: 1 | 2 | 4 | 8 }");
 
   const l = block("lifecycle");
-  for (const k of ["onStart", "onEnd"]) if (l[k] != null && !isStrings(l[k])) at(`lifecycle.${k}`, "must be a list of plugin names");
+  for (const k of ["onStart", "onEnd"]) if (l[k] != null && !(isStrings(l[k]) && (l[k] as string[]).every((n) => NAME.test(n)))) at(`lifecycle.${k}`, "must be a list of plugin names (capcomd plugins list)");
   const pm = block("permissions");
   if (pm.report != null && typeof pm.report !== "boolean") at("permissions.report", "must be true or false");
   const sh = block("sharing");
@@ -339,10 +351,11 @@ export function flatOverrides(set: Record<string, unknown>): Record<string, unkn
 export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed", "tags"];
 
 /**
- * What a resolved manifest sets that this capcomd reads but doesn't apply yet (ADR-024 §7 step 8; ADR-025
- * §13), so `validate` can say so instead of the setting silently doing nothing.
+ * What a resolved manifest sets that this capcomd reads but doesn't apply yet, so `validate` can say so instead of the
+ * setting silently doing nothing. `tools.mcp`, `sandbox.provider|environment|size` and `lifecycle.onStart|onEnd` apply
+ * since ADR-024 §7 step 8 (./runtime.ts), `context` since ADR-025's router.
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion", "tools.mcp", "sandbox.provider", "sandbox.environment", "sandbox.size", "lifecycle.onStart", "lifecycle.onEnd"].filter(set);
+  return ["identity.persona", "harness.cliVersion"].filter(set);
 }

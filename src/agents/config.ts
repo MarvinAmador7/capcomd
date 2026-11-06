@@ -4,6 +4,7 @@ import { agentSeam, orchestrateConfig, providerOfKind } from "../plugins/agents"
 import { CLAUDE_CODE_VERSION } from "../plugins/agent-claude";
 import { CODEX_VERSION } from "../plugins/agent-codex";
 import { reservedEnvName } from "../plugins/hooks";
+import { pinnedRuntime, type McpServer } from "../profiles/runtime";
 export { CLAUDE_USD_PER_MTOK, claudeCostUsd, type ClaudeUsage } from "../plugins/agent-claude";
 export { CLAUDE_CODE_VERSION, CODEX_VERSION };
 
@@ -144,6 +145,8 @@ export interface AgentConfig {
   /** Variables agent.preparing's plugins added for this attempt (docs/spec/plugin-api.md §6.6.7): checked new names and
    *  values that look like no secret, set in the agent's process environment. */
   pluginEnv?: Record<string, string>;
+  /** Its profile's MCP servers (ADR-024 `tools.mcp`, pinned at spawn): its CLI starts them in its sandbox. */
+  mcp?: McpServer[];
 }
 
 /** The variables agent.preparing's plugins added, from the attempt's spec (src/primitives/ops.ts `agentPreparing`). */
@@ -183,6 +186,8 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "danger-full-access") as AgentConfig["codexSandbox"];
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) throw new Error(`CAPCOMD_CODEX_SANDBOX=${sandbox} is invalid`);
   const cred = credentialModeFor(kind, source, spec?.auth);
+  // ADR-024 `tools.mcp`: pinned at spawn on its spec; a profile resolved by name has them on the resolution.
+  const mcp = ra.runtime?.mcp ?? pinnedRuntime(spec).mcp;
   const cfg: AgentConfig = {
     version: envVar("CLAUDE_CODE_VERSION", source) ?? CLAUDE_CODE_VERSION,
     codexVersion: envVar("CODEX_VERSION", source) ?? CODEX_VERSION,
@@ -213,6 +218,8 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
     credentialMode: cred,
     ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
+    // An orchestrate agent runs nothing (§16.1): never a server, whatever made it orchestrate after its profile was checked.
+    ...(mcp && isRealAgent(kind) && spec?.toolMode !== "orchestrate" ? { mcp } : {}),
   };
   if (spec?.toolMode !== "orchestrate" || !isRealAgent(kind)) return cfg;
   // §16.1: the provider's policy on top of the profile's lists and the env's; nothing here widens it.
