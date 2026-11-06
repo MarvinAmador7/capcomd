@@ -212,6 +212,28 @@ export async function placeCapacity(place: string, env: Env = process.env, memTo
   return { sandbox: place, agentsAtOnce: null, detail: "no cap known for this sandbox" };
 }
 
+/** How many agents of one profile can start now (capcomd_profiles `capacity`, ADR-024 §4). */
+export interface ProfileCapacity {
+  /** The place's cap, or 0 while its login waits for a usage limit to reset; null: no local cap. */
+  agentsAtOnce: number | null;
+  /** When its login's usage limit resets (ISO time), while it is limited. */
+  waitsUntil?: string;
+  detail: string;
+}
+
+/**
+ * A profile's capacity: the place's (every profile shares its slots), unless the login it spends from (`login`,
+ * "claude:subscription") is at its usage limit until `limitedUntil` (ms epoch, src/primitives/quota.ts quotaUntil;
+ * 0: it isn't): then none of it starts before the reset, and an agent spawned meanwhile waits for it.
+ */
+export function profileCapacity(place: PlaceCapacity, login: string | null, limitedUntil: number): ProfileCapacity {
+  if (login && limitedUntil > 0) {
+    const at = new Date(limitedUntil).toISOString();
+    return { agentsAtOnce: 0, waitsUntil: at, detail: `its login (${login.replace(":", " ")}) is at its usage limit until ${at}: an agent spawned now waits for the reset` };
+  }
+  return { agentsAtOnce: place.agentsAtOnce, detail: place.agentsAtOnce !== null ? `${place.agentsAtOnce} at once on ${place.sandbox}, shared with every other profile` : place.detail };
+}
+
 /** The one-line hint a driver gets before its first spawn. */
 export function teamShapeHint(c: PlaceCapacity): string {
   return `Plan the team shape first (skill: Choose a team shape): ${c.agentsAtOnce !== null ? `${c.agentsAtOnce} agents can run at once here (${c.sandbox})` : `there's no fixed number of agents at once here (${c.sandbox}: ${c.detail})`}.`;

@@ -3,7 +3,7 @@
 // add, set and rm edit the agents file.
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { abilityText, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, leadText, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../../profiles";
+import { abilityText, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, leadText, profileFacts, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile } from "../../profiles";
 import { credentialModeFor, loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -76,8 +76,8 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
     }
     case "list": {
       const f = guard(() => readProfiles(path));
-      const rows = Object.entries(f.agents).map(([n, s]) => ({ name: n, provider: s.provider, auth: s.auth, model: s.model ?? null, default: f.default === n, canSpawn: !!s.children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...readiness(n, s) }));
-      out({ file: path, default: f.default ?? null, agents: rows }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") : `no agents (${path}); add one: capcomd agents add <name> --provider claude|codex --auth apikey|subscription`);
+      const rows = Object.entries(f.agents).map(([n, s]) => ({ name: n, provider: s.provider, auth: s.auth, model: s.model ?? null, default: f.default === n, canSpawn: !!s.children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...profileFacts(f.profiles[n]!), ...readiness(n, s) }));
+      out({ file: path, default: f.default ?? null, agents: rows }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title, r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") : `no agents (${path}); add one: capcomd agents add <name> --provider claude|codex --auth apikey|subscription`);
       return 0;
     }
     case "show": {
@@ -90,10 +90,11 @@ export async function agentsCommand(pos: string[], values: Record<string, any>):
         const c = loadAgentConfig(process.env, n);
         effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
+      const facts = profileFacts(f.profiles[n]!);
       // Its skills as an agent of it is pinned with them: where each came from and the sha256 of its SKILL.md.
-      const pins = f.profiles[n]?.skills.map((s) => ({ name: s.name, source: s.source, hash: `sha256:${s.hash}`, path: s.path })) ?? [];
+      const pins = f.profiles[n]!.skills.map((s) => ({ name: s.name, source: s.source, hash: `sha256:${s.hash}`, path: s.path }));
       const skills = pins.length ? { skills: pins } : {};
-      out({ name: n, default: f.default === n, spec, ...skills, effective, error, ...readiness(n, spec) }, JSON.stringify({ name: n, spec, ...skills, effective, error }, null, 2));
+      out({ name: n, default: f.default === n, spec, ...skills, effective, error, ...facts, ...readiness(n, spec) }, JSON.stringify({ name: n, ...facts, spec, ...skills, effective, error }, null, 2));
       return error ? 1 : 0;
     }
     case "add":

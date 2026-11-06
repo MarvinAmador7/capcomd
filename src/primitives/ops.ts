@@ -462,6 +462,9 @@ export async function spawnAgent(o: SpawnOpts) {
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
   const runEnv = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
   const { resolved, spec } = hooks.listening("profile.resolved") ? checkResolved(await profileResolved(o, ref, resolveProfile(ref)), runEnv) : spawnChecks(ref, runEnv);
+  // ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be).
+  if (o.contract?.report === true && resolved.permissions?.report === false)
+    throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }
