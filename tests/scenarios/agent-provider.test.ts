@@ -159,6 +159,9 @@ test("profileVersion and profileSource: the version and layer of the profile eac
     // The agent's own record after the profile changed: still the version it was spawned with.
     const shown = (await w.cj(["inspect", run, t3.agentId])).j;
     expect({ version: shown.profileVersion, source: shown.profileSource }).toEqual({ version: 3, source: "project" });
+    // And its text line names it next to the profile.
+    const line = await capcomd(["inspect", run, t3.agentId], { ...w.env, PWD: w.dir });
+    expect(line.stdout.split("\n")[0]).toContain(`${t3.agentId} [tester v3, project] done`);
   } finally {
     rmSync(join(project, "tester"), { recursive: true, force: true });
     rmSync(join(user, "scout.yaml"), { force: true });
