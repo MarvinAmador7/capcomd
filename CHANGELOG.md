@@ -11,7 +11,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   repository, with one pull request per run for the brain's owners; the brain's own branch, and what agents read, never
   change. Under `review: human` (the default) nothing is sent until you run `capcomd context brain propose --run
   <runId> --yes` (without `--yes` it lists them), and groundray records you as the producer; under `review: lint`
-  capcomd sends them itself. Needs the groundray CLI on your machine (or `CAPCOMD_GROUNDRAY=<path>`); your own groundray
+  capcomd sends them itself, for up to 4 minutes (any it couldn't send wait for that command). Needs the groundray CLI on your machine (or `CAPCOMD_GROUNDRAY=<path>`); your own groundray
   setup is never read or changed. Drafts only: capcomd never supersedes, deprecates or verifies an item in a brain.
 
 - Fix: a background job that ended just as capcomd looked at it could be reported finished with its last output

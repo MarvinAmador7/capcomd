@@ -60,7 +60,12 @@ export function groundrayBin(env: Record<string, string | undefined> = process.e
  * CLI's), else capcomd itself. An agent or a plugin never names a person.
  */
 export function actorOf(by: Principal): string {
-  if (by.kind === "operator" || by.kind === "driver") return `human:${by.clientId && /^[A-Za-z0-9._-]{1,64}$/.test(by.clientId) ? by.clientId : by.kind}`;
+  if (by.kind === "operator" || by.kind === "driver") {
+    // groundray's actor schema (knowledge-item.schema.yaml `actor`): `human:` then two or more lowercase letters, digits
+    // and `._-`; an id it wouldn't take is the principal's kind.
+    const id = by.clientId?.toLowerCase() ?? "";
+    return `human:${/^[a-z0-9][a-z0-9._-]{1,127}$/.test(id) ? id : by.kind}`;
+  }
   return `capcomd/${VERSION}`;
 }
 
@@ -103,11 +108,17 @@ export const proposalSource = (d: BrainDraft) => ({
   title: `Proposed by capcomd agent ${d.origin.agentId} in run ${d.origin.runId}`,
 });
 
-/** The description groundray asks for: the body's first sentence, one line, at most 200 characters. */
+/** A length as groundray's schema counts it (code points), and a string cut to `n` of them. */
+const chars = (s: string) => [...s].length;
+const cut = (s: string, n: number) => [...s].slice(0, n).join("").trim();
+
+/** The description groundray asks for: one line of 10 to 240 characters (its schema). The body's first sentence (at
+ *  most 200), else the body's first 200 characters, else the title. */
 export function descriptionOf(body: string, title: string): string {
   const text = body.replace(/^#+\s.*$/gm, " ").replace(/\s+/g, " ").trim();
-  const first = (/^(.{1,200}?[.!?])(\s|$)/.exec(text)?.[1] ?? text.slice(0, 200)).trim();
-  return first || title;
+  const first = (/^(.{1,200}?[.!?])(\s|$)/.exec(text)?.[1] ?? cut(text, 200)).trim();
+  const t = title.replace(/\s+/g, " ").trim();
+  return [first, cut(text, 200), t].find((d) => chars(d) >= 10) ?? `Proposed knowledge: ${t}`;
 }
 
 const slugOf = (title: string) => title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "item";
@@ -117,7 +128,8 @@ const utc = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 /** Why groundray can't take a proposal ("it …"), or null. */
 export function draftProblem(d: { type: unknown; title: string; body: string }): string | null {
   if (!isGroundrayType(d.type)) return `has no type groundray knows (${GROUNDRAY_TYPES.join(", ")})`;
-  if (!d.title.trim() || d.title.length > 200 || /[\r\n]/.test(d.title)) return "has no one-line title";
+  // groundray's schema: a title of 3 to 120 characters on one line.
+  if (/[\r\n]/.test(d.title) || chars(d.title.trim()) < 3 || chars(d.title.trim()) > 120) return "has no one-line title of 3 to 120 characters";
   if (!d.body.trim()) return "has no text";
   if (Buffer.byteLength(d.body) > BODY_MAX_BYTES) return "is over groundray's 1 MiB for a body";
   if (/^\uFEFF?---[ \t]*\r?\n/.test(d.body)) return "starts with YAML frontmatter, which groundray writes itself";
@@ -243,7 +255,7 @@ export async function writeToBrain(brain: BrainTarget, draft: BrainDraft, actor:
       brain: brain.slug, type: draft.type, title: draft.title.trim(), description: descriptionOf(draft.body, draft.title),
       actor, method: "agent-generated", "body-file": bodyFile, "sources-file": sourcesFile,
       path: `inbox/${slugOf(draft.title)}-${proposalKey(draft).slice(0, 6)}.md`, confidence: "low",
-      "confidence-basis": `Proposed by agent ${draft.origin.agentId} of capcomd run ${draft.origin.runId}${actor.startsWith("human:") ? `, sent by ${actor}` : ""}; no one has verified it yet.`,
+      "confidence-basis": cut(`Proposed by agent ${draft.origin.agentId} of capcomd run ${draft.origin.runId}${actor.startsWith("human:") ? `, sent by ${actor}` : ""}; no one has verified it yet.`, 280),
       timestamp: utc(now),
     }).map(([k, v]) => `--${k}=${v}`), "--json"];
     answer(await groundray(deps.bin, home, create, c), "knowledge create (plan)");

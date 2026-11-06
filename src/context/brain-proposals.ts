@@ -9,7 +9,7 @@
 //    proposal's actor in the brain (`human:<id>`, ADR-025 §7: the approver forwarded, never an agent's claim);
 //  - `lint`: the kernel, as the consolidator's staging ends (src/primitives/ops.ts), as `capcomd/<version>`.
 // Either way a brain's owners review the pull request; a draft never raises authority there.
-import type { Provenance } from "../../packages/plugin/src/context-layer";
+import type { ContextProvider, Provenance } from "../../packages/plugin/src/context-layer";
 import type { Principal } from "../../packages/plugin/src/shapes";
 import { RelayError } from "../core/errors";
 import type { BrainDelta } from "./consolidate";
@@ -54,26 +54,39 @@ export async function brainProposals(runId: string, o: { agentId?: string } = {}
     .sort((a, b) => (a.value.origin.agentId < b.value.origin.agentId ? -1 : a.value.origin.agentId > b.value.origin.agentId ? 1 : a.value.n - b.value.n));
 }
 
+/** Under `review: lint`, how long the kernel spends sending a consolidator's proposals as it stages them: well inside the
+ *  settle step's 10 minutes (src/actors/agent-workflow.ts), whatever the brain's remote or groundray do. */
+export const LINT_SEND_BUDGET_MS = 4 * 60_000;
+/** A proposal isn't started with less time than this left (a clone, groundray twice, a push and a pull request). */
+const MIN_SEND_MS = 15_000;
+
 export interface SentProposal { id: string; brain: string; title: string; ok: boolean; already: boolean; item?: string; where?: string; error?: string }
 
 /**
  * Send the run's proposals not sent yet (one consolidator's with `agentId`) to their brains as `by`, one after the
  * other, through the active `groundray` provider (this process's: the daemon's or the CLI's): resolved for the
  * consolidator's run and agent with its brain, then `propose`. A failure is kept on its record and the next one is
- * tried; a record someone else sent meanwhile is left as they sent it.
+ * tried; a record someone else sent meanwhile is left as they sent it. `budgetMs`: how long they may take together; those
+ * it leaves no time for stay as they are (not sent, no error), for the next send.
  */
-export async function sendBrainProposals(runId: string, o: { by: Principal; agentId?: string; timeoutMs?: number }): Promise<SentProposal[]> {
+export async function sendBrainProposals(runId: string, o: { by: Principal; agentId?: string; timeoutMs?: number; budgetMs?: number }): Promise<SentProposal[]> {
   const { contextProviders } = await import("./providers");
   const { seamCall } = await import("../plugins/forges");
   const { kvWrite } = await kv();
-  const provider = (await contextProviders()).get("groundray")?.provider;
+  // Asked of this process's plugins only when one is sent.
+  let active: Promise<ContextProvider | undefined> | null = null;
+  const groundray = () => (active ??= contextProviders().then((m) => m.get("groundray")?.provider));
+  const until = o.budgetMs === undefined ? Infinity : Date.now() + o.budgetMs;
   const out: SentProposal[] = [];
   for (const { version, value: p } of await brainProposals(runId, o.agentId ? { agentId: o.agentId } : {})) {
     const said = { id: p.id, brain: p.brain, title: p.title };
     if (p.sent) { out.push({ ...said, ok: true, already: true, item: p.sent.item, where: p.sent.where }); continue; }
-    const c = seamCall(o.timeoutMs ?? 300_000);
+    const left = until - Date.now();
+    if (left < MIN_SEND_MS) { out.push({ ...said, ok: false, already: false, error: "not sent yet: the time for sending them ran out" }); continue; }
+    const c = seamCall(Math.min(o.timeoutMs ?? 300_000, left));
     let next: BrainProposal;
     try {
+      const provider = await groundray();
       if (!provider) throw new Error("the groundray context provider isn't active in this process");
       const scope = { projectId: null, repo: null, ref: null, profile: { name: p.origin.profile, version: 1 }, runId, agentId: p.origin.agentId, layers: ["project" as const], settings: { brain: p.brain }, bundleRoot: null };
       const { handle } = await provider.resolve(scope, c);

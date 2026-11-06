@@ -111,7 +111,12 @@ test("review: human: the fact waits for a person, who sends it as themselves; th
   const listed = await w.cj(["context", "brain", "propose", "--run", run]);
   expect(listed.j).toMatchObject({ ok: true, proposals: [{ id: `${c.agentId}.1`, brain: "acme", type: "policy", title: "Refunds for damaged goods", from: [`${worker}.1`], sent: null }] });
   expect(listed.j.text).toContain("--yes");
-  const sent = await w.cj(["context", "brain", "propose", "--run", run, "--yes"]);
+  // A send with no time left (the kernel's, under lint, bounds its time) leaves it as it was, for the next send.
+  const { sendBrainProposals } = await import("../../src/context/brain-proposals");
+  expect(await sendBrainProposals(run, { by: { kind: "operator", clientId: null }, budgetMs: 0 })).toEqual([{ id: `${c.agentId}.1`, brain: "acme", title: "Refunds for damaged goods", ok: false, already: false, error: expect.stringContaining("ran out") }]);
+  expect((await w.cj(["context", "brain", "propose", "--run", run])).j.proposals).toEqual([expect.not.objectContaining({ error: expect.anything() })]);
+  expect(await brain.sha(branch)).toBeNull();
+  const sent =await w.cj(["context", "brain", "propose", "--run", run, "--yes"]);
   expect(sent.code).toBe(0);
   expect(sent.j.sent).toEqual([expect.objectContaining({ id: `${c.agentId}.1`, ok: true, already: false, item: expect.stringMatching(/^urn:uuid:/), where: `${brain.bare}, branch ${branch}` })]);
   // The brain's repository: a draft on the run's proposal branch, as the person; its main is where it was.

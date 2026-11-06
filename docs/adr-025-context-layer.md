@@ -737,7 +737,7 @@ says why):
   change `{brain: <name>, type, title, text, from}` for the one brain its own profile names (its `groundray` entry, the
   same rule as a brief: one brain per profile). It is checked as a memory change is (the seeded scan and the
   redactor's placeholder, `itemBytes`, its `from` the run's candidates, the run's `proposalsPerRun`, which the brain's
-  changes take first) and as groundray needs (one of its types, a one-line title, a body without frontmatter), and it is
+  changes take first) and as groundray needs (one of its types, a one-line title of 3 to 120 characters, a body without frontmatter), and it is
   `add` only: supersession, deprecation and verification are not exposed by groundray's CLI ("Creation never
   authorizes promotion") and belong to the brain's owners. It is never staged on the consolidator's branch: the kernel
   keeps it in kv `_context/brain/<agentId>.<n>` (reserved) and the consolidator's result says so (`context.brain`).
@@ -747,7 +747,8 @@ says why):
   when the run proposed facts and no lessons (no branch, no hold). So the rule is the profile's `context.review`, as for
   memory: under `review: human` (the default) the proposals wait for a person, who sends them with `capcomd context brain
   propose --run <runId> --yes` and is their actor (`human:<id>` from the operator's or a driver's principal; the local
-  CLI's is `human:operator`); under `review: lint` the kernel sends them as the staging ends, as `capcomd/<version>`.
+  CLI's is `human:operator`); under `review: lint` the kernel sends them as the staging ends, as `capcomd/<version>`,
+  within 4 minutes for all of them (the settle step that stages them has 10), leaving the rest for the command.
   An agent never names a person. Either way the brain's owners review the pull request, and a draft never raises
   authority there.
 - **The throwaway authoring clone.** groundray's `knowledge create` writes into its catalog's authoring repository
@@ -777,7 +778,13 @@ says why):
   (which pushes with groundray's git) isn't used, so its credentials never matter.
 - Only a brain with groundray's `brain.yaml` takes proposals (`unsupported` for a plain OKF bundle), and the groundray
   CLI must be on the host (`CAPCOMD_GROUNDRAY`, else `PATH`); reads still need neither. The real CLI isn't run in CI:
-  the tests use a fake that does what groundray's `docs/cli.md` says it does.
+  the tests use a fake that does what groundray's `docs/cli.md` says it does and refuses what its item schema
+  (`schemas/knowledge-item.schema.yaml`) refuses of capcomd's values: a title of 3 to 120 characters (checked when the
+  consolidator's answer is staged), a description of 10 to 240 (the body's first sentence, else its start, else the
+  title), an actor `human:` with a lowercase id of two characters at least, a confidence basis of at most 280. Read
+  from groundray's source (not run): `brain add --json` answers `slug` and `id`, `knowledge create --json` answers
+  `item_id` and a bundle-relative `path`, and a source whose resource has a scheme other than http(s) (the
+  `capcomd://` marker) passes its validation.
 
 **Made while building step 6** (spec 1.0.28; evidence `docs/evidence/context/README.md`, "step 6"):
 

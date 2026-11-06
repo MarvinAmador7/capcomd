@@ -70,6 +70,18 @@ if (argv[0] === "knowledge" && argv[1] === "create") {
   const body = readFileSync(opt("--body-file")!, "utf8");
   if (body.startsWith("---")) die(1, "Body must not include YAML frontmatter.");
   const sources = opt("--sources-file") ? JSON.parse(readFileSync(opt("--sources-file")!, "utf8")) : [];
+  // What groundray's schema (schemas/knowledge-item.schema.yaml) takes of what capcomd gives: lengths in code points,
+  // one line each; the actor's patterns; a source's id and title.
+  const line = (v: string | undefined, min: number, max: number) => v !== undefined && !/[\r\n]/.test(v) && [...v].length >= min && [...v].length <= max;
+  if (!line(opt("--title")!.trim(), 3, 120)) die(1, "KB-E1xx: title must be 3 to 120 characters on one line");
+  if (!line(opt("--description")!.trim(), 10, 240)) die(1, "KB-E1xx: description must be 10 to 240 characters on one line");
+  if (!/^(human:[a-z0-9][a-z0-9._-]{1,127}|process:[a-z0-9][a-z0-9._-]{1,127}|[a-z0-9][a-z0-9._-]{1,63}\/[A-Za-z0-9][A-Za-z0-9._+-]{0,127})$/.test(opt("--actor")!)) die(1, `KB-E1xx: actor ${opt("--actor")} doesn't match the schema`);
+  if (opt("--confidence-basis") !== undefined && !line(opt("--confidence-basis"), 10, 280)) die(1, "KB-E1xx: confidence basis must be 10 to 280 characters on one line");
+  for (const s of sources as Array<{ id?: string; title?: string; resource?: string }>) {
+    if (typeof s.resource !== "string" || !line(s.resource, 1, 2048)) die(1, "KB-E202: a source needs a resource");
+    if (s.id !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(s.id)) die(1, "KB-E1xx: a source's id is lowercase kebab-case");
+    if (s.title !== undefined && !line(s.title, 3, 240)) die(1, "KB-E1xx: a source's title must be 3 to 240 characters");
+  }
   const rel = opt("--path") ?? `inbox/${opt("--title")!.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`;
   const file = join(repo, "knowledge", rel);
   if (existsSync(file)) die(1, `Destination exists: ${rel}`);

@@ -1087,8 +1087,16 @@ async function brainProposalsOf(runId: string, a: ScopeAgent, b: import("../cont
       text: `${n} proposal${n === 1 ? "" : "s"} to brain ${b.name} wait${n === 1 ? "s" : ""} for a person: capcomd context brain propose --run ${runId} --yes`,
     };
   }
-  const { sendBrainProposals } = await import("../context/brain-proposals");
-  const sent = await sendBrainProposals(runId, { agentId: a.agentId, by: { kind: "agent", agentId: a.agentId, runId } });
+  const { sendBrainProposals, LINT_SEND_BUDGET_MS } = await import("../context/brain-proposals");
+  // Kept already: a send that can't even start leaves them for a person, never fails the memory staged on the branch.
+  // Bounded as a whole (the settle step it runs in has its own deadline); what is left is sent with the command.
+  const sent = await sendBrainProposals(runId, { agentId: a.agentId, by: { kind: "agent", agentId: a.agentId, runId }, budgetMs: LINT_SEND_BUDGET_MS }).catch((e: unknown) => e as Error);
+  if (sent instanceof Error) {
+    return {
+      result: { name: b.name, proposals: listed, awaits: "person" as const, sent: [], error: String(sent.message ?? sent).slice(0, 500) },
+      text: `${n} proposal${n === 1 ? "" : "s"} to brain ${b.name} couldn't be sent (${String(sent.message ?? sent).slice(0, 200)}): send ${n === 1 ? "it" : "them"} with capcomd context brain propose --run ${runId} --yes`,
+    };
+  }
   const ok = sent.filter((x) => x.ok);
   return {
     result: { name: b.name, proposals: listed, awaits: null, sent: sent.map((x) => (x.ok ? { id: x.id, item: x.item, where: x.where } : { id: x.id, error: x.error })) },

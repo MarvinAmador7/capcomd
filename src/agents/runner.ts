@@ -418,7 +418,7 @@ export function buildConsolidatePrompt(t: AgentTask & { consolidate: NonNullable
       "",
       `The company's brain ${t.consolidate.brain} (its facts are in your brief): a fact the run established about the business, not about this repository (a policy, a decision, a definition, how a system behaves), may go to it as a new draft for its owners to review, in the same list:`,
       `  {"brain": "${t.consolidate.brain}", "type": "concept"|"decision"|"procedure"|"policy"|"system"|"source-summary"|"question", "title": "…", "text": "the fact and its evidence, in Markdown", "from": ["agt-….1"]}`,
-      "  Only new drafts (no supersede or deprecate in a brain), only what a candidate supports, never a lesson about this repository or a secret.",
+      "  Only new drafts (no supersede or deprecate in a brain), only what a candidate supports, never a lesson about this repository or a secret; a title of 3 to 120 characters.",
     ] : []),
   ].join("\n");
 }

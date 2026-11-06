@@ -17,7 +17,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import { BUILTINS, candidateOf } from "../../src/plugins/builtins";
 import { useForges } from "../../src/plugins/forges";
 import { forgePullRequest, groundrayProvider, hostWriter } from "../../src/context/groundray";
-import { actorOf, descriptionOf, proposalBranch, writeToBrain } from "../../src/context/groundray-write";
+import { actorOf, descriptionOf, draftProblem, proposalBranch, writeToBrain } from "../../src/context/groundray-write";
 import { brainDeltas, brainOf, stage } from "../../src/context/consolidate";
 import { mirrorReader } from "../../src/context/memory";
 import { secretScan } from "../../src/context/scan";
@@ -222,23 +222,37 @@ describe("a proposal to a brain (ADR-025 step 5)", () => {
     expect(readdirSync(join(root, "work", "brain-proposals"))).toEqual([]);
   }, 120_000);
 
+  test("what groundray's schema takes: a short body still gets a description of 10 characters, a person's id in capitals is lowercased", async () => {
+    const { r, settings } = await brainRepo();
+    fake.claims = [r.bare];
+    // The fake refuses what groundray's schema refuses (a description under 10 characters, an actor not in its pattern).
+    process.env.CAPCOMD_GROUNDRAY = cli();
+    const p = provider(settings);
+    const { handle } = await p.resolve(scope(), conformanceCall());
+    const receipt = await p.propose(handle, proposal("Fees", "Yes."), { kind: "operator", clientId: "Ops-Lead" }, conformanceCall(120_000));
+    expect(receipt.where).toBe("fake://pull/1");
+    const create = calls().filter((c) => c.argv[0] === "knowledge").at(-1)!.argv;
+    expect(create).toContain("--actor=human:ops-lead");
+    expect(create).toContain("--description=Proposed knowledge: Fees");
+  }, 120_000);
+
   test("what a brain doesn't take: an op other than add, a type groundray doesn't know, no title, frontmatter; an OKF bundle without brain.yaml", async () => {
     const { settings } = await brainRepo();
     let writes = 0;
     const p = groundrayProvider({ settings: async () => settings, read: (o) => mirrorReader({ ...o, runId: null }), write: async () => { writes++; throw new Error("unused"); } });
     const { handle } = await p.resolve(scope(), conformanceCall());
-    const refused = (x: object) => p.propose(handle, { ...proposal("T", "A fact."), ...x }, operator, conformanceCall()).then(() => null, (e: PluginError) => [e.code, e.message]);
+    const refused = (x: object) => p.propose(handle, { ...proposal("A fact", "A fact."), ...x }, operator, conformanceCall()).then(() => null, (e: PluginError) => [e.code, e.message]);
     expect(await refused({ op: "supersede", target: { provider: "groundray", id: "x", version: "" } })).toEqual(["unsupported", expect.stringContaining("new drafts only")]);
     expect(await refused({ type: "lesson" })).toEqual(["invalid", expect.stringContaining("has no type groundray knows")]);
-    expect(await refused({ title: undefined })).toEqual(["invalid", "brain acme can't take this proposal: it has no one-line title"]);
+    expect(await refused({ title: undefined })).toEqual(["invalid", "brain acme can't take this proposal: it has no one-line title of 3 to 120 characters"]);
     expect(await refused({ text: { text: "---\nstatus: stable\n---\nx", untrusted: true, by: AGENT } })).toEqual(["invalid", expect.stringContaining("frontmatter")]);
     // A handle for no agent of a run (`capcomd context brief`'s) can't propose.
     const bare = await p.resolve(scope({ runId: null, agentId: null }), conformanceCall());
-    expect(await p.propose(bare.handle, proposal("T", "A fact."), operator, conformanceCall()).then(() => null, (e: PluginError) => e.code)).toBe("invalid");
+    expect(await p.propose(bare.handle, proposal("A fact", "A fact."), operator, conformanceCall()).then(() => null, (e: PluginError) => e.code)).toBe("invalid");
     // An OKF bundle (no brain.yaml): groundray authors only its own brains.
     const okf = groundrayProvider({ settings: async () => ({ brains: { kb: { repo: "/srv/kb.git", branch: "main", commit: "a".repeat(40), slug: "kb", id: "", bundle: "kb" } } }), read: async ({ at }) => ({ sha: "a".repeat(40), date: "2026-11-01T00:00:00.000Z", truncated: false, files: "branch" in at || at ? [{ path: "kb/a.md", text: fm({ type: "concept", id: "a", description: "A" }, "a") }] : [] }) });
     const h = await okf.resolve(scope({ settings: { brain: "kb" } }), conformanceCall());
-    expect(await okf.propose(h.handle, proposal("T", "A fact."), operator, conformanceCall()).then(() => null, (e: PluginError) => [e.code, e.message])).toEqual(["unsupported", "brain kb has no brain.yaml: groundray authors only its own brains"]);
+    expect(await okf.propose(h.handle, proposal("A fact", "A fact."), operator, conformanceCall()).then(() => null, (e: PluginError) => [e.code, e.message])).toEqual(["unsupported", "brain kb has no brain.yaml: groundray authors only its own brains"]);
     expect(writes).toBe(0);
   }, 60_000);
 
@@ -247,6 +261,17 @@ describe("a proposal to a brain (ADR-025 step 5)", () => {
     expect(actorOf({ kind: "operator", clientId: "c-42" })).toBe("human:c-42");
     expect(actorOf({ kind: "driver", clientId: null })).toBe("human:driver");
     expect(actorOf({ kind: "operator", clientId: "has spaces; and more" })).toBe("human:operator");
+    // groundray's actor pattern: lowercase, two characters at least.
+    expect(actorOf({ kind: "driver", clientId: "Lead.42" })).toBe("human:lead.42");
+    expect(actorOf({ kind: "operator", clientId: "x" })).toBe("human:operator");
+    // groundray's schema: a title of 3 to 120 characters, a description of 10 to 240.
+    expect(draftProblem({ type: "policy", title: "Ok", body: "A fact." })).toContain("3 to 120 characters");
+    expect(draftProblem({ type: "policy", title: "é".repeat(121), body: "A fact." })).toContain("3 to 120 characters");
+    expect(draftProblem({ type: "policy", title: "é".repeat(120), body: "A fact." })).toBeNull();
+    expect(descriptionOf("Yes. It is.", "Refund window")).toBe("Yes. It is.");
+    expect(descriptionOf("Yes.", "Refund window")).toBe("Refund window");
+    expect(descriptionOf("# Only a heading", "Fees")).toBe("Proposed knowledge: Fees");
+    expect([...descriptionOf("😀".repeat(500), "Fees")].length).toBe(200);
     expect(actorOf({ kind: "agent", agentId: "agt-1", runId: "run-1" })).toBe(`capcomd/${VERSION}`);
     expect(actorOf({ kind: "plugin", name: "x", scopes: ["steer"] })).toBe(`capcomd/${VERSION}`);
     expect(descriptionOf("# Heading\n\nRefunds take 5 days. Then more.", "Refunds")).toBe("Refunds take 5 days.");
@@ -286,7 +311,9 @@ describe("a consolidator's deltas for a brain (src/context/consolidate.ts)", () 
     // A profile that names no brain: every delta for one is refused, none kept.
     expect(brainDeltas({ ...base, brain: null, raw: [fact()] }).refused).toEqual([{ n: 1, reason: "no_brain", what: expect.stringContaining("its profile names none") }]);
     // The room is the run's: shared with the memory's changes (which get what is left).
-    expect(brainDeltas({ ...base, room: 1, raw: [fact(), fact({ title: "B", text: "Other." })] }).refused).toEqual([{ n: 2, reason: "over_cap", what: expect.any(String) }]);
+    expect(brainDeltas({ ...base, room: 1, raw: [fact(), fact({ title: "Bee", text: "Other." })] }).refused).toEqual([{ n: 2, reason: "over_cap", what: expect.any(String) }]);
+    // A title groundray's schema wouldn't take is refused here, when it is staged, not when it is sent.
+    expect(brainDeltas({ ...base, raw: [fact({ title: "x".repeat(121) })] }).refused).toEqual([{ n: 1, reason: "invalid", what: expect.stringContaining("3 to 120 characters") }]);
     // The memory's staging leaves a brain's deltas out (and doesn't call `brain` an ignored field).
     const st = stage({ files: [], raw, candidates: cands, origin: { runId: RUN, agentId: AGENT, profile: "context-consolidator", model: null, image: null }, at: "2026-11-06T00:00:00.000Z", scan, outcome: () => false, itemBytes: 4096, descriptionChars: 150, room: 20 });
     expect(st.applied.map((x) => [x.n, x.op])).toEqual([[1, "add"]]);
