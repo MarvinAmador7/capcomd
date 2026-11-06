@@ -14,7 +14,7 @@ import { dirname, join, resolve } from "path";
 import { tmpdir } from "os";
 import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, lifecyclePlugins, pinnedMachine, pinnedRuntime, resolveAgent, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../profiles";
+import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, lifecyclePlugins, pinnedMachine, pinnedRuntime, resolveAgent, runtimeProblems, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
@@ -427,6 +427,10 @@ function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
   // Its machine's sandbox: its profile's (ADR-024 `sandbox.provider`), else the run's, else this process's.
   const rt = resolved.runtime ?? {};
+  // What its profile was checked for, again on the spec as overridden: an override or a profile.resolved patch that
+  // makes it orchestrate (narrowing) leaves an agent that runs nothing with MCP servers to run (src/profiles/runtime.ts).
+  const rp = resolved.spec ? runtimeProblems(resolved.name ?? resolved.kind, rt, resolved.spec) : [];
+  if (rp.length) throw new RelayError("config", rp.join("; "), "Spawn it without making it orchestrate (tools.mode), or give the MCP servers to the profiles it spawns.", { code: "orchestrate_mcp" });
   const source = rt.sandboxProvider ? withSandbox(runSource, rt.sandboxProvider) : runSource;
   // A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
   // commands run in a sandbox, never on the host): a sandbox that runs them on this host (the test fakes) only when the

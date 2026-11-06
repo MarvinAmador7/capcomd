@@ -97,7 +97,8 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   when it isn't). `trust: trusted` approves the server's tools up front, as capcomd's are; `untrusted` (the default)
   leaves them to the profile's tool rules: with `tools.allowed`, Claude Code runs only the ones it names
   (`mcp__semgrep`, or `mcp__semgrep__<tool>`), Codex asks its own approval rules (which refuse what needs asking). An
-  orchestrate profile can't have servers: it runs nothing, so give them to the profiles it spawns.
+  orchestrate profile can't have servers: it runs nothing, so give them to the profiles it spawns (an override that
+  makes one orchestrate is refused: `reason: "orchestrate_mcp"`).
 - `sandbox.provider` runs the profile's agents on that sandbox (`docker`, `boxd`), whatever the run's is (`capcomd run
   --sandbox`) or the daemon's; it must be an active sandbox plugin, and it can't take them out of isolation (a sandbox
   that runs agents on your machine, as the test ones do, is refused unless the run's is one too: `reason:

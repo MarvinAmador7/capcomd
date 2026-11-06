@@ -8,7 +8,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: a profile file can give its agents MCP servers, its own sandbox, environment and machine size, and plugins that
   must hear them. `tools.mcp: [{name, command, trust}]` starts each server in the agent's sandbox (never on your
   machine) for Claude Code and Codex, beside capcomd's own; `trust: trusted` approves its tools up front, `untrusted`
-  (the default) leaves them to the profile's tool rules. An orchestrate profile can't have any. `sandbox.provider`
+  (the default) leaves them to the profile's tool rules. An orchestrate profile can't have any, and spawning one with
+  `--set toolMode=orchestrate` is refused (`reason: "orchestrate_mcp"`). `sandbox.provider`
   runs the profile's agents on that sandbox (`docker`, `boxd`) whatever the run's is (never on your machine: a
   sandbox that runs agents on the host is refused, `reason: "sandbox_isolation"`); `sandbox.environment`
   is what their machines boot from there: `default` (the current `capcomd env build`), `image` (the provider's plain

@@ -218,7 +218,8 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
     credentialMode: cred,
     ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
-    ...(mcp && isRealAgent(kind) ? { mcp } : {}),
+    // An orchestrate agent runs nothing (§16.1): never a server, whatever made it orchestrate after its profile was checked.
+    ...(mcp && isRealAgent(kind) && spec?.toolMode !== "orchestrate" ? { mcp } : {}),
   };
   if (spec?.toolMode !== "orchestrate" || !isRealAgent(kind)) return cfg;
   // §16.1: the provider's policy on top of the profile's lists and the env's; nothing here widens it.

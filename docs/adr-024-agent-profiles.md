@@ -511,8 +511,9 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   Code allowlist and sets Codex's `default_tools_approval_mode="approve"`, as capcomd's own server has; `untrusted`
   leaves them to the profile's tool rules (no allowlist is every tool, as for every other tool). `capcomd` is
   reserved. **An orchestrate profile can't have servers** (spec §16.1: it runs nothing, and a server is a program its
-  sandbox runs). A program the sandbox doesn't have is the CLI's to report; the runner logs it first. Nothing is
-  installed for a server: its environment must have it.
+  sandbox runs), nor an agent that an override makes orchestrate (refused at spawn, `reason: orchestrate_mcp`). A
+  program the sandbox doesn't have is the CLI's to report; the runner logs it first. Nothing is installed for a server:
+  its environment must have it.
 - **`sandbox.provider` wins over the run's sandbox** for that profile's agents (§2.2 "absent: the run's, else the
   daemon's"): the machine is made, run, pushed from and destroyed there (`providerForAgent`, recorded on the worker as
   its `sandbox`, which `capcomd sandbox shell` and the drain read), its idle lifetime is that place's current setting (a

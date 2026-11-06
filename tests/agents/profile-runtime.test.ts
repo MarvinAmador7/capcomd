@@ -65,6 +65,26 @@ describe("the runtime blocks of a profile", () => {
     expect(errorOf(() => nowhere.load())).toContain(`sandbox.provider "nowhere" isn't an active sandbox provider`);
   });
 
+  test("an override that makes a profile with MCP servers orchestrate is refused at spawn, and its CLI would get none", async () => {
+    const w = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "tools: { mcp: [{ name: docs, command: [docs-mcp], trust: trusted }] }"]) });
+    const { encodeAgentRef } = await import("../../src/profiles");
+    const { spawnChecks } = await import("../../src/primitives/ops");
+    const ref = encodeAgentRef("w", { set: { toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: ["w"] } }, operator: true });
+    const saved = { home: process.env.CAPCOMD_HOME, file: process.env.CAPCOMD_AGENTS_FILE };
+    Object.assign(process.env, w.source);
+    try {
+      expect(() => spawnChecks("w", { CAPCOMD_SANDBOX: "fake" })).not.toThrow();
+      let err: any = null;
+      try { spawnChecks(ref, { CAPCOMD_SANDBOX: "fake" }); } catch (e) { err = e; }
+      expect(err).toMatchObject({ code: "config", reason: "orchestrate_mcp" });
+      expect(err?.message).toContain("profiles.w: tools.mcp: an orchestrate agent runs nothing");
+    } finally {
+      for (const [k, v] of [["CAPCOMD_HOME", saved.home], ["CAPCOMD_AGENTS_FILE", saved.file]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+    // Pinned on an orchestrate agent anyway (a record made otherwise): its config has no servers.
+    expect(loadAgentConfig({}, "w", { provider: "claude", auth: "apikey", kind: "claude-code", toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: ["w"] }, mcp: [{ name: "docs", command: ["docs-mcp"], trust: "trusted" }] }).mcp).toBeUndefined();
+  });
+
   test("no override reaches them: a parent can't add a server to its child or move it to another sandbox", () => {
     const base = { provider: "claude", auth: "apikey" } as const;
     for (const set of [{ "sandbox.provider": "fake-host" }, { sandbox: { provider: "fake-host" } }, { "tools.mcp": [{ name: "x", command: ["x"] }] }, { "lifecycle.onEnd": [] }, { sandboxProvider: "fake-host" }, { mcp: [] }])
