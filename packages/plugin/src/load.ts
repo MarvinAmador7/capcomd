@@ -12,7 +12,7 @@ import { parseRange, satisfies } from "./semver";
  *  `tests/plugins/front-doors.test.ts` keeps it equal to the CLI's. */
 export const KERNEL_COMMANDS = [
   "agent-drive", "agents", "approve", "auth", "await", "budget", "cancel", "clients", "doctor", "env", "events", "goal",
-  "grant", "help", "inspect", "kv", "logs", "mcp", "merge", "pause", "plugins", "pr", "replay", "resume", "run", "sandbox",
+  "grant", "help", "inspect", "kv", "logs", "mcp", "merge", "pause", "plugins", "pr", "profiles", "replay", "resume", "run", "sandbox",
   "secrets", "send", "serve", "service", "setup", "skills", "spawn", "status", "task", "title", "token", "trace", "tree",
   "tui", "ui", "upgrade", "verify", "version", "wait-any", "check", "hermes",
 ] as const;

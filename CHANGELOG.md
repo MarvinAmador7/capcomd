@@ -9,13 +9,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `SKILL.md` in its instructions when it starts, the way `capcomd send --skill` sends skills with a message: from the
   profile's own `skills/<name>/SKILL.md`, or from your `~/.claude/skills` with `source: user`. Skills are read when an
   agent is spawned and the agent keeps them (pinned by each file's sha256), so editing a skill changes the next agents,
-  not running ones; `hash: sha256:…` in the profile refuses a `SKILL.md` that has changed. `capcomd agents show`
+  not running ones; `hash: sha256:…` in the profile refuses a `SKILL.md` that has changed. `capcomd profiles show`
   prints each skill's source and hash. Naming `capcomd-orchestration` is allowed in a profile that may spawn, and its
   agents still get it once. See docs/agents.md, "Skills in a profile".
 - The skills an agent gets when it starts (the orchestration skill, a plugin's) are now each in a `<skill name="…">`
   block in its instructions, as a message's skills are; their text is unchanged.
 - New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
-  `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd agents list|show --json`, which also
+  `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd profiles list|show`, which also
   give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether
   it leads) and a `cost` tier for its model (`low`, `medium`, `high`). `capcomd_profiles` adds each profile's
   `capacity`: how many of it can start now, 0 while its login waits for a usage limit to reset. `permissions:
@@ -23,7 +23,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   A profile's `identity.title` and `identity.avatar` aren't passed to one that `extends` it. See docs/agents.md,
   "Profile files".
 - Fix: a profile whose allowed tools include a plain `Bash` (any command) is no longer described as read-only (a
-  reviewer) in `capcomd_profiles` and `capcomd agents list`; a shell limited to commands (`Bash(bun test:*)`) still is.
+  reviewer) in `capcomd_profiles` and `capcomd profiles list`; a shell limited to commands (`Bash(bun test:*)`) still is.
 - New: `capcomd hermes` says whether Hermes is installed and has capcomd (what `capcomd setup check` says for it), and
   `capcomd hermes add [--approvals elicit|human] [--hermes-entry-per-project] [--yes]` adds capcomd to Hermes on its
   own, as `capcomd setup agent` does: its MCP server entry, the capcomd skills, and who approves merges into protected
@@ -51,14 +51,51 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `github`, `git` or `local`; a client that checks it should accept other names. Where a goal branch's pull request is
   merged ("They review and merge it on GitHub", in `capcomd_goal`, `capcomd_pr_open` and the pull request's text) names
   the run's forge.
+- New: `capcomd profiles`, the new name of `capcomd agents` (`list`, `show`, `add`, `set`, `rm`, `schema`,
+  `validate`). `capcomd profiles show <name>` now prints where a profile comes from: the files laid together to make
+  it (the profiles it `extends`, the profile, its `override.yaml` files) and, for every value, the file that set it
+  (`--json`: `applied` and `values`). `list` shows each profile's layer (project, user or bundled) and `list --json`
+  its `version`, `format`, `path` and files. `capcomd profiles schema` prints the JSON Schema of a `profile.yaml`
+  (`capcomd profiles schema v1`: `agents.json`'s). `capcomd agents …` keeps working until the next minor release and
+  says the new name on stderr; `capcomd agents list --json` still lists its rows under `agents`, and `capcomd agents
+  schema` still prints `agents.json`'s schema.
+- New on the harness API: `GET /v1/profiles` (capability `profiles`, the `read` scope) lists every agent profile a run
+  can use, the daemon's or, with `?repo=`, a project's: each one's version, layer and files, provider, model, tool
+  mode, what it does, and whether its login is there. Profiles that can't be read come back with `error` saying why.
+- Fix: an `agents.json` that isn't valid JSON is reported by where it goes wrong, without quoting what is in the file
+  (as profile files already were), so an error shown in the app or to an agent never repeats the file's text.
 - New: agent profiles as YAML files. Put a profile in `.capcomd/profiles/<name>/profile.yaml` (or
   `.capcomd/profiles/<name>.yaml`; JSON works too), or in `~/.capcomd/profiles/` for every project, with blocks
   (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.
   A profile can `extends: <another profile>` and change only what differs (`null` removes an inherited value), and an
   `override.yaml` in `<name>/` adjusts a profile without copying it. A prompt can live in a file next to the profile
-  (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd agents list|show|validate` see
+  (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd profiles list|show|validate` see
   these profiles; `.capcomd/agents.json` works as before, and a `profile.yaml` of the same name in the same project
   wins. `--set` takes the new paths too (`--set limits.maxTurns=10`). See docs/agents.md, "Profile files".
+- Each agent now records which version of its profile it was started with, and where that profile came from
+  (`project`, `user` or `bundled`), so an agent that outlives an edit of its profile still says what it runs with.
+  `capcomd inspect <runId> <agentId>` shows it (`[worker v3, project]`), and the `--json` answers of `spawn`,
+  `inspect` and `await` carry `profileVersion` and `profileSource`. For apps: `Agent.profileVersion` and
+  `Agent.profileSource` on `GET /v1/runs/{runId}/agents` and the `snapshot.agents` frame, and the same two fields on
+  `agent.spawned` events (both null for an agent without a profile). A profile's version is its `version:` field,
+  else 1 (a whole number up to 2^53 - 1; a larger one is refused when the profile loads); `agents.json` profiles are
+  version 1.
+- New: background jobs for agents. An agent runs a long command (a test suite, a build) with
+  `capcomd job start -- <command>` in its VM (or the `capcomd_job_start` tool): when the command ends within the
+  foreground wait (60 s by default; `--foreground-ms N`) it answers with the exit code and output; otherwise it
+  answers `running` with a job id at once, the agent keeps working, and the command's result arrives as a message in
+  its inbox when it ends. `capcomd job output <job>`, `job list` and `job kill <job>` show and stop its jobs. Jobs run
+  in the agent's own machine and keep running if capcomd restarts (their result is still delivered); they end when
+  their agent ends, and after 30 minutes by default. While a job runs the agent keeps its slot and isn't flagged idle.
+  A profile can set `jobs: {foregroundMs, max, afterTurnMs}` (how long a start waits, how many run at once, 8 by
+  default, and how long one may run); the defaults for every agent are `CAPCOMD_JOBS_FOREGROUND_MS`,
+  `CAPCOMD_JOBS_MAX` and `CAPCOMD_JOBS_AFTER_TURN_MS`. A planner or lead in orchestrate mode starts none (it runs
+  nothing). Each job is on the run's stream as `job.started` and `job.ended` (`JOB_*` in `capcomd events`), and its
+  record is the run's `_jobs/<id>` key. For plugins: `ctx.jobs` (start, get, list, cancel, wait) with `exec` jobs in
+  an agent's machine and timers (`at`, or `everyMs` until `until`; re-armed when the daemon restarts, a missed one
+  fired once), and the `job.changed` hook. See docs/spec/plugin-api.md §16.2.
+- Docker's idle-container sweep now runs on the Docker plugin's own timer (when the daemon starts and every 5 minutes,
+  as before); nothing changes for you.
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
   `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of
   always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. An installed

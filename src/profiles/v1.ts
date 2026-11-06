@@ -48,7 +48,12 @@ export interface AgentSpec {
    *  edits files, runs work commands or pushes (its provider's tool policy, and capcomd refusing to verify or merge
    *  its own ref). Needs children.allowSpawn. Default `execute`. */
   toolMode?: ToolMode;
+  /** docs/spec/plugin-api.md §16.2 (ADR-024 `jobs`): its background jobs (`capcomd job start`): how long a start waits
+   *  for the result (default 60 s; 5 s for orchestrate), how many may run at once (8), and how long one may run
+   *  (30 min). Unset: the daemon's CAPCOMD_JOBS_* or those defaults. */
+  jobs?: JobsSpec;
 }
+export interface JobsSpec { foregroundMs?: number; max?: number; afterTurnMs?: number }
 export interface ChildrenSpec {
   /** Default false: this agent may not spawn children. */
   allowSpawn?: boolean;
@@ -72,7 +77,7 @@ export const providerEfforts = (p: Provider): readonly string[] => agentSeam(p)?
 /** The level a provider's CLI uses when none is set, when it is fixed (codex: medium); null: the CLI decides (claude: by model). */
 export const providerDefaultEffort = (p: Provider): string | null => agentSeam(p)?.describe().defaultEffort ?? null;
 
-/** JSON Schema (draft 2020-12) for `.capcomd/agents.json`; `capcomd agents schema` prints it. */
+/** JSON Schema (draft 2020-12) for `.capcomd/agents.json`; `capcomd profiles schema v1` prints it. */
 export const AGENTS_JSON_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://capcomd.dev/schema/agents-v1.json",
@@ -115,6 +120,17 @@ export const AGENTS_JSON_SCHEMA = {
         disallowedTools: { type: "array", items: { type: "string" } },
         children: { $ref: "#/$defs/children" },
         toolMode: { enum: ["execute", "orchestrate"], default: "execute", description: "orchestrate: reads, spawns and decides; never edits files, runs work commands or pushes (needs children.allowSpawn)" },
+        jobs: { $ref: "#/$defs/jobs" },
+      },
+    },
+    jobs: {
+      type: "object",
+      additionalProperties: false,
+      description: "Background jobs (`capcomd job start`): a long command answers \"running\" after foregroundMs and its result comes as a message.",
+      properties: {
+        foregroundMs: { type: "integer", minimum: 0, description: "How long a start waits for the result before answering running (default 60000; 5000 for orchestrate)" },
+        max: { type: "integer", minimum: 1, description: "Jobs running at once (default 8)" },
+        afterTurnMs: { type: "integer", minimum: 1000, description: "How long a job may run before it is stopped (default 1800000)" },
       },
     },
     children: {
@@ -176,6 +192,14 @@ export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { 
   if (Array.isArray(s.egress) && s.egress.length === 0) at(`${k$("egress")} must not be empty (boxd treats [] as unrestricted)`);
   for (const k of ["systemPrompt", "appendSystemPrompt", "description"]) if (s[k] !== undefined && typeof s[k] !== "string") at(`${k$(k)} must be a string`);
   if (s.children !== undefined) e.push(...validateChildren(name, s.children, `${labels.prefix}.children`));
+  if (s.jobs !== undefined) {
+    const j = s.jobs as Record<string, unknown>;
+    if (!j || typeof j !== "object" || Array.isArray(j)) at(`${k$("jobs")} must be an object`);
+    else {
+      for (const k of Object.keys(j)) if (!Object.hasOwn(AGENTS_JSON_SCHEMA.$defs.jobs.properties, k)) at(`${k$("jobs")}: unknown field "${k}"`);
+      for (const [k, min] of [["foregroundMs", 0], ["max", 1], ["afterTurnMs", 1000]] as const) if (j[k] !== undefined && (!Number.isInteger(j[k]) || (j[k] as number) < min)) at(`${k$("jobs")}.${k} must be an integer >= ${min}`);
+    }
+  }
   if (s.toolMode !== undefined && s.toolMode !== "execute" && s.toolMode !== "orchestrate") at(`${k$("toolMode")} must be "execute" or "orchestrate"`);
   // §16.1: an orchestrator with no children can do nothing.
   if (s.toolMode === "orchestrate" && (s.children as ChildrenSpec | undefined)?.allowSpawn !== true) at(`${k$("toolMode")} orchestrate needs children.allowSpawn: an orchestrate agent does its work through the agents it spawns`);
@@ -220,7 +244,7 @@ export function leadText(s: Pick<AgentSpec, "children">): string | null {
 
 /**
  * What `toolMode: orchestrate` means for whoever gives the agent a task (plugin API §16.1), in plain words: the
- * profile descriptions (capcomd_profiles, `capcomd agents list`), the planner's brief and the orchestration skill say it.
+ * profile descriptions (capcomd_profiles, `capcomd profiles list`), the planner's brief and the orchestration skill say it.
  */
 export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, git history and any branch, every agent's logs, verify and merge reports with their full check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs it to run code itself (its helpers write and test the code). Checks run at verify and merge, and their results are readable; capcomd check runs them on the combined code when it asks";
 
@@ -233,7 +257,7 @@ export function readOnlyTools(allowed: readonly string[] | undefined): boolean {
   return !!allowed?.length && !allowed.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\((:?\*)?\))?$/.test(t.trim()));
 }
 
-/** What a profile is for, in plain words (capcomd_profiles, `capcomd agents list`). */
+/** What a profile is for, in plain words (capcomd_profiles, `capcomd profiles list`). */
 export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & { toolMode?: string }): string {
   const lead = leadText(s);
   const mode = s.toolMode === "orchestrate" ? `. ${ORCHESTRATE_TEXT}` : "";

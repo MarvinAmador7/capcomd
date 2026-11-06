@@ -33,6 +33,12 @@ capcomd result --summary "done"
     expect(typeof e.entitySeq).toBe("number");
   });
   expect(ev.some((e: any) => e.agentId === root)).toBe(true);
+  // AGENT_SPAWNED names the profile's version and layer next to its name (ADR-024 §2.4): the harness's agents.json is
+  // the project's layer, its profiles version 1. The spawn's own answer and the agent's record say the same.
+  const spawnedEv = ev.filter((e: any) => e.type === "AGENT_SPAWNED");
+  expect(spawnedEv.map((e: any) => [e.event.profile, e.event.profileVersion, e.event.profileSource]).sort()).toEqual([["planner", 1, "project"], ["worker", 1, "project"]]);
+  const rec = (await w.cj(["inspect", run, root])).j;
+  expect([rec.profile, rec.profileVersion, rec.profileSource]).toEqual(["planner", 1, "project"]);
   const since = (await w.cj(["events", run, "--since-seq", String(ev.length - 2)])).j.events;
   expect(since.map((e: any) => e.seq)).toEqual([ev.length - 1, ev.length]);
 

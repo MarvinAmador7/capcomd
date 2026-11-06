@@ -52,6 +52,14 @@ export const AgentResult = z.looseObject({
 const finish = { result: AgentResult, spent: U, budget: U };
 /** Which AI provider an agent runs on (harness.v1 Agent.provider, agent.spawned agent.provider). */
 export const AgentProvider = z.enum(["claude", "codex"]);
+/** Where an agent's profile came from (harness.v1 Agent.profileSource, agent.spawned profileSource; ADR-024 §2.3): the
+ *  layer its name was found in. Same values as `src/profiles/load.ts` ProfileLayer. */
+export const ProfileSource = z.enum(["project", "user", "bundled"]);
+/** Agent.profileVersion, agent.spawned profileVersion (ADR-024 §2.4). */
+export const ProfileVersion = z.number().int().positive();
+/** The descriptions both carry (a description on the nullable field replaces the inner one in the published schema). */
+export const PROFILE_VERSION_TEXT = "The version of its profile the agent was spawned with: the profile's `version`, else 1 (an agents.json profile is 1). Fixed at spawn, so it says what the agent runs with whatever the profile says now";
+export const PROFILE_SOURCE_TEXT = "The layer its profile was found in at spawn: project (the project's .capcomd/profiles/ or .capcomd/agents.json), user (~/.capcomd/profiles/ or the user's agents.json) or bundled (shipped with capcomd). More may be added: show an unknown one as it is";
 /** agent.spawned `agent`: the agent's profile as resolved at spawn (provider, auth, limits, …) plus the runner the daemon
  * chose. Open: other profile fields come along, and may be added. */
 export const SpawnedAgent = z.looseObject({
@@ -76,6 +84,7 @@ export const SCOPE_EVENT_TYPES = [
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
 	"MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED",
 	"CHECK_STARTED", "CHECK_PASSED", "CHECK_FAILED",
+	"JOB_STARTED", "JOB_ENDED",
 	"PLUGIN_GATE_DENIED", "PLUGIN_GATE_BYPASSED",
 	"TASK_ADDED", "TASK_CLAIMED", "TASK_LEASE_EXPIRED", "TASK_DONE", "TASK_RELEASED",
 	"KV_PUT", "KV_DELETE", "KV_CAS",
@@ -113,7 +122,10 @@ export const LegacyEventShapes = {
 	"run.pr_opened": { branch: S, base: S, number: N.describe("The pull request's number on GitHub"), url: nS.describe("Its page on GitHub"), by: S.describe("Who opened it: client:<id>, operator or driver"), ...cause },
 	"run.branch_kept": { branch: S, base: S, by: S.describe("Who chose to keep it: client:<id>, operator or driver"), ...cause },
 	"run.titled": { title: AgentTitleText.describe(`Agent-written text: render as plain text, never markdown, links or actions. The run's new title from its planner (\`capcomd title --run\`): Run.title with titleSource agent, unless the run has a label of its own. 1 to ${TITLE_WORDS_MAX} lowercase words`), setBy: S.describe("The agent that named the run (its planner)"), ...cause },
-	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"), budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(),
+	"agent.spawned": { parent: nS, depth: N, profile: nS.describe("Profile name, lowercase (same type as Agent.profile)"),
+		profileVersion: ProfileVersion.nullable().optional().describe(`${PROFILE_VERSION_TEXT} (Agent.profileVersion). null without a profile (a fake agent, or CAPCOMD_AGENT naming a provider). Absent from older daemons`),
+		profileSource: ProfileSource.nullable().optional().describe(`${PROFILE_SOURCE_TEXT} (Agent.profileSource). null without a profile. Absent from older daemons`),
+		budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(),
 		title: AgentTitleText.optional().describe("Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title: its title at spawn (Agent.title): its spawner's (`spawn --title`; agent.titled follows), else derived from the task. Absent when it has none, and from older daemons"),
 		titleSource: AgentTitleSource.optional(), ...cause },
 	"agent.started": { ...cause },
@@ -159,6 +171,20 @@ export const LegacyEventShapes = {
 	"check.started": checkStart,
 	"check.passed": checkEnd,
 	"check.failed": checkEnd,
+	"job.started": {
+		jobId: S.describe("The job (job-…): background work an agent or a plugin started (`capcomd job start`, plugin API §16.2)"),
+		kind: z.enum(["exec", "timer"]).describe("exec: a command in its owner's machine; timer: a clock that fires. More may be added"),
+		owner: S.describe("Whose it is: an agent id (agt-…; it ends with that agent), run, or plugin"),
+		label: T.describe("Agent-written text: render as plain text. What it is, in its starter's words (for exec, the command by default)"),
+		plugin: nS.describe("The plugin that started it; null when an agent did"),
+	},
+	"job.ended": {
+		jobId: S.describe("The job (job-…)"),
+		state: z.enum(["done", "failed", "killed", "lost"]).describe("done: it exited 0 (a timer: it fired its last time); failed: a non-zero exit; killed: stopped (`capcomd job kill`, its timeout, or its agent ended); lost: its process or machine went away with no exit code. More may be added"),
+		code: N.nullable().describe("Its exit code (exec); null for a timer or a job that was lost"),
+		reason: nT.describe("Why it was killed or lost, in capcomd's words; null when it ended by itself"),
+		ms: N.describe("How long it ran, in milliseconds"),
+	},
 	"plugin.gate_denied": {
 		plugin: S.describe("The plugin that denied or held it"), hook: S.describe("The gate: verify.starting, verify.judging, merge.landing, approval.deciding or trigger.admitting"),
 		entity: S.describe("What it was about: the verification (vfy-…) or merge (mrg-…) id"), decision: z.enum(["deny", "hold"]).describe("deny refused it; hold parked a merge for a person's approval"),

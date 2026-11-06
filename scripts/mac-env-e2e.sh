@@ -36,9 +36,9 @@ t=$(ms); bun src/cli/index.ts env build; step env_build $(( $(ms) - t ))
 
 echo "######## 2. agent profiles (subscription auth only)"
 export CAPCOMD_AGENTS_FILE="$OUT/agents.json"
-bun src/cli/index.ts agents add e2e-claude --provider claude --auth subscription --max-turns 20 --description "mac-env-e2e claude (plan login)" >/dev/null
-bun src/cli/index.ts agents add e2e-codex --provider codex --auth subscription --max-turns 20 --sandbox "${CAPCOMD_E2E_CODEX_SANDBOX:-workspace-write}" --description "mac-env-e2e codex (plan login)" >/dev/null
-bun src/cli/index.ts agents list
+bun src/cli/index.ts profiles add e2e-claude --provider claude --auth subscription --max-turns 20 --description "mac-env-e2e claude (plan login)" >/dev/null
+bun src/cli/index.ts profiles add e2e-codex --provider codex --auth subscription --max-turns 20 --sandbox "${CAPCOMD_E2E_CODEX_SANDBOX:-workspace-write}" --description "mac-env-e2e codex (plan login)" >/dev/null
+bun src/cli/index.ts profiles list
 
 echo "######## 3. auth login where missing, then verify"
 for p in $PROVIDERS; do

@@ -33,7 +33,7 @@ function opsChanged(c: any, opId: string): void {
   try { c.broadcast("opsChanged", { at: Date.now(), opId }); } catch { /* no connections: nothing to tell */ }
 }
 import { stableId, available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
-import type { AgentSpec } from "../profiles";
+import type { AgentSpec, ProfileLayer } from "../profiles";
 import type { AttachedSkill } from "../agents/skills";
 import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
 import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
@@ -152,6 +152,11 @@ function rowToAgent(r: any) {
     driveEnv: r.drive_env ? (JSON.parse(r.drive_env as string) as Record<string, string>) : null,
     /** Its title (capability agents.title): the user's, the latest agent-set one, the rename counts; null: nobody named it. */
     titleState: r.title ? (JSON.parse(r.title as string) as TitleState) : null,
+    /** ADR-024 §2.4: the version of its profile it was spawned with and the layer that profile came from (harness.v1
+     *  Agent.profileVersion, profileSource); null without a profile (a fake agent, CAPCOMD_AGENT=claude-code) or on a
+     *  row that predates them. */
+    profileVersion: r.profile_version == null ? null : Number(r.profile_version),
+    profileSource: (r.profile_source as ProfileLayer | null) ?? null,
   };
 }
 export type ScopeAgent = ReturnType<typeof rowToAgent>;
@@ -362,6 +367,8 @@ export const scopeActor = actor({
       await addColumn(database, "agents_v2", "pause_requested", "TEXT");
       await addColumn(database, "agents_v2", "drive_env", "TEXT");
       await addColumn(database, "agents_v2", "title", "TEXT");
+      await addColumn(database, "agents_v2", "profile_version", "INTEGER");
+      await addColumn(database, "agents_v2", "profile_source", "TEXT");
       await database.execute(`CREATE TABLE IF NOT EXISTS awaits (waiter TEXT NOT NULL, target TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (waiter, target))`);
       await database.execute(`CREATE TABLE IF NOT EXISTS revoked (jti TEXT PRIMARY KEY, reason TEXT, at INTEGER NOT NULL)`);
       await database.execute(`CREATE TABLE IF NOT EXISTS messages (seq INTEGER PRIMARY KEY, to_agent TEXT NOT NULL, from_agent TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL, idem_key TEXT UNIQUE)`);
@@ -571,6 +578,9 @@ export const scopeActor = actor({
         driveEnv?: Record<string, string>;
         /** Its title, from its spawner (`spawn --title`; already normalized). Not part of the params hash: a retry is the same spawn. */
         title?: { title: string; by: "parent" | "driver"; setBy: string };
+        /** ADR-024 §2.4: the resolved profile's version and layer. Not part of the params hash: a retry after the
+         *  profile was edited is the same spawn, and keeps the version it was first recorded with. */
+        profileVersion?: number | null; profileSource?: ProfileLayer | null;
         /** Its profile's skills' SKILL.md texts (ADR-024 §7 step 5), pinned by hash in `spec.skills`: kept as attachments
          *  (content-addressed), so whoever prepares the agent gives it exactly what was resolved at spawn. */
         skillTexts?: string[];
@@ -627,13 +637,14 @@ export const scopeActor = actor({
         try { if (repoKv.length) runRepo = envVar("REPO", JSON.parse(repoKv[0]!.v as string) ?? {}); } catch { /* unreadable: fall back */ }
         const workspace = workspaceOf(runRepo ?? envVar("REPO"));
         await tx.execute(
-          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace, drive_env)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents_v2 (agent_id, run_id, parent, depth, profile, ref, spec, limits, task, contract, status, budget, spent, result, idem_key, params_hash, created_at, updated_at, workspace, drive_env, profile_version, profile_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '{}', NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
           params.agentId, params.runId, params.parent ?? null, d.depth, params.profile, params.ref,
           params.spec ? JSON.stringify(params.spec) : null, JSON.stringify(d.limits), params.task,
           params.contract ? JSON.stringify(params.contract) : null, JSON.stringify(d.budget), params.key ?? null, params.paramsHash, now, now,
           workspace ? JSON.stringify(workspace) : null,
-          params.driveEnv && Object.keys(params.driveEnv).length ? JSON.stringify(params.driveEnv) : null
+          params.driveEnv && Object.keys(params.driveEnv).length ? JSON.stringify(params.driveEnv) : null,
+          params.profileVersion ?? null, params.profileSource ?? null
         );
         killpoint("scope.spawn.mid");
         // Same redaction path as message bodies: the row keeps the raw task for the worker; event + attachment are redacted.
@@ -649,7 +660,8 @@ export const scopeActor = actor({
           await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", a.id, a.sha256, a.bytes, a.mediaType, String(text), now);
         }
         await addEvent(tx, "AGENT_SPAWNED", params.agentId, {
-          parent: params.parent ?? null, depth: d.depth, profile: params.profile, budget: d.budget, limits: d.limits,
+          parent: params.parent ?? null, depth: d.depth, profile: params.profile,
+          profileVersion: params.profileVersion ?? null, profileSource: params.profileSource ?? null, budget: d.budget, limits: d.limits,
           agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}), workspace,
           ...(shown.title ? { title: shown.title, titleSource: shown.titleSource } : {}),
@@ -1320,6 +1332,26 @@ export const scopeActor = actor({
       }, { name: "scopeKvWrite" });
       killpoint("kv.cas.after.before_reply");
       return out;
+    },
+
+    /**
+     * A background job's record (plugin API §16.2): kv `_jobs/<id>`, written by the kernel only (src/jobs/service.ts),
+     * with its `job.started` or `job.ended` event in the same transaction. A record that already ended stays as it is
+     * (a second settle, after a restart or from another watcher, changes nothing); `ended` says whether it had.
+     */
+    async jobWrite(c, params: { job: Record<string, any>; event?: "JOB_STARTED" | "JOB_ENDED"; agentId?: string | null; data?: Record<string, unknown> }) {
+      const k = `_jobs/${params.job.jobId}`;
+      let ended = false, version = 0;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = await tx.execute("SELECT v, version FROM kv WHERE k = ? AND deleted = 0", k);
+        const cur = r.length ? (JSON.parse(r[0]!.v as string) as Record<string, any> | null) : null;
+        if (cur && !["running", "stopping"].includes(String(cur.state))) { ended = true; version = Number(r[0]!.version); return; }
+        version = (r.length ? Number(r[0]!.version) : 0) + 1;
+        await tx.execute("INSERT INTO kv (k, v, version, writer, updated_at, deleted) VALUES (?, ?, ?, 'capcomd', ?, 0) ON CONFLICT(k) DO UPDATE SET v = excluded.v, version = excluded.version, writer = excluded.writer, updated_at = excluded.updated_at, deleted = 0",
+          k, JSON.stringify(params.job), version, Date.now());
+        if (params.event) await addEvent(tx, params.event, params.agentId ?? null, params.data ?? {}, `${params.event === "JOB_STARTED" ? "job-start" : "job-end"}-${params.job.jobId}`);
+      }, { name: "scopeJobWrite" });
+      return { version, ended };
     },
 
     async kvGet(c, params: { k: string }) {

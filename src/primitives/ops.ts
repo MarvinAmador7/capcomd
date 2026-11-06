@@ -416,7 +416,7 @@ export function spawnChecks(ref: string | null, source: Record<string, string | 
 }
 function resolveProfile(ref: string | null): ResolvedAgent {
   try { return resolveAgent(ref); } catch (e) {
-    if (e instanceof AgentConfigError) throw new RelayError("config", e.message, "Check the profile with `capcomd agents show <name>`; overrides may only narrow unless --operator.");
+    if (e instanceof AgentConfigError) throw new RelayError("config", e.message, "Check the profile with `capcomd profiles show <name>`; overrides may only narrow unless --operator.");
     throw e;
   }
 }
@@ -493,6 +493,8 @@ export async function spawnAgent(o: SpawnOpts) {
     profile: resolved.name, ref: ref ?? resolved.name,
     spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(skills.length ? { skills: skills.map(({ name, source, hash }) => ({ name, source, hash })) } : {}) },
     ...(skills.length ? { skillTexts: skills.map((s) => s.text) } : {}),
+    // ADR-024 §2.4: the version of the profile it runs with and where it came from, beside the spec they pinned.
+    profileVersion: resolved.profile?.version ?? null, profileSource: resolved.profile?.source ?? null,
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
     ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}),
     // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.
@@ -571,7 +573,8 @@ export function envSnapshotProblem(provider: unknown, source: Record<string, str
 
 export function view(a: ScopeAgent) {
   return {
-    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status, ...shownTitle(a.titleState, redactShapes(a.task)),
+    agentId: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile,
+    ...(a.profileVersion !== null ? { profileVersion: a.profileVersion, profileSource: a.profileSource } : {}), status: a.status, ...shownTitle(a.titleState, redactShapes(a.task)),
     budget: a.budget, spent: a.spent, task: a.task, key: a.key, limits: a.limits, result: a.result,
     ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...noticeView(a),
     ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),
@@ -1558,7 +1561,7 @@ export async function runReviewer(runId: string): Promise<string | undefined> {
 /** A reviewer profile's resolved spec (unknown profiles are a config error). */
 export function reviewerSpec(profile: string): Record<string, any> | null {
   try { return (resolveAgent(encodeAgentRef(profile)).spec as any) ?? null; } catch (e) {
-    if (e instanceof AgentConfigError) throw new RelayError("config", `reviewer: ${e.message}`, "Name an agent profile (`capcomd agents list`), e.g. --reviewer reviewer.");
+    if (e instanceof AgentConfigError) throw new RelayError("config", `reviewer: ${e.message}`, "Name an agent profile (`capcomd profiles list`), e.g. --reviewer reviewer.");
     throw e;
   }
 }
