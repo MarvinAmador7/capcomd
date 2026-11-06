@@ -373,7 +373,8 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
 
 - **The project's layer is the `profiles/` directory next to the agents file** (`.capcomd/agents.json` →
   `.capcomd/profiles/`), so `CAPCOMD_AGENTS_FILE`, which a run already carries to the daemon, carries it too; a project
-  with only `.capcomd/profiles/` counts as having profiles (`defaultAgentsFile`). The user's layer is
+  with only `.capcomd/profiles/` counts as having profiles (`defaultAgentsFile`, and a run the daemon starts for it,
+  `POST /v1/runs` with `repo`). The user's layer is
   `~/.capcomd/profiles/` (`$CAPCOMD_HOME/profiles`); when the agents file is the user's, there is no project layer.
 - **`agents.json` entries are profiles of the layer their file is in**; there a `profile.yaml` of the same name wins
   (with a warning), and a v2 profile may `extends` a v1 entry. With no v2 file anywhere, the result is exactly the v1
@@ -385,8 +386,10 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   doesn't apply (a warning). An override may not set `name`, `extends`, `version` or `sharing`.
 - **A `prompt.system` or `prompt.append` that is one word ending `.md` or `.txt` names a file** in the profile's
   directory, read at resolution (step 4's "prompt.* as files", pulled forward: the pin already has a home for the
-  text); a name outside the directory (`..`, absolute, a symlink out of it) or in a single-file profile is refused.
-- **`default: true`**: the highest layer's wins, two in one layer are an error, and it beats `agents.json`'s `default`
+  text); a name outside the directory (`..`, absolute, a symlink out of it) or in a single-file profile is refused. A
+  manifest that doesn't parse is reported by line and column, never by its text (the error can reach an agent that
+  asked for a spawn, and the file may be a link to anything on the host).
+- **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
 - **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `context`, `sandbox.provider|environment|size`,
   `jobs`, `lifecycle.onStart|onEnd`, `permissions.report`, `harness.cliVersion`) are checked and kept on the resolved

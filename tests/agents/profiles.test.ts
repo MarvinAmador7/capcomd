@@ -302,6 +302,20 @@ describe("profiles v2: loader and resolution", () => {
     expect(msg).not.toContain("host secret");
   });
 
+  test("a manifest that doesn't parse: where, never what (the file may be a link to anything on the host)", () => {
+    const w = world({ "secret.txt": "[default]\naws_secret_access_key = SUPERSECRET123\n  bad: : indent\n", "secret.json": "SUPERSECRET123\n" });
+    mkdirSync(w.at("P/"), { recursive: true });
+    symlinkSync(join(w.root, "secret.txt"), w.at("P/x.yaml"));
+    symlinkSync(join(w.root, "secret.json"), w.at("P/y.json"));
+    writeFileSync(w.at("P/z.yaml"), yaml(["name: z", "harness: { provider: claude, auth: apikey }", "harness: { provider: codex, auth: apikey }"]));
+    const msg = errorOf(() => w.load());
+    expect(msg).toContain(`${w.at("P/x.yaml")}: can't be read (invalid YAML at line 2, column 1: Unexpected scalar at node end)`);
+    expect(msg).toContain(`${w.at("P/y.json")}: can't be read (invalid JSON: JSON Parse error: Unexpected identifier)`);
+    expect(msg).toContain(`${w.at("P/z.yaml")}: can't be read (invalid YAML at line 3, column 1: Map keys must be unique)`);
+    expect(msg).not.toContain("SUPERSECRET");
+    expect(msg).not.toContain("codex");
+  });
+
   test("memory is read as context (ADR-025 D2); the layers that aren't built are refused", () => {
     const set = world({
       "P/m.yaml": yaml(["name: m", "harness: { provider: claude, auth: apikey }", "memory: { scope: project, files: [MEMORY.md], retain: 30d }"]),
@@ -315,6 +329,14 @@ describe("profiles v2: loader and resolution", () => {
     expect(checkManifest({ name: "u", memory: { scope: "user" } }, "profile", "u").join()).toContain("memory.scope: user memory isn't built");
     expect(checkManifest({ name: "u", memory: { files: ["A.md", "B.md"] } }, "profile", "u").join()).toContain("memory.files: must name one index file");
     expect(checkManifest({ name: "u", memory: {}, context: {} }, "profile", "u").join()).toContain("memory: is the old name of context: set one of them");
+    // `memory: null` in a child removes what it inherits, as `context: null` does (the parent's memory is its context).
+    const kids = world({
+      "P/m.yaml": yaml(["name: m", "harness: { provider: claude, auth: apikey }", "memory: { scope: project }"]),
+      "P/k.yaml": yaml(["name: k", "extends: m", "memory: null"]),
+      "P/j.yaml": yaml(["name: j", "extends: m", "memory: null", "context: { review: lint }"]),
+    }).load();
+    expect(kids.profiles.k!.manifest.context).toBeUndefined();
+    expect(kids.profiles.j!.manifest.context).toEqual({ providers: [{ name: "memory", layers: ["project", "run"] }], review: "lint" });
     expect(checkManifest({ name: "u", context: { limits: { k: 1 }, review: "auto" } }, "profile", "u")).toEqual([
       "context.limits.k: unknown field (briefBytes, indexLines, descriptionChars, itemBytes, proposalsPerRun)", `context.review: must be "human" or "lint"`,
     ]);

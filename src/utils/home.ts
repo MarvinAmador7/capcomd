@@ -42,9 +42,11 @@ export function tracesDir(source: Source = process.env): string {
  *  ones next to this file (src/profiles/load.ts profileLayers). */
 export function defaultAgentsFile(source: Source = process.env, cwd = process.cwd()): string {
   const project = join(cwd, ".capcomd", "agents.json");
-  if (existsSync(project) || existsSync(join(cwd, ".capcomd", "profiles"))) return project;
+  if (hasProjectProfiles(cwd)) return project;
   return useHome(source) ? join(capcomdHome(source), "agents.json") : join(PACKAGE_ROOT, ".capcomd", "agents.json");
 }
+/** Whether the checkout at `dir` has profiles of its own: a .capcomd/agents.json or a .capcomd/profiles/ directory. */
+export const hasProjectProfiles = (dir: string) => existsSync(join(dir, ".capcomd", "agents.json")) || existsSync(join(dir, ".capcomd", "profiles"));
 
 /** The user's v2 profiles (ADR-024 §2.1): ~/.capcomd/profiles (or $CAPCOMD_HOME/profiles; the checkout's
  *  .capcomd/profiles in a dev checkout), next to the user's agents.json. */

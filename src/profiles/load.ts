@@ -75,11 +75,21 @@ interface Entry { name: string; layer: ProfileLayer; path: string | null; format
 interface Layer { layer: ProfileLayer; profiles: Map<string, Entry>; overrides: Map<string, Entry> }
 
 const MANIFEST = /^(.+)\.(ya?ml|json)$/;
-/** A manifest's text as data: JSON by its extension, else YAML (JSON is YAML too; decision 4 in ADR-024 §9). */
+/**
+ * A manifest's text as data: JSON by its extension, else YAML (JSON is YAML too; decision 4 in ADR-024 §9). A parse
+ * error says where, never what is there: the message can reach an agent (a spawn it asked for), and the file may be a
+ * link to anything on the host.
+ */
 function readDoc(path: string): unknown {
   const text = readFileSync(path, "utf8");
-  if (path.endsWith(".json")) return JSON.parse(text);
-  return parseYaml(text, { uniqueKeys: true, maxAliasCount: 100 });
+  if (path.endsWith(".json")) {
+    try { return JSON.parse(text); } catch (e) { throw new Error(`invalid JSON: ${(e as Error).message.replace(/\s*["'`][^]*$/, "")}`); }
+  }
+  try { return parseYaml(text, { uniqueKeys: true, maxAliasCount: 100, prettyErrors: false }); } catch (e) {
+    const at = (e as { pos?: [number, number] }).pos?.[0];
+    const where = at === undefined ? "" : (() => { const before = text.slice(0, at).split("\n"); return ` at line ${before.length}, column ${before[before.length - 1]!.length + 1}`; })();
+    throw new Error(`invalid YAML${where}: ${(e as Error).message.replace(/:.*$/s, "")}`);
+  }
 }
 
 /** A prompt that is one word ending in .md or .txt is a file's name, not text. */

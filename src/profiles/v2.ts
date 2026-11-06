@@ -224,9 +224,10 @@ function checkMemory(m: Record<string, unknown>): string[] {
 /**
  * The manifest with `memory` read as `context` (ADR-025 §4, §10): `scope: project` (or unset) is the built-in memory
  * provider on the project and run layers, `none` is no provider; one `files` entry is that provider's index; `retain`
- * applies to every kind of item. Call after checkManifest passed.
+ * applies to every kind of item; `memory: null` removes an inherited `context`. Call after checkManifest passed.
  */
 export function withContext(doc: ProfileDoc): ProfileDoc {
+  if (doc.memory === null) { const { memory: _, ...rest } = doc; return rest.context !== undefined ? rest : { ...rest, context: null }; }
   if (!isMap(doc.memory)) return doc;
   const { memory, ...rest } = doc as { memory: Record<string, unknown> } & ProfileDoc;
   const index = Array.isArray(memory.files) ? memory.files[0] : undefined, r = memory.retain;
