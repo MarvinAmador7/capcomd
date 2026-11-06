@@ -80,8 +80,10 @@ src/
                   context providers; memory.ts, the project layer's provider (`.capcomd/context/` read through the
                   files mirror); limits.ts, the brief's budgets (limits.gen.ts: the eval's docs/evidence/context/
                   <model>/limits.json, regenerated with `bun scripts/gen-context-limits.ts`); providers.ts, the active
-                  providers by name; groundray.ts, a brain's provider and the project's brain mappings (`capcomd
-                  context brain`); project.ts, the project's `context` settings and their copy kept with a run
+                  providers by name; capture.ts, the candidates an agent's result.data.context makes; scan.ts, the
+                  seeded secret scan that refuses (capture and lint); lint.ts, `capcomd context lint` and index.md;
+                  groundray.ts, a brain's provider and the project's brain mappings (`capcomd context brain`);
+                  project.ts, the project's `context` settings and their copy kept with a run
   cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
                   front door's registration, front-doors.ts); groups/, the kernel's commands by group; flags.ts, help.ts;
                   commands/, what they call
@@ -103,9 +105,9 @@ src/
                   a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), skill-orchestration.ts, the orchestration
-                  skill as an agent.preparing patch, context.ts, the context router's listener and `capcomd context`,
-                  and context-memory.ts and context-groundray.ts, the `memory` and `groundray` context providers: every
-                  process loads them (host.ts `localHost`);
+                  skill as an agent.preparing patch, context.ts, the context router's listeners (the brief, capture)
+                  and `capcomd context`, and context-memory.ts and context-groundray.ts, the `memory` and `groundray`
+                  context providers: every process loads them (host.ts `localHost`);
                   sources/, trigger sources (source-schedule, and timer.ts, a source's timer kept across restarts and
                   setting changes; forge-github's own is forges/github-source.ts); process.ts, how the daemon starts an
                   out-of-process plugin (filtered env, its token, its log, the chaos killpoints); storage.ts, a plugin's

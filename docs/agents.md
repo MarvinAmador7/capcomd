@@ -195,7 +195,49 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
   (`--set`, `--overrides`) can remove the block but not change it.
 - ADR-024's `memory:` block is read as `context:` (`memory: {scope: project}` is `context: {providers: [{name:
   memory}]}`). One change from what ADR-024 described: the directory is read from the repository and is never
-  written back by the agent; changes to it are reviewed commits (capture and review arrive with ADR-025 steps 2-3).
+  written back by the agent; changes to it are reviewed commits (promotion through a reviewed merge arrives with
+  ADR-025 step 3).
+
+### Lessons agents propose
+
+An agent that may spawn (a planner, a lead) is told, in its orchestration skill, to keep its working notes in kv under
+`notes/<its id>` (every agent of the run can read them) and to propose what the project should remember in its result:
+
+```bash
+capcomd result --summary "…" --data '{"context": [{"title": "Rounding", "text": "Money is rounded half-even in src/money.js; Math.round caused one-cent errors."}]}'
+```
+
+When the agent ends, capcomd collects each lesson as a candidate of the run, nothing more: it reaches
+`.capcomd/context/` only through a reviewed change. A lesson is a `text`, and at most a `title`, a `type` (`lesson`
+when it doesn't say), an `op` (`add`, `supersede`, `deprecate`) and the `target` item it supersedes or deprecates.
+
+- Who proposed it is capcomd's to say: the agent whose token declared the result, its run, profile and model. Anything
+  else a lesson says about itself (`by`, `origin`, `status`, `verified`) is ignored.
+- A lesson holding a secret is refused, never redacted: a secret capcomd put in the run (an agent's API key, a token
+  in its environment, the forge's credential), anything shaped like a credential or a long random-looking string, or a
+  path where credentials are kept (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`). So is one over 4 KB
+  (`context.limits.itemBytes`) and, when a profile sets `context.limits.proposalsPerRun`, one past the run's limit.
+- `capcomd events <runId>` shows `plugin.context.proposed` for each candidate and `plugin.context.refused` for each
+  refusal (its number and reason, never its text); `capcomd kv get <runId> _context/<agentId>` shows an agent's
+  candidates.
+
+### Checking `.capcomd/context/`: `capcomd context lint`
+
+```bash
+capcomd context lint                 # in the repository: problems exit 1, each with its file
+capcomd context lint --fix           # also (re)writes .capcomd/context/index.md from the items
+capcomd context lint --base main     # also: no id changed and no item deleted since main
+capcomd context lint --run <runId>   # also: every outcome an item names is a passed verify or landed merge of the run
+```
+
+It checks that `.capcomd/context/` holds items only (`memory/<slug>.md`, `facts/…`, `index.md`, `log.md`); that each
+item has frontmatter with an `id` and a `type`, and well-formed `status`, dates, `supersedes`/`superseded_by`,
+`paths`, `outcomes`, `helpful`/`harmful`; that ids are unique; that supersession is reciprocal (A `supersedes: [B]`
+and B `superseded_by: [A]`) and has no cycle; that no file holds a secret (the same check as a proposed lesson's); and
+that `index.md` is what `--fix` writes. An item is never deleted (set `status: deprecated`), and its id never changes
+(supersede it with a new one). Warnings don't fail it: a stale item, a description the brief cuts, a body over 4 KB,
+a body that reads like an instruction or a command. A link in `.capcomd/context/` (or the directory being one) is a
+problem, and `--fix` never writes `index.md` through one.
 
 ### Business knowledge: a groundray brain
 

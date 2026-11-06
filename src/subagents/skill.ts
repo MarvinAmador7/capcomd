@@ -135,5 +135,16 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
 - Report progress with \`capcomd heartbeat "<note>"\` on long steps; silent agents are flagged stuck.
 - \`capcomd handoff --task …\` passes the rest of your task to a successor; then exit.
 - \`capcomd help\` lists every command.
+
+## Notes and lessons
+- Keep your working notes (your plan, what you found, what is left) in kv under notes/${o.agentId}:
+  \`capcomd kv put notes/${o.agentId} '{"plan": "…"}'\`. They outlast a compacted context. Every agent of the run can
+  read them, so nothing in them is private.
+- A lesson this project should remember (something true about the repository that a later agent would otherwise
+  find out the hard way: what went wrong, and what avoids it) goes in your result:
+  \`capcomd result --summary "…" --data '{"context": [{"title": "…", "text": "…"}]}'\`. Say what is true, not what to
+  do; leave out what the repository or AGENTS.md already says, and anything out of date within a week (that is a
+  note). A lesson is a candidate: it reaches the project's memory only through a reviewed change, and one holding a
+  secret, a credential or a path to one is refused.
 ${o.orchestrate ? orchestrateSkill({ mcp: o.mcp }) : ""}${goal}`;
 }
