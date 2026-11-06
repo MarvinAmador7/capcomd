@@ -155,7 +155,7 @@ describe("a proposal to a brain (ADR-025 step 5)", () => {
     const create = cs[2]!.argv;
     expect(create).not.toContain("--apply");
     expect(cs[3]!.argv).toContain("--apply");
-    const flag = (a: string[], f: string) => a[a.indexOf(f) + 1];
+    const flag = (a: string[], f: string) => a.find((x) => x.startsWith(`${f}=`))?.slice(f.length + 1) ?? a[a.indexOf(f) + 1];
     expect([flag(create, "--actor"), flag(create, "--method"), flag(create, "--type"), flag(create, "--brain"), flag(create, "--confidence")]).toEqual(["human:operator", "agent-generated", "policy", "acme", "low"]);
     expect(flag(create, "--description")).toBe("Damaged goods are refunded in full, shipping included.");
     for (const c of cs) {
@@ -180,14 +180,17 @@ describe("a proposal to a brain (ADR-025 step 5)", () => {
     expect(again).toEqual(first);
     expect(await r.sha(branch)).toBe(tip);
     expect(calls().filter((c) => c.argv[0] === "knowledge")).toHaveLength(2);
-    // Another proposal of the same agent: a second commit on its branch, the same pull request, as capcomd this time.
-    const second = await p.propose(handle, proposal("Late fees", "A late invoice accrues 1% a month.", "decision"), { kind: "agent", agentId: AGENT, runId: RUN }, conformanceCall(120_000));
+    // Another proposal of the same agent: a second commit on its branch, the same pull request, as capcomd this time. Its
+    // title, the agent's text, looks like an option: it stays the title (the plan is never applied by it).
+    const second = await p.propose(handle, proposal("--apply late fees", "A late invoice accrues 1% a month.", "decision"), { kind: "agent", agentId: AGENT, runId: RUN }, conformanceCall(120_000));
     expect(second.where).toBe(first.where);
     expect(second.id).not.toBe(first.id);
     expect((await r.seed.ok(["fetch", "-q", "origin"]), await r.seed.ok(["rev-list", "--count", `${tip}..origin/${branch}`]))).toBe("1");
     expect(fake.pulls).toHaveLength(1);
-    const create = calls().filter((c) => c.argv[0] === "knowledge").at(-1)!.argv;
-    expect(create[create.indexOf("--actor") + 1]).toBe(`capcomd/${VERSION}`);
+    const [plan, create] = calls().filter((c) => c.argv[0] === "knowledge").slice(-2).map((c) => c.argv);
+    expect(plan).not.toContain("--apply");
+    expect(plan).toContain("--title=--apply late fees");
+    expect(create).toContain(`--actor=capcomd/${VERSION}`);
   }, 120_000);
 
   test("refused: a commit outside the bundle is never pushed; no groundray; a forge without pull requests leaves the branch", async () => {

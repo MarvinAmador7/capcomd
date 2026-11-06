@@ -11,7 +11,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writ
 import { dirname, join } from "path";
 
 const argv = process.argv.slice(2);
-const opt = (name: string): string | undefined => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
+/** An option's value, given as `--name value` or `--name=value`. */
+const opt = (name: string): string | undefined => {
+  const eq = argv.find((a) => a.startsWith(`${name}=`));
+  if (eq !== undefined) return eq.slice(name.length + 1);
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
 const has = (name: string) => argv.includes(name);
 const out = (v: unknown) => { process.stdout.write(`${JSON.stringify(v, null, 2)}\n`); process.exit(0); };
 const die = (code: number, msg: string): never => { process.stderr.write(`${msg}\n`); process.exit(code); };

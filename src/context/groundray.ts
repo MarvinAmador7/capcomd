@@ -1,5 +1,5 @@
 // A company's facts from a brain (ADR-025 §11.2, step 4; the `context-groundray` built-in, src/plugins/context-groundray.ts):
-// the context provider `groundray`, read-only. A brain is a git repository holding an OKF bundle (groundray's: `brain.yaml`
+// the context provider `groundray`. A brain is a git repository holding an OKF bundle (groundray's: `brain.yaml`
 // at its root naming the bundle `knowledge/`; any OKF producer's bundle in a directory works the same), so reads need
 // neither the groundray CLI nor its catalog: capcomd reads the files at a pinned commit, through the same parser and
 // lexical search as the project's memory (src/context/memory.ts).

@@ -173,7 +173,6 @@ function answer(r: Run, what: string): Record<string, unknown> {
 export async function writeToBrain(brain: BrainTarget, draft: BrainDraft, actor: string, deps: WriteDeps, c: SeamCall): Promise<BrainWritten> {
   const problem = draftProblem(draft);
   if (problem) throw new PluginError("invalid", `brain ${brain.name} can't take this proposal: it ${problem}`);
-  const { Git } = await import("../merge/git");
   const { initHostRepo, remoteGit } = await import("../merge/host-git");
   const branch = proposalBranch(draft.origin);
   const source = proposalSource(draft);
@@ -234,18 +233,19 @@ export async function writeToBrain(brain: BrainTarget, draft: BrainDraft, actor:
     for (const d of ["home", "tmp", "config", "data", "cache"]) mkdirSync(join(home, d), { recursive: true });
     answerOrOk(await groundray(deps.bin, home, ["setup", "--non-interactive", "--search-mode", "keyword", "--data-dir", join(home, "data", "groundray"), "--cache-dir", join(home, "cache", "groundray")], c), "setup");
     const added = answer(await groundray(deps.bin, home, ["brain", "add", authoring, "--json"], c), "brain add");
-    if (added.slug !== brain.slug || (added.id !== undefined && added.id !== brain.id)) throw new PluginError("invalid", `the repository mapped as brain ${brain.name} is another brain at its tip (${String(added.slug).slice(0, 63)})`, `Map it again: capcomd context brain add ${brain.name} ${brain.repo}`);
+    if ((typeof added.slug === "string" && added.slug !== brain.slug) || (typeof added.id === "string" && added.id !== brain.id)) throw new PluginError("invalid", `the repository mapped as brain ${brain.name} is another brain at its tip (${String(added.slug).slice(0, 63)})`, `Map it again: capcomd context brain add ${brain.name} ${brain.repo}`);
     const bodyFile = join(home, "tmp", "body.md"), sourcesFile = join(home, "tmp", "sources.json");
     writeFileSync(bodyFile, draft.body.endsWith("\n") ? draft.body : `${draft.body}\n`);
     writeFileSync(sourcesFile, JSON.stringify([source]));
     const now = deps.now?.() ?? new Date();
-    const create = [
-      "knowledge", "create", "--brain", brain.slug, "--type", draft.type, "--title", draft.title.trim(), "--description", descriptionOf(draft.body, draft.title),
-      "--actor", actor, "--method", "agent-generated", "--body-file", bodyFile, "--sources-file", sourcesFile,
-      "--path", `inbox/${slugOf(draft.title)}-${proposalKey(draft).slice(0, 6)}.md`,
-      "--confidence", "low", "--confidence-basis", `Proposed by agent ${draft.origin.agentId} of capcomd run ${draft.origin.runId}${actor.startsWith("human:") ? `, sent by ${actor}` : ""}; no one has verified it yet.`,
-      "--timestamp", utc(now), "--json",
-    ];
+    // Every value as `--option=value`, one argument: a title the agent wrote that starts with `-` stays a title.
+    const create = ["knowledge", "create", ...Object.entries({
+      brain: brain.slug, type: draft.type, title: draft.title.trim(), description: descriptionOf(draft.body, draft.title),
+      actor, method: "agent-generated", "body-file": bodyFile, "sources-file": sourcesFile,
+      path: `inbox/${slugOf(draft.title)}-${proposalKey(draft).slice(0, 6)}.md`, confidence: "low",
+      "confidence-basis": `Proposed by agent ${draft.origin.agentId} of capcomd run ${draft.origin.runId}${actor.startsWith("human:") ? `, sent by ${actor}` : ""}; no one has verified it yet.`,
+      timestamp: utc(now),
+    }).map(([k, v]) => `--${k}=${v}`), "--json"];
     answer(await groundray(deps.bin, home, create, c), "knowledge create (plan)");
     const saved = answer(await groundray(deps.bin, home, [...create, "--apply"], c), "knowledge create --apply");
     const itemId = typeof saved.item_id === "string" ? saved.item_id : "";
