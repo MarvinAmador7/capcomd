@@ -151,10 +151,13 @@ packages/
                   blocks/1 tree; pure functions (no imports from src/), own tsconfig, tests and golden fixtures
   bot-avatar/   - (proposal) deterministic pixel bot avatars: agent id + role + size → SVG, from a parts catalog;
                   pure, no dependencies; catalog.json and golden bots for the Swift renderer
-  plugin/       - @capcomd/plugin (private): the plugin API's manifest schema and loading, context, hook registry,
+  plugin/       - @capcomd/plugin: the plugin API's manifest schema and loading, context, hook registry,
                   seams, protocol and its client library (client.ts `connect`), the host's machinery (src/host/: states,
                   order, dispatch, breaker, process.ts the out-of-process runtime) and the test
-                  kit, with worked examples; normative spec in docs/spec/plugin-api.md. The kernel fires hooks only
+                  kit (boot.ts: `bootWith`), with worked examples; normative spec in docs/spec/plugin-api.md, the
+                  authors' guide docs/plugins.md. The workspace package is private (its exports are the sources);
+                  scripts/pack.ts builds the published one (Node and Bun, at capcomd's version) and scripts/smoke.sh
+                  installs and uses it from Node. The kernel fires hooks only
                   as `hooks.fire("<hook>", "<mode>", …)`; `bun scripts/check-hook-modes.ts` (run by test:fast)
                   checks each site's mode against HOOKS
 tests/          - unit, scenario, agent and merge suites
@@ -182,6 +185,7 @@ What CI runs, and where (`.github/workflows/`):
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
 | `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect` with every runnable arm, below) |
 | `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
+| `ci.yml` plugin-package | `@capcomd/plugin` packed (`packages/plugin/scripts/pack.ts`), installed into a fresh project and used from Node 20, typechecked by a TypeScript 5 consumer (`packages/plugin/scripts/smoke.sh`) |
 | `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
 
@@ -208,6 +212,10 @@ and the package), and `bun run typecheck` / `test:fast` cover it. Its golden fil
 (`packages/agent-thread/fixtures/golden/*.items.json`, decoded by the Swift renderer too) are generated from the fixture
 sessions next to them; after an intended change to the thread output, refresh them with
 `bun packages/agent-thread/scripts/golden.ts` (the tests fail while they are stale). Keep new fixtures small.
+`packages/plugin` too; its published form is built by `bun packages/plugin/scripts/pack.ts [--out <dir>]` (default
+`packages/plugin/dist`, not committed) and checked by `packages/plugin/test/pack.test.ts` (test:fast) and
+`packages/plugin/scripts/smoke.sh <tgz>` (needs node and npm; CI's plugin-package job). The examples import it by name
+(`@capcomd/plugin`, the package referring to itself), as a plugin author's code does.
 `packages/bot-avatar` works the same way: its `fixtures/catalog.json` and `fixtures/golden/bots.json` refresh with
 `bun packages/bot-avatar/scripts/golden.ts`; a change to any golden bot means existing agents get a new face.
 
@@ -321,8 +329,8 @@ and workflow tests use to check that a crashed step resumes. Named killpoints:
 CI builds releases (`.github/workflows/release.yml`); [AGENTS.md](AGENTS.md) has the rules (Semantic Versioning,
 the changelog, what never to do by hand). By hand, before tagging:
 
-1. In a `release: vX.Y.Z` commit, bump `version` in `package.json` and in both plugin manifests under
-   `plugins/capcomd/`; in `CHANGELOG.md`, rename `## Unreleased` to
+1. In a `release: vX.Y.Z` commit, bump `version` in `package.json`, in both plugin manifests under
+   `plugins/capcomd/` and in `packages/plugin/package.json` (`@capcomd/plugin` is released with capcomd); in `CHANGELOG.md`, rename `## Unreleased` to
    `## X.Y.Z (YYYY-MM-DD)` and add a new empty `## Unreleased` above it (CI checks both stay in step:
    `bun scripts/release-notes.ts --check`). `bun scripts/release-notes.ts vX.Y.Z` prints the release notes, or why
    it can't.
@@ -344,6 +352,12 @@ npm: the workflow publishes the exact package it tested, with provenance, under 
 `X.Y.Z-rc.N`). It authenticates with the repository secret `NPM_TOKEN` (an npm automation token), or with npm
 trusted publishing once that's configured for this repository on npmjs.com (then the secret can go). A version
 that's already on npm is skipped, so re-runs are safe. Never `npm publish` by hand.
+
+`@capcomd/plugin`, the plugin API package, is published the same way and at the same version by the `npm-plugin` job,
+only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (off by default: the `@capcomd` scope must exist
+on npmjs.com and the token or trusted publishing must be allowed to publish to it). The job packs it from the tag
+(`packages/plugin/scripts/pack.ts`), installs and uses it from Node (`packages/plugin/scripts/smoke.sh`) and publishes
+that tarball; the GitHub release doesn't wait for it.
 
 Binaries: the workflow builds the single executable for darwin-arm64, darwin-x64, linux-x64 and linux-arm64 on one
 Linux runner (`scripts/build-binary.ts --target T`), then installs each with `install.sh` and drives it without Bun

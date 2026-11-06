@@ -1,8 +1,8 @@
 // The test kit (spec §14.5): `@capcomd/plugin/testkit`. The fake context is the host's own context (host/context.ts)
 // over an in-memory hook registry, so a plugin is held to the same manifest, scope and dispatch rules it meets in the
-// daemon. `bootWith` and the forge conformance suite need a daemon and the kernel's seams; they land with spec §17.2
-// steps 2-6 and refuse with `unsupported` until then. The sandbox suite is ./conformance.ts (step 3), the agent suite
-// ./agent-conformance.ts (step 4).
+// daemon. `bootWith` (./boot.ts) boots a real daemon with the plugin, through the capcomd the test names. The sandbox
+// suite is ./conformance.ts, the agent suite ./agent-conformance.ts, the context suite ./context-conformance.ts; the
+// forge suite isn't in the kit: only built-ins are forges (the kernel tests them in tests/plugins/forges.test.ts).
 import { PluginError } from "./errors";
 import { HOOKS, type HookCall, type HookName, type HookPayload, type HookResult } from "./hooks";
 import { readManifest } from "./load";
@@ -17,6 +17,9 @@ import { sandboxCases, type SandboxConformanceOptions } from "./conformance";
 import { agentCases, type AgentConformanceOptions } from "./agent-conformance";
 import { contextCases, type ContextConformanceOptions } from "./context-conformance";
 import type { ContextProvider } from "./context-layer";
+import { bootWith, type BootedDaemon, type BootOptions } from "./boot";
+
+export type { BootedDaemon, BootOptions } from "./boot";
 
 /** A recorded registration, so a test can assert that disposing the plugin removed every one (§14.1). */
 export type Registration =
@@ -52,15 +55,19 @@ export interface TestKit {
   load<C>(fake: FakeContext<C>, module: PluginModule<C>): Promise<void>;
   /** §14.1: load, assert registrations ⊆ manifest, dispose, assert nothing remains. */
   loadDispose<C>(manifest: PluginManifest, module: PluginModule<C>, config?: C): Promise<void>;
-  /** §14.3: boot a daemon on the fake sandbox with these plugins (and the built-ins) through the host, run `fn`
-   *  against its harness.v1 socket, stop it. Mocks only the agents (`CAPCOMD_SPAWN_EXEC=script`). */
-  bootWith(plugins: Array<{ dir: string } | { manifest: PluginManifest; module: PluginModule }>, fn: (daemon: { socket: string; token: string; stop(): Promise<void> }) => Promise<void>): Promise<void>;
+  /** §14.3: boot a daemon (`capcomd serve`, the capcomd `opts.capcomd` names) in a home of its own, on the fake sandbox
+   *  with scripted agents (`CAPCOMD_SPAWN_EXEC=script`), with these plugin directories as the user's plugins (and the
+   *  built-ins); wait until each is `active`, run `fn` against its harness.v1 socket and CLI, stop it, remove the home.
+   *  Mocks only the agents. A plugin runs as the daemon runs it: an out-of-process one is started, handshakes and gets
+   *  its hooks over the plugin socket (§9). */
+  bootWith(plugins: Array<{ dir: string }>, fn: (daemon: BootedDaemon) => Promise<void>, opts?: BootOptions): Promise<void>;
   /** §14.4: fire each declared hook with a generated payload and check the result's shape, the deadline and idempotency. */
   hookContract<C>(manifest: PluginManifest, module: PluginModule<C>, config?: C): Promise<void>;
   /** §14.2: the seam conformance suites. */
   conformance: {
     sandbox(make: () => SandboxProvider, opts?: SandboxConformanceOptions): void;
     agent(make: () => AgentProvider, fixtures?: AgentConformanceOptions): void;
+    /** Not in the kit: throws `unsupported` (forges are built-ins; the kernel tests them, §14.2). */
     forge(make: () => Forge, fixtureRepo: string): void;
     /** ADR-025 §3.1: a context provider's suite, against the scope a test brings (a fixture repository). */
     context(make: () => ContextProvider, opts?: ContextConformanceOptions): void;
@@ -227,9 +234,7 @@ export const testkit: TestKit = {
     await loadDisposeOnce(manifest, module, config, 1);
     await loadDisposeOnce(manifest, module, config, 2);
   },
-  async bootWith() {
-    throw new PluginError("unsupported", "bootWith boots a daemon through the host; it lands with the kernel's hook sites (spec §17.2 step 2)");
-  },
+  bootWith,
   async hookContract(manifest, module, config) {
     const fake = new Fake(manifest, config, {});
     await loadInto(fake, module);
@@ -264,7 +269,9 @@ export const testkit: TestKit = {
         for (const c of agentCases(make(), fixtures)) test(c.name, c.run);
       });
     },
-    forge() { throw new PluginError("unsupported", "the forge conformance suite lands with forges as plugins (spec §17.2 step 6)"); },
+    // A seam is in process only (protocol 1 carries none, §9.6), so only a built-in can be a forge; theirs are tested by
+    // the kernel against local bare repositories (tests/plugins/forges.test.ts, tests/merge).
+    forge() { throw new PluginError("unsupported", "the forge conformance suite is not in the test kit: forges are built-in plugins (a seam is in process only, spec §9.6); see tests/plugins/forges.test.ts"); },
     context(make, opts = {}) {
       const { describe, test } = require("bun:test") as typeof import("bun:test");
       describe(`context provider conformance (ADR-025 §3.1)${opts.name ? `: ${opts.name}` : ""}`, () => {

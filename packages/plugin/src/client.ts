@@ -3,12 +3,32 @@
 // on Bun or Node alike. The hooks stream reconnects with Last-Event-ID; an answer is retried until the call's deadline;
 // a write carries an Idempotency-Key. When the host goes (stdin, the pipe the host holds, closes) the stream ends.
 import { request } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PluginError, type PluginErrorCode } from "./errors";
 import type { HookName } from "./hooks";
-import type { EmitBody, HookAnswer, HookFrame, PluginClient, ProcessEnvironment, SessionOpen, SessionOpened, StorageEntry, StoragePutBody } from "./protocol";
+import { PLUGIN_PROTOCOL_VERSION, type EmitBody, type HookAnswer, type HookFrame, type PluginClient, type ProcessEnvironment, type SessionOpen, type SessionOpened, type StorageEntry, type StoragePutBody } from "./protocol";
 
 type Res = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
+
+/** One harness.v1 request over a Unix socket with a bearer token, its body as JSON (the test kit's `bootWith` uses it
+ *  with the operator's token). */
+export function socketRequest(socket: string, token: string, method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Res> {
+  return new Promise((resolve, reject) => {
+    const data = body === undefined ? undefined : JSON.stringify(body);
+    const req = request({ socketPath: socket, path, method, headers: { host: "localhost", authorization: `Bearer ${token}`, ...(data ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(data)) } : {}), ...headers } }, (res) => {
+      let s = "";
+      res.setEncoding("utf8");
+      res.on("data", (d: string) => { s += d; });
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: s }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
 
 const CODE_OF: Record<number, PluginErrorCode> = { 400: "invalid", 401: "forbidden", 403: "forbidden", 404: "not_found", 409: "conflict", 422: "invalid" };
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((r) => { const t = setTimeout(r, ms); signal?.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true }); });
@@ -16,6 +36,21 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((r) => { c
 export interface ConnectOptions {
   /** End the hooks stream when stdin closes (the host keeps it open while it lives). Default true when stdin is a pipe. */
   endWithStdin?: boolean;
+}
+
+/** The sha256 of the plugin.json in `root` (the plugin's directory, CAPCOMD_PLUGIN_ROOT): the `manifestHash` the host
+ *  checks at the handshake (§9.3), so a process started from other files than the host loaded is refused. */
+export function manifestHash(root: string): string {
+  return createHash("sha256").update(readFileSync(join(root, "plugin.json"))).digest("hex");
+}
+
+/** The handshake body for this start (§9.3): its session, protocol 1, the hash of its manifest, this process's pid and
+ *  the hooks its manifest declares (`hooks` overrides them; the host refuses any other list). */
+export function sessionOpen(env: ProcessEnvironment = process.env as unknown as ProcessEnvironment, hooks?: HookName[]): SessionOpen {
+  const root = env.CAPCOMD_PLUGIN_ROOT;
+  if (!root || !env.CAPCOMD_PLUGIN_SESSION) throw new PluginError("invalid", "not started by capcomd: CAPCOMD_PLUGIN_ROOT and CAPCOMD_PLUGIN_SESSION are required (§9.2)");
+  const declared = () => Object.keys((JSON.parse(readFileSync(join(root, "plugin.json"), "utf8")) as { contributes?: { hooks?: Record<string, unknown> } }).contributes?.hooks ?? {}) as HookName[];
+  return { session: env.CAPCOMD_PLUGIN_SESSION, protocol: PLUGIN_PROTOCOL_VERSION, manifestHash: manifestHash(root), pid: process.pid, hooks: hooks ?? declared() };
 }
 
 /** A PluginClient for this process's environment (§9.2). */
@@ -31,19 +66,7 @@ export function connect(env: ProcessEnvironment = process.env as unknown as Proc
   }
   const deadlines = new Map<string, number>();
 
-  const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Res> => new Promise((resolve, reject) => {
-    const data = body === undefined ? undefined : JSON.stringify(body);
-    const req = request({ socketPath: socket, path, method, headers: { host: "localhost", authorization: `Bearer ${token}`, ...(data ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(data)) } : {}), ...headers } }, (res) => {
-      let s = "";
-      res.setEncoding("utf8");
-      res.on("data", (d: string) => { s += d; });
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: s }));
-      res.on("error", reject);
-    });
-    req.on("error", reject);
-    if (data) req.write(data);
-    req.end();
-  });
+  const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => socketRequest(socket, token, method, path, body, headers);
   const ok = async <T>(p: Promise<Res>): Promise<T> => {
     const r = await p;
     if (r.status >= 200 && r.status < 300) return (r.body ? JSON.parse(r.body) : undefined) as T;

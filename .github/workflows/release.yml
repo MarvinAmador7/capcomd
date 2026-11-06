@@ -9,7 +9,9 @@ name: Release
 # until there's a Developer ID, installed with its cask from a throwaway tap first), their SHA-256 and the changelog
 # section as notes, and the Homebrew formula and cask in MarvinAmador7/homebrew-tap (needs the HOMEBREW_TAP_DEPLOY_KEY
 # secret; skipped with a warning without it, and for prereleases). Re-running for the same tag updates the release in
-# place (npm versions are immutable: an already-published version is skipped).
+# place (npm versions are immutable: an already-published version is skipped). With the repository variable
+# PUBLISH_PLUGIN_PACKAGE set to 'true' (off by default), the plugin API package @capcomd/plugin of the same version is
+# published to npm too (packages/plugin/scripts/pack.ts, checked by scripts/smoke.sh first).
 # The live boxd/GitHub/agents e2e (scripts/mac-subagents-e2e.sh) stays a manual step before tagging (DEVELOPMENT.md).
 
 on:
@@ -332,6 +334,60 @@ jobs:
           [ -n "$NODE_AUTH_TOKEN" ] || echo "::warning::no NPM_TOKEN secret: relying on npm trusted publishing for this repository"
           # `./`: a bare `dist/x.tgz` is read as the GitHub repo dist/x.tgz.
           npm publish "./dist/capcomd-$V.tgz" --provenance --access public --tag "$NPM_TAG"
+
+  npm-plugin:
+    name: Publish @capcomd/plugin to npm
+    # Off unless the repository variable PUBLISH_PLUGIN_PACKAGE is 'true' (Settings → Secrets and variables → Actions →
+    # Variables): the @capcomd scope must exist on npmjs.com, and NPM_TOKEN (or trusted publishing) must be allowed to
+    # publish to it. Then, after capcomd itself (published or skipped) and every check of the release, the plugin API
+    # package of the same version: packed from the tag (packages/plugin/scripts/pack.ts, which refuses a version other
+    # than capcomd's), installed and used from Node first (scripts/smoke.sh). An already-published version is skipped.
+    # The GitHub release doesn't wait for it.
+    needs: [prepare, test, smoke, binary-smoke, app, npm]
+    if: >-
+      ${{ !cancelled() && vars.PUBLISH_PLUGIN_PACKAGE == 'true' && (github.event_name == 'push' || inputs.publish)
+      && needs.prepare.result == 'success' && needs.test.result == 'success' && needs.smoke.result == 'success'
+      && needs.binary-smoke.result == 'success' && needs.app.result == 'success'
+      && (needs.npm.result == 'success' || needs.npm.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # npm provenance (and trusted publishing, once configured on npmjs.com)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: A recent npm (trusted publishing needs npm ≥ 11.5.1)
+        run: npm install -g npm@latest && npm --version
+
+      - run: bun install --frozen-lockfile
+
+      - name: Pack @capcomd/plugin, install it and use it from Node
+        env:
+          V: ${{ needs.prepare.outputs.version }}
+        run: |
+          bun packages/plugin/scripts/pack.ts --out dist/plugin
+          packages/plugin/scripts/smoke.sh "dist/plugin/capcomd-plugin-$V.tgz"
+
+      - name: npm publish (the tested package, with provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          V: ${{ needs.prepare.outputs.version }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
+        run: |
+          if [ "$(npm view "@capcomd/plugin@$V" version 2>/dev/null)" = "$V" ]; then echo "@capcomd/plugin@$V is already on npm"; exit 0; fi
+          [ -n "$NODE_AUTH_TOKEN" ] || echo "::warning::no NPM_TOKEN secret: relying on npm trusted publishing for this repository"
+          npm publish "./dist/plugin/capcomd-plugin-$V.tgz" --provenance --access public --tag "$NPM_TAG"
 
   publish:
     name: Publish the release

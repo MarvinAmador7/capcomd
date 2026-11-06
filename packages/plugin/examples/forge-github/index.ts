@@ -1,7 +1,7 @@
 // Worked example, spec §15.2: GitHub as a forge. Today's src/merge/github.ts HttpGitHub, src/merge/pr.ts prMerge and
 // the `gh` calls (`gh repo create`, `gh auth status`, `gh api user`) become this module. The kernel
 // keeps the target lock, the CAS on `targetSha`, integration and the checks (src/merge/direct.ts, integrate.ts).
-import { definePlugin, PluginError, type ErrorClass, type Forge, type ForgeBranches, type ForgeLogin, type ForgeRemoteCredential, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "../../src/index";
+import { definePlugin, PluginError, type ErrorClass, type Forge, type ForgeBranches, type ForgeLogin, type ForgeRemoteCredential, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "@capcomd/plugin";
 
 interface Config { api: string; pollMs: number; timeoutMs: number }
 
