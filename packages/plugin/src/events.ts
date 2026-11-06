@@ -34,7 +34,8 @@ export interface PluginEventData {
   "job.ended": { jobId: string; state: "done" | "failed" | "killed" | "lost"; code: number | null; reason: string | null; ms: number };
   /** §16.3: on the daemon stream, one per trigger the intake saw; `decision` is the audit of record-only mode. */
   "trigger.received": { source: string; id: string; thread: string; actor: string; addressed: "mention" | "direct" | null; decision: string; runId: string | null };
-  "trigger.subscribed": { source: string; thread: string; runId: string; until: string };
+  /** `until` is null while the run works and nobody set one (it ends 14 days after the run does). */
+  "trigger.subscribed": { source: string; thread: string; runId: string; until: string | null };
   "trigger.unsubscribed": { source: string; thread: string; runId: string; cause: "expired" | "unsubscribed" | "stopped" };
 }
 export type PluginEventType = keyof PluginEventData;

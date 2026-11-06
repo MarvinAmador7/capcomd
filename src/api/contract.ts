@@ -52,6 +52,15 @@ export const Run = z.object({
 	repo: z.string().nullable().describe("Repository the run works in (absolute path or remote URL)"),
 	createdAt: Timestamp.nullable(),
 	goalBranch: z.lazy(() => GoalBranchSummary).nullable().optional().describe("Capability runs.goal_branch. The run's goal branch and where it stands; null for a run without one (it merges into its target as before). Older daemons don't send it"),
+	trigger: z.lazy(() => RunTrigger).nullable().optional().describe("Capability triggers. The external event this run was started from (plugin API §16.3: a source's trigger the intake acted on); null for a run someone started. Older daemons don't send it"),
+});
+/** Run.trigger: where a run a trigger started came from, in its source's own terms. */
+export const RunTrigger = z.object({
+	source: z.string().describe("The source (github, schedule, …)"),
+	id: z.string().describe("The trigger's id at its source"),
+	thread: z.string().describe("The conversation it came from; the run follows it (trigger.subscribed)"),
+	actor: z.object({ id: z.string(), display: UntrustedText.describe("Agent-written text (here the source's name for the sender): render as plain text"), bot: z.boolean() }),
+	at: Timestamp,
 });
 /** Where a run's goal branch stands (Run.goalBranch.state, GET /v1/runs/{runId}/goal `state`). */
 export const GoalBranchState = z.enum(["working", "ready", "stopped", "pr_opened", "kept"]).describe("working: the planner is at it (reviewed work lands as it goes); ready: the planner finished, the user decides (open a pull request or keep the branch); stopped: the planner failed or was cancelled (the branch keeps what landed; a pull request can still be opened); pr_opened: a pull request into the base is open (or was merged on GitHub); kept: the user kept the branch without one. Treat a state you don't know as working");
@@ -307,6 +316,28 @@ const PluginEventData = {
 	}).describe(`${PLUGIN_EVENT}. A suspended plugin's listeners are called again`),
 } as const;
 
+/** The trigger intake's events (capability triggers; docs/spec/plugin-api.md §16.3, src/triggers/intake.ts). */
+const TRIGGER_EVENT = "Capability triggers. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon); the envelope text is daemon-written; the source's ids and thread are its own words";
+const TriggerEventData = {
+	"trigger.received": z.looseObject({
+		source: z.string().describe("The source that sent it (a plugin's `sources` name: github, schedule, …)"),
+		id: z.string().describe("The trigger's id at its source; (source, id) is its dedupe key"),
+		thread: z.string().describe("The conversation it belongs to, in the source's terms (a pull request, an issue, a schedule)"),
+		actor: z.string().describe("Who sent it, as the source names them (never mapped across sources)"),
+		addressed: z.enum(["mention", "direct"]).nullable().describe("Whether it addressed capcomd: a mention, a direct message, or neither (null)"),
+		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId), failed (a run could not start; it may come again). More may be added"),
+		runId: z.string().nullable().describe("The run it started or continued; null otherwise"),
+	}).describe(`${TRIGGER_EVENT}. One per trigger a source handed to the intake (spec §16.3.2); \`entity\` is trigger:<source>/<hash of id>`),
+	"trigger.subscribed": z.looseObject({
+		source: z.string(), thread: z.string(), runId: z.string(),
+		until: Timestamp.nullable().describe("When the subscription ends; null while the run works and nobody set one (it ends 14 days after the run does)"),
+	}).describe(`${TRIGGER_EVENT}. A run follows a thread: later triggers on it reach the run's planner as messages, without a new decision (spec §16.3.5). A run a trigger started follows that trigger's thread. \`entity\` is run:<runId>`),
+	"trigger.unsubscribed": z.looseObject({
+		source: z.string(), thread: z.string(), runId: z.string(),
+		cause: z.string().describe("expired (its time ran out, or its run is gone), stopped (a person stopped the run), unsubscribed (a plugin ended it). More may be added"),
+	}).describe(`${TRIGGER_EVENT}. A run no longer follows a thread. \`entity\` is run:<runId>`),
+} as const;
+
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
@@ -378,6 +409,7 @@ export const EventData = {
 		resourceId: z.string().describe("The machine's id"),
 		cause: z.string().describe("Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"),
 	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")"),
+	...TriggerEventData,
 	...PluginEventData,
 } as const;
 export type EventType = keyof typeof EventData;
@@ -448,6 +480,7 @@ export const CAPABILITIES = {
 	"agents.title": "Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled",
 	"agents.thread_tail": "GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages",
 	plugins: "GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; plugin.* events on the daemon stream audit the plugin host",
+	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +

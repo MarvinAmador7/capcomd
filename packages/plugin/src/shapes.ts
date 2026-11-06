@@ -205,4 +205,6 @@ export type TriggerDecision =
   | { kind: "started"; runId: string }
   | { kind: "continued"; runId: string; seq: number };
 
-export interface TriggerSubscription { runId: string; source: string; thread: string; until: Timestamp }
+/** A run that follows a thread (§16.3.5). `until`: when it ends; null while its run works and nobody set one (it then
+ *  ends 14 days after the run does, or at once when a person stops the run). */
+export interface TriggerSubscription { runId: string; source: string; thread: string; until: Timestamp | null }

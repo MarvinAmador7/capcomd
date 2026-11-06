@@ -280,7 +280,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // Background jobs and timers (§16.2): a plugin's timer is on the daemon's stream; plugins start theirs as they load.
   const J = await import("../../jobs/service");
   J.useDaemonEvents((e) => harnessStore.recordDaemonEvent(e));
-  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath(), jobs: true });
+  // Triggers (§16.3): the intake's events are on the daemon's stream too, and its sweep ends subscriptions.
+  (await import("../../triggers/intake")).startTriggers((e) => harnessStore.recordDaemonEvent(e));
+  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), snapshot: P.pluginsSnapshotPath(), jobs: true, triggers: true });
   process.on("exit", () => P.releaseSnapshot());
   let started = false;
   try { await host.start(P.builtinCandidates()); started = true; } catch (e) { console.error(`capcomd serve: plugins failed to start: ${(e as Error).message}`); }

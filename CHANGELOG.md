@@ -5,6 +5,25 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: triggers. capcomd can start a run from something that happens outside it: a schedule you set, or a comment on
+  a GitHub issue or pull request. Nothing runs until you say who may ask: in `~/.capcomd/config.json`,
+  `"triggers": {"sources": {"<source>": {"allowed": [...], "opened": [...], "mode": "observe", "project": "/path"}}}`
+  allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
+  (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
+  starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
+  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
+  there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
+  `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
+  `capcomd triggers subscriptions` the threads runs follow; the daemon stream has `trigger.received`,
+  `trigger.subscribed` and `trigger.unsubscribed`, and a started run's `trigger` says where it came from (capability
+  `triggers`). Schedules: `"plugins": {"source-schedule": {"schedules": {"nightly": {"text": "update the
+  dependencies", "everyMs": 86400000}}}}` (or `at` for once), allowed as `schedule:nightly`. GitHub comments:
+  `"plugins": {"forge-github": {"sourceRepos": ["acme/app"]}}`, read every minute with your GitHub login (comments
+  from before you set it are not read). Plugins can add their own sources (`ctx.triggers`) and turn a trigger down
+  (the `trigger.admitting` hook).
+- New: built-in plugins take settings from `~/.capcomd/config.json` (`"plugins": {"<name>": {…}}`, and
+  `"enabled": false` to turn one off) or from `CAPCOMD_PLUGIN_<NAME>_<KEY>` environment variables.
 - New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
   `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd agents list|show --json`, which also
   give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether

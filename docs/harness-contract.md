@@ -95,6 +95,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `agents.title` | Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled |
 | `agents.thread_tail` | GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages |
 | `plugins` | GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; plugin.* events on the daemon stream audit the plugin host |
+| `triggers` | Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from |
 
 ## Event envelope
 
@@ -1259,6 +1260,9 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
 - [`project.git_initialized`](events.md#projectgit_initialized)
 - [`project.published`](events.md#projectpublished)
 - [`sandbox.resource_deleted`](events.md#sandboxresource_deleted)
+- [`trigger.received`](events.md#triggerreceived)
+- [`trigger.subscribed`](events.md#triggersubscribed)
+- [`trigger.unsubscribed`](events.md#triggerunsubscribed)
 - [`plugin.loaded`](events.md#pluginloaded)
 - [`plugin.failed`](events.md#pluginfailed)
 - [`plugin.disposed`](events.md#plugindisposed)

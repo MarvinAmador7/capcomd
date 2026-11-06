@@ -9,8 +9,8 @@ export type Recorded = { hook: HookName; mode: string; at: string; key: string; 
 
 function record(call: HookCall): Recorded {
   const p = call.payload as Record<string, any>;
-  const subject = p.job?.jobId ?? p.merge?.mrgId ?? p.verification?.vfyId ?? p.approval?.approvalId ?? p.agent?.id ?? p.machine?.id ?? (call.hook === "agent.spawning" ? p.spawn?.profile : null) ?? (call.hook === "profile.resolved" ? p.profile?.name : null) ?? null;
-  return { hook: call.hook, mode: call.mode, at: call.at, key: call.idempotencyKey, runId: call.runId, agentId: call.agentId, principal: call.principal.kind, change: p.change?.kind ?? null, subject, ...(call.hook === "profile.resolved" ? { profile: p.profile } : {}) };
+  const subject = p.job?.jobId ?? (p.trigger ? `${p.trigger.source}/${p.trigger.id}` : null) ?? p.merge?.mrgId ?? p.verification?.vfyId ?? p.approval?.approvalId ?? p.agent?.id ?? p.machine?.id ?? (call.hook === "agent.spawning" ? p.spawn?.profile : null) ?? (call.hook === "profile.resolved" ? p.profile?.name : null) ?? null;
+  return { hook: call.hook, mode: call.mode, at: call.at, key: call.idempotencyKey, runId: call.runId, agentId: call.agentId, principal: call.principal.kind, change: p.change?.kind ?? (call.hook === "trigger.changed" ? p.decision?.kind : null) ?? null, subject, ...(call.hook === "profile.resolved" ? { profile: p.profile } : {}) };
 }
 
 export const plugin = definePlugin({

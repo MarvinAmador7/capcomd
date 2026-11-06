@@ -78,6 +78,10 @@ Usage:
   capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB; _ keys are run settings, listed with --prefix _)
   capcomd inspect <runId> [--json] [--follow [--since-seq N] [--until TYPE]]   run bundle: status + tree + trace + events
   capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
+  capcomd triggers log [--source S] [--limit N]   what the daemon did with each trigger a source sent (a schedule, a GitHub
+                                       comment): deduped, denied, recorded (observe mode: what would have run), started
+                                       or continued a run  ·  capcomd triggers subscriptions [runId] [--source S]: the
+                                       threads runs follow (settings: \`triggers.sources.<source>\` in ~/.capcomd/config.json)
                                        Named agent profiles (.capcomd/agents.json): provider, auth
                                        (apikey|subscription, exactly one), model, limits, prompts, tools.
                                        add/set flags: --provider --auth --model --effort --max-turns --budget

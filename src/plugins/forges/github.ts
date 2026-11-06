@@ -21,6 +21,7 @@ import { killpoint } from "../../utils/killpoint";
 import { VERSION } from "../../utils/self";
 import { casPush, lsRemoteBranches, readMs } from "./git";
 import { scoped, scopedEnv } from "./scope";
+import { SOURCE_DEFAULTS, startGitHubSource, type GitHubSourceConfig } from "./github-source";
 
 type Env = Record<string, string | undefined>;
 
@@ -294,8 +295,14 @@ export const manifest = {
   apiVersion: 1,
   engines: { capcomd: VERSION },
   entry: { runtime: "in-process", module: "./github.ts" },
-  provides: ["seam:forge/github"],
-  contributes: { seams: [{ kind: "forge", name: "github" }] },
+  provides: ["seam:forge/github", "source:github"],
+  // The source's timer and its triggers (./github-source.ts).
+  scopes: ["read", "steer"],
+  contributes: {
+    seams: [{ kind: "forge", name: "github" }],
+    sources: [{ name: "github", summary: "Comments on the issues and pull requests of sourceRepos, and of the threads runs follow (thread owner/name#number)" }],
+    hooks: { "job.changed": {} },
+  },
   config: {
     type: "object",
     additionalProperties: false,
@@ -303,10 +310,20 @@ export const manifest = {
       api: { type: "string", format: "uri", default: DEFAULTS.api, description: "The REST API base when the project names none (CAPCOMD_GITHUB_API wins)" },
       pollMs: { type: "integer", minimum: 10, default: DEFAULTS.pollMs, description: "How often to look at a pull request that isn't mergeable yet (CAPCOMD_GITHUB_POLL_MS wins)" },
       timeoutMs: { type: "integer", minimum: 1000, default: DEFAULTS.timeoutMs, description: "How long to wait for a pull request to become mergeable (CAPCOMD_GITHUB_TIMEOUT_MS wins)" },
+      sourceRepos: { type: "array", items: { type: "string", pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" }, default: SOURCE_DEFAULTS.sourceRepos, description: "The trigger source github: owner/name repositories whose issue and pull-request comments are triggers (none: the source reads nothing)" },
+      sourceEveryMs: { type: "integer", minimum: 10000, default: SOURCE_DEFAULTS.sourceEveryMs, description: "How often the source reads new comments" },
+      sourceCommand: { type: "string", default: SOURCE_DEFAULTS.sourceCommand, description: "A comment line starting with this addresses capcomd (as an @-mention of the login, by someone else, does)" },
     },
   },
 } satisfies PluginManifest;
 
-export const plugin: PluginModule<GitHubForgeConfig> = definePlugin<GitHubForgeConfig>({
-  activate(ctx) { ctx.seams.forge(new GitHubForge({ ...DEFAULTS, ...ctx.config.get() })); },
+export const plugin: PluginModule<GitHubForgeConfig & Partial<GitHubSourceConfig>> = definePlugin<GitHubForgeConfig & Partial<GitHubSourceConfig>>({
+  activate(ctx) {
+    const cfg = { ...DEFAULTS, ...SOURCE_DEFAULTS, ...ctx.config.get() };
+    ctx.seams.forge(new GitHubForge(cfg));
+    startGitHubSource(ctx, {
+      api: process.env.CAPCOMD_GITHUB_API ?? cfg.api, sourceRepos: Array.isArray(cfg.sourceRepos) ? cfg.sourceRepos : [], sourceEveryMs: cfg.sourceEveryMs,
+      sourceCommand: typeof cfg.sourceCommand === "string" ? cfg.sourceCommand : SOURCE_DEFAULTS.sourceCommand,
+    });
+  },
 });

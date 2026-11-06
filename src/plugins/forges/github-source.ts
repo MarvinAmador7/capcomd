@@ -1,0 +1,106 @@
+// forge-github's trigger source, `github` (docs/spec/plugin-api.md §16.3.1, §16.3.6, §17.2 step 10): comments on the
+// issues and pull requests of the repositories the operator names (`plugins.forge-github.sourceRepos`), and of the
+// threads runs follow (`ctx.triggers.subscriptions`), become triggers. It polls on the plugin's own timer (§16.2, every
+// `sourceEveryMs`, 1 min by default) with the user's GitHub login, keeps its read position per repository in
+// `ctx.storage` (a restart replays nothing; the first poll of a repository only marks where it starts), drops what
+// capcomd wrote itself (a comment carrying CAPCOMD_MARK: the login is usually the user's own, whose comments are theirs),
+// and fills the actor and `addressed` from GitHub's facts: the comment's author, whether GitHub says it is a bot, and
+// whether it addresses capcomd: a line starting with the command word (`sourceCommand`, `/capcomd`), or an @-mention of
+// the login by someone else (a login of capcomd's own). What a comment asks for is never judged here: the kernel's
+// intake decides (src/triggers/intake.ts). Daemon only (`ctx.jobs`, `ctx.triggers`).
+import type { PluginContext } from "../../../packages/plugin/src/context";
+import { PluginError } from "../../../packages/plugin/src/errors";
+import type { Trigger } from "../../../packages/plugin/src/shapes";
+import { githubAt, type GitHubApi, type IssueComment } from "./github-rest";
+
+export interface GitHubSourceConfig { api: string; sourceRepos: string[]; sourceEveryMs: number; sourceCommand: string }
+export const SOURCE_DEFAULTS = { sourceRepos: [] as string[], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+/** What a comment capcomd writes on GitHub carries (none yet: replies are a later step's), so the source never reads its
+ *  own words back as a request. */
+export const CAPCOMD_MARK = "<!-- capcomd -->";
+export const SOURCE_TIMER = "github comments";
+const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/** A thread is `owner/name#number`, the conversation's own name on GitHub. */
+const THREAD = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#\d+$/;
+
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** One comment as a trigger, or null for capcomd's own (§16.3.1: a source drops its bot's messages). `me`: the login. */
+export function commentTrigger(repo: string, c: IssueComment, me: string | null, command = SOURCE_DEFAULTS.sourceCommand): Trigger | null {
+  const login = c.user?.login, body = c.body ?? "";
+  if (!login || body.includes(CAPCOMD_MARK)) return null;
+  const number = Number(/\/(\d+)$/.exec(c.issue_url ?? "")?.[1]);
+  if (!Number.isInteger(number) || number <= 0) return null;
+  const commanded = !!command.trim() && new RegExp(`^\\s*${escape(command.trim())}(?![A-Za-z0-9_-])`, "im").test(body);
+  const mentioned = !!me && login.toLowerCase() !== me.toLowerCase() && new RegExp(`(^|[^A-Za-z0-9-])@${escape(me)}(?![A-Za-z0-9-])`, "i").test(body);
+  const mention = commanded || mentioned;
+  return {
+    source: "github", id: `comment-${c.id}`, thread: `${repo}#${number}`, at: c.created_at,
+    actor: { id: login, display: login, bot: c.user?.type === "Bot" || login.endsWith("[bot]") },
+    addressed: mention ? "mention" : null,
+    text: { text: c.body ?? "", untrusted: true, by: `github:${login}` },
+    replyTo: c.html_url ?? null,
+    data: { repo, number, commentId: c.id, url: c.html_url ?? null, pullRequest: /\/pull\/\d+/.test(c.html_url ?? "") },
+  };
+}
+
+/** The repositories to read: the configured ones and those of the threads runs follow. */
+async function reposToPoll(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig): Promise<string[]> {
+  const followed = (await ctx.triggers.subscriptions({ source: "github" }).catch(() => [])).map((s) => THREAD.exec(s.thread)?.[1]).filter((r): r is string => !!r);
+  return [...new Set([...cfg.sourceRepos.filter((r) => REPO.test(r)), ...followed])];
+}
+
+/** One round over every repository: each new comment is emitted, oldest first. Returns how many were. */
+export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig, api?: GitHubApi): Promise<number> {
+  const gh = api ?? (await githubAt(cfg.api));
+  if (!gh.listIssueComments) return 0;
+  const me = gh.viewer ? await gh.viewer().catch(() => null) : null;
+  let n = 0;
+  for (const repo of await reposToPoll(ctx, cfg)) {
+    const key = `github/${repo}`;
+    const pos = (await ctx.storage.get("daemon", key)) as { since?: string } | undefined;
+    // The first look at a repository: comments from now on, not its history.
+    if (!pos?.since) { await ctx.storage.put("daemon", key, { since: new Date().toISOString() }); continue; }
+    let comments: IssueComment[];
+    try { comments = await gh.listIssueComments(repo, pos.since); } catch (e) { ctx.log.warn(`github source: reading ${repo}'s comments failed`, { error: String((e as Error)?.message ?? e) }); continue; }
+    let since = pos.since;
+    for (const c of comments) {
+      if (c.updated_at > since) since = c.updated_at;
+      // An edit of a comment from before the position isn't a new request.
+      if (Date.parse(c.created_at) < Date.parse(pos.since)) continue;
+      const t = commentTrigger(repo, c, me, cfg.sourceCommand);
+      if (!t) continue;
+      await ctx.triggers.emit(t).then(() => { n++; }, (e) => ctx.log.warn(`github source: ${repo} comment ${c.id} was not taken`, { error: String((e as Error)?.message ?? e) }));
+    }
+    if (since !== pos.since) await ctx.storage.put("daemon", key, { since });
+  }
+  return n;
+}
+
+/** forge-github's `activate`: the source's timer, and a poll when it fires (one at a time; a slow one isn't doubled). */
+export function startGitHubSource(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig): void {
+  let polling = false;
+  ctx.hooks.on("job.changed", (call) => {
+    const { job, change } = call.payload;
+    if (job.plugin !== ctx.plugin.name || change.kind !== "fired" || job.spec.label !== SOURCE_TIMER || polling) return;
+    polling = true;
+    void pollGitHub(ctx, cfg).catch((e) => ctx.log.warn("github source: a poll failed", { error: String((e as Error)?.message ?? e) })).finally(() => { polling = false; });
+  });
+  void armSource(ctx, cfg);
+}
+
+/** The source's one timer: started when repositories are configured (nothing configured, no calls to GitHub; a run
+ *  that follows a GitHub thread is a trigger's, which needs one first); a timer from other settings stops. */
+async function armSource(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig): Promise<void> {
+  let keep: string | null = null;
+  if (cfg.sourceRepos.length) {
+    try {
+      keep = (await ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: SOURCE_TIMER, everyMs: Math.max(10_000, cfg.sourceEveryMs) }, { key: `github-source-${cfg.sourceEveryMs}` })).jobId;
+    } catch (e) {
+      if (e instanceof PluginError && e.code === "unsupported") return; // not the daemon
+      ctx.log.warn("the github source's timer did not start", { error: String((e as Error)?.message ?? e) });
+    }
+  }
+  for (const j of await ctx.jobs.list({ state: "running" }).catch(() => [])) {
+    if (j.spec.kind === "timer" && j.spec.label === SOURCE_TIMER && j.jobId !== keep) await ctx.jobs.cancel(j.jobId, "the github source's settings changed").catch(() => {});
+  }
+}
