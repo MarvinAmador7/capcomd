@@ -253,6 +253,19 @@ export interface ForgeBranches {
   note: string | null;
 }
 
+/**
+ * The user's own credential for git over https to a remote the forge serves (§7.4 `remoteCredential`, §11.7). Data
+ * only: the kernel's host git (`src/merge/host-git.ts`) makes it the only credential helper for `origin`, in the one git
+ * process that talks to the remote; the forge never runs git or a credential helper itself.
+ */
+export interface ForgeRemoteCredential {
+  /** The https origin it is for (`https://github.com`; scheme and host, no path): the remote must be on it. */
+  origin: string;
+  username: string;
+  /** Kept in that one process's environment, never in a file, a URL or a log. */
+  password: string;
+}
+
 /** Someone the user's own login at the service can act as (`login` with `accounts`). */
 export interface ForgeAccount { login: string; kind: "user" | "org" }
 
@@ -289,4 +302,8 @@ export interface Forge {
    *  act: the user first, then its organizations). Cheap (the forge may cache it) and never rejects: no login, or a
    *  service that doesn't answer, is `{ok: false}`; so is a use the forge has none of (no pull requests, no publish). */
   login(input: { use: ForgeLoginUse; accounts?: boolean }, c: SeamCall): Promise<ForgeLogin>;
+  /** Optional (absent: none). The user's credential for the kernel's host git over https to `remote` (§11.7), or null:
+   *  then the user's own git credentials apply. Asked only for an https remote the forge `matches`, before each fetch,
+   *  push or ls-remote: cheap (the forge may cache it). A credential for another origin than the remote's is ignored. */
+  remoteCredential?(input: { remote: string }, c: SeamCall): Promise<ForgeRemoteCredential | null>;
 }

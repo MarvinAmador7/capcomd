@@ -105,13 +105,15 @@ export async function goal(a: { runId: string; done?: boolean; summary?: string 
   // A run you drive yourself (no planner agent) is ready when you say its work is done, with what you did.
   const v = a.done ? await G.markGoalDone(a.runId, { by: DRIVER, summary: a.summary ?? null }) : await G.goalView(a.runId);
   const f = (id: string, t: string | null) => (t == null ? t : fence(id, t).text);
+  // Where the person merges it, in the run's forge's words ("on GitHub").
+  const place = v.pullRequest ? await G.pullRequestPlace(a.runId) : "";
   return {
     ...v, summary: v.plannerId ? f(v.plannerId, v.summary) : v.summary,
     landed: v.landed.map((l) => ({ ...l, task: f(l.agentId, l.task), review: l.review ? { ...l.review, reasons: l.review.reasons.map((r) => fence(l.review!.agentId ?? l.agentId, r).text) } : null })),
     notLanded: v.notLanded.map((n) => ({ ...n, task: f(n.agentId, n.task), detail: f(n.agentId, n.detail) })),
     compare: { ...v.compare, commits: v.compare.commits.map((c) => ({ ...c, subject: fence("commit", c.subject).text })) },
     next: v.driven && v.state === "working" ? "You drive this run: when every agent's work is verified and merged (or given up), call capcomd_goal {runId, done: true, summary: \"what landed\"}; the user then decides on a pull request."
-      : v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it on GitHub.`
+      : v.pullRequest ? `The pull request is #${v.pullRequest.number}${v.pullRequest.url ? ` (${v.pullRequest.url})` : ""}: the user reviews and merges it ${place}.`
       : v.openPullRequest.available && v.openPullRequest.confirm ? `${v.openPullRequest.confirm} Ask the user this, showing what landed and what didn't; only if they say yes, call capcomd_pr_open with stopped: true.`
       : v.openPullRequest.available ? `Show the user what landed and the summary, and ask whether to open a pull request into ${v.base} (capcomd_pr_open) or keep the branch.`
       : `${v.openPullRequest.reason}`,
@@ -120,8 +122,9 @@ export async function goal(a: { runId: string; done?: boolean; summary?: string 
 
 /** Open a pull request from the run's goal branch into its base (idempotent; capcomd never merges it). */
 export async function prOpen(a: { runId: string; stopped?: boolean }) {
-  const r = await (await import("../primitives/goal")).openGoalPullRequest(a.runId, { by: DRIVER, stopped: a.stopped === true });
-  return { ...r, next: `Tell the user: pull request #${r.pullRequest.number}${r.pullRequest.url ? ` (${r.pullRequest.url})` : ""} from ${r.branch} into ${r.base}. They review and merge it on GitHub.` };
+  const G = await import("../primitives/goal");
+  const r = await G.openGoalPullRequest(a.runId, { by: DRIVER, stopped: a.stopped === true });
+  return { ...r, next: `Tell the user: pull request #${r.pullRequest.number}${r.pullRequest.url ? ` (${r.pullRequest.url})` : ""} from ${r.branch} into ${r.base}. They review and merge it ${await G.pullRequestPlace(a.runId)}.` };
 }
 
 /** How long capcomd_runs waits for one run's records. */

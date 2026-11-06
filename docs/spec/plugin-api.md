@@ -728,18 +728,21 @@ fetch and integrate (`src/merge/integrate.ts`), the checks (`src/merge/verify.ts
 | `land(req, c)` | Called **under the kernel's target lock**. `mode: "direct"`: push `req.sha` to `req.target` as a compare-and-swap on `req.targetSha` (with `req.leaseBranch`, the branch leased at `req.branchSha` in the same atomic push; a remote that refuses atomic pushes is `{status: "failed", retryable: true}`); a moved target is `{status: "conflict", targetSha}` (`""` when the forge doesn't know it) and the kernel fetches and re-integrates. `mode: "pr"`: the branch is pushed already; find or open the pull request and merge it with `req.strategy` at exactly `req.branchSha`, the head the kernel integrated as `req.sha` and checked (the hosting service makes the merge commit, so the outcome's `sha` is the service's); a pull request the service can't merge is `conflict`, a wait past the deadline `{status: "failed", retryable: true}`. **Idempotent by `req.mrgId`**: a replay after a crash finds the existing PR or the pushed commit and reports `already: true`. MUST reject `unsupported` for `pr` when `pullRequests` is false. |
 | `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)`. A merged pull request carries `mergeSha`, so a pr-mode merge that finds one records it without integrating again |
 | `publishRepository` | `POST /v1/projects/publish`, asked of the first active forge whose `describe().publish` (forge-github: `gh repo create`); the event names where it went by the returned `url`. A name the service has already is `conflict` |
-| `listBranches({remote, cwd, max}, c)` | `POST /v1/runs` base resolution (`capcomd run`, `capcomd_run_new`) and `GET /v1/projects/branches`: `{defaultBranch, branches, source, note}`, from the service's API (`source: "service"`; the kernel reports the forge's name, `github`) when it can, else from the remote itself (`"git"`: `git ls-remote`, its `HEAD` the default branch, never guessed), with `note` saying why the service wasn't used. Rejects, saying why, when the remote can't be read at all; the kernel then reads the checkout's own refs (`local`) |
+| `listBranches({remote, cwd, max}, c)` | `POST /v1/runs` base resolution (`capcomd run`, `capcomd_run_new`) and `GET /v1/projects/branches`: `{defaultBranch, branches, source, note}`, from the service's API (`source: "service"`; the kernel reports the forge's name, `describe().name`: `github`, or a forge plugin's own, so the route's `source` is a string) when it can, else from the remote itself (`"git"`: `git ls-remote`, its `HEAD` the default branch, never guessed), with `note` saying why the service wasn't used. Rejects, saying why, when the remote can't be read at all; the kernel then reads the checkout's own refs (`local`) |
 | `login({use, accounts?}, c)` | Whether the user's own login at the service is on this machine for `use`: `pullRequests` (the goal branch's `openPullRequest.available`, the setup wizard's suggestion; forge-github: a token, `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`) or `publish` (`GET /v1/projects/inspect` and `publish-options` `ghReady`, publishing; forge-github: `gh auth status`); with `accounts`, as whom (`publish-options` `accounts`: the user, then its organizations; forge-github: `gh api user`, `gh api user/orgs`). Shaped like `available`: `{ok: true, accounts}` or `{ok: false, reason, fix}`, sentences the kernel puts in its own ("capcomd opens pull requests with your GitHub login, and there is none on this machine: <fix>, then try again"). Cheap (the forge may cache it; forge-github asks at most every 30 s) and never rejects |
+| `remoteCredential?({remote}, c)` | Optional (absent: none). The user's credential for the kernel's host git over https to `remote` (§11.7): `{origin, username, password}`, `origin` the https origin it is for (scheme and host, no path; forge-github: `https://github.com`, `x-access-token` and the user's token, `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`), or null, when the user's own git credentials apply. Asked before each host fetch, push and ls-remote of an https remote, of the active forges whose `matches(remote)` is true, in load order; the first credential wins. Data only: the forge never runs network git or a credential helper; `src/merge/host-git.ts` applies it, and ignores one whose `origin` isn't the remote's or whose fields span lines. Cheap (the forge may cache it); a rejection is no credential. Its span records neither the remote nor the answer |
 
 When the chosen forge has no pull requests in pr mode, or a goal branch's repository is on one, the kernel says so in
 the words of the active forges that have them ("pr mode needs a GitHub repo", "isn't on GitHub"); with none active,
-that no active forge supports pull requests.
+that no active forge supports pull requests. Where the person merges a goal branch's pull request is said with the
+run's forge's `label` too ("review and merge it on GitHub"); when the forge can't be told, "where the repository is
+hosted", never a guessed service.
 
 Built-ins: `forge-github` (§15.2) and `forge-git` (direct pushes to any remote; `pullRequests: false`). A GitLab or
 Gitea forge is one plugin and no API change. `tests/merge/fake-github.ts` stays the fake GitHub REST service that
 `forge-github`'s tests run against; `tests/merge/forge-fake` is the `forge-fake` test plugin, which lands what the kernel
-hands it without a hosting service, reads branches with `git ls-remote` unless a test hands it a listing, and logs in as
-a test says. Every process that lands work has the forges: the daemon's host, else the process's one local host
+hands it without a hosting service, reads branches with `git ls-remote` unless a test hands it a listing, and logs in
+and supplies a host git credential as a test says. Every process that lands work has the forges: the daemon's host, else the process's one local host
 (`src/plugins/host.ts` `localHost`: the built-ins marked `everyProcess`, the gates and the forges, and in tests
 `CAPCOMD_TEST_PLUGINS`; the CLI, `capcomd mcp`, tests). Until a project's layer of a plugin's config exists (§10.2), the
 built-in forges read a run's recorded merge settings (`CAPCOMD_GITHUB_API`, `_POLL_MS`, `_TIMEOUT_MS`, `_REPO`) and the
@@ -1063,9 +1066,11 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
    made again. `lsRemote` runs outside any repository. The remote is always the repository's URL as capcomd knows it,
    never a remote's name. Git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_ALLOW_PROTOCOL=file:git:http:https:ssh` (no
    `ext::`); the user's own git settings (their credential helper, ssh keys, global `url.*` rewrites) apply, except that
-   for an https remote on github.com, when capcomd has the user's GitHub token (`GITHUB_TOKEN`, `GH_TOKEN` or
-   `gh auth token`), it is the only credential helper for `https://github.com` (the helper list is reset first, so git
-   never hands the token to the user's own helpers, such as `osxkeychain`, to store), in that one process's environment.
+   for an https remote whose forge has the user's credential for it (§7.4 `remoteCredential`; forge-github: the user's
+   GitHub token, `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`, for `https://github.com`), it is the only credential
+   helper for the remote's origin (the helper list is reset first, so git never hands the credential to the user's own
+   helpers, such as `osxkeychain`, to store), in that one process's environment. The forge supplies the credential as
+   data; `host-git.ts` builds the helper, and only for the remote's own origin.
 3. `tests/unit/host-git-lint.test.ts` fails when a network git command is spelled anywhere else, or a credential helper
    is built outside `host-git.ts`; `tests/unit/host-git-credentials.test.ts` plants each vector above and checks that
    no planted command sees a token and nothing goes anywhere but the run's repository.
@@ -1181,7 +1186,9 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
   `testkit.conformance.agent`.
 - **forge**: against a local bare repository (`tests/merge/gitfixture.ts`): `land direct` is a CAS (a moved target is
   `conflict`), `land` twice with the same `mrgId` is `already: true`, `pr` mode without `pullRequests` rejects
-  `unsupported`, `matches` is pure.
+  `unsupported`, `matches` is pure; `remoteCredential`, when present, answers null for a remote the forge's service
+  doesn't host and an `origin` that is the remote's for one it does, and host git applies it as the only helper for that
+  origin and refuses one for another origin (`tests/plugins/forges.test.ts`).
 
 ### 14.3 Real composition
 
@@ -1223,8 +1230,8 @@ third-party plugin MAY do). Config: `bin`, `image`, `agentMemoryMb` (the `agentM
 ### 15.2 The GitHub forge (`forge-github`, in-process)
 
 `examples/forge-github`. `HttpGitHub`, `prMerge`'s poll loop and the `gh` calls become `land`, `openPullRequest`,
-`findPullRequest`, `publishRepository`, `listBranches`, `login`. The token is an `x-secret` config property with `gh auth token`
-as the fallback; `classifyError` maps rate limits to `quota` and 401/403 to `auth`. The kernel keeps the lock, the CAS,
+`findPullRequest`, `publishRepository`, `listBranches`, `login`, `remoteCredential` (the token for host git over https to
+github.com). The token is an `x-secret` config property with `gh auth token` as the fallback; `classifyError` maps rate limits to `quota` and 401/403 to `auth`. The kernel keeps the lock, the CAS,
 integration and the checks.
 
 ### 15.3 The reviewer as a gate (`gate-reviewer`, in-process)
@@ -1591,7 +1598,8 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
 | 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
 | 1.0.11 | 2026-11-05 | With ADR-024's loader (its §7 step 1): `profile.resolved`'s `profile` carries the resolved profile's `version` and the layer it was found in (`project`, `user`, `bundled`) instead of always `{version: 1, source: "user"}` (§6.6.5); the profile code is `src/profiles/`. |
-| 1.0.12 | 2026-11-05 | With the context eval (ADR-025 step 0): §7.3's `AgentRunState` gains the optional `cacheReadTokens` and `model` (additive), which the kernel records on the agent's span (`gen_ai.usage.cache_read.input_tokens`, `gen_ai.response.model`): the eval's cache-read ratio and the model a result was measured on. |
+| 1.0.12 | 2026-11-05 | The last forge logic in the forges (§7.4, §11.7): the optional `remoteCredential` (`ForgeRemoteCredential`; additive) supplies the credential host git uses for an https remote, which `host-git.ts` applies as the only helper for the remote's own origin (forge-github: the GitHub token for `https://github.com`, as before); `GET /v1/projects/branches` `source` is a string, the forge's name when its service answered; where a goal branch's pull request is merged is said with the run's forge's label. |
+| 1.0.13 | 2026-11-05 | With the context eval (ADR-025 step 0): §7.3's `AgentRunState` gains the optional `cacheReadTokens` and `model` (additive), which the kernel records on the agent's span (`gen_ai.usage.cache_read.input_tokens`, `gen_ai.response.model`): the eval's cache-read ratio and the model a result was measured on. |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 

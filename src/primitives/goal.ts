@@ -226,6 +226,16 @@ const workLabel = (w: { title?: string | null; task: string }) => w.title || w.t
 /** ", carries on agt-…'s work" for an agent that continued others' work (`spawn --continue`). */
 const carriesOn = (w: { continues?: string[] }) => w.continues?.length ? `, carries on ${w.continues.join(", ")}'s work` : "";
 
+/** Where a pull request is when its forge can't be told (a forge's label is "on <label>"). */
+const WHERE_HOSTED = "where the repository is hosted";
+
+/** Where the run's pull request is, in its forge's words ("on GitHub": its `describe().label`), else WHERE_HOSTED. */
+export async function pullRequestPlace(runId: string): Promise<string> {
+  const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
+  const label = cfg ? (await (await import("../plugins/forges")).forgeFor(cfg).catch(() => null))?.describe().label : null;
+  return label ? `on ${label}` : WHERE_HOSTED;
+}
+
 /** The pull request's body: the planner's summary, then what each agent landed and how it was reviewed, then what didn't. */
 /** `forge`: the label of the forge the pull request is opened on (its `describe().label`), where the person merges it. */
 export function pullRequestBody(o: { runId: string; branch: string; summary: string | null; landed: LandedWork[]; notLanded: NotLandedWork[]; stopped?: string | null; forge?: string }): string {
@@ -246,8 +256,8 @@ export function pullRequestBody(o: { runId: string; branch: string; summary: str
     lines.push("", "## Not landed", "");
     for (const n of o.notLanded) lines.push(`- ${workLabel(n)} (${n.agentId}${carriesOn(n)}): ${n.reason.replace(/_/g, " ")}${n.detail ? `: ${firstLine(n.detail, 300)}` : ""}`);
   }
-  lines.push("", "---", `Opened by capcomd from run ${o.runId}. capcomd never merges this pull request: review and merge it on ${o.forge ?? "GitHub"}.`);
-  // GitHub caps a body at 65536 characters.
+  lines.push("", "---", `Opened by capcomd from run ${o.runId}. capcomd never merges this pull request: review and merge it ${o.forge ? `on ${o.forge}` : WHERE_HOSTED}.`);
+  // Under the smallest cap a hosting service puts on a body (GitHub's is 65536 characters).
   return lines.join("\n").slice(0, 60_000);
 }
 
@@ -311,9 +321,7 @@ export async function keepGoalBranch(runId: string, o: { by: string }) {
   const r = (await s.goalDecision({ choice: "keep", by: o.by }).catch(async (e: any) => {
     if (e?.code === "conflict") {
       // Where it is open: the run's forge's words (docs/spec/plugin-api.md §7.4).
-      const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
-      const label = cfg ? (await (await import("../plugins/forges")).forgeFor(cfg).catch(() => null))?.describe().label : null;
-      throw new RelayError("conflict", String(e.message), `The pull request is open on ${label ?? "GitHub"}: close it there if you don't want it.`, { code: "pr_open" });
+      throw new RelayError("conflict", String(e.message), `The pull request is open ${await pullRequestPlace(runId)}: close it there if you don't want it.`, { code: "pr_open" });
     }
     throw e;
   })) as { changed: boolean; decision: GoalDecision };

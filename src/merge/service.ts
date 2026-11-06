@@ -8,9 +8,6 @@ import { sameHold, type MergeGate, type MergeOutcome, type MergeRequest, type Me
 import { hooks, recordGateEvent, refusedText } from "../plugins/hooks";
 import { ForgeNotActive, forgeFor, orList, pullRequestLabels } from "../plugins/forges";
 
-/** Tests inject a fake GitHub REST adapter for the GitHub forge (src/plugins/forges/github.ts). */
-export { setGitHubApi, hasGitHubOverride } from "../plugins/forges/github-rest";
-
 /**
  * Land (or, with testOnly, just verify) one task. Serialized per (remote, target). The kernel fetches, integrates and
  * checks; the project's forge (docs/spec/plugin-api.md §7.4) lands the checked commit under the target's lock.

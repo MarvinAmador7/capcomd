@@ -809,7 +809,7 @@ export const ProjectBranches = z.object({
 	path: z.string().describe("The path as given"),
 	root: z.string().nullable().describe("The checkout it is in; null when it isn't one (then everything else is empty)"),
 	github: z.string().nullable().describe("owner/name when origin is on GitHub"),
-	source: z.enum(["github", "git", "local"]).describe("Where the branches were read: github (the GitHub API with the user's own gh login), git (`git ls-remote origin`), local (the checkout's own refs: the remote couldn't be asked; see note)"),
+	source: z.string().describe("Where the branches were read: the name of the project's forge when its service answered (github: the GitHub API with the user's own gh login; a forge plugin says its own name, so expect values beyond these), git (`git ls-remote origin`), local (the checkout's own refs: the remote couldn't be asked; see note)"),
 	note: z.string().nullable().describe("Why a better source wasn't used (daemon-written, trusted), e.g. \"GitHub: no login (GITHUB_TOKEN, GH_TOKEN or `gh auth login`)\"; null when it was"),
 	defaultBranch: z.string().nullable().describe("The repository's default branch as the remote reports it; null when it doesn't (never a guessed main)"),
 	branches: z.array(z.string()).describe("The repository's branches, sorted (at most 500): the base menu"),
