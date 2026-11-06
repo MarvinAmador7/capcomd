@@ -3,7 +3,7 @@
 // of tool use; activity alone (steps of the same kind, no checkpoint) is not progress. The kernel's own `spinning`
 // notice (src/agents/stuck.ts) catches repeated identical calls; this plugin catches the slower drift the super-agent
 // essay describes: "the process is still running" but nothing lands.
-import { definePlugin } from "../../src/index";
+import { definePlugin } from "@capcomd/plugin";
 
 interface Config { everyMs: number; stalledAfterMs: number; stopAfterMs: number }
 

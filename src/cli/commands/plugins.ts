@@ -292,7 +292,7 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
   }
   const { runAgentConformance } = await import("../../../packages/plugin/src/agent-conformance");
   for (const s of manifest.contributes?.seams ?? []) {
-    if (s.kind === "forge") { result(`the ${s.kind} seam's conformance suite`, { ok: true, skipped: true, message: "the forge suite lands with forges as plugins" }); continue; }
+    if (s.kind === "forge") { result(`the ${s.kind} seam's conformance suite`, { ok: true, skipped: true, message: "the forge suite runs in capcomd's own tests, against local repositories (tests/plugins/forges.test.ts)" }); continue; }
     const fake = testkit.fakeContext(manifest, undefined, t.dir ? { dir: t.dir } : {});
     try {
       await testkit.load(fake, mod!);

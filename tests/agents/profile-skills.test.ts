@@ -152,7 +152,7 @@ describe("profile skills", () => {
     const ok = JSON.parse(w.cli(["agents", "show", "critic", "--json"]).out);
     expect(ok.skills).toEqual([
       { name: "owasp", source: "user", hash: `sha256:${sha(md("owasp", "Check the top ten."))}`, path: null },
-      { name: "own", source: "project", hash: `sha256:${sha(md("own", "The project's checklist."))}`, path: w.at("P/critic/skills/own/SKILL.md") },
+      { name: "own", source: "project", hash: `sha256:${sha(md("own", "The project's checklist."))}`, path: w.at("P/critic/skills/own/SKILL.md"), trust: "untrusted" },
     ]);
   }, 30_000);
 });

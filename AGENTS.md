@@ -29,8 +29,9 @@ Procedure:
 
 1. Start from an up-to-date `main` with green CI. Read the `## Unreleased` entries and pick the version from them.
 2. In one PR (or commit, if asked to push to `main`) titled `release: vX.Y.Z`, change only:
-   - `version` to `X.Y.Z` in `package.json` and both plugin manifests (`plugins/capcomd/.claude-plugin/plugin.json`,
-     `plugins/capcomd/.codex-plugin/plugin.json`; CI checks they agree);
+   - `version` to `X.Y.Z` in `package.json`, both plugin manifests (`plugins/capcomd/.claude-plugin/plugin.json`,
+     `plugins/capcomd/.codex-plugin/plugin.json`) and the plugin API package (`packages/plugin/package.json`:
+     `@capcomd/plugin` is released at capcomd's version); CI checks they agree;
    - `CHANGELOG.md`: rename `## Unreleased` to `## X.Y.Z (YYYY-MM-DD)` (today's date), add a one-line summary
      under it, and put a new empty `## Unreleased` above it;
    - version mentions in the docs, if any pin one.
@@ -41,8 +42,9 @@ Procedure:
 5. After the release commit is on `main` and its CI passed, tag that exact commit and push only the tag:
    `git tag -a vX.Y.Z -m "capcomd X.Y.Z" <sha> && git push origin vX.Y.Z`.
 6. Watch the Release workflow (`gh run watch`) and report the release URL, the npm version
-   (`npm view capcomd@X.Y.Z version`) and whether the Homebrew tap was updated (the `homebrew` job), or the failing
-   job and its log.
+   (`npm view capcomd@X.Y.Z version`; and `npm view @capcomd/plugin@X.Y.Z version` when the `npm-plugin` job ran, which
+   it does only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true`) and whether the Homebrew tap was
+   updated (the `homebrew` job), or the failing job and its log.
 
 Never:
 

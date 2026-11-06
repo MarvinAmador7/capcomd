@@ -25,14 +25,21 @@ export function gitSpan<T>(op: string, ref: string | undefined, fn: (span: Simpl
 export interface TransferProgress { phase: "fetch" | "upload" | "download"; bytes: number; total: number | null; ms: number; done: boolean; line?: string }
 export type OnTransferProgress = (p: TransferProgress) => void;
 
-const PROGRESS_EVERY_MS = () => Number(process.env.CAPCOMD_TRANSFER_PROGRESS_SECONDS ?? 15) * 1000;
+/** A number from the environment, or `def` when it is unset or isn't a number at least 0: a typo never makes every
+ *  transfer fail (a chunk of NaN bytes) or its bound go away. */
+const knob = (name: string, def: number) => {
+  const raw = process.env[name]?.trim();
+  const v = raw ? Number(raw) : NaN;
+  return Number.isFinite(v) && v >= 0 ? v : def;
+};
+const PROGRESS_EVERY_MS = () => knob("CAPCOMD_TRANSFER_PROGRESS_SECONDS", 15) * 1000;
 /** How long the mirror's fetch may go without progress before it fails (CAPCOMD_GIT_STALL_SECONDS, default 300). */
-export const STALL_MS = () => Number(process.env.CAPCOMD_GIT_STALL_SECONDS ?? 300) * 1000;
+export const STALL_MS = () => knob("CAPCOMD_GIT_STALL_SECONDS", 300) * 1000;
 /** The mirror's fetch's overall cap, however it progresses (CAPCOMD_GIT_FETCH_MAX_SECONDS, default 3 hours). */
-export const FETCH_MAX_MS = () => Number(process.env.CAPCOMD_GIT_FETCH_MAX_SECONDS ?? 3 * 3600) * 1000;
+export const FETCH_MAX_MS = () => knob("CAPCOMD_GIT_FETCH_MAX_SECONDS", 3 * 3600) * 1000;
 /** How much of a file is in memory, and in one provider upload or download, at a time (CAPCOMD_TRANSFER_CHUNK_BYTES,
  *  default 8 MiB). */
-const CHUNK = () => Math.max(64 * 1024, Number(process.env.CAPCOMD_TRANSFER_CHUNK_BYTES ?? 8 * 1024 ** 2));
+const CHUNK = () => Math.max(64 * 1024, knob("CAPCOMD_TRANSFER_CHUNK_BYTES", 8 * 1024 ** 2));
 /** How long the sandbox may take to read a bundle: 10 minutes, or 2 s per MB of a bigger one (git indexes the pack). */
 const applyMs = (bytes: number) => Math.max(600_000, Math.ceil(bytes / 1024 ** 2) * 2000);
 
@@ -66,7 +73,9 @@ export function progressLine(what: string, p: TransferProgress): string {
 
 /**
  * A host file → `to` in the sandbox, read from disk a chunk at a time (never whole in memory): one upload when it fits
- * in a chunk, else each chunk as its own file, joined in the sandbox. Answers its size.
+ * in a chunk, else each chunk as its own file, joined in the sandbox (each part removed as it is appended, so the
+ * sandbox never holds the file twice). An upload that breaks halfway (the sandbox gone, a provider error) leaves
+ * neither the parts nor a partial file behind, when the sandbox still answers. Answers its size.
  */
 async function uploadFile(s: SandboxGit, file: string, to: string, report: Report): Promise<number> {
   const size = statSync(file).size;
@@ -87,9 +96,12 @@ async function uploadFile(s: SandboxGit, file: string, to: string, report: Repor
       await s.upload(`${parts}/${String(n).padStart(6, "0")}`, data);
       report(off + data.length);
     }
+    const join_ = await s.exec(["sh", "-c", `set -e; : > ${sq(to)}; for f in ${sq(parts)}/*; do cat "$f" >> ${sq(to)}; rm -f "$f"; done; rm -rf ${sq(parts)}; [ "$(wc -c < ${sq(to)} | tr -d ' ')" = ${size} ]`], { timeoutMs: 600_000 });
+    if (join_.code !== 0) throw new TransferError(`joining the ${size}-byte upload in the sandbox failed: ${tail(join_)}`, "sandbox");
+  } catch (e) {
+    await s.exec(["sh", "-c", `rm -rf ${sq(parts)} ${sq(to)}`]).catch(() => {});
+    throw e;
   } finally { closeSync(fd); }
-  const join_ = await s.exec(["sh", "-c", `cat ${sq(parts)}/* > ${sq(to)}; rc=$?; rm -rf ${sq(parts)}; [ $rc = 0 ] && [ "$(wc -c < ${sq(to)} | tr -d ' ')" = ${size} ]`], { timeoutMs: 600_000 });
-  if (join_.code !== 0) throw new TransferError(`joining the ${size}-byte upload in the sandbox failed: ${tail(join_)}`, "sandbox");
   report(size, { done: true });
   return size;
 }
@@ -98,8 +110,10 @@ async function uploadFile(s: SandboxGit, file: string, to: string, report: Repor
  *  sandbox splits it, the host downloads and appends each part. */
 async function downloadFile(s: SandboxGit, from: string, file: string, size: number, report: Report): Promise<number> {
   const chunk = CHUNK();
+  const short = (got: number) => new TransferError(`downloaded ${got} of the sandbox's ${size}-byte bundle`, "sandbox");
   if (size <= chunk) {
     const data = await s.download!(from);
+    if (data.length !== size) throw short(data.length);
     writeFileSync(file, data);
     report(data.length, { done: true });
     return data.length;
@@ -120,6 +134,7 @@ async function downloadFile(s: SandboxGit, from: string, file: string, size: num
   } finally {
     await s.exec(["sh", "-c", `rm -rf ${sq(parts)}`]).catch(() => {});
   }
+  if (got !== size) throw short(got);
   report(got, { done: true });
   return got;
 }
@@ -192,7 +207,8 @@ const ended = (f: { timedOut?: boolean; stalled?: boolean }) => f.timedOut && !f
 /** Where each branch is on the remote, fetched into the mirror (all branches, pruned, or `branches`). */
 async function fetchMirror(h: HostRemote, m: Git, branches: "all" | string[], o: FetchOptions): Promise<{ heads: Record<string, string>; ref?: string }> {
   // A big first fetch is slow but moving: it runs while git reports progress, up to the cap.
-  const bound = { timeoutMs: o.timeoutMs ?? FETCH_MAX_MS(), stallMs: STALL_MS(), ...(o.report ? { onProgress: (line: string) => o.report!(0, { line }) } : {}) };
+  // indexPack: a small fetch with one big object (under git's unpack limit) reports its bytes too, as a big one does.
+  const bound = { timeoutMs: o.timeoutMs ?? FETCH_MAX_MS(), stallMs: STALL_MS(), indexPack: true, ...(o.report ? { onProgress: (line: string) => o.report!(0, { line }) } : {}) };
   const specs = branches === "all" ? ["+refs/heads/*:refs/remotes/origin/*"] : branches.map((b) => `+refs/heads/${b}:refs/remotes/origin/${b}`);
   if (specs.length) {
     const f = await remoteGit(m, ["fetch", "--progress", "--no-tags", "--no-write-fetch-head", ...(branches === "all" ? ["--prune"] : []), h.remote, ...specs], h.remote, bound);

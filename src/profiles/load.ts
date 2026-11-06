@@ -68,7 +68,8 @@ function viewOf(overlay: ProfileOverlay) {
 }
 type View = ReturnType<typeof viewOf>;
 
-/** Where a profile came from (spec §6.6.5 `ProfileResolved.profile.source`; `installed` arrives with ADR-024 step 7). */
+/** Where a profile came from (spec §6.6.5 `ProfileResolved.profile.source`). An installed package is in the user's or
+ *  the project's layer, where `capcomd profiles install` put it; its LOCK says where from (./install.ts). */
 export type ProfileLayer = "project" | "user" | "bundled";
 /** One file applied to a resolved profile: an ancestor it extends, the profile itself, or an override of it. */
 export interface AppliedFile { as: "extends" | "profile" | "override"; name: string; layer: ProfileLayer; path: string | null }
@@ -137,7 +138,7 @@ function readDoc(path: string, fs: View): unknown {
 }
 
 /** A prompt that is one word ending in .md or .txt is a file's name, not text. */
-const LOOKS_LIKE_FILE = /^\S+\.(?:md|txt)$/;
+export const LOOKS_LIKE_FILE = /^\S+\.(?:md|txt)$/;
 /**
  * A manifest's file references, read: `prompt.system`/`prompt.append` that name a file (`prompt.md`) become its text,
  * and `identity.persona` must exist. Only in a profile directory, and only inside it (`..`, an absolute path and a

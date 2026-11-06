@@ -3,7 +3,7 @@
 // come back a chunk at a time from disk; and a long transfer reports its progress (to its caller, as `git.progress`
 // events on its span, and in one line for a log). The sandbox is FakeProvider's host mode, so its commands run here.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "fs";
 import { randomBytes } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -11,7 +11,7 @@ import { bareRepo } from "./gitfixture";
 import { FakeProvider } from "../../src/providers/fake";
 import { AGENT_EGRESS } from "../../src/agents/config";
 import { Git } from "../../src/merge/git";
-import { progressLine, pushFromSandbox, sendToSandbox, TransferError, type SandboxGit, type TransferProgress } from "../../src/merge/transfer";
+import { mirror, progressLine, pushFromSandbox, sendToSandbox, TransferError, type SandboxGit, type TransferProgress } from "../../src/merge/transfer";
 import { getFinishedSpans } from "../../src/utils/tracing-simple";
 
 const KNOBS = ["CAPCOMD_TRANSFER_CHUNK_BYTES", "CAPCOMD_TRANSFER_PROGRESS_SECONDS", "CAPCOMD_GIT_STALL_SECONDS", "GIT_SSH_COMMAND", "GIT_PROGRESS_DELAY"];
@@ -131,6 +131,74 @@ describe("the mirror's fetch", () => {
     expect(err).toBeInstanceOf(TransferError);
     expect(String(err.message)).toContain("made no progress for 1 s");
     expect(Date.now() - t0).toBeLessThan(10_000);
+  }, 30_000);
+
+  test("runs on while a slow fetch keeps moving, even one big object under git's unpack limit", async () => {
+    // Three objects, one of them a 1 MiB blob, over an "ssh" that passes 32 KiB every 250 ms: about 8 s of transfer
+    // with a 4 s stall bound. Under the unpack limit git's unpack-objects writes nothing while the blob arrives (the
+    // fetch would be killed as a stall at 4 s); the mirror's fetch uses index-pack, which reports the bytes each second.
+    const r = await bareRepo();
+    writeFileSync(join(r.root, "seed", "one.bin"), randomBytes(1024 * 1024));
+    await r.seed.ok(["add", "one.bin"]);
+    await r.seed.ok(["commit", "-q", "-m", "one big object"]);
+    await r.seed.ok(["push", "-q", "origin", "main"]);
+    const bin = mkdtempSync(join(tmpdir(), "capcomd-slow-ssh-"));
+    writeFileSync(join(bin, "throttle.ts"), `const r = Bun.stdin.stream().getReader(); for (;;) { const { value, done } = await r.read(); if (done) break; for (let i = 0; i < value.length; i += 32768) { process.stdout.write(value.subarray(i, i + 32768)); await Bun.sleep(250); } }`);
+    writeFileSync(join(bin, "ssh.sh"), `#!/bin/sh\nexec git-upload-pack '${r.bare}' | '${process.execPath}' '${join(bin, "throttle.ts")}'\n`);
+    chmodSync(join(bin, "ssh.sh"), 0o755);
+    process.env.GIT_SSH_COMMAND = join(bin, "ssh.sh");
+    process.env.CAPCOMD_GIT_STALL_SECONDS = "4";
+    const { box } = await sandbox();
+    const work = mkdtempSync(join(tmpdir(), "capcomd-xfer-"));
+    const t0 = Date.now();
+    const res = await sendToSandbox({ remote: "ssh://git@example.invalid/acme/slow.git", workdir: join(work, "host") }, box, join(work, "repo"), { branches: "all", checkout: "main" }, { fresh: true });
+    expect(Date.now() - t0).toBeGreaterThan(5_000);
+    expect(res.heads.main).toBe((await r.sha("main"))!);
+  }, 60_000);
+});
+
+describe("a transfer that breaks halfway", () => {
+  test("an upload that fails after some chunks leaves no parts and no partial bundle in the sandbox", async () => {
+    process.env.CAPCOMD_TRANSFER_CHUNK_BYTES = String(CHUNK);
+    const r = await bigRepo(5 * CHUNK);
+    const { box } = await sandbox();
+    let n = 0;
+    const dying: SandboxGit = { ...box, upload: async (a, d) => { if (a.includes(".parts/") && ++n === 3) throw new Error("the VM went away"); await box.upload(a, d); } };
+    const work = mkdtempSync(join(tmpdir(), "capcomd-xfer-"));
+    const err = await sendToSandbox({ remote: r.bare, workdir: join(work, "host") }, dying, join(work, "repo"), { branches: "all", checkout: "main" }, { fresh: true }).catch((e) => e);
+    expect(String(err?.message)).toContain("the VM went away");
+    expect(readdirSync("/tmp").filter((f) => f.startsWith(`capcomd-in-${process.pid}-`))).toEqual([]);
+  }, 60_000);
+
+  test("a download that comes back short fails as such, and leaves nothing on the host", async () => {
+    process.env.CAPCOMD_TRANSFER_CHUNK_BYTES = String(CHUNK);
+    const r = await bareRepo();
+    const { box } = await sandbox();
+    const work = mkdtempSync(join(tmpdir(), "capcomd-xfer-"));
+    const h = { remote: r.bare, workdir: join(work, "host") };
+    const dir = join(work, "repo");
+    await sendToSandbox(h, box, dir, { branches: "all", checkout: "main" }, { fresh: true });
+    writeFileSync(join(dir, "work.bin"), randomBytes(3 * CHUNK));
+    const c = await box.exec(["sh", "-c", `cd '${dir}' && git add -A && git -c user.name=a -c user.email=a@a commit -qm work && git rev-parse HEAD`]);
+    const sha = c.stdout.trim().split("\n").pop()!;
+    // The provider hands back the last part cut short (a stream that ended early).
+    const cut: SandboxGit = { ...box, download: async (a) => { const d = await box.download!(a); return /\.parts\/p\.aaaaac$/.test(a) ? d.subarray(0, d.length - 10) : d; } };
+    const err = await pushFromSandbox(h, cut, dir, { sha, ref: "refs/heads/capcomd/r/t", expect: null, near: ["main"] }).catch((e) => e);
+    expect(err).toBeInstanceOf(TransferError);
+    expect(String(err.message)).toMatch(/^downloaded \d+ of the sandbox's \d+-byte bundle$/);
+    expect(await r.sha("refs/heads/capcomd/r/t")).toBeNull();
+    const xfer = join((await mirror(h)).cwd, "xfer");
+    expect(existsSync(xfer) ? readdirSync(xfer).filter((f) => f.startsWith("in-")) : []).toEqual([]);
+  }, 60_000);
+
+  test("a chunk size that isn't a number falls back to the default instead of breaking every transfer", async () => {
+    process.env.CAPCOMD_TRANSFER_CHUNK_BYTES = "8MiB";
+    const r = await bareRepo();
+    const { box, seen } = await sandbox();
+    const work = mkdtempSync(join(tmpdir(), "capcomd-xfer-"));
+    await sendToSandbox({ remote: r.bare, workdir: join(work, "host") }, box, join(work, "repo"), { branches: "all", checkout: "main" }, { fresh: true });
+    expect(seen.uploads).toBe(1);
+    expect((await new Git(join(work, "repo")).ok(["rev-parse", "HEAD"])).trim()).toBe((await r.sha("main"))!);
   }, 30_000);
 });
 

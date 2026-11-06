@@ -93,6 +93,9 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   project: { type: "boolean" },
   "accept-risk": { type: "boolean" },
   "plugin-config": { type: "string", multiple: true },
+  // capcomd profiles export --flat --out DIR (ADR-024 §2.5)
+  flat: { type: "boolean" },
+  out: { type: "string" },
   ref: { type: "string" },
   id: { type: "string" },
   checks: { type: "string" },

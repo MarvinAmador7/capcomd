@@ -1,7 +1,7 @@
 // `engines.capcomd` ranges (spec §4.4): semver range semantics with prereleases included, so `>=0.9.0 <1.0.0` admits
 // 0.10.0-rc.1. Bun.semver.satisfies leaves prereleases out (node-semver's default) and accepts any string as a range,
-// so the host parses ranges itself and compares versions with Bun.semver.order. The grammar is node-semver's common
-// subset: comparators (`>=1.2.0 <2`), `^`, `~`, x-ranges (`1.x`, `1.2`), hyphen ranges (`1.0.0 - 1.4.0`) and `||`.
+// so the host parses ranges itself and compares versions by semver 2.0 precedence (`compareVersions`: no Bun API, so the
+// published package runs on Node too). The grammar is node-semver's common subset: comparators (`>=1.2.0 <2`), `^`, `~`, x-ranges (`1.x`, `1.2`), hyphen ranges (`1.0.0 - 1.4.0`) and `||`.
 
 type Op = ">=" | ">" | "<=" | "<" | "=";
 type Comparator = { op: Op; version: string };
@@ -70,11 +70,37 @@ export function parseRange(range: string): Comparator[][] | null {
   return sets;
 }
 
+const VERSION = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/** Semver 2.0 precedence (§11 of semver.org): -1, 0 or 1. Build metadata is ignored; a prerelease sorts before its
+ *  release, its identifiers compared numerically when both are numbers, a number before a word, fewer before more.
+ *  A string that isn't a version sorts before every version (and equal to another such string). */
+export function compareVersions(a: string, b: string): -1 | 0 | 1 {
+  const x = VERSION.exec(a.trim()), y = VERSION.exec(b.trim());
+  if (!x || !y) return !x && !y ? 0 : !x ? -1 : 1;
+  const sign = (n: number) => (n < 0 ? -1 : n > 0 ? 1 : 0) as -1 | 0 | 1;
+  for (let i = 1; i <= 3; i++) if (Number(x[i]) !== Number(y[i])) return sign(Number(x[i]) - Number(y[i]));
+  const p = x[4]?.split("."), q = y[4]?.split(".");
+  if (!p || !q) return !p && !q ? 0 : !p ? 1 : -1;
+  for (let i = 0; i < Math.max(p.length, q.length); i++) {
+    const s = p[i], t = q[i];
+    if (s === undefined) return -1;
+    if (t === undefined) return 1;
+    if (s === t) continue;
+    const sn = /^\d+$/.test(s), tn = /^\d+$/.test(t);
+    // Numbers by value (`00` is `0`, as Bun has it): equal ones go on to the next identifier.
+    if (sn && tn) { if (Number(s) !== Number(t)) return sign(Number(s) - Number(t)); continue; }
+    if (sn !== tn) return sn ? -1 : 1;
+    return s < t ? -1 : 1;
+  }
+  return 0;
+}
+
 const TEST: Record<Op, (o: number) => boolean> = { ">=": (o) => o >= 0, ">": (o) => o > 0, "<=": (o) => o <= 0, "<": (o) => o < 0, "=": (o) => o === 0 };
 
 /** Whether `version` is in `range`, prereleases compared like any version (§4.4). False for a range that doesn't parse. */
 export function satisfies(version: string, range: string): boolean {
   const sets = parseRange(range);
   if (!sets) return false;
-  return sets.some((set) => set.every((c) => TEST[c.op](Bun.semver.order(version, c.version))));
+  return sets.some((set) => set.every((c) => TEST[c.op](compareVersions(version, c.version))));
 }
