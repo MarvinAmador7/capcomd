@@ -248,13 +248,21 @@ export function leadText(s: Pick<AgentSpec, "children">): string | null {
  */
 export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, git history and any branch, every agent's logs, verify and merge reports with their full check output) and runs nothing (no edits, commits, installs, builds or tests), so give it no task that needs it to run code itself (its helpers write and test the code). Checks run at verify and merge, and their results are readable; capcomd check runs them on the combined code when it asks";
 
+/**
+ * Whether an allow-list leaves the agent read-only: it names tools, none of them edits files, and its shell, if any,
+ * is limited to commands (`Bash(bun test:*)`, as `capcomd setup` gives a reviewer). A plain `Bash` (or `Bash(*)`)
+ * can write any file.
+ */
+export function readOnlyTools(allowed: readonly string[] | undefined): boolean {
+  return !!allowed?.length && !allowed.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\((:?\*)?\))?$/.test(t.trim()));
+}
+
 /** What a profile is for, in plain words (capcomd_profiles, `capcomd agents list`). */
 export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & { toolMode?: string }): string {
   const lead = leadText(s);
   const mode = s.toolMode === "orchestrate" ? `. ${ORCHESTRATE_TEXT}` : "";
   if (lead) return `leads a part: spawns ${lead}, and verifies and merges their work (spawn it with children: {maxChildren, maxDepth} to size it)${mode}`;
-  const ro = s.allowedTools?.length && !s.allowedTools.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t));
-  return ro ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
+  return readOnlyTools(s.allowedTools) ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
 }
 
 /**

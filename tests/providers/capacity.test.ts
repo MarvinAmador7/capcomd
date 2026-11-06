@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { admits, agentMemory, agentSlots, AgentSlots, holdSlot, releaseSlot, slotsFor } from "../../src/providers/capacity";
+import { admits, agentMemory, agentSlots, AgentSlots, holdSlot, profileCapacity, releaseSlot, slotsFor } from "../../src/providers/capacity";
 import { agentSlotsField } from "../../src/api/sandboxes";
 
 const GB = 1024 ** 3;
@@ -159,4 +159,15 @@ describe("holdSlot (a check's machine, capcomd check)", () => {
     t = 2000; // past the grace from the renewal too
     expect((await s.request("agent", 1500)).admitted).toBe(true);
   });
+});
+
+test("a profile's capacity (capcomd_profiles): the place's slots, or none until its login's usage limit resets", () => {
+  const docker = { sandbox: "docker", agentsAtOnce: 7, detail: "7 agents at once (Docker's 7.8 GB ÷ 1024 MB per agent)" };
+  expect(profileCapacity(docker, "claude:subscription", 0)).toEqual({ agentsAtOnce: 7, detail: "7 at once on docker, shared with every other profile" });
+  const until = Date.UTC(2026, 10, 5, 18, 0, 0);
+  expect(profileCapacity(docker, "claude:subscription", until)).toEqual({
+    agentsAtOnce: 0, waitsUntil: "2026-11-05T18:00:00.000Z", detail: "its login (claude subscription) is at its usage limit until 2026-11-05T18:00:00.000Z: an agent spawned now waits for the reset",
+  });
+  const boxd = { sandbox: "boxd", agentsAtOnce: null, detail: "no local cap: each agent runs in its own boxd cloud VM" };
+  expect(profileCapacity(boxd, null, 0)).toEqual({ agentsAtOnce: null, detail: boxd.detail });
 });

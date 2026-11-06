@@ -380,7 +380,8 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   (with a warning), and a v2 profile may `extends` a v1 entry. With no v2 file anywhere, the result is exactly the v1
   file.
 - **`extends` is looked up like any name** (project, user, bundled), so a profile extending its own name is a cycle;
-  the parent comes with its own overrides applied. `name`, `version`, `default` and `sharing` are not inherited.
+  the parent comes with its own overrides applied. `name`, `version`, `default` and `sharing` are not inherited (nor,
+  since step 4, `identity.title` and `identity.avatar`).
 - **Overrides apply from the profile's own layer upward**: a bundled profile gets the user's, then the project's
   `override.yaml`; a user profile the user's, then the project's; a user override of a name the project defines itself
   doesn't apply (a warning). An override may not set `name`, `extends`, `version` or `sharing`.
@@ -392,11 +393,32 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
 - **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
 - **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `context`, `sandbox.provider|environment|size`,
-  `lifecycle.onStart|onEnd`, `permissions.report`, `harness.cliVersion`) are checked and kept on the resolved
+  `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4) are checked and kept on the resolved
   profile, not pinned (`jobs` is pinned as is since the jobs service, spec §17.2 step 7); `capcomd agents validate` names the ones a profile sets. `sandbox.provider` is checked against
   the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.
+
+Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src/profiles/describe.ts`):
+
+- **`permissions.report: false` refuses a spawn with `report`** (`reason: report_not_allowed`), checked on the host
+  where every spawn is (`ops.spawnAgent`, after `profile.resolved`), not pinned. Unset means allowed, as before any
+  profile could say: `true` changes nothing at spawn and says, in `fit`, that the profile answers with a report.
+- **`identity.title` and `identity.avatar` are not inherited**, like `name`: a `lead` that extends `worker` would
+  otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
+  a reviewer until it says otherwise).
+- **`fit` is built from the resolved spec and `permissions` only**: what the tools allow (orchestrate, read-only,
+  edits; a plain `Bash` isn't read-only, `Bash(<cmd>:*)` rules are, as `does` says), report, provider label, model,
+  effort, cost, limits, an egress allowlist's size, whether it leads (`leadText`). No `description`,
+  `tags`, `title` or `sharing` goes into it, so a shared package can't word it.
+- **`cost` is a tier by model family** (Haiku, `-mini`, `-nano`: low; Sonnet, GPT, `o<N>`: medium; Opus, `-pro`:
+  high), null when the profile leaves the model to the CLI or names one outside those families. No price table is
+  kept: list prices change, the relative tiers rarely do.
+- **`capacity` is the sandbox's slots, shared by every profile** (`placeCapacity` of the project's configured
+  sandbox, as `capcomd_setup` reports it), or 0 with `waitsUntil` while the profile's login is in the quota ledger;
+  readiness (a missing login) stays in `ready`/`detail`, not in `capacity`. Only `capcomd_profiles` reports it:
+  `capcomd agents list` also runs in an agent's VM, which can't see the host's sandbox.
+- **`prompt.*` as files** shipped with step 1 (above).
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 
