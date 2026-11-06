@@ -82,6 +82,7 @@ src/
                   <model>/limits.json, regenerated with `bun scripts/gen-context-limits.ts`); providers.ts, the active
                   providers by name; capture.ts, the candidates an agent's result.data.context makes; scan.ts, the
                   seeded secret scan that refuses (capture and lint); lint.ts, `capcomd context lint` and index.md;
+                  skills.ts and skills/, the doctrine and routing skills the router attaches;
                   groundray.ts, a brain's provider and the project's brain mappings (`capcomd context brain`);
                   project.ts, the project's `context` settings and their copy kept with a run
   cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
@@ -168,7 +169,7 @@ What CI runs, and where (`.github/workflows/`):
 |---|---|
 | `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
-| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect --arms none,agents-md,index`, below) |
+| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect` with every runnable arm, below) |
 | `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
 | `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
@@ -253,8 +254,18 @@ each step with `capcomd check` on the agent's branch, in a sandbox like verify's
 re-discovery (reads of the fact's file) from `capcomd logs`, turns, tokens, the cache-read ratio, cost (notional on
 a plan login) and the model the CLI reported, from the agent's span.
 
+The arms past the baselines are the router's brief over a hand-written `.capcomd/context/` (`index`; its records, the
+two lessons the tasks need and, with `--memory project`, the default, the rest of a project's memory:
+`world.ts` `otherRecords`) and what ADR-025 step 6 asked of it, delivered by the harness the way the kernel would
+(`scripts/eval-context/deliver.ts`): `index-paths` (no `paths` column), `index-k1` and `index-k3` (the brief's first
+k items, whole and fenced, in the agent's first message) and `index-triggered` (an item pushed as a fenced message
+the first time the agent touches a path it applies to; Claude Code only, a Codex agent can't read a message while it
+runs). `report.ts` `admission` answers each against `index` by fixed rules, and a run on a project's memory writes the
+answers into the model's `limits.json` (`inlineItems`, `triggeredInjection`, `decisions`); `--memory small` (only
+what the tasks need) is reported, never decides.
+
 ```bash
-bun scripts/eval-context.ts --seed 1 --expect --arms none,agents-md,index   # fake sandbox and scripted agent (CI, ~30 s)
+bun scripts/eval-context.ts --seed 1 --expect --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered   # fake (CI, ~1 min)
 bun scripts/eval-context.ts --list                     # the arms, chains and pending probes, and which are runnable
 CAPCOMD_HOME=<a home with your logins> BOXD_API_KEY=… \
   bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-6.1-sol --reps 3 --port 6571 --evidence docs/evidence/context
@@ -266,8 +277,9 @@ the files they name when its profile has one, else the stub's stale comment and 
 runs real Claude Code or Codex agents (one profile per `--models` entry, plan logins) on `--sandbox` (boxd by default,
 or docker); a Codex model must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a
 `CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`), never `~/.capcomd`
-itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` and, the first time, the model's `limits.json`
-(ADR-025 D4's starting values until an arm measures them). The world itself isn't written there: the seed and the
+itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` (`<date>-2.json` and so on for another run that
+day: evidence is never overwritten) and, the first time, the model's `limits.json` (ADR-025 D4's starting values until
+an arm measures them). The world itself isn't written there: the seed and the
 recorded commit give it back, and its carriers file holds the planted instruction. The router reads a model's
 `limits.json` from a generated copy: after the eval writes one, run `bun scripts/gen-context-limits.ts` (CI checks
 it with `--check`). The seed defaults to today's date

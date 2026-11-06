@@ -220,7 +220,7 @@ const SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SKILL_SOURCES = ["builtin", "user", "project", "plugin"];
 const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 /** At most this many skills on one agent, together at most this many bytes (as on a message, src/agents/skills.ts). */
-const SKILLS_MAX = 8, SKILL_BYTES_MAX = 256 * 1024;
+export const SKILLS_MAX = 8, SKILL_BYTES_MAX = 256 * 1024;
 /** At most this many variables a plugin adds, each value at most this long. */
 const ENV_MAX = 32, ENV_VALUE_MAX = 4096;
 /**

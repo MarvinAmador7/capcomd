@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 import { readSkillSync, SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
+import { CONTEXT_SKILLS, contextSkills } from "../context/skills";
 
 /** capcomd's orchestration skill (plugins/capcomd/skills/capcomd-orchestration), the only bundled one. */
 export const ORCHESTRATION_SKILL_NAME = "capcomd-orchestration";
@@ -28,15 +29,17 @@ const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 /**
  * A resolved profile's `skills`, read: `dirs` are the package directories that may hold them, nearest first (the
  * profile's overrides, itself, then its ancestors), each with its layer. `maySpawn`: the profile's
- * `children.allowSpawn`. Errors are `<prefix>: skills[i] …`, as a profile's others are.
+ * `children.allowSpawn`; `hasContext`: it has a context block, whose skills the router attaches (ADR-025 step 6).
+ * Errors are `<prefix>: skills[i] …`, as a profile's others are.
  */
-export function profileSkills(prefix: string, list: unknown, dirs: Array<{ dir: string; layer: "project" | "user" }>, maySpawn: boolean): { skills: ProfileSkill[]; errors: string[] } {
+export function profileSkills(prefix: string, list: unknown, dirs: Array<{ dir: string; layer: "project" | "user" }>, maySpawn: boolean, hasContext = false): { skills: ProfileSkill[]; errors: string[] } {
   const skills: ProfileSkill[] = [], errors: string[] = [];
   if (!Array.isArray(list)) return { skills, errors };
   const at = (i: number, m: string) => errors.push(`${prefix}: skills[${i}] ${m}`);
   list.forEach((entry, i) => {
     if (!isMap(entry) || typeof entry.name !== "string") return; // ./v2.ts checkManifest said why
     const name = entry.name, source = entry.source as string | undefined, pin = entry.hash as string | undefined;
+    if (CONTEXT_SKILLS.some((s) => s.name === name)) { at(i, `(${name}): that name is capcomd's own skill, which an agent whose profile has a context block gets by itself; give yours another name`); return; }
     if (name === ORCHESTRATION_SKILL_NAME) {
       if (source !== undefined && source !== "bundled") at(i, `(${name}): that name is capcomd's own skill (source: bundled); give yours another name`);
       else if (pin !== undefined) at(i, `(${name}): capcomd writes this skill for each agent (its limits, budget and goal branch), so a hash can't pin it: remove the hash`);
@@ -72,9 +75,14 @@ export function profileSkills(prefix: string, list: unknown, dirs: Array<{ dir: 
     if (pin !== undefined && pin !== `sha256:${hash}`) { at(i, `(${name}): its SKILL.md changed: it is sha256:${hash} now, and the profile pins ${pin}. Read it, then pin the new hash`); return; }
     skills.push({ name, source: found.source, hash, text: found.text, path: found.path });
   });
-  const most = SKILLS_PER_MESSAGE_MAX - (maySpawn ? 1 : 0), room = SKILL_MAX_BYTES - (maySpawn ? ORCHESTRATION_RESERVE_BYTES : 0);
+  // The context router's skills (src/context/skills.ts) for a profile with a context block: the doctrine, and the
+  // routing paragraph for an agent that may spawn.
+  const kept = hasContext ? contextSkills({ role: "work", maySpawn }) : [];
+  const most = SKILLS_PER_MESSAGE_MAX - (maySpawn ? 1 : 0) - kept.length;
+  const room = SKILL_MAX_BYTES - (maySpawn ? ORCHESTRATION_RESERVE_BYTES : 0) - kept.reduce((n, s) => n + Buffer.byteLength(s.text), 0);
   const ours = list.filter((s) => !(isMap(s) && s.name === ORCHESTRATION_SKILL_NAME)).length;
-  const why = maySpawn ? " (an agent that may spawn keeps room for capcomd's orchestration skill)" : "";
+  const reasons = [...(maySpawn ? ["an agent that may spawn keeps room for capcomd's orchestration skill"] : []), ...(kept.length ? ["a profile with a context block keeps room for its context skills"] : [])];
+  const why = reasons.length ? ` (${reasons.join("; ")})` : "";
   if (ours > most) errors.push(`${prefix}: skills: at most ${most} skills${why}, and it names ${ours}`);
   const total = skills.reduce((n, s) => n + Buffer.byteLength(s.text), 0);
   if (!errors.length && total > room) errors.push(`${prefix}: skills: their SKILL.md files add up to ${total} bytes, over the ${room} an agent's skills may have${why}`);

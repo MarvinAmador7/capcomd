@@ -298,7 +298,8 @@ contains only what may carry that authority:
    truncation is deterministic and the header says what was dropped. No body, ever.
 3. Nothing else. The groundray doctrine ("answer → evidence → guidance", "relevance is not truth or authority") and the
    routing paragraph ship as hash-pinned skills once `prompt.skills` is accepted at `agent.preparing` (spec §17.2 step
-   8; `src/plugins/hooks.ts:219` refuses it today).
+   8; `src/plugins/hooks.ts:219` refuses it today). *(Shipped in step 6: `capcomd-context-doctrine` and
+   `capcomd-context-routing`, attached by the router after the brief; §13, "Made while building step 6".)*
 
 The brief is a pure function of `(project, profile, revision, limits)`: **identical for every agent of a profile at a
 revision**, task-independent, so parallel workers share the cached prefix Claude Code documents for sessions in one
@@ -540,7 +541,8 @@ admitted them.
    as actor. Tests: the forge fake receives a PR on the brain repository; the mounted export is unchanged.
 6. **After spec §17.2 step 8**: the doctrine and routing paragraphs as hash-pinned skills on `agent.preparing`;
    inline items as a fenced first message *if* step 0's matrix admits them; the `context` message kind *if* triggered
-   injection is admitted.
+   injection is admitted. *(Built: the two skills. Measured and not admitted: inline items and triggered injection;
+   see "Made while building step 6" below.)*
 7. **Later, each by amendment with numbers**: `user`/`profile` layers after the transfer ablation (D15); plugin-contributed
    agent tools (D16, its own ADR); an embedding provider (D14); sweeps as timer jobs; item signing.
 
@@ -627,7 +629,7 @@ this list says why):
   already says, nothing stale within a week). It reaches agents that may spawn, the ones with an in-VM `capcomd
   result`; Hermes' full routing paragraph as a hash-pinned skill of its own still waits for step 6.
 
-**Made while building step 4** (spec 1.0.28; groundray's read path, `src/context/groundray.ts`, the built-in
+**Made while building step 4** (spec 1.0.29; groundray's read path, `src/context/groundray.ts`, the built-in
 `context-groundray`):
 
 - **The mapping is the project's, pinned per run by the run's record.** `capcomd context brain add <name> <repo>
@@ -669,6 +671,40 @@ this list says why):
   every agent's sandbox gets the tree at start.
 - A line's path may be 320 characters (200 before): a bundle's file is under the kernel's root.
 - `allowStale` (§10's example) isn't read: stale lines leave the brief as for any provider.
+
+**Made while building step 6** (spec 1.0.28; evidence `docs/evidence/context/README.md`, "step 6"):
+
+- The doctrine and the routing paragraph are two skills, `capcomd-context-doctrine` and `capcomd-context-routing`
+  (`src/context/skills/`, `src/context/skills.ts`), attached by the router (the `context` plugin) in the same patch as
+  the brief, `source: builtin`, pinned by the sha256 of their fixed text, so the brief stays byte-identical across a
+  profile's agents. The doctrine goes to every agent whose profile has a context block, reviewers included (it is about
+  reading, D11 allows facts); the routing paragraph goes only to an agent that may spawn and is not a reviewer or a report
+  agent: `capcomd kv` and `capcomd result --data`, which it names, are the in-VM capcomd's, which only an agent that may
+  spawn has (§5.1 had it in "the orchestration skill" for that reason). Its proposal shape is step 2's (`title`,
+  `text`, `type`), which capture collects from `result.data.context[]`; the orchestration skill keeps step 2's short
+  "Notes and lessons" paragraph for every agent that may spawn, and one whose profile has a context block gets the
+  routing skill's fuller version beside it (the two agree). Their names are the kernel's (a profile can't use them), and a profile with a context block keeps
+  room for them among its own `skills`, as one that may spawn does for the orchestration skill. The router attaches them
+  after the orchestration skill (`after: [skill-orchestration]`) and only as many as fit what the agent's other skills
+  leave (an agent pinned before its profile kept room, or a plugin's skills): a skill that doesn't fit is left out, never
+  the brief or the orchestration skill.
+- **Inline items: not admitted.** **Triggered injection (and with it the `context` message kind): not admitted.** The
+  step-0 eval asked both live on the four current models before anything was built: the harness delivers each the way
+  the kernel would (`scripts/eval-context/deliver.ts`) and decides by rules fixed before the full run
+  (`report.ts` `admission`, from §12's decision rules: inline items on success or on 20% fewer tool calls at no more than
+  10% more cost; triggered injection only on more steps passed than the `paths` column, §6.3). On a project's memory
+  (the records the tasks need among 17 other items) every arm passed 21/21; inline k = 1 and k = 3 saved at most 11% of
+  the tool calls and k = 3 cost more on three models; triggered injection cost 11-18% more on every Claude model, cannot
+  reach a Codex agent, and had the run's only two failures (a report agent whose last message answered a push, as far as
+  the results show). Each model's `limits.json` records `inlineItems: 0` and `triggeredInjection: false` with the run
+  that decided them; nothing of either ships, and spec §11.5's `context` kind stays reserved. A re-run on a new model
+  release (or a harder world, where success has room to move) reopens both by the same rules.
+- The eval's index arms keep a project-sized memory by default (`--memory project`): with only the five items the
+  tasks need, "the brief's first three items" are the three answers, which measures `AGENTS.md` again rather than a
+  task-independent brief. `--memory small` stays available and is reported, never decides; on it the inline rule would
+  have admitted k = 1 and k = 3 for one model (sonnet), which is the point.
+- §12's "a `paths` column vs none" ablation is an arm (`index-paths`, the items without `paths`) run on the fake
+  sandbox in CI; "each doctrine skill present vs absent" is not an arm yet (the index arms all get the skills).
 
 ## 14. What the review changed
 
