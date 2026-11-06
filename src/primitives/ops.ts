@@ -1025,7 +1025,8 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const said = orchestrate && !declared.summary && lastWords ? { summary: lastWords } : {};
   // ADR-025 §5.2: a consolidator's answer is staged on its branch by the kernel; that branch is its work.
   const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;
-  const work = consolidated?.staged ? { branch: consolidated.staged.sha ? branch : null, commit: consolidated.staged.sha } : { branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null };
+  // A consolidator's work is only what was staged: no list, nothing to stage or a staging that failed is no branch.
+  const work = consolidated ? { branch: consolidated.staged?.sha ? branch : null, commit: consolidated.staged?.sha ?? null } : { branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null };
   const fin = await s.finish({ agentId, status: limit || "error" in blocked || consolidated?.error ? "failed" : "done", spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, ...consolidated?.result, verification: null, ...work, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
   return fin.agent;
 }

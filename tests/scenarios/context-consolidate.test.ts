@@ -121,6 +121,23 @@ test("a contradiction becomes a supersede; a poisoned lesson is staged as a flag
   const { stageOnBranch } = await import("../../src/context/consolidator");
   const again = await stageOnBranch(run, { agentId: c.agentId, profile: CONSOLIDATOR_PROFILE, spec: {}, taskId: c.agentId }, [{ title: "Flaky suite", text: "something else entirely, said later" }]);
   expect(again.sha).toBe(commit);
+
+  // Stagings of one run at once (consolidators ending together) share the run's clone: each branch holds its own
+  // change and nothing of another's.
+  const names = ["one", "two", "three", "four"];
+  const many = await Promise.all(names.map((n) => stageOnBranch(run, { agentId: `agt-cc${n}`, profile: CONSOLIDATOR_PROFILE, spec: {}, taskId: `agt-cc${n}` }, [{ title: `Many ${n}`, text: `Lesson ${n} of ${names.length} staged at once: the ${n} tool reads its settings from tools/${n}.json.` }])));
+  await w.repo.seed.ok(["fetch", "-q", "origin"]);
+  for (const [i, s] of many.entries()) {
+    const files = (await w.repo.seed.ok(["diff", "--name-only", `${s.sha}^`, String(s.sha)])).split("\n").filter(Boolean);
+    expect(files).toEqual([INDEX_FILE, expect.stringMatching(new RegExp(`^\\.capcomd/context/memory/many-${names[i]}-[0-9a-f]{6}\\.md$`))]);
+  }
+
+  // A consolidator that gives no list stages nothing, and has no branch to verify or merge.
+  const none = await consolidator(run, []);
+  expect(none.result).toMatchObject({ branch: null, commit: null, context: { applied: [], refused: [] } });
+  const silent = await spawnRoot(w, run, CONSOLIDATOR_PROFILE, w.script(`consolidate-silent-${run}`, `capcomd result --summary "nothing to add" >/dev/null`), { task: "Consolidate this run's lessons" });
+  const s = (await waitAll(w, run, [silent])).agents[0];
+  expect(s).toMatchObject({ status: "done", result: { summary: "nothing to add", branch: null, commit: null, context: { applied: [] } } });
 }, 240_000);
 
 test("a worker's branch that changes .capcomd/context/ fails its verify; merging it past the gate is recorded as a bypass of context-memory", async () => {

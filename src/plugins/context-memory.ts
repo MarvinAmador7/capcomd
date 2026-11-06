@@ -15,8 +15,8 @@ import { definePlugin } from "../../packages/plugin/src/context";
 import type { Outcome } from "../../packages/plugin/src/context-layer";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { VERSION } from "../utils/self";
-import { CONTEXT_DIR, memoryProvider } from "../context/memory";
-import { holdOf, judgeBranch, type BranchFacts, type Judgement, type Review } from "../context/promotion";
+import { memoryProvider } from "../context/memory";
+import { holdOf, judgeBranch, touchesContext, type BranchFacts, type Judgement, type Review } from "../context/promotion";
 
 export const manifest: PluginManifest = {
   schema: "capcomd.plugin/v1", name: "context-memory", version: VERSION,
@@ -73,12 +73,14 @@ export const promotionKernel = {
     const SHA = /^[0-9a-f]{40,64}$/;
     if (!SHA.test(o.commit) || (o.targetSha && !SHA.test(o.targetSha)) || /[^A-Za-z0-9._/-]|\.\./.test(`${o.branch}${target}`)) throw new Error("not a commit or a branch");
     // Its own bare host repo, fetched under a lock that holds across processes (a CLI's verify, the daemon's merge):
-    // only the target and the branch, and the commit by its id when its branch has moved on since.
+    // only the target and the branch, and the commit by its id when its branch has moved on since. Nothing when it has
+    // both commits already (a merge after its verify read them): a merge's fast path stays one round trip.
     const git = await withCloneLock(cfg, GATES_CLONE, async () => {
       const dir = cloneDir(cfg, GATES_CLONE);
       let g = new Git(dir);
       if (!existsSync(join(dir, "HEAD")) || !isHostRepo(dir) || (await hostRepoProblems(g)).length) { rmSync(dir, { recursive: true, force: true }); g = await initHostRepo(dir, { bare: true }); }
       const has = async (sha: string) => (await g.run(["cat-file", "-e", `${sha}^{commit}`])).code === 0;
+      if (o.targetSha && (await has(o.commit)) && (await has(o.targetSha))) return g;
       const ref = (b: string) => `+refs/heads/${b}:refs/remotes/origin/${b}`;
       const f = await remoteGit(g, ["fetch", "-q", "--no-tags", cfg.remote, ref(target), ...(await has(o.commit) ? [] : [ref(o.branch)])], cfg.remote);
       if (f.code !== 0 && !(await has(o.commit))) await remoteGit(g, ["fetch", "-q", "--no-tags", cfg.remote, ref(target)], cfg.remote);
@@ -113,7 +115,7 @@ export async function judgeRef(runId: string, ref: string, o: { commit?: string 
   const commit = o.commit || agent?.commit;
   if (!agent || !commit) return null;
   const facts = await promotionKernel.branch(runId, { commit, branch: agent.branch, targetSha: o.targetSha ?? null });
-  if (!facts.files.some((f) => f.path.startsWith(CONTEXT_DIR) || f.oldPath?.startsWith(CONTEXT_DIR))) return null;
+  if (!facts.files.some((f) => touchesContext(f.path) || touchesContext(f.oldPath))) return null;
   const { secretScan } = await import("../context/scan");
   const { DEFAULT_LIMITS } = await import("../context/limits");
   const j = judgeBranch({ ...facts, agent }, {
@@ -139,8 +141,9 @@ export const plugin = definePlugin({
     // The gate (ADR-025 §5.3): under the target's lock, before anything is pushed. Fail-closed: a branch it can't read
     // doesn't land.
     ctx.hooks.on("merge.landing", async (call) => {
-      const { merge } = call.payload;
-      const j = await judgeRef(merge.runId, merge.ref);
+      const { merge, target } = call.payload;
+      // From where it left the target as its verify saw it (when it has one), so a merge right after it reads nothing new.
+      const j = await judgeRef(merge.runId, merge.ref, { targetSha: target.sha || null });
       if (!j) return { decision: "allow" };
       if (j.problems.length) return { decision: "deny", reason: j.problems.join(" ").slice(0, 2000) };
       if (j.review === "lint") return { decision: "allow" };

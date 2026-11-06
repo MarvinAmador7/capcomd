@@ -7,7 +7,8 @@
 // kernel's records, so its branch is lint-clean by construction and changes nothing outside `.capcomd/context/`.
 // Deterministic for one input, so a replay stages the same files:
 //  - an `add` the lexical match finds said already (an active item, or an earlier add of this staging) isn't added
-//    again; the item's `helpful` counter goes up instead (with a change: counters alone stage nothing);
+//    again; a memory item's `helpful` counter goes up instead (with a change: counters alone stage nothing; a fact's
+//    never does);
 //  - an `add` titled as an active memory item is (one subject, said differently) supersedes it: the brief never shows
 //    two active items with one subject, and the newer one wins (a correction outlives what it corrected);
 //  - `supersede` writes the new item with `supersedes: [target]` and marks the target `superseded_by` it and
@@ -209,6 +210,8 @@ export function stage(i: StageInput): Staged {
       if (twin) return void applied.push({ n, op: "duplicate", id: twin.id, path: twin.path });
       const known = [...items.values()].find((x) => active(x) && !touched.has(x.id) && same(w, x.words));
       if (known) {
+        // A fact is a person's to change, its counters too: said already, so nothing is added, and nothing counted.
+        if (known.kind === "fact") return void applied.push({ n, op: "duplicate", id: known.id, path: known.path });
         set(known.path, { helpful: known.helpful + 1 });
         touched.add(known.id);
         return void applied.push({ n, op: "duplicate", id: known.id, path: known.path });

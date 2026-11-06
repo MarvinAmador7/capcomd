@@ -687,9 +687,10 @@ without a review (no reviewer gate active) fails closed. Review-mode agents a ju
 `review.vfyId`) that still run when it finishes are stopped by the kernel.
 
 The built-in `context-memory` is a judge too (ADR-025 §5.3, "lint as a check"): for an agent's branch whose
-`tested.commit` changes `.capcomd/context/` (against its merge base with `tested.targetSha`), it denies when the agent
-isn't a consolidator (`memory lands only from a consolidator or a person`), when a consolidator's branch changes a file
-outside that directory, and when `capcomd context lint` fails on the directory at `tested.commit` against the merge
+`tested.commit` changes `.capcomd/context/` (against its merge base with `tested.targetSha`; a file under it, or the
+directory or `.capcomd` made a file or a link), it denies when the agent isn't a consolidator (`memory lands only from a
+consolidator or a person`), when a consolidator's branch changes a file outside that directory or makes it a file or a
+link, and when `capcomd context lint` fails on the directory at `tested.commit` against the merge
 base (`src/context/promotion.ts`); a branch that touches nothing there, or isn't an agent's, is allowed unread. It is
 built in and loaded in every process (§6.1), and it judges before the reviewer gate (§6.3, by name), so a memory change
 that can't land costs no review. It reads the branch in a clone of the run's repository it keeps (a host repo,
@@ -722,7 +723,8 @@ of a held merge ends its verifier record `failed`. A dry run (no repository) has
 no `merge.landing`.
 
 Promotion is a merge (ADR-025 §5.3): the built-in `context-memory` listens here, fail-closed, judging the agent's commit
-(its result's `commit`) as its `verify.judging` judge does (§6.6.13), and denies what that judge would. A consolidator's
+(its result's `commit`, from its merge base with `target.sha` when the payload has one, else with the target's tip) as
+its `verify.judging` judge does (§6.6.13), and denies what that judge would. A consolidator's
 branch that passes is held for a person under its profile's `context.review: human` (the default), with what changes
 and what lint flags for a reader (an item that reads like an instruction, a stale or large one) in the reason and
 `holdId` `memory@<commit, 12 characters>`, so an approval holds for that commit only; under `review: lint` it is allowed

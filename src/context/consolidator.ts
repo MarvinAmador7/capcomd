@@ -154,40 +154,44 @@ export async function stageOnBranch(runId: string, a: { agentId: string; profile
   const none = (applied: Applied[] = [], refused: StageRefusal[] = []): StagedBranch => ({ sha: null, branch, applied, refused, ignored: [], lint: { errors: [], warnings: [] } });
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId);
   if (!cfg) return none();
-  const { openClone } = await import("../merge/repo");
+  const { openClone, withCloneLock } = await import("../merge/repo");
   const { remoteGit } = await import("../merge/host-git");
   const { taskKey } = await import("../merge/config");
   const { readContextAt } = await import("./lint");
   const { limitsFor } = await import("./limits");
   const { runSecrets, secretScan } = await import("./scan");
   const target = (await (await import("../primitives/ops")).runTarget(runId)) ?? cfg.target;
-  const git = await openClone(cfg, `${runId}-context`);
-  const existing = await git.revParse(`refs/remotes/origin/${branch}`);
-  const base = existing ? await git.revParse(`${existing}^`) : await git.revParse(`refs/remotes/origin/${target}`);
-  if (!base) throw new Error(`target branch ${target} not found on ${cfg.remote}`);
-  const spec = (a.spec ?? {}) as { model?: string; context?: ContextSpec };
-  const { limits } = limitsFor(spec.model ?? null, spec.context);
-  const records = await runCandidates(runId);
-  const staged = stage({
-    files: readContextAt(git.cwd, base), raw, candidates: records.flatMap((r) => r.candidates as Candidate[]),
-    origin: { runId, agentId: a.agentId, profile: a.profile ?? CONSOLIDATOR_PROFILE, model: spec.model ?? null, image: null }, at,
-    scan: secretScan(await runSecrets({ runId, remote: cfg.remote })), outcome: outcomeIn(await runOps(runId)),
-    itemBytes: limits.itemBytes, descriptionChars: limits.descriptionChars ?? 150, room: limits.proposalsPerRun, retain: retainOf(spec.context),
+  // One staging at a time in the run's clone (two consolidators of one run ending together): its checkout, the files
+  // written and the commit are the clone's one working tree. The clone's own lock is openClone's, inside this one.
+  return withCloneLock(cfg, `${runId}-context-stage`, async () => {
+    const git = await openClone(cfg, `${runId}-context`);
+    const existing = await git.revParse(`refs/remotes/origin/${branch}`);
+    const base = existing ? await git.revParse(`${existing}^`) : await git.revParse(`refs/remotes/origin/${target}`);
+    if (!base) throw new Error(`target branch ${target} not found on ${cfg.remote}`);
+    const spec = (a.spec ?? {}) as { model?: string; context?: ContextSpec };
+    const { limits } = limitsFor(spec.model ?? null, spec.context);
+    const records = await runCandidates(runId);
+    const staged = stage({
+      files: readContextAt(git.cwd, base), raw, candidates: records.flatMap((r) => r.candidates as Candidate[]),
+      origin: { runId, agentId: a.agentId, profile: a.profile ?? CONSOLIDATOR_PROFILE, model: spec.model ?? null, image: null }, at,
+      scan: secretScan(await runSecrets({ runId, remote: cfg.remote })), outcome: outcomeIn(await runOps(runId)),
+      itemBytes: limits.itemBytes, descriptionChars: limits.descriptionChars ?? 150, room: limits.proposalsPerRun, retain: retainOf(spec.context),
+    });
+    const out = { ...none(staged.applied, staged.refused), ignored: staged.ignored, lint: staged.lint };
+    if (existing) return { ...out, sha: existing };
+    if (!staged.writes.length) return out;
+    await git.ok(["checkout", "-q", "-B", "capcomd-context", base]);
+    for (const w of staged.writes) writeIn(git.cwd, w.path, w.text);
+    await git.ok(["add", "--", ...staged.writes.map((w) => w.path)]);
+    const lines = staged.applied.filter((x) => x.op !== "duplicate").map((x) => `- ${x.op} ${x.op === "supersede" ? `${x.target} with ${x.id}` : x.id}`);
+    const dups = staged.applied.filter((x) => x.op === "duplicate").length;
+    const subject = `context: ${lines.length} memory change${lines.length === 1 ? "" : "s"} from ${runId}`;
+    const msg = `${subject}\n\n${[...lines, ...(dups ? [`- ${dups} already known (helpful counted)`] : [])].join("\n")}\n\nCapcomd-Task: ${taskKey(runId, a.taskId)}\nCapcomd-Agent: ${CONSOLIDATOR_PROFILE}\n`;
+    await git.ok(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", "-q", ...(cfg.signCommits ? ["-S"] : []), "-m", msg]);
+    const sha = await git.ok(["rev-parse", "HEAD"]);
+    const pushed = await remoteGit(git, ["push", "-q", `--force-with-lease=refs/heads/${branch}:`, cfg.remote, `${sha}:refs/heads/${branch}`], cfg.remote);
+    if (pushed.code !== 0) throw new Error(`git push ${branch} failed (${pushed.code}): ${(pushed.stderr || pushed.stdout).trim()}`);
+    await git.ok(["update-ref", `refs/remotes/origin/${branch}`, sha]);
+    return { ...out, sha };
   });
-  const out = { ...none(staged.applied, staged.refused), ignored: staged.ignored, lint: staged.lint };
-  if (existing) return { ...out, sha: existing };
-  if (!staged.writes.length) return out;
-  await git.ok(["checkout", "-q", "-B", "capcomd-context", base]);
-  for (const w of staged.writes) writeIn(git.cwd, w.path, w.text);
-  await git.ok(["add", "--", ...staged.writes.map((w) => w.path)]);
-  const lines = staged.applied.filter((x) => x.op !== "duplicate").map((x) => `- ${x.op} ${x.op === "supersede" ? `${x.target} with ${x.id}` : x.id}`);
-  const dups = staged.applied.filter((x) => x.op === "duplicate").length;
-  const subject = `context: ${lines.length} memory change${lines.length === 1 ? "" : "s"} from ${runId}`;
-  const msg = `${subject}\n\n${[...lines, ...(dups ? [`- ${dups} already known (helpful counted)`] : [])].join("\n")}\n\nCapcomd-Task: ${taskKey(runId, a.taskId)}\nCapcomd-Agent: ${CONSOLIDATOR_PROFILE}\n`;
-  await git.ok(["-c", "user.name=capcomd", "-c", "user.email=capcomd@users.noreply.github.com", "commit", "-q", ...(cfg.signCommits ? ["-S"] : []), "-m", msg]);
-  const sha = await git.ok(["rev-parse", "HEAD"]);
-  const pushed = await remoteGit(git, ["push", "-q", `--force-with-lease=refs/heads/${branch}:`, cfg.remote, `${sha}:refs/heads/${branch}`], cfg.remote);
-  if (pushed.code !== 0) throw new Error(`git push ${branch} failed (${pushed.code}): ${(pushed.stderr || pushed.stdout).trim()}`);
-  await git.ok(["update-ref", `refs/remotes/origin/${branch}`, sha]);
-  return { ...out, sha };
 }

@@ -43,7 +43,10 @@ export interface Judgement {
   changed: string[];
 }
 
-const under = (p: string | null | undefined) => !!p && p.startsWith(CONTEXT_DIR);
+/** Whether a changed path is the project's memory: a file under `.capcomd/context/`, or the directory itself or
+ *  `.capcomd` made a file (a link: what an agent's checkout then reads as memory is wherever it points). */
+export const touchesContext = (p: string | null | undefined): boolean => !!p && (p.startsWith(CONTEXT_DIR) || CONTEXT_DIR.startsWith(`${p}/`));
+const under = touchesContext;
 const said = (ps: LintProblem[]) => ps.map((p) => `${p.file}: ${p.message}`);
 const listed = (xs: string[], max = 5) => `${xs.slice(0, max).join(", ")}${xs.length > max ? ` and ${xs.length - max} more` : ""}`;
 
@@ -60,7 +63,9 @@ export function judgeBranch(f: BranchFacts, o: { scan: (t: string) => ScanHit | 
   }
   const outside = [...new Set(f.files.flatMap((x) => [x.path, x.oldPath ?? null]).filter((p): p is string => !!p && !under(p)))];
   if (outside.length) out.problems.push(`a consolidator's branch changes only ${CONTEXT_DIR}: ${f.agent.id} also changed ${listed(outside)}`);
-  const r = lintContext({ files: f.after, base: f.before, scan: o.scan, outcome: o.outcome, itemBytes: o.itemBytes, descriptionChars: o.descriptionChars, ...(o.now !== undefined ? { now: o.now } : {}) });
+  const replaced = changed.filter((p) => !p.startsWith(CONTEXT_DIR));
+  if (replaced.length) out.problems.push(`a consolidator's branch changes the items in ${CONTEXT_DIR}, never the directory itself: ${f.agent.id} changed ${listed(replaced)}`);
+  const r =lintContext({ files: f.after, base: f.before, scan: o.scan, outcome: o.outcome, itemBytes: o.itemBytes, descriptionChars: o.descriptionChars, ...(o.now !== undefined ? { now: o.now } : {}) });
   out.problems.push(...said(r.errors).map((x) => `context lint: ${x}`));
   out.warnings.push(...said(r.warnings));
   return out;

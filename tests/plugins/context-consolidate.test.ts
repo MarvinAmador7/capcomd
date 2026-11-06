@@ -101,6 +101,13 @@ describe("staging a consolidator's deltas (ADR-025 §5.2)", () => {
     expect(r.writes.filter((w) => w.path.includes("/ports-")).length).toBe(1);
   });
 
+  test("a fact said again is a duplicate, and its file is never touched (a fact is a person's to change)", () => {
+    const r = stage(input([{ title: "Fee", text: "Shipping is 4.99 under 50." }, { title: "Build cache", text: "The build cache in .cache/build survives a clean." }]));
+    expect(r.applied.map((x) => [x.op, x.id])).toEqual([["duplicate", "FEE-2"], ["add", expect.stringMatching(/^build-cache-/)]]);
+    expect(written(r, "facts/fee.md")).toBeNull();
+    expect(r.lint.errors).toEqual([]);
+  });
+
   test("refused, never redacted: a secret, a redactor's placeholder, too large, past the run's limit, a source or an outcome not of the run, not a delta", () => {
     const r = stage(input([
       { text: `staging logs in with ${RUN_SECRET}` },
@@ -180,6 +187,15 @@ describe("what the gates judge of a branch (ADR-025 §5.3)", () => {
     expect(judgeBranch(facts({ agent: { id: "agt-w1", profile: "worker", review: "human" }, files: [{ path: "docs/x.md", oldPath: `${CONTEXT_DIR}memory/flaky.md` }] }), o).problems[0]).toContain(NOT_A_CONSOLIDATOR);
   });
 
+  test("the directory made a file or a link (it, or .capcomd) is a change to it; .capcomd's other files aren't", () => {
+    const worker = { id: "agt-w1", profile: "worker", review: "human" as const };
+    for (const path of [".capcomd/context", ".capcomd"]) {
+      expect(judgeBranch(facts({ agent: worker, files: [{ path }, { path: "docs/mem/memory/evil.md" }] }), o).problems[0]).toContain(NOT_A_CONSOLIDATOR);
+      expect(judgeBranch(facts({ files: [...facts().files, { path }] }), o).problems).toContain(`a consolidator's branch changes the items in ${CONTEXT_DIR}, never the directory itself: agt-cons1 changed ${path}`);
+    }
+    expect(judgeBranch(facts({ agent: worker, files: [{ path: ".capcomd/agents.json" }, { path: ".capcomd/contexts/x.md" }] }), o)).toMatchObject({ touches: false, problems: [] });
+  });
+
   test("a consolidator's branch: lint-clean passes, with what lint flags for the person; a file outside, or lint's problems, fail it", () => {
     const j = judgeBranch(facts(), o);
     expect(j).toMatchObject({ touches: true, consolidator: true, review: "human", problems: [] });
@@ -206,7 +222,7 @@ describe("the context-memory plugin's gates (verify.judging, merge.landing)", ()
     const calls: string[] = [];
     Object.assign(memoryPlugin.promotionKernel, {
       agent: async (_runId: string, ref: string) => { calls.push(`agent ${ref}`); return agent; },
-      branch: async (_runId: string, b: { commit: string }) => { calls.push(`branch ${b.commit.slice(0, 4)}`); return { files, after: after(staged), before: BASE }; },
+      branch: async (_runId: string, b: { commit: string; targetSha: string | null }) => { calls.push(`branch ${b.commit.slice(0, 4)}${b.targetSha ? ` from ${b.targetSha.slice(0, 4)}` : ""}`); return { files, after: after(staged), before: BASE }; },
       outcome: async () => outcomeIn(OPS),
       secrets: async () => [RUN_SECRET],
     });
@@ -240,9 +256,13 @@ describe("the context-memory plugin's gates (verify.judging, merge.landing)", ()
     expect(m.result).toMatchObject({ decision: "deny", reason: expect.stringContaining(NOT_A_CONSOLIDATOR) });
     const v = await fake.fire("verify.judging", samplePayload("verify.judging"));
     expect(v.result).toMatchObject({ decision: "deny", reasons: [expect.stringContaining(NOT_A_CONSOLIDATOR)] });
+    // The directory made a link to somewhere the gate doesn't look: a change to it all the same.
+    kernel({ ...cons(), profile: "worker" }, [{ path: ".capcomd/context", oldPath: null }, { path: "docs/mem/memory/evil.md", oldPath: null }]);
+    expect((await fake.fire("merge.landing", samplePayload("merge.landing"))).result).toMatchObject({ decision: "deny", reason: expect.stringContaining(NOT_A_CONSOLIDATOR) });
     const calls = kernel({ ...cons(), profile: "worker" }, [{ path: "src/a.ts", oldPath: null }]);
     expect((await fake.fire("merge.landing", samplePayload("merge.landing"))).result).toEqual({ decision: "allow" });
-    expect(calls).toEqual(["agent agt-test1", `branch dddd`]);
+    // Read from where it left the target its verify saw (the payload's target.sha), so the bare repo has it already.
+    expect(calls).toEqual(["agent agt-test1", `branch dddd from ${samplePayload("merge.landing").target.sha.slice(0, 4)}`]);
     // A person's branch (no agent's) and an agent with no work are let through without reading anything.
     const none = kernel(null);
     expect((await fake.fire("merge.landing", samplePayload("merge.landing"))).result).toEqual({ decision: "allow" });
