@@ -15,6 +15,8 @@ const RECORDER = join(import.meta.dir, "..", "plugins", "fixtures", "hook-record
 let w: World;
 let dir: string;
 let log: string;
+/** This file's runs: their scripted agents' and jobs' processes are named by them. */
+const runs: string[] = [];
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-scn-jobs-"));
   log = join(dir, "hooks.ndjson");
@@ -23,6 +25,9 @@ beforeAll(async () => {
   w = await world("jobs", { CAPCOMD_AGENTS_FILE: agents, CAPCOMD_JOBS_POLL_MS: "200", CAPCOMD_TEST_PLUGINS: RECORDER, CAPCOMD_TEST_HOOK_LOG: log, NODE_ENV: "test" });
 }, 120_000);
 afterAll(async () => {
+  // A scenario that failed may leave a scripted agent (its "VM" outlives a crashed daemon) or a job behind: stop them.
+  const mine = Bun.spawnSync(["ps", "-A", "-o", "pid=,command="]).stdout.toString().split("\n").filter((l) => w && (l.includes(w.dir) || runs.some((r) => l.includes(`/${r}/`)))).map((l) => Number(l.trim().split(/\s+/)[0]));
+  for (const pid of mine) if (pid > 1 && pid !== process.pid) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
   try { await w?.stop(); } finally { if (dir) rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -31,10 +36,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const logsOf = async (run: string, agent: string) => (await w.cj(["logs", run, agent, "--tail", "2000"])).j.lines.map((l: any) => l.line).join("\n");
 
 /** Wait in the script until a message whose text contains $1 is in the inbox; print its text. */
-const WAIT_MSG = `wait_msg() { i=0; while :; do m=$(capcomd inbox); case "$m" in *"$1"*) printf "%s" "$m" | $S/jget messages | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const m of JSON.parse(s))if(m.body.text.includes(process.argv[1]))console.log("msg-from: "+m.from+"\\nmsg: "+JSON.stringify(m.body.text))})' "$1"; return 0;; esac; i=$((i+1)); [ $i -gt 600 ] && return 1; sleep 0.2; done; }`;
+const WAIT_MSG = `wait_msg() { end=$(( $(date +%s) + 150 )); while :; do m=$(capcomd inbox); case "$m" in *"$1"*) printf "%s" "$m" | $S/jget messages | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const m of JSON.parse(s))if(m.body.text.includes(process.argv[1]))console.log("msg-from: "+m.from+"\\nmsg: "+JSON.stringify(m.body.text))})' "$1"; return 0;; esac; [ $(date +%s) -gt $end ] && return 1; sleep 0.2; done; }`;
 
 test("a 10 s job answers running and its result arrives as a message; a quick one answers in the foreground", async () => {
   const run = await newRun(w);
+  runs.push(run);
   const t0 = Date.now();
   const agent = await spawnRoot(w, run, "worker", w.script("long-job", `${WAIT_MSG}
 r=$(capcomd job start --label build --foreground-ms 1000 -- 'sleep 10; echo built-ok; echo a-warning >&2')
@@ -87,6 +93,7 @@ capcomd result --summary "built" >/dev/null`));
 
 test("a daemon that crashes while a job runs settles it when it comes back: the result still arrives", async () => {
   const run = await newRun(w);
+  runs.push(run);
   const mark = join(dir, `started-${Date.now()}`);
   const agent = await spawnRoot(w, run, "worker", w.script("restart-job", `${WAIT_MSG}
 r=$(capcomd job start --label slow --foreground-ms 500 -- 'sleep 8; echo survived-restart')
@@ -116,6 +123,7 @@ capcomd result --summary "survived" >/dev/null`));
 
 test("an agent kills its own job; its jobs end with it; an orchestrate agent starts none", async () => {
   const run = await newRun(w);
+  runs.push(run);
   const pidFile = join(dir, `orphan-${Date.now()}`);
   const agent = await spawnRoot(w, run, "worker", w.script("kill-job", `
 r=$(capcomd job start --label forever --foreground-ms 300 -- 'trap "echo got-term; exit 7" TERM; while :; do sleep 0.1; done')
