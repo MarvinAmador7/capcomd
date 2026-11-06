@@ -13,7 +13,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   (`CAPCOMD_TEMPLATE_REBUILD_MB`) and daily for any project that moved (`CAPCOMD_TEMPLATE_REFRESH_HOURS`). `capcomd
   env templates` shows each template's age, size, how far behind it is and the delta an agent would get;
   `CAPCOMD_PROJECT_TEMPLATES=manual` or `off` turns the automatic builds or the templates off. Templates are capped at
-  10 GB (`CAPCOMD_TEMPLATE_MAX_GB`). See docs/boxd.md, "Project templates".
+  10 GB (`CAPCOMD_TEMPLATE_MAX_GB`) on top of the base image. See docs/boxd.md, "Project templates".
 - Fix: a big repository no longer fails to clone after 10 minutes. The host's fetch into its mirror now fails only when
   git has reported no progress for 5 minutes (`CAPCOMD_GIT_STALL_SECONDS`), or after 3 hours
   (`CAPCOMD_GIT_FETCH_MAX_SECONDS`), and `capcomd env build` no longer gives it 15 minutes. Git bundles go to an

@@ -309,10 +309,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     }
     const record: EnvRecord = { name, manifest, versions, builtAt: new Date().toISOString(), buildMs: now() - t0, depsInstalled };
     if (o.project) {
-      if (snap.sizeBytes && snap.sizeBytes > o.project.maxBytes) {
-        await p.snapshotDelete(name).catch(() => {});
-        throw new Error(`env build: the template's snapshot is ${(snap.sizeBytes / 1024 ** 3).toFixed(1)} GB, over the ${(o.project.maxBytes / 1024 ** 3).toFixed(0)} GB cap (CAPCOMD_TEMPLATE_MAX_GB); deleted it`);
-      }
+      // The cap is on what the template adds (checked above): boxd's snapshot size counts the base image too (8 GB).
       await recordTemplate(p, o, { record, heads, template: template!, sizeBytes: snap.sizeBytes ?? sizeBytes, made: true }, log);
       log(`ready: ${name} in ${record.buildMs}ms`);
       return { name, cached: false, record, snapshot: snap };

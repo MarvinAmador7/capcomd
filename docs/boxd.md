@@ -128,8 +128,9 @@ capcomd env templates rm --repo URL
   templates. A rebuild never overwrites a snapshot: it makes a new one, keeps the one it replaced (agents may be booting
   from it), and deletes the one before that. capcomd deletes only snapshots its templates ledger (`templates.json` next
   to `envs.json`) says it made as templates.
-- **Size.** At most `CAPCOMD_TEMPLATE_MAX_GB` (default 10): a bigger checkout plus home is refused before the
-  snapshot, and a snapshot boxd reports as bigger is deleted.
+- **Size.** What a template adds, its checkout plus the agent home, is at most `CAPCOMD_TEMPLATE_MAX_GB` (default
+  10); a bigger one is refused before the snapshot. boxd's snapshot size (what `env templates` shows) also counts the
+  base image, about 8 GB.
 - **The setup step runs the repository's code.** The build VM is isolated like an agent's, holds no git credential,
   and passes the env build's secret scan before it is snapshotted. An org-scoped host-bound secret (`capcomd secrets
   sync`, a Claude login kept as a boxd secret) still puts its placeholder (`bxds_…`) in every VM of the org, the build
