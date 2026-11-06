@@ -377,7 +377,9 @@ capcomd context brain propose --run <runId> --yes    # send them as you (groundr
 ```
 
 - Under `review: human` (the default) nothing goes to the brain until you send it; under `review: lint` capcomd sends
-  them as it stages the consolidator's answer, as itself (`capcomd/<version>`).
+  them as it stages the consolidator's answer, as itself (`capcomd/<version>`), for up to 4 minutes; any it couldn't
+  send wait for `--yes`.
+- A fact's title is 3 to 120 characters (groundray's limit); a longer one is refused when the answer is staged.
 - The consolidator's result says what it proposed (`context.brain`), and the run's stream has
   `plugin.context.brain_staged` and `plugin.context.brain_proposed`.
 - groundray runs in a throwaway directory with settings of its own: your own groundray installation is never read or
