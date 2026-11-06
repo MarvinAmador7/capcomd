@@ -84,6 +84,7 @@ export const SCOPE_EVENT_TYPES = [
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
 	"MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED",
 	"CHECK_STARTED", "CHECK_PASSED", "CHECK_FAILED",
+	"JOB_STARTED", "JOB_ENDED",
 	"PLUGIN_GATE_DENIED", "PLUGIN_GATE_BYPASSED",
 	"TASK_ADDED", "TASK_CLAIMED", "TASK_LEASE_EXPIRED", "TASK_DONE", "TASK_RELEASED",
 	"KV_PUT", "KV_DELETE", "KV_CAS",
@@ -170,6 +171,20 @@ export const LegacyEventShapes = {
 	"check.started": checkStart,
 	"check.passed": checkEnd,
 	"check.failed": checkEnd,
+	"job.started": {
+		jobId: S.describe("The job (job-…): background work an agent or a plugin started (`capcomd job start`, plugin API §16.2)"),
+		kind: z.enum(["exec", "timer"]).describe("exec: a command in its owner's machine; timer: a clock that fires. More may be added"),
+		owner: S.describe("Whose it is: an agent id (agt-…; it ends with that agent), run, or plugin"),
+		label: T.describe("Agent-written text: render as plain text. What it is, in its starter's words (for exec, the command by default)"),
+		plugin: nS.describe("The plugin that started it; null when an agent did"),
+	},
+	"job.ended": {
+		jobId: S.describe("The job (job-…)"),
+		state: z.enum(["done", "failed", "killed", "lost"]).describe("done: it exited 0 (a timer: it fired its last time); failed: a non-zero exit; killed: stopped (`capcomd job kill`, its timeout, or its agent ended); lost: its process or machine went away with no exit code. More may be added"),
+		code: N.nullable().describe("Its exit code (exec); null for a timer or a job that was lost"),
+		reason: nT.describe("Why it was killed or lost, in capcomd's words; null when it ended by itself"),
+		ms: N.describe("How long it ran, in milliseconds"),
+	},
 	"plugin.gate_denied": {
 		plugin: S.describe("The plugin that denied or held it"), hook: S.describe("The gate: verify.starting, verify.judging, merge.landing, approval.deciding or trigger.admitting"),
 		entity: S.describe("What it was about: the verification (vfy-…) or merge (mrg-…) id"), decision: z.enum(["deny", "hold"]).describe("deny refused it; hold parked a merge for a person's approval"),

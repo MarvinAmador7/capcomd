@@ -6,7 +6,7 @@ import { traceMethods } from "./utils/tracing-simple";
 import { sandboxName } from "./providers/registry";
 import { resilientProvider } from "./providers/resilient";
 import { hookedProvider } from "./plugins/sandbox";
-import { keepTidy, sandboxProvider } from "./plugins/sandboxes";
+import { placeInUse, sandboxProvider } from "./plugins/sandboxes";
 
 interface Dependencies {
   model: ModelClient;
@@ -98,9 +98,9 @@ export function providerNamed(name: string | null | undefined): SandboxProvider 
   let p = bySandbox.get(name);
   if (!p) {
     const raw = providerFromEnv({ ...process.env, CAPCOMD_SANDBOX: name, RELAY_SANDBOX: undefined });
-    // A place that doesn't delete idle machines by itself (Docker, ADR-020): `capcomd serve` sweeps its own sandbox's;
-    // this one's too.
-    keepTidy(name);
+    // A place that doesn't delete idle machines by itself (Docker, ADR-020): its plugin's timer sweeps the daemon's own
+    // sandbox; this one's too.
+    placeInUse(name);
     p = tracedProvider(raw, raw.constructor?.name === "FakeProvider" ? "fake" : raw.constructor?.name ?? "provider");
     bySandbox.set(name, p);
   }

@@ -58,6 +58,22 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `agent.spawned` events (both null for an agent without a profile). A profile's version is its `version:` field,
   else 1 (a whole number up to 2^53 - 1; a larger one is refused when the profile loads); `agents.json` profiles are
   version 1.
+- New: background jobs for agents. An agent runs a long command (a test suite, a build) with
+  `capcomd job start -- <command>` in its VM (or the `capcomd_job_start` tool): when the command ends within the
+  foreground wait (60 s by default; `--foreground-ms N`) it answers with the exit code and output; otherwise it
+  answers `running` with a job id at once, the agent keeps working, and the command's result arrives as a message in
+  its inbox when it ends. `capcomd job output <job>`, `job list` and `job kill <job>` show and stop its jobs. Jobs run
+  in the agent's own machine and keep running if capcomd restarts (their result is still delivered); they end when
+  their agent ends, and after 30 minutes by default. While a job runs the agent keeps its slot and isn't flagged idle.
+  A profile can set `jobs: {foregroundMs, max, afterTurnMs}` (how long a start waits, how many run at once, 8 by
+  default, and how long one may run); the defaults for every agent are `CAPCOMD_JOBS_FOREGROUND_MS`,
+  `CAPCOMD_JOBS_MAX` and `CAPCOMD_JOBS_AFTER_TURN_MS`. A planner or lead in orchestrate mode starts none (it runs
+  nothing). Each job is on the run's stream as `job.started` and `job.ended` (`JOB_*` in `capcomd events`), and its
+  record is the run's `_jobs/<id>` key. For plugins: `ctx.jobs` (start, get, list, cancel, wait) with `exec` jobs in
+  an agent's machine and timers (`at`, or `everyMs` until `until`; re-armed when the daemon restarts, a missed one
+  fired once), and the `job.changed` hook. See docs/spec/plugin-api.md §16.2.
+- Docker's idle-container sweep now runs on the Docker plugin's own timer (when the daemon starts and every 5 minutes,
+  as before); nothing changes for you.
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
   `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of
   always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. An installed
