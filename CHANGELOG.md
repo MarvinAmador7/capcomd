@@ -5,6 +5,29 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a background job that ended just as capcomd looked at it could be reported finished with its last output
+  missing from its size; the size is now read after the exit code.
+- New: install plugins from a git repository. `capcomd plugins install <owner/repo>[#<name>][@<ref>]` (a git URL or a
+  local repository path works too; `#name` picks one plugin among several, `@ref` a branch, tag or commit) puts it in
+  `~/.capcomd/plugins/<name>/` with a `LOCK` file recording where it came from, the commit and a hash of every file;
+  the daemon runs it from its next start. capcomd refuses a plugin whose manifest points outside its folder, one with a
+  link out of it, one that would run inside capcomd itself, and one made for another capcomd version, unless you allow
+  that exact version with `capcomd plugins allow-version <name>@<version> --accept-risk`. `capcomd plugins update
+  <name>` fetches it again and shows which files, commit and hash changed before replacing it (`--dry-run` only shows),
+  `capcomd plugins remove <name>` deletes it (its data stays), and `capcomd plugins show <name>` shows one plugin with
+  its settings, where each came from, and its source.
+- New: a project's plugins (`.capcomd/plugins/<name>/` in the repository, or `"plugins": {"use":
+  ["owner/repo#name@ref"]}` in its `.capcomd/config.json`, fetched into your home with `capcomd plugins install
+  --project`) never run just because you opened the project: `capcomd plugins trust <name>` shows what would run (the
+  command, its scopes and hooks, the secrets it would get, the hash of its files) and asks first (`--yes` for scripts). A changed file, or the same
+  plugin in another project, needs trusting again; until then `capcomd plugins list` shows it `validated (untrusted)`.
+- New: a run can set a plugin's per-run settings (the ones its schema marks `x-per-run`): `capcomd run
+  --plugin-config <plugin>.<key>=<value>` (also `run new`), or `plugins` in `POST /v1/runs` (capability
+  `plugins.config`); any other setting is refused before the run starts. A plugin's secrets take a reference you set in
+  `~/.capcomd/config.json` (`{"$secret": "env:VAR"}`), never a value. A project's `.capcomd/config.json` can't turn a
+  plugin on, turn off one that isn't the project's own (settings of it that the plugin refuses are ignored, with a
+  warning, instead of failing the plugin), or set a secret; `capcomd plugins show <name>` says where each
+  setting came from.
 - New: lessons land in the project's memory through a reviewed merge. `capcomd setup project` adds a
   `context-consolidator` profile, and the planner spawns it as its run's last child when the run's agents proposed
   lessons. It reads the run's candidates, the project's memory (`.capcomd/context/`) and the run's verifies and merges,

@@ -3,11 +3,15 @@
 // environment, CAPCOMD_PLUGIN_<NAME>_<KEY> (name and key upper-cased, `-` and `.` as `_`; a value that reads as JSON is
 // that value, else a string, and it replaces the key's value). The files' objects merge key by key, `null` deletes.
 // `enabled` is reserved at every layer: false keeps the plugin at `validated` (§5.4), true turns on a built-in that is
-// off until asked for (the watchdog, which `capcomd setup` turns on). Each layer is checked against the schema (the
-// subset manifests use: types, bounds, enums, required, additionalProperties); an error fails the plugin
-// `config_invalid` (§10.4) rather than run it with defaults. A secret property (`x-secret`) is never read from these
-// layers: its reference stays the schema's (src/plugins/secrets.ts). CAPCOMD_NO_CONFIG (tests) skips the files, not
-// the environment.
+// off until asked for (the watchdog, which `capcomd setup` turns on). A project's `enabled` counts only for a plugin of
+// that project, and only to turn it off: a repository can't switch off a gate the operator runs, nor on what they turned
+// off. Each layer is checked against the schema (the subset manifests use: types, bounds, enums, required,
+// additionalProperties); an error fails the plugin `config_invalid` (§10.4) rather than run it with defaults, except in
+// a project's layer for a plugin not the project's: that layer is set aside (reported, left out), or breaking its value
+// would switch the plugin off just the same. A secret
+// property (`x-secret`) holds a reference (§10.3), never a value: the user's or the environment's (src/plugins/secrets.ts
+// reads it); a project may not set one (it could point a plugin at another of the daemon's variables). It is never in
+// the config. CAPCOMD_NO_CONFIG (tests) skips the files, not the environment.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { projectConfigPath, readConfig, userConfigPath } from "../config/store";
@@ -15,7 +19,9 @@ import { projectConfigPath, readConfig, userConfigPath } from "../config/store";
 type Env = Record<string, string | undefined>;
 type Json = unknown;
 export type ConfigLayer = "user" | "project" | "env";
-export interface ConfigIssue { path: string; message: string; layer: ConfigLayer }
+/** `setAside`: a project's settings for a plugin that isn't the project's, refused and left out; the plugin runs on its
+ *  other layers (a repository can't switch off the operator's plugins by breaking their config). */
+export interface ConfigIssue { path: string; message: string; layer: ConfigLayer; setAside?: true }
 export interface PluginSettings {
   /** `plugins.<name>.enabled` from the last layer that set it; undefined when none did. */
   enabled?: boolean;
@@ -23,7 +29,14 @@ export interface PluginSettings {
   config: Record<string, unknown>;
   /** What the schema refused, each with the layer that set it. */
   errors: ConfigIssue[];
+  /** The last layer that set each top-level key of `config`. */
+  sources: Record<string, ConfigLayer>;
 }
+
+/** A secret reference (§10.3): `{"$secret": "env:<VAR>"}` or `{"$secret": "keychain:<account>"}`. */
+export const SECRET_REF = /^(env:[A-Za-z_][A-Za-z0-9_]*|keychain:[A-Za-z0-9._@-]{1,128})$/;
+export const secretRefOf = (v: unknown): string | null =>
+  isObject(v) && Object.keys(v).length === 1 && typeof v.$secret === "string" && SECRET_REF.test(v.$secret) ? v.$secret : null;
 
 type Schema = {
   type?: string | string[]; properties?: Record<string, Schema>; additionalProperties?: boolean | Schema; required?: string[];
@@ -51,7 +64,7 @@ const withoutNulls = (v: unknown): unknown => isObject(v) ? Object.fromEntries(O
 export const envName = (plugin: string, key: string) => `CAPCOMD_PLUGIN_${plugin}_${key}`.toUpperCase().replace(/[-.]/g, "_");
 
 /** The manifest's config schema (a `$ref` read from the plugin's directory). */
-function schemaOf(m: { config?: unknown }, dir: string | null): Schema | null {
+export function schemaOf(m: { config?: unknown }, dir: string | null): Schema | null {
   let s = m.config as Schema | undefined;
   if (s && typeof s.$ref === "string") {
     if (!dir) return null;
@@ -123,7 +136,7 @@ export function pluginConfigFiles(o: { env?: Env; cwd?: string } = {}): Record<"
   return { user: readConfig(userConfigPath(env)).plugins ?? {}, project: readConfig(projectConfigPath(o.cwd ?? process.cwd(), env)).plugins ?? {} };
 }
 
-export function pluginSettings(m: { name: string; config?: unknown }, o: { dir?: string | null; env?: Env; cwd?: string; files?: ReturnType<typeof pluginConfigFiles> } = {}): PluginSettings {
+export function pluginSettings(m: { name: string; config?: unknown }, o: { dir?: string | null; env?: Env; cwd?: string; files?: ReturnType<typeof pluginConfigFiles>; source?: "builtin" | "user" | "project" } = {}): PluginSettings {
   const env = o.env ?? process.env;
   const schema = schemaOf(m, o.dir ?? null);
   const secret = new Set(Object.entries(schema?.properties ?? {}).filter(([, p]) => p?.["x-secret"] === true).map(([k]) => k));
@@ -131,21 +144,33 @@ export function pluginSettings(m: { name: string; config?: unknown }, o: { dir?:
   const layers: Array<[ConfigLayer, unknown]> = [["user", files.user[m.name]], ["project", files.project[m.name]], ["env", envLayer(m.name, schema, env)]];
   const errors: ConfigIssue[] = [];
   let config: Record<string, unknown> = {};
+  const sources: Record<string, ConfigLayer> = {};
   let enabled: boolean | undefined;
+  const foreign = o.source !== "project";
   for (const [layer, raw] of layers) {
     if (raw === undefined) continue;
-    if (!isObject(raw)) { errors.push({ path: m.name, message: "must be an object of the plugin's settings", layer }); continue; }
+    const before = errors.length;
+    const setAside = () => { for (const e of errors.slice(before)) e.setAside = true; };
+    if (!isObject(raw)) { errors.push({ path: m.name, message: "must be an object of the plugin's settings", layer }); if (layer === "project" && foreign) setAside(); continue; }
     const { enabled: on, ...rest } = raw;
     if (on !== undefined) {
-      if (typeof on === "boolean") enabled = on;
-      else errors.push({ path: "enabled", message: "must be true or false", layer });
+      if (typeof on !== "boolean") errors.push({ path: "enabled", message: "must be true or false", layer });
+      else if (layer !== "project") enabled = on;
+      else if (!on && o.source === "project" && enabled === undefined) enabled = false;
     }
-    for (const k of Object.keys(rest)) if (secret.has(k)) delete rest[k];
+    for (const k of Object.keys(rest)) {
+      if (!secret.has(k)) continue;
+      if (layer === "project") errors.push({ path: k, message: "is a secret: only your own config (or CAPCOMD_PLUGIN_*) may set its reference", layer });
+      else if (rest[k] !== null && !secretRefOf(rest[k])) errors.push({ path: k, message: 'is a secret: give a reference, {"$secret": "env:<VAR>"}, never the value', layer });
+      delete rest[k];
+    }
     // Each layer on its own, so an error names where it came from; a null only deletes what a layer below set.
     if (schema) for (const e of checkSchema({ ...schema, required: [] }, withoutNulls(rest))) errors.push({ ...e, layer });
+    if (layer === "project" && foreign && errors.length > before) { setAside(); continue; }
     // A variable is the whole value of its key (CAPCOMD_PLUGIN_X_SCHEDULES='{}': none), not a patch of it.
     if (layer === "env") for (const [k, v] of Object.entries(rest)) { if (v === null) delete config[k]; else config[k] = v; }
     else config = mergePatch(config, rest) as Record<string, unknown>;
+    for (const k of Object.keys(rest)) { if (k in config) sources[k] = layer; else delete sources[k]; }
   }
-  return { ...(enabled === undefined ? {} : { enabled }), config, errors };
+  return { ...(enabled === undefined ? {} : { enabled }), config, errors, sources };
 }

@@ -3645,6 +3645,40 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `plugin.trusted`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "description": "project: a project's plugin, which runs only once trusted (more may come)"
+    },
+    "hash": {
+      "type": "string",
+      "description": "The content hash trusted (sha256:<hex> over every file of the plugin): a changed file needs trusting again"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who trusted it: operator (capcomd plugins trust on the daemon's machine)"
+    }
+  },
+  "required": [
+    "plugin",
+    "source",
+    "hash",
+    "by"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins.config. Capability plugins. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. The daemon ran a project's plugin under the operator's trust for the first time (spec §4.8; the trust is recorded by capcomd plugins trust)"
+}
+```
+
 ## `plugin.hook_failed`
 
 ```json

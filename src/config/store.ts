@@ -96,7 +96,8 @@ export function readConfig(path: string | null): CapcomdConfig {
  *  by key; other keys are replaced). */
 export function mergeConfig(cur: CapcomdConfig, patch: CapcomdConfig): CapcomdConfig {
   const plugins: Record<string, Record<string, unknown>> = { ...(cur.plugins ?? {}) };
-  for (const [name, p] of Object.entries(patch.plugins ?? {})) plugins[name] = { ...(plugins[name] ?? {}), ...p };
+  // A plugin's settings merge key by key; a list (a project's `plugins.use`, plugin API §4.8) is replaced.
+  for (const [name, p] of Object.entries(patch.plugins ?? {})) plugins[name] = Array.isArray(p) ? p : { ...(plugins[name] ?? {}), ...p };
   const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) }, plugins };
   if (!Object.keys(next.env!).length) delete next.env;
   if (!Object.keys(next.run!).length) delete next.run;

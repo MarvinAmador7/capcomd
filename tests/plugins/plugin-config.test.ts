@@ -38,27 +38,29 @@ function place(user: unknown, project: unknown) {
 }
 
 describe("layers (§10.2)", () => {
-  test("user, then project, then the environment: objects merge, null deletes, enabled from the last layer that says", () => {
+  test("user, then project, then the environment: objects merge, null deletes, enabled from the user or the environment", () => {
     const p = place({ everyMs: 5000, labels: { a: "1", b: "2" }, enabled: false }, { labels: { b: null, c: "3" }, enabled: true });
-    expect(pluginSettings(M, p)).toEqual({ enabled: true, config: { everyMs: 5000, labels: { a: "1", c: "3" } }, errors: [] });
-    const env = { ...p.env, CAPCOMD_PLUGIN_MY_PLUGIN_EVERYMS: "2000", CAPCOMD_PLUGIN_MY_PLUGIN_MODE: "loud", CAPCOMD_PLUGIN_MY_PLUGIN_ENABLED: "false" };
-    expect(pluginSettings(M, { ...p, env })).toEqual({ enabled: false, config: { everyMs: 2000, mode: "loud", labels: { a: "1", c: "3" } }, errors: [] });
+    // A project can't turn on what the user turned off (step 12): its `enabled` counts only to turn off its own plugin.
+    expect(pluginSettings(M, p)).toEqual({ enabled: false, config: { everyMs: 5000, labels: { a: "1", c: "3" } }, errors: [], sources: { everyMs: "user", labels: "project" } });
+    const env = { ...p.env, CAPCOMD_PLUGIN_MY_PLUGIN_EVERYMS: "2000", CAPCOMD_PLUGIN_MY_PLUGIN_MODE: "loud", CAPCOMD_PLUGIN_MY_PLUGIN_ENABLED: "true" };
+    expect(pluginSettings(M, { ...p, env })).toEqual({ enabled: true, config: { everyMs: 2000, mode: "loud", labels: { a: "1", c: "3" } }, errors: [], sources: { everyMs: "env", labels: "project", mode: "env" } });
     expect(envName("sandbox-docker", "idle.lifetime")).toBe("CAPCOMD_PLUGIN_SANDBOX_DOCKER_IDLE_LIFETIME");
   });
 
-  test("what the schema refuses is named with its layer; a secret is never read from a layer; CAPCOMD_NO_CONFIG skips the files", () => {
+  test("what the schema refuses is named with its layer; a secret is never in the config; CAPCOMD_NO_CONFIG skips the files", () => {
     const p = place({ everyMs: 10, colour: "red", token: { $secret: "env:OTHER" } }, { mode: "noisy", enabled: "yes" });
     const s = pluginSettings(M, { ...p, env: { ...p.env, CAPCOMD_PLUGIN_MY_PLUGIN_EVERYMS: "fast" } });
     expect(s.errors).toEqual([
       { path: "everyMs", message: "must be at least 1000", layer: "user" },
       { path: "colour", message: "is not a setting of this plugin", layer: "user" },
-      { path: "enabled", message: "must be true or false", layer: "project" },
-      { path: "mode", message: "must be one of \"quiet\", \"loud\"", layer: "project" },
+      // The project's, for a plugin that isn't the project's: set aside (reported, left out), never failing it.
+      { path: "enabled", message: "must be true or false", layer: "project", setAside: true },
+      { path: "mode", message: "must be one of \"quiet\", \"loud\"", layer: "project", setAside: true },
       { path: "everyMs", message: "must be integer", layer: "env" },
     ]);
     expect(s.config).not.toHaveProperty("token");
     const off = pluginSettings(M, { ...p, env: { ...p.env, CAPCOMD_NO_CONFIG: "1", CAPCOMD_PLUGIN_MY_PLUGIN_EVERYMS: "3000" } });
-    expect(off).toEqual({ config: { everyMs: 3000 }, errors: [] });
+    expect(off).toEqual({ config: { everyMs: 3000 }, errors: [], sources: { everyMs: "env" } });
   });
 
   test("the merge and the schema check", () => {
@@ -102,6 +104,6 @@ describe("the host and the built-ins", () => {
     expect(on).toMatchObject({ enabled: true, config: { stalledAfterMs: 3000 } });
     expect(wd({ CAPCOMD_PLUGIN_WATCHDOG_ENABLED: "true", CAPCOMD_PLUGIN_WATCHDOG_EVERYMS: "5" }).configErrors).toEqual([{ path: "everyMs", message: "must be at least 1000", layer: "env" }]);
     // Every other built-in is on, as before.
-    for (const c of builtinCandidates()) if ((c.manifest as { name: string }).name !== "watchdog") expect(c.enabled).toBe(true);
+    for (const c of builtinCandidates()) if (c.source === "builtin" && (c.manifest as { name: string }).name !== "watchdog") expect(c.enabled).toBe(true);
   });
 });

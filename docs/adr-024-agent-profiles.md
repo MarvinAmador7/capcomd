@@ -495,8 +495,14 @@ Made while building skills in the profile (§7 step 5, 2026-11-06; `src/profiles
   plugins' (`skillBlock`, the same as a message's skills): every skill an agent gets reads the same way, the
   orchestration skill included.
 - **The trust prompt for a project's skills (decision 4) waits for step 7** (`capcomd profiles trust`, with the plugin
-  trust mechanism, spec §4.8, which isn't built yet). Until then a project's skills are used as its `prompt.append`
-  and `agents.json` prompts always were: as text the project supplies.
+  trust mechanism, spec §4.8). Until then a project's skills are used as its `prompt.append` and `agents.json` prompts
+  always were: as text the project supplies. The mechanism landed with the plugin core's step 12 (spec 1.0.31) as
+  `src/install/`, for step 7 to reuse: `source.ts` parses `<owner/repo>[#<name>][@<ref>]`, `fetch.ts` fetches a package
+  directory out of a commit through the host's repo (`pick` chooses it, here by `profile.yaml`), `lock.ts` writes and
+  checks `LOCK` (`kind: "profile"`, every file's sha256 and mode, the content hash) and `diffTrees` is what `update`
+  shows before it applies, and `trust.ts` keeps trust per content hash and place (`kind: "profile"` beside the
+  plugins'); `src/plugins/install.ts` is how the plugins use them.
+
 Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/runtime.ts`, `src/plugins/lifecycle.ts`,
 `src/env/resolve.ts` `bootSnapshot`):
 

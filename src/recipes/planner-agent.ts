@@ -46,7 +46,7 @@ export async function runWithPlanner(opts: RunOptions & { profile: string; drive
   const g = opts.goalBranch;
   const target = g ? g.branch : opts.targetBranch ?? d.target;
   const run = await runNew({ runId, budget: opts.budget ?? {}, label: opts.goal, goal: opts.goal, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}),
-    ...(g ? { goalBranch: g.branch, base: g.base } : target ? { target } : {}), ...(opts.sandbox ? { sandbox: opts.sandbox } : {}) });
+    ...(g ? { goalBranch: g.branch, base: g.base } : target ? { target } : {}), ...(opts.sandbox ? { sandbox: opts.sandbox } : {}), ...(opts.pluginConfig ? { pluginConfig: opts.pluginConfig } : {}) });
   const gates = { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(g ? { base: g.base } : {}) };
   // `profile` may be a ref with overrides (`--planner-provider`): show its name and provider.
   const planner = opts.profile.split(";")[0]!, driver = opts.driver ? ` (${opts.driver})` : "";

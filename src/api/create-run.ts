@@ -98,7 +98,8 @@ export async function startDetachedRun(input: CreateRunInput & { runId: string }
 	const [cmd, ...args] = selfArgv("run", "--detach", "--json", "--run-id", input.runId,
 		...(input.targetBranch ? [`--target-branch=${input.targetBranch}`] : []), ...(input.profile ? [`--profile=${input.profile}`] : []),
 		...(input.driver ? [`--planner-provider=${input.driver}`] : []), ...(input.effort ? [`--planner-effort=${input.effort}`] : []), ...(input.model ? [`--planner-model=${input.model}`] : []), ...(input.sandbox ? [`--sandbox=${input.sandbox}`] : []),
-		...(input.base !== undefined ? [`--base=${input.base}`] : []), ...(input.goalBranch === false ? ["--no-goal-branch"] : input.goalBranch !== undefined ? [`--goal-branch=${input.goalBranch}`] : []), "--", input.goal);
+		...(input.base !== undefined ? [`--base=${input.base}`] : []), ...(input.goalBranch === false ? ["--no-goal-branch"] : input.goalBranch !== undefined ? [`--goal-branch=${input.goalBranch}`] : []),
+		...(input.plugins ? (await import("../plugins/run-config")).pluginConfigFlags(input.plugins) : []), "--", input.goal);
 	const child = (o.spawn ?? spawn)(cmd!, args, { cwd: ctx.cwd, env: ctx.env as NodeJS.ProcessEnv, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "", stderr = "";
 	child.stdout!.on("data", (b) => { stdout += b; });
