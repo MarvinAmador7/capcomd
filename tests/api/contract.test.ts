@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApiError, ApprovalId, contract, EventData, Scope, StreamFrames } from "../../src/api/contract";
+import { ApiError, ApprovalId, CAPABILITY_NAMES, contract, EventData, Scope, StreamFrames } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
 import { isEventType } from "../../packages/plugin/src/event-type";
 import { bodyHash, resolveDecide } from "../../src/api/idempotency";
@@ -23,10 +23,25 @@ describe("harness.v1 contract", () => {
 	test("committed OpenAPI covers every route, with a scoped stream and no global one", () => {
 		for (const p of ["/v1/health", "/v1/runs", "/v1/runs/{runId}", "/v1/runs/{runId}/agents", "/v1/runs/{runId}/files", "/v1/events", "/v1/streams/{scope}/events", "/v1/approvals/{approvalId}/decision",
 			"/v1/runs/{runId}/pause", "/v1/runs/{runId}/resume", "/v1/runs/{runId}/cancel", "/v1/runs/{runId}/agents/{agentId}/messages",
-			"/v1/runs/{runId}/agents/{agentId}/pause", "/v1/runs/{runId}/agents/{agentId}/resume"])
+			"/v1/runs/{runId}/agents/{agentId}/pause", "/v1/runs/{runId}/agents/{agentId}/resume", "/v1/profiles"])
 			expect(Object.keys(paths)).toContain(p);
 		expect(Object.keys(paths)).not.toContain("/v1/events/stream");
 		expect(paths["/v1/streams/{scope}/events"].get.responses["200"].content).toHaveProperty("text/event-stream");
+	});
+	test("capability profiles: GET /v1/profiles with an optional repo, read-only, a profile's description marked untrusted (ADR-024 §5)", () => {
+		expect(CAPABILITY_NAMES).toContain("profiles");
+		const op = paths["/v1/profiles"];
+		expect(Object.keys(op)).toEqual(["get"]);
+		expect(op.get.parameters.map((p: any) => [p.name, p.in, !!p.required])).toEqual([["repo", "query", false]]);
+		const body = op.get.responses["200"].content["application/json"].schema;
+		expect(body.required).toEqual(["file", "layers", "default", "profiles", "warnings", "error"]);
+		const row = body.properties.profiles.items;
+		for (const k of ["name", "version", "source", "format", "path", "default", "provider", "auth", "model", "toolMode", "canLead", "does", "ready", "readiness", "applied"]) expect(row.required).toContain(k);
+		expect(row.properties.description).toMatchObject({ "x-untrusted": true, type: ["string", "null"] });
+		// A layer is a string, not an enum: installed packages (ADR-024 step 7) add one without breaking a client.
+		expect(row.properties.source.type).toBe("string");
+		expect(row.properties.source.enum).toBeUndefined();
+		expect(row.properties.applied.items.properties.as.enum).toEqual(["extends", "profile", "override"]);
 	});
 	test("scope is daemon, prj-… or run-…", () => {
 		for (const s of ["daemon", "prj-a1", "run-mvhd"]) expect(Scope.safeParse(s).success).toBe(true);

@@ -36,7 +36,7 @@ export function resolveAgent(name?: string | null, source: Record<string, string
     const r = pick(name);
     // An operator override may change the provider (`capcomd run --planner-provider`): the runner follows it.
     if (r && ref.overrides) { const spec = applyOverrides(name, r.spec!, ref.overrides); return { ...r, kind: kindOf(spec.provider), spec, overridden: true }; }
-    if (!r) throw new AgentConfigError(`unknown agent profile "${name}" (defined: ${Object.keys(file.agents).join(", ") || "none"}; add one with \`capcomd agents add\`)`);
+    if (!r) throw new AgentConfigError(`unknown agent profile "${name}" (defined: ${Object.keys(file.agents).join(", ") || "none"}; add one with \`capcomd profiles add\`)`);
     return r;
   }
   const env = envVar("AGENT", source)?.trim();

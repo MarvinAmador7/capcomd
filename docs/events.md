@@ -272,6 +272,28 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "null"
       ]
     },
+    "profileVersion": {
+      "description": "The version of its profile the agent was spawned with: the profile's `version`, else 1 (an agents.json profile is 1). Fixed at spawn, so it says what the agent runs with whatever the profile says now (Agent.profileVersion). null without a profile (a fake agent, or CAPCOMD_AGENT naming a provider). Absent from older daemons",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "profileSource": {
+      "description": "The layer its profile was found in at spawn: project (the project's .capcomd/profiles/ or .capcomd/agents.json), user (~/.capcomd/profiles/ or the user's agents.json) or bundled (shipped with capcomd). More may be added: show an unknown one as it is (Agent.profileSource). null without a profile. Absent from older daemons",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "project",
+        "user",
+        "bundled",
+        null
+      ]
+    },
     "budget": {},
     "limits": {},
     "agent": {
@@ -3770,6 +3792,28 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             ],
             "pattern": "^[a-z0-9][a-z0-9._-]*$",
             "description": "Profile name, lowercase"
+          },
+          "profileVersion": {
+            "description": "The version of its profile the agent was spawned with: the profile's `version`, else 1 (an agents.json profile is 1). Fixed at spawn, so it says what the agent runs with whatever the profile says now. null without a profile (a fake agent, CAPCOMD_AGENT naming a provider) or for an agent spawned before capcomd recorded it. Older daemons don't send it",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "profileSource": {
+            "description": "The layer its profile was found in at spawn: project (the project's .capcomd/profiles/ or .capcomd/agents.json), user (~/.capcomd/profiles/ or the user's agents.json) or bundled (shipped with capcomd). More may be added: show an unknown one as it is. null when profileVersion is. Older daemons don't send it",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "project",
+              "user",
+              "bundled",
+              null
+            ]
           },
           "status": {
             "type": "string",

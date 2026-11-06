@@ -188,6 +188,13 @@ export function harnessApp(o: ServerOptions) {
 				throw e;
 			}
 		}) },
+		// Capability profiles: as GET /v1/run-options, a `repo` that isn't a project is 422.
+		profiles: { list: os.profiles.list.handler(async ({ input }) => {
+			try { return await src.profiles(input.repo); } catch (e) {
+				if (e instanceof CreateRunError) throw new ORPCError("UNPROCESSABLE_CONTENT", { message: e.message });
+				throw e;
+			}
+		}) },
 		skills: { list: os.skills.list.handler(() => src.skills()) },
 		// ?sandbox= (capability sandboxes): one place's rows; a name that isn't a listed place is 404.
 		logins: { list: os.logins.list.handler(async ({ input }) => {

@@ -103,7 +103,8 @@ src/
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), resolution, pins and overrides
-                  (resolve.ts), what a planner reads to choose one: title, tags, fit, cost (describe.ts)
+                  (resolve.ts), and what `capcomd profiles`, GET /v1/profiles and a planner read of each: the files
+                  and values, title, tags, fit, cost (describe.ts)
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

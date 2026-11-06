@@ -122,7 +122,8 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
     if (raw.name === undefined) at("name", `is required (${fileName})`);
     else if (raw.name !== fileName) at("name", `is ${JSON.stringify(raw.name)}, but the file is the profile ${fileName}'s`);
   }
-  if (raw.version !== undefined && !isInt(raw.version, 1)) at("version", "must be an integer >= 1");
+  // A safe integer: an agent records it (harness.v1 Agent.profileVersion), and one past 2^53 isn't a version any client reads back.
+  if (raw.version !== undefined && !(isInt(raw.version, 1) && Number.isSafeInteger(raw.version))) at("version", "must be an integer >= 1");
   if (raw.extends !== undefined && (typeof raw.extends !== "string" || !NAME.test(raw.extends)))
     at("extends", "must be a profile's name: one of this project's, your own or a bundled one (never another project's, a path or a repository)");
   if (raw.default !== undefined && raw.default !== null && typeof raw.default !== "boolean") at("default", "must be true or false");
@@ -251,6 +252,14 @@ export function inheritable(base: ProfileDoc): ProfileDoc {
   return out;
 }
 
+/** Which of the files laid together set each value (its index among them), by path: `block.key` for a key in a block,
+ *  the key itself otherwise (`tags`, `version`). */
+export type SetBy = Record<string, number>;
+/** What a profile that extends `base` keeps of its SetBy: as inheritable does with the values. */
+export function inheritableSetBy(setBy: SetBy): SetBy {
+  return Object.fromEntries(Object.entries(setBy).filter(([p]) => !OWN.has(p.split(".")[0]!)));
+}
+
 const dropNulls = (m: Record<string, unknown>) => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== null));
 
 /**
@@ -263,6 +272,23 @@ export function layerOver(base: ProfileDoc, over: ProfileDoc): ProfileDoc {
     if (v === null) { delete out[k]; continue; }
     const b = out[k];
     out[k] = isMap(v) ? dropNulls(isMap(b) ? { ...b, ...v } : v) : v;
+  }
+  return out;
+}
+
+/**
+ * The SetBy of `layerOver(base, over)` when `over` is the file at index `at` (ADR-024 §2.6: `capcomd profiles show`
+ * says where every value came from): what it writes is its, what it removes (`null`) is no one's, and a block it
+ * writes over a value that wasn't one replaces it whole.
+ */
+export function setByOver(setBy: SetBy, base: ProfileDoc, over: ProfileDoc, at: number): SetBy {
+  const out = { ...setBy };
+  const drop = (k: string) => { delete out[k]; for (const p of Object.keys(out)) if (p.startsWith(`${k}.`)) delete out[p]; };
+  for (const [k, v] of Object.entries(over)) {
+    if (v === null || !isMap(v) || !isMap(base[k])) drop(k);
+    if (v === null) continue;
+    if (!isMap(v)) { out[k] = at; continue; }
+    for (const [sub, x] of Object.entries(v)) { if (x === null) delete out[`${k}.${sub}`]; else out[`${k}.${sub}`] = at; }
   }
   return out;
 }
