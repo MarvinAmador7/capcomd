@@ -56,6 +56,9 @@ export interface AgentCommandCtx {
   cfg: AgentConfig;
   /** ADR-017: in-VM capcomd for agents allowed to spawn (MCP server script + its config). */
   capcomd?: { cli: string; mcpConfig: string };
+  /** ADR-024 `tools.mcp`: its profile's MCP servers, started in the sandbox. `config` is a file with them and capcomd's
+   *  own (when it has one) as `{mcpServers}` (Claude Code `--mcp-config`); `servers`, for a CLI that takes flags. */
+  mcp?: { config: string; servers: Array<{ name: string; command: string[]; trust: "trusted" | "untrusted" }> };
   /** The supervisor feeds the prompt, and messages sent while it runs, on stdin (adapters with streamInput). */
   stdinPrompt?: boolean;
 }

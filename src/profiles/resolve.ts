@@ -4,6 +4,7 @@
 import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
 import { env as envVar } from "../utils/env";
 import { agentsFilePath, readProfiles, type ProfileLayer } from "./load";
+import type { ProfileRuntime } from "./runtime";
 import { AgentConfigError, validateSpec, widenings, type AgentSpec } from "./v1";
 import { LIST_PATHS, flatOverrides } from "./v2";
 
@@ -13,6 +14,9 @@ export interface ResolvedAgent {
   profile?: { name: string; version: number; source: ProfileLayer };
   /** Its `permissions` block, when it has one (ADR-024 §2.2): `report: false` refuses a spawn with report. Not pinned. */
   permissions?: { report?: boolean };
+  /** Its runtime blocks (./runtime.ts), resolved by name: pinned on the agent at spawn beside its spec
+   *  (src/primitives/ops.ts `spawnAgent`); no override reaches them. */
+  runtime?: ProfileRuntime;
 }
 
 /**
@@ -28,7 +32,7 @@ export function resolveAgent(name?: string | null, source: Record<string, string
     if (!r) return null;
     const pm = r.manifest.permissions as { report?: unknown } | undefined;
     const permissions = pm && typeof pm === "object" && typeof pm.report === "boolean" ? { permissions: { report: pm.report } } : {};
-    return { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...permissions };
+    return { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...permissions, ...(Object.keys(r.runtime).length ? { runtime: r.runtime } : {}) };
   };
   if (name) {
     const ref = decodeAgentRef(name);

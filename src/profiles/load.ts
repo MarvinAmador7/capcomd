@@ -11,6 +11,7 @@ import { env as envVar } from "../utils/env";
 import { defaultAgentsFile, userProfilesDir } from "../utils/home";
 import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile } from "./v1";
 import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layerOver, notApplied, setByOver, toFlat, v2Path, withContext, type ProfileDoc, type SetBy } from "./v2";
+import { runtimeOf, runtimeProblems, type ProfileRuntime } from "./runtime";
 
 /** A JSON parse error as a profile file's error says it: where it went wrong, never what is there (readDoc). */
 const jsonError = (e: unknown) => (e as Error).message.replace(/\s*["'`][^]*$/, "");
@@ -57,6 +58,9 @@ export interface ResolvedProfile {
   setBy: SetBy;
   /** What it pins (./v1.ts AgentSpec). */
   spec: AgentSpec;
+  /** What it pins beside the flat spec (./runtime.ts): its MCP servers, sandbox, environment, size and lifecycle
+   *  plugins; empty for an agents.json profile. */
+  runtime: ProfileRuntime;
 }
 /** Every profile a project sees, resolved: `agents` and `default` read as a v1 file's do, so every reader of
  *  `readAgentsFile(…).agents[name]` reads v2 profiles the same way. */
@@ -200,7 +204,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     const f = readAgentsFile(path);
     const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => {
       const manifest = fromFlat(name, spec);
-      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec }];
+      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, runtime: {} }];
     }));
     return { ...f, profiles, warnings };
   }
@@ -275,11 +279,13 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
         const { sandboxSeam } = require("../plugins/sandboxes") as typeof import("../plugins/sandboxes");
         if (!sandboxSeam(sandbox)) e.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't an active sandbox provider (see \`capcomd plugins list\`)`);
       }
+      const runtime = runtimeOf(doc);
+      e.push(...runtimeProblems(name, runtime, spec));
       if (e.length) return fail(e.join("; "));
       if (def?.on) defaults.push({ name, at: def.at, v1: false });
       const notYet = notApplied(doc);
       if (notYet.length) warnings.push(`profiles.${name}: ${notYet.join(", ")} ${notYet.length > 1 ? "are" : "is"} read but not used yet by this capcomd`);
-      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec };
+      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec, runtime };
       done.set(name, r);
       return r;
     } finally { resolving.pop(); }

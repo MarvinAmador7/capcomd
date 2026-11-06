@@ -4,7 +4,7 @@
 // `capcomd agents …` is the same command under its old name, for one minor release.
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
-import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, notApplied, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile } from "../../profiles";
+import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, lifecyclePlugins, notApplied, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, readAgentsFile, readProfiles, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileSet } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -62,6 +62,34 @@ function shown(v: unknown): string {
 }
 const appliedText = (a: AppliedFile) => `${a.as.padEnd(8)} ${a.name.padEnd(16)} ${a.layer.padEnd(7)} ${a.path ?? "(bundled with capcomd)"}`;
 
+/**
+ * What `validate` asks of this host beside the files (ADR-024 §7 step 8): a `lifecycle` plugin must be active and
+ * listening to agent.changed on the running daemon (an error, as a seam no plugin provides is: plugin API §7.1; a
+ * warning when no daemon runs to ask), and a `sandbox.environment` should be one its sandbox has (a warning: environments
+ * are this host's, and a spawn refuses one that isn't there).
+ */
+async function hostChecks(set: ProfileSet): Promise<{ errors: string[]; warnings: string[] }> {
+  const errors: string[] = [], warnings: string[] = [];
+  const { lifecycleCheck } = await import("../../plugins/lifecycle");
+  const { bootSnapshot, EnvironmentProblem } = await import("../../env/resolve");
+  const { withSandbox } = await import("../../providers/run-sandbox");
+  for (const [n, r] of Object.entries(set.profiles)) {
+    const names = lifecyclePlugins(r.runtime.lifecycle);
+    if (names.length) {
+      const c = await lifecycleCheck(names);
+      if (c.problem) errors.push(`profiles.${n}: ${c.problem}`);
+      else if (!c.checked) warnings.push(`profiles.${n}: lifecycle names ${names.join(", ")}: no daemon is running to say whether ${names.length === 1 ? "it is" : "they are"} active (a spawn checks again)`);
+    }
+    if (r.runtime.environment) {
+      try { bootSnapshot({ environment: r.runtime.environment, real: false }, withSandbox(process.env, r.runtime.sandboxProvider)); } catch (e) {
+        if (!(e instanceof EnvironmentProblem)) throw e;
+        warnings.push(`profiles.${n}: ${e.message}`);
+      }
+    }
+  }
+  return { errors, warnings };
+}
+
 /** `as`: the name it was run under; `capcomd agents` keeps its old outputs where they differ (list's `agents`, schema). */
 export async function profilesCommand(pos: string[], values: Record<string, any>, as: "profiles" | "agents" = "profiles"): Promise<number> {
   const json = !!values.json;
@@ -83,7 +111,10 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       return 0;
     case "validate": {
       let warnings: string[] = [];
-      const errs = values.spec ? validateSpec(name ?? "candidate", specFromFlags(values)) : (() => { try { warnings = readProfiles(path).warnings; return []; } catch (e) { return [(e as Error).message]; } })();
+      let errs: string[], set: ProfileSet | null = null;
+      if (values.spec) errs = validateSpec(name ?? "candidate", specFromFlags(values));
+      else { try { set = readProfiles(path); warnings = set.warnings; errs = []; } catch (e) { errs = [(e as Error).message]; } }
+      if (set) { const host = await hostChecks(set); errs.push(...host.errors); warnings = [...warnings, ...host.warnings]; }
       console.log(json ? JSON.stringify({ schema: SCHEMA, ok: errs.length === 0, errors: errs, ...(warnings.length ? { warnings } : {}) }) : errs.length ? errs.join("\n") : ["valid", ...warnings.map((w) => `warning: ${w}`)].join("\n"));
       return errs.length ? 2 : 0;
     }

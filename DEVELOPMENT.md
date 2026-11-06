@@ -97,12 +97,14 @@ src/
                   a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), and skill-orchestration.ts, the orchestration
-                  skill as an agent.preparing patch: every process loads them (host.ts `localHost`)
+                  skill as an agent.preparing patch: every process loads them (host.ts `localHost`); lifecycle.ts, whether
+                  the plugins a profile's `lifecycle` names are there to hear its agents
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
-                  layers a name resolves through, project, user, bundled (load.ts), resolution, pins and overrides
-                  (resolve.ts), and what `capcomd profiles`, GET /v1/profiles and a planner read of each: the files
-                  and values, title, tags, fit, cost (describe.ts)
+                  layers a name resolves through, project, user, bundled (load.ts), what an agent is pinned with beside
+                  the flat spec: MCP servers, sandbox, environment, size, lifecycle plugins (runtime.ts), resolution,
+                  pins and overrides (resolve.ts), and what `capcomd profiles`, GET /v1/profiles and a planner read of
+                  each: the files and values, title, tags, fit, cost (describe.ts)
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results

@@ -86,9 +86,30 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   usage limit).
 - `permissions: { report: false }` keeps a profile from being spawned with `report` (read-only work whose answer is
   its result): such a spawn is refused (`reason: "report_not_allowed"`). Unset or `true`, it may be, as before.
-- `identity.persona`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name),
-  `sandbox.provider|environment|size` and `lifecycle.onStart|onEnd` are checked but don't change what an agent does
-  yet; `capcomd profiles validate` lists the ones a profile sets. `jobs` (`foregroundMs`, `max`, `afterTurnMs`) sets the
+- `identity.persona`, `skills` and `context` (with `memory` read as its old name) are checked but don't change what
+  an agent does yet; `capcomd profiles validate` lists the ones a profile sets.
+- `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
+  untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
+  (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says
+  when it isn't). `trust: trusted` approves the server's tools up front, as capcomd's are; `untrusted` (the default)
+  leaves them to the profile's tool rules: with `tools.allowed`, Claude Code runs only the ones it names
+  (`mcp__semgrep`, or `mcp__semgrep__<tool>`), Codex asks its own approval rules (which refuse what needs asking). An
+  orchestrate profile can't have servers: it runs nothing, so give them to the profiles it spawns.
+- `sandbox.provider` runs the profile's agents on that sandbox (`docker`, `boxd`), whatever the run's is (`capcomd run
+  --sandbox`) or the daemon's; it must be an active sandbox plugin. `sandbox.environment` is what their machines boot
+  from there: `default` (the current `capcomd env build`, as for every agent), `image` (the provider's plain image: the
+  agent CLI is installed at start) or a build's name from `capcomd env status --sandbox <name>`. With a plan login kept
+  in an image (`capcomd auth login`), that image is the one used, so the environment must be `default` or the one it
+  was made from. `sandbox.size: { vcpu: 1 | 2 | 4 | 8 }` is the machine's size on boxd; Docker containers share your
+  CPUs and don't take it.
+- `lifecycle.onStart` and `lifecycle.onEnd` name plugins that must be active for the profile's agents: each one hears
+  the agent's `agent.changed` (its start, steps, end), which carries the names (`lifecycle`), so it knows it was named.
+  A spawn of a profile that names a plugin that isn't active and listening to `agent.changed` is refused (`reason:
+  "lifecycle_inactive"`), and an agent whose plugin was turned off since doesn't start.
+- These runtime blocks are fixed when the agent is spawned and can't be changed with `--set`, `--overrides` or by a
+  parent spawning a child. `capcomd profiles validate` checks them against this host too: a lifecycle plugin the
+  running daemon doesn't have is an error, an environment the sandbox doesn't have a warning (a spawn refuses it,
+  `reason: "environment"`). `jobs` (`foregroundMs`, `max`, `afterTurnMs`) sets the
   agent's background jobs (`capcomd job start`), as the flat `jobs` field does in `agents.json`.
 - `capcomd profiles schema` prints the JSON Schema of a profile file (id `capcomd.profile/v2`), for an editor.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
