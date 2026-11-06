@@ -1,6 +1,8 @@
-// context (ADR-025 §6.1, §10, step 1): the kernel's context router as the one agent.preparing listener that composes a
-// profile's context providers into the brief (src/context/brief.ts), appended to the agent's prompt after its profile's
-// own. An agent whose profile has no `context` block gets nothing and costs nothing. Its events, on the run's stream:
+// context (ADR-025 §6.1, §10, steps 1 and 6): the kernel's context router as the one agent.preparing listener that
+// composes a profile's context providers into the brief (src/context/brief.ts), appended to the agent's prompt after its
+// profile's own, with the context layer's skills (src/context/skills.ts: the doctrine, and the routing paragraph for an
+// agent that writes run notes), each pinned by the sha256 of its text. An agent whose profile has no `context` block
+// gets nothing and costs nothing. Its events, on the run's stream:
 // `plugin.context.loaded` (what the brief held) and `plugin.context.skipped` (a provider left out, and why). Its command:
 //   capcomd context brief <profile> [--run <runId>] [--review]   the brief that profile's agents start with now
 // It is loaded in every process an agent is prepared in (the daemon, a run's driver) and in the CLI.
@@ -33,7 +35,7 @@ export const manifest: PluginManifest = {
 /** What the brief is built from besides the payload (a test replaces it). */
 export const contextKernel = {
   /** The agent's record as the kernel prepares it (src/primitives/ops.ts `agentPreparing`), else read from the engine. */
-  agent: async (runId: string, agentId: string): Promise<Pick<ScopeAgent, "contract">> => {
+  agent: async (runId: string, agentId: string): Promise<Pick<ScopeAgent, "contract"> & { limits?: Pick<ScopeAgent["limits"], "allowSpawn"> }> => {
     const p = preparingAgent.getStore();
     if (p && p.runId === runId && p.agentId === agentId) return p.record as ScopeAgent;
     return (await import("../primitives/ops")).getAgentOrThrow(runId, agentId);
@@ -67,16 +69,22 @@ export const plugin = definePlugin({
       if (!spec.provider || !spec.context?.providers?.length) return { decision: "allow" };
       const a = await contextKernel.agent(agent.runId, agent.id);
       const { roleOf } = await import("../context/brief");
-      const b = await briefFor({ runId: agent.runId, agentId: agent.id, profile: agent.profile, spec, role: roleOf(a) });
+      const role = roleOf(a);
+      const b = await briefFor({ runId: agent.runId, agentId: agent.id, profile: agent.profile, spec, role });
+      // The skills it reads the brief with; one its profile already gave it, by name, isn't attached twice.
+      const { contextSkills } = await import("../context/skills");
+      const skills = contextSkills({ role, maySpawn: a.limits?.allowSpawn === true }).filter((s) => !call.payload.prompt.skills.some((x) => x.name === s.name));
       const loaded = b.providers.filter((p) => p.state === "loaded").map((p) => `${p.name} at ${sha(p.revision)}`);
       const emit = (type: string, text: string, data: Record<string, unknown>) =>
         ctx.events.emit({ type, stream: agent.runId, entity: agent.id, text, data }).catch((e: unknown) => ctx.log.warn("could not record a context event", { type, error: (e as Error)?.message ?? String(e) }));
       await emit("loaded", `${agent.id} starts with ${b.loaded} of ${b.total} context lines${loaded.length ? ` (${loaded.join(", ")})` : ""}.`, {
         agentId: agent.id, profile: agent.profile, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes,
         budget: { briefBytes: b.limits.briefBytes, indexLines: b.limits.indexLines, source: b.source }, providers: b.providers,
+        skills: skills.map(({ name, hash }) => ({ name, hash })),
       });
       for (const p of b.providers) if (p.state === "skipped") await emit("skipped", `${agent.id} starts without the ${p.name} context provider (${p.reason}).`, { agentId: agent.id, profile: agent.profile, provider: p.name, reason: p.reason });
-      return { decision: "allow", patch: { prompt: { append: b.text } } };
+      const attach = skills.map(({ name, hash, text }) => ({ name, hash, source: "builtin" as const, text }));
+      return { decision: "allow", patch: { prompt: { append: b.text, ...(attach.length ? { skills: attach } : {}) } } };
     });
 
     ctx.cli.command({
@@ -92,8 +100,14 @@ export const plugin = definePlugin({
         if (!spec?.context?.providers?.length) {
           return { schema: SCHEMA, ok: true, profile: name, brief: null, text: `Profile ${name} has no context block, so its agents start with no brief. Give it one in its profile: context: {providers: [{name: memory}]}` };
         }
-        const b = await briefFor({ runId, agentId: null, profile: name, spec: { ...spec, ...(resolved.profile ? { profile: resolved.profile } : {}) }, role: flags.review === true ? "review" : "work" });
-        return { schema: SCHEMA, ok: true, profile: name, brief: b.text, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes, budget: { ...b.limits, source: b.source }, providers: b.providers, text: b.text };
+        const role = flags.review === true ? "review" : "work";
+        const b = await briefFor({ runId, agentId: null, profile: name, spec: { ...spec, ...(resolved.profile ? { profile: resolved.profile } : {}) }, role });
+        const { contextSkills } = await import("../context/skills");
+        const skills = contextSkills({ role, maySpawn: spec.children?.allowSpawn === true }).map(({ name: n, hash }) => ({ name: n, hash }));
+        return {
+          schema: SCHEMA, ok: true, profile: name, brief: b.text, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes, budget: { ...b.limits, source: b.source }, providers: b.providers, skills,
+          text: `${b.text}\n\nWith the skills: ${skills.map((s) => `${s.name} (sha256 ${s.hash.slice(0, 12)})`).join(", ")}.`,
+        };
       },
     });
   },

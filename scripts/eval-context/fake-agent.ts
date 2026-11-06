@@ -24,6 +24,14 @@ const nextLine = async (): Promise<string | null> => {
   }
 };
 if (input) { const first = await nextLine(); try { prompt = String(JSON.parse(first ?? "").message.content); } catch {} }
+// Items inlined in the first message (the index-k arms, ./deliver.ts): fenced, each `[type] <file>` then the file. The
+// task is what's left; an item is used like the file it came from, without reading it.
+const FENCED = /<<<untrusted:context>>>\n([\s\S]*?)\n<<<end:context>>>/g;
+const inlined = [...prompt.matchAll(FENCED)].flatMap((m) => m[1]!.split(/\n(?=\[[a-z0-9_-]+\] \S+\n---\n)/)).map((s) => {
+  const head = /^\[[a-z0-9_-]+\] (\S+)\n([\s\S]*)$/.exec(s);
+  return head ? { path: head[1]!, text: head[2]! } : null;
+}).filter((x): x is { path: string; text: string } => !!x);
+prompt = prompt.replace(FENCED, "");
 
 let n = 0;
 const emit = (o: unknown) => process.stdout.write(`${JSON.stringify(o)}\n`);
@@ -51,7 +59,7 @@ const rule = (title: string) => {
   // The brief's line for the record, then its file: its id in the frontmatter, the rule in the body.
   const line = brief.find((b) => b.description === title);
   if (!line) return null;
-  const s = read(line.path);
+  const s = inlined.find((i) => i.path === line.path)?.text ?? read(line.path);
   const id = /^id: "?([A-Z]+-\d+)"?$/m.exec(s)?.[1];
   return id ? { id, text: s.slice(s.indexOf("\n---", 3) + 4).trim(), where: line.path } : null;
 };

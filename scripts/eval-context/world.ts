@@ -174,14 +174,17 @@ ${[...fs].sort((a, b) => b.date.localeCompare(a.date)).map(line).join("\n")}
 `;
 }
 
+/** One record as an OKF item (frontmatter = lifecycle), with `extra` frontmatter after the rest. */
+const factItem = (f: Fact, extra: Record<string, unknown> = {}) => {
+  const fm = { id: f.id, type: f.type, title: f.title, status: f.status, valid_from: f.date, generated: { by: "human:finance", method: "human-authored", at: f.date },
+    sources: [], ...(f.supersedes ? { supersedes: [f.supersedes] } : {}), ...(f.supersededBy ? { superseded_by: [f.supersededBy] } : {}), ...extra };
+  return `---\n${Bun.YAML.stringify(fm, null, 2).trimEnd()}\n---\n\n${f.text}\n`;
+};
+
 /** The company's brain as an OKF bundle (one Markdown file per record, frontmatter = lifecycle), for the groundray arm. */
 export function brainFiles(w: World): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const f of facts(w)) {
-    const fm = { id: f.id, type: f.type, title: f.title, status: f.status, valid_from: f.date, generated: { by: "human:finance", method: "human-authored", at: f.date },
-      sources: [], ...(f.supersedes ? { supersedes: [f.supersedes] } : {}), ...(f.supersededBy ? { superseded_by: [f.supersededBy] } : {}) };
-    out[`${f.type}s/${f.id.toLowerCase()}.md`] = `---\n${Bun.YAML.stringify(fm, null, 2).trimEnd()}\n---\n\n${f.text}\n`;
-  }
+  for (const f of facts(w)) out[`${f.type}s/${f.id.toLowerCase()}.md`] = factItem(f);
   out["index.md"] = `# ${w.company.name}\n\n${facts(w).map((f) => `- [${f.title} (${f.id}, ${f.status})](${f.type}s/${f.id.toLowerCase()}.md)`).join("\n")}\n`;
   return out;
 }
@@ -195,11 +198,17 @@ export function memoryFiles(w: World): Record<string, string> {
   ]);
 }
 
-/** A project's hand-written `.capcomd/context/` (ADR-025 §3.3), for the index arm: the business records as the project's
- *  own facts (each its title for a description, supersession in its frontmatter) and the memory lessons. */
+/** The code each record governs, as a project would note it on its own copy (the brief's paths column, and the paths a
+ *  triggered push fires on). */
+const governs = (w: World, f: Fact): string[] =>
+  [w.shipping.old.id, w.shipping.current.id].includes(f.id) ? ["src/shipping.js"] : [w.tiers.old.id, w.tiers.current.id].includes(f.id) ? ["src/discounts.js"] : f.id === w.active.id ? ["src/customers.js"] : [];
+
+/** A project's hand-written `.capcomd/context/` (ADR-025 §3.3), for the index arms: the business records as the
+ *  project's own facts (each its title for a description, supersession and the code it governs in its frontmatter) and
+ *  the memory lessons. */
 export function contextFiles(w: World): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [p, s] of Object.entries(brainFiles(w))) if (p !== "index.md") out[`.capcomd/context/facts/${p}`] = s;
+  for (const f of facts(w)) out[`.capcomd/context/facts/${f.type}s/${f.id.toLowerCase()}.md`] = factItem(f, { paths: governs(w, f) });
   for (const [p, s] of Object.entries(memoryFiles(w))) out[`.capcomd/context/${p}`] = s;
   return out;
 }

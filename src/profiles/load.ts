@@ -299,7 +299,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
         if (!sandboxSeam(sandbox)) e.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't an active sandbox provider (see \`capcomd plugins list\`)`);
       }
       // Its skills, read from the nearest directory that has each (an override's, its own, then its ancestors').
-      const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true);
+      const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true, !!spec.context?.providers?.length);
       e.push(...sk.errors);
       e.push(...contextProblems(name, spec));
       if (e.length) return fail(e.join("; "));
