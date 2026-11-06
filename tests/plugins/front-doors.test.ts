@@ -216,9 +216,14 @@ describe("skill-orchestration: the orchestration skill as an agent.preparing pat
     skillKernel.goal = async () => ({ branch: "capcomd/add-sum", base: "main" });
     const a = record();
     const text = await unpreparedSkill("run-none", a, null);
+    // In its block, as a prepared attempt reads it (ADR-024 §7 step 5).
+    expect(text).toStartWith(`<skill name="${SKILL_NAME}">\n`);
+    expect(text).toEndWith("\n</skill>");
     expect(text).toContain("# Orchestrating child agents (capcomd)");
     expect(text).toContain("Your merges land on capcomd/add-sum");
     expect(await unpreparedSkill("run-none", a, { provider: "claude", skills: [{ name: SKILL_NAME }] })).toBeUndefined();
+    // Prepared with only its profile's skills (no plugin attached it): the kernel's, still.
+    expect(await unpreparedSkill("run-none", a, { provider: "claude", skills: [{ name: "tdd" }] })).toBe(text);
   });
 
   test("an agent that can't spawn, and a fake agent, get nothing", async () => {
