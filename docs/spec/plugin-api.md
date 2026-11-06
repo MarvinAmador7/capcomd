@@ -540,7 +540,7 @@ The checker puts the branch on the target and runs the checks in one call, so th
 passed (the tree they passed is `tested`); checks that fail ask no judge.
 
 A judge that ran the run's reviewer profile (`reviewer`) adds `review: ReviewReport {profile, agentId, passed, reasons,
-error?, sha, targetSha?, startedAt?}` to its answer (any decision; a malformed one, or one on another hook, is
+error?, retryable?, sha, targetSha?, startedAt?}` to its answer (any decision; a malformed one, or one on another hook, is
 `invalid_result`). The kernel records it as the verification's `review` (capcomd.v1's `result.review`, `judge`, the
 review timings) and keeps "both must pass for the same tree" (`reviewFits`): a review counts only when its `sha` and
 `targetSha` are `tested.commit` and `tested.targetSha`. A verification with a reviewer whose judges all allowed it
@@ -1240,7 +1240,11 @@ the kernel's own agent primitives, not `ctx.agents` (a plugin's spawn has no par
 the `review` report (§6.6.13) instead of a `verdict` event (the verdict is on the reviewer's result and in the
 verification's record). Its `verify.judging` deadline is the maximum, 60 min. It fails closed with its own `deny` (the
 error in its `review`), never by failing the call: three failed calls would suspend it, and a suspended gate denies every
-verify (§6.5). A CLI that ran a verify waits (bounded) for the reviewer it started or stops before it exits.
+verify (§6.5). A call it made that failed in capcomd's own machinery (the engine or an actor didn't answer: not a
+UserError, not a kernel refusal such as an unknown profile or the budget) is tried again, keyed, within the deadline (4
+tries by default, `CAPCOMD_REVIEW_INFRA_TRIES`); still failing, its deny says the reviewer couldn't be run, with the
+error's own text, and its `review` is `retryable: true` (no verdict was given: verify again). A CLI that ran a verify
+waits (bounded) for the reviewer it started or stops before it exits.
 
 ### 15.4 A Slack notifier (`slack-notifier`, out of process)
 
@@ -1581,7 +1585,8 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.6 | 2026-11-05 | Orchestrate means full read visibility and no execution (§16.1, the owner's call after a live run whose planner and lead couldn't `git fetch`): read-only git with fetch and a detached checkout, every capcomd read; edits, git writes, installs, builds and tests refused. Claude Code's lists gain the read-only commands and the refused prefixes (plus three option wildcards); Codex's policy is `denyCommands` as execpolicy rules with its sandbox the agent's (`read-only` can't fetch and can't start in Docker) and its capcomd MCP tools approved; `toolPolicies.orchestrate.denyCommands`, `AgentConfig.denyCommands` and the optional `refusal(line)` (§7.3; all additive); the agent suite accepts `denyCommands` that refuse commits and pushes in place of a read-only sandbox. `capcomd fetch`; a verify's and a merge's `result.combined`; an orchestrate agent that spawned nothing ends failed; the mode is explained to everyone who briefs one; `capcomd logs` shows every agent's tool calls and refusals. |
 | 1.0.7 | 2026-11-05 | The rest of the forge's logic in the forge (§7.4): `listBranches` (replacing the unused `defaultBranch`) for a run's base and the setup screen's branches; `login` (`ForgeLogin`, `ForgeAccount`, `ForgeLoginUse`) for the logins the app shows and who you publish as; `describe().publish` choosing the forge that creates repositories; "pr mode" and "isn't on GitHub" said in the active forges' words. An inactive `merge.forge` is refused at `POST /v1/runs`, `capcomd run` and `capcomd_run_new` (§7.1); every forge method goes through the kernel's wrapper (§7.1); one local host for the gates and the forges. |
 | 1.0.8 | 2026-11-05 | `merge.landing`'s `hold` takes an optional `holdId` (§6.6.15; additive): an approved hold is matched by plugin and `holdId`, falling back to the reason text without one; `heldBy.holdId` on the record and the approval. A plugin-held merge's approval carries the changed files, as a protected target's does. |
-| 1.0.9 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
+| 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
+| 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 

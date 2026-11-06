@@ -25,6 +25,9 @@ export interface ReviewReport {
   reasons: string[];
   /** Why there is no verdict (the reviewer ended without one, or couldn't start). */
   error?: string;
+  /** No verdict because the reviewer's machinery failed (the engine or an actor didn't answer), not because of the
+   *  change: verifying again may pass. Absent when the reviewer answered, or failed in a way a retry wouldn't fix. */
+  retryable?: boolean;
   /** The agent commit it read, and the target commit it read it on. */
   sha: string;
   targetSha?: string;

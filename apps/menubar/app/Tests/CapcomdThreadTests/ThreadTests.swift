@@ -22,7 +22,7 @@ final class ThreadTests: XCTestCase {
 
   func testEveryGoldenSessionDecodes() throws {
     let names = try FileManager.default.contentsOfDirectory(atPath: Self.golden.path).filter { $0.hasSuffix(".items.json") }
-    XCTAssertEqual(names.count, 4)
+    XCTAssertEqual(names.count, 5)
     for n in names {
       let items = try goldenItems(String(n.dropLast(".items.json".count)))
       XCTAssertFalse(items.isEmpty, n)

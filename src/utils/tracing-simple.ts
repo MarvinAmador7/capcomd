@@ -11,6 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { env } from "./env";
 import { tracesDir } from "./home";
+import { withReadableErrors } from "./actor-errors";
 
 export interface SimpleSpan {
   traceId: string;
@@ -201,11 +202,12 @@ export function traceActions<A extends Record<string, (c: any, ...args: any[]) =
 ): A {
   const out: Record<string, any> = {};
   for (const [action, fn] of Object.entries(actions)) {
+    // Every action's failure reaches its caller with its own text, not as rivetkit's "An internal error occurred".
     if (action.startsWith("get")) {
-      out[action] = fn; // reads are noisy and not interesting in a waterfall
+      out[action] = withReadableErrors(fn); // reads are noisy and not interesting in a waterfall
       continue;
     }
-    out[action] = function (this: unknown, c: any, ...args: any[]) {
+    out[action] = withReadableErrors(function (this: unknown, c: any, ...args: any[]) {
       const params = args[0];
       const runId = runIdOf(c, params);
       const attrs: Record<string, any> = { "relay.actor": actorName, "relay.action": action };
@@ -215,7 +217,7 @@ export function traceActions<A extends Record<string, (c: any, ...args: any[]) =
         if (params && params[k] !== undefined) attrs[`relay.${k.replace(/Id$/, "_id")}`] = params[k];
       }
       return withSpan(`actor.${actorName}.${action}`, attrs, () => fn.call(this, c, ...args));
-    };
+    });
   }
   return out as A;
 }

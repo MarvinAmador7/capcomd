@@ -44,7 +44,10 @@ export class RelayError extends Error {
 export function toRelayError(error: unknown): RelayError {
   if (error instanceof RelayError) return error;
   const message = error instanceof Error ? error.message : String(error);
-  if (/ECONNREFUSED|Unable to connect|fetch failed|ConnectionRefused|engine unreachable/i.test(message)) {
+  // An actor action's own failure, crossing with its text (src/utils/actor-errors.ts): the engine answered, so text such
+  // as "fetch failed" or "ECONNREFUSED" there is about something the action called, never the engine being down.
+  const fromEngine = (error as { metadata?: Record<string, unknown> } | null)?.metadata?.capcomdInternal === true;
+  if (!fromEngine && /ECONNREFUSED|Unable to connect|fetch failed|ConnectionRefused|engine unreachable/i.test(message)) {
     return new RelayError("engine_unreachable", message, "Start the engine with `capcomd serve` and retry.");
   }
   if (/not.?found/i.test(message)) {

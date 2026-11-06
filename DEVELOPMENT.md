@@ -194,7 +194,7 @@ bun scripts/eval-team-shape.ts --ref origin/main --port 6531       # capcomd as 
 ```
 
 Everything is in one scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp dir), deleted at the end (`--keep`
-keeps it, with `session.ndjson` and `events.json`). It never uses `~/.capcomd`, :6420, Docker or your Claude Code
+keeps it, with `session.ndjson`, `events.json` and the engine's `engine.log`). It never uses `~/.capcomd`, :6420, Docker or your Claude Code
 settings (`--setting-sources project`, `--no-session-persistence`); it needs `claude` logged in. Runs vary: compare a
 few of each. Two at once need ports at least 20 apart (an engine takes its port, the next and port+10).
 
