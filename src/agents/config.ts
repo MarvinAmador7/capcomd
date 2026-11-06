@@ -3,6 +3,7 @@ import { OPEN_EGRESS } from "../providers/sandbox";
 import { agentSeam, orchestrateConfig, providerOfKind } from "../plugins/agents";
 import { CLAUDE_CODE_VERSION } from "../plugins/agent-claude";
 import { CODEX_VERSION } from "../plugins/agent-codex";
+import { reservedEnvName } from "../plugins/hooks";
 export { CLAUDE_USD_PER_MTOK, claudeCostUsd, type ClaudeUsage } from "../plugins/agent-claude";
 export { CLAUDE_CODE_VERSION, CODEX_VERSION };
 
@@ -140,6 +141,17 @@ export interface AgentConfig {
   /** The profile's `toolMode` (docs/spec/plugin-api.md §16.1), when `orchestrate`: the agent reads, spawns and decides,
    *  with its provider's tool policy applied to the lists above, and never commits or pushes. Unset: `execute`. */
   toolMode?: "orchestrate";
+  /** Variables agent.preparing's plugins added for this attempt (docs/spec/plugin-api.md §6.6.7): checked new names and
+   *  values that look like no secret, set in the agent's process environment. */
+  pluginEnv?: Record<string, string>;
+}
+
+/** The variables agent.preparing's plugins added, from the attempt's spec (src/primitives/ops.ts `agentPreparing`). */
+function pluginEnvOf(spec: unknown): Record<string, string> | null {
+  const e = (spec as { pluginEnv?: unknown } | null | undefined)?.pluginEnv;
+  if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+  const ok = Object.entries(e).filter((x): x is [string, string] => /^[A-Z][A-Z0-9_]*$/.test(x[0]) && !reservedEnvName(x[0]) && typeof x[1] === "string");
+  return ok.length ? Object.fromEntries(ok) : null;
 }
 
 /** The reasoning effort an agent runs with: CAPCOMD_AGENT_EFFORT, else its profile's; undefined means the CLI's default. */
@@ -200,6 +212,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexUsdPerMtokIn: num("CODEX_USD_PER_MTOK_IN", 1.25),
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
     credentialMode: cred,
+    ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
   };
   if (spec?.toolMode !== "orchestrate" || !isRealAgent(kind)) return cfg;
   // §16.1: the provider's policy on top of the profile's lists and the env's; nothing here widens it.

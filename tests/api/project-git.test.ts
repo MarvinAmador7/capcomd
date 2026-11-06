@@ -305,11 +305,11 @@ describe("POST /v1/projects/publish", () => {
 
 	test("the repository is created by the forge that serves it (plugin API §7.4): the test forge, when it claims github.com", async () => {
 		const { PluginHost } = await import("../../packages/plugin/src/host/host");
-		const { BUILTINS } = await import("../../src/plugins/builtins");
+		const { BUILTINS, candidateOf } = await import("../../src/plugins/builtins");
 		const { useForges } = await import("../../src/plugins/forges");
 		const { fake } = await import("../merge/forge-fake/index");
 		const host = new PluginHost({ capcomd: (await import("../../src/utils/self")).VERSION, kernel: [], emit: () => {}, dataDir: () => "/nonexistent" });
-		await host.start([{ source: "builtin", dir: join(import.meta.dir, "..", "merge", "forge-fake") }, ...BUILTINS.map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module }))]);
+		await host.start([{ source: "builtin", dir: join(import.meta.dir, "..", "merge", "forge-fake") }, ...BUILTINS.map(candidateOf)]);
 		useForges(host);
 		fake.claims = ["https://github.com/"];
 		try {
