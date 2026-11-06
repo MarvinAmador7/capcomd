@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `capcomd profiles`, the new name of `capcomd agents` (`list`, `show`, `add`, `set`, `rm`, `schema`,
+  `validate`). `capcomd profiles show <name>` now prints where a profile comes from: the files laid together to make
+  it (the profiles it `extends`, the profile, its `override.yaml` files) and, for every value, the file that set it
+  (`--json`: `applied` and `values`). `list` shows each profile's layer (project, user or bundled) and `list --json`
+  its `version`, `format`, `path` and files. `capcomd profiles schema` prints the JSON Schema of a `profile.yaml`
+  (`capcomd profiles schema v1`: `agents.json`'s). `capcomd agents …` keeps working until the next minor release and
+  says the new name on stderr; `capcomd agents list --json` still lists its rows under `agents`, and `capcomd agents
+  schema` still prints `agents.json`'s schema.
+- New on the harness API: `GET /v1/profiles` (capability `profiles`, the `read` scope) lists every agent profile a run
+  can use, the daemon's or, with `?repo=`, a project's: each one's version, layer and files, provider, model, tool
+  mode, what it does, and whether its login is there. Profiles that can't be read come back with `error` saying why.
 - New: agent profiles as YAML files. Put a profile in `.capcomd/profiles/<name>/profile.yaml` (or
   `.capcomd/profiles/<name>.yaml`; JSON works too), or in `~/.capcomd/profiles/` for every project, with blocks
   (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.

@@ -413,7 +413,7 @@ export function spawnChecks(ref: string | null, source: Record<string, string | 
 }
 function resolveProfile(ref: string | null): ResolvedAgent {
   try { return resolveAgent(ref); } catch (e) {
-    if (e instanceof AgentConfigError) throw new RelayError("config", e.message, "Check the profile with `capcomd agents show <name>`; overrides may only narrow unless --operator.");
+    if (e instanceof AgentConfigError) throw new RelayError("config", e.message, "Check the profile with `capcomd profiles show <name>`; overrides may only narrow unless --operator.");
     throw e;
   }
 }
@@ -1479,7 +1479,7 @@ export async function runReviewer(runId: string): Promise<string | undefined> {
 /** A reviewer profile's resolved spec (unknown profiles are a config error). */
 export function reviewerSpec(profile: string): Record<string, any> | null {
   try { return (resolveAgent(encodeAgentRef(profile)).spec as any) ?? null; } catch (e) {
-    if (e instanceof AgentConfigError) throw new RelayError("config", `reviewer: ${e.message}`, "Name an agent profile (`capcomd agents list`), e.g. --reviewer reviewer.");
+    if (e instanceof AgentConfigError) throw new RelayError("config", `reviewer: ${e.message}`, "Name an agent profile (`capcomd profiles list`), e.g. --reviewer reviewer.");
     throw e;
   }
 }

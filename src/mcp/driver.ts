@@ -522,13 +522,13 @@ export async function setup() {
 
 export async function profiles() {
   const { agentsFilePath, readProfiles, leadText, abilityText } = await import("../profiles");
-  const { readiness } = await import("../cli/commands/agents");
+  const { readiness } = await import("../cli/commands/profiles");
   const f = readProfiles(agentsFilePath());
   const profiles = Object.entries(f.agents).map(([name, s]) => ({ name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute", ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...readiness(name, s) }));
   const leads = profiles.filter((p) => p.canLead).map((p) => p.name);
   return {
     default: f.default ?? null, profiles,
     next: leads.length ? `To give a part with two or more independent sub-parts a lead, spawn ${leads.join(" or ")} with children: {maxChildren: N, maxDepth: 1} (skill: Choose a team shape).`
-      : "No profile here can lead (spawn helpers): every agent does its task itself. Ask the user to run `capcomd setup project` again for a lead profile, or `capcomd agents add lead …`.",
+      : "No profile here can lead (spawn helpers): every agent does its task itself. Ask the user to run `capcomd setup project` again for a lead profile, or `capcomd profiles add lead …`.",
   };
 }

@@ -45,7 +45,19 @@ Usage:
   capcomd env build [--force]            Bake agent CLIs + repo deps into a snapshot (no secrets)
   capcomd env status | env rm [name|all] List / delete env snapshots (env, auth, doctor: --sandbox docker|boxd
                                        works on that sandbox instead of CAPCOMD_SANDBOX)
-  capcomd agents list|show|add|set|rm|schema|validate
+  capcomd profiles list|show|add|set|rm|schema|validate
+                                       Named agent profiles: .capcomd/agents.json, and profile files
+                                       (profile.yaml) in .capcomd/profiles/ and ~/.capcomd/profiles/ (docs/agents.md).
+                                       show <name>: the files laid together and which one set each value;
+                                       schema: a profile file's JSON Schema (schema v1: agents.json's).
+                                       add, set and rm edit agents.json: provider, auth
+                                       (apikey|subscription, exactly one), model, limits, prompts, tools.
+                                       add/set flags: --provider --auth --model --effort --max-turns --budget
+                                       --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
+                                       --append-system-prompt --allowed-tools --disallowed-tools
+                                       --description --default --spec JSON --unset k1,k2
+  capcomd agents …                     The old name of capcomd profiles, until the next minor release
+                                       (agents schema: agents.json's; agents list --json: the rows under "agents")
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
                                            onto the run's goal branch: --goal-branch G (default: capcomd/<goal-slug>), cut
@@ -99,12 +111,6 @@ Usage:
   capcomd kv get <runId> <k>  ·  kv put <runId> <k> <json> [--key K]  ·  kv cas <runId> <k> <json> --expect V [--key K]  ·  kv del <runId> <k> [--expect V]  ·  kv list <runId> [--prefix P] [--all]   (values ≤ 64KB; _ keys are run settings, listed with --prefix _)
   capcomd inspect <runId> [--json] [--follow [--since-seq N] [--until TYPE]]   run bundle: status + tree + trace + events
   capcomd events <runId> --follow [--until TYPE] [--timeout-ms N] [--from-start | --since-seq N]   (with --json: one JSON line per event; resume with --since-seq <last seq>)
-                                       Named agent profiles (.capcomd/agents.json): provider, auth
-                                       (apikey|subscription, exactly one), model, limits, prompts, tools.
-                                       add/set flags: --provider --auth --model --effort --max-turns --budget
-                                       --timeout-ms --idle-after-ms --stuck-repeats --no-change-after-ms --checkpoint-every-ms --sandbox --egress --system-prompt
-                                       --append-system-prompt --allowed-tools --disallowed-tools
-                                       --description --default --spec JSON --unset k1,k2
   capcomd auth login claude|codex        Log in with your Claude/ChatGPT plan in a VM; saves a private auth profile
   capcomd auth status [agent] [--quick]  Verify saved logins   |   capcomd auth logout claude|codex
   capcomd secrets sync                   Store local ANTHROPIC/OPENAI keys as boxd host-bound secrets
@@ -345,9 +351,10 @@ async function main(argv: string[]): Promise<number> {
         const { envCommand } = await import("./commands/env");
         return await envCommand(command, positionals, values as any);
       }
+      case "profiles":
       case "agents": {
-        const { agentsCommand } = await import("./commands/agents");
-        return await agentsCommand(positionals, values as any);
+        const { profilesCommand } = await import("./commands/profiles");
+        return await profilesCommand(positionals, values as any, command);
       }
       case "clients": {
         const C = await import("../api/clients");

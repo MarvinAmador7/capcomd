@@ -195,7 +195,7 @@ suite (§14.1).
 #### 4.7.1 CLI commands
 
 A command group `capcomd <name> …`. `name` MUST NOT be one of the kernel's commands (the `case` labels in
-`src/cli/index.ts`: `run`, `spawn`, `verify`, `merge`, `agents`, `sandbox`, `serve`, `setup`, …); the host keeps the
+`src/cli/index.ts`: `run`, `spawn`, `verify`, `merge`, `profiles`, `agents`, `sandbox`, `serve`, `setup`, …); the host keeps the
 list and refuses a collision at validation. The handler receives the words after the command name, the parsed flags,
 whether `--json` was given, the caller's principal and an `AbortSignal` (SIGINT), and MUST return a `relay.v1` envelope
 (`src/core/errors.ts` `SCHEMA`), or throw a `PluginError` which the CLI prints as `{schema, ok: false, error}` with the
@@ -897,7 +897,7 @@ primitive without a route in protocol v1 rejects `unsupported` out of process (i
 | `events.subscribe/replay` | `GET /v1/streams/{stream}/events`, `GET /v1/events` |
 | `events.emit` | **new** `POST /v1/plugins/{name}/events` |
 | `storage.*` | **new** `/v1/plugins/{name}/storage[/{key}]` |
-| `profiles.list`, `sandboxes.descriptors`, `auth.loginPresent` | `GET /v1/profiles` (ADR-024), `GET /v1/sandboxes`, `GET /v1/logins` |
+| `profiles.list`, `sandboxes.descriptors`, `auth.loginPresent` | `GET /v1/profiles` (ADR-024; capability `profiles`; `project` is its `?repo=`, and its rows carry `name`, `version`, `source`, `description`, `tags` and more), `GET /v1/sandboxes`, `GET /v1/logins` |
 | `agents.spawn/await/grant/notice`, `gates.verify/merge`, `board.*`, `kv.*`, `jobs.*`, `triggers.*`, `profiles.resolve`, `sandboxes.provider/forRun`, `seams.*`, `cli`, `mcp`, `api`, `ui` | **protocol v1: in-process only** (`unsupported`). Routes for spawn, gates, board, kv, jobs and triggers are the next protocol version's additions (§9.10); front-door and seam contributions stay in-process by design (a seam call must not cross a process boundary per `exec`). |
 
 The caller's principal on these calls is the plugin's token's, so `ops.ts` and `policy.ts` enforce as for any client.
@@ -1589,6 +1589,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
 | 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
 | 1.0.11 | 2026-11-05 | With ADR-024's loader (its §7 step 1): `profile.resolved`'s `profile` carries the resolved profile's `version` and the layer it was found in (`project`, `user`, `bundled`) instead of always `{version: 1, source: "user"}` (§6.6.5); the profile code is `src/profiles/`. |
+| 1.0.12 | 2026-11-05 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 

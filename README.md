@@ -220,8 +220,8 @@ capcomd env build                 # bake the agent CLIs into a VM snapshot (once
 capcomd auth login claude         # log in with your plan inside a VM (or: codex)
 capcomd doctor --strict           # check every agent works
 export CAPCOMD_REPO=https://github.com/you/app.git  CAPCOMD_MERGE_TARGET=main  CAPCOMD_MERGE_MODE=pr
-capcomd agents add worker --provider claude --auth subscription   # no limits; add --max-turns, --timeout-ms or --budget for one
-capcomd agents add reviewer --provider claude --auth subscription \
+capcomd profiles add worker --provider claude --auth subscription # no limits; add --max-turns, --timeout-ms or --budget for one
+capcomd profiles add reviewer --provider claude --auth subscription \
   --allowed-tools 'Read,Glob,Grep,LS,Bash(git diff:*),Bash(bun test:*)'
 capcomd serve &                   # the engine (setup can install it as a service instead)
 ```
@@ -237,7 +237,7 @@ agent profiles.
 | **Run** | A durable scope with a budget, its named checks, an optional reviewer and target branch (`capcomd run new`). |
 | **Orchestrator** | Whoever calls the primitives: your agent, an agent inside a VM allowed to delegate, or you. |
 | **Agent** | One Claude Code or Codex session in its own VM and branch (`capcomd spawn`). |
-| **Profile** | A reusable agent definition: provider, login, model, limits, tools, and whether it may spawn (`capcomd agents`). |
+| **Profile** | A reusable agent definition: provider, login, model, limits, tools, and whether it may spawn (`capcomd profiles`). |
 | **Check** | A command the operator names for the run; agents choose one per child, never write one. |
 | **Reviewer** | An agent profile that reads each verified change and returns pass or fail with reasons. |
 | **Verify / merge** | `verify` runs the checks and the review on a commit; `merge --require` lands exactly that commit. |

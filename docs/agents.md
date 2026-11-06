@@ -1,18 +1,46 @@
 # Agent profiles
 
-Named harness agents (a capcomd primitive, see ADR-016) in `.capcomd/agents.json` (override with `CAPCOMD_AGENTS_FILE`). Schema: `capcomd agents schema` (JSON Schema, id `capcomd.agents/v1`). Design: ADR-015 §5–7.
+Named harness agents (a capcomd primitive, see ADR-016) in `.capcomd/agents.json` (override with `CAPCOMD_AGENTS_FILE`), and profile files (below). Schema: `capcomd profiles schema v1` (JSON Schema, id `capcomd.agents/v1`). Design: ADR-015 §5–7, ADR-024.
 
 ```bash
-capcomd agents add rev --provider claude --auth subscription --max-turns 20 --append-system-prompt "Be terse." --default
-capcomd agents add cx  --provider codex  --auth apikey --sandbox workspace-write --egress github.com
-capcomd agents set rev --model claude-sonnet-4-5 ; capcomd agents set rev --unset model
-capcomd agents list --json ; capcomd agents show rev --json   # spec + effective config + readiness
-capcomd agents validate ; capcomd agents rm cx
+capcomd profiles add rev --provider claude --auth subscription --max-turns 20 --append-system-prompt "Be terse." --default
+capcomd profiles add cx  --provider codex  --auth apikey --sandbox workspace-write --egress github.com
+capcomd profiles set rev --model claude-sonnet-4-5 ; capcomd profiles set rev --unset model
+capcomd profiles list --json ; capcomd profiles show rev --json   # spec + where each value came from + effective config + readiness
+capcomd profiles validate ; capcomd profiles rm cx
 capcomd run --profile rev --set maxTurns=10 --set children.maxDepth=1 "goal"   # narrowing only
 capcomd run --profile rev --overrides '{"maxTurns":50}' --operator "goal"       # widening needs --operator
 ```
 
-For Hermes or another orchestrator: define profiles with `agents add NAME --spec '<json>' --json`, read them with `agents list --json`, and select one per goal with `--profile`, or a per-task directive `[agent:NAME] …` in the goal text.
+For Hermes or another orchestrator: define profiles with `profiles add NAME --spec '<json>' --json`, read them with `profiles list --json` (or `GET /v1/profiles` on the harness API, capability `profiles`), and select one per goal with `--profile`, or a per-task directive `[agent:NAME] …` in the goal text.
+
+`capcomd agents …` is the old name of `capcomd profiles …` and works until the next minor release (it says so on
+stderr). Two of its outputs stay as they were: `agents list --json` lists the rows under `agents` (`profiles list
+--json` under `profiles`), and `agents schema` prints the `agents.json` schema (`profiles schema` prints a profile
+file's).
+
+### Where a profile comes from: `capcomd profiles show`
+
+`show <name>` prints the files laid together to make the profile, first to last (its `extends` ancestors, the profile
+itself, then its overrides), and every resolved value with the number of the file that set it:
+
+```text
+lead: version 2, found in the project's profiles
+Files, first to last (a later one wins):
+   1  extends  worker           project /work/app/.capcomd/agents.json
+   2  profile  lead             project /work/app/.capcomd/profiles/lead/profile.yaml
+   3  override lead             project /work/app/.capcomd/profiles/lead/override.yaml
+Values (the number is the file that set it):
+  harness.provider               claude                                           1
+  harness.model                  sonnet                                           1
+  tools.mode                     orchestrate                                      2
+  limits.maxTurns                30                                               3
+```
+
+`--json` gives the same as `applied` (the files) and `values` (`{path, value, from}`, `from` being one of `applied`),
+plus `spec` (what an agent is pinned with), `effective` (with capcomd's defaults) and readiness. `list` shows each
+profile's layer (`project`, `user` or `bundled`), and `list --json` its `version`, `format` (`v1` for an
+`agents.json` entry, `v2` for a profile file), `path` and `applied`.
 
 ## Profile files (v2: `profile.yaml`)
 
@@ -44,11 +72,12 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   capcomd. An `override.yaml` in `<name>/` changes a profile without copying it (same blocks, no `name`): yours over a
   bundled one, the project's over yours or a bundled one.
 - `agents.json` keeps working as before; a `profile.yaml` of the same name in the same place wins, and `capcomd
-  agents validate` says so. `capcomd agents list`, `show` and `validate` read both; `add`, `set` and `rm` edit only
+  profiles validate` says so. `capcomd profiles list`, `show` and `validate` read both; `add`, `set` and `rm` edit only
   `agents.json`.
 - `identity`, `skills`, `tools.mcp`, `context` (with `memory` read as its old name), `sandbox.provider|environment|size`,
   `jobs`, `lifecycle.onStart|onEnd` and `permissions` are checked but don't change what an agent does yet; `capcomd
-  agents validate` lists the ones a profile sets.
+  profiles validate` lists the ones a profile sets.
+- `capcomd profiles schema` prints the JSON Schema of a profile file (id `capcomd.profile/v2`), for an editor.
 - `--set` and `--overrides` take the v2 paths too: `--set limits.maxTurns=10 --set tools.allowed=Read,Grep`.
 
 ## The planner's provider, model and effort for one run

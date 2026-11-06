@@ -159,7 +159,7 @@ As the user's agent you are the **driver**:
 
 Ground rules: one `run new` per goal with an explicit `--budget`; nothing reaches main without `verify` +
 `merge --require`; write acceptance criteria as commands where possible; cancel what you no longer need (`cancel`
-propagates); profiles come from `capcomd agents list --json` (or `capcomd_profiles`).
+propagates); profiles come from `capcomd profiles list --json` (or `capcomd_profiles`).
 
 ## Primitives (reference)
 

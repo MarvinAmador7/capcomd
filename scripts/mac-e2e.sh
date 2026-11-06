@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real end-to-end: GitHub repo → capcomd run (boxd VM + agent, PR mode) → merged PR.
-# CAPCOMD_AGENT = an agent profile name (capcomd agents list) or claude-code (default) | codex.
+# CAPCOMD_AGENT = an agent profile name (capcomd profiles list) or claude-code (default) | codex.
 # CAPCOMD_ENV=image forces the default boxd image; otherwise workers boot from the env snapshot,
 # or from the auth profile snapshot for subscription logins.
 # Needs: bun, gh (logged in as MarvinAmador7), a boxd key (BOXD_API_KEY or the keychain one capcomd keeps). API keys only for auth=apikey agents.
@@ -15,7 +15,7 @@ AGENT="${CAPCOMD_AGENT:-claude-code}"
 AUTH="${CAPCOMD_AUTH:-}"
 case "$AGENT" in
   claude-code|codex) PROVIDER="$AGENT";;
-  *) SPEC=$(bun src/cli/index.ts agents show "$AGENT" --json 2>/dev/null) || { echo "mac-e2e: unknown agent profile $AGENT (capcomd agents list)" >&2; exit 2; }
+  *) SPEC=$(bun src/cli/index.ts profiles show "$AGENT" --json 2>/dev/null) || { echo "mac-e2e: unknown agent profile $AGENT (capcomd profiles list)" >&2; exit 2; }
      PROVIDER=$(printf '%s' "$SPEC" | bun -e 'const j=JSON.parse(await Bun.stdin.text()); console.log(j.spec.provider==="codex"?"codex":"claude-code")')
      AUTH=$(printf '%s' "$SPEC" | bun -e 'const j=JSON.parse(await Bun.stdin.text()); console.log(j.spec.auth)');;
 esac
