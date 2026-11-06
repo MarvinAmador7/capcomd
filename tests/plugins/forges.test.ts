@@ -199,11 +199,12 @@ describe("the user's own login is the forge's (§7.4 login)", () => {
 });
 
 describe("a goal branch's pull request names the forge it is on", () => {
-  test("its description says where to merge it: the forge's label, GitHub when none is given", async () => {
+  test("its description says where to merge it: the forge's label, else where the repository is hosted (never a guessed GitHub)", async () => {
     const { pullRequestBody } = await import("../../src/primitives/goal");
     const o = { runId: "run-f", branch: "capcomd/x", summary: null, landed: [], notLanded: [] };
     expect(pullRequestBody({ ...o, forge: "Fake forge" }).endsWith("capcomd never merges this pull request: review and merge it on Fake forge.")).toBe(true);
-    expect(pullRequestBody(o).endsWith("review and merge it on GitHub.")).toBe(true);
+    expect(pullRequestBody({ ...o, forge: "GitHub" }).endsWith("review and merge it on GitHub.")).toBe(true);
+    expect(pullRequestBody(o).endsWith("review and merge it where the repository is hosted.")).toBe(true);
   });
 });
 
@@ -224,6 +225,96 @@ describe("every forge call goes through the kernel's wrapper (§7.1)", () => {
     const raw = host.contributions.get("seam", "forge/fake")!.value.impl;
     expect(all[0]!.forge).not.toBe(raw);
     expect(all[0]!.forge.classifyError(new Error("?"))).toEqual({ kind: "unknown", retryable: false });
+  });
+});
+
+describe("host git's credential for a remote is its forge's (§7.4 remoteCredential, §11.7)", () => {
+  const c = () => ({ signal: new AbortController().signal, deadline: new Date(Date.now() + 10_000).toISOString(), trace: { traceId: "", spanId: "" } });
+  const REMOTE = "https://forge.example/acme/app.git";
+  const CRED = { origin: "https://forge.example", username: "capcomd-bot", password: "fake-forge-secret-0123456789" };
+
+  test("GitHub: the user's token for https://github.com, nothing for any other remote or without a token; git: none", async () => {
+    const gh = new GitHubForge();
+    const as = <T>(env: Record<string, string>, fn: () => Promise<T>) => forgeScope.run({ env }, fn);
+    expect(await as({ GITHUB_TOKEN: "ghs_t" }, () => gh.remoteCredential({ remote: "https://github.com/o/r.git" }, c())))
+      .toEqual({ origin: "https://github.com", username: "x-access-token", password: "ghs_t" });
+    for (const remote of ["https://gitlab.com/o/r.git", "https://github.com.evil.example/o/r", "https://x@github.com/o/r.git", "git@github.com:o/r.git", "ssh://git@github.com/o/r.git", "/srv/git/r.git"])
+      expect(await as({ GITHUB_TOKEN: "ghs_t" }, () => gh.remoteCredential({ remote }, c()))).toBeNull();
+    expect(await as({ GITHUB_TOKEN: "", GH_TOKEN: "", CAPCOMD_GH_CLI: fakeGh(false) }, () => gh.remoteCredential({ remote: "https://github.com/o/r.git" }, c()))).toBeNull();
+    expect(await as({ GITHUB_TOKEN: "", GH_TOKEN: "", CAPCOMD_GH_CLI: fakeGh(true) }, () => gh.remoteCredential({ remote: "https://github.com/o/r.git" }, c())))
+      .toEqual({ origin: "https://github.com", username: "x-access-token", password: "gho_fake" });
+    expect((new GitForge() as import("../../packages/plugin/src/seams").Forge).remoteCredential).toBeUndefined();
+  });
+
+  test("host git asks the forges that match the remote, in load order, and makes the first credential the only helper for its origin", async () => {
+    fake.claims = ["https://forge.example/"];
+    fake.credential = CRED;
+    const { hostCredentialEnv } = await import("../../src/merge/host-git");
+    const env = await hostCredentialEnv(REMOTE, { GIT_CONFIG_COUNT: "1" });
+    expect(env).toMatchObject({
+      CAPCOMD_GIT_USERNAME: "capcomd-bot", CAPCOMD_GIT_TOKEN: CRED.password, GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_1: "credential.https://forge.example.helper", GIT_CONFIG_VALUE_1: "",
+      GIT_CONFIG_KEY_2: "credential.https://forge.example.helper", GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "file:git:http:https:ssh",
+    });
+    // The helper reads the credential from this one process's environment: never in the config value itself.
+    expect(env.GIT_CONFIG_VALUE_2).toContain("$CAPCOMD_GIT_TOKEN");
+    expect(env.GIT_CONFIG_VALUE_2).not.toContain(CRED.password);
+    expect(fake.calls).toEqual([`credential ${REMOTE}`]);
+    expect(fake.seen.at(-1)).toMatchObject({ method: "remoteCredential" });
+    // A remote the forge doesn't claim, or that isn't https, isn't asked about; the other forges have none for it.
+    for (const other of ["https://other.example/acme/app.git", "git@forge.example:acme/app.git", "/srv/git/app.git"]) {
+      const e = await hostCredentialEnv(other, {});
+      expect(e.CAPCOMD_GIT_TOKEN).toBeUndefined();
+      expect(JSON.stringify(e)).not.toContain(CRED.password);
+    }
+    expect(fake.calls).toEqual([`credential ${REMOTE}`]);
+  });
+
+  test("a credential host git won't apply: another origin than the remote's, a path, http, a user, a line break, an empty name; a forge that throws", async () => {
+    fake.claims = ["https://forge.example/"];
+    const { credentialOrigin, hostCredentialEnv } = await import("../../src/merge/host-git");
+    const bad: Array<typeof fake.credential> = [
+      { ...CRED, origin: "https://evil.example" }, { ...CRED, origin: "https://forge.example.evil" }, { ...CRED, origin: "https://forge.example/acme" },
+      { ...CRED, origin: "http://forge.example" }, { ...CRED, origin: "https://u@forge.example" }, { ...CRED, origin: "not a url" },
+      { ...CRED, password: "x\nhost=evil.example" }, { ...CRED, username: "" }, new Error("the fake forge's keychain is locked"),
+    ];
+    for (const cred of bad) {
+      fake.credential = cred;
+      const env = await hostCredentialEnv(REMOTE, {});
+      expect(env).toEqual({ GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "file:git:http:https:ssh" });
+    }
+    expect(credentialOrigin(CRED, "https://forge.example.evil/acme/app.git")).toBeNull();
+    expect(credentialOrigin(CRED, "https://FORGE.example/acme/app.git")).toBe("https://forge.example");
+    expect(credentialOrigin({ origin: "https://forge.example:8443" }, "https://forge.example/acme/app.git")).toBeNull();
+  });
+
+  test("git gets the credential exactly as the forge gave it: backslashes in a password add no lines and cut nothing", async () => {
+    // sh's echo expands `\n` and `\c` (macOS /bin/sh, dash): a helper that echoed the password let a forge's
+    // `p\nhost=evil.example` reach git as a second line, and git took the host from it.
+    fake.claims = ["https://forge.example/"];
+    const password = String.raw`p\nhost=evil.example\cTAIL\\x %s`;
+    fake.credential = { ...CRED, username: String.raw`bot\tname`, password };
+    const { hostCredentialEnv } = await import("../../src/merge/host-git");
+    const home = mkdtempSync(join(scratch, "cred-home-"));
+    const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, GIT_CONFIG_NOSYSTEM: "1", ...(await hostCredentialEnv(REMOTE, {})) };
+    const p = Bun.spawn(["git", "credential", "fill"], { cwd: home, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    p.stdin.write("protocol=https\nhost=forge.example\n\n");
+    p.stdin.end();
+    const [out, code] = [await new Response(p.stdout).text(), await p.exited];
+    expect(code).toBe(0);
+    expect(out.split("\n").filter(Boolean)).toEqual(["protocol=https", "host=forge.example", String.raw`username=bot\tname`, `password=${password}`]);
+  });
+
+  test("the kernel's wrapper traces the call and records neither the remote nor the answer", async () => {
+    fake.claims = ["https://forge.example/"];
+    fake.credential = CRED;
+    const { getFinishedSpans } = await import("../../src/utils/tracing-simple");
+    const { remoteCredentialFor } = await import("../../src/plugins/forges");
+    expect(await remoteCredentialFor(REMOTE)).toEqual(CRED);
+    const span = getFinishedSpans().filter((s) => s.name === "forge.remoteCredential").at(-1)!;
+    expect(span.attributes["forge.name"]).toBe("fake");
+    expect(JSON.stringify(span)).not.toContain(CRED.password);
+    expect(JSON.stringify(span)).not.toContain("acme/app");
   });
 });
 

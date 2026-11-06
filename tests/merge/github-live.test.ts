@@ -9,7 +9,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMergeConfig, taskBranch } from "../../src/merge/config";
-import { mergeTask, setGitHubApi } from "../../src/merge/service";
+import { mergeTask } from "../../src/merge/service";
+import { setGitHubApi } from "../../src/plugins/forges/github-rest";
 import { produceFakeWork } from "../../src/merge/fakework";
 
 const live = process.env.CAPCOMD_GH_LIVE === "1";
