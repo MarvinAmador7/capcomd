@@ -44,11 +44,11 @@ export async function pluginsCommand(positionals: string[], values: { json?: boo
 
 /** One plugin's validation, as `--json` prints it. */
 interface Validated { name: string; version: string | null; source: "builtin" | "dir"; path: string | null; ok: boolean; issues: ManifestIssue[]; warnings: ManifestIssue[]; conformance: ConformanceResult[] }
-type Target = { label: string; dir: string | null; manifest: unknown; module: PluginModule<never> | null; conformance?: SandboxConformanceOptions };
+type Target = { label: string; dir: string | null; manifest: unknown; module: PluginModule<never> | null; conformance?: SandboxConformanceOptions; kernelSurface?: boolean };
 
 async function validateCommand(args: string[], values: { json?: boolean; conformance?: boolean }): Promise<number> {
   const { BUILTINS } = await import("../../plugins/builtins");
-  const builtin = (b: (typeof BUILTINS)[number]): Target => ({ label: String((b.manifest as { name?: unknown }).name), dir: null, manifest: b.manifest, module: b.module, conformance: (b as { conformance?: SandboxConformanceOptions }).conformance ?? {} });
+  const builtin = (b: (typeof BUILTINS)[number]): Target => ({ label: String((b.manifest as { name?: unknown }).name), dir: null, manifest: b.manifest, module: b.module, conformance: (b as { conformance?: SandboxConformanceOptions }).conformance ?? {}, kernelSurface: !!b.kernelSurface });
   let targets: Target[];
   if (!args.length) targets = BUILTINS.map(builtin);
   else targets = args.map((a) => {
@@ -76,7 +76,7 @@ async function validateCommand(args: string[], values: { json?: boolean; conform
 async function validateOne(t: Target, conformance: boolean): Promise<Validated> {
   const { loadManifest, readManifest } = await import("../../../packages/plugin/src/load");
   const { VERSION } = await import("../../utils/self");
-  const loaded = t.dir ? readManifest(t.dir, { capcomd: VERSION }) : loadManifest(t.manifest, { capcomd: VERSION });
+  const loaded = t.dir ? readManifest(t.dir, { capcomd: VERSION }) : loadManifest(t.manifest, { capcomd: VERSION, kernelSurface: !!t.kernelSurface });
   const m = loaded.manifest;
   const v: Validated = { name: m?.name ?? t.label, version: m?.version ?? null, source: t.dir ? "dir" : "builtin", path: t.dir, ok: loaded.ok, issues: loaded.ok ? [] : loaded.issues, warnings: loaded.ok ? loaded.warnings : [], conformance: [] };
   if (!loaded.ok || !conformance) return v;

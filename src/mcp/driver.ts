@@ -8,14 +8,14 @@ import * as O from "../primitives/ops";
 import * as S from "../primitives/state";
 import { parseBudget, TERMINAL_AGENT, type Budget } from "../primitives/policy";
 import { fence } from "../subagents/results";
+import { WAIT_DEFAULT_MS, WAIT_MAX_MS } from "./session";
 
 /** The driver's name in records it writes (kv writer, task holder, message sender, approver). */
 export const DRIVER = "driver";
 /** kv keys the orchestrator owns: a driver reads them, never writes them (same list as in-VM agents). */
 const RESERVED_KV = ["_", "approval/", "recipe/", "handoff/"];
-/** Waits return before a client's tool timeout (Codex defaults to 60s); the caller asks again. */
-export const WAIT_DEFAULT_MS = 25_000;
-export const WAIT_MAX_MS = 55_000;
+/** Waits return before a client's tool timeout (./session.ts, where the tools' schemas read them too). */
+export { WAIT_DEFAULT_MS, WAIT_MAX_MS };
 
 const deny = (message: string, hint: string): never => { throw new RelayError("usage", message, hint, { code: "forbidden" }); };
 /** A wait's bound: 0 answers at once (a look, or a verify/merge started without waiting), at most WAIT_MAX_MS. */

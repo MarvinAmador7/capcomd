@@ -13,6 +13,25 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   { report: false }` keeps a profile from being spawned with `report` (refused with `reason: "report_not_allowed"`).
   A profile's `identity.title` and `identity.avatar` aren't passed to one that `extends` it. See docs/agents.md,
   "Profile files".
+- New: `capcomd hermes` says whether Hermes is installed and has capcomd (what `capcomd setup check` says for it), and
+  `capcomd hermes add [--approvals elicit|human] [--hermes-entry-per-project] [--yes]` adds capcomd to Hermes on its
+  own, as `capcomd setup agent` does: its MCP server entry, the capcomd skills, and who approves merges into protected
+  branches. Both take `--json`.
+- Plugins can add CLI commands and MCP tools. capcomd's own commands and tools are now registered the same way, by
+  built-in plugins (`front-run`, `front-primitives`, `front-profiles`, `front-env`, `front-setup`, `front-mcp`,
+  `front-hermes`; `capcomd plugins list` shows them): every command, flag, tool, tool schema and output is unchanged. A
+  plugin's command answers `capcomd <name> …` with a relay.v1 envelope (printed as JSON with `--json`, else its text),
+  is listed by `capcomd --help` under "Plugin commands" and shows its own usage with `capcomd <name> --help`; a
+  plugin's tool is `capcomd_<plugin>_<tool>` on `capcomd mcp`, checked against its schema, and runs as the driver.
+  Built-in plugins only in this version (third-party plugins come with the out-of-process runtime). `capcomd --version`
+  and `--help` start faster; other commands start about 30 ms slower, the time to load the built-in plugins.
+- Plugins that prepare an agent (`agent.preparing`) can now give it skills and environment variables: a skill (its
+  SKILL.md, pinned by its sha256) goes after the profile's own prompt in the agent's instructions, and a variable is
+  set in the agent's environment, if its name is new (never one capcomd or the agent's provider sets, nor one that
+  would steer the agent: `CAPCOMD_*`, `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*`, `CODEX_*`, `NODE_*`, `LD_*`, `GIT_*`, the
+  proxy and certificate variables and the like; the plugin API spec §6.6.7 lists them) and its value doesn't look like
+  a secret. The orchestration skill that agents allowed to spawn get is
+  now such a skill, from the built-in `skill-orchestration` plugin; agents get the same text as before.
 - Forge plugins: a forge can now supply the credential capcomd's git uses on your machine for its https remotes (the
   optional `remoteCredential` method, docs/spec/plugin-api.md §7.4), so a GitLab or Gitea forge plugin can push and
   fetch with your login there. The built-in GitHub forge supplies your GitHub login for https://github.com as before;

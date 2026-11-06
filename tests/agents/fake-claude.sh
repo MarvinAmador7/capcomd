@@ -33,6 +33,8 @@ if [ "$stream" = 1 ]; then IFS= read -r first; prompt=$(printf '%s' "$first" | t
 printf '%s' "$prompt" > ../prompt-seen.txt
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
 printf '%s' "$ANTHROPIC_API_KEY" > ../keyseen.txt
+# The variables agent.preparing's plugins set (tests/subagents/prepare-skills.test.ts): PLUGIN_*.
+env | grep '^PLUGIN_' | sort > ../plugin-env.txt
 echo "oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} apikey=${ANTHROPIC_API_KEY:+set}" > ../authseen.txt
 emit() { printf '%s\n' "$1"; }
 emit '{"type":"system","subtype":"init","session_id":"s1","tools":["Read","Edit"],"model":"fake"}'

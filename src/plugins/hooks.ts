@@ -10,6 +10,9 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import type { AgentPreparing, AgentSpawning, HookName, PreparePatch, ProfilePatch, ProfileResolved, RunCreatePatch, RunCreating, SandboxEnsuring, SandboxPatch, SpawnPatch } from "../../packages/plugin/src/hooks";
 import type { Budget, Principal, Timestamp, Untrusted } from "../../packages/plugin/src/shapes";
 import { RelayError, type ErrorCode } from "../core/errors";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
+import { Redactor } from "../agents/redact";
 
 let registry: HookRegistry | null = null;
 /** This process is the daemon (`capcomd serve`): its gates wait for its own registry, never start a local one. */
@@ -34,7 +37,8 @@ export function daemonHooks(): void {
 }
 
 /**
- * Before a verify runs: the plugins that judge it are listening in this process. The daemon's are its host's. A
+ * Before a verify runs, and before an agent is prepared (agent.preparing: the orchestration skill, src/primitives/ops.ts
+ * `preparingHooks`): the plugins that judge or prepare it are listening in this process. The daemon's are its host's. A
  * process that runs a verify against the engine itself (the CLI, the MCP server, a run's driver) starts the built-in
  * gates in a local host of its own (src/plugins/host.ts `localHost`), so the run's reviewer judges every verify wherever
  * it runs, until those front doors go through the daemon (plugin API §6.1, §17.2 step 8). (A merge's gate,
@@ -209,14 +213,72 @@ export function applySpawnPatch(p: AgentSpawning, patch: SpawnPatch): AgentSpawn
   return { ...p, spawn };
 }
 
-/** §6.6.7: `prompt.append` after the profile's own; `egress` only removes hosts. `skills` and `env` are refused
- *  (`invalid`) until the step that attaches them to the agent's run (ADR-024 skills, §17.2 step 8). */
-export function applyPreparePatch(p: AgentPreparing, patch: PreparePatch): AgentPreparing {
+const SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const SKILL_SOURCES = ["builtin", "user", "project", "plugin"];
+const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
+/** At most this many skills on one agent, together at most this many bytes (as on a message, src/agents/skills.ts). */
+const SKILLS_MAX = 8, SKILL_BYTES_MAX = 256 * 1024;
+/** At most this many variables a plugin adds, each value at most this long. */
+const ENV_MAX = 32, ENV_VALUE_MAX = 4096;
+/**
+ * Names a plugin never sets, even when the agent's environment doesn't have them yet: the kernel's (`CAPCOMD_*`), the
+ * agent providers' families (where their CLIs send the credential and which login they read), what a shell or a runtime
+ * loads before the agent's code (`LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`…), the proxy and certificates its traffic
+ * trusts, and git's. Any one of them would steer the agent without a word of prompt text (§6.6.7).
+ */
+const RESERVED_ENV_PREFIXES = ["CAPCOMD_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "LD_", "DYLD_", "NODE_", "NPM_CONFIG_", "PYTHON", "PERL5", "RUBY", "GIT_"];
+const RESERVED_ENV = new Set(["BASH_ENV", "ENV", "SHELL", "IFS", "CDPATH", "PS4", "PROMPT_COMMAND", "ZDOTDIR", "TMPDIR", "USER", "LOGNAME",
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"]);
+/**
+ * The agent agent.preparing fires for (src/primitives/ops.ts `agentPreparing`), its record as the kernel just read it:
+ * kernel-internal, for the kernel's own listener (src/plugins/skill-orchestration.ts), which needs the agent's limits
+ * and budget the payload doesn't carry. A plugin's listener never sees it.
+ */
+export const preparingAgent = new AsyncLocalStorage<{ runId: string; agentId: string; record: unknown }>();
+
+/** A name agent.preparing's `env` may not add (src/agents/config.ts drops one from an attempt's spec too). */
+export const reservedEnvName = (name: string): boolean => RESERVED_ENV.has(name) || RESERVED_ENV_PREFIXES.some((p) => name.startsWith(p));
+export const skillHash = (text: string): string => createHash("sha256").update(text).digest("hex");
+
+/**
+ * §6.6.7: `prompt.append` after the profile's own; `skills` are added, each pinned by the sha256 of its text (a skill
+ * already attached, by name, is refused); `env` adds variables whose names are new (not one the agent's environment
+ * has, `p.env`, nor a reserved one, `reservedEnvName`) and whose values look like no secret (the redactor's shapes); `egress`
+ * only removes hosts. The kernel attaches skills and variables to the attempt's run (src/primitives/ops.ts
+ * `agentPreparing`); the payload carries a variable's name only, its value stays in the patch.
+ */
+export function applyPreparePatch(p: AgentPreparing, patch: PreparePatch, looksSecret: (value: string) => boolean = (v) => new Redactor().text(v) !== v): AgentPreparing {
   const next = { ...p, prompt: { ...p.prompt } };
-  if (patch.env !== undefined) throw invalid("env is not supported by this capcomd yet");
+  if (patch.env !== undefined) {
+    if (!patch.env || typeof patch.env !== "object" || Array.isArray(patch.env)) throw invalid("env is an object of variable names to values");
+    const add = Object.entries(patch.env);
+    if (add.length > ENV_MAX) throw invalid(`env: at most ${ENV_MAX} variables from one plugin`);
+    for (const [k, v] of add) {
+      if (!ENV_NAME.test(k)) throw invalid(`env ${JSON.stringify(k)}: a name is upper case letters, digits and _ (^[A-Z][A-Z0-9_]*$)`);
+      if (p.env.includes(k)) throw widening(`env ${k} is set already: a plugin only adds new variables`);
+      if (reservedEnvName(k)) throw widening(`env ${k} is reserved: it steers the agent's provider, loader, proxy or git, which a plugin never sets`);
+      if (typeof v !== "string" || v.length > ENV_VALUE_MAX) throw invalid(`env ${k}: a string of at most ${ENV_VALUE_MAX} characters`);
+      if (looksSecret(v)) throw invalid(`env ${k}: its value looks like a secret; secrets reach a sandbox as placeholders, never through a plugin (§11.4)`);
+    }
+    next.env = [...p.env, ...add.map(([k]) => k)];
+  }
   if (patch.prompt !== undefined) {
     if (!patch.prompt || typeof patch.prompt !== "object") throw invalid("prompt is an object");
-    if (patch.prompt.skills !== undefined) throw invalid("prompt.skills is not supported by this capcomd yet");
+    if (patch.prompt.skills !== undefined) {
+      if (!Array.isArray(patch.prompt.skills)) throw invalid("prompt.skills is a list of skills");
+      const skills = [...p.prompt.skills];
+      for (const s of patch.prompt.skills) {
+        if (!s || typeof s !== "object" || typeof s.name !== "string" || !SKILL_NAME.test(s.name)) throw invalid("a skill has a name of lowercase letters, digits, ., _ and -");
+        if (typeof s.text !== "string" || !s.text.trim()) throw invalid(`skill ${s.name}: text is its SKILL.md, a non-empty string`);
+        if (!SKILL_SOURCES.includes(s.source)) throw invalid(`skill ${s.name}: source is one of ${SKILL_SOURCES.join(", ")}`);
+        if (s.hash !== skillHash(s.text)) throw invalid(`skill ${s.name}: hash is the sha256 of its text (pinned, src/agents/skills.ts)`);
+        if (skills.some((x) => x.name === s.name)) throw invalid(`skill ${s.name} is attached already`);
+        skills.push({ name: s.name, hash: s.hash, source: s.source, text: s.text });
+      }
+      if (skills.length > SKILLS_MAX) throw invalid(`at most ${SKILLS_MAX} skills on one agent`);
+      if (skills.reduce((n, s) => n + Buffer.byteLength(s.text), 0) > SKILL_BYTES_MAX) throw invalid(`an agent's skills are at most ${SKILL_BYTES_MAX} bytes together`);
+      next.prompt.skills = skills;
+    }
     if (patch.prompt.append !== undefined) {
       if (typeof patch.prompt.append !== "string") throw invalid("prompt.append is a string");
       const add = patch.prompt.append.trim();
