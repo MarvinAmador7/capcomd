@@ -3,7 +3,7 @@
 import { HARNESS_MODELS } from "../config/models";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, AgentStatus, Attachment, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Profiles, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
 import type { WorkspaceFile } from "./run-files";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
 import { describeEvent } from "./describe";
@@ -73,6 +73,9 @@ export interface HarnessSource {
 	 * run of that project (throws CreateRunError, a 422, when it isn't one).
 	 */
 	runOptions(repo?: string): Promise<O<typeof RunOptions>>;
+	/** GET /v1/profiles: every agent profile a run can use; with `repo`, a run of that project (throws CreateRunError, a
+	 *  422, when it isn't one). */
+	profiles(repo?: string): Promise<O<typeof Profiles>>;
 	/** GET /v1/logins: claude then codex, each in docker then boxd. Local state only; never a credential. */
 	logins(): Promise<O<typeof Login>[]>;
 	/** GET /v1/environments: docker then boxd. */
@@ -200,6 +203,8 @@ export function memorySource(seed: Partial<{
 	skills: Array<O<typeof Skill> & { content: string }>;
 	/** What GET /v1/run-options answers (default: both drivers and sandboxes, unavailable). */
 	runOptions: O<typeof RunOptions>;
+	/** What GET /v1/profiles answers (default: no profiles). */
+	profiles: O<typeof Profiles>;
 	/** GET /v1/logins, /v1/environments, /v1/service (default: logged out everywhere, no environment, no service). */
 	logins: O<typeof Login>[];
 	environments: O<typeof Environment>[];
@@ -371,6 +376,7 @@ export function memorySource(seed: Partial<{
 		trace: async () => [],
 		skills: async () => (seed.skills ?? []).map(({ content: _, ...s }) => s),
 		runOptions: optionsOf,
+		profiles: async () => seed.profiles ?? { file: "/nonexistent/.capcomd/agents.json", layers: [], default: null, profiles: [], warnings: [], error: null },
 		logins: loginsOf,
 		...surface,
 		environments: async () => seed.environments ?? LISTED_PROVIDERS.map((sandbox) => ({ sandbox, status: "missing" as const, name: null, versions: {}, builtAt: null, command: `capcomd env build --sandbox ${sandbox}` })),

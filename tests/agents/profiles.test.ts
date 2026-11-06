@@ -150,7 +150,7 @@ describe("children policy + narrowing overrides", () => {
 
 import { mkdirSync, symlinkSync } from "fs";
 import { dirname } from "path";
-import { abilityText, readProfiles, flatOverrides, PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, checkManifest, costTier, fitText, profileFacts, type ProfileDoc } from "../../src/profiles";
+import { abilityText, readProfiles, flatOverrides, PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, checkManifest, costTier, fitText, profileFacts, profileValues, setByOver, type ProfileDoc } from "../../src/profiles";
 import { defaultAgentsFile } from "../../src/utils/home";
 
 // ADR-024 §7 step 1: v2 profiles (YAML/JSON), `extends`, overrides, layers, resolution to the v1 flat pin.
@@ -270,6 +270,40 @@ describe("profiles v2: loader and resolution", () => {
     expect(set.profiles.critic!.source).toBe("user");
     expect(set.agents.solo).toEqual({ provider: "claude", auth: "subscription" });
     expect(set.warnings).toEqual([`${w.at("U/solo/override.yaml")}: doesn't apply: the project profile solo (${w.at("P/solo/profile.yaml")}) is used, and only overrides at its layer or above apply to it`]);
+  });
+
+  test("setBy: which of the files laid together set each value (ADR-024 §7 step 2, `capcomd profiles show`)", () => {
+    const bundled = { worker: { name: "worker", version: 4, harness: { provider: "claude", auth: "subscription" }, limits: { maxTurns: 30, timeoutMs: 600000 }, tools: { disallowed: ["WebFetch"] } } };
+    const w = world({
+      "U/worker/override.yaml": yaml(["harness: { model: opus }", "limits: { maxTurns: 25 }"]),
+      "P/lead/profile.yaml": yaml(["name: lead", "extends: worker", "description: Leads.", "limits: { timeoutMs: null }", "tools: null", "children: { allowSpawn: true, allowedChildProfiles: [worker] }"]),
+      "P/lead/override.yaml": yaml(["limits: { maxTurns: 30 }", "tags: [lead]"]),
+    }, { solo: { provider: "codex", auth: "apikey", maxTurns: 5 } });
+    const set = w.load(bundled);
+    // The ancestor's own files come first with their own values; what the child removes (null) is no one's; its own
+    // `version` isn't inherited (who it is), so lead is version 1 and no file set it.
+    expect(set.profiles.lead!.applied.map((a) => `${a.as} ${a.name} ${a.layer}`)).toEqual(["extends worker bundled", "extends worker user", "profile lead project", "override lead project"]);
+    expect(Object.fromEntries(profileValues(set.profiles.lead!).map((v) => [v.path, [v.value, v.from && set.profiles.lead!.applied.indexOf(v.from)]]))).toEqual({
+      extends: ["worker", 2], description: ["Leads.", 2], tags: [["lead"], 3],
+      "harness.provider": ["claude", 0], "harness.auth": ["subscription", 0], "harness.model": ["opus", 1],
+      "limits.maxTurns": [30, 3], "children.allowSpawn": [true, 2], "children.allowedChildProfiles": [["worker"], 2],
+    });
+    expect(set.profiles.lead!.setBy).toMatchObject({ name: 2 });
+    expect(set.profiles.lead!.version).toBe(1);
+    expect(profileValues(set.profiles.worker!).find((v) => v.path === "version")).toEqual({ path: "version", value: 4, from: { as: "profile", name: "worker", layer: "bundled", path: null } });
+    // A v1 entry: every value is its agents.json's.
+    expect(profileValues(set.profiles.solo!)).toEqual([
+      { path: "harness.provider", value: "codex", from: set.profiles.solo!.applied[0]! }, { path: "harness.auth", value: "apikey", from: set.profiles.solo!.applied[0]! },
+      { path: "limits.maxTurns", value: 5, from: set.profiles.solo!.applied[0]! },
+    ]);
+    // And so with no v2 file anywhere (the v1 file as it is).
+    const v1 = world({}, { solo: { provider: "codex", auth: "apikey", maxTurns: 5 } }).load();
+    expect(v1.profiles.solo!.setBy).toEqual({ name: 0, "harness.provider": 0, "harness.auth": 0, "limits.maxTurns": 0 });
+  });
+
+  test("setByOver: a block written over a value that isn't one replaces it whole; null removes a key or a block", () => {
+    expect(setByOver({ a: 0, "b.x": 0, "b.y": 0 }, { a: 1, b: { x: 1, y: 2 } }, { a: { k: 1 }, b: { x: null, z: 3 } }, 1)).toEqual({ "a.k": 1, "b.y": 0, "b.z": 1 });
+    expect(setByOver({ "b.x": 0, c: 0 }, { b: { x: 1 }, c: 1 }, { b: null, c: [1] }, 2)).toEqual({ c: 2 });
   });
 
   test("extends cycles, unknown parents and parents in another project are refused", () => {
