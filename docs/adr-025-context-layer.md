@@ -627,7 +627,7 @@ this list says why):
   already says, nothing stale within a week). It reaches agents that may spawn, the ones with an in-VM `capcomd
   result`; Hermes' full routing paragraph as a hash-pinned skill of its own still waits for step 6.
 
-**Made while building step 4** (spec 1.0.27; groundray's read path, `src/context/groundray.ts`, the built-in
+**Made while building step 4** (spec 1.0.28; groundray's read path, `src/context/groundray.ts`, the built-in
 `context-groundray`):
 
 - **The mapping is the project's, pinned per run by the run's record.** `capcomd context brain add <name> <repo>

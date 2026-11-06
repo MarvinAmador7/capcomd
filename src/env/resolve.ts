@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { env as envVar } from "../utils/env";
 import { stateDir } from "../utils/home";
-import { providerStateFile } from "../providers/registry";
+import { providerStateFile, sandboxName } from "../providers/registry";
 
 export const ENV_PREFIX = "capcomd-env-";
 export const ENV_SCHEMA = 1;
@@ -65,6 +65,38 @@ export function resolveEnvSnapshot(source: Record<string, string | undefined> = 
   if (explicit) return explicit;
   // Lockfile mismatch only means the worker installs deps itself; CLIs + git config still apply.
   return readLedger(ledgerPath(source)).current?.name;
+}
+
+/** A profile's `sandbox.environment` the agent's sandbox can't boot from as asked: a configuration problem. */
+export class EnvironmentProblem extends Error { readonly code = "environment"; }
+
+/**
+ * What an agent's machine boots from (ADR-024 `sandbox.environment`): the image its plan login is kept in, when it has
+ * one (`capcomd auth login` made it from an environment, so the agent gets both), else its profile's environment on
+ * `source`'s sandbox: `default` or none is the current build, as for every agent (resolveEnvSnapshot); `image` is the
+ * provider's plain image; any other name is that build (`capcomd env status` lists them). A name the sandbox's ledger
+ * doesn't have, and a login kept in an image of another environment, throw EnvironmentProblem. `real`: a real agent's
+ * CLI needs an environment; a fake (scripted) one boots one only when its profile names it.
+ */
+export function bootSnapshot(o: { environment?: string; real: boolean; login?: { agent: string; snapshot?: string; env: string } | null }, source: Record<string, string | undefined> = process.env): string | undefined {
+  const named = o.environment && o.environment !== "default" ? o.environment : null;
+  let snapshot: string | undefined;
+  if (named && named !== "image") {
+    const l = readLedger(ledgerPath(source));
+    if (l.current?.name !== named && !l.history.some((h) => h.name === named)) {
+      let place: string | null = null;
+      try { place = sandboxName(source); } catch { /* an unknown sandbox: said where it is used */ }
+      throw new EnvironmentProblem(`sandbox.environment ${named} isn't an environment of the ${place ?? "agent's"} sandbox (\`capcomd env status${place ? ` --sandbox ${place}` : ""}\` lists its builds; default is the current one, image the provider's plain image)`);
+    }
+    snapshot = named;
+  }
+  if (o.login?.snapshot) {
+    if (named && snapshot !== o.login.env)
+      throw new EnvironmentProblem(`the ${o.login.agent} plan login is kept in an image made from the environment ${o.login.env}, and this profile's sandbox.environment is ${named}: use environment default (or ${o.login.env}), or an API key (auth: apikey)`);
+    return o.login.snapshot;
+  }
+  if (named) return snapshot;
+  return o.real ? resolveEnvSnapshot(source) : undefined;
 }
 
 /**

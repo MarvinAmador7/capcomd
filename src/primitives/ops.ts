@@ -1,7 +1,10 @@
 import { isSandboxUnreachable, isTransientSandboxError } from "../providers/boxd-errors";
 import { sandboxAuthError } from "../plugins/sandboxes";
 import { redactShapes } from "../agents/redact";
-import { resolveEnvSnapshot } from "../env/resolve";
+import { bootSnapshot, EnvironmentProblem, resolveEnvSnapshot } from "../env/resolve";
+import { profileFor } from "../auth/profiles";
+import { withSandbox } from "../providers/run-sandbox";
+import { LIFECYCLE_HINT, lifecycleProblem } from "../plugins/lifecycle";
 // ADR-016 step 1: run new / spawn / await / wait-any / cancel, on top of the existing worker
 // actor. The CLI is a thin client; durable state lives in the scope actor (agent tree, keys,
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
@@ -11,7 +14,7 @@ import { dirname, join, resolve } from "path";
 import { tmpdir } from "os";
 import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, resolveAgent, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../profiles";
+import { agentsFilePath, applyOverrides, decodeAgentRef, encodeAgentRef, lifecyclePlugins, pinnedMachine, pinnedRuntime, resolveAgent, runtimeProblems, AgentConfigError, type AgentSpec, type Overrides, type ResolvedAgent } from "../profiles";
 import { agentEffort, agentModel, isRealAgent } from "../agents/config";
 import { available, treeSpend, paramsHash, parseBudget, parseGrant, stableId, TERMINAL_AGENT, type Budget, type Grant } from "./policy";
 import { noticeOf, treeView, rollups, subtree } from "../subagents/results";
@@ -424,15 +427,44 @@ function resolveProfile(ref: string | null): ResolvedAgent {
     throw e;
   }
 }
-function checkResolved(resolved: ResolvedAgent, source: Record<string, string | undefined>) {
+function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string | undefined>) {
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
-  const envProblem = envSnapshotProblem(spec?.provider, source);
+  // Its machine's sandbox: its profile's (ADR-024 `sandbox.provider`), else the run's, else this process's.
+  const rt = resolved.runtime ?? {};
+  // What its profile was checked for, again on the spec as overridden: an override or a profile.resolved patch that
+  // makes it orchestrate (narrowing) leaves an agent that runs nothing with MCP servers to run (src/profiles/runtime.ts).
+  const rp = resolved.spec ? runtimeProblems(resolved.name ?? resolved.kind, rt, resolved.spec) : [];
+  if (rp.length) throw new RelayError("config", rp.join("; "), "Spawn it without making it orchestrate (tools.mode), or give the MCP servers to the profiles it spawns.", { code: "orchestrate_mcp" });
+  const source = rt.sandboxProvider ? withSandbox(runSource, rt.sandboxProvider) : runSource;
+  // A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
+  // commands run in a sandbox, never on the host): a sandbox that runs them on this host (the test fakes) only when the
+  // run's own does too.
+  if (rt.sandboxProvider && !realSandbox(source) && realSandbox(runSource))
+    throw new RelayError("config", `profile ${resolved.name}: sandbox.provider ${rt.sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
+  const envProblem = envSnapshotProblem(spec?.provider, source, rt.environment);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
+  if (rt.environment) environmentCheck(resolved, source);
   // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
   const egress = spec?.egress as string[] | undefined;
   if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox(source) && !sandboxCaps(source).egressAllowlist)
     throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   return { resolved, spec };
+}
+
+/** ADR-024 `sandbox.environment`: the sandbox has it, and a plan login kept in an image is one made from it (the agent
+ *  boots from one image: src/env/resolve.ts `bootSnapshot`, which the worker asks again when it makes the machine). */
+function environmentCheck(resolved: ResolvedAgent, source: Record<string, string | undefined>) {
+  const mode = env("SPAWN_EXEC");
+  const real = isRealAgent(resolved.kind) && mode !== "fake" && mode !== "script";
+  let login: { agent: string; snapshot?: string; env: string } | null = null;
+  if (real && resolved.spec?.auth === "subscription") {
+    const p = profileFor(resolved.kind, source);
+    if (p) login = { agent: resolved.kind, ...(p.snapshot ? { snapshot: p.snapshot } : {}), env: p.env };
+  }
+  try { bootSnapshot({ environment: resolved.runtime!.environment!, real, login }, source); } catch (e) {
+    if (e instanceof EnvironmentProblem) throw new RelayError("config", `profile ${resolved.name}: ${e.message}`, "Build it (`capcomd env build`), or change the profile's sandbox.environment (`capcomd profiles show` says where it is set).", { code: "environment" });
+    throw e;
+  }
 }
 
 /** The id `spawnAgent` gives a top-level agent spawned with `key` (stable: the same run and key, the same id). The
@@ -469,6 +501,9 @@ export async function spawnAgent(o: SpawnOpts) {
   // ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be).
   if (o.contract?.report === true && resolved.permissions?.report === false)
     throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
+  // ADR-024 `lifecycle.onStart|onEnd`: the plugins its profile names must be there to hear it.
+  const unheard = await lifecycleProblem(lifecyclePlugins(resolved.runtime?.lifecycle));
+  if (unheard) throw new RelayError("config", `profile ${resolved.name} can't be spawned: its ${unheard}`, LIFECYCLE_HINT, { code: "lifecycle_inactive" });
   // Requested budget: the contract's `budget` ({usd, turns, wallSeconds}), then --budget per unit.
   let requested: Budget;
   try { requested = { ...parseBudget(o.contract?.budget), ...(o.budget ?? {}) }; } catch (e) { throw new RelayError("usage", (e as Error).message, "Budget units: usd, turns, wallSeconds (e.g. --budget usd=2,turns=40)."); }
@@ -495,7 +530,8 @@ export async function spawnAgent(o: SpawnOpts) {
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
     profile: resolved.name, ref: ref ?? resolved.name,
-    spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(skills.length ? { skills: skills.map(({ name, source, hash }) => ({ name, source, hash })) } : {}) },
+    // Its runtime blocks (ADR-024 §7 step 8: MCP servers, sandbox, environment, size, lifecycle) beside the flat spec.
+    spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(skills.length ? { skills: skills.map(({ name, source, hash }) => ({ name, source, hash })) } : {}), ...(resolved.runtime ?? {}) },
     ...(skills.length ? { skillTexts: skills.map((s) => s.text) } : {}),
     // ADR-024 §2.4: the version of the profile it runs with and where it came from, beside the spec they pinned.
     profileVersion: resolved.profile?.version ?? null, profileSource: resolved.profile?.source ?? null,
@@ -564,9 +600,12 @@ export class EnvSnapshotMissing extends Error { readonly code = "env_snapshot_mi
 /**
  * Real CLI agents on a provider with snapshots boot from the capcomd env snapshot (the CLIs baked in); without one
  * every agent would install its CLI first (minutes, and network the profile may not allow), so spawn asks for one.
+ * A profile that names its environment (ADR-024 `sandbox.environment`, other than `default`) chose: `image` installs
+ * the CLI, a build's name is checked where it is resolved (src/env/resolve.ts `bootSnapshot`).
  */
-export function envSnapshotProblem(provider: unknown, source: Record<string, string | undefined> = process.env): string | null {
+export function envSnapshotProblem(provider: unknown, source: Record<string, string | undefined> = process.env, environment?: string): string | null {
   if (provider !== "claude" && provider !== "codex") return null;
+  if (environment && environment !== "default") return null;
   if (!realSandbox(source) || !sandboxCaps(source).snapshots) return null;
   if ((source.CAPCOMD_SPAWN_EXEC ?? "") === "fake" || (source.CAPCOMD_SPAWN_EXEC ?? "") === "script") return null;
   if ((source.CAPCOMD_ENV ?? "").toLowerCase() === "image") return null;
@@ -837,9 +876,14 @@ async function preflightDrive(runId: string, agentId: string, s: any, a: ScopeAg
   // The CLI is launched with the profile's own caps only: the engine enforces the agent's budget from its live spend,
   // so a grant (ADR-019 §4) raises it while it runs.
   const exec = execOf(a);
-  // Fail fast (no retries, no driverless "running"): a real agent on boxd needs the env snapshot.
-  const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider, await (await import("../providers/run-sandbox")).runSandboxEnv(runId)) : null;
+  const rt = pinnedRuntime(a.spec);
+  // Fail fast (no retries, no driverless "running"): a real agent on boxd needs the env snapshot (on its profile's
+  // sandbox, else its run's).
+  const envProblem = exec ? envSnapshotProblem((a.spec as any)?.provider, await (await import("../providers/run-sandbox")).agentSandboxEnv(runId, rt.sandboxProvider), rt.environment) : null;
   if (envProblem) throw new EnvSnapshotMissing(envProblem);
+  // ADR-024 `lifecycle`: the plugins its profile names must hear it (they may have been disabled since its spawn).
+  const unheard = await lifecycleProblem(lifecyclePlugins(rt.lifecycle));
+  if (unheard) throw new RelayError("config", `${agentId} can't start: its profile's ${unheard}`, LIFECYCLE_HINT, { code: "lifecycle_inactive" });
   // ADR-019 §6: the login this agent spends from is out of quota (another agent hit it): wait for the reset, don't run.
   const login = exec ? loginOf(a.spec) : null;
   const waitUntil = login ? quotaUntil(login) : 0;
@@ -854,7 +898,8 @@ async function ensureWorker(runId: string, a: ScopeAgent, w: any, prepared: Prep
   let wk = await w.getWorker({ workerId: agentId });
   if (!wk || wk.state === "provisioning" || wk.state === "failed") {
     const spec = prepared ?? a.spec;
-    await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(spec ? { agentSpec: spec as Record<string, unknown> } : {}) } : {}) });
+    const machine = pinnedMachine(a.spec);
+    await w.provisionWorker({ workerId: agentId, runId, epoch, ...(exec ? { agent: exec, ...(spec ? { agentSpec: spec as Record<string, unknown> } : {}) } : {}), ...(Object.keys(machine).length ? { machine } : {}) });
     wk = await w.getWorker({ workerId: agentId });
   }
   if ((await s.getAgent({ agentId }))?.status === "cancelled") { await w.drainWorker({ workerId: agentId }); return true; }
@@ -911,7 +956,8 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
   const named = shownTitle(a.titleState, a.task);
   const title = named.title && named.titleSource !== "derived" ? named.title : null;
-  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
+  const machine = pinnedMachine(a.spec);
+  const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
   return { kind: "pushed", pushed, vmRpc: !!vmRpc };
 }
@@ -1065,7 +1111,9 @@ async function pinnedSkillTexts(runId: string, a: ScopeAgent): Promise<AgentPrep
 export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1): Promise<PreparedSpec> {
   const spec = pinnedOf(a);
   const RS = await import("../providers/run-sandbox");
-  const source = await RS.runSandboxEnv(runId);
+  // Where its machine runs: its profile's sandbox, else its run's (ADR-024 `sandbox.provider`).
+  const machine = pinnedMachine(a.spec);
+  const source = await RS.agentSandboxEnv(runId, machine.sandbox);
   let egress: string[] = [], credentialMode: "secret" | "env" | "subscription" | "none" = "none";
   if (execOf(a)) {
     try {
@@ -1075,9 +1123,9 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
     } catch { /* the run reports a bad profile itself */ }
   }
   let provider = "fake";
-  try { provider = (await RS.runSandbox(runId)) ?? sandboxName(); } catch { /* an unknown CAPCOMD_SANDBOX: the run reports it */ }
+  try { provider = (await RS.agentSandbox(runId, machine.sandbox)) ?? sandboxName(); } catch { /* an unknown CAPCOMD_SANDBOX: the run reports it */ }
   const skills = await pinnedSkillTexts(runId, a);
-  const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: null } };
+  const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: machine.environment ?? null } };
   let n: AgentPreparing = payload, patches: Array<{ patch: PreparePatch }> = [];
   // The kernel's own listeners read the agent's record from here, not the engine again (the orchestration skill); the
   // context router leaves the bundles its brief cites here, for the attempt's runner to place (ADR-025 §6.2).
@@ -1190,7 +1238,9 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
   if (!vmId) return null;
-  const { provider, sandbox } = await (await import("../dependencies")).providerForRun(runId);
+  // Its machine's sandbox, as recorded on its worker when it was made (its profile's, else the run's).
+  const made = typeof wk?.context?.sandbox === "string" && wk.context.sandbox ? wk.context.sandbox as string : null;
+  const { provider, sandbox } = await (await import("../dependencies")).providerForAgent(runId, pinnedMachine(a.spec).sandbox ?? made);
   const { VM_RPC_DIR } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
   // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.

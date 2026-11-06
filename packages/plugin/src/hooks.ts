@@ -122,7 +122,9 @@ export type AgentChange =
   | { kind: "notice"; notice: AgentNotice | null }
   | { kind: "paused"; by: string } | { kind: "resumed"; by: string } | { kind: "titled" }
   | { kind: "ended"; status: "done" | "failed" | "cancelled" | "handed-off"; result: AgentResult | null };
-export interface AgentChanged { agent: Agent; change: AgentChange }
+/** `lifecycle`: the plugins the agent's profile names (ADR-024 `lifecycle.onStart|onEnd`), when it names any, so a
+ *  plugin hears which agents' starts and ends it was named for (§6.6.8). */
+export interface AgentChanged { agent: Agent; change: AgentChange; lifecycle?: { onStart: string[]; onEnd: string[] } }
 export interface AgentItem { agent: Pick<Agent, "id" | "runId" | "profile">; item: ThreadItem }
 
 export interface SandboxEnsuring {

@@ -90,6 +90,10 @@ export const codex: AgentProvider = {
     // capcomd's tools are approved up front: `codex exec` asks for nothing (its approval policy is never), so a tool
     // that needs an approval is refused; what an agent may do with them is its capcomd token's limits.
     (ctx.capcomd ? ` -c ${q('mcp_servers.capcomd.command="node"')} -c ${q(`mcp_servers.capcomd.args=["${ctx.capcomd.cli}","mcp"]`)} -c ${q('mcp_servers.capcomd.default_tools_approval_mode="approve"')}` : "") +
+    // The profile's MCP servers (ADR-024 `tools.mcp`), as TOML strings (JSON's quoting is TOML's); a trusted one's tools
+    // approved up front like capcomd's, an untrusted one's left to codex's own approval rules.
+    (ctx.mcp?.servers ?? []).map((s) => ` -c ${q(`mcp_servers.${s.name}.command=${JSON.stringify(s.command[0])}`)} -c ${q(`mcp_servers.${s.name}.args=${JSON.stringify(s.command.slice(1))}`)}` +
+      (s.trust === "trusted" ? ` -c ${q(`mcp_servers.${s.name}.default_tools_approval_mode="approve"`)}` : "")).join("") +
     ` -o ${q(`${ctx.dir}/last-message.txt`)} "$(cat ${q(ctx.promptFile)})"` +
     ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)} < /dev/null`,
   parse(line, redact, state, cfg) {

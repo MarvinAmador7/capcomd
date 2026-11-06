@@ -5,6 +5,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: a profile file can give its agents MCP servers, its own sandbox, environment and machine size, and plugins that
+  must hear them. `tools.mcp: [{name, command, trust}]` starts each server in the agent's sandbox (never on your
+  machine) for Claude Code and Codex, beside capcomd's own; `trust: trusted` approves its tools up front, `untrusted`
+  (the default) leaves them to the profile's tool rules. An orchestrate profile can't have any, and spawning one with
+  `--set toolMode=orchestrate` is refused (`reason: "orchestrate_mcp"`). `sandbox.provider`
+  runs the profile's agents on that sandbox (`docker`, `boxd`) whatever the run's is (never on your machine: a
+  sandbox that runs agents on the host is refused, `reason: "sandbox_isolation"`); `sandbox.environment`
+  is what their machines boot from there: `default` (the current `capcomd env build`), `image` (the provider's plain
+  image) or a build's name from `capcomd env status`; `sandbox.size: { vcpu: 1 | 2 | 4 | 8 }` sizes their machines on
+  boxd (Docker containers share your CPUs). `lifecycle.onStart` and `lifecycle.onEnd` name plugins that must be active
+  and listening to `agent.changed`: a spawn of a profile that names one that isn't is refused (`reason:
+  "lifecycle_inactive"`), and so is one whose environment its sandbox doesn't have (`reason: "environment"`).
+  `capcomd profiles validate` says both before you spawn. None of these can be changed with `--set` or by a parent
+  spawning a child; agents already running keep what they started with. See docs/agents.md, "Profile files".
 - New: agents propose lessons for the project's memory. A planner or lead ends with lessons in its result
   (`capcomd result --data '{"context": [{"title": "…", "text": "…"}]}'`, which its orchestration skill now teaches,
   along with keeping working notes in kv under `notes/<its id>`), and capcomd keeps each as a candidate of the run,

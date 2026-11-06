@@ -4,7 +4,7 @@
 import { SUPERVISOR_SOURCE } from "../utils/assets";
 import type { SandboxProvider, VmId, ExecResult } from "../providers/sandbox";
 import type { AgentConfig, ContextBundleSpec } from "./config";
-import type { AgentAdapter, AgentEvent, AgentRunState } from "./types";
+import type { AgentAdapter, AgentCommandCtx, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
 import { taskKey } from "../merge/config";
 import { gitSpan, pushFromSandbox, sendToSandbox, sendTreeAt, type HostRemote, type SandboxGit } from "../merge/transfer";
@@ -716,6 +716,24 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         await provider.upload(vmId, appendSystemFile, new TextEncoder().encode([cfg.appendSystemPrompt ? r.text(cfg.appendSystemPrompt) : "", opts.naming.skill].filter(Boolean).join("\n\n")));
       } else promptText = [promptText, opts.naming.skill].join("\n\n");
     }
+    // ADR-024 `tools.mcp`: its profile's MCP servers, which its CLI starts in this machine (never on the host). One file
+    // holds them and capcomd's own, for a CLI that reads servers from a file (Claude Code); the list goes to one that
+    // takes them as flags (Codex). A trusted server's tools are approved up front, as capcomd's are.
+    let mcpCtx: AgentCommandCtx["mcp"];
+    if (cfg.mcp?.length) {
+      const servers = cfg.mcp;
+      const config = `${W}/mcp.json`;
+      const own = capcomdCtx ? { capcomd: { command: "node", args: [capcomdCtx.cli, "mcp"], env: { CAPCOMD_RPC_DIR: opts.subagents!.rpcDir } } } : {};
+      // capcomd's own last: no profile's server takes its name (the profile is refused for it, and this keeps it so).
+      await provider.upload(vmId, config, new TextEncoder().encode(JSON.stringify({ mcpServers: { ...Object.fromEntries(servers.map((s) => [s.name, { command: s.command[0], args: s.command.slice(1) }])), ...own } })));
+      mcpCtx = { config, servers };
+      const trusted = servers.filter((s) => s.trust === "trusted").map((s) => `mcp__${s.name}`);
+      if (adapter.kind === "claude-code" && cfg.allowedTools && trusted.length) cfg = { ...cfg, allowedTools: [...cfg.allowedTools, ...trusted] };
+      // A program the machine doesn't have is the CLI's to report (the server fails to start); the log says it first.
+      const missing = (await sh(`cd ${sq(repo)} 2>/dev/null; for c in ${servers.map((s) => sq(s.command[0]!)).join(" ")}; do command -v "$c" >/dev/null 2>&1 || echo "$c"; done; true`)).stdout.split("\n").map((x) => x.trim()).filter(Boolean);
+      opts.onLog?.([`[capcomd] MCP servers from its profile: ${servers.map((s) => `${s.name}${s.trust === "trusted" ? " (trusted)" : ""}`).join(", ")}`,
+        ...(missing.length ? [`[capcomd] not found in its sandbox: ${r.text(missing.join(", "))} (an MCP server's program must be in its environment)`] : [])]);
+    }
     await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
     const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`, outbox = `${W}/outbox.jsonl`;
     // ADR-019 §1: the supervisor runs the agent and reports up through the outbox. It needs node, which the npm CLIs
@@ -728,7 +746,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Plugin API §16.1: a planner or lead that sees everything and runs nothing; whatever it writes is never committed.
     const orchestrate = cfg.toolMode === "orchestrate";
     const inboxFile = `${W}/inbox.jsonl`;
-    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}) }, sq)}`;
+    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(mcpCtx ? { mcp: mcpCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}) }, sq)}`;
     if (supervised) {
       await provider.upload(vmId, `${W}/agent.sh`, new TextEncoder().encode(`${agentLine}\n`));
       await provider.upload(vmId, `${W}/supervisor.mjs`, new TextEncoder().encode(SUPERVISOR_SOURCE));
