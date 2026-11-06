@@ -140,7 +140,7 @@ What CI runs, and where (`.github/workflows/`):
 |---|---|
 | `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
-| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed) |
+| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect`, below) |
 | `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
 | `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
@@ -208,6 +208,44 @@ Everything is in one scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp di
 keeps it, with `session.ndjson`, `events.json` and the engine's `engine.log`). It never uses `~/.capcomd`, :6420, Docker or your Claude Code
 settings (`--setting-sources project`, `--no-session-persistence`); it needs `claude` logged in. Runs vary: compare a
 few of each. Two at once need ports at least 20 apart (an engine takes its port, the next and port+10).
+
+### Context eval
+
+`scripts/eval-context.ts` measures what an agent gets beyond its task (ADR-025 §12): nothing, an `AGENTS.md`, and,
+as the context layer's build steps land, the router's brief, project memory and a company brain. It generates a
+fictional company from a seed (`scripts/eval-context/world.ts`: a small Node shop repository, its business records
+with one superseded each, meeting notes, a carriers file with an instruction planted in it; `world.yaml` is the
+source of truth), gives every arm the same repository plus the arm's files (`arms.ts`), and runs five task chains
+(`tasks.ts`) the way a user does, with `run new`, `spawn` and `await`: (a) one agent finds a fact buried in the docs
+and a second in the same run needs it; (b) a fix whose cause is a repository convention lands (verify, merge) and a
+fresh run writes new code where it applies; (c) a business rule only the company knows, superseded once, cited; (d)
+a stale comment in the code against the current record; (e) the planted instruction. A hidden Node checker scores
+each step with `capcomd check` on the agent's branch, in a sandbox like verify's, and names the answer's class
+(current, superseded, other, …); the planted instruction is its own probe. Metrics per step: tool calls and
+re-discovery (reads of the fact's file) from `capcomd logs`, turns, tokens, the cache-read ratio, cost (notional on
+a plan login) and the model the CLI reported, from the agent's span.
+
+```bash
+bun scripts/eval-context.ts --seed 1 --expect          # fake sandbox and scripted agent (what CI runs, ~30 s)
+bun scripts/eval-context.ts --list                     # the arms, chains and pending probes, and which are runnable
+CAPCOMD_HOME=<a home with your logins> BOXD_API_KEY=… \
+  bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-6.1-sol --reps 3 --port 6571 --evidence docs/evidence/context
+```
+
+`--agents fake` runs on the fake-host sandbox with `scripts/eval-context/fake-agent.ts` as `claude`: a deterministic
+agent that reads only its checkout (the instruction file when there is one, else the stub's stale comment and the
+docs), so `--expect` knows every verdict and fails when an arm, a checker or a metric stops working. `--agents live`
+runs real Claude Code or Codex agents (one profile per `--models` entry, plan logins) on `--sandbox` (boxd by default,
+or docker); a Codex model must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a
+`CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`), never `~/.capcomd`
+itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` and, the first time, the model's `limits.json`
+(ADR-025 D4's starting values until an arm measures them). The world itself isn't written there: the seed and the
+recorded commit give it back, and its carriers file holds the planted instruction. The seed defaults to today's date
+(UTC), so a run on a new model release gets names and numbers no model has seen; re-run the live baselines on every
+release and commit them. Everything else (the engine's data, bare repositories, traces, `world.yaml`) is in one
+scratch folder (`CAPCOMD_EVAL_TMP`, else the system temp dir, or a new or empty `--work`), deleted at the end unless
+`--keep` (which keeps `steps/<model>-<arm>-<rep>-<step>.json`: each agent's record and log). Ports as for the
+team-shape eval.
 
 ### Killpoints
 
