@@ -341,7 +341,8 @@ Each step ships alone, with tests, and leaves every existing test green.
    Tests: `tests/api` idempotency and scope tests as for `PATCH /v1/sandboxes`. Done but the Crew screen, which has no
    approved design yet (§9, "Made while building the writes").
 7. **Install/export/update** with `LOCK`. Tests: a local git fixture repository (the `tests/merge/gitfixture.ts`
-   pattern), a package that names a file outside its directory is refused, a hash change is reported.
+   pattern), a package that names a file outside its directory is refused, a hash change is reported. Done, with the
+   trust prompt for a project's skills (decision 4) (2026-11-06; §9, "Made while building install, export and update").
 8. **`memory`, `tools.mcp`, `sandbox.provider|environment|size`, `lifecycle.onStart|onEnd`**: each needs the plugin
    core's hook or wiring (ADR-023 §4.5, §5) and ships after that step of ADR-023 lands. Tests: the scenarios suite with
    scripted agents (`CAPCOMD_SPAWN_EXEC=script`), one per block. `memory` isn't built here: ADR-025 D2 folds it into
@@ -495,8 +496,8 @@ Made while building skills in the profile (§7 step 5, 2026-11-06; `src/profiles
   plugins' (`skillBlock`, the same as a message's skills): every skill an agent gets reads the same way, the
   orchestration skill included.
 - **The trust prompt for a project's skills (decision 4) waits for step 7** (`capcomd profiles trust`, with the plugin
-  trust mechanism, spec §4.8). Until then a project's skills are used as its `prompt.append` and `agents.json` prompts
-  always were: as text the project supplies. The mechanism landed with the plugin core's step 12 (spec 1.0.31) as
+  trust mechanism, spec §4.8; built there: below). Until then a project's skills are used as its `prompt.append` and
+  `agents.json` prompts always were: as text the project supplies. The mechanism landed with the plugin core's step 12 (spec 1.0.31) as
   `src/install/`, for step 7 to reuse: `source.ts` parses `<owner/repo>[#<name>][@<ref>]`, `fetch.ts` fetches a package
   directory out of a commit through the host's repo (`pick` chooses it, here by `profile.yaml`), `lock.ts` writes and
   checks `LOCK` (`kind: "profile"`, every file's sha256 and mode, the content hash) and `diffTrees` is what `update`
@@ -595,6 +596,49 @@ Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`,
   /v1/profiles/{name}` (§5), which have no client yet; `ctx.profiles` gains no write method (spec §11.1's `configure`
   writes wait for it). **The app's Crew screen isn't built**: no approved mockup covers it (apps/menubar/design), so the
   API ships first and the screen waits for a design.
+
+Made while building install, export and update (§7 step 7, 2026-11-06; `src/profiles/install.ts`,
+`src/profiles/trust.ts`):
+
+- **An installed package is in the user's or the project's layer**, not a layer of its own: `capcomd profiles install`
+  writes `~/.capcomd/profiles/<name>/`, or with `--project` the checkout's `.capcomd/profiles/<name>/` (to commit, so
+  the team shares it through the repository; a project plugin is fetched into the user's home instead because it is
+  code, a profile is data and is gated as any project profile is: below). Its `LOCK` is a plugin's (`kind:
+  "profile"`, the same content hash: every file but `LOCK`), and says where it came from; `profileSource` stays
+  `project | user | bundled`. **`sharing.source` isn't written into `profile.yaml`** (§2.2's comment): it would make
+  the installed files differ from the commit's; the `LOCK` has it and `show` prints it.
+- **"Any executable" is a file with mode `100755`**; a link inside the package is allowed (the fetch refuses one out,
+  and the loader reads a prompt, persona or skill only inside the directory). A package holding an `override.yaml` is
+  refused too: an override is the user's or the project's (§2.6). `update` keeps one the user put beside the package
+  and leaves it out of "edited since it was installed".
+- **Checked in place**: install, update and `rm` of an installed package change the directory, read the profiles, and
+  put it back when they now have a problem they didn't have (a file named outside the package, an `extends` nothing
+  here answers, a child another profile extends gone). The writes' overlay (step 6) can't hold a new directory, and a
+  reader sees the change for one read at most. A project with a broken profile can still install a package that adds
+  no problem. A change to the user's layer is also read as every other project reads it (the user's layer alone): a
+  package the current project hides with a profile of the same name isn't resolved there, and would otherwise break
+  the user's profiles everywhere else.
+- **§2.4's hand edit "treated as a bump with a notice" is the notice only**: `show` and `validate` say a package was
+  edited since it was installed (its files against its `LOCK`, the user's override left out), and `update` lists the
+  edits it replaces. Its `version` stays the file's: a version made up from a hash can't keep going up, and the agent's
+  pin already records what it ran.
+- **`update` shows each skill whose `SKILL.md` hash changes** (§2.5 "shown before it is applied") with the files,
+  commit and content hash, and applies without asking, as `capcomd plugins update` does; `--dry-run` stops at the
+  report. A project's changed skill then waits for trust again.
+- **Trust is per `SKILL.md`, not per package**: kind `profile` in `trust.json`, the file made real as the place, and
+  the sha256 the agent is pinned with as the hash, so what the operator trusted is exactly the text an agent gets (no
+  window between a check and a read), and two profiles using one directory's skills don't compete for one entry. Only
+  the project layer's skills need it: the user's own profiles, installed or written, and `~/.claude/skills` are the
+  user's. The kernel refuses a spawn of a profile with an untrusted project skill (`config`, reason `untrusted`) in its
+  spawn checks, which `capcomd run` also runs for its planner before starting; an agent already spawned keeps the text
+  it was pinned with. `identity.persona` isn't gated yet (it has no runtime) and gets the same rule when it does;
+  prompt files stay as `agents.json` prompts are, the project's text.
+- **`export` keeps `extends` by default**; `--flat` writes what the profile resolves to (its ancestors and overrides
+  laid in, a prompt of more than a line as a file, every skill it is pinned with from a package copied into
+  `skills/`, a `source: user` skill still by name). `default` is never exported, nor a `LOCK`.
+- **Not in this step**: `POST /v1/profiles/install` (§5; no client yet, and the plugins have no install route
+  either), the marketplace file's `profiles` (§2.5), `profiles add --from`, and trust in the API (`GET /v1/profiles`
+  rows don't say it yet).
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 

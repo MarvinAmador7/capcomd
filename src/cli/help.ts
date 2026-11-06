@@ -24,7 +24,7 @@ Usage:
   capcomd env build [--force]            Bake agent CLIs + repo deps into a snapshot (no secrets)
   capcomd env status | env rm [name|all] List / delete env snapshots (env, auth, doctor: --sandbox docker|boxd
                                        works on that sandbox instead of CAPCOMD_SANDBOX)
-  capcomd profiles list|show|add|set|rm|schema|validate
+  capcomd profiles list|show|add|set|rm|schema|validate|install|update|export|trust
                                        Named agent profiles: .capcomd/agents.json, and profile files
                                        (profile.yaml) in .capcomd/profiles/ and ~/.capcomd/profiles/ (docs/agents.md).
                                        show <name>: the files laid together and which one set each value;
@@ -39,6 +39,18 @@ Usage:
                                        --append-system-prompt --allowed-tools --disallowed-tools
                                        --description --default --spec JSON --set path=value (limits.maxTurns=40,
                                        tags=a,b) --unset k1,k2 --extends P (add)
+  capcomd profiles install <owner/repo>[#<name>][@<ref>] [--project]
+                                       Install a profile package from a git repository (a git URL or a
+                                       local repository path works too) into ~/.capcomd/profiles/<name>/
+                                       (--project: .capcomd/profiles/<name>/), with a LOCK (source, commit,
+                                       each file's sha256); profiles are data: no executables
+  capcomd profiles update <name> [--project] [--dry-run]
+                                       Fetch it again and show the changed files and skill hashes first
+  capcomd profiles export <name> [--flat] [--out DIR]
+                                       Write a profile as a package (--flat: resolved, no extends)
+  capcomd profiles trust [<name>] [--yes]
+                                       Show a project profile's skills and trust them as they are; until
+                                       then a spawn of it is refused (a changed SKILL.md needs it again)
   capcomd agents …                     The old name of capcomd profiles, until the next minor release
                                        (agents schema: agents.json's; agents list --json: the rows under "agents")
   Primitives (ADR-016; all --json, stable ids, --key idempotent):

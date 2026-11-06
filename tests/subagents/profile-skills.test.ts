@@ -3,7 +3,9 @@
 // skills (tests/plugins/fixtures/test-preparer) use too. What the agent gets (the fake claude in a host-exec sandbox):
 // its profile's prompt, then the profile's skills, then the plugins' (the orchestration skill first), each once and in
 // a block named for it; a lead whose profile names capcomd-orchestration gets it once. A skill is pinned when the agent
-// is spawned: a SKILL.md edited after that changes the next agent's, never the spawned one's.
+// is spawned: a SKILL.md edited after that changes the next agent's, never the spawned one's. A project's profile skills
+// wait for the operator's trust (ADR-024 decision 4, `capcomd profiles trust`): a spawn before it, or after an edit, is
+// refused (`untrusted`).
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -89,6 +91,14 @@ async function finished(run: string, id: string) {
 const times = (text: string, part: string) => text.split(part).length - 1;
 const body = (md: string) => md.slice(md.indexOf("# "));
 
+test("a project's profile skills wait for the operator's trust: a spawn before it is refused", async () => {
+  const run = (await cj(["run", "new", "--key", `pfs-trust-${Date.now()}`])).j.runId as string;
+  const refused = await cj(["spawn", run, "--profile", "lead", "--task", "Fix the sum helper", "--key", "early"]);
+  expect(refused.j?.error).toMatchObject({ code: "config", reason: "untrusted", message: "profile lead can't be spawned: its project skill plan isn't trusted" });
+  expect(refused.j?.error?.hint).toContain("capcomd profiles trust lead");
+  for (const p of ["lead", "worker"]) expect((await cj(["profiles", "trust", p, "--yes"])).j?.trusted?.skills?.map((s: { trust: string }) => s.trust)).toEqual(["trusted"]);
+}, 60_000);
+
 test("a lead gets its profile's prompt, its profile's skill, then the orchestration skill once, then a plugin's", async () => {
   const run = (await cj(["run", "new", "--key", `pfs-${Date.now()}`])).j.runId as string;
   const lead = await finished(run, await spawn(run, "lead", "lead"));
@@ -120,6 +130,9 @@ test("a skill is pinned when the agent is spawned: an edit after that is the nex
   // Spawned, not started: it is prepared after the edit, and still gets the text it was spawned with.
   const pinned = await spawn(run, "worker", "pinned", ["--no-start"]);
   put("profiles/worker/skills/tdd/SKILL.md", TDD_V2);
+  // An edited skill is trusted again before an agent gets it.
+  expect((await cj(["spawn", run, "--profile", "worker", "--task", "Fix the sum helper", "--key", "unseen"])).j?.error).toMatchObject({ reason: "untrusted", message: "profile worker can't be spawned: its project skill tdd (changed since you trusted it) isn't trusted" });
+  expect((await cj(["profiles", "trust", "worker", "--yes"])).code).toBe(0);
   const later = await spawn(run, "worker", "later");
   const a = await finished(run, pinned), b = await finished(run, later);
   expect(a.system).toContain(body(TDD));
