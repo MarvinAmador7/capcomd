@@ -58,7 +58,7 @@ export async function runWithPlanner(opts: RunOptions & { profile: string; drive
     const { rootAgentIdFor, PLANNER_KV } = await import("../primitives/ops");
     await (await import("../primitives/state")).kvWrite(runId, { k: PLANNER_KV, value: { agentId: rootAgentIdFor(runId, "planner") }, writer: "operator" });
     // An orchestrate planner (plugin API §16.1) is told what its mode means; its profile says (overrides can't lift it).
-    const orchestrate = (() => { try { return (require("../agents/profiles") as typeof import("../agents/profiles")).resolveAgent(planner).spec?.toolMode === "orchestrate"; } catch { return false; } })();
+    const orchestrate = (() => { try { return (require("../profiles") as typeof import("../profiles")).resolveAgent(planner).spec?.toolMode === "orchestrate"; } catch { return false; } })();
     root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates, { orchestrate }), key: "planner" });
   } catch (e) {
     // The run started, but its planner can't: the run ends failed with the reason (not left "started" with no agent).

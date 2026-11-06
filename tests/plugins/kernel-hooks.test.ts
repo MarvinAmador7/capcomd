@@ -9,7 +9,7 @@ import type { AgentPreparing, AgentSpawning, RunCreating, SandboxEnsuring } from
 import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySandboxPatch, applySpawnPatch, hooks, principalOf, refusedError, useHooks } from "../../src/plugins/hooks";
 import { agentChange, changedHooks, mergeChange } from "../../src/plugins/changes";
 import { hookedProvider, purposeOf } from "../../src/plugins/sandbox";
-import { applyOverrides, type AgentSpec } from "../../src/agents/profiles";
+import { applyOverrides, type AgentSpec } from "../../src/profiles";
 import { FakeProvider } from "../../src/providers/fake";
 
 const OPERATOR = { kind: "operator" as const, clientId: null };

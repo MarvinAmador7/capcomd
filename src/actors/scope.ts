@@ -33,7 +33,7 @@ function opsChanged(c: any, opId: string): void {
   try { c.broadcast("opsChanged", { at: Date.now(), opId }); } catch { /* no connections: nothing to tell */ }
 }
 import { stableId, available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
-import type { AgentSpec } from "../agents/profiles";
+import type { AgentSpec } from "../profiles";
 import type { AttachedSkill } from "../agents/skills";
 import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
 import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
