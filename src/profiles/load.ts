@@ -10,16 +10,19 @@ import { parse as parseYaml } from "yaml";
 import { env as envVar } from "../utils/env";
 import { defaultAgentsFile, userProfilesDir } from "../utils/home";
 import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile } from "./v1";
-import { FILE_REF, checkManifest, fromFlat, inheritable, layerOver, notApplied, toFlat, v2Path, withContext, type ProfileDoc } from "./v2";
+import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layerOver, notApplied, setByOver, toFlat, v2Path, withContext, type ProfileDoc, type SetBy } from "./v2";
+
+/** A JSON parse error as a profile file's error says it: where it went wrong, never what is there (readDoc). */
+const jsonError = (e: unknown) => (e as Error).message.replace(/\s*["'`][^]*$/, "");
 
 export function agentsFilePath(source: Record<string, string | undefined> = process.env): string {
   return envVar("AGENTS_FILE", source) ?? defaultAgentsFile(source);
 }
-/** The v1 file alone, as written (what `capcomd agents add|set|rm` edit). Every reader of profiles uses readProfiles. */
+/** The v1 file alone, as written (what `capcomd profiles add|set|rm` edit). Every reader of profiles uses readProfiles. */
 export function readAgentsFile(path = agentsFilePath()): AgentsFile {
   if (!existsSync(path)) return { schema: AGENTS_SCHEMA, agents: {} };
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { throw new AgentConfigError(`${path}: invalid JSON (${(e as Error).message})`); }
+  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { throw new AgentConfigError(`${path}: invalid JSON (${jsonError(e)})`); }
   const errs = validateFile(raw);
   if (errs.length) throw new AgentConfigError(`${path}: ${errs.join("; ")}`);
   return raw as AgentsFile;
@@ -50,6 +53,8 @@ export interface ResolvedProfile {
   applied: AppliedFile[];
   /** The resolved manifest (v2 blocks, `memory` read as `context`, prompt files read in). */
   manifest: ProfileDoc;
+  /** For each value of `manifest`, by path (`limits.maxTurns`, `tags`), the index in `applied` of the file that set it. */
+  setBy: SetBy;
   /** What it pins (./v1.ts AgentSpec). */
   spec: AgentSpec;
 }
@@ -83,7 +88,7 @@ const MANIFEST = /^(.+)\.(ya?ml|json)$/;
 function readDoc(path: string): unknown {
   const text = readFileSync(path, "utf8");
   if (path.endsWith(".json")) {
-    try { return JSON.parse(text); } catch (e) { throw new Error(`invalid JSON: ${(e as Error).message.replace(/\s*["'`][^]*$/, "")}`); }
+    try { return JSON.parse(text); } catch (e) { throw new Error(`invalid JSON: ${jsonError(e)}`); }
   }
   try { return parseYaml(text, { uniqueKeys: true, maxAliasCount: 100, prettyErrors: false }); } catch (e) {
     const at = (e as { pos?: [number, number] }).pos?.[0];
@@ -193,9 +198,10 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
 
   if (!errs.length && layers.every((l) => !l.profiles.size && !l.overrides.size)) {
     const f = readAgentsFile(path);
-    const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => [name, {
-      name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest: fromFlat(name, spec), spec,
-    }]));
+    const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => {
+      const manifest = fromFlat(name, spec);
+      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec }];
+    }));
     return { ...f, profiles, warnings };
   }
 
@@ -203,7 +209,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
   let v1: AgentsFile | null = null;
   if (existsSync(path)) {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { errs.push(`${path}: invalid JSON (${(e as Error).message})`); }
+    try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { errs.push(`${path}: invalid JSON (${jsonError(e)})`); }
     if (raw !== undefined) {
       const e = validateFileShape(raw, () => true);
       if (e.length) errs.push(`${path}: ${e.join("; ")}`);
@@ -240,25 +246,25 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     resolving.push(name);
     try {
       const { entry, at } = src;
-      let doc: ProfileDoc = {};
+      let doc: ProfileDoc = {}, setBy: SetBy = {};
       const applied: AppliedFile[] = [];
+      const lay = (over: ProfileDoc, file: AppliedFile) => { setBy = setByOver(setBy, doc, over, applied.length); doc = layerOver(doc, over); applied.push(file); };
       const parent = entry.doc.extends as string | undefined;
       if (parent !== undefined) {
         const p = resolveName(parent);
         if (p === undefined) return fail(`${entry.path ?? `profiles.${name}`}: extends "${parent}", which isn't a profile here (this project's, your own or a bundled one; a profile never extends another project's)`);
         if (p === "failed") return fail(); // its own error says why
         doc = inheritable(p.manifest);
+        setBy = inheritableSetBy(p.setBy);
         applied.push(...p.applied.map((a): AppliedFile => ({ ...a, as: "extends" })));
       }
-      doc = layerOver(doc, entry.doc);
-      applied.push({ as: "profile", name, layer: entry.layer, path: entry.path });
+      lay(entry.doc, { as: "profile", name, layer: entry.layer, path: entry.path });
       let def: { at: number; on: boolean } | null = typeof entry.doc.default === "boolean" ? { at, on: entry.doc.default } : null;
       // Overrides: this layer's, then each one above it, so the project's comes last (§2.6).
       for (let i = at; i >= 0; i--) {
         const ov = layers[i]!.overrides.get(name);
         if (!ov) continue;
-        doc = layerOver(doc, ov.doc);
-        applied.push({ as: "override", name, layer: ov.layer, path: ov.path });
+        lay(ov.doc, { as: "override", name, layer: ov.layer, path: ov.path });
         if (typeof ov.doc.default === "boolean") def = { at: i, on: ov.doc.default };
       }
       const plainV1 = entry.format === "v1" && applied.length === 1;
@@ -273,7 +279,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       if (def?.on) defaults.push({ name, at: def.at, v1: false });
       const notYet = notApplied(doc);
       if (notYet.length) warnings.push(`profiles.${name}: ${notYet.join(", ")} ${notYet.length > 1 ? "are" : "is"} read but not used yet by this capcomd`);
-      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, spec };
+      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec };
       done.set(name, r);
       return r;
     } finally { resolving.pop(); }

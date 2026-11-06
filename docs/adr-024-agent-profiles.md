@@ -252,7 +252,7 @@ with the same schema and no `name`; it is applied last, as `extends` would be. T
 
 The planner (a Claude Code or Codex session driving `capcomd mcp`, or the `planner` profile in its VM) chooses by
 reading, not by magic. Today `capcomd_profiles` returns `{name, provider, auth, model, canSpawn, canLead, ready, does}`
-(`src/cli/commands/agents.ts` `list`, `abilityText`), and the orchestration skill says "any profile whose entry has
+(`src/cli/commands/profiles.ts` `list`, `abilityText`), and the orchestration skill says "any profile whose entry has
 `canLead` can lead". v2 adds, per profile:
 
 - `tags` and `description` as written;
@@ -394,10 +394,34 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   in the same layer.
 - **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `context`, `sandbox.provider|environment|size`,
   `lifecycle.onStart|onEnd`, `harness.cliVersion`; `permissions.report` until step 4) are checked and kept on the resolved
-  profile, not pinned (`jobs` is pinned as is since the jobs service, spec §17.2 step 7); `capcomd agents validate` names the ones a profile sets. `sandbox.provider` is checked against
+  profile, not pinned (`jobs` is pinned as is since the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets. `sandbox.provider` is checked against
   the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.
+
+Made while building the CLI and `GET /v1/profiles` (§7 step 2, 2026-11-05; `src/cli/commands/profiles.ts`,
+`src/api/profiles.ts`, `src/profiles/describe.ts`):
+
+- **`capcomd agents` is the same command under its old name**: it prints the new name on stderr (not with `--json`,
+  whose stdout is a reader's), and keeps the two outputs that would otherwise change under a script: `agents list
+  --json` lists its rows under `agents` (`profiles list --json` under `profiles`), and `agents schema` prints the
+  `agents.json` schema. `profiles schema` prints a profile file's (`capcomd.profile/v2`), `profiles schema v1`
+  `agents.json`'s. `add`, `set` and `rm` still edit only `agents.json` until step 6.
+- **`show` numbers the files laid together and gives each value the number of the file that set it** (§2.6's "the
+  three layers and the result"). The loader records it as it lays the files (`ResolvedProfile.setBy`, by v2 path,
+  one level deep as `layerOver` merges); what a child removes with `null` is no file's, and what isn't inherited
+  (`name`, `version`, `default`, `sharing`) is the child's own or nobody's. `--json` carries `applied` and
+  `values: [{path, value, from}]`.
+- **`GET /v1/profiles` takes `repo`** as `GET /v1/run-options` does (a project's profiles, as `POST /v1/runs` with that
+  `repo` resolves them; 422 when it isn't a project). **Profiles that can't be read are a 200 with `error`** (every
+  problem, as `validate` says it) and no rows, not a 422: the request was right, the files are wrong, and the app shows
+  why where the list would be. A row's `description` is marked untrusted (a project's profile files are in its
+  repository, which agents change); `does` and `canLead` are daemon-written; no prompt text and no credential is
+  served. A layer is a string, not an enum, so step 7's `installed` adds no breaking value. `ready` is the login
+  for the daemon's own sandbox, as `capcomd profiles list` says it; `GET /v1/logins` has every sandbox's.
+- **`GET /v1/profiles/{name}` waits for step 6**: §3's descriptor (`fields[]` with `editable` and `source`, the
+  ADR-021 rows) is what the Crew screen edits through `PUT`, so it ships with the writes; until then a row's `applied`
+  says where a profile came from, and `capcomd profiles show` where each value did.
 
 Made while pinning the version (§7 step 3, 2026-11-05; `src/actors/scope.ts`, `src/api/contract.ts`):
 
@@ -432,7 +456,7 @@ Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src
 - **`capacity` is the sandbox's slots, shared by every profile** (`placeCapacity` of the project's configured
   sandbox, as `capcomd_setup` reports it), or 0 with `waitsUntil` while the profile's login is in the quota ledger;
   readiness (a missing login) stays in `ready`/`detail`, not in `capacity`. Only `capcomd_profiles` reports it:
-  `capcomd agents list` also runs in an agent's VM, which can't see the host's sandbox.
+  `capcomd profiles list` also runs in an agent's VM, which can't see the host's sandbox.
 - **`prompt.*` as files** shipped with step 1 (above).
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
