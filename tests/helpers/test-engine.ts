@@ -231,8 +231,12 @@ export class Engine {
     return [this.port, this.port + 1, this.port + 10];
   }
 
-  private noteKill = (code: number | null) => {
-    if (this.stopping) return;
+  /** The port-holder kill a killpoint started (noteKill): stop() waits for it, so a late one can't hit the next engine. */
+  private killing: Promise<void> | null = null;
+
+  private noteKill = (child: ChildProcess, code: number | null) => {
+    // An earlier child's late exit (one a stop or a cold restart killed) says nothing about the engine running now.
+    if (this.stopping || child !== this.child) return;
     // [DRIVER-KILL]: a driver killpoint fired in this engine host (ADR-022: the agent workflow runs the spool pump here).
     if (code === 137 || /\[KILLPOINT\]|\[DRIVER-KILL\]/.test(tailFile(this.logPath))) {
       this.sawKill = true;
@@ -245,7 +249,7 @@ export class Engine {
       }
       // rivet-engine runs in its own process group, so the group kill above misses it.
       // Kill this instance's engine by its own ports (never a global pkill).
-      void this.killPortHolders();
+      this.killing = this.killPortHolders();
     }
   };
 
@@ -327,7 +331,7 @@ export class Engine {
       stdio: ["ignore", logFd, logFd],
     });
     this.child = child;
-    child.on("exit", (code) => this.noteKill(code));
+    child.on("exit", (code) => this.noteKill(child, code));
     await this.waitReady();
     this.captureDataFiles();
   }
@@ -402,6 +406,8 @@ export class Engine {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    await this.killing?.catch(() => {});
+    this.killing = null;
     const pid = this.child?.pid;
     const victims = new Set<number>();
     if (pid) {

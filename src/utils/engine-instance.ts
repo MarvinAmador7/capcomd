@@ -3,3 +3,5 @@
  * that holds them, and a driver compares it before and after a failed attempt to tell a daemon restart from a fault.
  */
 export const ENGINE_INSTANCE = crypto.randomUUID();
+/** When this engine process started (an attempt can run into its restart: src/actors/agent-workflow.ts). */
+export const ENGINE_STARTED_AT = Date.now();

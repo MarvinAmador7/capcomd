@@ -2,8 +2,8 @@
 // daemon/project stream seqs are assigned once per run at first sight and never reused, so Last-Event-ID resume is
 // stable across deleted runs and equal createdAt timestamps. One small JSON file, written atomically (tmp + rename), 0600.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { capcomdHome } from "../utils/home";
+import { dirname } from "node:path";
+import { homeFile } from "../utils/home";
 import type { StoredKey } from "./idempotency";
 
 export const KEY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -14,7 +14,7 @@ export type DaemonEvent = { seq: number; at: number; type: string; entity: strin
 /** The daemon's own events kept for replay (the oldest go first). */
 export const DAEMON_EVENTS_MAX = 1000;
 export type HarnessStateData = { keys: Record<string, StampedKey>; decisions: Record<string, Record<string, unknown>>; runSeq: Record<string, number>; nextSeq: number; daemonEvents?: DaemonEvent[]; entitySeq?: Record<string, number> };
-export const defaultStatePath = () => join(capcomdHome(), "harness-state.json");
+export const defaultStatePath = () => homeFile("harness-state.json");
 
 /** Cleanup (Axiom follow-up to #38): idempotency keys expire after 24h; seqs of deleted runs are dropped, but nextSeq is a
  * high-water mark so a seq is never reused. Runs on load, on every write, and on key lookup. */

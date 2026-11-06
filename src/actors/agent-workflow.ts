@@ -19,7 +19,7 @@ import { queue } from "rivetkit";
 import { Loop, workflow } from "rivetkit/workflow";
 import type { RawAccess } from "rivetkit/db";
 import { env, withDriveEnv } from "../utils/env";
-import { ENGINE_INSTANCE } from "../utils/engine-instance";
+import { ENGINE_INSTANCE, ENGINE_STARTED_AT } from "../utils/engine-instance";
 import { redactShapes } from "../agents/redact";
 import { TERMINAL_AGENT } from "../primitives/policy";
 import { killpoint } from "../utils/killpoint";
@@ -42,6 +42,15 @@ const WATCH_MS = () => Math.ceil(Number(env("AGENT_WORKFLOW_POLL_MS") ?? 60_000)
  *  (a client without the flag) can't take it over while the workflow runs it. */
 const WF_LEASE_MS = 6 * 3600_000;
 const MAX_ATTEMPTS = 3;
+/**
+ * A restarted engine host answers some calls with `internal_error` until the actors it routes are ready again, and the
+ * attempt the workflow runs again at once after a restart (the step the host died in) can run into that. Within this
+ * long of the host starting, such a failure isn't the agent's (no DRIVE_FAILED, not counted): the attempt is left
+ * unsettled, and the watch finds it lost and runs it again, as after any restart (at most RESTART_RERUNS times). The
+ * legacy driver does the same for an attempt the daemon went away under (`engineOutage` in src/primitives/ops.ts).
+ */
+const RESTART_WINDOW_MS = () => Number(env("AGENT_RESTART_WINDOW_MS") ?? 120_000);
+const RESTART_RERUNS = 3;
 /**
  * How far ahead a running step keeps its worker's wake alarm. When the engine host dies, the engine brings a worker back
  * only at its next alarm or on a call to it (rivet's crash policy: sleep). The workflow arms an alarm only to wait (the
@@ -211,6 +220,14 @@ type Drive = { phase: "ensure" | "start" | "watch" | "failed"; n: number; error?
 type Poll = { state: "running" } | { state: "lost" } | { state: "done"; outcome: unknown } | { state: "failed"; error: AttemptError } | { state: "ended" };
 /** Runs alive in this process, by actor and attempt: a row "running" without one here was lost with its process or actor. */
 const liveRuns = new Map<string, Promise<void>>();
+// Tests (CAPCOMD_TEST_ATTEMPT_ERRORS=N): the first N attempts this host starts fail the way a call into a restarting
+// engine does (internal_error), so the restart window's rerun is shown without timing a real restart.
+let injectedErrors = 0;
+const injectAttemptError = () => {
+  if (injectedErrors >= Number(process.env.CAPCOMD_TEST_ATTEMPT_ERRORS ?? 0)) return;
+  injectedErrors++;
+  throw Object.assign(new Error("An internal error occurred"), { group: "core", code: "internal_error" });
+};
 
 const ops = () => import("../primitives/ops");
 const scopeOf = async (runId: string) => (await import("../core/relay")).client().scope.getOrCreate([runId]);
@@ -254,6 +271,7 @@ async function startAttempt(c: any, p: StartAgent, n: number, prepared: Record<s
   const run = (async () => {
     let state: "done" | "failed", col: "outcome" | "error", value: unknown;
     try {
+      injectAttemptError();
       const o = await ops();
       const a = await o.getAgentOrThrow(p.runId, p.agentId);
       const shim = { db, key, client: () => cl };
@@ -262,6 +280,14 @@ async function startAttempt(c: any, p: StartAgent, n: number, prepared: Record<s
       state = "done"; col = "outcome";
     } catch (e) {
       value = await classify(e);
+      if ((value as AttemptError).kind === "internal_error" && Date.now() - ENGINE_STARTED_AT < RESTART_WINDOW_MS()) {
+        const row: any = (await db.execute("SELECT restarts FROM agent_attempts WHERE attempt = ?", n).catch(() => []))[0];
+        if (row && Number(row.restarts) < RESTART_RERUNS) {
+          console.error(`[agent-workflow] ${p.agentId} attempt ${n} ran into the engine still starting (${(value as AttemptError).message.slice(0, 200)}); running it again`);
+          await new Promise((r) => setTimeout(r, 2000 * (Number(row.restarts) + 1)));
+          return; // still "running" and no longer live: the watch's next look finds it lost
+        }
+      }
       state = "failed"; col = "error";
       console.error(`[agent-workflow] ${p.agentId} attempt ${n} failed (${(value as AttemptError).kind}): ${(value as AttemptError).message.slice(0, 500)}`);
     }

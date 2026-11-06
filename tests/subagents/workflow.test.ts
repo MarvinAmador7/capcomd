@@ -132,6 +132,7 @@ test("restart mid-step: a worker whose engine host died inside a workflow step w
   expect(run).toMatch(/^run-/);
   await cj(["spawn", run, "--profile", "worker", "--task", "make the failing test pass", "--key", "mid"]);
   for (let i = 0; i < 300 && !engine.sawKill; i++) await sleep(100);
+  const killed = Date.now();
   expect(engine.sawKill).toBe(true);
   expect(await Bun.file(engine.logPath).text()).toContain("[KILLPOINT] Exiting at workflow.start_agent.mid");
   await engine.stop();
@@ -146,6 +147,25 @@ test("restart mid-step: a worker whose engine host died inside a workflow step w
   console.log(`  done ${Math.round((Date.now() - back) / 1000)}s after the engine came back`);
   expect(Date.now() - back).toBeLessThan(60_000);
   expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
+  const events = (await cj(["events", run])).stdout;
+  // On a failure, which attempt failed, when (against the kill and the restart) and why.
+  if (events.includes('"DRIVE_FAILED"')) console.error(`killed ${new Date(killed).toISOString()}, back ${new Date(back).toISOString()}:`, JSON.stringify((JSON.parse(events.trim().split("\n").pop()!).events ?? []).filter((e: any) => /DRIVE|ATTEMPT|AGENT_(STARTED|DONE|FAILED)/.test(e.type))));
+  expect(events).not.toContain('"DRIVE_FAILED"');
+}, 300_000);
+
+test("an attempt that runs into the engine still starting (internal_error) runs again: no failed attempt, no DRIVE_FAILED", async () => {
+  // Right after a restart the engine can answer internal_error until the actors it routes are ready (a "restart
+  // mid-step" under load, 2026-11-05: one DRIVE_FAILED). Injected here: the first attempt this host starts fails so.
+  const logFrom = readFileSync(engine.logPath, "utf8").length;
+  await engine.stop();
+  process.env.CAPCOMD_TEST_ATTEMPT_ERRORS = "1";
+  try { await engine.start(null); } finally { delete process.env.CAPCOMD_TEST_ATTEMPT_ERRORS; }
+  const run = (await cj(["run", "new"])).j?.runId;
+  const agent = (await cj(["spawn", run, "--profile", "worker", "--task", "make the failing test pass", "--key", "starting"])).j?.agentId;
+  expect(agent).toMatch(/^agt-/);
+  const a = await untilStatus(run, agent, "done", 90_000);
+  expect(a.result?.commit).toMatch(/^[0-9a-f]{40}$/);
+  expect(readFileSync(engine.logPath, "utf8").slice(logFrom)).toContain(`${agent} attempt 1 ran into the engine still starting`);
   expect((await cj(["events", run])).stdout).not.toContain('"DRIVE_FAILED"');
 }, 300_000);
 

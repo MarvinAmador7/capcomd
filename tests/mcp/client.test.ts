@@ -30,13 +30,13 @@ const ok = async (name: string, args: Record<string, unknown> = {}) => {
   if (r.isError) throw new Error(`${name}: ${JSON.stringify(r.body)}`);
   return r.body;
 };
-/** Call a bounded tool until it stops answering "running". */
+/** Call a bounded tool until it stops answering "running": the first call starts the verify or merge, the next ones
+ *  poll it by the id it answered (another call with the ref and no id or key would start a new one each time). */
 const settle = async (name: string, args: Record<string, unknown>) => {
-  for (let i = 0; i < 30; i++) {
-    const b = await ok(name, { ...args, timeoutMs: 5000 });
-    if (b.state !== "running") return b;
-  }
-  throw new Error(`${name} never settled`);
+  let b = await ok(name, { ...args, timeoutMs: 5000 });
+  for (let i = 0; i < 30 && b.state === "running"; i++) b = await ok(name, { runId: args.runId, id: b.id, timeoutMs: 5000 });
+  if (b.state === "running") throw new Error(`${name} never settled`);
+  return b;
 };
 const filesOn = async (branch: string) => {
   await repo.seed.ok(["fetch", "-q", "origin"]);
