@@ -23,6 +23,7 @@ import { applyPreparePatch } from "../../src/plugins/hooks";
 import { CONTEXT_SKILLS, DOCTRINE_SKILL, ROUTING_SKILL } from "../../src/context/skills";
 import { profileSkills } from "../../src/profiles/skills";
 import { frontmatter as skillFrontmatter } from "../../src/agents/skills";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -309,6 +310,39 @@ describe("the router at agent.preparing (ADR-025 §6.1; spec §6.6.7, §14.4)", 
     const has = briefed();
     has.prompt.skills = [{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin", text: DOCTRINE_SKILL.text }];
     expect(await names({ contract: null, limits: { allowSpawn: true } }, has)).toEqual([ROUTING_SKILL.name]);
+  });
+
+  test("an agent with no room left for a skill still gets its brief: only the skills that fit are attached, never a patch the kernel refuses", async () => {
+    const other = (i: number, bytes = 64) => { const text = `---\nname: other-${i}\n---\n${"x".repeat(bytes)}\n`; return { name: `other-${i}`, hash: createHash("sha256").update(text).digest("hex"), source: "plugin" as const, text }; };
+    const fire = (payload: ReturnType<typeof briefed>) => withRouter(async () => ({ contract: null, limits: { allowSpawn: true } }), async (fake) => {
+      const out = await fake.fire("agent.preparing", payload, { runId: "run-test1" });
+      expect(out.failure).toBeNull();
+      const patch = (out.result as { patch: Patch }).patch;
+      // The kernel takes what the router returns, whatever room the agent had.
+      expect(() => applyPreparePatch(payload, patch as never)).not.toThrow();
+      expect(patch.prompt.append).toStartWith("Context: loaded 5 of 5 lines");
+      const loaded = fake.emitted().find((e) => e.type === "plugin.context.loaded")!;
+      return { names: patch.prompt.skills?.map((s) => s.name) ?? [], logged: (loaded.data as { skills: Array<{ name: string }> }).skills.map((s) => s.name) };
+    });
+    // Seven skills already (a plugin's, an agent pinned before its profile kept room): one slot, the doctrine takes it.
+    const seven = briefed();
+    seven.prompt.skills = Array.from({ length: 7 }, (_, i) => other(i));
+    expect(await fire(seven)).toEqual({ names: [DOCTRINE_SKILL.name], logged: [DOCTRINE_SKILL.name] });
+    // Eight: none fits; the brief goes alone.
+    const eight = briefed();
+    eight.prompt.skills = Array.from({ length: 8 }, (_, i) => other(i));
+    expect(await fire(eight)).toEqual({ names: [], logged: [] });
+    // Bytes, too: skills that leave less than the doctrine's size of the kernel's 256 KiB.
+    const full = briefed();
+    full.prompt.skills = [other(0, 256 * 1024 - 300)];
+    expect((await fire(full)).names).toEqual([]);
+    // The room it fits in is what's left after the orchestration skill: that listener runs first wherever an agent is
+    // prepared, so an agent that may spawn never loses its orchestration skill (closed) to a context skill (open).
+    const { gates, hooks } = await import("../../src/plugins/hooks");
+    await gates();
+    const order = hooks.order("agent.preparing");
+    expect(order.indexOf("skill-orchestration")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("skill-orchestration")).toBeLessThan(order.indexOf("context"));
   });
 });
 

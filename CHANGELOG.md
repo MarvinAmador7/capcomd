@@ -74,7 +74,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
   secret. Each is recorded on the agent by its sha256; `capcomd context brief <profile>` names them. A profile with a
   `context` block keeps room for them among its own `skills` (one of the 8, two when it may spawn) and can't use
-  their names for skills of its own.
+  their names for skills of its own; an agent whose other skills leave no room for one starts without it, never without
+  its brief or its orchestration skill.
 - Not added, after measuring: putting the first items of the brief in full in an agent's first message, and pushing
   an item to an agent when it opens a file the item applies to. Measured on Claude Opus, Sonnet and Haiku 5.5 and
   GPT-6.1 (pushes on the Claude models only: a Codex agent can't read a message while it works), neither did better

@@ -13,7 +13,7 @@ import { RelayError, SCHEMA } from "../core/errors";
 import { VERSION } from "../utils/self";
 import type { ScopeAgent } from "../actors/scope";
 import type { Brief } from "../context/brief";
-import { preparingAgent } from "./hooks";
+import { preparingAgent, SKILL_BYTES_MAX, SKILLS_MAX } from "./hooks";
 
 const SUMMARY = "The context brief a profile's agents start with: an index of the project's memory and facts (ADR-025)";
 const USAGE = "capcomd context brief <profile> [--run <runId>] [--review] [--json]";
@@ -23,6 +23,9 @@ export const manifest: PluginManifest = {
   description: "The context router: briefs each agent whose profile has a context block with an index of its providers' items (the project's memory, a company's facts), never their bodies.",
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./context.ts" },
   scopes: ["steer"],
+  // After the orchestration skill's listener (§6.3), so the context skills fit in the room that skill leaves: one that
+  // didn't fit would cost the agent a context skill (this listener leaves it out), never its orchestration skill.
+  after: ["skill-orchestration"],
   // Open: a brief that can't be built leaves the agent as it was without one (its providers' failures are already
   // named in the header the router writes; this is the router itself failing), never an agent that can't start.
   contributes: {
@@ -71,10 +74,21 @@ export const plugin = definePlugin({
       const { roleOf } = await import("../context/brief");
       const role = roleOf(a);
       const b = await briefFor({ runId: agent.runId, agentId: agent.id, profile: agent.profile, spec, role });
-      // The skills it reads the brief with; one the payload already has by name (an earlier listener's) isn't attached
-      // twice, so the patch stays one the kernel takes.
+      // The skills it reads the brief with, so the patch stays one the kernel takes: one the payload already has by name
+      // (an earlier listener's) isn't attached twice, and only those that fit the room the agent's other skills leave
+      // (a profile with a context block keeps room for them, but a plugin's skills or an agent pinned before it did may
+      // fill it): a refused patch would cost the agent its brief too.
       const { contextSkills } = await import("../context/skills");
-      const skills = contextSkills({ role, maySpawn: a.limits?.allowSpawn === true }).filter((s) => !call.payload.prompt.skills.some((x) => x.name === s.name));
+      const has = call.payload.prompt.skills;
+      let slots = SKILLS_MAX - has.length, bytes = SKILL_BYTES_MAX - has.reduce((n, s) => n + Buffer.byteLength(s.text), 0);
+      const wanted = contextSkills({ role, maySpawn: a.limits?.allowSpawn === true }).filter((s) => !has.some((x) => x.name === s.name));
+      const skills = wanted.filter((s) => {
+        const size = Buffer.byteLength(s.text);
+        if (slots < 1 || size > bytes) return false;
+        slots--; bytes -= size;
+        return true;
+      });
+      if (skills.length < wanted.length) ctx.log.warn("an agent's other skills leave no room for a context skill: it starts without it", { agentId: agent.id, left: wanted.filter((s) => !skills.includes(s)).map((s) => s.name) });
       const loaded = b.providers.filter((p) => p.state === "loaded").map((p) => `${p.name} at ${sha(p.revision)}`);
       const emit = (type: string, text: string, data: Record<string, unknown>) =>
         ctx.events.emit({ type, stream: agent.runId, entity: agent.id, text, data }).catch((e: unknown) => ctx.log.warn("could not record a context event", { type, error: (e as Error)?.message ?? String(e) }));

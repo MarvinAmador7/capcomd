@@ -593,7 +593,10 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   spawn has (§5.1 had it in "the orchestration skill" for that reason). Until step 2 collects `result.data.context[]`,
   a candidate written there stays in the agent's result; the skill promises only that nothing reaches the project's
   memory without review. Their names are the kernel's (a profile can't use them), and a profile with a context block keeps
-  room for them among its own `skills`, as one that may spawn does for the orchestration skill.
+  room for them among its own `skills`, as one that may spawn does for the orchestration skill. The router attaches them
+  after the orchestration skill (`after: [skill-orchestration]`) and only as many as fit what the agent's other skills
+  leave (an agent pinned before its profile kept room, or a plugin's skills): a skill that doesn't fit is left out, never
+  the brief or the orchestration skill.
 - **Inline items: not admitted.** **Triggered injection (and with it the `context` message kind): not admitted.** The
   step-0 eval asked both live on the four current models before anything was built: the harness delivers each the way
   the kernel would (`scripts/eval-context/deliver.ts`) and decides by rules fixed before the full run
