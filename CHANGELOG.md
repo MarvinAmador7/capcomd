@@ -65,6 +65,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   copied over; `~/.capcomd/rpc.key` is left as it is). An agent still running across that restart gets a new
   token as soon as capcomd picks it up again; a capcomd call it made with its old token in between fails once with
   "token rejected: bad_signature" and works when tried again.
+- New for contributors: `scripts/eval-context.ts`, the context eval (ADR-025 §12). It generates a fictional company
+  and its repository from a seed and runs agents through capcomd on five kinds of task (a fact one agent finds and the
+  next needs, a convention learned in one run and needed in the next, a superseded business rule, a stale fact in the
+  code, an instruction planted in a data file), scoring each with a hidden check on the agent's branch. Today it
+  compares agents given nothing with agents given an `AGENTS.md`; later arms add capcomd's context layer. Results per
+  model, from live runs on Claude Code and Codex, are in `docs/evidence/context/`; CI runs it on the fake sandbox.
+  See DEVELOPMENT.md, "Context eval".
+- Traces: an agent's span now also records how many of its input tokens were cache reads
+  (`gen_ai.usage.cache_read.input_tokens`) and the model its CLI reported running (`gen_ai.response.model`, Claude
+  Code), when the CLI says.
 - Security: your git credentials never reach an agent's sandbox any more. Before, capcomd's own git commands in an
   agent's VM or container (cloning its checkout, pushing its branch and checkpoints, `capcomd fetch`) ran with your
   GitHub token, so an agent could take it by planting git settings, a hook or a `git` program in its sandbox. Now

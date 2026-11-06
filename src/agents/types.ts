@@ -19,6 +19,10 @@ export interface AgentRunState {
   turns: number;
   inputTokens: number;
   outputTokens: number;
+  /** Of inputTokens, how many were cache reads, when the CLI says (claude cache_read_input_tokens, codex cached_input_tokens). */
+  cacheReadTokens?: number;
+  /** The model the CLI says it ran (claude's init and messages), when it says. */
+  model?: string;
   costUsd: number;
   /** Per message id, the usage claude reported so far (each content block repeats its message's usage). */
   usage?: Record<string, ClaudeUsage>;
