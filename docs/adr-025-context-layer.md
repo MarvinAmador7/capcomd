@@ -1,6 +1,6 @@
 # ADR-025: The context layer: memory and business knowledge as plugins
 
-Status: **Proposed** (2026-11-05). Builds on ADR-023 (the plugin core; spec [docs/spec/plugin-api.md](spec/plugin-api.md)
+Status: **Accepted** (2026-11-05; the owner accepted decisions D1–D16 in §15 as recommended). Builds on ADR-023 (the plugin core; spec [docs/spec/plugin-api.md](spec/plugin-api.md)
 1.0.8, which wins where this ADR and it differ), ADR-024 (agent profiles v2, whose `memory` block this replaces),
 ADR-017 (in-VM sub-agents and the closed op list), ADR-003 (verification, not self-report), ADR-005 (approvals),
 ADR-013 (merges). Research: [docs/research/memory-and-context.md](research/memory-and-context.md), cited below as
@@ -599,6 +599,8 @@ that is never mixed into a work PR. **Hermes' "treat as authoritative" framing**
 framing costs success.
 
 ## 15. Owner decisions
+
+Accepted by the owner on 2026-11-05: every decision below as recommended.
 
 | # | Decision | Recommendation |
 |---|---|---|
