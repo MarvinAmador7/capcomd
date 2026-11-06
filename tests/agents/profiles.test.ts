@@ -279,7 +279,7 @@ describe("profiles v2: loader and resolution", () => {
       "P/c/override.yaml": yaml(["name: c", "extends: a"]),
       "P/d/profile.yaml": yaml(["name: d", "harness: { provider: claude, auth: apikey }", "prompt: { append: ../secret.md, system: link.md }"]),
       "P/e.json": JSON.stringify({ name: "e", harness: { provider: "claude", auth: "apikey" }, prompt: { append: "notes.md" } }),
-      "P/f/profile.yaml": yaml(["name: f", "harness: { provider: claude, auth: subscription, effort: ludicrous }", "limits: { maxTurns: 0 }", "tools: { mode: orchestrate }"]),
+      "P/f/profile.yaml": yaml(["name: f", "harness: { provider: claude, auth: subscription, effort: ludicrous }", "limits: { maxTurns: 0, maxBudgetUsd: .inf }", "tools: { mode: orchestrate }"]),
       "secret.md": "host secret\n",
     });
     symlinkSync(join(w.root, "secret.md"), w.at("P/d/link.md"));
@@ -297,6 +297,7 @@ describe("profiles v2: loader and resolution", () => {
       "profiles.f: harness.effort must be one of low, medium, high, xhigh, max for provider claude",
       "profiles.f: limits.maxTurns must be an integer >= 1",
       "profiles.f: tools.mode orchestrate needs children.allowSpawn",
+      "profiles.f: limits.maxBudgetUsd must be > 0", // YAML can say .inf, which a pin (JSON) can't hold
     ]) expect(msg).toContain(x);
     expect(msg).not.toContain("x-tool");
     expect(msg).not.toContain("host secret");

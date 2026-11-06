@@ -162,7 +162,7 @@ export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { 
   else if (!["apikey", "subscription"].includes(s.auth as string)) at(`${k$("auth")} must be "apikey" or "subscription"`);
   const posInt = (k: string, min = 1) => { if (s[k] !== undefined && (!Number.isInteger(s[k]) || (s[k] as number) < min)) at(`${k$(k)} must be an integer >= ${min}`); };
   posInt("maxTurns"); posInt("timeoutMs", 1000); posInt("idleAfterMs", 1000); posInt("checkpointEveryMs", 1000); posInt("stuckRepeats", 2); posInt("noChangeAfterMs", 1000);
-  if (s.maxBudgetUsd !== undefined && !(typeof s.maxBudgetUsd === "number" && s.maxBudgetUsd > 0)) at(`${k$("maxBudgetUsd")} must be > 0`);
+  if (s.maxBudgetUsd !== undefined && !(typeof s.maxBudgetUsd === "number" && Number.isFinite(s.maxBudgetUsd) && s.maxBudgetUsd > 0)) at(`${k$("maxBudgetUsd")} must be > 0`);
   if (s.sandbox !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(s.sandbox as string)) at(`${k$("sandbox")} is invalid`);
   if (s.model !== undefined && (typeof s.model !== "string" || !s.model)) at(`${k$("model")} must be a non-empty string`);
   if (s.effort !== undefined) {
