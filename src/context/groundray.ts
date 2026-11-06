@@ -1,5 +1,5 @@
 // A company's facts from a brain (ADR-025 §11.2, step 4; the `context-groundray` built-in, src/plugins/context-groundray.ts):
-// the context provider `groundray`, read-only. A brain is a git repository holding an OKF bundle (groundray's: `brain.yaml`
+// the context provider `groundray`. A brain is a git repository holding an OKF bundle (groundray's: `brain.yaml`
 // at its root naming the bundle `knowledge/`; any OKF producer's bundle in a directory works the same), so reads need
 // neither the groundray CLI nor its catalog: capcomd reads the files at a pinned commit, through the same parser and
 // lexical search as the project's memory (src/context/memory.ts).
@@ -14,21 +14,28 @@
 //
 // The router places the brain's tree at the cited commit in the agent's sandbox (resolve's `bundle`; the runner, through
 // host git, src/merge/transfer.ts `sendTreeAt`), at `<bundleRoot>/groundray/<name>`, which is where each index line's
-// path points. The write path (proposals as brain pull requests through the groundray CLI) is ADR-025 step 5.
+// path points.
+//
+// Writable (ADR-025 step 5, ./groundray-write.ts): `propose` makes a draft item through the groundray CLI in a
+// throwaway authoring clone, pushes it to the run's proposal branch of the brain's repository and opens a pull request
+// there through the forge that serves it, as the person who sent it (else capcomd). Only new drafts (`add`): a brain's
+// items change, and are promoted, by its owners' review in groundray's own flow. What agents read is never touched.
 import { existsSync } from "fs";
-import { resolve as resolvePath } from "path";
+import { join, resolve as resolvePath } from "path";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { SeamCall } from "../../packages/plugin/src/seams";
-import { bundleDir, type ContextDescriptor, type ContextHit, type ContextItem, type ContextProvider, type ContextRef, type ContextScope, type ContextSearch } from "../../packages/plugin/src/context-layer";
+import { bundleDir, type ContextDescriptor, type ContextHit, type ContextItem, type ContextProposal, type ContextProvider, type ContextRef, type ContextScope, type ContextSearch, type ProposalReceipt } from "../../packages/plugin/src/context-layer";
 import type { ContextBrain } from "../config/store";
 import { RelayError } from "../core/errors";
 import { assertRemoteUrl, inlineCredential } from "../merge/host-git";
+import type { Principal } from "../../packages/plugin/src/shapes";
+import { actorOf, BRAIN_NAME_RE, draftProblem, groundrayBin, writeToBrain, type BrainDraft, type BrainTarget, type BrainWritten, type WriteDeps } from "./groundray-write";
 import { aborted, classifyContextError, contextItem, MEMORY_MAX_FILES, mirrorReader, parseBundle, searchItems, type Parsed, type TreeReader } from "./memory";
 import { contextSettings, type ContextSettings } from "./project";
 
 export const GROUNDRAY = "groundray";
 /** A brain's name, as a profile and the project's mapping write it. */
-export const BRAIN_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+export const BRAIN_NAME = BRAIN_NAME_RE;
 /** groundray's brain.yaml schema 1 (its schemas/brain.schema.yaml): the slug and the UUID v4 identity. */
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const BRAIN_ID = /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -138,13 +145,43 @@ function mappingOf(settings: ContextSettings, name: string): ContextBrain | null
   return b as unknown as ContextBrain;
 }
 
-interface Handle { name: string; remote: string; commit: string; branch: string; bundle: string; dir: string | null }
+/** What a handle binds: the brain at a commit, and the run and agent it was resolved for (a proposal's origin). */
+interface Handle { name: string; remote: string; commit: string; branch: string; bundle: string; dir: string | null; slug?: string; id?: string; runId?: string | null; agentId?: string | null }
+
+/** How a proposal is written to a brain (./groundray-write.ts; a test's own). */
+export type BrainWriter = (brain: BrainTarget, draft: BrainDraft, actor: string, c: SeamCall) => Promise<BrainWritten>;
+
+/** The pull request for a proposal branch, through the forge that serves the brain's repository (its own remote, not
+ *  the run's): an open one found, else opened; null when no forge there opens pull requests (forge-git's kind). */
+export const forgePullRequest: WriteDeps["pullRequest"] = async (input, c) => {
+  const F = await import("../plugins/forges");
+  const forge = await F.forgeFor({ remote: input.remote });
+  if (!forge || !forge.describe().pullRequests) return null;
+  return F.forgeScope.run({}, async () => {
+    const found = await forge.findPullRequest({ remote: input.remote, head: input.head, base: input.base }, c);
+    const p = found && found.state === "open" ? found : await forge.openPullRequest(input, c);
+    return { number: p.number, url: p.url };
+  });
+};
+
+/** The write path on this host: the groundray CLI, a throwaway directory where capcomd keeps its clones, the forge that
+ *  serves the brain's repository for the pull request. */
+export const hostWriter: BrainWriter = async (brain, draft, actor, c) => {
+  const bin = groundrayBin();
+  if (!bin) throw new PluginError("unavailable", "the groundray CLI isn't on this machine: proposals to a brain go through it", "Install groundray (https://github.com/MarvinAmador7/groundray), or name it with CAPCOMD_GROUNDRAY=<path>.");
+  const { runEnv } = await import("../merge/run-config");
+  const { loadMergeConfig } = await import("../merge/config");
+  const cfg = loadMergeConfig({ ...(await runEnv(draft.origin.runId)), CAPCOMD_REPO: brain.repo });
+  if (!cfg) throw new PluginError("unavailable", `can't work with ${brain.repo}`);
+  return writeToBrain(brain, draft, actor, { bin, workdir: join(cfg.workdir, "brain-proposals"), pullRequest: forgePullRequest }, c);
+};
 
 /** `context:groundray` (ADR-025 §11.2). `read`: how a tree is read (the files mirror; a test's fixture). `settings`: the
- *  project settings a run was started with (src/context/project.ts; a test's own). */
-export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: string | null) => Promise<ContextSettings> } = {}): ContextProvider {
+ *  project settings a run was started with (src/context/project.ts; a test's own). `write`: how a proposal is written. */
+export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: string | null) => Promise<ContextSettings>; write?: BrainWriter } = {}): ContextProvider {
   const read = o.read ?? mirrorReader;
   const settingsOf = o.settings ?? contextSettings;
+  const write = o.write ?? hostWriter;
   /** Brains read, by (repository, commit, bundle): a commit's tree never changes. */
   const cache = new Map<string, BrainTree>();
   const reading = new Map<string, Promise<BrainTree | { error: string }>>();
@@ -179,11 +216,11 @@ export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: str
   const shownPath = (h: Handle, path: string) => (h.dir ? `${h.dir}/${path}` : `${h.name}@${h.commit.slice(0, 12)}:${path}`);
   const descriptor: ContextDescriptor = {
     name: GROUNDRAY, descriptorVersion: 1, label: "Business knowledge (a groundray brain)", vendor: "capcomd",
-    caps: { kinds: ["fact"], layers: ["project"], writable: false, search: ["lexical"], bundle: true }, trainedFor: null,
+    caps: { kinds: ["fact"], layers: ["project"], writable: true, search: ["lexical"], bundle: true }, trainedFor: null,
   };
   return {
     describe: () => structuredClone(descriptor),
-    // Reads need no groundray binary (D9): the CLI is for proposals, ADR-025 step 5.
+    // Reads need no groundray binary (D9): the CLI is for proposals, which say so when it is missing.
     async available() { return { ok: true }; },
     classifyError: classifyContextError,
     async resolve(scope: ContextScope, c: SeamCall) {
@@ -201,7 +238,7 @@ export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: str
       if (t.restricted) throw new PluginError("invalid", `brain ${brain} is restricted at ${m.commit.slice(0, 12)}: ${t.restricted}`);
       if (t.unchecked) throw new PluginError("invalid", `brain ${brain} can't be checked at ${m.commit.slice(0, 12)}: ${t.unchecked}`);
       const dir = scope.bundleRoot ? bundleDir(scope.bundleRoot, GROUNDRAY, brain) : null;
-      const h: Handle = { name: brain, remote: m.repo, commit: t.commit, branch: m.branch, bundle: t.bundle, dir };
+      const h: Handle = { name: brain, remote: m.repo, commit: t.commit, branch: m.branch, bundle: t.bundle, dir, slug: m.slug, id: m.id, runId: scope.runId, agentId: scope.agentId };
       return { handle: JSON.stringify(h), revision: t.commit, ...(dir ? { bundle: { remote: m.repo, branch: m.branch, commit: t.commit, name: brain } } : {}) };
     },
     async index(handle: string, c: SeamCall) {
@@ -223,8 +260,19 @@ export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: str
       // A brain is shared across projects: its items belong to none.
       return contextItem({ ...i, line: { ...i.line, path: shownPath(h, i.line.path) } }, { provider: GROUNDRAY, revision: h.commit, projectId: null });
     },
-    async propose() {
-      throw new PluginError("unsupported", "a brain is read-only here for now: proposals to it come with groundray's write path (ADR-025 step 5)");
+    /** A new draft in the brain (ADR-025 step 5): its run's proposal branch and pull request, as `by` (./groundray-write.ts). */
+    async propose(handle: string, p: ContextProposal, by: Principal, c: SeamCall): Promise<ProposalReceipt> {
+      aborted(c);
+      const h = handleOf(handle);
+      if ((p.op ?? "add") !== "add") throw new PluginError("unsupported", "a brain takes new drafts only (op add): its items are superseded, deprecated and verified by its owners, in groundray's own flow");
+      if (!h.runId || !h.agentId) throw new PluginError("invalid", "a proposal comes from an agent of a run: resolve the brain with its scope");
+      if (!h.slug || !h.id) throw new PluginError("unsupported", `brain ${h.name} has no brain.yaml: groundray authors only its own brains`);
+      const draft: BrainDraft = { type: (p.type ?? "") as BrainDraft["type"], title: p.title ?? "", body: p.text.text, origin: { runId: h.runId, agentId: h.agentId } };
+      const problem = draftProblem(draft);
+      if (problem) throw new PluginError("invalid", `brain ${h.name} can't take this proposal: it ${problem}`);
+      const w = await write({ name: h.name, repo: h.remote, branch: h.branch, slug: h.slug, id: h.id, bundle: h.bundle }, draft, actorOf(by), c);
+      const where = w.pullRequest ? w.pullRequest.url ?? `pull request #${w.pullRequest.number} on ${h.remote}` : `${h.remote}, branch ${w.branch}`;
+      return { id: w.itemId || `${w.branch}:${w.path}`, staged: true, where };
     },
   };
 }

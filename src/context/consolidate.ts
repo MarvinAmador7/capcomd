@@ -21,13 +21,17 @@
 //    `origin` the kernel's record of it, its `sources` the candidates it consolidates (who proposed each, with which
 //    profile and model), its `stale_after` from its type's retention (D8: lesson 180 days, feedback 90, reference none);
 //  - index.md is the one lint writes (./lint.ts renderIndex).
+// A delta that names a brain (`brain: <name>`, ADR-025 step 5) is a proposal to a company's brain, never a change to the
+// project's memory: `stage` leaves it out and `brainDeltas` checks it (the brain its profile names, groundray's types,
+// a new draft only, the same scan and limits), for the kernel to send through groundray (./brain-proposals.ts).
 import { createHash } from "crypto";
-import type { ContextProposal, Outcome, Provenance } from "../../packages/plugin/src/context-layer";
+import type { ContextProposal, ContextSpec, Outcome, Provenance } from "../../packages/plugin/src/context-layer";
 import { REDACTED } from "../agents/redact";
 import { proposalOf, type Candidate, type RefuseReason } from "./capture";
 import { INDEX_FILE, lintContext, type LintFile, type LintProblem } from "./lint";
 import { CONTEXT_DIR, STATUS, frontmatter } from "./memory";
 import type { ScanHit } from "./scan";
+import { BRAIN_NAME_RE, draftProblem, GROUNDRAY_TYPES, isGroundrayType, type GroundrayType } from "./groundray-write";
 
 /** The profile whose branch may change `.capcomd/context/` (ADR-025 §5.2): its agents are staged here, never captured. */
 export const CONSOLIDATOR_PROFILE = "context-consolidator";
@@ -35,7 +39,7 @@ export const CONSOLIDATOR_PROFILE = "context-consolidator";
 /** D8: how long an item of a type stays fresh, in days (null: always). A profile's `retain` sets its own. */
 export const RETAIN_DAYS: Readonly<Record<string, number | null>> = { lesson: 180, feedback: 90, reference: null };
 
-export type StageReason = RefuseReason | "no_target" | "conflict" | "unknown_source" | "outcome";
+export type StageReason = RefuseReason | "no_target" | "conflict" | "unknown_source" | "outcome" | "no_brain";
 export interface StageRefusal { n: number; reason: StageReason; what: string }
 /** What a delta did: `duplicate` added nothing (the item it repeats, `id`, counts one more `helpful`). */
 export interface Applied { n: number; op: "add" | "supersede" | "deprecate" | "duplicate"; id: string; path: string; target?: string }
@@ -73,13 +77,15 @@ export interface Staged {
 }
 
 /** A delta: a proposal, and what only a consolidator says (the candidates it consolidates, the gates that confirmed it). */
-const FIELDS = new Set(["text", "title", "type", "op", "target", "from", "outcomes"]);
+const FIELDS = new Set(["text", "title", "type", "op", "target", "from", "outcomes", "brain"]);
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 const CANDIDATE_ID = /^agt-[A-Za-z0-9_-]{1,64}\.\d{1,4}$/;
 const MAX_FROM = 50, MAX_OUTCOMES = 20;
 const DAY_MS = 86_400_000;
 
 const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** A delta for a brain: `brainDeltas` stages it, `stage` leaves it out. */
+const forBrain = (v: unknown) => isMap(v) && v.brain !== undefined;
 /** Loaded on first use: the orchestration skill names the consolidator's profile from here, and few processes stage. */
 const yaml = () => require("yaml") as typeof import("yaml");
 const words = (s: string) => new Set(s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1));
@@ -178,6 +184,7 @@ export function stage(i: StageInput): Staged {
   (Array.isArray(i.raw) ? i.raw : []).forEach((v, k) => {
     const n = k + 1;
     const refuse = (reason: StageReason, what: string) => { refused.push({ n, reason, what }); };
+    if (forBrain(v)) return;
     if (isMap(v)) for (const f of Object.keys(v)) if (!FIELDS.has(f) && FIELD_NAME.test(f) && !i.scan(f)) ignored.add(f);
     const p = proposalOf(v, i.origin.agentId);
     if (!p) return refuse("invalid", "isn't a delta: give it a text, and at most a title, a type, an op, a target, from and outcomes");
@@ -275,6 +282,66 @@ export function stage(i: StageInput): Staged {
     writes: [...changed].map(([path, text]) => ({ path, text })).sort(byPath),
     applied, refused, ignored: [...ignored].sort(), lint: { errors: r.errors, warnings: r.warnings },
   };
+}
+
+/** The brain a profile's context block names (its `groundray` entry's `brain`), or null: the one a consolidator of that
+ *  profile may propose to. */
+export function brainOf(context: ContextSpec | null | undefined): string | null {
+  const b = context?.providers?.find((p) => p.name === "groundray")?.brain;
+  return typeof b === "string" && BRAIN_NAME_RE.test(b) ? b : null;
+}
+
+/** A consolidator's proposal to a brain, checked: what the kernel keeps for groundray (./brain-proposals.ts). */
+export interface BrainDelta { n: number; brain: string; type: GroundrayType; title: string; text: string; from: string[] }
+
+export interface BrainStageInput {
+  raw: unknown;
+  /** The brain the consolidator's profile names (`brainOf`), or null: it may propose to none. */
+  brain: string | null;
+  candidates: ReadonlyArray<Candidate>;
+  agentId: string;
+  scan: (text: string) => ScanHit | null;
+  itemBytes: number | null;
+  /** How many it may keep (`proposalsPerRun`, shared with the memory's changes, which come after); null: no limit. */
+  room: number | null;
+}
+
+/**
+ * The deltas of a consolidator's answer that name a brain (`brain: <name>`), checked as a memory delta is (a proposal,
+ * its `from` the run's candidates, every string scanned and a secret or the redactor's placeholder refused, within
+ * `itemBytes` and the run's room) and as groundray needs (the brain its profile names, one of groundray's types, a
+ * one-line title, a body without frontmatter, a new draft only: a brain's items are superseded and deprecated by its
+ * owners). Deterministic for one input. Numbered as `stage` numbers its own, by their place in the answer.
+ */
+export function brainDeltas(i: BrainStageInput): { accepted: BrainDelta[]; refused: StageRefusal[] } {
+  const accepted: BrainDelta[] = [], refused: StageRefusal[] = [];
+  (Array.isArray(i.raw) ? i.raw : []).forEach((v, k) => {
+    const n = k + 1;
+    if (!forBrain(v)) return;
+    const refuse = (reason: StageReason, what: string) => { refused.push({ n, reason, what }); };
+    const d = v as Record<string, unknown>;
+    if (typeof d.brain !== "string" || !BRAIN_NAME_RE.test(d.brain) || d.brain !== i.brain) {
+      return refuse("no_brain", i.brain ? `is for a brain other than ${i.brain}, the one its profile names` : "is for a brain, and its profile names none (context.providers: [{name: groundray, brain: <name>}])");
+    }
+    const p = proposalOf(v, i.agentId);
+    if (!p) return refuse("invalid", "isn't a proposal: give it a text, a title and one of groundray's types");
+    if ((p.op ?? "add") !== "add" || p.target) return refuse("invalid", "isn't a new draft: a brain's items are superseded and deprecated by its owners, so a proposal to it only adds");
+    if (!isGroundrayType(d.type)) return refuse("invalid", `has no type groundray knows (${GROUNDRAY_TYPES.join(", ")})`);
+    const from = d.from === undefined ? [] : Array.isArray(d.from) && d.from.length <= MAX_FROM && d.from.every((x) => typeof x === "string" && CANDIDATE_ID.test(x)) ? [...new Set(d.from as string[])] : null;
+    if (!from) return refuse("invalid", "isn't a delta: from is a list of candidate ids");
+    const all = [p.title ?? "", d.type, p.text.text].join("\n");
+    const hit = i.scan(all);
+    if (hit) return refuse(hit.reason, `holds ${hit.what}`);
+    if (all.includes(REDACTED)) return refuse("token", "held something shaped like a credential, which was redacted on its way here");
+    if (i.itemBytes !== null && Buffer.byteLength(p.text.text) > i.itemBytes) return refuse("too_large", `is over the ${i.itemBytes}-byte limit for one item`);
+    const unknown = from.find((c) => !i.candidates.some((x) => x.id === c));
+    if (unknown) return refuse("unknown_source", `names ${unknown}, which isn't a candidate of this run`);
+    const problem = draftProblem({ type: d.type, title: p.title ?? "", body: p.text.text });
+    if (problem) return refuse("invalid", problem);
+    if (i.room !== null && accepted.length >= i.room) return refuse("over_cap", "would pass the run's limit on lessons (limits.proposalsPerRun)");
+    accepted.push({ n, brain: i.brain!, type: d.type, title: p.title!, text: p.text.text, from });
+  });
+  return { accepted, refused };
 }
 
 /**

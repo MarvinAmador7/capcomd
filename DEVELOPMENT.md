@@ -86,7 +86,9 @@ src/
                   consolidate.ts, how a consolidator's answer is staged as files (pure); consolidator.ts, its kernel
                   side (its inputs, its model, the commit on its branch); promotion.ts, what the gates judge of a
                   branch that changes .capcomd/context/; groundray.ts, a brain's provider and the project's brain
-                  mappings (`capcomd context brain`); project.ts, the project's `context` settings and their copy
+                  mappings (`capcomd context brain`); groundray-write.ts, its write path (a draft through the groundray
+                  CLI in a throwaway authoring clone, its proposal branch and pull request); brain-proposals.ts, a run's
+                  proposals to a brain (kept, and sent as a person or as capcomd); project.ts, the project's `context` settings and their copy
                   kept with a run
   cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
                   front door's registration, front-doors.ts); groups/, the kernel's commands by group; flags.ts, help.ts;
