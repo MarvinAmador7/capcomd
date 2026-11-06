@@ -97,7 +97,8 @@ export class GitForge implements Forge {
     throw new PluginError("unsupported", "the git forge can't create repositories", "Create the repository where it is hosted, then add it as origin.");
   }
   listBranches(input: { remote: string; cwd: string; max: number }, c: SeamCall) { return lsRemoteBranches(input, c); }
-  /** git has no login of its own: the remote's credentials are git's (the kernel configures them into its clones). */
+  /** git has no login of its own, and no `remoteCredential`: the user's own git credentials (their helper, ssh keys)
+   *  apply to host git (§11.7). */
   async login(input: { use: ForgeLoginUse }): Promise<ForgeLogin> {
     return input.use === "pullRequests"
       ? { ok: false, reason: "the git forge lands by push only: it has no pull requests", fix: "Set the merge mode to direct, or name a forge that has pull requests (merge.forge)." }
