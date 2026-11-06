@@ -15,7 +15,7 @@ export type AgentKind = "fake" | RealAgent;
 // `pinned`: the spec recorded with the agent (profiles.ts pinnedAgent), which wins over a lookup by name.
 export function agentFromEnv(source: Record<string, string | undefined> = process.env, profile?: string | null, pinned?: unknown): AgentKind {
   // CAPCOMD_AGENT may be a provider kind or a profile name; else the agents file's default; else fake.
-  const { resolveAgent } = require("./profiles") as typeof import("./profiles");
+  const { resolveAgent } = require("../profiles") as typeof import("../profiles");
   return resolveAgent(profile, source, pinned).kind;
 }
 export const isRealAgent = (k: AgentKind): k is RealAgent => k !== "fake";
@@ -167,7 +167,7 @@ export function agentModel(spec: { model?: string } | null | undefined, source: 
 const list = (v: string | undefined, d: string[]) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : d);
 
 export function loadAgentConfig(source: Record<string, string | undefined> = process.env, profileName?: string | null, pinned?: unknown): AgentConfig {
-  const { resolveAgent } = require("./profiles") as typeof import("./profiles");
+  const { resolveAgent } = require("../profiles") as typeof import("../profiles");
   const ra = resolveAgent(profileName, source, pinned);
   const spec = ra.spec;
   const specNum: Record<string, number | undefined> = { AGENT_MAX_TURNS: spec?.maxTurns, AGENT_MAX_BUDGET_USD: spec?.maxBudgetUsd, AGENT_TIMEOUT_MS: spec?.timeoutMs, AGENT_IDLE_MS: spec?.idleAfterMs, AGENT_STUCK_REPEATS: spec?.stuckRepeats, AGENT_NO_CHANGE_MS: spec?.noChangeAfterMs, AGENT_CHECKPOINT_MS: spec?.checkpointEveryMs };

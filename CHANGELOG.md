@@ -24,6 +24,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   proxy and certificate variables and the like; the plugin API spec §6.6.7 lists them) and its value doesn't look like
   a secret. The orchestration skill that agents allowed to spawn get is
   now such a skill, from the built-in `skill-orchestration` plugin; agents get the same text as before.
+- New: agent profiles as YAML files. Put a profile in `.capcomd/profiles/<name>/profile.yaml` (or
+  `.capcomd/profiles/<name>.yaml`; JSON works too), or in `~/.capcomd/profiles/` for every project, with blocks
+  (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.
+  A profile can `extends: <another profile>` and change only what differs (`null` removes an inherited value), and an
+  `override.yaml` in `<name>/` adjusts a profile without copying it. A prompt can live in a file next to the profile
+  (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd agents list|show|validate` see
+  these profiles; `.capcomd/agents.json` works as before, and a `profile.yaml` of the same name in the same project
+  wins. `--set` takes the new paths too (`--set limits.maxTurns=10`). See docs/agents.md, "Profile files".
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
   `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of
   always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. An installed

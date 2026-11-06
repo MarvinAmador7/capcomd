@@ -78,7 +78,7 @@ export interface ProfileResolved {
   spec: PinnedSpec;
   overrides: Readonly<Record<string, unknown>> | null;
 }
-/** Narrow-only (`src/agents/profiles.ts` widenings()): a patch that widens is refused with code `widening` (§6.6.5). */
+/** Narrow-only (`src/profiles/v1.ts` widenings()): a patch that widens is refused with code `widening` (§6.6.5). */
 export type ProfilePatch = Partial<Pick<PinnedSpec, "model" | "effort" | "allowedTools" | "disallowedTools" | "egress" | "maxTurns" | "maxBudgetUsd" | "timeoutMs" | "idleAfterMs" | "stuckRepeats" | "noChangeAfterMs" | "checkpointEveryMs" | "children">>;
 
 /** `src/primitives/ops.ts` SpawnOpts after spawnChecks. */

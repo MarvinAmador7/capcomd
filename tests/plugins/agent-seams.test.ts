@@ -13,7 +13,7 @@ import { testkit } from "../../packages/plugin/src/testkit";
 import { runAgentConformance } from "../../packages/plugin/src/agent-conformance";
 import { adapterFor, claudeAdapter, codexAdapter } from "../../src/agents/adapters";
 import { CLAUDE_CODE_VERSION, CODEX_VERSION, loadAgentConfig } from "../../src/agents/config";
-import { AGENTS_SCHEMA, applyOverrides, providerDefaultEffort, providerEfforts, resolveAgent, validateFile, validateSpec, type AgentSpec } from "../../src/agents/profiles";
+import { AGENTS_SCHEMA, applyOverrides, providerDefaultEffort, providerEfforts, resolveAgent, validateFile, validateSpec, type AgentSpec } from "../../src/profiles";
 import { Redactor } from "../../src/agents/redact";
 import { logins } from "../../src/api/settings";
 import { claude, ORCHESTRATE_ALLOWED, ORCHESTRATE_DISALLOWED } from "../../src/plugins/agent-claude";

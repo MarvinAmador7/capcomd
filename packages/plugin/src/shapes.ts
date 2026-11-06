@@ -47,7 +47,7 @@ export interface Agent {
   updatedAt: Timestamp | null;
 }
 
-/** The flat, validated agent spec pinned on an agent at spawn (`src/agents/profiles.ts` AgentSpec, `pinSpec`). v2
+/** The flat, validated agent spec pinned on an agent at spawn (`src/profiles/` AgentSpec, `pinSpec`). v2
  *  blocks (ADR-024) resolve to the same flat shape plus `profile`. */
 export interface PinnedSpec {
   provider: string;

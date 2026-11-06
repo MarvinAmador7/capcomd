@@ -526,11 +526,11 @@ export async function serviceStep(p: Prompter, v: Values): Promise<Step> {
  * login counts.
  */
 export function loginsNeeded(cwd = process.cwd(), env: Record<string, string | undefined> = process.env): Set<string> | null {
-  const P = require("../../agents/profiles") as typeof import("../../agents/profiles");
+  const P = require("../../profiles") as typeof import("../../profiles");
   const { env: envVar } = require("../../utils/env") as typeof import("../../utils/env");
   const { defaultAgentsFile } = require("../../utils/home") as typeof import("../../utils/home");
   let agents: Record<string, { provider?: string; auth?: string }>;
-  try { agents = P.readAgentsFile(envVar("AGENTS_FILE", env) ?? defaultAgentsFile(env, cwd)).agents as any; } catch { return null; }
+  try { agents = P.readProfiles(envVar("AGENTS_FILE", env) ?? defaultAgentsFile(env, cwd), env).agents as any; } catch { return null; }
   const specs = Object.values(agents ?? {});
   if (!specs.length) return null;
   return new Set(specs.filter((s) => s.auth === "subscription").map((s) => (s.provider === "codex" ? "codex" : "claude-code")));

@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DRIVER_LABEL, DRIVERS, plannerDriver, plannerProfile } from "../agents/run-driver";
-import { agentsFilePath, providerDefaultEffort, providerEfforts, readAgentsFile } from "../agents/profiles";
+import { agentsFilePath, providerDefaultEffort, providerEfforts, readProfiles } from "../profiles";
 import { readConfig, userConfigPath } from "../config/store";
 import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } from "../providers/registry";
 import { withSandbox } from "../providers/run-sandbox";
@@ -97,7 +97,7 @@ export async function runOptions(source: Env = process.env, ask?: Parameters<typ
 	// The daemon's default planner profile: its provider is the default driver.
 	const planner = plannerProfile(undefined, source);
 	let defaultProvider: string | null = null;
-	try { if (planner) defaultProvider = readAgentsFile(agentsFilePath(source)).agents[planner]?.provider ?? null; } catch { /* unreadable agents file: no default */ }
+	try { if (planner) defaultProvider = readProfiles(agentsFilePath(source), source).agents[planner]?.provider ?? null; } catch { /* unreadable agents file: no default */ }
 	const drivers = DRIVERS.map((provider): DriverOption => {
 		let d: ReturnType<typeof plannerDriver>;
 		try { d = plannerDriver(provider, undefined, source); } catch (e) { d = { ok: false, code: "planner", reason: (e as Error).message, model: null, defaultEffort: providerDefaultEffort(provider) }; }

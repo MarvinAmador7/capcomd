@@ -33,7 +33,7 @@ import { adapterFor } from "../agents/adapters";
 import type { AttachedSkill } from "../agents/skills";
 import { resolveEnvSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
-import { effectiveAgentRecord } from "../agents/profiles";
+import { effectiveAgentRecord } from "../profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { admitStart, agentVmIdemKey, agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
 

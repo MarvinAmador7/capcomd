@@ -14,7 +14,7 @@ async function spawnCommand({ positionals, values, json }: Cmd): Promise<number>
   let set: Record<string, unknown> = {};
   try {
     if (values.overrides) set = JSON.parse(values.overrides as string);
-    set = deepMerge(set, (await import("../../agents/profiles")).parseSetPairs(sets));
+    set = deepMerge(set, (await import("../../profiles")).parseSetPairs(sets));
   } catch (e) { usage(`bad override: ${(e as Error).message}`); }
   if ((Object.keys(set).length) && !profile) usage("--set/--overrides need --profile NAME");
   let contract: Record<string, unknown> | undefined;

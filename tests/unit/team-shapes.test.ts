@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { LEAD_DESCRIPTION, PLANNER_DESCRIPTION, planProject, testTools } from "../../src/config/project-setup";
-import { abilityText, leadText, validateFile, widenings, type AgentsFile } from "../../src/agents/profiles";
+import { abilityText, leadText, validateFile, widenings, type AgentsFile } from "../../src/profiles";
 import { applyGrant, childLimits, rootLimits } from "../../src/primitives/policy";
 import { placeCapacity, teamShapeHint } from "../../src/providers/capacity";
 import { INSTRUCTIONS } from "../../src/mcp/server";

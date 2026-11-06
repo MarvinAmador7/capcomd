@@ -99,7 +99,7 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   let goal = rawGoal;
   if (agentFlag) {
     if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(agentFlag)) usage(`invalid --profile ${agentFlag}`);
-    const P = await import("../../agents/profiles");
+    const P = await import("../../profiles");
     let set: Record<string, unknown> = {};
     try {
       if (values.overrides) set = JSON.parse(values.overrides as string);

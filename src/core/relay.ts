@@ -1,6 +1,6 @@
 // Data-returning operations shared by the CLI (`--json` and human output) and `capcomd mcp`.
 import { preflightNeeded, runPreflight } from "./preflight";
-import { parseAgentDirective } from "../agents/profiles";
+import { parseAgentDirective } from "../profiles";
 import { sandboxAuthError } from "../plugins/sandboxes";
 import { createClient } from "rivetkit/client";
 import type { Registry } from "../registry";
@@ -168,7 +168,7 @@ export async function executeRun(opts: RunOptions): Promise<RunResult> {
 
 /** The goal's `[agent:NAME]` profile as resolved here, for the planner actor (null: none, or it doesn't resolve here). */
 function pinnedDirective(goal: string): { agentSpec?: Record<string, unknown> } {
-  const { parseAgentDirective, pinSpec, resolveAgent } = require("../agents/profiles") as typeof import("../agents/profiles");
+  const { parseAgentDirective, pinSpec, resolveAgent } = require("../profiles") as typeof import("../profiles");
   const d = parseAgentDirective(goal);
   if (!d.agent) return {};
   try { return { agentSpec: pinSpec(resolveAgent(d.agent)) }; } catch { return {}; } // the planner reports it
