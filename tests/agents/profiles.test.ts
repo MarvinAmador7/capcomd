@@ -474,7 +474,7 @@ describe("profiles v2: loader and resolution", () => {
     const set = cli(["agents", "set", "critic", "--model", "opus", "--json"], env);
     expect(set.code).toBe(0);
     expect(JSON.parse(set.out)).toMatchObject({ path: w.at("P/critic/profile.yaml"), version: 2, spec: { model: "opus" } });
-    expect(readFileSync(w.at("P/critic/profile.yaml"), "utf8")).toContain("harness: { provider: claude, auth: apikey, model: opus }");
+    expect(readFileSync(w.at("P/critic/profile.yaml"), "utf8")).toContain('harness: { provider: claude, auth: apikey, cliVersion: ">=2.1", model: opus }');
     expect(JSON.parse(readFileSync(w.source.CAPCOMD_AGENTS_FILE, "utf8")).agents).toEqual({ worker: { provider: "codex", auth: "apikey" } });
   }, 30_000);
 
