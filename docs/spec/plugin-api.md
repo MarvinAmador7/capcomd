@@ -541,7 +541,10 @@ refuses the spawn with `plugin:<name>`. Team-shape policies, fan-out caps. Once 
 #### 6.6.7 `agent.preparing` · modify · workflow `prepare` (`agent-workflow.ts`), before the machine is ensured
 `AgentPreparing {agent, spec, prompt: {system, append, skills[]}, env: names[], egress[], credentialMode, sandbox}`.
 `spec` is the agent's pinned spec with `profile: {name, version, source}` when the agent recorded one at spawn (as
-`profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same). Patch
+`profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same), and its profile's runtime
+blocks when it has them (ADR-024 §7 step 8: `mcp`, `sandboxProvider`, `environment`, `size`, `lifecycle`; additive).
+`sandbox` is where its machine is made: `provider`, its profile's `sandbox.provider`, else the run's, else the
+daemon's; `environment`, its profile's `sandbox.environment`, else null (the sandbox's current build). Patch
 `{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after the profile's own (never replaces); `skills` are added (pinned by hash, `src/agents/skills.ts`); `env` adds variables whose names match `^[A-Z][A-Z0-9_]*$`
 and are not already set, and whose values match no secret pattern (`src/agents/redact.ts`); `egress` may only remove
 hosts. **The only place a plugin adds prompt text**: the orchestration skill (`src/subagents/skill.ts`) and ADR-024's
@@ -606,7 +609,13 @@ the kernel's: a profile can't name them, and a profile with a context block keep
 two when it may spawn, and their bytes), as one that may spawn does for the orchestration skill.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
-`AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
+`AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
+`lifecycle: {onStart[], onEnd[]}` is present when the agent's profile names plugins (ADR-024 `lifecycle.onStart|onEnd`,
+pinned at spawn; additive): there is no per-profile hook, so a plugin a profile names listens here and filters on its own
+name. The kernel refuses a spawn of such a profile (`config`, reason `lifecycle_inactive`), and the agent's start (its
+claim, before its machine is ensured), while a named plugin isn't active and listening to this hook: the daemon asks its
+own host, another process the running daemon's listing (§13.2; with no daemon running, nothing is refused there and the
+daemon asks at the start). `capcomd profiles validate` reports it the same way (§7.1).
 `checkpointed` is the progress signal (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
 recorded when the agent is claimed, before its machine is ensured, so its `machine` is null (`sandbox.changed`
 `ready` names the machine); it is told once, at the agent's first claim, which is always attempt 1 (a retried attempt
@@ -755,7 +764,7 @@ Selection, per use:
 
 | Seam | Selected by | Today |
 |---|---|---|
-| sandbox | the run's `sandbox` (`POST /v1/runs`, `capcomd run --sandbox`, kv `RUN_SANDBOX_KV`), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForRun` |
+| sandbox | for an agent's machine, its profile's `sandbox.provider` (ADR-024; pinned at spawn as `PinnedSpec.sandboxProvider`, recorded on its worker; one whose `caps.isolation` is `host` is refused at spawn, `config` reason `sandbox_isolation`, unless the run's is `host` too); else, and for a run's checks, the run's `sandbox` (`POST /v1/runs`, `capcomd run --sandbox`, kv `RUN_SANDBOX_KV`), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForAgent`, `providerForRun` |
 | agent | the resolved profile's `provider` (`PinnedSpec.provider`; ADR-024 `harness.provider`) | `src/agents/adapters.ts` `adapterFor` on the closed union `claude \| codex` |
 | forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`); creating a repository asks the first active forge whose `describe().publish` | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request, a run's base (`listBranches`), the logins the app shows (`login`); `publishForge` for `POST /v1/projects/publish` |
 
@@ -822,7 +831,10 @@ span as `gen_ai.usage.cache_read.input_tokens` and `gen_ai.response.model`. The 
 `credentialMode` values (`auto` included) and `usdPerMtok`, the operator's token rates for a CLI that reports tokens and
 not cost, and `denyCommands`, the command prefixes an orchestrate agent's CLI must refuse (§16.1). The optional, pure
 `refusal(line, redact)` reads a tool call the CLI refused from one line of its stderr, for a CLI that reports refusals
-only there (codex). The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
+only there (codex). `command`'s `AgentCommandCtx.mcp` (additive) carries the profile's MCP servers (ADR-024
+`tools.mcp`), which the CLI starts in the sandbox: `config`, a file holding them and capcomd's own (when `capcomd` is
+set) as `{mcpServers: {<name>: {command, args}}}`, and `servers`, the list, for a CLI that takes servers as flags; a
+provider MUST start them only inside the sandbox, and approves a `trusted` one's tools up front as it does capcomd's. The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
 install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is invoked and read.
 ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude` and `codex` are the built-ins
 (`agent-claude`, `agent-codex`: `src/plugins/agent-claude.ts`, `agent-codex.ts`). Only the daemon has a plugin host: in
@@ -1858,7 +1870,7 @@ manifest declares a notifier-shaped plugin (`run.changed` + `agent.changed` obse
 | `src/recipes/hierarchical.ts` | `recipe-hierarchical`, **disabled by default**, kept for the parity eval (decision 5) | front door | |
 | `plugins/capcomd/` (Claude Code / Codex plugin) | unchanged: a plugin *for* the agent (ADR-018) | | |
 | `src/api/sandboxes.ts` settings/info rows | each sandbox plugin's `ui` descriptors | UI | §4.7.5 |
-| ADR-024 profiles: `harness.provider`, `sandbox.provider`, `skills`, `identity.persona`, `lifecycle.onStart/onEnd` | seam names; `agent.preparing`; `onStart/onEnd` → plugins listening to `agent.changed` filtered by profile (the `lifecycle` block names plugins that must be active) | | §7, §6.6.7 |
+| ADR-024 profiles: `harness.provider`, `sandbox.provider`, `skills`, `identity.persona`, `lifecycle.onStart/onEnd`, `tools.mcp`, `sandbox.environment/size` | seam names (`sandbox.provider` selects the agent's machine's sandbox); `agent.preparing`; `onStart/onEnd` → plugins listening to `agent.changed` filtered by profile (the `lifecycle` block names plugins that must be active; the change carries them); `tools.mcp` → the agent provider's `AgentCommandCtx.mcp`; `environment`/`size` → the machine's `VmSpec` | | §7, §6.6.7, §6.6.8 |
 | `plannerBrief`'s "don't change files" | `tools.mode: orchestrate` on `planner` and `lead` | profile | §16.1 |
 
 ### 17.2 Steps
@@ -1918,7 +1930,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.24 | 2026-11-06 | With the watchdog (§17.2 step 11): the built-in `watchdog`, off until `plugins.watchdog.enabled: true`, which `capcomd setup` writes (§4.8); its config, its definition of progress (files changed, an agent under it spawned or ended, a job, verification or approval it waited on ended; never tool calls), waiting holding its clock, an agent judged through the agents under it, a reviewer, a report-only and an orchestrate agent not judged (their work is never checkpointed), `stalled` never raised over the kernel's own notice, `stopAfterMs` counted from the last progress like `stalledAfterMs`, its memory across a restart (§16.4; the worked example's `stopAfterMs` now means the same). Config layers 1–4 read for the built-ins, the schema subset checked, one `plugin.config_refused` per layer (a harness.v1 daemon event, additive), secret properties not read from layers yet (§10.2, §10.4). In the daemon: `agents.get`, `agents.tree`, `agents.cancel` and `agents.notice`; a plugin raises and clears only its own notice kinds and the kernel's clear only the kind it raised (§8.4). |
 | 1.0.25 | 2026-11-06 | With ADR-024's writes (its §7 step 6): the `configure` scope's profile writes (§11.1) are `PUT /v1/profiles/{name}` (capability `profiles.edit`; additive, with `GET /v1/profiles/{name}` and the daemon-stream event `profile.changed`); `ctx.profiles` gains no write method yet. A write changes the profile's own file and bumps its `version`; what an agent pinned at spawn (`profileVersion`, §6.6.7) is unchanged. |
 | 1.0.26 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
-| 1.0.27 | 2026-11-06 | With ADR-025 step 6: the context router attaches the context layer's skills at `agent.preparing` (§6.6.7): `capcomd-context-doctrine` to every agent whose spec has a context block, `capcomd-context-routing` to one of them that may spawn and isn't a reviewer or a report agent, `source: builtin`, pinned by hash, after the orchestration skill and only as many as fit the room the agent's other skills leave; their names are the kernel's and a profile with a context block keeps room for them; `plugin.context.loaded`'s `data.skills` (additive). Inline items and the `context` message kind (§11.5) stay unshipped: the step's eval did not admit them (ADR-025 §13). |
+| 1.0.27 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach (an override that makes an agent with MCP servers orchestrate is refused, `orchestrate_mcp`); an agent's machine is on its profile's `sandbox.provider` before the run's, never one that runs it on the host unless the run's does (`sandbox_isolation`, §7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
+| 1.0.28 | 2026-11-06 | With ADR-025 step 6: the context router attaches the context layer's skills at `agent.preparing` (§6.6.7): `capcomd-context-doctrine` to every agent whose spec has a context block, `capcomd-context-routing` to one of them that may spawn and isn't a reviewer or a report agent, `source: builtin`, pinned by hash, after the orchestration skill and only as many as fit the room the agent's other skills leave; their names are the kernel's and a profile with a context block keeps room for them; `plugin.context.loaded`'s `data.skills` (additive). Inline items and the `context` message kind (§11.5) stay unshipped: the step's eval did not admit them (ADR-025 §13). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

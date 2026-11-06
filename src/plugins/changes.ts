@@ -8,6 +8,7 @@ import type { AgentChange, ApprovalChange, MergeChange, RunChange, VerifyChange 
 import type { HookName } from "../../packages/plugin/src/hooks";
 import type { Principal, Run } from "../../packages/plugin/src/shapes";
 import type { ScopeAgent, ScopeOp } from "../actors/scope";
+import { pinnedRuntime } from "../profiles/runtime";
 import { hooks, iso, principalOf, untrusted } from "./hooks";
 import { agentOf, approvalOf, mergeOf, verificationOf } from "./shapes";
 
@@ -84,7 +85,9 @@ async function flush(db: Db, runId: string, t: Tap, rows: Rows) {
     if (e.agentId && hooks.listening("agent.changed")) {
       const change = agentChange(e);
       const a = change ? await agentRow(e.agentId) : null;
-      if (change && a) hooks.fire("agent.changed", "observe", { agent: agentOf(a), change }, await at(e));
+      // ADR-024 `lifecycle`: the plugins its profile names hear that they were named (they filter on it, §6.6.8).
+      const lifecycle = a ? pinnedRuntime(a.spec).lifecycle : undefined;
+      if (change && a) hooks.fire("agent.changed", "observe", { agent: agentOf(a), change, ...(lifecycle ? { lifecycle } : {}) }, await at(e));
     }
     const verify = verifyChange(e);
     if (verify && hooks.listening("verify.changed")) {

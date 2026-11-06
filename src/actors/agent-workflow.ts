@@ -113,7 +113,11 @@ export async function queueStart(c: any, p: StartAgent): Promise<{ queued: boole
 async function admitted(c: any, p: StartAgent): Promise<boolean> {
   const { slotsFor, gb } = await import("../providers/capacity");
   let place: string | null = null;
-  try { place = (await (await import("../providers/run-sandbox")).runSandbox(p.runId)) ?? (await import("../providers/registry")).sandboxName(); } catch { return true; }
+  try {
+    // Its machine's place: its profile's sandbox (ADR-024 `sandbox.provider`), else its run's, else the daemon's.
+    const own = (await import("../profiles/runtime")).pinnedMachine((await (await scopeOf(p.runId)).getAgent({ agentId: p.agentId }).catch(() => null))?.spec).sandbox;
+    place = (await (await import("../providers/run-sandbox")).agentSandbox(p.runId, own)) ?? (await import("../providers/registry")).sandboxName();
+  } catch { return true; }
   const slots = slotsFor(place);
   if (!slots) return true;
   await c.db.execute(ADMISSION_SQL);

@@ -11,6 +11,7 @@ import { env as envVar } from "../utils/env";
 import { defaultAgentsFile, userProfilesDir } from "../utils/home";
 import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile } from "./v1";
 import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layerOver, notApplied, setByOver, toFlat, v2Path, withContext, type ProfileDoc, type SetBy } from "./v2";
+import { runtimeOf, runtimeProblems, type ProfileRuntime } from "./runtime";
 import { profileSkills, type ProfileSkill } from "./skills";
 
 /** A JSON parse error as a profile file's error says it: where it went wrong, never what is there (readDoc). */
@@ -88,6 +89,9 @@ export interface ResolvedProfile {
   setBy: SetBy;
   /** What it pins (./v1.ts AgentSpec). */
   spec: AgentSpec;
+  /** What it pins beside the flat spec (./runtime.ts): its MCP servers, sandbox, environment, size and lifecycle
+   *  plugins; empty for an agents.json profile. */
+  runtime: ProfileRuntime;
   /** Its `skills`, read and hashed (./skills.ts), which an agent of it is pinned with too; not capcomd's orchestration
    *  skill, which every agent that may spawn gets by itself. */
   skills: ProfileSkill[];
@@ -247,7 +251,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     if (bad.length) throw new AgentConfigError(bad.join("; "));
     const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => {
       const manifest = fromFlat(name, spec);
-      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [] }];
+      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [], runtime: {} }];
     }));
     return { ...f, profiles, warnings };
   }
@@ -329,6 +333,8 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
         const { sandboxSeam } = require("../plugins/sandboxes") as typeof import("../plugins/sandboxes");
         if (!sandboxSeam(sandbox)) e.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't an active sandbox provider (see \`capcomd plugins list\`)`);
       }
+      const runtime = runtimeOf(doc);
+      e.push(...runtimeProblems(name, runtime, spec));
       // Its skills, read from the nearest directory that has each (an override's, its own, then its ancestors').
       const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true, !!spec.context?.providers?.length);
       e.push(...sk.errors);
@@ -338,7 +344,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       if (def?.on) defaults.push({ name, at: def.at, v1: false });
       const notYet = notApplied(doc);
       if (notYet.length) warnings.push(`profiles.${name}: ${notYet.join(", ")} ${notYet.length > 1 ? "are" : "is"} read but not used yet by this capcomd`);
-      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec, skills: sk.skills };
+      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec, skills: sk.skills, runtime };
       done.set(name, r);
       return r;
     } finally { resolving.pop(); }

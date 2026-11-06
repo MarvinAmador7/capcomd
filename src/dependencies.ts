@@ -112,3 +112,7 @@ export async function providerForRun(runId: string | null | undefined): Promise<
   const sandbox = await runSandbox(runId);
   return { provider: providerNamed(sandbox), sandbox };
 }
+/** The provider one agent's machine is on: its profile's sandbox (`own`, ADR-024 `sandbox.provider`), else its run's. */
+export async function providerForAgent(runId: string | null | undefined, own: string | null | undefined): Promise<{ provider: SandboxProvider; sandbox: string | null }> {
+  return own ? { provider: providerNamed(own), sandbox: own } : providerForRun(runId);
+}

@@ -629,7 +629,7 @@ this list says why):
   already says, nothing stale within a week). It reaches agents that may spawn, the ones with an in-VM `capcomd
   result`; Hermes' full routing paragraph as a hash-pinned skill of its own still waits for step 6.
 
-**Made while building step 6** (spec 1.0.27; evidence `docs/evidence/context/README.md`, "step 6"):
+**Made while building step 6** (spec 1.0.28; evidence `docs/evidence/context/README.md`, "step 6"):
 
 - The doctrine and the routing paragraph are two skills, `capcomd-context-doctrine` and `capcomd-context-routing`
   (`src/context/skills/`, `src/context/skills.ts`), attached by the router (the `context` plugin) in the same patch as

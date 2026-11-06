@@ -18,8 +18,8 @@ import {
 } from "../utils/lifecycle";
 import { produceFakeWork } from "../merge/fakework";
 import { killpoint } from "../utils/killpoint";
-import { getDependencies, providerForRun, providerNamed } from "../dependencies";
-import { runIdleLifetime, withSandbox } from "../providers/run-sandbox";
+import { getDependencies, providerForAgent, providerNamed } from "../dependencies";
+import { agentIdleLifetime, withSandbox } from "../providers/run-sandbox";
 import { reportMachineDeleted } from "../providers/machine-audit";
 import { forgetMachine, machineNameFor, recordAgentMachine } from "../providers/machines";
 import { sandboxCaps, sandboxName } from "../providers/registry";
@@ -31,9 +31,9 @@ import { itemWriter } from "../agents/thread-store";
 import { heartbeatEveryMs } from "../subagents/results";
 import { adapterFor } from "../agents/adapters";
 import type { AttachedSkill } from "../agents/skills";
-import { resolveEnvSnapshot } from "../env/resolve";
+import { bootSnapshot } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
-import { effectiveAgentRecord } from "../profiles";
+import { effectiveAgentRecord, type ProfileMachine } from "../profiles";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { admitStart, agentVmIdemKey, agentWorkflowOn, agentWorkflowParts, queueStart, stepWakeActions, workflowStats, type StartAgent } from "./agent-workflow";
 
@@ -76,24 +76,26 @@ async function remoteBranchSha(remote: string, branch: string): Promise<string |
 }
 /**
  * This worker's agent, resolved once per action: its kind and, for a real agent, its config, the VM's egress and the
- * snapshot it boots from (a plan login's when it has one, else the `capcomd env build` snapshot, else the default image).
- * `pinned`: the spec recorded when the agent was spawned (the scope's agent record), which wins over the profile by
- * name: this process (the daemon) need not see the project's agents file, and its own may define the name otherwise or
- * not at all. `source`: the env as the run sees it (its own sandbox, if it has one: snapshots and plan logins are per
- * sandbox). A problem here is configuration (an unknown or invalid profile, no credentials): it crosses the actor
- * boundary as a typed error with its message, not rivetkit's opaque "internal error".
+ * snapshot it boots from (a plan login's when it has one, else its profile's environment, else the `capcomd env build`
+ * snapshot, else the default image: src/env/resolve.ts `bootSnapshot`). `pinned`: the spec recorded when the agent was
+ * spawned (the scope's agent record), which wins over the profile by name: this process (the daemon) need not see the
+ * project's agents file, and its own may define the name otherwise or not at all. `source`: the env as the agent's
+ * machine sees it (its profile's sandbox, else its run's, if either: snapshots and plan logins are per sandbox).
+ * `machine`: what its profile pinned for its machine (ADR-024 `sandbox.*`), which a scripted agent has too. A problem
+ * here is configuration (an unknown or invalid profile, no credentials, an environment the sandbox doesn't have): it
+ * crosses the actor boundary as a typed error with its message, not rivetkit's opaque "internal error".
  */
-function agentSetup(profile: string | undefined, pinned: unknown, source: Record<string, string | undefined>) {
+function agentSetup(profile: string | undefined, pinned: unknown, source: Record<string, string | undefined>, machine: ProfileMachine = {}) {
   try {
     const kind = agentFromEnv(source, profile, pinned);
-    if (!isRealAgent(kind)) return { kind, config: null, egressAllow: LEGACY_EGRESS, snapshot: {} as { fromSnapshot?: string }, record: null };
+    const boot = (login?: Parameters<typeof bootSnapshot>[0]["login"]) => {
+      const snap = bootSnapshot({ ...(machine.environment ? { environment: machine.environment } : {}), real: isRealAgent(kind), login }, source);
+      return snap ? { fromSnapshot: snap } : {};
+    };
+    if (!isRealAgent(kind)) return { kind, config: null, egressAllow: LEGACY_EGRESS, snapshot: boot() as { fromSnapshot?: string }, record: null };
     const config = loadAgentConfig(source, profile, pinned);
-    let snapshot: { fromSnapshot?: string } = {};
-    if (config.credentialMode === "subscription") {
-      const prof = profileFor(kind, source);
-      if (prof?.snapshot) snapshot = { fromSnapshot: prof.snapshot };
-    }
-    if (!snapshot.fromSnapshot) { const snap = resolveEnvSnapshot(source); if (snap) snapshot = { fromSnapshot: snap }; }
+    const login = config.credentialMode === "subscription" ? profileFor(kind, source) : undefined;
+    const snapshot: { fromSnapshot?: string } = boot(login ? { agent: kind, ...(login.snapshot ? { snapshot: login.snapshot } : {}), env: login.env } : null);
     return { kind, config, egressAllow: config.egress, snapshot, record: effectiveAgentRecord(profile, source, pinned) };
   } catch (e) {
     throw configError(e);
@@ -256,6 +258,8 @@ export type PushBranchParams = {
   report?: boolean;
   /** The agent's title when it starts (the driver's, its parent's or the user's): its commit's subject before the brief. */
   title?: string;
+  /** What its profile pinned for its machine (as provisionWorker got it): the same sandbox, environment and size. */
+  machine?: ProfileMachine;
 };
 
 /**
@@ -286,11 +290,13 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   const workerContext = JSON.parse(workerLife.context as string) as WorkerContext & {
     idemKey?: string;
   };
-  const { provider, sandbox } = await providerForRun(params.runId);
+  // The machine is where provisionWorker made it (recorded on the worker): its profile's sandbox, else the run's.
+  const own = params.machine?.sandbox ?? null;
+  const { provider, sandbox } = await providerForAgent(params.runId, own ?? (workerContext as { sandbox?: string }).sandbox ?? null);
   const runSource = withSandbox(process.env, sandbox);
   const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
   // The run's idle machine lifetime: the VM's delete deadline, renewed while the agent runs.
-  const lifeSeconds = await runIdleLifetime(params.runId, sandbox);
+  const lifeSeconds = await agentIdleLifetime(params.runId, own, sandbox);
 
   // Acquire the push lock (or wait out a live push by another call).
   await c.db.execute(PUSH_LOCKS_SQL);
@@ -329,7 +335,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
 
   killpoint("push.mid");
 
-  const setup = agentSetup(params.agent, params.agentSpec, runSource);
+  const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine);
   recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
   const { id: vmId } = await provider.ensure({
     idemKey: vmKey,
@@ -337,6 +343,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     ttlSeconds: lifeSeconds,
     egressAllow: setup.egressAllow,
     ...setup.snapshot,
+    ...(params.machine?.size ? { size: params.machine.size } : {}),
     labels: { workerId, taskId, epoch: String(epoch) },
   }).catch((error) => {
     if (sandboxAuthError(error)) throw new UserError((error as Error).message, { code: "sandbox_auth", metadata: { kind: "config", retryable: false } });
@@ -544,21 +551,25 @@ export const workerActor = actor({
         agent?: string;
         /** The spec the agent was spawned with (its scope record): wins over `agent` looked up by name. */
         agentSpec?: Record<string, unknown> | null;
+        /** What its profile pinned for its machine (ADR-024 `sandbox.*`): every agent's, a scripted one's too. */
+        machine?: ProfileMachine;
       }
     ) {
       const { workerId, runId, epoch } = params;
       return withOutageListener(outageNotice(() => c.client(), runId, workerId), async () => {
-      const { provider, sandbox } = await providerForRun(runId);
+      // Its profile's sandbox (ADR-024 `sandbox.provider`), else the run's, else the daemon's.
+      const own = params.machine?.sandbox ?? null;
+      const { provider, sandbox } = await providerForAgent(runId, own);
       const runSource = withSandbox(process.env, sandbox);
       // The run's idle machine lifetime (recorded at `run new`), else its place's current setting.
-      const lifeSeconds = await runIdleLifetime(runId, sandbox);
+      const lifeSeconds = await agentIdleLifetime(runId, own, sandbox);
 
       const existing = await getLifecycle(c.db, workerId);
       if (existing && existing.state !== "provisioning" && existing.state !== "failed") {
         const ctx = JSON.parse(existing.context as string);
         return { workerId, vmId: ctx.vmId as string, state: existing.state };
       }
-      const setup = agentSetup(params.agent, params.agentSpec, runSource);
+      const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine);
 
       const idemKey =
         existing && JSON.parse(existing.context as string).idemKey
@@ -597,6 +608,7 @@ export const workerActor = actor({
           ttlSeconds: lifeSeconds,
           egressAllow: setup.egressAllow,
           ...setup.snapshot,
+          ...(params.machine?.size ? { size: params.machine.size } : {}),
           labels: {
             runId,
             workerId,
