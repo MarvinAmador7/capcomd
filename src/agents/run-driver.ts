@@ -3,7 +3,7 @@
 // its provider swapped and the model and login of that provider (another of the project's profiles on it, e.g. the
 // `codex-worker` capcomd setup writes; else the provider's default model). GET /v1/run-options lists the same choice.
 import { agentEffort, agentModel } from "./config";
-import { agentsFilePath, encodeAgentRef, providerDefaultEffort, providerEfforts, providerKind, readAgentsFile, resolveAgent, type AgentSpec, type AuthMode, type Provider } from "./profiles";
+import { agentsFilePath, encodeAgentRef, providerDefaultEffort, providerEfforts, providerKind, readProfiles, resolveAgent, type AgentSpec, type AuthMode, type Provider } from "../profiles";
 import { agentSeam } from "../plugins/agents";
 import { profileFor } from "../auth/profiles";
 import { modelProblem } from "../config/models";
@@ -49,7 +49,7 @@ export type DriverChoice =
 
 /** The provider a profile runs on (null: no such profile). */
 export function profileProvider(name: string, source: Env = process.env): Provider {
-  return readAgentsFile(agentsFilePath(source)).agents[name]?.provider ?? "claude";
+  return readProfiles(agentsFilePath(source), source).agents[name]?.provider ?? "claude";
 }
 
 const levelsText = (provider: Provider) => providerEfforts(provider).join(", ");
@@ -71,7 +71,7 @@ export function plannerDriver(provider: Provider, name?: string, source: Env = p
   if (chosenModel !== undefined) { const bad = modelProblem(provider, chosenModel, source); if (bad) return { ok: false, code: "model", reason: bad, model: null, defaultEffort: fallback }; }
   const planner = plannerProfile(name, source);
   if (!planner) return { ok: false, code: "planner", reason: name ? `profile ${name} can't plan: it doesn't exist or may not spawn agents (children.allowSpawn)` : `No planner profile (run capcomd setup)`, model: null, defaultEffort: fallback };
-  const file = readAgentsFile(agentsFilePath(source));
+  const file = readProfiles(agentsFilePath(source), source);
   const spec = file.agents[planner]!;
   if (spec.provider === provider) {
     const c = credentialReady(provider, spec.auth, source, where), model = chosenModel ?? agentModel(spec, source) ?? null;
