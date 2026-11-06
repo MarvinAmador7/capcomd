@@ -5,7 +5,7 @@
 // profileCapacity. Read by capcomd_profiles (src/mcp/driver.ts) and `capcomd agents list|show`.
 import { agentSeam } from "../plugins/agents";
 import type { ResolvedProfile } from "./load";
-import { leadText, type AgentSpec } from "./v1";
+import { leadText, readOnlyTools, type AgentSpec } from "./v1";
 
 /** A model's list price, relative to the others a harness offers: a planner gives mechanical parts the low one. */
 export type CostTier = "low" | "medium" | "high";
@@ -32,8 +32,7 @@ export function costTier(model: string | undefined | null): CostTier | null {
 /** Whether the profile edits code, from its tools: what fit says first. */
 function works(s: AgentSpec): string {
   if (s.toolMode === "orchestrate") return "orchestrates: sees everything, runs nothing";
-  const editTools = s.allowedTools?.length && s.allowedTools.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t));
-  if ((s.allowedTools?.length && !editTools) || s.sandbox === "read-only") return "read-only";
+  if (readOnlyTools(s.allowedTools) || s.sandbox === "read-only") return "read-only";
   return "edits and runs code";
 }
 

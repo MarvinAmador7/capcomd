@@ -380,7 +380,8 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   (with a warning), and a v2 profile may `extends` a v1 entry. With no v2 file anywhere, the result is exactly the v1
   file.
 - **`extends` is looked up like any name** (project, user, bundled), so a profile extending its own name is a cycle;
-  the parent comes with its own overrides applied. `name`, `version`, `default` and `sharing` are not inherited.
+  the parent comes with its own overrides applied. `name`, `version`, `default` and `sharing` are not inherited (nor,
+  since step 4, `identity.title` and `identity.avatar`).
 - **Overrides apply from the profile's own layer upward**: a bundled profile gets the user's, then the project's
   `override.yaml`; a user profile the user's, then the project's; a user override of a name the project defines itself
   doesn't apply (a warning). An override may not set `name`, `extends`, `version` or `sharing`.
@@ -407,8 +408,9 @@ Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src
   otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
   a reviewer until it says otherwise).
 - **`fit` is built from the resolved spec and `permissions` only**: what the tools allow (orchestrate, read-only,
-  edits), report, provider label, model, effort, cost, limits, an egress allowlist's size, whether it leads (`leadText`).
-  No `description`, `tags`, `title` or `sharing` goes into it, so a shared package can't word it.
+  edits; a plain `Bash` isn't read-only, `Bash(<cmd>:*)` rules are, as `does` says), report, provider label, model,
+  effort, cost, limits, an egress allowlist's size, whether it leads (`leadText`). No `description`,
+  `tags`, `title` or `sharing` goes into it, so a shared package can't word it.
 - **`cost` is a tier by model family** (Haiku, `-mini`, `-nano`: low; Sonnet, GPT, `o<N>`: medium; Opus, `-pro`:
   high), null when the profile leaves the model to the CLI or names one outside those families. No price table is
   kept: list prices change, the relative tiers rarely do.
