@@ -134,8 +134,9 @@ export interface AgentRunOptions {
   onNotice?: (n: { kind: Stuck["kind"]; detail: string } | null) => void;
   secrets?: string[];
   now?: () => number;
-  /** ADR-017: install in-VM capcomd (CLI + MCP + skill). Only set for agents allowed to spawn. */
-  subagents?: { skill: string; cliSource: string; rpcDir: string };
+  /** ADR-017: install in-VM capcomd (CLI + MCP). Only set for agents allowed to spawn. Their orchestration skill is in
+   *  `cfg.appendSystemPrompt` (agent.preparing); `skill`, when given, is appended after it. */
+  subagents?: { skill?: string; cliSource: string; rpcDir: string };
   /**
    * Capability agents.title, for an agent without `subagents`: a `capcomd` on its PATH that only names its tab (the
    * shim, src/primitives/title-rules.mjs: it checks the title and talks to nobody) and the lines that ask it to. Each
@@ -658,7 +659,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         if (cfg.allowedTools) cfg = { ...cfg, allowedTools: [...cfg.allowedTools, "Bash(capcomd:*)", "mcp__capcomd"] };
         appendSystemFile = `${W}/append-system.txt`;
         await provider.upload(vmId, appendSystemFile, new TextEncoder().encode([cfg.appendSystemPrompt ? r.text(cfg.appendSystemPrompt) : "", sa.skill].filter(Boolean).join("\n\n")));
-      } else promptText = [promptText, sa.skill].join("\n\n");
+      } else promptText = [promptText, sa.skill].filter(Boolean).join("\n\n");
     } else if (opts.naming) {
       // agents.title: any other gets a `capcomd` that only names its tab, checked locally, no RPC (the daemon reads the
       // call from its tool calls below). Without node it still prints a line; the call is read all the same.
@@ -712,9 +713,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       `echo $? > ${sq(exitFile)}`,
     ].join("\n");
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
-    // The credential exists only in this exec's env (inherited by the agent). Never logged.
+    // The credential exists only in this exec's env (inherited by the agent). Never logged. A plugin's variables
+    // (agent.preparing) go in it too, never in place of the runner's, the provider's or the credential's.
     must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)} ${sq(inboxFile)} ${sq(`${W}/checkpoint.request`)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
-      { ...adapter.baseEnv(), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
+      { ...(cfg.pluginEnv ?? {}), ...baseEnv, ...adapter.baseEnv(), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
 
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
     const deadline = cfg.timeoutMs ? now() + cfg.timeoutMs + 30_000 : Infinity;

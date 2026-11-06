@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from "os";
 import { basename, dirname, join } from "path";
 import { parse as parseYaml } from "yaml";
-import { detectHermes, editHermesConfig, HERMES_ALLOWED_TOOLS, HERMES_DENY, hermesAllowlist, hermesStatus, installHermesSkills, mergedEntry, type HermesEntry } from "../../src/cli/commands/hermes";
+import { detectHermes, editHermesConfig, HERMES_ALLOWED_TOOLS, HERMES_DENY, hermesAllowlist, hermesStatus, installHermesSkills, mergedEntry, type HermesEntry } from "../../src/plugins/front/hermes-config";
 
 const CLI = new URL("../../src/cli/index.ts", import.meta.url).pathname;
 const run = (args: string[], o: { cwd: string; env: Record<string, string> }) => {

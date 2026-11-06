@@ -6,10 +6,11 @@ import { PluginHost, type Candidate } from "../../packages/plugin/src/host/host"
 import type { PluginContext, PluginModule } from "../../packages/plugin/src/context";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { AgentPreparing, AgentSpawning, RunCreating, SandboxEnsuring } from "../../packages/plugin/src/hooks";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySandboxPatch, applySpawnPatch, hooks, principalOf, refusedError, useHooks } from "../../src/plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySandboxPatch, applySpawnPatch, hooks, principalOf, refusedError, skillHash, useHooks } from "../../src/plugins/hooks";
 import { agentChange, changedHooks, mergeChange } from "../../src/plugins/changes";
 import { hookedProvider, purposeOf } from "../../src/plugins/sandbox";
 import { applyOverrides, type AgentSpec } from "../../src/profiles";
+import { loadAgentConfig } from "../../src/agents/config";
 import { FakeProvider } from "../../src/providers/fake";
 
 const OPERATOR = { kind: "operator" as const, clientId: null };
@@ -94,12 +95,46 @@ describe("the kernel's patch rules (§6.6)", () => {
     expect(widens(() => applySpawnPatch(s, { budget: { usd: -1 } }))).toBe("invalid");
   });
 
-  test("agent.preparing: text is appended after the profile's, egress only shrinks, env and skills wait for their step", () => {
+  test("agent.preparing: text is appended after the profile's, egress only shrinks", () => {
     const p: AgentPreparing = { agent: {} as never, spec: {} as never, prompt: { system: null, append: "Be brief.", skills: [] }, env: [], egress: ["github.com", "npmjs.org"], credentialMode: "subscription", sandbox: { provider: "fake", environment: null } };
     expect(applyPreparePatch(p, { prompt: { append: "Cite files." }, egress: ["github.com"] })).toMatchObject({ prompt: { append: "Be brief.\n\nCite files." }, egress: ["github.com"] });
     expect(widens(() => applyPreparePatch(p, { egress: ["evil.example"] }))).toBe("widening");
-    expect(widens(() => applyPreparePatch(p, { env: { FOO: "1" } }))).toBe("invalid");
-    expect(widens(() => applyPreparePatch(p, { prompt: { skills: [] } }))).toBe("invalid");
+  });
+
+  test("agent.preparing: skills are added pinned by their hash, once each (§6.6.7, step 8)", () => {
+    const p: AgentPreparing = { agent: {} as never, spec: {} as never, prompt: { system: null, append: null, skills: [] }, env: [], egress: [], credentialMode: "subscription", sandbox: { provider: "fake", environment: null } };
+    const skill = (name: string, text: string, hash = skillHash(text)) => ({ name, text, hash, source: "plugin" as const });
+    const one = applyPreparePatch(p, { prompt: { skills: [skill("cite-files", "# Cite files\nName every file you change.")] } });
+    expect(one.prompt.skills).toEqual([skill("cite-files", "# Cite files\nName every file you change.")]);
+    // The next plugin sees it, and adds after it.
+    expect(applyPreparePatch(one, { prompt: { skills: [skill("be-brief", "# Be brief")] } }).prompt.skills.map((s) => s.name)).toEqual(["cite-files", "be-brief"]);
+    expect(widens(() => applyPreparePatch(one, { prompt: { skills: [skill("cite-files", "# Something else")] } }))).toBe("invalid");
+    expect(widens(() => applyPreparePatch(p, { prompt: { skills: [skill("x", "# X", "0".repeat(64))] } }))).toBe("invalid");
+    expect(widens(() => applyPreparePatch(p, { prompt: { skills: [skill("Bad Name", "# X")] } }))).toBe("invalid");
+    expect(widens(() => applyPreparePatch(p, { prompt: { skills: [{ ...skill("x", "# X"), source: "anywhere" as never }] } }))).toBe("invalid");
+    expect(widens(() => applyPreparePatch(p, { prompt: { skills: Array.from({ length: 9 }, (_, i) => skill(`s${i}`, `# ${i}`)) } }))).toBe("invalid");
+  });
+
+  test("agent.preparing: env adds new variables only, never a secret (§6.6.7, step 8)", () => {
+    const p: AgentPreparing = { agent: {} as never, spec: {} as never, prompt: { system: null, append: null, skills: [] }, env: ["HOME", "PATH", "ANTHROPIC_API_KEY"], egress: [], credentialMode: "secret", sandbox: { provider: "fake", environment: null } };
+    expect(applyPreparePatch(p, { env: { TEAM: "payments", LOG_LEVEL: "debug" } }).env).toEqual(["HOME", "PATH", "ANTHROPIC_API_KEY", "TEAM", "LOG_LEVEL"]);
+    expect(widens(() => applyPreparePatch(p, { env: { PATH: "/evil/bin" } }))).toBe("widening");
+    expect(widens(() => applyPreparePatch(p, { env: { ANTHROPIC_API_KEY: "x" } }))).toBe("widening");
+    expect(widens(() => applyPreparePatch(p, { env: { CAPCOMD_RPC_DIR: "/tmp/x" } }))).toBe("widening");
+    // Names the agent's environment doesn't have yet, but that would steer where its credential goes, what its runtimes
+    // load, or which proxy and certificates it trusts: reserved, never a plugin's.
+    for (const k of ["ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "OPENAI_BASE_URL", "CODEX_HOME", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "HTTPS_PROXY", "SSL_CERT_FILE", "GIT_SSH_COMMAND", "PYTHONPATH", "CAPCOMD_NEW"])
+      expect([k, widens(() => applyPreparePatch(p, { env: { [k]: "https://example.test" } }))]).toEqual([k, "widening"]);
+    expect(applyPreparePatch(p, { env: { NODEJS_TEAM: "x", GITHUB_ORG: "acme" } }).env).toContain("GITHUB_ORG");
+    expect(widens(() => applyPreparePatch(p, { env: { lower: "1" } }))).toBe("invalid");
+    expect(widens(() => applyPreparePatch(p, { env: { TOKEN: `ghp_${"a".repeat(36)}` } }))).toBe("invalid");
+    expect(widens(() => applyPreparePatch(p, { env: { KEY: "sk-ant-abcdefghijklmnop" } }))).toBe("invalid");
+    expect(widens(() => applyPreparePatch(p, { env: { N: 1 as never } }))).toBe("invalid");
+  });
+
+  test("agent.preparing: an attempt's spec reaches the agent's environment with only the names a plugin may add", () => {
+    const spec = { provider: "claude", auth: "apikey", kind: "claude-code", pluginEnv: { PLUGIN_TEAM: "payments", ANTHROPIC_BASE_URL: "https://example.test", NODE_OPTIONS: "--require x", CAPCOMD_X: "1", lower: "1" } };
+    expect(loadAgentConfig({ ANTHROPIC_API_KEY: "k" }, null, spec).pluginEnv).toEqual({ PLUGIN_TEAM: "payments" });
   });
 
   test("sandbox.ensuring: labels under plugin.<name>., size and lifetime never grow", () => {

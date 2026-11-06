@@ -136,6 +136,14 @@ SHOULD follow it), not part of the pattern: `agent.step` and `sandbox.resource_a
 Seam names (`docker`, `claude`, `github`) and source names (`github`) are **not** prefixed: they are the names users
 select by, and uniqueness is enforced at resolution (§7.1, §16.3).
 
+**The kernel's own front doors** (§17.2 step 8) are the one exception: the built-ins the kernel's built-in list names as
+its surface (`src/plugins/builtins.ts` `kernelSurface`: the CLI's `front-<group>` plugins, `front-mcp`, `front-hermes`)
+register the names capcomd has always had: their tools are `capcomd_<t>` and their CLI groups are the kernel's commands
+(`KERNEL_COMMANDS`). The flag is the kernel's list's, not the manifest's: the same manifest from a directory (a
+third-party or a test plugin) gets the prefix and fails the command collision check. They are placed `order: pre`, so a
+plugin whose prefixed tool name happens to equal one of theirs (`capcomd_pr_open` from a plugin `pr`) loses it: its
+registration is `conflict` (§4.7).
+
 ### 4.3 Entry forms
 
 Exactly one form per plugin. The export-form rule is strict because a wrong form fails silently in other systems
@@ -194,20 +202,44 @@ suite (§14.1).
 
 #### 4.7.1 CLI commands
 
-A command group `capcomd <name> …`. `name` MUST NOT be one of the kernel's commands (the `case` labels in
-`src/cli/index.ts`: `run`, `spawn`, `verify`, `merge`, `agents`, `sandbox`, `serve`, `setup`, …); the host keeps the
-list and refuses a collision at validation. The handler receives the words after the command name, the parsed flags,
-whether `--json` was given, the caller's principal and an `AbortSignal` (SIGINT), and MUST return a `relay.v1` envelope
-(`src/core/errors.ts` `SCHEMA`), or throw a `PluginError` which the CLI prints as `{schema, ok: false, error}` with the
-matching exit code (`src/core/errors.ts` `EXIT`). The CLI dispatcher is the kernel's; a plugin command runs only when the
-daemon is up (the CLI connects as a client), so it cannot be used to run host code without the host.
+A command group `capcomd <name> …`. `name` MUST NOT be one of the kernel's commands (`KERNEL_COMMANDS` in
+`packages/plugin/src/load.ts`: the ones the dispatcher answers itself, `serve`, `plugins`, `help`, `version`, `tui`, and
+the ones the kernel's own front doors register, `run`, `spawn`, `verify`, `merge`, `agents`, `sandbox`, `setup`, `mcp`,
+`hermes`, …, §4.2); the host keeps the list and refuses a collision at validation. The handler receives the words after
+the command name, the parsed flags, whether `--json` was given, the caller's principal (the operator, on the host's CLI)
+and an `AbortSignal` (SIGINT; a second SIGINT, or 5 s without an answer, ends the process), and MUST return a `relay.v1`
+envelope (`src/core/errors.ts` `SCHEMA`), or throw a `PluginError` which the CLI prints as `{schema, ok: false, error}`
+with the matching exit code (`src/core/errors.ts` `EXIT`: `invalid`, `forbidden` and `widening` are usage, 2;
+`not_found`, 3; `unsupported`, config, 2; the rest 1) and `reason: "plugin:<name>"` (`forbidden` keeps `forbidden`). The
+CLI prints the envelope as one JSON line with `--json`, else its `text` when that is a string, else the envelope as JSON.
+Flags: `--k v` (the next word, unless it starts with `-`), `--k=v`, a flag of the kernel's table keeps its type (so
+`--json` takes no value), a flag given twice is a list, `--` ends them. `capcomd <name> --help` prints the command's
+`usage`; `capcomd --help` lists every plugin's command after the kernel's.
+
+The CLI dispatcher is the kernel's (`src/cli/index.ts`, `src/cli/front-doors.ts`). It answers its own commands itself and
+looks every other one up among the registrations of the process's plugin host (`src/plugins/host.ts` `localHost`: the
+built-ins every process loads, the front doors among them). A kernel front door's command is parsed with the kernel's
+own flag table (a misspelled flag is a usage error before anything runs), prints its own output (the kernel's text, its
+streams, its prompts) and MAY answer `{exit: number}` (`CliExit`) instead of an envelope; from any other plugin that is an
+error. An in-process command runs in the CLI's own process, so only a built-in's (or, under `bun test`, a
+`CAPCOMD_TEST_PLUGINS` directory's) can; a third-party command (out of process, §9) runs only when the daemon is up, the
+CLI connecting as a client (§17.2 step 9), so it cannot be used to run host code without the host.
 
 #### 4.7.2 MCP tools
 
-`capcomd_<name>_<tool>` on the `capcomd mcp` server (`src/mcp/server.ts`), with a JSON Schema for its arguments and the
-MCP annotations. The handler runs with the **driver** principal and the driver policy (`src/mcp/driver.ts`), returns a
-`relay.v1` envelope, and MUST answer within 55 s (`WAIT_MAX_MS`): MCP clients time out at 60 s. `ctx.mcp.instructions`
-appends text to the server's instructions under a heading `## <name>`; it SHOULD be short (§16.5).
+`capcomd_<name>_<tool>` on the `capcomd mcp` server (`src/mcp/server.ts`), with a JSON Schema for its arguments (an
+object schema, draft 2020-12 or draft-07: any other is `invalid` at registration, and one the server can't read leaves
+that tool out of the listing), an optional `title` and `_meta`, and the MCP annotations (`readOnlyHint`,
+`destructiveHint`, `idempotentHint`, `openWorldHint`). The server lists the schema exactly as registered, checks a call's
+arguments against it (the MCP SDK's validation error when they don't fit) and drops properties it doesn't name, so a
+client's extra argument never reaches the handler. The handler runs with the **driver** principal and the driver policy
+(`src/mcp/driver.ts`), returns a `relay.v1` envelope, and MUST answer within 55 s (`WAIT_MAX_MS`): MCP clients time out
+at 60 s. A thrown `PluginError` is the `relay.v1` error, coded as on the CLI (§4.7.1), with `isError`.
+`ctx.mcp.instructions` appends text to the server's instructions under a heading `## <name>`; it SHOULD be short (§16.5).
+capcomd's own tools are front-mcp's registrations (`src/mcp/tools.ts`, as `capcomd_<tool>`, §4.2) and its instructions
+come first, without a heading. The tools are served in the process that runs `capcomd mcp` (its plugin host's
+registrations); a call's session (its MCP server, for elicitation, and the servers it started for other projects) is the
+kernel's own and reaches only front-mcp's handlers.
 
 #### 4.7.3 API routes
 
@@ -369,12 +401,18 @@ A hook fires in the process its kernel operation runs in, and only the daemon ha
 changes (every `*.changed` hook), the sandbox calls, the agent's phases, `merge.landing` (under the target's lock) and
 everything an agent asks from its VM run in the daemon. An operation a CLI or the MCP server runs against the engine
 itself (`capcomd run new`, `spawn`, `verify`, `merge`, `approve` from the host shell or `capcomd mcp`) fires its
-`ops.ts` gates in that process, where nothing listens, until those front doors go through the daemon (§17.2 step 8).
+`ops.ts` gates in that process, where nothing listens. Since §17.2 step 8 those commands and tools are front doors'
+registrations, but they still run in the process that serves them; sending their operations through the daemon is not
+part of this version (§17.2 step 9 and later; until then a third-party plugin's gates judge only what the daemon runs).
 The exception is the built-in gates the kernel's own contract depends on (the reviewer gate, §15.3): before a verify
 runs, a process that isn't the daemon starts them in a local host of its own (`src/plugins/hooks.ts` `gates()`; in
 tests also `CAPCOMD_TEST_PLUGINS`), so a run's reviewer judges every verify wherever it runs; the daemon's verifies wait
 for its host to start instead. Such a local host writes no daemon-stream events; its gate events go on the run's stream.
-With no listener a site builds no payload and awaits nothing (`HookRegistry.listening`).
+With no listener a site builds no payload and awaits nothing (`HookRegistry.listening`). The same holds for the
+built-ins every process loads (`everyProcess` in `src/plugins/builtins.ts`): the front doors, the forges, the reviewer
+gate and the orchestration skill; an attempt prepared outside the daemon (a run's driver) waits for that local host, and
+one the daemon prepares before its plugins have loaded (an agent resumed at start) waits for them, so an agent that may
+spawn always gets its skill (§6.6.7).
 
 Every call is a `HookCall<N>`:
 
@@ -499,9 +537,29 @@ and are not already set, and whose values match no secret pattern (`src/agents/r
 hosts. **The only place a plugin adds prompt text**: the orchestration skill (`src/subagents/skill.ts`) and ADR-024's
 `skills` and `identity.persona` land here. Fires per attempt (a retried agent prepares again), in the attempt's
 ensure-machine step (`ops.ensureMachine`; a driver's `ensureWorker`); the spec it makes is the one the attempt's
-machine and run get. Until the step that attaches them to an agent's run (ADR-024 skills, §17.2 step 8) a patch's
-`prompt.skills` and `env` are refused (`invalid_result`); `prompt.append` and `egress` apply. A deny fails the attempt
-for good (code `config`, reason `plugin:<name>`).
+machine and run get. A deny fails the attempt for good (code `config`, reason `plugin:<name>`).
+
+The kernel's rules (`src/plugins/hooks.ts` `applyPreparePatch`; since §17.2 step 8, before it `skills` and `env` were
+refused): a skill is `{name, hash, source, text}` with a name of `^[a-z0-9][a-z0-9._-]{0,63}$`, a non-empty `text` (its
+SKILL.md), `source` one of `builtin`, `user`, `project`, `plugin`, and `hash` the sha256 (hex) of `text`; a name already
+attached is `invalid`; at most 8 skills and 256 KB of them per agent, as on a message. `env` holds at most 32 variables
+per patch, each value a string of at most 4 096 characters; a name the agent's environment has (the payload's `env`: the
+runner's `HOME`, `PATH`, `CAPCOMD_RPC_DIR` and `CAPCOMD_CHECKOUT`, the provider's own variables and its credential's) or
+a reserved one is `widening`. Reserved (`reservedEnvName`), whether or not the agent has it, is a name that would steer
+the agent without prompt text: the kernel's `CAPCOMD_*`; the agent providers' families `ANTHROPIC_*`, `CLAUDE_*`,
+`OPENAI_*`, `CODEX_*` (where a CLI sends its credential, which login it reads); what a shell or runtime loads first
+(`LD_*`, `DYLD_*`, `NODE_*`, `NPM_CONFIG_*`, `PYTHON*`, `PERL5*`, `RUBY*`, `BASH_ENV`, `ENV`, `SHELL`, `IFS`, `CDPATH`,
+`PS4`, `PROMPT_COMMAND`, `ZDOTDIR`); the proxy and certificates its traffic trusts (`HTTP_PROXY`, `HTTPS_PROXY`,
+`ALL_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`); git's `GIT_*`; and
+`TMPDIR`, `USER`, `LOGNAME`. A value the redactor would change is `invalid` (secrets reach a sandbox as placeholders,
+§11.4). The payload a later listener sees has the earlier skills and the earlier variables' names; their values stay in
+the patches. The kernel then attaches them to the attempt's run: the skills' text after the profile's `append` and the
+plugins' appends, in the order the plugins added them, where the agent reads its instructions (Claude Code's appended
+system prompt, Codex's prompt), and recorded on the attempt's spec by `{name, hash, source}`; the variables in the
+agent's process environment, never in place of the runner's, the provider's or the credential's. The kernel's own
+listener, `skill-orchestration`, reads the agent's record from the kernel's call rather than the engine, so its `closed`
+failure never trips on a slow engine; an attempt no plugin prepared (a workflow that passed its prepare step under an
+earlier capcomd, started or restarted after an upgrade) gets the orchestration skill from the kernel, as before.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
@@ -1566,11 +1624,11 @@ manifest declares a notifier-shaped plugin (`run.changed` + `agent.changed` obse
 | `src/merge/direct.ts`'s push | `forge-git` (the CAS push; integration stays kernel) | seam: forge | §7.4 |
 | `startReview`, `finishReview`, `review.ts` | `gate-reviewer` | hook: `verify.judging` | §15.3 |
 | `src/merge/verify.ts` checks (kernel keeps them; a plugin may add judges) | kernel | | §6.6.13 |
-| `src/mcp/server.ts` tool list, `driver.ts` | `front-mcp` (24 tools as `ctx.mcp.tool`) | front door | §4.7.2 |
-| `src/cli/index.ts` `switch` groups | one `front-<group>` per group; `index.ts` becomes the dispatcher | front door | §4.7.1 |
-| `src/cli/commands/hermes.ts` | `front-hermes` | front door | |
+| `src/mcp/server.ts` tool list, `driver.ts` | `front-mcp` (25 tools as `ctx.mcp.tool`, `src/mcp/tools.ts`; `src/mcp/server.ts` serves the registrations) | front door | §4.7.2 |
+| `src/cli/index.ts` `switch` groups | one `front-<group>` per group (`front-run`, `front-primitives`, `front-profiles`, `front-env`, `front-setup`; `mcp` is front-mcp's), their commands in `src/cli/groups/`; `index.ts` becomes the dispatcher (`serve`, `plugins`, `help`, `version`, `tui` stay its own) | front door | §4.7.1 |
+| `src/cli/commands/hermes.ts` | `front-hermes` (`src/plugins/front/hermes-config.ts`; `capcomd hermes`, `capcomd hermes add`) | front door | §4.7.1 |
 | `src/utils/tracing-simple.ts` sinks, `runsIndexPath` writer | `observe-traces`, `observe-runs-index` | observers | §6.6.4 |
-| `src/subagents/skill.ts` prompt injection | `agent.preparing` patch from `front-mcp`'s sibling `skill-orchestration` | hook | §6.6.7 |
+| `src/subagents/skill.ts` prompt injection | `agent.preparing` patch from `front-mcp`'s sibling `skill-orchestration` (`src/plugins/skill-orchestration.ts`) | hook | §6.6.7 |
 | `src/recipes/hierarchical.ts` | `recipe-hierarchical`, **disabled by default**, kept for the parity eval (decision 5) | front door | |
 | `plugins/capcomd/` (Claude Code / Codex plugin) | unchanged: a plugin *for* the agent (ADR-018) | | |
 | `src/api/sandboxes.ts` settings/info rows | each sandbox plugin's `ui` descriptors | UI | §4.7.5 |
@@ -1591,7 +1649,7 @@ step changes `relay.v1`/`capcomd.v1` output or harness.v1 except by adding featu
 | 5 | Gates: `gate-reviewer`; a second test judge shows the AND; `--operator` bypass recorded (`plugin.gate_bypassed`) | `tests/primitives/verify-merge.test.ts`, `tests/scenarios/review.test.ts`, a bypass scenario asserting the event names the plugin |
 | 6 | Forges: `forge-github`, `forge-git`, `forge-fake`; `mergeTask` → `forge.land` under the kernel lock | `tests/merge/*` with `forge-fake`; `tests/api/project-git.test.ts` |
 | 7 | Jobs (§16.2): the service, `_jobs/` records, `exec` on the owner's machine via the spool, timers, `job.*` events, in-VM `capcomd job`, slots | a scenario: a scripted agent starts a 10 s job with `foregroundMs: 1000`, gets `running`, its result arrives as a message; restart mid-job settles it; the Docker sweep as a timer |
-| 8 | Front doors: MCP tools and CLI groups as registrations; `front-hermes`; `skill-orchestration` on `agent.preparing` | `tests/mcp/client.test.ts` lists the same tools; `tests/cli` passes; a test plugin's command and tool answer with the envelope and the caller's principal |
+| 8 | Front doors: MCP tools and CLI groups as registrations; `front-hermes`; `skill-orchestration` on `agent.preparing`, with `skills` and `env` attached to the agent's run (§6.6.7) | `tests/mcp/client.test.ts` lists the same tools; `tests/cli` passes; a test plugin's command and tool answer with the envelope and the caller's principal (`tests/plugins/front-doors.test.ts`); a test plugin's skill and variable reach the agent (`tests/subagents/prepare-skills.test.ts`) |
 | 9 | Out-of-process runtime (§9): spawn, filtered env, token minting, handshake, hooks stream, answers, restart, `plugins.protocol` routes applied to `contract.ts` (the fragment deleted) | a fixture process plugin (`tests/agents/fake-claude.sh` pattern); chaos killpoints `plugin.hook.mid`, `plugin.process.crash` with the audit "gate denied, nothing landed" |
 | 10 | Triggers (§16.3): sources, the intake, `triggers.sources.*` config, `observe` default, subscriptions, `trigger.*` events, `capcomd triggers log`; a `schedule` source; the GitHub source | a scenario with a fixture source: deduped, denied, recorded, started, continued; a subscription expires; `observe` runs nothing |
 | 11 | Watchdog built-in (§16.4) enabled by `setup` | a scenario with a scripted agent that stops producing checkpoints: `stalled` raised at the configured time, cancelled after |
@@ -1619,8 +1677,9 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
 | 1.0.11 | 2026-11-05 | With ADR-024's loader (its §7 step 1): `profile.resolved`'s `profile` carries the resolved profile's `version` and the layer it was found in (`project`, `user`, `bundled`) instead of always `{version: 1, source: "user"}` (§6.6.5); the profile code is `src/profiles/`. |
 | 1.0.12 | 2026-11-05 | The last forge logic in the forges (§7.4, §11.7): the optional `remoteCredential` (`ForgeRemoteCredential`; additive) supplies the credential host git uses for an https remote, which `host-git.ts` applies as the only helper for the remote's own origin (forge-github: the GitHub token for `https://github.com`, as before); `GET /v1/projects/branches` `source` is a string, the forge's name when its service answered; where a goal branch's pull request is merged is said with the run's forge's label. |
-| 1.0.13 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6 (numbered 1.0.7 by mistake when it landed, next to the forge row): `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
-| 1.0.14 | 2026-11-05 | With the jobs service (§17.2 step 7, §16.2): `exec` runs in the owner agent's machine through its spool pump's exec, as a detached runner whose files (`<spool>/jobs/<id>/`) outlive the daemon; the machine is attached while the agent runs, so re-attaching after a restart is the agent's pump starting again; a job whose agent ended unwatched settles `lost` when it is next read. A run-owned job machine (`owner: {run: true}` for `exec`) is refused `unsupported` until a later step; a job's `env` values are not kept on its record. The in-VM ops are `job.start`, `job.output`, `job.list`, `job.kill`, in every agent token (where an in-VM capcomd runs); a start's answer is the job as its agent reads it, and a job the agent stops itself sends no message. A single-string `cmd` runs with `sh -c`, more are argv. `afterTurnMs` is a job's default timeout (from its start), not yet counted from the agent's last step; daemon defaults are `CAPCOMD_JOBS_MAX`, `CAPCOMD_JOBS_FOREGROUND_MS`, `CAPCOMD_JOBS_AFTER_TURN_MS` (config `env`). The `jobs` block is pinned as is (`PinnedSpec.jobs`), from a v2 profile and as the flat field of a `capcomd.agents/v1` entry. A settled record keeps the last 48 KB of stdout and 16 KB of stderr; a job no message comes for is marked `quiet` in its directory, so the supervisor doesn't keep the CLI's input open for one. An agent's timers end with it (`killed`; one whose agent ended where no pump saw it, at its next fire). A timer may set both `at` (its first fire) and `everyMs`. An orchestrate agent starts no `exec` job (§16.1 item 6). The Docker sweep is `sandbox-docker`'s own timer (§15.1). `job.started`/`job.ended` are run events (additive), on the daemon stream for a plugin's timer. |
+| 1.0.13 | 2026-11-06 | With the front doors (§17.2 step 8): the kernel's own front doors keep capcomd's names (`capcomd_<tool>`, the kernel's commands), named by the built-in list (`kernelSurface`), `order: pre` (§4.2); `KERNEL_COMMANDS` is the dispatcher's own commands and the front doors' (§4.7.1); a command's flags, its output, its PluginError's exit code and reason, `--help`, a kernel front door's `{exit}` (`CliExit`, additive), where an in-process command runs (§4.7.1); a tool's `title`, `_meta` and `openWorldHint` (additive), its schema listed as registered, its arguments checked and only the named ones passed on (§4.7.2); the front doors still run in the process that serves them (§6.1); `agent.preparing`'s `skills` and `env` accepted, with the kernel's rules (names that steer the agent's provider, loader, proxy or git reserved) and how they reach the agent, and the payload's `env` filled in (§6.6.7); `front-hermes` adds `capcomd hermes` (§17.1). |
+| 1.0.14 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6 (numbered 1.0.7 by mistake when it landed, next to the forge row): `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
+| 1.0.15 | 2026-11-05 | With the jobs service (§17.2 step 7, §16.2): `exec` runs in the owner agent's machine through its spool pump's exec, as a detached runner whose files (`<spool>/jobs/<id>/`) outlive the daemon; the machine is attached while the agent runs, so re-attaching after a restart is the agent's pump starting again; a job whose agent ended unwatched settles `lost` when it is next read. A run-owned job machine (`owner: {run: true}` for `exec`) is refused `unsupported` until a later step; a job's `env` values are not kept on its record. The in-VM ops are `job.start`, `job.output`, `job.list`, `job.kill`, in every agent token (where an in-VM capcomd runs); a start's answer is the job as its agent reads it, and a job the agent stops itself sends no message. A single-string `cmd` runs with `sh -c`, more are argv. `afterTurnMs` is a job's default timeout (from its start), not yet counted from the agent's last step; daemon defaults are `CAPCOMD_JOBS_MAX`, `CAPCOMD_JOBS_FOREGROUND_MS`, `CAPCOMD_JOBS_AFTER_TURN_MS` (config `env`). The `jobs` block is pinned as is (`PinnedSpec.jobs`), from a v2 profile and as the flat field of a `capcomd.agents/v1` entry. A settled record keeps the last 48 KB of stdout and 16 KB of stderr; a job no message comes for is marked `quiet` in its directory, so the supervisor doesn't keep the CLI's input open for one. An agent's timers end with it (`killed`; one whose agent ended where no pump saw it, at its next fire). A timer may set both `at` (its first fire) and `everyMs`. An orchestrate agent starts no `exec` job (§16.1 item 6). The Docker sweep is `sandbox-docker`'s own timer (§15.1). `job.started`/`job.ended` are run events (additive), on the daemon stream for a plugin's timer. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

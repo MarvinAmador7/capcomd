@@ -12,7 +12,7 @@ import { CAPABILITY_NAMES } from "../api/contract";
 import { Redactor } from "../agents/redact";
 import { stateDir } from "../utils/home";
 import { VERSION } from "../utils/self";
-import { BUILTINS } from "./builtins";
+import { BUILTINS, candidateOf } from "./builtins";
 import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 import { pluginJobs } from "../jobs/service";
@@ -23,7 +23,7 @@ export type DaemonEventSink = (e: { type: string; entity: string; text: string; 
 /** What the daemon discovers (§4.8). Built-ins only in this version: user and project plugins arrive with the
  *  out-of-process runtime and `capcomd plugins install|trust` (§17.2 steps 9 and 12). */
 export function builtinCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module })), ...testPlugins(env)];
+  return [...BUILTINS.map(candidateOf), ...testPlugins(env)];
 }
 
 /** Tests only (`bun test` sets NODE_ENV=test): CAPCOMD_TEST_PLUGINS, `:`-separated plugin directories, load in process
@@ -121,16 +121,17 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
   });
 }
 
-/** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges),
- *  and in tests CAPCOMD_TEST_PLUGINS. */
+/** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges, the
+ *  front doors, the orchestration skill), and in tests CAPCOMD_TEST_PLUGINS. */
 export function localCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.filter((b) => b.everyProcess).map((b) => ({ source: "builtin" as const, manifest: b.manifest, module: b.module })), ...testPlugins(env)];
+  return [...BUILTINS.filter((b) => b.everyProcess).map(candidateOf), ...testPlugins(env)];
 }
 
 let local: Promise<PluginHost> | null = null;
 /**
  * The plugin host of a process that isn't the daemon, started once on first use: its gates (src/plugins/hooks.ts
- * `gates`) and its forges (src/plugins/forges `forgeFor`) are this host's. It writes no daemon-stream events (that
+ * `gates`), its forges (src/plugins/forges `forgeFor`) and its front doors (the CLI's commands, src/cli/front-doors.ts;
+ * the MCP server's tools, src/mcp/server.ts) are this host's. It writes no daemon-stream events (that
  * stream is the daemon's) and no listing; its gate events go on the run's stream like the daemon's.
  */
 export function localHost(env: Record<string, string | undefined> = process.env): Promise<PluginHost> {
