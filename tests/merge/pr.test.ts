@@ -1,8 +1,9 @@
 import { describe, expect, test, afterEach } from "bun:test";
 import { bareRepo, withoutEngine } from "./gitfixture";
 import { fakeGitHub } from "./fake-github";
-import { mergeTask, setGitHubApi } from "../../src/merge/service";
-import { HttpGitHub } from "../../src/merge/github";
+import { mergeTask } from "../../src/merge/service";
+import { setGitHubApi } from "../../src/plugins/forges/github-rest";
+import { HttpGitHub } from "../../src/plugins/forges/github-rest";
 import { produceFakeWork } from "../../src/merge/fakework";
 import { taskBranch, taskKey } from "../../src/merge/config";
 
