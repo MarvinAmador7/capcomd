@@ -97,6 +97,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "plugin.disposed": return "A plugin was unloaded.";
 		case "plugin.version_refused": return "A plugin doesn't support this capcomd.";
 		case "plugin.duplicate_refused": return "A second plugin of the same name was refused.";
+		case "plugin.config_refused": return `${d.plugin ? `The ${d.plugin} plugin's` : "A plugin's"} settings were refused.`;
 		case "plugin.hook_failed": return "A plugin's hook listener failed.";
 		case "plugin.suspended": return "A plugin's hooks were suspended.";
 		case "plugin.resumed": return "A plugin's hooks were resumed.";

@@ -16,8 +16,9 @@ import { BUILTINS, candidateOf } from "./builtins";
 import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 import { pluginJobs } from "../jobs/service";
+import { mergePatch, pluginConfigFiles, pluginSettings } from "./config";
+import { pluginAgents } from "./services";
 import { pluginTriggers } from "../triggers/intake";
-import { readConfig, userConfigPath } from "../config/store";
 import { pluginStore, storageService } from "./storage";
 import { processLauncher } from "./process";
 import type { ProcessTimings } from "../../packages/plugin/src/host/process";
@@ -29,7 +30,8 @@ export type DaemonEventSink = (e: { type: string; entity: string; text: string; 
  *  of process: a third-party plugin never runs in process, §5.2). Project plugins wait for `capcomd plugins trust`
  *  (§17.2 step 12). */
 export function builtinCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.map(candidateOf), ...testPlugins(env), ...userPlugins(env)].map((c) => configured(c, env));
+  const files = pluginConfigFiles({ env });
+  return [...BUILTINS.map(candidateOf), ...testPlugins(env), ...userPlugins(env)].map((c) => configured(c, env, files));
 }
 
 /** The user's plugins (§4.8 step 2), in name order: each directory of <home>/plugins holding a plugin.json. */
@@ -40,41 +42,19 @@ export function userPlugins(env: Record<string, string | undefined> = process.en
   return names.filter((n) => !n.startsWith(".") && existsSync(join(dir, n, "plugin.json"))).map((n) => ({ source: "user" as const, dir: join(dir, n) }));
 }
 
-/** JSON merge-patch (§10.2): objects merge key by key, arrays and values replace, null deletes. */
-function mergePatch(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
-  const out = { ...base };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === null) delete out[k];
-    else if (v && typeof v === "object" && !Array.isArray(v) && out[k] && typeof out[k] === "object" && !Array.isArray(out[k])) out[k] = mergePatch(out[k] as Record<string, unknown>, v as Record<string, unknown>);
-    else out[k] = v;
-  }
-  return out;
-}
-
 /**
- * A built-in's config (§10.2), over its schema's defaults (the host's): `plugins.<name>` in ~/.capcomd/config.json
- * (off with CAPCOMD_NO_CONFIG, as every user setting), then CAPCOMD_PLUGIN_<NAME>_<KEY> for each property its schema
- * names (upper-cased, `-` and `.` as `_`; a value that parses as JSON is that JSON, else the string). `enabled: false`
- * there holds it at `validated`. The project layer and a run's are later steps'.
+ * A candidate with its settings (§10.2, src/plugins/config.ts) over its schema's defaults (the host's): `plugins.<name>`
+ * in the user's, then the project's config (neither under CAPCOMD_NO_CONFIG), then CAPCOMD_PLUGIN_<NAME>_<KEY>.
+ * `enabled` from the last layer that says (false holds it at `validated`; true turns on a built-in that is off until
+ * asked for, the watchdog); what its schema refuses is `configErrors` (the host fails it `config_invalid`). A candidate
+ * whose manifest isn't read yet (a directory: a user's plugin, a test plugin) is as it was.
  */
-export function configured(c: Candidate, env: Record<string, string | undefined> = process.env): Candidate {
-  const m = c.manifest as { name?: unknown; config?: { properties?: Record<string, unknown> } } | undefined;
+export function configured(c: Candidate, env: Record<string, string | undefined> = process.env, files = pluginConfigFiles({ env })): Candidate {
+  const m = c.manifest as { name?: unknown; config?: unknown } | undefined;
   if (!m || typeof m.name !== "string") return c;
-  const user = env.CAPCOMD_NO_CONFIG ? undefined : (readConfig(userConfigPath(env)) as { plugins?: Record<string, unknown> }).plugins?.[m.name];
-  let config: Record<string, unknown> = { ...(c.config ?? {}) };
-  let enabled = c.enabled;
-  if (user && typeof user === "object" && !Array.isArray(user)) {
-    const { enabled: on, ...rest } = user as Record<string, unknown>;
-    if (typeof on === "boolean") enabled = on;
-    config = mergePatch(config, rest);
-  }
-  const envName = (k: string) => `CAPCOMD_PLUGIN_${`${m.name}_${k}`.toUpperCase().replace(/[-.]/g, "_")}`;
-  for (const k of Object.keys(m.config?.properties ?? {})) {
-    const v = env[envName(k)];
-    if (v === undefined) continue;
-    try { config[k] = JSON.parse(v); } catch { config[k] = v; }
-  }
-  return { ...c, ...(Object.keys(config).length ? { config } : {}), ...(enabled !== undefined ? { enabled } : {}) };
+  const s = pluginSettings(m as { name: string; config?: unknown }, { env, files });
+  const config = mergePatch(c.config ?? {}, s.config) as Record<string, unknown>;
+  return { ...c, ...(Object.keys(config).length ? { config } : {}), ...(s.enabled !== undefined ? { enabled: s.enabled } : {}), ...(s.errors.length ? { configErrors: s.errors } : {}) };
 }
 
 /** Tests only (`bun test` sets NODE_ENV=test): CAPCOMD_TEST_PLUGINS, `:`-separated plugin directories, load in process
@@ -144,10 +124,10 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
 }
 
 /**
- * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2) and `ctx.storage` (§8.4; one process writes a
- * plugin's storage: a CLI's local host has neither, `unsupported`). `triggers`: they get `ctx.triggers` too (§16.3; the
- * daemon's only). `process`: the plugin socket out-of-process plugins connect to (§9.2); without it they stay
- * `validated` (a CLI's local host).
+ * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2), `ctx.agents` (§8.4, src/plugins/services.ts) and
+ * `ctx.storage` (§8.4; one process writes a plugin's storage): a CLI's local host has none of them, `unsupported`.
+ * `triggers`: they get `ctx.triggers` too (§16.3; the daemon's only). `process`: the plugin socket out-of-process
+ * plugins connect to (§9.2); without it they stay `validated` (a CLI's local host).
  */
 export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
   const redactor = new Redactor();
@@ -172,7 +152,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
     },
     dataDir,
     ...(o.jobs || o.triggers ? { services: (m) => ({
-      ...(o.jobs ? { jobs: pluginJobs(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
+      ...(o.jobs ? { jobs: pluginJobs(m.name), agents: pluginAgents(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
       ...(o.triggers ? { triggers: pluginTriggers(m.name, m.scopes ?? []) } : {}),
     }) } : {}),
     secret: async (m, key) => resolveSecret(m, key),
@@ -185,7 +165,8 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
 /** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges, the
  *  front doors, the orchestration skill), and in tests CAPCOMD_TEST_PLUGINS. */
 export function localCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.filter((b) => b.everyProcess).map(candidateOf), ...testPlugins(env)].map((c) => configured(c, env));
+  const files = pluginConfigFiles({ env });
+  return [...BUILTINS.filter((b) => b.everyProcess).map(candidateOf), ...testPlugins(env)].map((c) => configured(c, env, files));
 }
 
 let local: Promise<PluginHost> | null = null;

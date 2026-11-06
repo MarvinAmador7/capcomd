@@ -18,6 +18,7 @@ import * as skillOrchestration from "./skill-orchestration";
 import * as contextRouter from "./context";
 import * as contextMemory from "./context-memory";
 import * as sourceSchedule from "./sources/schedule";
+import * as watchdog from "./watchdog";
 
 export type Builtin = Required<Pick<Candidate, "manifest" | "module">> & {
   /** A plugin the kernel needs in every process, not only the daemon: a gate wherever a verify runs (src/plugins/hooks.ts
@@ -29,6 +30,9 @@ export type Builtin = Required<Pick<Candidate, "manifest" | "module">> & {
   /** One of the kernel's own front doors (§4.2, §4.7.1): its CLI groups are the kernel's commands and its MCP tools are
    *  `capcomd_<tool>` (`Candidate.kernelSurface`). */
   kernelSurface?: boolean;
+  /** Off until `plugins.<name>.enabled: true` (§4.8): a built-in a person turns on, as `capcomd setup` does the
+   *  watchdog's (§16.4). */
+  off?: boolean;
 };
 
 const shipped = (m: object) => ({ ...m, version: VERSION, engines: { capcomd: VERSION } });
@@ -54,10 +58,15 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   { manifest: contextRouter.manifest, module: contextRouter.plugin as Builtin["module"], everyProcess: true },
   // Trigger sources (§16.3, step 10): schedules. GitHub's comments are forge-github's own source.
   { manifest: sourceSchedule.manifest, module: sourceSchedule.plugin as Builtin["module"] },
+  // The watchdog (§16.4, step 11): the daemon's, off until `capcomd setup` (or plugins.watchdog.enabled) turns it on.
+  { manifest: watchdog.manifest, module: watchdog.plugin as Builtin["module"], off: true },
 ];
 
 /** The kernel's own front doors, by name: the dispatcher prints their output as theirs (src/cli/front-doors.ts). */
 export const KERNEL_SURFACE: ReadonlySet<string> = new Set(BUILTINS.filter((b) => b.kernelSurface).map((b) => (b.manifest as { name: string }).name));
 
-/** A built-in as the host discovers it (§4.8). */
-export const candidateOf = (b: Builtin): Candidate => ({ source: "builtin", manifest: b.manifest, module: b.module, ...(b.kernelSurface ? { kernelSurface: true } : {}) });
+/** A built-in as the host discovers it (§4.8): on unless it is one a person turns on (`off`); its settings are
+ *  src/plugins/host.ts `configured`'s. */
+export const candidateOf = (b: Builtin): Candidate => ({
+  source: "builtin", manifest: b.manifest, module: b.module, ...(b.kernelSurface ? { kernelSurface: true } : {}), enabled: !b.off,
+});
