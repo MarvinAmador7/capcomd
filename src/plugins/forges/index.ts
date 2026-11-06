@@ -2,12 +2,12 @@
 // host activated (`capcomd serve` calls useForges); every other process that lands work, opens a pull request or reads
 // a remote's branches (the CLI, `capcomd mcp`, a test) uses its local host (src/plugins/host.ts `localHost`, the one
 // that also runs the built-in gates), so a forge is always a plugin and is chosen the same way. Kernel code asks
-// forgeFor(cfg) (or publishForge) and never names an implementation; what it gets back is the kernel's wrapper around
-// the plugin's object (§7.1): every method traced, a SeamCall that is always honoured, and the reads retried while the
-// forge's own classifyError says the failure is transient.
+// forgeFor(cfg) (or publishForge, remoteCredentialFor) and never names an implementation; what it gets back is the
+// kernel's wrapper around the plugin's object (§7.1): every method traced, a SeamCall that is always honoured, and the
+// reads retried while the forge's own classifyError says the failure is transient.
 import type { PluginHost } from "../../../packages/plugin/src/host/host";
 import { PluginError } from "../../../packages/plugin/src/errors";
-import type { ErrorClass, Forge, ForgeLogin, LandOutcome, LandRequest, SeamCall } from "../../../packages/plugin/src/seams";
+import type { ErrorClass, Forge, ForgeLogin, ForgeRemoteCredential, LandOutcome, LandRequest, SeamCall } from "../../../packages/plugin/src/seams";
 import type { MergeConfig } from "../../merge/config";
 import { addSpanEvent, getTraceContext, setSpanAttributes, withSpan } from "../../utils/tracing-simple";
 import { forgeScope, type ForgeScope } from "./scope";
@@ -104,6 +104,24 @@ export function forgeLogin(forge: Forge, input: Parameters<Forge["login"]>[0], s
   return withForge(scope, ms, (c) => forge.login(input, c));
 }
 
+/**
+ * The credential host git uses for an https `remote` (§7.4 `remoteCredential`, §11.7): asked of the active forges that
+ * match the remote, in load order; the first that has one. null when none does (the user's own git credentials apply),
+ * for a remote that isn't https, and when asking fails. Never rejects. Only src/merge/host-git.ts applies it.
+ */
+export async function remoteCredentialFor(remote: string, ms = 10_000): Promise<ForgeRemoteCredential | null> {
+  if (!/^https:\/\//i.test(remote.trim())) return null;
+  let all: Awaited<ReturnType<typeof activeForges>>;
+  try { all = await activeForges(); } catch { return null; }
+  for (const { forge } of all) {
+    const ask = forge.remoteCredential;
+    if (!ask || !forge.matches(remote)) continue;
+    const cred = await withForge({}, ms, (c) => ask({ remote }, c)).catch(() => null);
+    if (cred) return cred;
+  }
+  return null;
+}
+
 // ---- the kernel's wrapper (§7.1) ----
 
 /** What `e` is, as the forge says (§7.2.3); `unknown` when it can't say or its classifyError throws. */
@@ -174,5 +192,8 @@ function kernelForge(raw: Forge, plugin: string): Forge {
         const k = classify(raw, e);
         return { ok: false, reason: String((e as Error)?.message ?? e).slice(0, 300), fix: "hint" in k ? k.hint : null };
       }),
+    // Only on a forge that has it (the kernel then asks the next forge that matches). The span records no remote and no
+    // part of the answer.
+    ...(raw.remoteCredential ? { remoteCredential: (input: { remote: string }, c: SeamCall) => traced("remoteCredential", {}, c, (x) => raw.remoteCredential!(input, x), once) } : {}),
   };
 }

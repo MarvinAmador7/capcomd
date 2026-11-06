@@ -9,7 +9,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import { loadManifest } from "../../packages/plugin/src/load";
 import { taskBranch, taskKey, loadMergeConfig, type MergeConfig } from "../../src/merge/config";
 import { produceFakeWork } from "../../src/merge/fakework";
-import { GitHubHttpError } from "../../src/merge/github";
+import { GitHubHttpError } from "../../src/plugins/forges/github-rest";
 import { mergeTask } from "../../src/merge/service";
 import { BUILTINS } from "../../src/plugins/builtins";
 import { activeForges, forgeFor, ForgeNotActive, seamCall, useForges } from "../../src/plugins/forges";

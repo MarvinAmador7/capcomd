@@ -4,11 +4,12 @@
 // pushing exactly `sha`, the commit the checks passed on. Idempotent by `mrgId`. Records every call and whether the
 // kernel held the target's lock when it called `land`; knobs to move the target first, fail a land, or not claim PRs.
 // Its branches are the remote's own (`git ls-remote`, as any forge may read them) unless a test hands it a listing, a
-// failure, or failures that pass (to see the kernel retry); its login answers what a test says, per use.
+// failure, or failures that pass (to see the kernel retry); its login answers what a test says, per use; its credential
+// for host git is the one a test hands it (none by default).
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { definePlugin, PluginError, type Forge, type ForgeBranches, type ForgeLogin, type ForgeLoginUse, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "../../../packages/plugin/src/index";
+import { definePlugin, PluginError, type Forge, type ForgeBranches, type ForgeLogin, type ForgeLoginUse, type ForgeRemoteCredential, type LandOutcome, type LandRequest, type PullRequestRef, type SeamCall } from "../../../packages/plugin/src/index";
 import { lsRemoteBranches } from "../../../src/plugins/forges/git";
 import { Git } from "../../../src/merge/git";
 import { lockKey } from "../../../src/merge/lock";
@@ -43,10 +44,13 @@ export const fake = {
   seen: [] as Array<{ method: string; deadline: string; traceId: string }>,
   /** `findPullRequest` never settles and ignores its signal (the kernel must still answer `timeout`). */
   hangFind: false,
+  /** What `remoteCredential` answers (an Error is thrown); null: none. */
+  credential: null as ForgeRemoteCredential | Error | null,
   reset() {
     Object.assign(fake, {
       lands: [], calls: [], pulls: [], published: [], claims: [], pullRequests: true, lockDir: null, beforeLand: null, failNext: null,
       publish: true, branches: null, flakyBranches: 0, logins: { pullRequests: { ok: true, accounts: [] }, publish: { ok: true, accounts: [] } }, loginThrows: false, seen: [], hangFind: false,
+      credential: null,
     });
   },
 };
@@ -142,6 +146,13 @@ class FakeForge implements Forge {
     fake.seen.push({ method: "login", deadline: c.deadline, traceId: c.trace.traceId });
     if (fake.loginThrows) throw new PluginError("unavailable", "the fake forge can't tell who you are", "Log in to the fake forge");
     return fake.logins[input.use];
+  }
+
+  async remoteCredential(input: { remote: string }, c: SeamCall): Promise<ForgeRemoteCredential | null> {
+    fake.calls.push(`credential ${input.remote}`);
+    fake.seen.push({ method: "remoteCredential", deadline: c.deadline, traceId: c.trace.traceId });
+    if (fake.credential instanceof Error) throw fake.credential;
+    return fake.credential;
   }
 }
 

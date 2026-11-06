@@ -13,6 +13,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   { report: false }` keeps a profile from being spawned with `report` (refused with `reason: "report_not_allowed"`).
   A profile's `identity.title` and `identity.avatar` aren't passed to one that `extends` it. See docs/agents.md,
   "Profile files".
+- Forge plugins: a forge can now supply the credential capcomd's git uses on your machine for its https remotes (the
+  optional `remoteCredential` method, docs/spec/plugin-api.md §7.4), so a GitLab or Gitea forge plugin can push and
+  fetch with your login there. The built-in GitHub forge supplies your GitHub login for https://github.com as before;
+  nothing changes for GitHub users, and capcomd still never hands the credential to your own credential helper to save.
+- `GET /v1/projects/branches` `source` is now any forge's name (the forge whose service listed the branches), not only
+  `github`, `git` or `local`; a client that checks it should accept other names. Where a goal branch's pull request is
+  merged ("They review and merge it on GitHub", in `capcomd_goal`, `capcomd_pr_open` and the pull request's text) names
+  the run's forge.
 - New: agent profiles as YAML files. Put a profile in `.capcomd/profiles/<name>/profile.yaml` (or
   `.capcomd/profiles/<name>.yaml`; JSON works too), or in `~/.capcomd/profiles/` for every project, with blocks
   (`harness`, `prompt`, `tools`, `sandbox`, `limits`, `lifecycle`, `children`) instead of `agents.json`'s flat fields.
