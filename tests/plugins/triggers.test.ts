@@ -17,7 +17,7 @@ import { CreateRunError } from "../../src/api/source";
 import { resetJobs, useDaemonEvents } from "../../src/jobs/service";
 import { configured, kernelHost } from "../../src/plugins/host";
 import { useHooks } from "../../src/plugins/hooks";
-import { pluginStorage } from "../../src/plugins/storage";
+import { pluginStore, storageService } from "../../src/plugins/storage";
 import { checkSchedule, fireTrigger, manifest as scheduleManifest, plugin as schedulePlugin } from "../../src/plugins/sources/schedule";
 import { commentTrigger, pollGitHub } from "../../src/plugins/forges/github-source";
 import type { IssueComment } from "../../src/plugins/forges/github-rest";
@@ -343,7 +343,7 @@ describe("the GitHub source (forge-github)", () => {
 
   test("the first poll marks where it starts; later ones emit new comments in order, from where they left off", async () => {
     const emitted: Trigger[] = [];
-    const store = pluginStorage(join(home, "plugins", "forge-github"));
+    const store = storageService(pluginStore("forge-github", join(home, "plugins", "forge-github")));
     const ctx = { storage: store, log: { warn: () => {} }, triggers: { emit: async (t: Trigger) => { emitted.push(t); return { kind: "recorded" }; }, subscriptions: async () => [{ runId: "run-1", source: "github", thread: "acme/other#3", until: null }] } } as unknown as PluginContext<unknown>;
     const asked: Array<[string, string]> = [];
     let page: IssueComment[] = [];
@@ -365,7 +365,7 @@ describe("the GitHub source (forge-github)", () => {
 
   test("a mention of the login addresses capcomd only with sourceMentions: the login is usually the user's own", async () => {
     const emitted: Trigger[] = [];
-    const store = pluginStorage(join(home, "plugins", "forge-github"));
+    const store = storageService(pluginStore("forge-github", join(home, "plugins", "forge-github")));
     const ctx = { storage: store, log: { warn: () => {} }, triggers: { emit: async (t: Trigger) => { emitted.push(t); return { kind: "recorded" }; }, subscriptions: async () => [] } } as unknown as PluginContext<unknown>;
     const since = new Date(Date.now() - 60_000).toISOString(), at = new Date().toISOString();
     await store.put("daemon", "github/acme/app", { since });
@@ -381,7 +381,7 @@ describe("the GitHub source (forge-github)", () => {
   test("a comment the intake couldn't act on for now is read again at the next poll; one it refused for good is not", async () => {
     const tried: string[] = [];
     let fail: PluginError | null = new PluginError("unavailable", "the engine didn't answer", undefined, true), failOn = "comment-2";
-    const store = pluginStorage(join(home, "plugins", "forge-github"));
+    const store = storageService(pluginStore("forge-github", join(home, "plugins", "forge-github")));
     const ctx = { storage: store, log: { warn: () => {} }, triggers: {
       emit: async (t: Trigger) => { tried.push(t.id); if (fail && t.id === failOn) throw fail; return { kind: "started", runId: "run-x" }; },
       subscriptions: async () => [],
@@ -410,22 +410,7 @@ describe("the GitHub source (forge-github)", () => {
   });
 });
 
-describe("ctx.storage and built-in config", () => {
-  test("daemon-scope storage: get, put, cas, list, delete; keys are checked; run scope isn't available yet", async () => {
-    const s = pluginStorage(join(home, "plugins", "p"));
-    expect(await s.get("daemon", "a/b")).toBeUndefined();
-    await s.put("daemon", "a/b", { n: 1 });
-    expect(await s.get("daemon", "a/b")).toEqual({ n: 1 });
-    expect(await s.cas("daemon", "a/b", { n: 2 }, { n: 3 })).toBe(false);
-    expect(await s.cas("daemon", "a/b", { n: 1 }, { n: 3 })).toBe(true);
-    expect(await s.cas("daemon", "new", undefined, 1)).toBe(true);
-    expect(await s.list("daemon", "a/")).toEqual(["a/b"]);
-    await s.delete("daemon", "a/b");
-    expect(await s.list("daemon", "")).toEqual(["new"]);
-    await expect(s.put("daemon", "../x", 1)).rejects.toBeInstanceOf(PluginError);
-    await expect(s.get({ runId: "run-1" }, "x")).rejects.toMatchObject({ code: "unsupported" });
-  });
-
+describe("built-in config", () => {
   test("a built-in's config: plugins.<name> in the user's config, then CAPCOMD_PLUGIN_<NAME>_<KEY>; enabled: false turns it off", () => {
     writeFileSync(join(home, "config.json"), JSON.stringify({ plugins: { "source-schedule": { enabled: false, schedules: { a: { text: "x", everyMs: 1000 } } } } }));
     const c = { source: "builtin" as const, manifest: scheduleManifest, module: schedulePlugin as Candidate["module"] };

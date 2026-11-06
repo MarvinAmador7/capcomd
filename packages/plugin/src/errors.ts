@@ -34,6 +34,16 @@ export class PluginError extends Error {
 /** Why a hook listener's call did not produce a usable result (§6.5; event `plugin.hook_failed`). */
 export type HookFailureKind = "timeout" | "threw" | "crashed" | "invalid_result" | "disconnected" | "suspended";
 
+/** A listener's call that failed for a reason the host knows, not the listener's own throw: an out-of-process plugin's
+ *  process exited with the call in flight (`crashed`) or its hooks stream is gone (`disconnected`, §9.5). The registry
+ *  records its `kind` instead of `threw`. */
+export class HookFailure extends Error {
+  override readonly name = "HookFailure";
+  constructor(readonly kind: HookFailureKind, message: string) {
+    super(message);
+  }
+}
+
 /** Why a plugin is `failed` (§5.4; event `plugin.failed`). */
 export type PluginFailureCause =
   | "invalid_manifest" | "incompatible" | "duplicate" | "untrusted" | "disabled"

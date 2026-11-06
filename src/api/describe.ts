@@ -100,6 +100,7 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "plugin.hook_failed": return "A plugin's hook listener failed.";
 		case "plugin.suspended": return "A plugin's hooks were suspended.";
 		case "plugin.resumed": return "A plugin's hooks were resumed.";
+		case "plugin.process_changed": return "A plugin's process changed.";
 		// Plugin names are [a-z0-9-] (the manifest's pattern); the plugin's reason stays in data.
 		case "plugin.gate_denied": return `${d.plugin ? `The ${d.plugin} plugin` : "A plugin"} ${d.decision === "hold" ? "held" : "denied"} ${d.entity ?? "an operation"}.`;
 		case "plugin.gate_bypassed": return `The operator's merge ${d.entity ?? ""} went past ${Array.isArray(d.plugins) ? d.plugins.length : 0} plugin veto(es).`.replace("  ", " ");

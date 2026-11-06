@@ -17,6 +17,8 @@ export const KERNEL_COMMANDS = [
   "tui", "ui", "upgrade", "verify", "version", "wait-any", "check", "hermes", "triggers",
 ] as const;
 
+const PROCESS_PROTOCOL = 1;
+
 /** The plugin API majors this host serves (§12.1). */
 export const API_VERSIONS: readonly number[] = [1];
 
@@ -55,6 +57,12 @@ export function checkManifest(m: PluginManifest, o: CheckOptions = {}): { invali
     if (decl?.failure === "closed" && meta.mode === "observe")
       warnings.push({ path: `contributes.hooks.${hook}.failure`, message: `${hook} is an observe hook: failure is always open (§6.5)` });
   }
+  // Protocol 1 carries hooks and events only (§9.6): a seam, a source, a context provider (ADR-025: in process only) or a
+  // front door of a process plugin would never be
+  // registered, so its manifest can't declare one (its `provides` would order and resolve others by a lie).
+  if (m.entry.runtime === "process")
+    for (const k of ["seams", "sources", "context", "cli", "mcp", "api", "ui"] as const)
+      if (m.contributes?.[k]?.length) invalid.push({ path: `contributes.${k}`, message: `an out-of-process plugin contributes hooks and events only in protocol ${PROCESS_PROTOCOL}; ${k} are in-process (§9.6)` });
   for (const [i, c] of (m.contributes?.cli ?? []).entries())
     if (!o.kernelSurface && (KERNEL_COMMANDS as readonly string[]).includes(c.name)) invalid.push({ path: `contributes.cli.${i}.name`, message: `\`capcomd ${c.name}\` is a kernel command (§4.7.1)` });
   if (!parseRange(m.engines.capcomd)) invalid.push({ path: "engines.capcomd", message: `not a semver range: ${JSON.stringify(m.engines.capcomd)}` });

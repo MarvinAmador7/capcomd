@@ -2,8 +2,9 @@
 // plugin registers a seam object: SeamCall-shaped methods plus describe, available and classifyError. The kernel's
 // consumers keep calling the kernel shape (`exec(id, cmd, {timeoutMs})`), and the built-ins' providers keep their own
 // extras (snapshots, secrets, interactive sessions), so a built-in's seam carries its kernel provider factory under
-// NATIVE and the kernel uses that object as it always has; a seam without one (a third-party plugin, step 9) is adapted
-// here, its errors turned back into the kernel's sandbox errors through its own classifyError (§7.2.3).
+// NATIVE and the kernel uses that object as it always has; a seam without one (a test's plugin: out-of-process plugins
+// carry no seam in protocol 1, §9.6) is adapted here, its errors turned back into the kernel's sandbox errors through its
+// own classifyError (§7.2.3).
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { ErrorClass, SandboxDescriptor, SandboxProvider as SandboxSeam, SeamCall } from "../../packages/plugin/src/seams";
 import {

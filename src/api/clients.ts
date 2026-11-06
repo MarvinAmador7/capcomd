@@ -11,8 +11,9 @@ import { capcomdHome } from "../utils/home";
 export const CLIENT_SCOPES = ["read", "steer", "approve", "configure"] as const;
 export type ClientScope = (typeof CLIENT_SCOPES)[number];
 /** `app`: made by `capcomd clients pair --app <app>` (the next pairing of that app revokes it). */
-export type ClientRecord = { id: string; name: string; scopes: ClientScope[]; sha256: string; createdAt: string; revokedAt: string | null; app?: string };
-export type AuthedClient = { clientId: string; name: string; scopes: ClientScope[] };
+export type ClientRecord = { id: string; name: string; scopes: ClientScope[]; sha256: string; createdAt: string; revokedAt: string | null; app?: string; plugin?: string };
+/** `plugin`: the token was minted for that plugin's process (plugin API §9.3), which its protocol routes require. */
+export type AuthedClient = { clientId: string; name: string; scopes: ClientScope[]; plugin?: string };
 
 export const clientsPath = (env: Record<string, string | undefined> = process.env) => join(capcomdHome(env), "harness-clients.json");
 const hash = (t: string) => createHash("sha256").update(t).digest("hex");
@@ -81,7 +82,24 @@ export function authenticate(header: string | null | undefined, clients: ClientR
 	for (const c of clients) {
 		if (c.revokedAt) continue;
 		const ch = Buffer.from(c.sha256, "hex");
-		if (ch.length === h.length && timingSafeEqual(ch, h)) return { clientId: c.id, name: c.name, scopes: c.scopes };
+		if (ch.length === h.length && timingSafeEqual(ch, h)) return { clientId: c.id, name: c.name, scopes: c.scopes, ...(c.plugin ? { plugin: c.plugin } : {}) };
 	}
 	return null;
 }
+
+/**
+ * Out-of-process plugins' tokens (plugin API §9.3): minted like `addClient`'s, named `plugin:<name>` with the manifest's
+ * scopes and marked with the plugin, one per start of its process. They live in this daemon's memory only, never in
+ * harness-clients.json: revoking one deletes it, and a daemon that dies leaves none behind that still works.
+ */
+const pluginTokens = new Map<string, ClientRecord>();
+
+export function mintPluginClient(plugin: string, scopes: readonly string[]): { client: ClientRecord; token: string; revoke(): void } {
+	const made = mint(`plugin:${plugin}`, scopes.filter((s): s is ClientScope => s !== "approve" && (CLIENT_SCOPES as readonly string[]).includes(s)));
+	const client: ClientRecord = { ...made.client, id: `plg-${randomBytes(6).toString("hex")}`, plugin };
+	pluginTokens.set(client.id, client);
+	return { client, token: made.token, revoke: () => { pluginTokens.delete(client.id); } };
+}
+
+/** The plugin tokens that work now (the gateway authenticates against these beside the file's clients). */
+export const pluginClients = (): ClientRecord[] => [...pluginTokens.values()];

@@ -3612,6 +3612,57 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `plugin.process_changed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "plugin": {
+      "type": "string"
+    },
+    "event": {
+      "type": "string",
+      "description": "started, disconnected (its hooks stream has been closed for 60 s: its gate calls fail), reconnected, exited, restarting (more may come)"
+    },
+    "pid": {
+      "description": "The process's id; null when it couldn't be started",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "code": {
+      "description": "exited: its exit code; null when a signal ended it, and for the other events",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "restarts": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
+      "description": "Its exits in the last 10 minutes: at 5 it is failed with cause restart_limit"
+    }
+  },
+  "required": [
+    "plugin",
+    "event",
+    "pid",
+    "code",
+    "restarts"
+  ],
+  "additionalProperties": {},
+  "description": "Capability plugins.protocol. Durable, on the `daemon` stream (and GET /v1/events?scope=daemon); `entity` is plugin:<name>; the envelope text is daemon-written. An out-of-process plugin's process changed (spec §9.5): each start has a new session and token; a gate call in flight when it exited was denied"
+}
+```
+
 # Lifecycle feed
 
 Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.

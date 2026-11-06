@@ -15,6 +15,8 @@ import { isListedProvider, LISTED_PROVIDERS, PROVIDER_LABEL } from "../providers
 import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES } from "./sandboxes";
 import { PLUGIN_NAME_PATTERN } from "../../packages/plugin/src/manifest";
 import { PLUGIN_STATES } from "../../packages/plugin/src/host/host";
+import { HOOK_NAMES, type HookName } from "../../packages/plugin/src/hooks";
+import { EVENT_NAME_PATTERN } from "../../packages/plugin/src/event-type";
 import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TABLE_MAX_COLS, TABLE_MAX_ROWS, THREAD_FORMAT, ThreadItem } from "../../packages/agent-thread/src/index";
 
 export { ThreadItem };
@@ -316,6 +318,13 @@ const PluginEventData = {
 	"plugin.resumed": z.looseObject({
 		plugin: z.string(), by: z.string().describe("Who resumed it"),
 	}).describe(`${PLUGIN_EVENT}. A suspended plugin's listeners are called again`),
+	"plugin.process_changed": z.looseObject({
+		plugin: z.string(),
+		event: z.string().describe("started, disconnected (its hooks stream has been closed for 60 s: its gate calls fail), reconnected, exited, restarting (more may come)"),
+		pid: z.number().int().nullable().describe("The process's id; null when it couldn't be started"),
+		code: z.number().int().nullable().describe("exited: its exit code; null when a signal ended it, and for the other events"),
+		restarts: z.number().int().describe("Its exits in the last 10 minutes: at 5 it is failed with cause restart_limit"),
+	}).describe(`Capability plugins.protocol. Durable, on the \`daemon\` stream (and GET /v1/events?scope=daemon); \`entity\` is plugin:<name>; the envelope text is daemon-written. An out-of-process plugin's process changed (spec §9.5): each start has a new session and token; a gate call in flight when it exited was denied`),
 } as const;
 
 /** The trigger intake's events (capability triggers; docs/spec/plugin-api.md §16.3, src/triggers/intake.ts). */
@@ -481,8 +490,9 @@ export const CAPABILITIES = {
 	"runs.goal_branch": "Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events",
 	"agents.title": "Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled",
 	"agents.thread_tail": "GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages",
-	plugins: "GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; plugin.* events on the daemon stream audit the plugin host",
+	plugins: "GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; GET /v1/plugins/{name} (its manifest and config, never a secret); POST /v1/plugins/{name}/enable and /disable (the configure scope, an Idempotency-Key); plugin.* events on the daemon stream audit the plugin host",
 	profiles: "GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there",
+	"plugins.protocol": "The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process",
 	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
@@ -617,7 +627,76 @@ export const PluginSummary = z.object({
 });
 export const Plugins = z.object({ plugins: z.array(PluginSummary).describe("In load order, then the plugins that didn't load, in the order they were discovered") });
 export const PLUGINS_DOC = "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. " +
-	"This capcomd ships no plugins yet, so the list is empty until it does.";
+	"The built-in plugins come first; the user's own (out of process, from ~/.capcomd/plugins) after them.";
+const PluginName = z.string().regex(new RegExp(PLUGIN_NAME_PATTERN)).describe("A plugin's name: lowercase letters, digits and hyphens");
+const HookNameSchema = z.enum(HOOK_NAMES as [HookName, ...HookName[]]).describe("A hook (spec §6.6). Ignore names you don't know");
+/** GET /v1/plugins/{name} (capability plugins): spec §13.2. */
+export const PluginDetail = PluginSummary.extend({
+	manifest: z.looseObject({}).nullable().describe("The validated manifest (capcomd.plugin/v1); null when it couldn't be read. Its strings are the plugin author's: render them as plain text"),
+	config: z.object({
+		values: z.record(z.string(), z.unknown()).describe("The plugin's config, every `x-secret` property left out"),
+		sources: z.record(z.string(), z.enum(["default", "user", "project", "env"])).describe("Where each value came from"),
+	}),
+});
+export const PLUGIN_DETAIL_DOC = "Capability plugins. One plugin as GET /v1/plugins lists it, with its validated manifest and its config without any secret. Needs the `read` scope. 404 `not_found` for a name the daemon didn't discover.";
+const PLUGIN_CONTROL_DOC = (what: string) => `Capability plugins. ${what} Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. ` +
+	"404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. For this daemon's life: config doesn't record it yet.";
+
+/** The out-of-process protocol (capability plugins.protocol): spec §9, packages/plugin/src/protocol.ts. */
+const PROTOCOL = "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running.";
+export const SessionOpen = z.object({
+	session: z.string().describe("CAPCOMD_PLUGIN_SESSION: a new one per start of the process"),
+	protocol: z.literal(1).describe("The protocol version the process speaks"),
+	manifestHash: z.string().regex(/^[0-9a-f]{64}$/).describe("sha256 of the plugin.json the process was started from"),
+	pid: z.number().int().describe("The process's id"),
+	hooks: z.array(HookNameSchema).describe("The hooks it will answer: exactly its manifest's contributes.hooks"),
+});
+export const SessionOpened = z.object({
+	session: z.string(), protocol: z.literal(1),
+	plugin: z.object({ name: z.string(), version: z.string(), scopes: z.array(z.enum(["read", "steer", "configure"])).describe("The scopes its token carries") }),
+	config: z.record(z.string(), z.unknown()).describe("Its config, secret properties left out"),
+	secrets: z.record(z.string(), z.string()).describe("Its own `x-secret` properties' values, sent once, here; never logged, never in events, never in its environment"),
+	hookTimeoutsMs: z.record(z.string(), z.number().int()).describe("Per hook, the deadline the daemon applies to a call, in ms"),
+	connectWithinMs: z.number().int().describe("The hooks stream must be open within this of the start, else the process is stopped"),
+	daemon: z.object({ version: z.string(), capabilities: z.array(z.string()) }),
+});
+export const WireHookCall = z.looseObject({
+	callId: z.string().describe("The answer's key"), hook: HookNameSchema, mode: z.enum(["observe", "veto", "modify"]), payloadVersion: z.number().int(),
+	idempotencyKey: z.string().describe("<hook>:<entity id>:<attempt>: the same when the daemon asks the same decision again (spec §6.7)"),
+	deadline: Timestamp.describe("Absolute, the daemon's clock: past it the daemon applies the failure policy (a gate denies). Answer with a second to spare"),
+	trace: z.object({ traceId: z.string(), spanId: z.string() }),
+	principal: z.looseObject({ kind: z.string().describe("operator, driver, agent, viewer or plugin: who caused the operation") }),
+	runId: z.string().nullable(), agentId: z.string().nullable(), at: Timestamp,
+	deprecated: z.object({ since: z.string(), replacement: z.string().nullable() }).optional(),
+	payload: z.looseObject({}).describe("The hook's payload (spec §6.6); agent-written text inside is {text, untrusted: true, by}: plain text"),
+});
+export const HookFrame = z.discriminatedUnion("frame", [
+	z.object({ frame: z.literal("hook.call"), seq: z.number().int(), call: WireHookCall }),
+	z.object({ frame: z.literal("hook.dropped"), seq: z.number().int(), count: z.number().int().describe("Observe calls not delivered"), hooks: z.array(HookNameSchema).describe("Their hooks, when known") }),
+	z.object({ frame: z.literal("session.closing"), seq: z.number().int(), reason: z.enum(["daemon_stopping", "disabled", "replaced"]).describe("Finish open calls and exit (replaced: a newer stream of this session took over)") }),
+]);
+export const HookAnswerBody = z.object({
+	session: z.string(),
+	result: z.looseObject({
+		decision: z.enum(["allow", "deny", "hold"]).describe("hold: merge.landing only"),
+		reason: z.string().max(500).optional().describe("deny and hold: required"),
+		reasons: z.array(z.string().max(500)).max(20).optional(),
+		patch: z.looseObject({}).optional().describe("modify hooks only: what the hook may patch (spec §6.6)"),
+		holdId: z.string().min(1).max(200).optional(),
+		review: z.looseObject({}).optional().describe("verify.judging only: the judge's report (spec §6.6.13)"),
+	}),
+});
+export const EmitBody = z.object({
+	type: z.string().regex(new RegExp(EVENT_NAME_PATTERN)).describe("Without the plugin prefix: one of its contributes.events (written as plugin.<name>.<type>)"),
+	stream: z.string().describe("daemon, or a run id"),
+	entity: z.string().optional().describe("What the event is about; absent or empty: plugin:<name>"),
+	text: z.string().max(500).describe("The plugin's own sentence (clients render it as plain text)"),
+	data: z.record(z.string(), z.unknown()).describe("At most 64 KB; redacted"),
+	durability: z.enum(["durable", "ephemeral"]).optional().describe("ephemeral is refused for now (422)"),
+});
+export const StorageEntry = z.object({ key: z.string(), value: z.unknown(), rev: z.string().describe("Changes with every write") });
+const StorageQuery = { run: z.string().optional().describe("A run id: that run's scope (deleted with the run); absent: the daemon scope") };
+const StorageKeyParam = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/);
 /** GET /v1/profiles (capability profiles): ADR-024 §5, the rows `capcomd profiles list --json` lists. */
 const ProfileLayerName = z.string().describe("A layer profiles are found in, highest first: project (the project's .capcomd/profiles/ and its agents.json), user (~/.capcomd/profiles/, or the user's agents.json), bundled (shipped with capcomd). More may be added (installed packages): treat one you don't know as user");
 export const ProfileFile = z.object({
@@ -1126,6 +1205,37 @@ export const contract = {
 	},
 	plugins: {
 		list: oc.route({ method: "GET", path: "/v1/plugins", description: PLUGINS_DOC }).output(Plugins),
+		get: oc.route({ method: "GET", path: "/v1/plugins/{name}", description: PLUGIN_DETAIL_DOC }).input(z.object({ name: PluginName })).output(PluginDetail),
+		enable: oc.route({ method: "POST", path: "/v1/plugins/{name}/enable", inputStructure: "detailed", description: PLUGIN_CONTROL_DOC("Run the plugin's lifecycle again from validated (spec §5.4): resolved, loaded, active; for an active plugin, reset a tripped breaker (plugin.resumed). A failed out-of-process plugin (restart_limit) gets a new process.") })
+			.input(z.object({ params: z.object({ name: PluginName }), headers: IdempotencyHeaders })).output(PluginSummary),
+		disable: oc.route({ method: "POST", path: "/v1/plugins/{name}/disable", inputStructure: "detailed", description: PLUGIN_CONTROL_DOC("Dispose the plugin (spec §5.4: disposing, then disposed with cause disabled); an out-of-process plugin's process gets session.closing, then SIGTERM, then SIGKILL. A built-in can't be: 409 `conflict`.") })
+			.input(z.object({ params: z.object({ name: PluginName }), headers: IdempotencyHeaders })).output(PluginSummary),
+		openSession: oc.route({
+			method: "POST", path: "/v1/plugins/{name}/sessions", inputStructure: "detailed",
+			description: `${PROTOCOL} The handshake (spec §9.3), within connectWithinMs of the start. 409 \`conflict\` for a session id the daemon didn't issue for this start, one already open, or a manifestHash that isn't the loaded plugin.json's; 422 \`invalid\` for a protocol it doesn't speak or hooks that aren't exactly contributes.hooks. Answers the config, the plugin's secrets once, and the deadlines.`,
+		}).input(z.object({ params: z.object({ name: PluginName }), body: SessionOpen })).output(SessionOpened),
+		hooks: oc.route({
+			method: "GET", path: "/v1/plugins/{name}/hooks", inputStructure: "detailed",
+			description: `${PROTOCOL} The session's hook calls (spec §9.4), SSE: \`event:\` is the frame (hook.call, hook.dropped, session.closing), \`id:\` its seq, heartbeat comments every 15 s. One stream per session (a second closes the first with session.closing reason replaced). Last-Event-ID resumes: the frames after it again, and the open gate call (same callId); a gap past the 1 000 kept is a hook.dropped. ` +
+				"Gate and modify calls come one at a time (the next after this one is answered or its deadline passes); observe calls as they happen, queued while no stream is open (1 000 frames or 4 MB, then the oldest are dropped and counted). Closed for 60 s, the plugin is disconnected: its gate calls fail (denied). 409 `conflict` for a session that isn't this start's, or isn't open.",
+		}).input(z.object({ params: z.object({ name: PluginName }), query: z.object({ session: z.string() }), headers: z.object({ "last-event-id": z.string().regex(/^\d+$/).optional() }) }))
+			.output(eventIterator(HookFrame)),
+		answer: oc.route({
+			method: "POST", path: "/v1/plugins/{name}/hooks/{callId}", inputStructure: "detailed", successStatus: 204,
+			description: `${PROTOCOL} Answer one gate or modify call (spec §9.4) before its deadline. 204 when it was taken (also for an observe call: no answer is needed, one is taken). 404 \`not_found\` for a call this session wasn't sent; 409 \`conflict\` when it was answered already or its deadline passed (the daemon applied its failure policy: log it and move on), or for another session; 422 \`invalid\` when the result doesn't fit the hook's mode or a modify patch widens (\`message\` says how): the call failed with invalid_result, which a gate denies.`,
+		}).input(z.object({ params: z.object({ name: PluginName, callId: z.string() }), body: HookAnswerBody })).output(z.void()),
+		emit: oc.route({
+			method: "POST", path: "/v1/plugins/{name}/events", inputStructure: "detailed", successStatus: 201,
+			description: `${PROTOCOL} ctx.events.emit (spec §9.6): a durable plugin.<name>.<type> event on the daemon stream or a run's. Needs the steer scope (403 \`forbidden\`), a type in contributes.events (403) and an Idempotency-Key (keyed by the plugin, across its restarts: the same key and body answer the first seq). 404 \`not_found\` for a run that doesn't exist; 422 \`invalid\` for text over 500 characters, data over 64 KB or ephemeral.`,
+		}).input(z.object({ params: z.object({ name: PluginName }), headers: IdempotencyHeaders, body: EmitBody })).output(z.object({ seq: z.number().int() })),
+		storageList: oc.route({ method: "GET", path: "/v1/plugins/{name}/storage", inputStructure: "detailed", description: `${PROTOCOL} ctx.storage.list (spec §8.4, §9.6): its own keys under \`prefix\`, in name order, with their values. The storage is private to the plugin. 404 \`not_found\` for a run that doesn't exist.` })
+			.input(z.object({ params: z.object({ name: PluginName }), query: z.object({ prefix: z.string().max(200).optional(), ...StorageQuery }) })).output(z.object({ entries: z.array(StorageEntry) })),
+		storageGet: oc.route({ method: "GET", path: "/v1/plugins/{name}/storage/{key}", inputStructure: "detailed", description: `${PROTOCOL} ctx.storage.get. \`key\` keeps its \`/\` as is. 404 \`not_found\` when it is unset.` })
+			.input(z.object({ params: z.object({ name: PluginName, key: StorageKeyParam }), query: z.object(StorageQuery) })).output(StorageEntry),
+		storagePut: oc.route({ method: "PUT", path: "/v1/plugins/{name}/storage/{key}", inputStructure: "detailed", description: `${PROTOCOL} ctx.storage.put and cas: with \`expect\` (the JSON text of the current value, or null for "unset") a compare-and-swap, whose mismatch is 409 \`conflict\` with \`current\`, the entry now. Values are JSON of at most 64 KB (422 beyond).` })
+			.input(z.object({ params: z.object({ name: PluginName, key: StorageKeyParam }), query: z.object(StorageQuery), body: z.object({ value: z.unknown(), expect: z.string().nullable().optional() }) })).output(StorageEntry),
+		storageDelete: oc.route({ method: "DELETE", path: "/v1/plugins/{name}/storage/{key}", inputStructure: "detailed", successStatus: 204, description: `${PROTOCOL} ctx.storage.delete; an unset key is 204 too.` })
+			.input(z.object({ params: z.object({ name: PluginName, key: StorageKeyParam }), query: z.object(StorageQuery) })).output(z.void()),
 	},
 	profiles: {
 		list: oc.route({ method: "GET", path: "/v1/profiles", description: PROFILES_DOC }).input(ProfilesQuery).output(Profiles),
