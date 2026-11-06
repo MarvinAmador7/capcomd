@@ -161,7 +161,9 @@ export async function hostCredentialEnv(remote: string, source: Record<string, s
     [`GIT_CONFIG_KEY_${n}`]: `credential.${origin}.helper`,
     [`GIT_CONFIG_VALUE_${n}`]: "",
     [`GIT_CONFIG_KEY_${n + 1}`]: `credential.${origin}.helper`,
-    [`GIT_CONFIG_VALUE_${n + 1}`]: '!f() { test "$1" = get || exit 0; echo "username=$CAPCOMD_GIT_USERNAME"; echo "password=$CAPCOMD_GIT_TOKEN"; }; f',
+    // printf, not echo: sh's echo (macOS, dash) expands backslash escapes, so a password with `\n` in it would add lines
+    // (`host=…`) to git's credential and `\c` would cut it short. `%s` writes the values as they are.
+    [`GIT_CONFIG_VALUE_${n + 1}`]: `!f() { test "$1" = get || exit 0; printf 'username=%s\\npassword=%s\\n' "$CAPCOMD_GIT_USERNAME" "$CAPCOMD_GIT_TOKEN"; }; f`,
   };
 }
 

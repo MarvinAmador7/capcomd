@@ -288,6 +288,23 @@ describe("host git's credential for a remote is its forge's (§7.4 remoteCredent
     expect(credentialOrigin({ origin: "https://forge.example:8443" }, "https://forge.example/acme/app.git")).toBeNull();
   });
 
+  test("git gets the credential exactly as the forge gave it: backslashes in a password add no lines and cut nothing", async () => {
+    // sh's echo expands `\n` and `\c` (macOS /bin/sh, dash): a helper that echoed the password let a forge's
+    // `p\nhost=evil.example` reach git as a second line, and git took the host from it.
+    fake.claims = ["https://forge.example/"];
+    const password = String.raw`p\nhost=evil.example\cTAIL\\x %s`;
+    fake.credential = { ...CRED, username: String.raw`bot\tname`, password };
+    const { hostCredentialEnv } = await import("../../src/merge/host-git");
+    const home = mkdtempSync(join(scratch, "cred-home-"));
+    const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, GIT_CONFIG_NOSYSTEM: "1", ...(await hostCredentialEnv(REMOTE, {})) };
+    const p = Bun.spawn(["git", "credential", "fill"], { cwd: home, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    p.stdin.write("protocol=https\nhost=forge.example\n\n");
+    p.stdin.end();
+    const [out, code] = [await new Response(p.stdout).text(), await p.exited];
+    expect(code).toBe(0);
+    expect(out.split("\n").filter(Boolean)).toEqual(["protocol=https", "host=forge.example", String.raw`username=bot\tname`, `password=${password}`]);
+  });
+
   test("the kernel's wrapper traces the call and records neither the remote nor the answer", async () => {
     fake.claims = ["https://forge.example/"];
     fake.credential = CRED;
