@@ -37,6 +37,10 @@ export interface Agent {
   parent: string | null;
   depth: number;
   profile: string | null;
+  /** The version of its profile it was spawned with (ADR-024 §2.4), fixed at spawn; null without a profile. */
+  profileVersion?: number | null;
+  /** The layer its profile was found in at spawn; null without a profile. */
+  profileSource?: "project" | "user" | "bundled" | "installed" | null;
   status: AgentStatus;
   text: string;
   task: string | null;

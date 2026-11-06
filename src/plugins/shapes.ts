@@ -10,16 +10,19 @@ const str = (v: unknown): string | null => (typeof v === "string" && v ? v : nul
 export function agentOf(a: ScopeAgent): Agent {
   const spec = (a.spec ?? {}) as Record<string, unknown>;
   return {
-    id: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: a.status,
+    id: a.agentId, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile,
+    profileVersion: a.profileVersion, profileSource: a.profileSource, status: a.status,
     text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), task: a.task,
     provider: str(spec.provider), model: str(spec.model), effort: str(spec.effort), createdAt: iso(a.createdAt), updatedAt: iso(a.updatedAt),
   };
 }
 
-/** The agent's pinned spec without the kernel's own `kind` (a fake agent has none: an empty spec). */
-export function pinnedOf(a: Pick<ScopeAgent, "spec">): PinnedSpec {
+/** The agent's pinned spec without the kernel's own `kind` (a fake agent has none: an empty spec), with the profile
+ *  it was resolved from when the agent recorded one (`PinnedSpec.profile`, as `profile.resolved` carries it). */
+export function pinnedOf(a: Pick<ScopeAgent, "spec" | "profile" | "profileVersion" | "profileSource">): PinnedSpec {
   const { kind: _kind, ...spec } = (a.spec ?? {}) as Record<string, unknown>;
-  return spec as unknown as PinnedSpec;
+  const profile = a.profile && a.profileVersion !== null && a.profileSource ? { profile: { name: a.profile, version: a.profileVersion, source: a.profileSource } } : {};
+  return { ...spec, ...profile } as unknown as PinnedSpec;
 }
 
 /** A verification op (vfy-…). `tested` and `passed` once its checks ran; `reasons` from its reviewer. */

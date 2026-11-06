@@ -13,6 +13,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd agents list|show|validate` see
   these profiles; `.capcomd/agents.json` works as before, and a `profile.yaml` of the same name in the same project
   wins. `--set` takes the new paths too (`--set limits.maxTurns=10`). See docs/agents.md, "Profile files".
+- Each agent now records which version of its profile it was started with, and where that profile came from
+  (`project`, `user` or `bundled`), so an agent that outlives an edit of its profile still says what it runs with.
+  `capcomd inspect <runId> <agentId>` shows it (`[worker v3, project]`), and the `--json` answers of `spawn`,
+  `inspect` and `await` carry `profileVersion` and `profileSource`. For apps: `Agent.profileVersion` and
+  `Agent.profileSource` on `GET /v1/runs/{runId}/agents` and the `snapshot.agents` frame, and the same two fields on
+  `agent.spawned` events (both null for an agent without a profile). A profile's version is its `version:` field,
+  else 1; `agents.json` profiles are version 1.
 - The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
   `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of
   always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. An installed

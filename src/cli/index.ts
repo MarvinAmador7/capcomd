@@ -778,7 +778,9 @@ async function main(argv: string[]): Promise<number> {
         const r: any = await (await import("../primitives/ops")).inspectAgent(runId, id, { logTail: values.tail ? Number(values.tail) : 50 });
         if (json) out(r);
         else {
-          console.log(`${r.agentId} [${r.profile ?? "-"}] ${r.status}${r.notice ? ` ${String(r.notice.kind).toUpperCase()}: ${r.notice.detail}` : ""}  parent ${r.parent ?? "(operator)"}  depth ${r.depth}`);
+          // The profile as it was at spawn (ADR-024 §2.4): `worker v3, project`.
+          const profile = `${r.profile ?? "-"}${r.profileVersion ? ` v${r.profileVersion}, ${r.profileSource}` : ""}`;
+          console.log(`${r.agentId} [${profile}] ${r.status}${r.notice ? ` ${String(r.notice.kind).toUpperCase()}: ${r.notice.detail}` : ""}  parent ${r.parent ?? "(operator)"}  depth ${r.depth}`);
           console.log(`  budget ${JSON.stringify(r.budget)} spent ${JSON.stringify(r.spent)}  subtree ${JSON.stringify(r.rollup)}`);
           console.log(`  limits ${JSON.stringify(r.limits)}`);
           console.log(`  vm ${JSON.stringify(r.vm)}  driver ${r.driver ?? "-"}  heartbeat ${r.heartbeatAt ? new Date(r.heartbeatAt).toISOString() : "-"} ${r.heartbeatNote ?? ""}`);

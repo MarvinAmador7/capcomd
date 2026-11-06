@@ -1,4 +1,4 @@
-// Agent.provider / Agent.model and the typed agent.spawned `agent` (the end-to-end run is tests/scenarios/agent-provider).
+// Agent.provider / Agent.model / Agent.profileVersion and the typed agent.spawned `agent` (the end-to-end run is tests/scenarios/agent-provider).
 import { describe, expect, test } from "bun:test";
 import { agentModel } from "../../src/agents/config";
 import { Agent, EventData } from "../../src/api/contract";
@@ -59,6 +59,34 @@ describe("contract", () => {
 		expect(strictEventData("agent.spawned", { ...base, agent: { model: 3 } }).ok).toBe(false);
 		expect(strictEventData("agent.spawned", { ...base, agent: { effort: 3 } }).ok).toBe(false);
 		expect(EventData["agent.spawned"].parse({ ...base, agent: { kind: "codex", sandbox: "read-only" } }).agent).toEqual({ kind: "codex", sandbox: "read-only" });
+	});
+	test("Agent.profileVersion and profileSource (ADR-024 §2.4): optional (older daemons), nullable, a positive version and a layer", () => {
+		const base = { ...agent, provider: "claude", model: null };
+		expect(Agent.parse({ ...base, profileVersion: 3, profileSource: "project" })).toMatchObject({ profileVersion: 3, profileSource: "project" });
+		for (const source of ["user", "bundled"]) expect(Agent.safeParse({ ...base, profileVersion: 1, profileSource: source }).success).toBe(true);
+		expect(Agent.safeParse({ ...base, profileVersion: null, profileSource: null }).success).toBe(true);
+		expect(Agent.safeParse(base).success).toBe(true);
+		for (const bad of [{ profileVersion: 0 }, { profileVersion: 1.5 }, { profileVersion: "1" }, { profileSource: "installed" }, { profileSource: "other" }])
+			expect({ bad, ok: Agent.safeParse({ ...base, ...bad }).success }).toEqual({ bad, ok: false });
+	});
+	test("agent.spawned carries profileVersion and profileSource next to profile; older events without them still validate", () => {
+		const base = { parent: null, depth: 0, profile: "worker", budget: {}, limits: {}, agent: null, task: "t", key: null, operator: false, workspace: null };
+		expect(strictEventData("agent.spawned", { ...base, profileVersion: 2, profileSource: "user" })).toEqual({ ok: true });
+		expect(strictEventData("agent.spawned", { ...base, profile: null, profileVersion: null, profileSource: null })).toEqual({ ok: true });
+		expect(strictEventData("agent.spawned", base)).toEqual({ ok: true });
+		expect(strictEventData("agent.spawned", { ...base, profileVersion: 0, profileSource: "user" }).ok).toBe(false);
+		expect(strictEventData("agent.spawned", { ...base, profileVersion: 1, profileSource: "elsewhere" }).ok).toBe(false);
+	});
+	test("published: Agent.profileVersion / profileSource and AgentSpawnedData's are nullable and not required", () => {
+		const agentSchema = (spec as any).paths["/v1/runs/{runId}/agents"].get.responses["200"].content["application/json"].schema.items;
+		const spawned = (spec as any).components.schemas.AgentSpawnedData;
+		for (const s of [agentSchema, spawned]) {
+			expect(s.required ?? []).not.toContain("profileVersion");
+			expect(s.required ?? []).not.toContain("profileSource");
+			expect(s.properties.profileVersion.type).toEqual(["integer", "null"]);
+			expect(s.properties.profileSource.enum).toEqual(["project", "user", "bundled", null]);
+			expect(s.properties.profileVersion.description).toContain("Fixed at spawn");
+		}
 	});
 	test("published: Agent has provider and model as nullable required fields; AgentSpawnedData.agent is a nullable open object", () => {
 		const agentSchema = (spec as any).paths["/v1/runs/{runId}/agents"].get.responses["200"].content["application/json"].schema.items;

@@ -493,7 +493,8 @@ refuses the spawn with `plugin:<name>`. Team-shape policies, fan-out caps. Once 
 
 #### 6.6.7 `agent.preparing` · modify · workflow `prepare` (`agent-workflow.ts`), before the machine is ensured
 `AgentPreparing {agent, spec, prompt: {system, append, skills[]}, env: names[], egress[], credentialMode, sandbox}`.
-Patch `{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after the profile's own (never replaces);
+`spec` is the agent's pinned spec with `profile: {name, version, source}` when the agent recorded one at spawn (as
+`profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same). Patch `{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after the profile's own (never replaces);
 `skills` are added (pinned by hash, `src/agents/skills.ts`); `env` adds variables whose names match `^[A-Z][A-Z0-9_]*$`
 and are not already set, and whose values match no secret pattern (`src/agents/redact.ts`); `egress` may only remove
 hosts. **The only place a plugin adds prompt text**: the orchestration skill (`src/subagents/skill.ts`) and ADR-024's
@@ -1589,6 +1590,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.9 | 2026-11-05 | The reviewer gate tries a call that failed in capcomd's own machinery again, and when it still fails, says so: `ReviewReport.retryable` (additive), never a verdict (§6.6.13, §15.3). |
 | 1.0.10 | 2026-11-05 | Git credentials and agent-editable checkouts (§11.7): no git credential enters a sandbox (the sandbox providers' per-exec git credential hook is gone; the host fetches and pushes for the sandbox through its mirror, with bundles); host network git runs only in a checked host repo or outside any repository, by URL; `capcomd fetch` brings a bundle instead of fetching in the checkout, so it no longer refuses a checkout for its git settings (§16.1). |
 | 1.0.11 | 2026-11-05 | With ADR-024's loader (its §7 step 1): `profile.resolved`'s `profile` carries the resolved profile's `version` and the layer it was found in (`project`, `user`, `bundled`) instead of always `{version: 1, source: "user"}` (§6.6.5); the profile code is `src/profiles/`. |
+| 1.0.12 | 2026-11-05 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 
