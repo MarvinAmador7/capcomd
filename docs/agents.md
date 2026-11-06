@@ -139,7 +139,7 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
 - The items are read at the tip of the branch the run's agents start from (its target), so every agent of a profile
   gets the same brief until that branch changes. A change to `.capcomd/context/` is a commit like any other.
 - Each line is plain text: a description is cut to `descriptionChars`, secrets are redacted and anything that looks
-  like a fence marker (`<<<…>>>`) is neutralised. A provider that fails or takes over 10 s is named in the header
+  like a fence marker (`<<<…>>>`, or a lone `<<<` or `>>>`) is neutralised. A provider that fails or takes over 10 s is named in the header
   (`memory: skipped (timeout)`) rather than leaving an empty brief.
 - Reviewers and report agents get no memory lines (they judge the tree, not remembered opinions), only facts.
 - A provider name that isn't active is refused when profiles are read (`capcomd profiles validate`), and an override

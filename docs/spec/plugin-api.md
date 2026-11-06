@@ -570,7 +570,7 @@ The kernel's context router (ADR-025 §6.1) is the one listener that composes co
 built-in `context` plugin (`src/plugins/context.ts`, failure open), for an agent whose pinned spec has a `context` block
 with providers (an agent without one gets no patch). Its append is the brief: a kernel-written header in plain prose
 (how many index lines of how many it loaded, the budget and where it came from, each provider's revision or the reason
-it was skipped, in the kernel's words) and one line per item (`IndexLine`, its description redacted, made one line,
+it was skipped, in the kernel's words) and one line per item (`IndexLine`, its description made one line, redacted,
 neutralised with `fence()`'s rule and capped), never an item's body. The brief is a function of the providers' indexes,
 the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
 and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
@@ -1115,13 +1115,14 @@ itself; the kernel runs it again on what the plugin emits.
 
 Untrusted text another agent reads arrives inside a fence naming its author (`src/subagents/results.ts` `fence()`), and
 every `<<<…>>>` on one line inside it is neutralised, whatever it says, so no marker, today's or a later one, can be
-forged from inside. The context brief (§6.6.7, ADR-025 §6.1) is the one place untrusted text is the basis of a model's
+forged from inside (and, as before, an `end` or `untrusted` one split over lines). The context brief (§6.6.7, ADR-025 §6.1) is the one place untrusted text is the basis of a model's
 attention from system-role text (Claude Code's appended system prompt; Codex's prompt): an item's description, written
 by whoever wrote the item. What fences it there: the header is the kernel's, in plain prose, with no marker syntax and
-none of a provider's own words (a failure is named with the kernel's reason); each description is redacted (the
-kernel's shapes and the agent providers' credentials), made one line (control characters and line breaks are spaces),
-neutralised with `fence()`'s rule and capped at `limits.descriptionChars`, and so are an item's path and `paths`; an
-item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
+none of a provider's own words (a failure is named with the kernel's reason); each description is first made one line
+(invisible format characters dropped, control characters and line breaks made spaces), then redacted (the kernel's
+shapes and the agent providers' credentials), neutralised with `fence()`'s rule and a lone `<<<` or `>>>` with it (so
+two fields of one line can't make a marker together), and capped at `limits.descriptionChars`, and so are an item's
+path and `paths`; an item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
 is reserved for ADR-025 §6.3 and not shipped.
 
 ### 11.6 Isolation

@@ -568,7 +568,11 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
 - Freshness is judged against the UTC day, not the instant, so two agents prepared the same day get the same brief.
   The router drops a line superseded by one in the same index, deprecated lines, stale ones (counted in the header) and,
   for a reviewer, memory ones (counted too); a provider's failure is named with one of the kernel's reasons (`timeout`,
-  `not active`, `not found`, `not configured`, `unavailable`, `failed`), never its own message.
+  `not active`, `not found`, `not configured`, `unavailable`, `failed`), never its own message. The providers are
+  asked at once, each within its own 10 s, so the listener's own deadline never leaves the brief (and its header) out.
+- A line of the brief joins several untrusted fields (description, path, `paths`), so each is made one line before it
+  is redacted and neutralised (a marker split by a line break or hidden behind an invisible character is caught), and a
+  lone `<<<` or `>>>` is neutralised too: half a marker in one field and half in the next can't make a whole one.
 - `context` is pinned on the agent with its flat spec (`PinnedSpec.context`, `AgentSpec.context`, also allowed in an
   `agents.json` entry); an override may remove it but not change it (a widening), and a child profile has its own
   (D12). A provider entry's `layers` default to `[project, run]`.

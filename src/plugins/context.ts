@@ -87,7 +87,7 @@ export const plugin = definePlugin({
         const runId = typeof flags.run === "string" ? flags.run : null;
         const { resolveAgent } = await import("../profiles");
         let resolved: ReturnType<typeof resolveAgent>;
-        try { resolved = resolveAgent(name); } catch (e) { throw new RelayError("usage", (e as Error).message, "See your profiles with `capcomd agents list`."); }
+        try { resolved = resolveAgent(name); } catch (e) { throw new RelayError("usage", (e as Error).message, "See your profiles with `capcomd profiles list`."); }
         const spec = resolved.spec as unknown as PinnedSpec | undefined;
         if (!spec?.context?.providers?.length) {
           return { schema: SCHEMA, ok: true, profile: name, brief: null, text: `Profile ${name} has no context block, so its agents start with no brief. Give it one in its profile: context: {providers: [{name: memory}]}` };
