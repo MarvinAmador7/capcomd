@@ -161,8 +161,9 @@ test("two runs' consolidators merging into one target land one after the other u
   // Both approved at once: the target's lock lands them one at a time, the later on the earlier's commit.
   const done = await Promise.all(runs.map((run, i) => w.cj(["approve", run, held[i]!.id]).then((r) => r.j)));
   expect(done.map((m) => m.state)).toEqual(["merged", "merged"]);
-  const [first, second] = [...done].sort((x, y) => x.updatedAt - y.updatedAt);
-  expect(second.result.targetBefore).toBe(first.result.sha);
+  // One of them landed on the other's commit (which went first isn't ours to say; their records are two runs').
+  const [x, y] = done.map((m) => ({ sha: String(m.result.sha), before: String(m.result.targetBefore) }));
+  expect(x!.before === y!.sha || y!.before === x!.sha).toBe(true);
   const trunk = await memoryAt("trunk");
   for (const t of ["aardvark-build-cache-", "zebra-deploy-freeze-"]) expect(trunk.some((f) => f.path.includes(t))).toBe(true);
   expect(lintContext({ files: trunk, scan }).errors).toEqual([]);
