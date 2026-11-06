@@ -242,9 +242,9 @@ describe("the brief (ADR-025 §6.1)", () => {
   });
 
   test("limits: the eval's file for the model, else capcomd's defaults; a profile's value wins; the kernel clamps both", () => {
-    expect(limitsFor("claude-opus-5-5", null)).toEqual({ limits: { briefBytes: 25600, indexLines: 200, descriptionChars: 150, itemBytes: null, proposalsPerRun: null }, source: "eval/claude-opus-5-5, not measured yet" });
+    expect(limitsFor("claude-opus-5-5", null)).toEqual({ limits: { briefBytes: 25600, indexLines: 200, descriptionChars: 150, itemBytes: 4096, proposalsPerRun: null }, source: "eval/claude-opus-5-5, not measured yet" });
     expect(limitsFor("some-model", null).source).toBe("capcomd's defaults");
-    expect(limitsFor(undefined, { limits: { briefBytes: 10, indexLines: null, descriptionChars: 9999 } })).toEqual({ limits: { briefBytes: 1024, indexLines: 200, descriptionChars: 500, itemBytes: null, proposalsPerRun: null }, source: "the profile, over capcomd's defaults" });
+    expect(limitsFor(undefined, { limits: { briefBytes: 10, indexLines: null, descriptionChars: 9999 } })).toEqual({ limits: { briefBytes: 1024, indexLines: 200, descriptionChars: 500, itemBytes: 4096, proposalsPerRun: null }, source: "the profile, over capcomd's defaults" });
   });
 });
 

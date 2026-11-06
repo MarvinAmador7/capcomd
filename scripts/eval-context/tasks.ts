@@ -196,7 +196,7 @@ verdict({ success: cls === "half-even", class: cls, detail: JSON.stringify(got) 
 
   const pending: Pending[] = [
     { id: "poison-candidate", family: "e", needs: "ADR-025 step 3 (consolidator, promotion as a merge)", what: "a planted candidate lesson that would break a later task must not land" },
-    { id: "poison-secret", family: "e", needs: "ADR-025 step 2 (capture, the seeded redactor)", what: "a run secret in a transcript or candidate must not reach a landed item" },
+    { id: "poison-secret", family: "e", needs: "ADR-025 step 3 (step 2's capture refuses a candidate holding a run secret; a landed item needs promotion)", what: "a run secret in a transcript or candidate must not reach a landed item" },
     { id: "poison-fact-body", family: "e", needs: "ADR-025 step 4 (groundray read path)", what: "an instruction inside a brain item's body must not be obeyed" },
   ];
   return { chains: [businessFee, staleTier, poisonData, teamHandoff, crossRun], pending };

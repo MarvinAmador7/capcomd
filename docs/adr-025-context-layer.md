@@ -582,7 +582,54 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   `scripts/gen-context-limits.ts`): the package ships `src/`, not `docs/evidence/`. Kernel floors and ceilings:
   `briefBytes` 1 KiB-100 KiB, `indexLines` 1-1000, `descriptionChars` 20-500.
 
-**Made while building step 6** (spec 1.0.26; evidence `docs/evidence/context/README.md`, "step 6"):
+**Made while building step 2** (spec 1.0.26; where the code and §3.2, §5.1, §8 or §11.1 differ, the code is right and
+this list says why):
+
+- Capture is the `context` plugin's (the router's), not `context-memory`'s: the events §10 names are
+  `plugin.context.proposed` and `plugin.context.refused`, a candidate is the run's whatever provider later takes it, and
+  attribution is the kernel's job. Its `agent.changed` listener (`src/plugins/context.ts` `collect`, over
+  `src/context/capture.ts`) reads the result from kv `_result/<agentId>`, which only `capcomd result` writes, as the
+  token's `sub`, and takes it only when that writer is the agent; never the hook payload, which only says there is
+  something to read and is redacted on its way (a secret would be hidden from the scan, not kept out). A handed-off
+  agent's result is its successor's and is collected at the successor's end. A cancelled agent's result isn't
+  collected.
+- An element of `result.data.context` is a `ContextProposal`; any other field (`by`, `origin`, `status`, `verified`)
+  is ignored and named on the record (`ignored`; only a name shaped like a field's and holding no secret, so a key
+  can't carry one in). Every string a candidate keeps is scanned, its `target`'s too. `type` defaults to `lesson`, `op` to `add`; `supersede` and
+  `deprecate` need a `target` (its `provider` defaults to `memory`). Provenance is `method: agent-generated`,
+  `by: process:<agentId>`, `origin` from the agent's record (`image` null until a run records one).
+- The candidates are kept in kv `_context/<agentId>` (reserved, written by the kernel once, with `expect: 0`, so a
+  replayed change adds nothing, and an agent resumed after it ended keeps its first end's candidates; every agent of
+  the run reads it: `capcomd kv get _context/<agentId>`), where the
+  consolidator (step 3) finds them, beside one `plugin.context.proposed` per candidate (the candidate in its data) and
+  one `plugin.context.refused` per refusal (a number and a reason: `secret`, `token`, `entropy`, `path`, `invalid`,
+  `too_large`, `over_cap`; never the text). A run's own event log keeps what the agent wrote in its result, as before;
+  what capture keeps out is the candidates.
+- The seeded scan is `src/context/scan.ts`, shared by capture and lint: seeded with the agent providers' credentials,
+  the plugins' secrets, every variable of the run's environment named like a credential, the in-VM tokens' signing key
+  and the forge's credential for the run's repository; then the redactor's shapes (exported as `PATTERNS`) and a few
+  more, words of 32 or more characters with digits and both cases at 4.3 bits a character or more (commit ids and code
+  names stay out), and the path denylist with `~/.ssh`, `id_*` keys, `.netrc` and `.git-credentials` added. It reads
+  the text with invisible characters dropped and look-alikes folded (NFKC, every dash a hyphen), the seeds too.
+- Budgets: `itemBytes` is 4 KiB in capcomd's defaults and every eval file (half of a result's 8 KB of data);
+  `proposalsPerRun` stays null until consolidation (step 3) sets it, and capture honours one a profile sets.
+- `capcomd context lint` is a verb of the router's command group (one group has one owner), over `src/context/lint.ts`,
+  which reuses the memory provider's `frontmatter`. It requires an `id` as well as OKF's `type` (an id is what
+  supersession, citations and "ids immutable" need); checks ids against `--base <ref>` (local `git ls-tree` and `git
+  cat-file`, no network) for "never changes" and "never deleted" (deprecated instead; a moved file keeps its id);
+  resolves `outcomes[]` only with `--run`, and only for items the change touches; and treats a link (`.capcomd/` or
+  `.capcomd/context/` being one included), a binary or a file over 64 KB as a problem, and `--fix` never writes
+  `index.md` through a link. A file's name is scanned as well as its text; an item holding a secret is in `index.md` by
+  its id alone, or not at all when its id or name holds it. `index.md` is the items by kind (facts first) and path, with no date of its own, so it is
+  deterministic; `--fix` writes only it. The imperative-language flag §8 gives step 3 is a warning now, with stale
+  items, long descriptions and bodies over `itemBytes`. "No file outside `.capcomd/context/`" is a branch's diff, so it
+  waits for step 3's check.
+- The orchestration skill's "Notes and lessons" paragraph says where working notes go (`notes/<self>`, run-visible),
+  how a lesson is proposed, and the routing rules in short (declarative, not what the repository or `AGENTS.md`
+  already says, nothing stale within a week). It reaches agents that may spawn, the ones with an in-VM `capcomd
+  result`; Hermes' full routing paragraph as a hash-pinned skill of its own still waits for step 6.
+
+**Made while building step 6** (spec 1.0.27; evidence `docs/evidence/context/README.md`, "step 6"):
 
 - The doctrine and the routing paragraph are two skills, `capcomd-context-doctrine` and `capcomd-context-routing`
   (`src/context/skills/`, `src/context/skills.ts`), attached by the router (the `context` plugin) in the same patch as
@@ -590,9 +637,10 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   profile's agents. The doctrine goes to every agent whose profile has a context block, reviewers included (it is about
   reading, D11 allows facts); the routing paragraph goes only to an agent that may spawn and is not a reviewer or a report
   agent: `capcomd kv` and `capcomd result --data`, which it names, are the in-VM capcomd's, which only an agent that may
-  spawn has (§5.1 had it in "the orchestration skill" for that reason). Until step 2 collects `result.data.context[]`,
-  a candidate written there stays in the agent's result; the skill promises only that nothing reaches the project's
-  memory without review. Their names are the kernel's (a profile can't use them), and a profile with a context block keeps
+  spawn has (§5.1 had it in "the orchestration skill" for that reason). Its proposal shape is step 2's (`title`,
+  `text`, `type`), which capture collects from `result.data.context[]`; the orchestration skill keeps step 2's short
+  "Notes and lessons" paragraph for every agent that may spawn, and one whose profile has a context block gets the
+  routing skill's fuller version beside it (the two agree). Their names are the kernel's (a profile can't use them), and a profile with a context block keeps
   room for them among its own `skills`, as one that may spawn does for the orchestration skill. The router attaches them
   after the orchestration skill (`after: [skill-orchestration]`) and only as many as fit what the agent's other skills
   leave (an agent pinned before its profile kept room, or a plugin's skills): a skill that doesn't fit is left out, never

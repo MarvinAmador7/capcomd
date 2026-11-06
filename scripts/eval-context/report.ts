@@ -103,9 +103,9 @@ export interface Limits {
 
 export function startingLimits(model: string): Limits {
   return {
-    schema: "capcomd.context-limits/v1", model, briefBytes: 25_600, indexLines: 200, descriptionChars: 150, itemBytes: null, proposalsPerRun: null,
+    schema: "capcomd.context-limits/v1", model, briefBytes: 25_600, indexLines: 200, descriptionChars: 150, itemBytes: 4096, proposalsPerRun: null,
     inlineItems: 0, triggeredInjection: false, measured: false,
-    source: "ADR-025 D4 starting values (Claude Code's 25 KB / 200-line memory index; descriptionChars from the one-line index entries of that index). itemBytes and proposalsPerRun are set by the steps that add capture and consolidation (2-3). No inline items and no triggered injection until the matrix admits them (§6.1, §6.3).",
+    source: "ADR-025 D4 starting values (Claude Code's 25 KB / 200-line memory index; descriptionChars from the one-line index entries of that index). itemBytes is 4 KiB since capture (step 2): one lesson with its failure and its guardrail, half of a result's 8 KB of data; proposalsPerRun is set by the step that adds consolidation (3). No inline items and no triggered injection until the matrix admits them (§6.1, §6.3).",
     evidence: [],
   };
 }

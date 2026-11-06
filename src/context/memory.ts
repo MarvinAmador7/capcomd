@@ -2,9 +2,9 @@
 // the Markdown items under `.capcomd/context/` in the run's repository, read at the tip of the branch the agent starts
 // from. `memory/<slug>.md` are memories (lessons, feedback, references), `facts/…` a project's own small fact bundle;
 // each has OKF frontmatter (`id`, `type`, `title`/`description`, `status`, `generated`, `stale_after`, `supersedes`,
-// `superseded_by`, `paths`) over its body. Read-only in this step: capture, lint and promotion arrive with ADR-025
-// steps 2-3. Everything in a file is the repository's, so untrusted: the router fences what reaches the brief, and a
-// body is never in it.
+// `superseded_by`, `paths`) over its body. Read-only: agents propose lessons as candidates of their run
+// (./capture.ts), `capcomd context lint` checks the tree (./lint.ts), and promotion is a reviewed merge (ADR-025 step 3).
+// Everything in a file is the repository's, so untrusted: the router fences what reaches the brief; a body never does.
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { ErrorClass, SeamCall } from "../../packages/plugin/src/seams";
 import type { Authority, ContextDescriptor, ContextHit, ContextItem, ContextKind, ContextLayer, ContextProvider, ContextRef, ContextScope, ContextSearch, IndexLine } from "../../packages/plugin/src/context-layer";
@@ -39,22 +39,23 @@ const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : typeof v === "string" && v.trim() ? [v.trim()] : []);
 /** An instant from frontmatter (YAML may have parsed a date already), as ISO, or undefined. */
-const instant = (v: unknown): string | undefined => {
+export const instant = (v: unknown): string | undefined => {
   const d = v instanceof Date ? v : typeof v === "string" ? new Date(v) : null;
   return d && Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
 };
-const STATUS = new Set(["draft", "stable", "deprecated"]);
-const METHODS = new Set(["human-authored", "imported", "transformed", "agent-generated", "calculated"]);
+export const STATUS = new Set(["draft", "stable", "deprecated"]);
+export const METHODS = new Set(["human-authored", "imported", "transformed", "agent-generated", "calculated"]);
 
-/** `---\n<yaml>\n---\n<body>`: the frontmatter as a map (empty when there is none or it doesn't parse) and the body. */
-export function frontmatter(text: string): { meta: Record<string, unknown>; body: string } {
+/** `---\n<yaml>\n---\n<body>`: the frontmatter as a map (empty when there is none or it doesn't parse) and the body.
+ *  `state` says which (lint, ./lint.ts, refuses all but `ok`). */
+export function frontmatter(text: string): { meta: Record<string, unknown>; body: string; state: "ok" | "none" | "invalid" } {
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
-  if (!m) return { meta: {}, body: text };
+  if (!m) return { meta: {}, body: text, state: "none" };
   let meta: unknown = null;
   // Loaded on first use: every process loads this provider, few read an item.
   const { parse } = require("yaml") as typeof import("yaml");
   try { meta = parse(m[1]!, { maxAliasCount: 10, prettyErrors: false }); } catch { /* not YAML: no frontmatter */ }
-  return { meta: isMap(meta) ? meta : {}, body: text.slice(m[0].length) };
+  return { meta: isMap(meta) ? meta : {}, body: text.slice(m[0].length), state: isMap(meta) ? "ok" : "invalid" };
 }
 
 /** The items of one tree: `memory/**.md` and `facts/**.md` (not `index.md` or `log.md`, OKF's reserved files), each id
@@ -201,7 +202,7 @@ export function memoryProvider(o: { read?: TreeReader } = {}): ContextProvider {
       };
     },
     async propose() {
-      throw new PluginError("unsupported", "project memory is read-only for now: it changes through a reviewed commit to .capcomd/context/");
+      throw new PluginError("unsupported", "project memory is read-only: an agent proposes a lesson in its result (result.data.context), and it changes through a reviewed commit to .capcomd/context/");
     },
   };
 }
