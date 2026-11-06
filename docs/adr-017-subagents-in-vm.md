@@ -38,7 +38,9 @@ Why the spool:
 
 ### 2. Capability tokens
 `cct1.<claims>.<hmac>` with claims `{run, sub (the agent), ops[], exp, jti}`, HMAC-SHA256 over
-the claims with a host-only key (`CAPCOMD_RPC_KEY` or `~/.capcomd/rpc.key`, 0600). TTL 30 min,
+the claims with a host-only key (`CAPCOMD_RPC_KEY`, or the file `rpc.key` in the capcomd home, 0600:
+`~/.capcomd/rpc.key`, `$CAPCOMD_HOME/rpc.key`, `<repo>/.relay/rpc.key` in a dev checkout; `CAPCOMD_RPC_KEY_FILE`
+names another file). TTL 30 min,
 refreshed by the driver every TTL/2 while the agent runs. A token is refused if: its signature or
 format is bad, it is expired, its jti is in the scope's `revoked` table (`capcomd token revoke`;
 the driver revokes on agent exit), its agent is terminal, or it arrives through another agent's

@@ -13,7 +13,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   (`prompt: { append: prompt.md }`). Runs, spawns, `capcomd_profiles` and `capcomd agents list|show|validate` see
   these profiles; `.capcomd/agents.json` works as before, and a `profile.yaml` of the same name in the same project
   wins. `--set` takes the new paths too (`--set limits.maxTurns=10`). See docs/agents.md, "Profile files".
-
+- The key capcomd signs agents' capability tokens with now lives in the capcomd home like the rest of its state:
+  `$CAPCOMD_HOME/rpc.key` when you set `CAPCOMD_HOME` (and `.relay/rpc.key` in a checkout of capcomd), instead of
+  always `~/.capcomd/rpc.key`, so a second home no longer signs with (or creates) your main home's key. An installed
+  capcomd without `CAPCOMD_HOME` is unchanged: the key stays `~/.capcomd/rpc.key`. `CAPCOMD_RPC_KEY_FILE` still names
+  another file.
+  If you use `CAPCOMD_HOME`: after upgrading, the daemon makes a new key there when it restarts (the old key is not
+  copied over; `~/.capcomd/rpc.key` is left as it is). An agent still running across that restart gets a new
+  token as soon as capcomd picks it up again; a capcomd call it made with its old token in between fails once with
+  "token rejected: bad_signature" and works when tried again.
 - Security: your git credentials never reach an agent's sandbox any more. Before, capcomd's own git commands in an
   agent's VM or container (cloning its checkout, pushing its branch and checkpoints, `capcomd fetch`) ran with your
   GitHub token, so an agent could take it by planting git settings, a hook or a `git` program in its sandbox. Now
