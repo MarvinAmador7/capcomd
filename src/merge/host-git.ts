@@ -114,6 +114,13 @@ export function assertRemoteUrl(remote: string): void {
   if (/^(ext|fd)::/i.test(remote)) throw new Error(`refusing the ${remote.split("::")[0]} transport`);
 }
 
+/** A URL with a credential in it (`https://user:token@…`, `https://token@…`, any `user:password@`): capcomd neither keeps
+ *  nor fetches one (an ssh user such as `ssh://git@host/…` is not a credential). */
+export function inlineCredential(remote: string): boolean {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)@/i.exec(remote.trim());
+  return !!m && (/^https?$/i.test(m[1]!) || m[2]!.includes(":"));
+}
+
 // ---- credentials -------------------------------------------------------------------------------------------------
 
 /** The active forges' credential for `remote` (docs/spec/plugin-api.md §7.4 `remoteCredential`), or null. */

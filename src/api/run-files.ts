@@ -163,9 +163,10 @@ export class FilesMirror {
 	 * The regular files under `prefix` (a directory, `.capcomd/context/`) at a branch's tip, fetched now, or at a commit
 	 * the mirror has: the commit, its date, and each file's text. At most `maxFiles` files of at most `maxBytes` each (a
 	 * bigger one is listed with `text: null`); symlinks and submodules are left out. The project layer of the context
-	 * router reads a repository's hand-written memory this way (src/context/memory.ts), without a checkout.
+	 * router reads a repository's hand-written memory this way (src/context/memory.ts), and a brain's bundle
+	 * (src/context/groundray.ts), without a checkout. `only`: the paths to read and count (others are left out unread).
 	 */
-	readTree(at: { branch: string } | { sha: string }, prefix: string, o: { maxFiles: number; maxBytes: number }): Promise<{ sha: string; date: string; files: Array<{ path: string; text: string | null }>; truncated: boolean } | { error: string }> {
+	readTree(at: { branch: string } | { sha: string }, prefix: string, o: { maxFiles: number; maxBytes: number; only?: (path: string) => boolean }): Promise<{ sha: string; date: string; files: Array<{ path: string; text: string | null }>; truncated: boolean } | { error: string }> {
 		return this.serial(async () => {
 			if (!SAFE_NAME.test(prefix) || ("branch" in at ? !SAFE_NAME.test(at.branch) : !SHA.test(at.sha))) return { error: "not a branch, commit or directory name" };
 			let git: Git;
@@ -191,6 +192,7 @@ export class FilesMirror {
 			for (const entry of ls.stdout.split("\0")) {
 				const m = /^(\d{6}) (\w+) ([0-9a-f]{40,64}) +(-|\d+)\t([\s\S]+)$/.exec(entry);
 				if (!m || m[2] !== "blob" || (m[1] !== "100644" && m[1] !== "100755")) continue;
+				if (o.only && !o.only(m[5]!)) continue;
 				if (files.length >= o.maxFiles) { truncated = true; break; }
 				if (Number(m[4]) > o.maxBytes) { files.push({ path: m[5]!, text: null }); continue; }
 				const blob = await git.run(["cat-file", "blob", m[3]!]);

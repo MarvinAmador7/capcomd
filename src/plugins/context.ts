@@ -1,15 +1,18 @@
-// context (ADR-025 §5.1, §6.1, §10, steps 1, 2 and 6): the kernel's context router. As the one agent.preparing listener
-// it composes a profile's context providers into the brief (src/context/brief.ts), appended to the agent's prompt after
-// its profile's own, with the context layer's skills (src/context/skills.ts: the doctrine, and the routing paragraph for
-// an agent that writes run notes), each pinned by the sha256 of its text; an agent whose profile has no `context` block
-// gets nothing and costs nothing. As an agent.changed
+// context (ADR-025 §5.1, §6.1, §10, steps 1, 2, 4 and 6): the kernel's context router. As the one agent.preparing
+// listener it composes a profile's context providers into the brief (src/context/brief.ts), appended to the agent's
+// prompt after its profile's own, with the context layer's skills (src/context/skills.ts: the doctrine, and the
+// routing paragraph for an agent that writes run notes), each pinned by the sha256 of its text, and leaves the bundles
+// the brief cites (a brain at its commit) for the attempt's runner to place in the sandbox; an agent whose profile has
+// no `context` block gets nothing and costs nothing. As an agent.changed
 // listener it collects the lessons an agent proposed in its result (`result.data.context`) when it ends: attributed to
 // the token that wrote the result, checked by the seeded secret scan, kept as candidates of the run in kv
 // `_context/<agentId>` (src/context/capture.ts). Its events, on the run's stream: `plugin.context.loaded` (what a brief
 // held), `plugin.context.skipped` (a provider left out, and why), `plugin.context.proposed` (a candidate kept) and
-// `plugin.context.refused` (one refused, and why, never its text). Its command:
+// `plugin.context.refused` (one refused, and why, never its text). Its commands:
 //   capcomd context brief <profile> [--run <runId>] [--review]   the brief that profile's agents start with now
 //   capcomd context lint [--fix] [--base <ref>] [--run <runId>]  check .capcomd/context/ (src/context/lint.ts)
+//   capcomd context brain add <name> <repo> [--branch <b>] [--bundle <dir>]   map a brain, pinned at the branch's tip
+//   capcomd context brain list | remove <name>                   the project's brains (src/context/groundray.ts)
 // It is loaded in every process an agent is prepared in (the daemon, a run's driver) and in the CLI; agents end in the
 // daemon, so that is where capture runs.
 import { existsSync, mkdirSync, writeFileSync } from "fs";
@@ -24,10 +27,13 @@ import type { Brief } from "../context/brief";
 import type { CaptureRecord } from "../context/capture";
 import { preparingAgent, SKILL_BYTES_MAX, SKILLS_MAX } from "./hooks";
 
-const SUMMARY = "The project's context (ADR-025): the brief a profile's agents start with, and lint for .capcomd/context/";
+const SUMMARY = "The project's context (ADR-025): the brief a profile's agents start with, and lint for .capcomd/context/; brain mappings";
 const USAGE = [
   "capcomd context brief <profile> [--run <runId>] [--review] [--json]",
   "capcomd context lint [--fix] [--base <ref>] [--run <runId>] [--dir <repo>] [--json]",
+  "capcomd context brain add <name> <repo> [--branch <branch>] [--bundle <dir>] [--json]",
+  "capcomd context brain list [--json]",
+  "capcomd context brain remove <name> [--json]",
 ];
 
 export const manifest: PluginManifest = {
@@ -214,6 +220,36 @@ export async function briefFor(o: { runId: string | null; agentId: string | null
 }
 
 const sha = (r: string) => r.slice(0, 12);
+const usage = () => new RelayError("usage", `usage: ${USAGE.join("\n       ")}`, "Name a profile (`capcomd context brief worker`), check .capcomd/context/ (`capcomd context lint`), or map a brain (`capcomd context brain add acme <repo>`).");
+
+/** `capcomd context brain …`: the brains the project maps (src/context/groundray.ts). */
+async function brainCommand(args: string[], flags: Record<string, unknown>): Promise<Envelope> {
+  const G = await import("../context/groundray");
+  const verb = args[1];
+  if (verb === "list" && args.length === 2) {
+    const { path, brains } = G.listBrains();
+    const rows = Object.entries(brains).map(([name, b]) => ({ name, ...b }));
+    const text = rows.length ? rows.map((b) => `${b.name}  ${b.repo} (${b.branch} at ${sha(b.commit)})${b.title ? `  ${b.title}` : ""}`).join("\n")
+      : `This project maps no brain (${path}). Map one: capcomd context brain add <name> <repository>`;
+    return { schema: SCHEMA, ok: true, path, brains: rows, text };
+  }
+  if (verb === "add" && args.length === 4) {
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+    const branch = str(flags.branch), bundle = str(flags.bundle);
+    const r = await G.addBrain({ name: args[2]!, repo: args[3]!, ...(branch ? { branch } : {}), ...(bundle ? { bundle } : {}) });
+    const moved = r.previous ? (r.previous.commit === r.brain.commit ? ` (already at ${sha(r.brain.commit)})` : ` (was ${sha(r.previous.commit)})`) : "";
+    return {
+      schema: SCHEMA, ok: true, name: r.name, brain: r.brain, items: r.items, truncated: r.truncated, path: r.path,
+      text: `Brain ${r.name}: ${r.brain.repo}, ${r.brain.branch} at ${sha(r.brain.commit)}${moved}, ${r.items} item${r.items === 1 ? "" : "s"}${r.truncated ? " (more than capcomd reads)" : ""}. ` +
+        `Profiles name it with context: {providers: [{name: groundray, brain: ${r.name}}]}; runs started from now on read this commit. Run this again to move it to the branch's tip.`,
+    };
+  }
+  if (verb === "remove" && args.length === 3) {
+    const r = G.removeBrain(args[2]!);
+    return { schema: SCHEMA, ok: true, name: args[2], removed: r.removed, path: r.path, text: `Brain ${args[2]} is no longer mapped (runs already started keep the commit they recorded).` };
+  }
+  throw usage();
+}
 
 /** A context event on the run's stream; one that can't be recorded is logged, never thrown. */
 const emitter = (ctx: PluginContext, runId: string, entity: string): Emit => (type, text, data) =>
@@ -250,8 +286,13 @@ export const plugin = definePlugin({
         agentId: agent.id, profile: agent.profile, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes,
         budget: { briefBytes: b.limits.briefBytes, indexLines: b.limits.indexLines, source: b.source }, providers: b.providers,
         skills: skills.map(({ name, hash }) => ({ name, hash })),
+        ...(b.bundles.length ? { bundles: b.bundles.map((x) => ({ provider: x.provider, name: x.name, commit: x.commit })) } : {}),
       });
       for (const p of b.providers) if (p.state === "skipped") await emit("skipped", `${agent.id} starts without the ${p.name} context provider (${p.reason}).`, { agentId: agent.id, profile: agent.profile, provider: p.name, reason: p.reason });
+      // The bundles the brief's lines point at, for the attempt's runner to place (ADR-025 §6.2): the kernel's own
+      // record of this call, left with the patch it answers.
+      const kernel = preparingAgent.getStore();
+      if (kernel && kernel.runId === agent.runId && kernel.agentId === agent.id) kernel.bundles = b.bundles.map((x) => ({ ...x }));
       const attach = skills.map(({ name, hash, text }) => ({ name, hash, source: "builtin" as const, text }));
       return { decision: "allow", patch: { prompt: { append: b.text, ...(attach.length ? { skills: attach } : {}) } } };
     });
@@ -270,7 +311,8 @@ export const plugin = definePlugin({
       name: "context", summary: SUMMARY, usage: USAGE,
       async run({ args, flags }) {
         if (args[0] === "lint" && args.length === 1) return lint(flags);
-        if (args[0] !== "brief" || args.length !== 2) throw new RelayError("usage", `usage: ${USAGE.join("\n       ")}`, "Name a profile (`capcomd context brief worker`), or check .capcomd/context/ (`capcomd context lint`).");
+        if (args[0] === "brain") return brainCommand(args, flags);
+        if (args[0] !== "brief" || args.length !== 2) throw usage();
         const name = args[1]!;
         const runId = typeof flags.run === "string" ? flags.run : null;
         const { resolveAgent } = await import("../profiles");

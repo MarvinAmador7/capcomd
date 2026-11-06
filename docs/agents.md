@@ -276,6 +276,50 @@ that `index.md` is what `--fix` writes. An item is never deleted (set `status: d
 a body that reads like an instruction or a command. A link in `.capcomd/context/` (or the directory being one) is a
 problem, and `--fix` never writes `index.md` through one.
 
+### Business knowledge: a groundray brain
+
+The `groundray` provider briefs agents with a company's facts (decisions, policies, procedures, definitions) from a
+brain: a git repository with groundray's layout (`brain.yaml`, an OKF bundle under `knowledge/`), or any OKF bundle in a
+directory of a repository. capcomd reads the files itself; the groundray CLI isn't needed.
+
+```sh
+# in the project's checkout: map a name to the brain, pinned at its default branch's tip
+capcomd context brain add acme https://github.com/acme/brain.git     # --branch <b>, --bundle <dir> for a plain OKF bundle
+capcomd context brain list
+capcomd context brain add acme https://github.com/acme/brain.git     # again: move the pin to the tip
+capcomd context brain remove acme
+```
+
+```yaml
+# a profile
+context:
+  providers:
+    - name: groundray
+      brain: acme                  # one brain, by the name the project mapped; never a path
+    - name: memory
+```
+
+```text
+Context: loaded 2 of 2 lines (…); groundray at 9f8e7d6c5b4a, modified 2026-10-12; memory at a1b2c3d4e5f6, modified 2026-10-30. …
+- [policy] Refunds are accepted within 30 days of delivery → /var/tmp/capcomd/context/groundray/acme/knowledge/policies/refunds.md (stable; 2026-10-01)
+- [lesson] Money is rounded half-even (src/money.js), never with Math.round → .capcomd/context/memory/money-rounding.md (paths: src/**; stable; 2026-10-30)
+```
+
+- The mapping lives in the project's `.capcomd/config.json` (`context.brains`). A run records it when it starts, so
+  every agent of the run reads the commit the run started with; mapping the brain again affects runs started after.
+- Before an agent starts, capcomd puts the brain's files at that commit in its sandbox, where the lines point
+  (`<agent workdir>/context/groundray/<name>/`), read-only and without git history. The host fetches the brain with your
+  own git access (your forge login or git's credential helpers), as it does the project's repository; no credential
+  enters the sandbox, and a URL with one in it is refused.
+- One brain per agent: a profile names one, and a provider is never asked twice for one brief.
+- A restricted brain (its bundle's `default_sensitivity: restricted`, or any Markdown file under it marked
+  `sensitivity: restricted`) is refused by `brain add`, and an agent is never briefed from one: keep restricted knowledge
+  outside capcomd. So is a brain capcomd can't check whole (a Markdown file over 4 MiB, more than 2000 of them).
+- A repository given as a path is recorded as an absolute path.
+- Reviewers get the brain's facts too (only memory is left out for them). Deprecated and superseded facts, and those
+  past their `stale_after`, leave the brief; a fact without `status` counts as a draft.
+- Read-only for now: agents propose changes to a brain in a later release (through the brain's own pull requests).
+
 ## The planner's provider, model and effort for one run
 
 A run with a planner agent uses the project's `planner` profile. Three flags change it for that run only, without
