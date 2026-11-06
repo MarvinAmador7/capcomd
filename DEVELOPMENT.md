@@ -222,14 +222,14 @@ a plan login) and the model the CLI reported, from the agent's span.
 bun scripts/eval-context.ts --seed 1 --expect          # fake sandbox and scripted agent (what CI runs, ~30 s)
 bun scripts/eval-context.ts --list                     # the arms, chains and pending probes, and which are runnable
 CAPCOMD_HOME=<a home with your logins> BOXD_API_KEY=… \
-  bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-5.6 --reps 3 --port 6571 --evidence docs/evidence/context
+  bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-6.1-sol --reps 3 --port 6571 --evidence docs/evidence/context
 ```
 
 `--agents fake` runs on the fake-host sandbox with `scripts/eval-context/fake-agent.ts` as `claude`: a deterministic
 agent that reads only its checkout (the instruction file when there is one, else the stub's stale comment and the
 docs), so `--expect` knows every verdict and fails when an arm, a checker or a metric stops working. `--agents live`
 runs real Claude Code or Codex agents (one profile per `--models` entry, plan logins) on `--sandbox` (boxd by default,
-or docker). Give it a `CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`),
+or docker); a Codex model must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a `CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`),
 never `~/.capcomd` itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` and, the first time, the
 model's `limits.json` (ADR-025 D4's starting values until an arm measures them), plus the world under `DIR/worlds/`.
 The seed defaults to today's date, so a run on a new model release gets names and numbers no model has seen; re-run

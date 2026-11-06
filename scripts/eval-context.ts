@@ -8,7 +8,7 @@
 // self-reported. Results are per model; re-run on every model release (§9: every constant is an eval output per model).
 //
 //   bun scripts/eval-context.ts                                    # the fake sandbox and agent (CI): the harness itself
-//   bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-5.6 --port 6571 --evidence docs/evidence/context
+//   bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-6.1-sol --port 6571 --evidence docs/evidence/context
 //
 // --agents fake (default) runs on the fake-host sandbox with scripts/eval-context/fake-agent.ts as `claude`, and with
 // --expect fails unless every step's verdict is the one the fake's policy must produce (so a checker, an arm or a metric
@@ -38,7 +38,7 @@ const { values: a } = parseArgs({
 const ROOT = resolve(import.meta.dir, "..");
 const CLI = join(ROOT, "src", "cli", "index.ts");
 const LIVE = a.agents === "live";
-if (!LIVE && a.agents !== "fake") throw new Error("--agents is fake or live");
+if (!LIVE && a.agents !== "fake") fail("--agents is fake or live");
 // A new world per day by default (a model release's run gets names and numbers nobody has seen); CI pins one.
 const SEED = Number(a.seed ?? new Date().toISOString().slice(0, 10).replace(/-/g, ""));
 const world = generateWorld(SEED);
@@ -46,7 +46,7 @@ const { chains: ALL_CHAINS, pending } = suite(world);
 const chains = a.chains ? a.chains.split(",").map((id) => ALL_CHAINS.find((c) => c.id === id) ?? fail(`no chain ${id}: ${ALL_CHAINS.map((c) => c.id).join(", ")}`)) : ALL_CHAINS;
 const arms = a.arms!.split(",").map((n) => armNamed(n) ?? fail(`no arm ${n}: ${ARMS.map((x) => x.name).join(", ")}`));
 for (const arm of arms) if (!arm.files) fail(`arm ${arm.name} isn't runnable yet: it needs ${arm.needs}`);
-const models = LIVE ? (a.models ?? fail("--agents live needs --models, e.g. claude-opus-5-5,gpt-5.6")).split(",") : ["fake"];
+const models = LIVE ? (a.models ?? fail("--agents live needs --models, e.g. claude-opus-5-5,gpt-6.1-sol")).split(",") : ["fake"];
 const REPS = Number(a.reps);
 function fail(msg: string): never { console.error(`eval-context: ${msg}`); process.exit(2); }
 
@@ -237,7 +237,10 @@ await Promise.all(Array.from({ length: Math.min(Number(a.concurrency), jobs.leng
 const minutes = Math.round((Date.now() - t0) / 600) / 100;
 
 // ── results ──────────────────────────────────────────────────────────────────────────────────────
-const commit = spawnSync("git", ["-C", ROOT, "rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).stdout.trim() || null;
+// The capcomd that ran, as a commit; `-dirty` when the checkout had changes outside the evidence it writes.
+const head = spawnSync("git", ["-C", ROOT, "rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).stdout.trim();
+const dirty = (spawnSync("git", ["-C", ROOT, "status", "--porcelain", "--", ".", ":(exclude)docs/evidence/context"], { encoding: "utf8" }).stdout ?? "").trim() !== "";
+const commit = head ? `${head}${dirty ? "-dirty" : ""}` : null;
 const version = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version as string;
 const date = new Date().toISOString().slice(0, 10);
 const reports = models.map((model) => {
