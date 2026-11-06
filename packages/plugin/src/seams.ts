@@ -124,6 +124,8 @@ export interface AgentEvent { type: string; subtype?: string; tool?: string; tex
  *  its own on it between `parse` calls (Claude Code's per-message usage, its tool-use ids). */
 export interface AgentRunState {
   events: number; turns: number; inputTokens: number; outputTokens: number; costUsd: number;
+  /** Of `inputTokens`, the cache reads, and the model the CLI reported running: when the CLI says (on the agent span). */
+  cacheReadTokens?: number; model?: string;
   resultText?: string; done: boolean; error?: string; stopReason?: string;
   quota?: { message: string; resetAt?: number };
 }

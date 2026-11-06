@@ -116,6 +116,7 @@ export const codex: AgentProvider = {
     if (type === "turn.completed") {
       const u = raw.usage ?? {};
       state.inputTokens += Number(u.input_tokens ?? 0);
+      state.cacheReadTokens = (state.cacheReadTokens ?? 0) + Number(u.cached_input_tokens ?? 0);
       state.outputTokens += Number(u.output_tokens ?? 0) + Number(u.reasoning_output_tokens ?? 0);
       const rate = cfg.usdPerMtok ?? { in: 1.25, out: 10 };
       state.costUsd = (state.inputTokens * rate.in + state.outputTokens * rate.out) / 1e6;

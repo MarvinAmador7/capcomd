@@ -974,6 +974,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     const { turns } = state;
     setSpanAttributes(span, { "agent.billing": billing, "agent.notional_cost_usd": notionalCostUsd });
     setSpanAttributes(span, { "agent.exit_code": exitCode, "agent.cost_usd": costUsd, "agent.turns": turns, "agent.stop_reason": limit ?? out.stopReason, "agent.events": state.events, "gen_ai.response.cost": costUsd, "gen_ai.usage.input_tokens": state.inputTokens, "gen_ai.usage.output_tokens": state.outputTokens });
+    // Cache reads (of the input tokens) and the model the CLI reported, when it reports them: the context eval's
+    // per-agent cache ratio and the model a result was measured on (ADR-025 §12).
+    if (state.cacheReadTokens !== undefined) setSpanAttributes(span, { "gen_ai.usage.cache_read.input_tokens": state.cacheReadTokens });
+    if (state.model) setSpanAttributes(span, { "gen_ai.response.model": state.model });
     if (limit) addSpanEvent(span, "agent.limit", { reason: limit });
     // §16.1: what an orchestrate agent wrote ends it failed whatever else happened (stopped at a turn's end, a limit, an
     // error of its CLI): that is the reason it gives.
