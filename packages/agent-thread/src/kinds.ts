@@ -18,6 +18,7 @@ export function commandKind(cmd: string): ActivityKind {
 	if (m(/^capcomd\s+send\b/)) return "message";
 	if (m(/^capcomd\s+verify\b/)) return "verify";
 	if (m(/^capcomd\s+merge\b/)) return "merge";
+	if (m(/^capcomd\s+check\b/)) return "check";
 	if (m(/^capcomd\s+result\b/)) return "report";
 	if (m(/\b(bun|npm|pnpm|yarn|deno)\s+(run\s+)?test\b|\b(pytest|vitest|jest|mocha|rspec|phpunit|tox)\b|\b(go|cargo|swift|dotnet|mix)\s+test\b|\bmake\s+(test|check)\b|\bgradle\w*\s+test\b|\bmvn\s+test\b/)) return "test";
 	if (m(/\b(npm|pnpm|yarn|bun)\s+(install|i|add|ci)\b|\bpip3?\s+install\b|\b(poetry|bundle|composer)\s+install\b|\bgo\s+mod\s+(download|tidy)\b|\bcargo\s+fetch\b|\b(apt|apt-get|brew)\s+install\b/)) return "install";
@@ -38,6 +39,7 @@ export function opKind(op: string): ActivityKind | null {
 		case "send": return "message";
 		case "verify": return "verify";
 		case "merge": return "merge";
+		case "check": return "check";
 		case "result": return "report";
 		case "task": return "plan";
 		default: return null;

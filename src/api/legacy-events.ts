@@ -75,6 +75,7 @@ export const SCOPE_EVENT_TYPES = [
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
 	"MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED",
+	"CHECK_STARTED", "CHECK_PASSED", "CHECK_FAILED",
 	"PLUGIN_GATE_DENIED", "PLUGIN_GATE_BYPASSED",
 	"TASK_ADDED", "TASK_CLAIMED", "TASK_LEASE_EXPIRED", "TASK_DONE", "TASK_RELEASED",
 	"KV_PUT", "KV_DELETE", "KV_CAS",
@@ -82,7 +83,27 @@ export const SCOPE_EVENT_TYPES = [
 export type ScopeEventType = (typeof SCOPE_EVENT_TYPES)[number];
 
 /** Op events carry the op's own data/result bag after `id`; those stay open even on the daemon side. */
-const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verify.failed", "merge.succeeded", "merge.failed"]);
+const OPEN = new Set(["verify.started", "merge.started", "verify.passed", "verify.failed", "merge.succeeded", "merge.failed", "check.started", "check.passed", "check.failed"]);
+/** A check (`capcomd check <ref>`, chk-…): the run's checks on one commit of a branch as it is; it merges nothing. */
+const checkStart = {
+	id: S.describe("The check (chk-…)"),
+	ref: S.describe("What was asked for: an agent id (its pushed branch) or a branch name"),
+	branch: S.describe("The branch checked"),
+	sha: S.describe("The commit checked: the branch's tip when the check was asked for"),
+	agentId: nS.describe("The agent whose branch it is, when ref named one"),
+	askedBy: S.optional().describe("The agent that asked for it (an in-VM `capcomd check`); absent for the operator's and the driver's"),
+};
+const checkEnd = {
+	id: S.describe("The check (chk-…)"),
+	pass: z.boolean().describe("Whether the checks passed on that commit"),
+	branch: S.describe("The branch checked"),
+	commit: S.describe("The commit checked"),
+	checks: z.looseObject({
+		passed: z.boolean(), status: S.describe("passed, failed, or missing (the branch or commit isn't on the repository)"),
+		where: S.optional().describe("Where they ran: vm (a fresh sandbox), host, reused (this tree already passed this command in the run), none (no check command)"),
+		reason: S.optional().describe("Why they didn't pass, when they didn't"),
+	}).describe("How the checks went. Their output is on the check's record (`capcomd check <runId> --id <chk>`), not on the event"),
+};
 
 export const LegacyEventShapes = {
 	"run.created": { budget: U, label: nS, goal: nT.optional(), ...cause },
@@ -135,6 +156,9 @@ export const LegacyEventShapes = {
 	"merge.approval_requested": { id: S, target: U, ref: U, branch: S.nullable().optional(), reason: T.nullable().optional(), diff: MergeDiff.optional().describe("The files the branch changes against where it left the target, read when the merge was parked (the approval's subject.files); absent when the diff couldn't be read"), askedBy: S.optional().describe("The agent that asked for the merge and waits on the decision (in-VM merges); absent for an operator's merge"), heldBy: HeldBy.optional() },
 	"merge.approved": { id: S, by: U },
 	"merge.denied": { id: S, merged: z.boolean().optional(), status: S.optional(), by: U.optional(), reason: T.optional() },
+	"check.started": checkStart,
+	"check.passed": checkEnd,
+	"check.failed": checkEnd,
 	"plugin.gate_denied": {
 		plugin: S.describe("The plugin that denied or held it"), hook: S.describe("The gate: verify.starting, verify.judging, merge.landing, approval.deciding or trigger.admitting"),
 		entity: S.describe("What it was about: the verification (vfy-…) or merge (mrg-…) id"), decision: z.enum(["deny", "hold"]).describe("deny refused it; hold parked a merge for a person's approval"),

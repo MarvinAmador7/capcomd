@@ -13,7 +13,7 @@ export const KERNEL_COMMANDS = [
   "agent-drive", "agents", "approve", "auth", "await", "budget", "cancel", "clients", "doctor", "env", "events", "goal",
   "grant", "help", "inspect", "kv", "logs", "mcp", "merge", "pause", "plugins", "pr", "replay", "resume", "run", "sandbox",
   "secrets", "send", "serve", "service", "setup", "skills", "spawn", "status", "task", "title", "token", "trace", "tree",
-  "tui", "ui", "upgrade", "verify", "version", "wait-any",
+  "tui", "ui", "upgrade", "verify", "version", "wait-any", "check",
 ] as const;
 
 /** The plugin API majors this host serves (§12.1). */

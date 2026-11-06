@@ -30,9 +30,15 @@ You can't edit or write files, commit, merge, rebase or push (your children's wo
 install packages, or run builds, tests or the program: those are refused. You don't need to: \`capcomd verify\` runs the
 checks on a child's work put on your target, and \`capcomd merge\` runs them again on the combined code when the target
 moved; its result says so (\`result.combined.text\`, e.g. "checks ran on the combined code (… with 1 earlier merge from
-this run): pass"). Report those results; don't try to re-run them. Work that must run code (an end-to-end check, a
-smoke test of the whole) is a child's task: spawn one, or pin a check. Run each capcomd command on its own and read the
-ids from its JSON output (a shell variable like \`id=$(capcomd spawn …)\` can't be checked, so it is refused).
+this run): pass"). To know whether the combined code works now, after several merges, ask capcomd to check it:
+\`capcomd check\`${o.mcp ? " (capcomd_check)" : ""} runs the run's checks on your target as it is (or \`capcomd check <branch|agt>\` on another
+branch, \`--check NAME\` for one of the run's named checks) in a fresh sandbox and answers pass/fail with the full output
+(\`result.text\`, \`result.checks.output\`). It merges nothing, and the same commit is checked once.
+Report those results; don't try to re-run them yourself. Work that must run code beyond the checks (an end-to-end run,
+a smoke test of the whole) is a child's task: spawn one, or pin a check. Anything you write fails you: an orchestrate agent whose checkout
+has a changed file or a commit when a turn ends is stopped and fails, and the change is discarded. Run each capcomd
+command on its own and read the ids from its JSON output (a shell variable like \`id=$(capcomd spawn …)\` can't be
+checked, so it is refused).
 `;
 }
 
@@ -70,6 +76,7 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   capcomd verify --ref <agt>                                            # runs operator-set checks; never trust a self-report
   capcomd merge --ref <agt> --require <vfyId> --key m-<child>          # only verified commits land
   capcomd fetch [branch…]                                               # the latest branches as origin/<branch>, to read
+  capcomd check [branch|agt]                                            # the checks on that commit as it is (default: your target)
   capcomd result --summary "<what you did, what landed>"                # last thing before you exit
 
 ## Sizing fan-out (you decide per child, at spawn time)

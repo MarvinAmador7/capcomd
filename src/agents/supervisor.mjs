@@ -2,7 +2,7 @@
 // ADR-019 §1, §3: the in-VM supervisor. It runs next to the agent CLI (run.sh starts it when the VM has node), and
 // reports up through an outbox the engine drains: heartbeats while it is alive, and checkpoints of the workspace.
 // Dependency-free, like vm-cli.mjs. Config (JSON file, argv[2]):
-//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, input?, reportTree? }
+//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree? }
 // With `reportTree`, each heartbeat carries the workspace's tree hash (for "no change in the workspace", ADR-019 §2).
 // It never pushes: the agent must not hold push credentials, so the engine pushes the checkpoint ref it reports.
 // With `input` ({ prompt, inbox }), the agent CLI reads user messages on stdin (claude --input-format stream-json):
@@ -46,6 +46,8 @@ function headIndex(idx, ref = "HEAD") {
 }
 let lastTree = null, lastHead = null;
 function checkpoint(reason) {
+  // `checkpoints: false` (an orchestrate agent, plugin API §16.1): its checkout is never committed, not even here.
+  if (cfg.checkpoints === false) return;
   try {
     const head = git(["rev-parse", "HEAD"]);
     const idx = { GIT_INDEX_FILE: `${cfg.dir}/checkpoint.index` };

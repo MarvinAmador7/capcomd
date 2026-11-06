@@ -6,7 +6,7 @@ Status: accepted in part. Built: step 1 (run new, spawn, await, wait-any, cancel
 capcomd provides durable, sandboxed, observable building blocks: agents, tasks, verification, merge, state and budgets. An orchestrator (Hermes, a script, or a capcomd agent with `children.allowSpawn`) composes them into patterns, guided by `plugins/capcomd/skills/capcomd-orchestration/SKILL.md`. capcomd enforces safety, not shape: sandbox/egress, the auth rules (ADR-015 §6), children limits (§7), budgets, leases, verification-before-merge and the event log.
 
 ## Surface (every command: `--json` envelope `{schema:"capcomd.v1", ok, ...}`, stable IDs, idempotency via `--key`)
-IDs: `run-…` (scope/budget root), `agt-…` (agent instance), `tsk-…`, `vfy-…`, `mrg-…`. Every agent has `parent` (an agent ID or the operator) and `depth`.
+IDs: `run-…` (scope/budget root), `agt-…` (agent instance), `tsk-…`, `vfy-…`, `mrg-…`, `chk-…`. Every agent has `parent` (an agent ID or the operator) and `depth`.
 
 | Primitive | Command | Notes |
 |---|---|---|
@@ -17,6 +17,7 @@ IDs: `run-…` (scope/budget root), `agt-…` (agent instance), `tsk-…`, `vfy-
 | cancel | `capcomd cancel <runId> [agt] [--reason]` | propagates to all descendants; leases released; VMs destroyed |
 | verify | `capcomd verify --ref branch|commit [--checks "bun test"] [--review-profile R] --acceptance file → vfy {pass, checks, review{passed, reasons}}` | commands run in a fresh VM (ADR-003); then a reviewer agent (the run's `--reviewer`, operator-set) reads the commit against the criteria |
 | merge | `capcomd merge --ref B --target main [--require vfy] [--strategy squash] → mrg` | requires a passing `vfy` for that exact commit unless `--operator` (ADR-013 CAS) |
+| check | `capcomd check <runId> [branch\|agt] [--check NAME \| --checks CMD] [--key K] → chk {pass, text, checks{status, where, output}}` (built, 2026-11-05) | the checks on that commit as it is (default: the run's target), in a fresh VM like verify's; merges and reviews nothing, so an orchestrate agent may ask for it in its VM (plugin API §16.1); one per commit and command |
 | board | `capcomd task add|claim|renew|release|done|list|show <runId> …` (built, step 3) | leases with fencing epochs; expired leases are taken over |
 | blackboard | `capcomd kv get|put|cas|list <runId> key [value] [--expect n]` (built, step 3) | versioned and CAS-protected, so concurrent writers can't lose an update |
 | events | `capcomd events R [--follow [--until TYPE] [--timeout-ms N] [--from-start]]` (follow built, step 3) | read or subscribe (NDJSON); includes the per-actor `agent.resolved` record |
