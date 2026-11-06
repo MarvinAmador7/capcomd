@@ -11,6 +11,7 @@ import { definePlugin, type PluginContext } from "../../../packages/plugin/src/c
 import { PluginError } from "../../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../../packages/plugin/src/manifest";
 import { VERSION } from "../../utils/self";
+import { startSourceTimer } from "./timer";
 
 export interface Schedule {
   /** What a fire asks for: the started run's goal. */
@@ -90,7 +91,7 @@ async function arm(ctx: PluginContext<ScheduleConfig>, schedules: Map<string, Sc
   const mine = new Set<string>();
   for (const [name, s] of schedules) {
     try {
-      const job = await ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: `${LABEL}${name}`, ...(s.at ? { at: s.at } : {}), ...(s.everyMs ? { everyMs: s.everyMs } : {}), ...(s.until ? { until: s.until } : {}) }, { key: keyOf(name, s) });
+      const job = await startSourceTimer(ctx, keyOf(name, s), { kind: "timer", runId: null, owner: { plugin: true }, label: `${LABEL}${name}`, ...(s.at ? { at: s.at } : {}), ...(s.everyMs ? { everyMs: s.everyMs } : {}), ...(s.until ? { until: s.until } : {}) });
       mine.add(job.jobId);
     } catch (e) {
       if (e instanceof PluginError && e.code === "unsupported") return; // not the daemon: nothing is scheduled here
@@ -111,7 +112,8 @@ export const plugin = definePlugin<ScheduleConfig>({
       if (c.ok) schedules.set(name, c.schedule);
       else ctx.log.warn(`schedule ${name} is left out: ${c.why}`);
     }
-    ctx.hooks.on("job.changed", (call) => {
+    // No schedules, no listener: one on job.changed makes the daemon read every background job's output (§6.6.19).
+    if (schedules.size) ctx.hooks.on("job.changed", (call) => {
       const { job, change } = call.payload;
       if (job.plugin !== ctx.plugin.name || change.kind !== "fired" || !job.spec.label.startsWith(LABEL)) return;
       const name = job.spec.label.slice(LABEL.length), s = schedules.get(name);

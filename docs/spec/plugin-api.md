@@ -1548,17 +1548,23 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
 
 - `schedule` (`source-schedule`, `src/plugins/sources/schedule.ts`): its config `schedules: {<name>: {text, everyMs?,
   at?, until?}}` (§10.2); each schedule is one timer, keyed by its settings (a changed schedule is a new timer, the
-  old one is cancelled), and each fire a trigger `{id: <name>/<jobId>/<n>, thread: schedule:<name>@<fire time>, actor:
+  old one is cancelled; settings changed back to a cancelled timer's start it again under a new key,
+  `src/plugins/sources/timer.ts`), and each fire a trigger `{id: <name>/<jobId>/<n>, thread: schedule:<name>@<fire time>, actor:
   {id: schedule:<name>, bot: true}, addressed: direct, text}`. Every fire is its own thread, so one night's run never
   gets the next night's fire as a message. The operator allows the actor (or opens `schedule:*`) like any other.
 - `github` (`forge-github`, `src/plugins/forges/github-source.ts`; no GitHub code in the kernel): the issue and pull
   request comments of its config's `sourceRepos` (`owner/name`), and of the repositories of the `github` threads runs
   follow, read every `sourceEveryMs` (60 s) with the user's GitHub login; thread `owner/name#<number>`, id
   `comment-<id>`, actor the author (`bot` from GitHub's user type), `addressed: mention` when a line starts with the
-  command word (`sourceCommand`, `/capcomd`) or someone else @-mentions the login; `replyTo` the comment's URL. The
-  login is usually the user's own, so their comments are theirs, not the bot's: what the source drops as its own is
-  what capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read position is per repository in `ctx.storage`;
-  the first poll of a repository only marks where it starts.
+  command word (`sourceCommand`, `/capcomd`), or, with `sourceMentions: true` (off by default), when someone else
+  @-mentions the login; `replyTo` the comment's URL. The login is usually the user's own: a mention of it addresses
+  the user, not capcomd, and their comments are theirs, not the bot's: what the source drops as its own is what
+  capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
+  position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
+  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
+  position before it, so the next poll reads it again. The source listens to `job.changed` only when `sourceRepos`
+  names a repository (as `source-schedule` only with a schedule): a listener there makes the daemon read every
+  background job's output (§6.6.19).
 
 #### 16.3.2 The intake
 
@@ -1750,7 +1756,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.18 | 2026-11-06 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
 | 1.0.19 | 2026-11-06 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
-| 1.0.21 | 2026-11-06 | With triggers (§17.2 step 10, §16.3): the intake's gate defined exactly (allowed: an allowed actor or an opened thread, `*` patterns; explicit: allowed and addressed; inferred: allowed and not addressed; not allowed: denied), its settings (`triggers.sources` in the user's config or `CAPCOMD_TRIGGERS_FILE`, read per trigger), `trigger.admitting` asked only about an allowed trigger, the planner a continued trigger reaches (and a run with none going on to the gate), a start that fails (logged `failed`, `decision: "failed"` on `trigger.received`, the emit rejecting, the trigger free to come again), `wouldHave` only `start` for now, `Run.trigger` and the capability `triggers` (additive), `TriggerSubscription.until` and `trigger.subscribed`'s `until` null while the run works, what stops a subscription, the sweep, `capcomd triggers log` and `subscriptions`; the built-in `schedule` source and forge-github's `github` source (§16.3.1); `ctx.storage`'s daemon scope; a built-in's config from the user layer and `CAPCOMD_PLUGIN_<NAME>_<KEY>` (§10.2); today's run and message paths don't pass through the intake yet, and a run's pull-request thread subscription is a later step (§16.3.6). |
+| 1.0.21 | 2026-11-06 | With triggers (§17.2 step 10, §16.3): the intake's gate defined exactly (allowed: an allowed actor or an opened thread, `*` patterns; explicit: allowed and addressed; inferred: allowed and not addressed; not allowed: denied), its settings (`triggers.sources` in the user's config or `CAPCOMD_TRIGGERS_FILE`, read per trigger), `trigger.admitting` asked only about an allowed trigger, the planner a continued trigger reaches (and a run with none going on to the gate), a start that fails (logged `failed`, `decision: "failed"` on `trigger.received`, the emit rejecting, the trigger free to come again), `wouldHave` only `start` for now, `Run.trigger` and the capability `triggers` (additive), `TriggerSubscription.until` and `trigger.subscribed`'s `until` null while the run works, what stops a subscription, the sweep, `capcomd triggers log` and `subscriptions`; the built-in `schedule` source and forge-github's `github` source (§16.3.1: an @-mention of the login addresses capcomd only with `sourceMentions`, a retryable refusal is read again, a cancelled timer's settings start a new one); `ctx.storage`'s daemon scope; a built-in's config from the user layer and `CAPCOMD_PLUGIN_<NAME>_<KEY>` (§10.2); today's run and message paths don't pass through the intake yet, and a run's pull-request thread subscription is a later step (§16.3.6). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

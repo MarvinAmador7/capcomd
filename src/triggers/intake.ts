@@ -68,10 +68,22 @@ export function gateOf(cfg: TriggersConfig, source: string): { allowed: string[]
   };
 }
 
-/** `opened` patterns: exact, or with `*` for any run of characters. */
+/** `opened` patterns: exact, or with `*` for any run of characters. Matched in linear passes, not as a regular
+ *  expression: a pattern of many `*` against a long thread a source names would backtrack for minutes. */
 export function threadMatches(pattern: string, thread: string): boolean {
   if (!pattern.includes("*")) return pattern === thread;
-  return new RegExp(`^${pattern.split("*").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "s").test(thread);
+  const parts = pattern.split("*");
+  const first = parts[0]!, last = parts.at(-1)!;
+  if (thread.length < first.length + last.length || !thread.startsWith(first) || !thread.endsWith(last)) return false;
+  // Each middle part at its earliest place after the one before: if that fails, no later place can do better.
+  let at = first.length;
+  const end = thread.length - last.length;
+  for (const p of parts.slice(1, -1)) {
+    const i = thread.indexOf(p, at);
+    if (i < 0 || i + p.length > end) return false;
+    at = i + p.length;
+  }
+  return true;
 }
 
 // ---- records ---------------------------------------------------------------------------------------------------------

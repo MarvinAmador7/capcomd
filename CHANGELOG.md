@@ -20,7 +20,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `triggers`). Schedules: `"plugins": {"source-schedule": {"schedules": {"nightly": {"text": "update the
   dependencies", "everyMs": 86400000}}}}` (or `at` for once), allowed as `schedule:nightly`. GitHub comments:
   `"plugins": {"forge-github": {"sourceRepos": ["acme/app"]}}`, read every minute with your GitHub login (comments
-  from before you set it are not read). Plugins can add their own sources (`ctx.triggers`) and turn a trigger down
+  from before you set it are not read; an @-mention of that login addresses you, not capcomd, unless you set
+  `"sourceMentions": true` for a login that is capcomd's own account). Plugins can add their own sources (`ctx.triggers`) and turn a trigger down
   (the `trigger.admitting` hook).
 - New: built-in plugins take settings from `~/.capcomd/config.json` (`"plugins": {"<name>": {…}}`, and
   `"enabled": false` to turn one off) or from `CAPCOMD_PLUGIN_<NAME>_<KEY>` environment variables.

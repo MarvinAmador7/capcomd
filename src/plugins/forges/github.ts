@@ -312,7 +312,8 @@ export const manifest = {
       timeoutMs: { type: "integer", minimum: 1000, default: DEFAULTS.timeoutMs, description: "How long to wait for a pull request to become mergeable (CAPCOMD_GITHUB_TIMEOUT_MS wins)" },
       sourceRepos: { type: "array", items: { type: "string", pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" }, default: SOURCE_DEFAULTS.sourceRepos, description: "The trigger source github: owner/name repositories whose issue and pull-request comments are triggers (none: the source reads nothing)" },
       sourceEveryMs: { type: "integer", minimum: 10000, default: SOURCE_DEFAULTS.sourceEveryMs, description: "How often the source reads new comments" },
-      sourceCommand: { type: "string", default: SOURCE_DEFAULTS.sourceCommand, description: "A comment line starting with this addresses capcomd (as an @-mention of the login, by someone else, does)" },
+      sourceCommand: { type: "string", default: SOURCE_DEFAULTS.sourceCommand, description: "A comment line starting with this addresses capcomd" },
+      sourceMentions: { type: "boolean", default: SOURCE_DEFAULTS.sourceMentions, description: "An @-mention of the GitHub login, by someone else, addresses capcomd too. Only for a login that is capcomd's own account: a mention of your own login addresses you" },
     },
   },
 } satisfies PluginManifest;
@@ -323,7 +324,7 @@ export const plugin: PluginModule<GitHubForgeConfig & Partial<GitHubSourceConfig
     ctx.seams.forge(new GitHubForge(cfg));
     startGitHubSource(ctx, {
       api: process.env.CAPCOMD_GITHUB_API ?? cfg.api, sourceRepos: Array.isArray(cfg.sourceRepos) ? cfg.sourceRepos : [], sourceEveryMs: cfg.sourceEveryMs,
-      sourceCommand: typeof cfg.sourceCommand === "string" ? cfg.sourceCommand : SOURCE_DEFAULTS.sourceCommand,
+      sourceCommand: typeof cfg.sourceCommand === "string" ? cfg.sourceCommand : SOURCE_DEFAULTS.sourceCommand, sourceMentions: cfg.sourceMentions === true,
     });
   },
 });

@@ -98,7 +98,8 @@ src/
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), and skill-orchestration.ts, the orchestration
                   skill as an agent.preparing patch: every process loads them (host.ts `localHost`); sources/, trigger
-                  sources (source-schedule; forge-github's own is forges/github-source.ts); storage.ts, ctx.storage
+                  sources (source-schedule, and timer.ts, a source's timer kept across restarts and setting changes;
+                  forge-github's own is forges/github-source.ts); storage.ts, ctx.storage
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and

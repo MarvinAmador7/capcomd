@@ -5,16 +5,19 @@
 // `ctx.storage` (a restart replays nothing; the first poll of a repository only marks where it starts), drops what
 // capcomd wrote itself (a comment carrying CAPCOMD_MARK: the login is usually the user's own, whose comments are theirs),
 // and fills the actor and `addressed` from GitHub's facts: the comment's author, whether GitHub says it is a bot, and
-// whether it addresses capcomd: a line starting with the command word (`sourceCommand`, `/capcomd`), or an @-mention of
-// the login by someone else (a login of capcomd's own). What a comment asks for is never judged here: the kernel's
-// intake decides (src/triggers/intake.ts). Daemon only (`ctx.jobs`, `ctx.triggers`).
+// whether it addresses capcomd: a line starting with the command word (`sourceCommand`, `/capcomd`), or, with
+// `sourceMentions` (a login that is capcomd's own account, not the user's), an @-mention of the login by someone else.
+// A comment whose emit failed for now (the intake's `unavailable`) is read again at the next poll. What a comment asks
+// for is never judged here: the kernel's intake decides (src/triggers/intake.ts). Daemon only (`ctx.jobs`,
+// `ctx.triggers`).
 import type { PluginContext } from "../../../packages/plugin/src/context";
 import { PluginError } from "../../../packages/plugin/src/errors";
 import type { Trigger } from "../../../packages/plugin/src/shapes";
 import { githubAt, type GitHubApi, type IssueComment } from "./github-rest";
+import { startSourceTimer } from "../sources/timer";
 
-export interface GitHubSourceConfig { api: string; sourceRepos: string[]; sourceEveryMs: number; sourceCommand: string }
-export const SOURCE_DEFAULTS = { sourceRepos: [] as string[], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+export interface GitHubSourceConfig { api: string; sourceRepos: string[]; sourceEveryMs: number; sourceCommand: string; sourceMentions?: boolean }
+export const SOURCE_DEFAULTS = { sourceRepos: [] as string[], sourceEveryMs: 60_000, sourceCommand: "/capcomd", sourceMentions: false };
 /** What a comment capcomd writes on GitHub carries (none yet: replies are a later step's), so the source never reads its
  *  own words back as a request. */
 export const CAPCOMD_MARK = "<!-- capcomd -->";
@@ -24,7 +27,8 @@ const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const THREAD = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#\d+$/;
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** One comment as a trigger, or null for capcomd's own (§16.3.1: a source drops its bot's messages). `me`: the login. */
+/** One comment as a trigger, or null for capcomd's own (§16.3.1: a source drops its bot's messages). `me`: a login whose
+ *  @-mention addresses capcomd (null: only the command word does). */
 export function commentTrigger(repo: string, c: IssueComment, me: string | null, command = SOURCE_DEFAULTS.sourceCommand): Trigger | null {
   const login = c.user?.login, body = c.body ?? "";
   if (!login || body.includes(CAPCOMD_MARK)) return null;
@@ -53,33 +57,42 @@ async function reposToPoll(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig)
 export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig, api?: GitHubApi): Promise<number> {
   const gh = api ?? (await githubAt(cfg.api));
   if (!gh.listIssueComments) return 0;
-  const me = gh.viewer ? await gh.viewer().catch(() => null) : null;
+  // The login is usually the user's own: a mention of it addresses them, not capcomd, unless the operator says so.
+  const me = cfg.sourceMentions && gh.viewer ? await gh.viewer().catch(() => null) : null;
   let n = 0;
   for (const repo of await reposToPoll(ctx, cfg)) {
     const key = `github/${repo}`;
-    const pos = (await ctx.storage.get("daemon", key)) as { since?: string } | undefined;
+    // `retry`: a comment whose emit failed for now, read again from `since` and not taken for an old one's edit.
+    const pos = (await ctx.storage.get("daemon", key)) as { since?: string; retry?: number } | undefined;
     // The first look at a repository: comments from now on, not its history.
     if (!pos?.since) { await ctx.storage.put("daemon", key, { since: new Date().toISOString() }); continue; }
     let comments: IssueComment[];
     try { comments = await gh.listIssueComments(repo, pos.since); } catch (e) { ctx.log.warn(`github source: reading ${repo}'s comments failed`, { error: String((e as Error)?.message ?? e) }); continue; }
-    let since = pos.since;
+    let since = pos.since, retry: number | undefined;
     for (const c of comments) {
-      if (c.updated_at > since) since = c.updated_at;
       // An edit of a comment from before the position isn't a new request.
-      if (Date.parse(c.created_at) < Date.parse(pos.since)) continue;
-      const t = commentTrigger(repo, c, me, cfg.sourceCommand);
-      if (!t) continue;
-      await ctx.triggers.emit(t).then(() => { n++; }, (e) => ctx.log.warn(`github source: ${repo} comment ${c.id} was not taken`, { error: String((e as Error)?.message ?? e) }));
+      const t = Date.parse(c.created_at) < Date.parse(pos.since) && c.id !== pos.retry ? null : commentTrigger(repo, c, me, cfg.sourceCommand);
+      if (t) {
+        const again = await ctx.triggers.emit(t).then(() => { n++; return false; }, (e) => {
+          ctx.log.warn(`github source: ${repo} comment ${c.id} was not taken`, { error: String((e as Error)?.message ?? e) });
+          return e instanceof PluginError && e.retryable;
+        });
+        // The intake couldn't act now (the trigger may come again): the position stays before it, for the next poll.
+        if (again) { retry = c.id; break; }
+      }
+      if (c.updated_at > since) since = c.updated_at;
     }
-    if (since !== pos.since) await ctx.storage.put("daemon", key, { since });
+    if (since !== pos.since || retry !== pos.retry) await ctx.storage.put("daemon", key, { since, ...(retry !== undefined ? { retry } : {}) });
   }
   return n;
 }
 
-/** forge-github's `activate`: the source's timer, and a poll when it fires (one at a time; a slow one isn't doubled). */
+/** forge-github's `activate`: the source's timer, and a poll when it fires (one at a time; a slow one isn't doubled).
+ *  With no repositories configured it doesn't listen to job.changed: a listener there makes the daemon read every
+ *  background job's output (§6.6.19). */
 export function startGitHubSource(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig): void {
   let polling = false;
-  ctx.hooks.on("job.changed", (call) => {
+  if (cfg.sourceRepos.length) ctx.hooks.on("job.changed", (call) => {
     const { job, change } = call.payload;
     if (job.plugin !== ctx.plugin.name || change.kind !== "fired" || job.spec.label !== SOURCE_TIMER || polling) return;
     polling = true;
@@ -94,7 +107,7 @@ async function armSource(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig): 
   let keep: string | null = null;
   if (cfg.sourceRepos.length) {
     try {
-      keep = (await ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: SOURCE_TIMER, everyMs: Math.max(10_000, cfg.sourceEveryMs) }, { key: `github-source-${cfg.sourceEveryMs}` })).jobId;
+      keep = (await startSourceTimer(ctx, `github-source-${cfg.sourceEveryMs}`, { kind: "timer", runId: null, owner: { plugin: true }, label: SOURCE_TIMER, everyMs: Math.max(10_000, cfg.sourceEveryMs) })).jobId;
     } catch (e) {
       if (e instanceof PluginError && e.code === "unsupported") return; // not the daemon
       ctx.log.warn("the github source's timer did not start", { error: String((e as Error)?.message ?? e) });

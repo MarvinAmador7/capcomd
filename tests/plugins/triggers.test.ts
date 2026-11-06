@@ -72,6 +72,15 @@ describe("the gate's settings", () => {
     expect(threadMatches("issue/1", "issue/1")).toBe(true);
     expect(threadMatches("issue/1", "issue/10")).toBe(false);
     expect(threadMatches("a.b*", "axb")).toBe(false);
+    expect(threadMatches("*#1", "acme/app#1")).toBe(true);
+    expect(threadMatches("a*b*c", "abc")).toBe(true);
+    expect(threadMatches("a*b*c", "acb")).toBe(false);
+    expect(threadMatches("ab*ba", "aba")).toBe(false);
+    expect(threadMatches("*", "")).toBe(true);
+    // Linear: many stars against a long thread that doesn't match end at once (a regular expression backtracks).
+    const t0 = Date.now();
+    expect(threadMatches("*a*a*a*a*a*a*a*a*a*a*b", "a".repeat(500))).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(100);
   });
 
   test("a source with no settings records (observe), allows nobody; a bad mode is observe; CAPCOMD_TRIGGERS_FILE wins", () => {
@@ -292,6 +301,20 @@ describe("the schedule source (source-schedule)", () => {
     host = await start({});
     for (let i = 0; i < 100 && timers().some((t) => t.state === "running"); i++) await sleep(50);
     expect(timers().filter((t) => t.state === "running")).toEqual([]);
+    // With no schedule it doesn't listen to job.changed (a listener makes the daemon read every job's output).
+    expect(host.hooks.listening("job.changed")).toBe(false);
+    await host.stop();
+    resetJobs();
+    // Set back to the hourly settings it had: its timer (cancelled under that key) runs again.
+    host = await start({ nightly: { text: "update the dependencies", everyMs: 3_600_000 } });
+    for (let i = 0; i < 100 && timers().filter((t) => t.state === "running").length !== 1; i++) await sleep(50);
+    expect(timers().filter((t) => t.state === "running").map((t) => t.spec.everyMs)).toEqual([3_600_000]);
+    await host.stop();
+    resetJobs();
+    // A restart with the same settings finds that timer again: no second one.
+    host = await start({ nightly: { text: "update the dependencies", everyMs: 3_600_000 } });
+    await sleep(200);
+    expect(timers().filter((t) => t.state === "running")).toHaveLength(1);
     await host.stop();
   }, 30_000);
 });
@@ -338,6 +361,52 @@ describe("the GitHub source (forge-github)", () => {
     expect(emitted.map((t) => `${t.thread} ${t.id}`)).toEqual(["acme/app#12 comment-2"]);
     expect(asked.map(([r]) => r)).toEqual(["acme/app", "acme/other"]);
     expect(((await store.get("daemon", "github/acme/app")) as { since: string }).since).toBe(latest);
+  });
+
+  test("a mention of the login addresses capcomd only with sourceMentions: the login is usually the user's own", async () => {
+    const emitted: Trigger[] = [];
+    const store = pluginStorage(join(home, "plugins", "forge-github"));
+    const ctx = { storage: store, log: { warn: () => {} }, triggers: { emit: async (t: Trigger) => { emitted.push(t); return { kind: "recorded" }; }, subscriptions: async () => [] } } as unknown as PluginContext<unknown>;
+    const since = new Date(Date.now() - 60_000).toISOString(), at = new Date().toISOString();
+    await store.put("daemon", "github/acme/app", { since });
+    const api = { listIssueComments: async () => [comment(1, { body: "@marvin can you take a look?", created_at: at, updated_at: at })], viewer: async () => "marvin" } as never;
+    const cfg = { api: "https://api.github.com", sourceRepos: ["acme/app"], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+    await pollGitHub(ctx, cfg, api);
+    expect(emitted.map((t) => t.addressed)).toEqual([null]);
+    await store.put("daemon", "github/acme/app", { since });
+    await pollGitHub(ctx, { ...cfg, sourceMentions: true }, api);
+    expect(emitted.map((t) => t.addressed)).toEqual([null, "mention"]);
+  });
+
+  test("a comment the intake couldn't act on for now is read again at the next poll; one it refused for good is not", async () => {
+    const tried: string[] = [];
+    let fail: PluginError | null = new PluginError("unavailable", "the engine didn't answer", undefined, true), failOn = "comment-2";
+    const store = pluginStorage(join(home, "plugins", "forge-github"));
+    const ctx = { storage: store, log: { warn: () => {} }, triggers: {
+      emit: async (t: Trigger) => { tried.push(t.id); if (fail && t.id === failOn) throw fail; return { kind: "started", runId: "run-x" }; },
+      subscriptions: async () => [],
+    } } as unknown as PluginContext<unknown>;
+    const start = Date.now() - 600_000;
+    const ts = (s: number) => new Date(start + s * 1000).toISOString();
+    await store.put("daemon", "github/acme/app", { since: ts(0) });
+    // comment-2 was written before comment-1 and edited after it: read in update order, its creation is past the position.
+    const page = [comment(1, { created_at: ts(20), updated_at: ts(20) }), comment(2, { created_at: ts(10), updated_at: ts(30) }), comment(3, { created_at: ts(40), updated_at: ts(40) })];
+    const api = { listIssueComments: async (_r: string, since: string) => page.filter((c) => c.updated_at >= since) } as never;
+    const cfg = { api: "https://api.github.com", sourceRepos: ["acme/app"], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+    expect(await pollGitHub(ctx, cfg, api)).toBe(1);
+    expect(tried).toEqual(["comment-1", "comment-2"]);
+    expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(20), retry: 2 });
+    fail = null;
+    expect(await pollGitHub(ctx, cfg, api)).toBe(3);
+    expect(tried).toEqual(["comment-1", "comment-2", "comment-1", "comment-2", "comment-3"]);
+    expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(40) });
+    // Refused for good (the operator's settings): the source moves on.
+    fail = new PluginError("invalid", "no project"); failOn = "comment-4";
+    page.push(comment(4, { created_at: ts(50), updated_at: ts(50) }));
+    tried.length = 0;
+    expect(await pollGitHub(ctx, cfg, api)).toBe(1);
+    expect(tried).toEqual(["comment-3", "comment-4"]);
+    expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(50) });
   });
 });
 
