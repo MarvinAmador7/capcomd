@@ -442,7 +442,7 @@ describe("profiles v2: loader and resolution", () => {
 
   test("CLI: agents list/show/validate read v2 profiles; add/set/rm say they don't edit them", () => {
     const w = world({
-      "P/critic/profile.yaml": yaml(["name: critic", "description: Reviews.", "harness: { provider: claude, auth: apikey }", "tools: { allowed: [Read, Grep] }", "skills: [{ name: tdd }]", "jobs: { max: 2 }"]),
+      "P/critic/profile.yaml": yaml(["name: critic", "description: Reviews.", "harness: { provider: claude, auth: apikey }", "tools: { allowed: [Read, Grep] }", "skills: [{ name: tdd }]", "lifecycle: { onEnd: [post-review-summary] }"]),
       "P/critic/skills/tdd/SKILL.md": "---\nname: tdd\n---\nWrite the failing test first.\n",
     }, { worker: { provider: "codex", auth: "apikey" } });
     const env = { ...w.source, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
@@ -453,7 +453,7 @@ describe("profiles v2: loader and resolution", () => {
     expect(show.spec).toEqual({ provider: "claude", auth: "apikey", description: "Reviews.", allowedTools: ["Read", "Grep"] });
     const tdd = readFileSync(w.at("P/critic/skills/tdd/SKILL.md"), "utf8");
     expect(show.skills).toEqual([{ name: "tdd", source: "project", hash: `sha256:${new Bun.CryptoHasher("sha256").update(tdd).digest("hex")}`, path: w.at("P/critic/skills/tdd/SKILL.md") }]);
-    expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: jobs is read but not used yet by this capcomd"] });
+    expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: lifecycle.onEnd is read but not used yet by this capcomd"] });
     const set = cli(["agents", "set", "critic", "--model", "opus", "--json"], env);
     expect(set.code).not.toBe(0);
     expect(JSON.parse(set.out).error.message).toContain(`profile "critic" is defined in ${w.at("P/critic/profile.yaml")}`);

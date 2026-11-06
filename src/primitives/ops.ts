@@ -1202,7 +1202,8 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
  */
 export async function unpreparedSkill(runId: string, a: ScopeAgent, prepared: PreparedSpec): Promise<string | undefined> {
   const has = Array.isArray(prepared?.skills) && (prepared.skills as Array<{ name?: unknown }>).some((s) => s?.name === ORCHESTRATION_SKILL_NAME);
-  return has ? undefined : (await import("../plugins/skill-orchestration")).skillText(runId, a);
+  // In its block, as a prepared attempt gets it (agentPreparing).
+  return has ? undefined : skillBlock(ORCHESTRATION_SKILL_NAME, await (await import("../plugins/skill-orchestration")).skillText(runId, a));
 }
 
 export async function getAgentOrThrow(runId: string, agentId: string): Promise<ScopeAgent> {

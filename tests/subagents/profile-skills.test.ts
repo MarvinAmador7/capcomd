@@ -130,3 +130,19 @@ test("a skill is pinned when the agent is spawned: an edit after that is the nex
   const ev = (await cj(["events", run, "--from-start", "--until", "agent.spawned", "--timeout-ms", "5000"])).stdout;
   expect(ev).not.toContain("Write the failing test before the fix.");
 }, 180_000);
+
+test("an agent whose pinned skill text isn't in the run's records fails for good (config), never runs without it", async () => {
+  const run = (await cj(["run", "new", "--key", `pfs-gone-${Date.now()}`])).j.runId as string;
+  const { client } = await import("../../src/core/relay");
+  const s = client().scope.getOrCreate([run]);
+  const model = (await s.getAgent({ agentId: await spawn(run, "worker", "model", ["--no-start"]) }))!;
+  // The same spawn, pinned to a SKILL.md whose text the run never kept (an edited record, a lost attachment).
+  const gone = new Bun.CryptoHasher("sha256").update("# not kept").digest("hex");
+  const spec = { ...(model.spec as Record<string, unknown>), skills: [{ name: "tdd", source: "project", hash: gone }] };
+  const agentId = `agt-gone${Date.now().toString(36)}`;
+  await s.spawn({ runId: run, agentId, paramsHash: `gone-${agentId}`, parent: null, profile: "worker", ref: "worker", spec, task: "Fix the sum helper" });
+  const done = (await cj(["await", run, agentId, "--timeout-ms", "90000"])).j?.agents?.[0];
+  expect(done?.status).toBe("failed");
+  expect(JSON.stringify(done)).toContain(`profile skill tdd (sha256 ${gone.slice(0, 12)}…) isn't in run ${run}'s records as it was pinned at spawn`);
+  expect(readdirSync(join(dir, "vm")).some((d) => d.includes(agentId))).toBe(false); // it never ran
+}, 180_000);
