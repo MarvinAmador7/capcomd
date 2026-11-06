@@ -52,10 +52,11 @@ export function treeHash(files: Record<string, TreeFile>): string {
 }
 
 /**
- * Every file under `dir` but its top-level LOCK, hashed. Refuses a link that leaves the directory (absolute, or `..`
- * past its root), anything that is neither a file, a directory nor a link, and a tree over TREE_LIMITS.
+ * Every file under `dir` but its top-level LOCK, hashed (`withLock`: LOCK too, for a directory capcomd didn't install,
+ * where LOCK is just another file its code can run). Refuses a link that leaves the directory (absolute, or `..` past
+ * its root), anything that is neither a file, a directory nor a link, and a tree over TREE_LIMITS.
  */
-export function hashTree(dir: string): Tree {
+export function hashTree(dir: string, o: { withLock?: boolean } = {}): Tree {
   const root = resolve(dir);
   const files: Record<string, TreeFile> = {};
   let bytes = 0, count = 0;
@@ -63,7 +64,7 @@ export function hashTree(dir: string): Tree {
     const abs = rel ? join(root, rel) : root;
     for (const e of readdirSync(abs).sort()) {
       const r = rel ? `${rel}/${e}` : e;
-      if (!rel && e === LOCK_FILE) continue;
+      if (!rel && e === LOCK_FILE && !o.withLock) continue;
       const p = join(abs, e);
       const st = lstatSync(p);
       if (++count > TREE_LIMITS.files) throw new TreeError(`more than ${TREE_LIMITS.files} files`);

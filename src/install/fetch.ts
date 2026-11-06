@@ -5,8 +5,8 @@
 // TREE_LIMITS.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, posix } from "node:path";
+import { chmodSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, posix } from "node:path";
 import { Git } from "../merge/git";
 import { hostRepoDir, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
 import { TREE_LIMITS, inside } from "./lock";
@@ -92,19 +92,37 @@ export async function fetchPackage(source: PackageSource, o: {
     const rel = e.path.slice(prefix.length);
     if (!rel || rel.split("/").some((s) => s === ".." || s === "." || s === ".git")) throw new FetchError(`${e.path}: not a path a package may hold`);
     const to = join(o.into, rel);
-    mkdirSync(dirname(to), { recursive: true });
+    mkdirs(o.into, rel, e.path);
     const body = data.get(e.sha)!;
     if ((bytes += body.length) > TREE_LIMITS.bytes) throw new FetchError(`the package is more than ${TREE_LIMITS.bytes / 1024 / 1024} MB`);
     if (e.mode === "120000") {
       const target = body.toString("utf8");
       if (isAbsolute(target) || !inside(o.into, posix.join(posix.dirname(rel), target))) throw new FetchError(`${e.path} links outside the package (${target})`);
-      symlinkSync(target, to);
+      try { symlinkSync(target, to); } catch { throw clash(e.path); }
     } else {
-      writeFileSync(to, body);
+      // `wx`: never over something already written (a path that names it again in another case or normalization).
+      try { writeFileSync(to, body, { flag: "wx" }); } catch { throw clash(e.path); }
       chmodSync(to, e.mode === "100755" ? 0o755 : 0o644);
     }
   }
   return { commit, path: dir };
+}
+
+const clash = (path: string) => new FetchError(`${path} names a file the package already has (paths that differ only in case or normalization)`);
+
+/**
+ * The directories of `rel` under `into`, made one at a time, through none of the package's own links. A filesystem
+ * that ignores case or normalization (macOS) reads `p/D` for `p/d`: a link written earlier must not take a later path
+ * out of the package, where the link's own check (its target, taken literally) can't see it.
+ */
+function mkdirs(into: string, rel: string, path: string) {
+  let at = into;
+  for (const part of rel.split("/").slice(0, -1)) {
+    at = join(at, part);
+    let st;
+    try { st = lstatSync(at); } catch { mkdirSync(at, { mode: 0o755 }); continue; }
+    if (!st.isDirectory()) throw new FetchError(`${path} goes through ${st.isSymbolicLink() ? "a link" : "a file"} of the package (paths that differ only in case or normalization)`);
+  }
 }
 
 /** A short, stable folder name for something keyed by a path (a project's directory). */

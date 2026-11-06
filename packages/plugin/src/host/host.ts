@@ -33,8 +33,9 @@ export interface Candidate {
   enabled?: boolean;
   /** The plugin's config over its schema's defaults: the user, project and environment layers merged (§10.2). */
   config?: Record<string, unknown>;
-  /** What its schema refused in those layers (§10.4): an enabled plugin with any is failed `config_invalid`. */
-  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env" }>;
+  /** What its schema refused in those layers (§10.4): an enabled plugin with any is failed `config_invalid`, except for
+   *  those `setAside` (a project's settings for a plugin not its own, left out of `config`): those are only reported. */
+  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env"; setAside?: true }>;
   /** The layer each top-level key of `config` came from (`GET /v1/plugins/{name}` `config.sources`); a key not listed
    *  is the user's. */
   configSources?: Record<string, "user" | "project" | "env">;
@@ -328,7 +329,9 @@ export class PluginHost {
         const mine = errors.filter((e) => e.layer === layer).map(({ path, message }) => ({ path, message }));
         this.o.emit({ type: "plugin.config_refused", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin's settings were refused.`, data: { plugin: r.name, errors: mine, layer } });
       }
-      return this.fail(r, "config_invalid", errors.map((e) => `${e.layer}: plugins.${r.name}.${e.path}: ${e.message}`).join("; "));
+      const fatal = errors.filter((e) => !e.setAside);
+      if (fatal.length) return this.fail(r, "config_invalid", fatal.map((e) => `${e.layer}: plugins.${r.name}.${e.path}: ${e.message}`).join("; "));
+      this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `the project's settings for it were refused and left out: ${errors.map((e) => `plugins.${r.name}.${e.path}: ${e.message}`).join("; ")}`, fields: {} });
     }
     this.set(r, "validated", r.enabled ? null : "disabled");
   }

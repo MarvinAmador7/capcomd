@@ -53,8 +53,9 @@ describe("layers (§10.2)", () => {
     expect(s.errors).toEqual([
       { path: "everyMs", message: "must be at least 1000", layer: "user" },
       { path: "colour", message: "is not a setting of this plugin", layer: "user" },
-      { path: "enabled", message: "must be true or false", layer: "project" },
-      { path: "mode", message: "must be one of \"quiet\", \"loud\"", layer: "project" },
+      // The project's, for a plugin that isn't the project's: set aside (reported, left out), never failing it.
+      { path: "enabled", message: "must be true or false", layer: "project", setAside: true },
+      { path: "mode", message: "must be one of \"quiet\", \"loud\"", layer: "project", setAside: true },
       { path: "everyMs", message: "must be integer", layer: "env" },
     ]);
     expect(s.config).not.toHaveProperty("token");
@@ -103,6 +104,6 @@ describe("the host and the built-ins", () => {
     expect(on).toMatchObject({ enabled: true, config: { stalledAfterMs: 3000 } });
     expect(wd({ CAPCOMD_PLUGIN_WATCHDOG_ENABLED: "true", CAPCOMD_PLUGIN_WATCHDOG_EVERYMS: "5" }).configErrors).toEqual([{ path: "everyMs", message: "must be at least 1000", layer: "env" }]);
     // Every other built-in is on, as before.
-    for (const c of builtinCandidates()) if ((c.manifest as { name: string }).name !== "watchdog") expect(c.enabled).toBe(true);
+    for (const c of builtinCandidates()) if (c.source === "builtin" && (c.manifest as { name: string }).name !== "watchdog") expect(c.enabled).toBe(true);
   });
 });

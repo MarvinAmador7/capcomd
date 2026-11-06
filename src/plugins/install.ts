@@ -11,8 +11,8 @@
 //    src/install/trust.ts): opening a repository runs no code on the host. A changed file is a changed hash, and the
 //    plugin waits for trust again.
 //  - `update` fetches again from the LOCK's source and reports what changed (files, hash, commit) before replacing it.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { RelayError } from "../core/errors";
 import { readManifest } from "../../packages/plugin/src/load";
 import { SEMVER_PATTERN, type PluginManifest } from "../../packages/plugin/src/manifest";
@@ -21,12 +21,13 @@ import { VERSION } from "../utils/self";
 import { projectConfigPath, readConfig, writeConfig } from "../config/store";
 import { projectDirOf } from "../config/projects";
 import { fetchPackage, keyOf, FetchError } from "../install/fetch";
-import { diffTrees, hashTree, lockState, readLock, writeLock, LOCK_SCHEMA, TreeError, type Lock } from "../install/lock";
+import { diffTrees, hashTree, inside, lockState, readLock, writeLock, LOCK_SCHEMA, TreeError, type Lock } from "../install/lock";
 import { parseSource, SourceError, type PackageSource } from "../install/source";
 import { recordTrust, revokeTrust, trustState } from "../install/trust";
 import { BUILTINS } from "./builtins";
 
 type Env = Record<string, string | undefined>;
+const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
 
 /** <home>/plugins: the user's plugins (§4.8 step 2). */
 export const userPluginsDir = (env: Env = process.env) => join(capcomdHome(env), "plugins");
@@ -284,7 +285,10 @@ function projectPluginSources(project: string, env: Env, uses: boolean): Array<{
   const own = join(project, ".capcomd", "plugins");
   let names: string[] = [];
   try { names = readdirSync(own).sort(); } catch { /* none */ }
-  for (const n of names) if (!n.startsWith(".") && existsSync(join(own, n, "plugin.json"))) dirs.push({ dir: join(own, n), from: "vendored" });
+  // Only a directory that really is in the checkout: trust goes to a place made real (src/install/trust.ts), so a link
+  // to a plugin another project holds would bring that project's trust here.
+  const checkout = real(project);
+  for (const n of names) if (!n.startsWith(".") && existsSync(join(own, n, "plugin.json")) && inside(checkout, real(join(own, n)))) dirs.push({ dir: join(own, n), from: "vendored" });
   if (uses) {
     const cached = cachedUses(project, env);
     for (const u of projectUses(project, env)) {
@@ -304,16 +308,22 @@ export function projectPluginList(project: string, env: Env = process.env, uses 
     const manifest = loaded.manifest;
     let hash: string | null = null;
     const issues = loaded.ok ? [] : loaded.issues.map((i) => `${i.path}: ${i.message}`);
-    try { hash = hashTree(dir).hash; } catch (e) { issues.push((e as Error).message); }
+    try { hash = trustHash(dir, env); } catch (e) { issues.push((e as Error).message); }
     const t = hash ? trustState("plugin", dir, hash, env) : { state: "untrusted" as const, entry: null };
     return { name: manifest?.name ?? dir.split("/").pop()!, dir, from, manifest, issues, hash, trust: t.state, trustedHash: t.entry?.hash ?? null };
   });
 }
 
+/** The hash a project plugin is trusted by: every file of it. Only a `plugins.use` copy in the user's home leaves out
+ *  the LOCK capcomd wrote there; a checkout's `LOCK` is the project's file like any other (`command: ["sh", "LOCK"]`). */
+function trustHash(dir: string, env: Env): string {
+  return hashTree(dir, { withLock: !inside(real(userPluginsDir(env)), real(dir)) }).hash;
+}
+
 /** Whether the project plugin at `dir` may run: its content now is exactly what the operator trusted. */
 export function projectPluginTrusted(dir: string, env: Env = process.env): { trusted: boolean; hash: string | null } {
   let hash: string | null = null;
-  try { hash = hashTree(dir).hash; } catch { return { trusted: false, hash: null }; }
+  try { hash = trustHash(dir, env); } catch { return { trusted: false, hash: null }; }
   return { trusted: trustState("plugin", dir, hash, env).state === "trusted", hash };
 }
 

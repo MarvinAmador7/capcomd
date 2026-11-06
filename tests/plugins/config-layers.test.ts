@@ -55,7 +55,23 @@ describe("layers 1-4 (§10.2)", () => {
     const errs = (user: Record<string, unknown>, project: Record<string, unknown> = {}) => pluginSettings(M, { env: {}, files: files({ notify: user }, { notify: project }) });
     expect(errs({ webhook: { $secret: "env:MY_HOOK" } })).toMatchObject({ config: {}, errors: [] });
     expect(errs({ webhook: "https://hooks.slack.com/T0/B0/xyz" }).errors).toEqual([{ path: "webhook", layer: "user", message: expect.stringContaining("never the value") }]);
-    expect(errs({}, { webhook: { $secret: "env:GITHUB_TOKEN" } }).errors).toEqual([{ path: "webhook", layer: "project", message: expect.stringContaining("only your own config") }]);
+    expect(errs({}, { webhook: { $secret: "env:GITHUB_TOKEN" } }).errors).toEqual([{ path: "webhook", layer: "project", message: expect.stringContaining("only your own config"), setAside: true }]);
+  });
+
+  test("a project's refused settings for a plugin not its own are set aside: the plugin runs on the other layers", async () => {
+    const f = files({ notify: { channel: "#ops" } }, { notify: { channel: 7, quiet: true } });
+    const s = pluginSettings(M, { env: {}, files: f, source: "user" });
+    expect(s).toMatchObject({ config: { channel: "#ops" }, errors: [{ path: "channel", layer: "project", setAside: true }] });
+    expect(s.config).not.toHaveProperty("quiet");
+    // The project's own plugin: its project layer is its config, and a refused one fails it (§10.4).
+    expect(pluginSettings(M, { env: {}, files: f, source: "project" }).errors).toEqual([{ path: "channel", layer: "project", message: "must be string" }]);
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const host = new PluginHost({ capcomd: "0.9.0", kernel: [], emit: (e) => events.push(e as never), dataDir: () => tmpdir() });
+    host.plan([{ source: "builtin", manifest: M, config: s.config, configErrors: s.errors }]);
+    expect(host.get("notify")).toMatchObject({ state: "resolved", cause: null });
+    expect(events.filter((e) => e.type === "plugin.config_refused").map((e) => e.data)).toEqual([{ plugin: "notify", layer: "project", errors: [{ path: "channel", message: "must be string" }] }]);
+    host.plan([{ source: "builtin", manifest: M, configErrors: [{ path: "channel", layer: "user", message: "must be string" }] }]);
+    expect(host.get("notify")).toMatchObject({ state: "failed", cause: "config_invalid" });
   });
 
   test("the kernel reads the user's and the project's config files; a plugin from a directory is configured too", () => {

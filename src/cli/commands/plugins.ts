@@ -31,6 +31,9 @@ const USAGE = [
 type Values = { json?: boolean; conformance?: boolean; project?: boolean; yes?: boolean; acceptRisk?: boolean; dryRun?: boolean };
 const out = (body: Record<string, unknown>) => console.log(JSON.stringify({ schema: SCHEMA, ok: true, ...body }));
 const short = (sha: string) => sha.slice(0, 12);
+/** A manifest's text as the trust prompt prints it: control and format characters (escape sequences, carriage returns,
+ *  bidi overrides) shown as `\u{…}`, so a plugin can't redraw or hide what the operator is asked about. */
+const visible = (s: string) => s.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
 
 export async function pluginsCommand(positionals: string[], values: Values): Promise<number> {
   const sub = positionals[1] ?? "list";
@@ -174,11 +177,16 @@ async function trustCommand(args: string[], values: Values): Promise<number> {
   }
   const m = p.manifest;
   if (!values.json) {
-    console.log(`${name} ${m.version}: ${m.description}`);
-    console.log(`  from     ${p.dir}${p.from === "use" ? " (plugins.use)" : ""}`);
-    if (m.entry.runtime === "process") console.log(`  runs     ${m.entry.command.join(" ")}  (on this machine, as you, out of process)`);
+    console.log(`${name} ${m.version}: ${visible(m.description)}`);
+    console.log(`  from     ${visible(p.dir)}${p.from === "use" ? " (plugins.use)" : ""}`);
+    if (m.entry.runtime === "process") console.log(`  runs     ${m.entry.command.map((a) => /^[\w./${}=:@%+,-]+$/.test(a) ? a : visible(JSON.stringify(a))).join(" ")}  (on this machine, as you, out of process)`);
     console.log(`  scopes   ${(m.scopes ?? []).join(", ") || "none"}`);
     console.log(`  hooks    ${Object.keys(m.contributes?.hooks ?? {}).join(", ") || "none"}`);
+    // Its secrets reach it at its start (§10.3): a manifest's default reference names a variable of yours.
+    const { secretKeys } = await import("../../../packages/plugin/src/host/host");
+    const { secretRef } = await import("../../plugins/secrets");
+    const refs = secretKeys(m, p.dir).map((k) => { try { return `${k} ← ${visible(secretRef(m, k, process.env, p.dir))}`; } catch { return `${k} (none set)`; } });
+    console.log(`  secrets  ${refs.join(", ") || "none"}`);
     console.log(`  hash     ${p.hash}`);
     if (p.trust === "changed") console.log(`  You trusted other content before (${p.trustedHash}): its files changed since.`);
   }

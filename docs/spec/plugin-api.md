@@ -293,7 +293,9 @@ default except one a person turns on: the watchdog (§16.4) is listed but held a
 or a local repository path, with `#<name>` choosing one plugin among several (else the repository's root `plugin.json`,
 else its only one) and `@<ref>` a branch, tag or commit (else the remote's `HEAD`). The host fetches it through its own
 host repo (`src/merge/host-git.ts`, §11.7) and writes the plugin directory's files out of the commit itself: no checkout,
-hooks, filters or submodules, no link that leaves the directory, at most 5 000 files and 100 MB. `install` refuses a
+hooks, filters or submodules, no link that leaves the directory, nothing written through a link or over a file already
+written (paths that differ only in case or normalization, which macOS reads as one), at most 5 000 files and 100 MB.
+`install` refuses a
 manifest §4.9 refuses (a `command[0]` or `$ref` resolving outside the directory among it), an `in-process` plugin
 (§5.2), a built-in's name, a name already installed, and an incompatible one (§4.4). `LOCK` (JSON, schema
 `capcomd.lock/v1`) records `kind`, `name`, `version`, `source`, `remote`, `ref`, `commit`, `path` (the directory in the
@@ -307,10 +309,14 @@ directory again).
 
 **Trusting** a project's plugins. `capcomd plugins install --project [<source>]` adds the source to `plugins.use` and
 fetches every entry into the user's home (`<home>/plugins/.project/<key>/<name>/`, keyed by the project's directory),
-never into the checkout; an entry not fetched yet isn't discovered. Trust is given to one content hash of one plugin at
-one place (its directory, made real) and kept in `<home>/trust.json` (0600), which no project can write: a changed file,
-or the same plugin copied to another project, needs trusting again. `capcomd plugins trust <name>` is the prompt: it
-shows what would run (the command, the scopes its token gets, the hooks it answers, its directory and hash) and asks;
+never into the checkout; an entry not fetched yet isn't discovered. A `.capcomd/plugins/<name>/` that is a link out of
+the checkout (to another project's plugin) isn't one of the project's plugins. Trust is given to one content hash of one
+plugin at one place (its directory, made real) and kept in `<home>/trust.json` (0600), which no project can write: a
+changed file, or the same plugin copied to another project, needs trusting again. In a checkout the hash covers every
+file, a `LOCK` there included (only a copy capcomd installed leaves out the `LOCK` it wrote). `capcomd plugins trust
+<name>` is the prompt: it shows what would run (the command, the scopes its token gets, the hooks it answers, the secret
+references it is given, its directory and hash; the manifest's text with control and format characters shown escaped,
+so it can't redraw the prompt) and asks;
 `--yes` answers for a script (without a terminal it is required). An untrusted project plugin is listed `validated` with
 cause `untrusted` and `enabled: false`, and stays there through `enable`; without a trust check (any host but the
 daemon's) none runs. The daemon writes `plugin.trusted {plugin, source: "project", hash, by}` the first time it runs a
@@ -1170,7 +1176,10 @@ is a constant for the plugin's life, which keeps every listener a pure function 
 `enabled` is a reserved key at every layer: `plugins.<name>.enabled: false` holds the plugin at `validated` (§5.4). It is
 the user's to set; a project's `enabled: false` turns off only a plugin of that project (a repository can't switch off a
 gate the operator runs, nor switch on what the operator turned off). The project layer, like the run layer, can't set a
-secret property (§10.3). Layer 5 is checked against the plugins the daemon would load (their manifests, not their code):
+secret property (§10.3). Nor can it fail a plugin that isn't the project's own: settings of the project layer that the
+schema refuses (a wrong type, a secret) for such a plugin are set aside, reported (`plugin.config_refused`, layer
+`project`) and left out, and the plugin runs on its other layers; only the project's own plugins fail `config_invalid`
+on their project layer (§10.4). Layer 5 is checked against the plugins the daemon would load (their manifests, not their code):
 an unknown plugin, a property without `x-per-run` or a value its property's schema refuses is a 422 with `field`
 `plugins.<name>.<path>` (`capcomd run` refuses it as a usage error, reason `plugins`, before the run exists); the stored
 key `config` of the run scope is the kernel's, and a plugin's write or delete of it is `forbidden`
@@ -1196,7 +1205,7 @@ existing keychain entry is mapped to it by the config migration (§17).
 
 Config is validated against the schema at `resolved` (layers 1–4) and at run creation (layer 5). Invalid config is
 `failed(config_invalid)` with `plugin.config_refused {errors: [{path, message}], layer}`; the plugin is **not** run with
-defaults. Each layer is checked on its own, so an error names its layer (one event per layer); the kernel checks the
+defaults (a project layer for a plugin not the project's is set aside instead, §10.2). Each layer is checked on its own, so an error names its layer (one event per layer); the kernel checks the
 subset of JSON Schema manifests use (`type`, `enum`, `minimum`/`maximum` and their exclusive forms, `minLength`/
 `maxLength`, `items`, `required`, `properties`, `additionalProperties`); a disabled plugin's settings aren't checked. `plugin.failed`'s message and `capcomd plugins show` show the errors; `GET /v1/plugins/{name}`'s `config.sources` say which layer each value came from. A run-layer error is a 422 on `POST
 /v1/runs` with `field: "plugins.<name>.<path>"`.
@@ -1958,7 +1967,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.25 | 2026-11-06 | With ADR-024's writes (its §7 step 6): the `configure` scope's profile writes (§11.1) are `PUT /v1/profiles/{name}` (capability `profiles.edit`; additive, with `GET /v1/profiles/{name}` and the daemon-stream event `profile.changed`); `ctx.profiles` gains no write method yet. A write changes the profile's own file and bumps its `version`; what an agent pinned at spawn (`profileVersion`, §6.6.7) is unchanged. |
 | 1.0.26 | 2026-11-06 | With capture and lint (ADR-025 step 2): `agent.changed`'s `ended` has a kernel listener, the `context` plugin's, that collects the lessons in an agent's `result.data.context` from the record its token wrote, stamps their provenance, refuses one holding a secret, too big or past the run's limit, and keeps the run's candidates in kv `_context/<agentId>` (§6.6.8); `plugin.context.proposed` and `plugin.context.refused` on the run's stream; §11.5: what is proposed for a durable layer is refused, never redacted, by the seeded scan; `capcomd context lint` joins the `context` command group. |
 | 1.0.27 | 2026-11-06 | With ADR-024's runtime blocks (its §7 step 8): `PinnedSpec` gains `mcp`, `sandboxProvider`, `environment`, `size` and `lifecycle` (all additive), pinned at spawn and out of every override's and `profile.resolved` patch's reach (an override that makes an agent with MCP servers orchestrate is refused, `orchestrate_mcp`); an agent's machine is on its profile's `sandbox.provider` before the run's, never one that runs it on the host unless the run's does (`sandbox_isolation`, §7.1); `agent.preparing`'s `sandbox` says that place and the profile's environment (§6.6.7); `agent.changed` carries `lifecycle` and the kernel refuses a spawn and a start while a named plugin isn't active and listening (`lifecycle_inactive`, §6.6.8); `AgentCommandCtx.mcp` (additive) gives the agent provider the profile's MCP servers (§7.3). `memory` stays `context`'s alias (ADR-025 D2). |
-| 1.0.28 | 2026-11-06 | With install, trust and update (§17.2 step 12) and the rest of config layering (the owner approved it with this step): installing from a git repository through the host's own repo, the files written out of the commit (no checkout, no link out, size limits), what `install` refuses, `LOCK`'s fields and the content hash, `update` reporting what changed before replacing, `remove` keeping the data (§4.8); `plugins.use` fetched to the user's home, trust per content hash and place in `<home>/trust.json`, the trust prompt and `--yes`, an untrusted project plugin listed `validated`/`untrusted` through `enable` and checked again before every start of its process, `plugin.trusted` written by the daemon the first time it acts on a trust (§4.8); the daemon honours `allow-version` (§4.4); `enable` reads a directory plugin again (§4.8); every plugin's config is layered, not only a built-in's; `enabled` is the user's (a project turns off only its own plugins), neither the project nor a run sets a secret, and a secret's reference is the user's or the environment's, a value where one belongs refused; `config.sources` per layer; the run layer checked against the manifests and its storage key the kernel's (§10.2, §10.4); a reference resolving to nothing still a warning, keychain references still unresolved (§9.3, §10.3); capability `plugins.config`, `POST /v1/runs` `plugins` and `plugin.trusted` in the contract (all additive, §13.1). |
+| 1.0.28 | 2026-11-06 | With install, trust and update (§17.2 step 12) and the rest of config layering (the owner approved it with this step): installing from a git repository through the host's own repo, the files written out of the commit (no checkout, no link out, size limits), what `install` refuses, `LOCK`'s fields and the content hash, `update` reporting what changed before replacing, `remove` keeping the data (§4.8); `plugins.use` fetched to the user's home, trust per content hash and place in `<home>/trust.json` (a checkout's link out isn't its plugin; a checkout's `LOCK` is hashed), the trust prompt (with the secret references, its text escaped) and `--yes`, nothing written through a link or over a written file at install, an untrusted project plugin listed `validated`/`untrusted` through `enable` and checked again before every start of its process, `plugin.trusted` written by the daemon the first time it acts on a trust (§4.8); the daemon honours `allow-version` (§4.4); `enable` reads a directory plugin again (§4.8); every plugin's config is layered, not only a built-in's; `enabled` is the user's (a project turns off only its own plugins), a project's refused settings for a plugin not its own set aside rather than failing it, neither the project nor a run sets a secret, and a secret's reference is the user's or the environment's, a value where one belongs refused; `config.sources` per layer; the run layer checked against the manifests and its storage key the kernel's (§10.2, §10.4); a reference resolving to nothing still a warning, keychain references still unresolved (§9.3, §10.3); capability `plugins.config`, `POST /v1/runs` `plugins` and `plugin.trusted` in the contract (all additive, §13.1). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

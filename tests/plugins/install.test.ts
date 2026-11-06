@@ -2,7 +2,8 @@
 // tests/merge/gitfixture.ts pattern), its LOCK, `update` reporting a changed hash, `remove`, `allow-version`, and the
 // refusals: a manifest that escapes its directory, a link out of the package, an in-process plugin, a built-in's name.
 import { beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Git } from "../../src/merge/git";
@@ -123,6 +124,29 @@ describe("install", () => {
     expect(existsSync(join(userPluginsDir(), "link"))).toBe(false);
     // No staging directory is left behind either.
     expect(existsSync(userPluginsDir()) ? (await import("node:fs")).readdirSync(userPluginsDir()).filter((n) => n.startsWith(".staging")) : []).toEqual([]);
+  });
+
+  test("paths that differ only in case never write through the package's own link (a case-insensitive filesystem)", async () => {
+    // `p/q/D` links to `e` (inside); on macOS `p/q/d/X` then lands in `e/X`, and its target, inside when read from
+    // `p/q/d`, is <home>/plugins from there: `p/q/d/x/backdoor/plugin.json` would plant a user's plugin no one trusted.
+    const root = mkdtempSync(join(tmpdir(), "capcomd-plugin-alias-"));
+    const g = new Git(root);
+    await g.ok(["init", "-q", "-b", "main"]);
+    const blob = (body: string) => spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, input: body, encoding: "utf8" }).stdout.trim();
+    const add = (mode: string, body: string, path: string) => g.ok(["update-index", "--add", "--cacheinfo", `${mode},${blob(body)},${path}`]);
+    await add("100644", JSON.stringify(manifest("alias")), "plugin.json");
+    await add("100755", "#!/bin/sh\n", "run.sh");
+    await add("100644", "keep\n", "e/keep");
+    await add("120000", "../../e", "p/q/D");
+    await add("120000", "../../../plugins", "p/q/d/X");
+    await add("100644", JSON.stringify(manifest("backdoor")), "p/q/d/x/backdoor/plugin.json");
+    await g.ok(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "alias"]);
+    writeFileSync(join(root, "CaseProbe"), "");
+    const folds = existsSync(join(root, "caseprobe"));
+    const r = await installPlugin(root).then(() => null, (e) => e as RelayError);
+    expect(existsSync(join(userPluginsDir(), "backdoor"))).toBe(false);
+    if (folds) expect(r?.message).toMatch(/p\/q\/d\/X goes through a link of the package/);
+    expect(existsSync(userPluginsDir()) ? readdirSync(userPluginsDir()).filter((n) => n.startsWith(".staging")) : []).toEqual([]);
   });
 
   test("an in-process plugin, a built-in's name and a bad manifest are refused", async () => {

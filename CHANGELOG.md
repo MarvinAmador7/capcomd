@@ -17,13 +17,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: a project's plugins (`.capcomd/plugins/<name>/` in the repository, or `"plugins": {"use":
   ["owner/repo#name@ref"]}` in its `.capcomd/config.json`, fetched into your home with `capcomd plugins install
   --project`) never run just because you opened the project: `capcomd plugins trust <name>` shows what would run (the
-  command, its scopes and hooks, the hash of its files) and asks first (`--yes` for scripts). A changed file, or the same
+  command, its scopes and hooks, the secrets it would get, the hash of its files) and asks first (`--yes` for scripts). A changed file, or the same
   plugin in another project, needs trusting again; until then `capcomd plugins list` shows it `validated (untrusted)`.
 - New: a run can set a plugin's per-run settings (the ones its schema marks `x-per-run`): `capcomd run
   --plugin-config <plugin>.<key>=<value>` (also `run new`), or `plugins` in `POST /v1/runs` (capability
   `plugins.config`); any other setting is refused before the run starts. A plugin's secrets take a reference you set in
   `~/.capcomd/config.json` (`{"$secret": "env:VAR"}`), never a value. A project's `.capcomd/config.json` can't turn a
-  plugin on, turn off one that isn't the project's own, or set a secret; `capcomd plugins show <name>` says where each
+  plugin on, turn off one that isn't the project's own (settings of it that the plugin refuses are ignored, with a
+  warning, instead of failing the plugin), or set a secret; `capcomd plugins show <name>` says where each
   setting came from.
 - New: a profile file can give its agents MCP servers, its own sandbox, environment and machine size, and plugins that
   must hear them. `tools.mcp: [{name, command, trust}]` starts each server in the agent's sandbox (never on your
