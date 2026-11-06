@@ -28,7 +28,29 @@ export interface ContextScope {
   agentId: string | null;
   /** From the pinned spec's `context.providers[].layers`. */
   layers: readonly ContextLayer[];
+  /** The provider's own settings from the same entry (everything but `name` and `layers`: groundray's `brain`), as the
+   *  agent's pinned spec has them. */
+  settings?: Readonly<Record<string, unknown>>;
+  /** Where the kernel places a provider's bundle in the agent's sandbox (`<bundleRoot>/<provider>/<bundle.name>`, ADR-025
+   *  §6.2): the same for every agent of a run, so a line's `path` can name a file there. Null: nothing is placed. */
+  bundleRoot?: string | null;
 }
+
+/** A repository at a commit the kernel places, read-only by convention, in the agent's sandbox at
+ *  `<scope.bundleRoot>/<provider>/<name>` before the agent starts (ADR-025 §6.2): a brain beside the checkout. The host
+ *  fetches it (its URL, never a credential in it), the sandbox gets its tree, no history. */
+export interface ContextBundle {
+  /** The repository's URL or path, as the host fetches it. */
+  remote: string;
+  /** A branch that has the commit (fetched when the host's copy doesn't), or null. */
+  branch: string | null;
+  /** The commit, full hex: what the brief's lines and citations name. */
+  commit: string;
+  /** Its directory under the provider's, `^[a-z0-9][a-z0-9_-]{0,62}$`. */
+  name: string;
+}
+/** The directory a provider's bundle `name` is placed at under `root` (ContextScope.bundleRoot). */
+export const bundleDir = (root: string, provider: string, name: string): string => `${root.replace(/\/+$/, "")}/${provider}/${name}`;
 
 /** `version`: a commit or a content hash. */
 export interface ContextRef { provider: string; id: string; version: string }
@@ -123,8 +145,9 @@ export interface ContextProvider {
   describe(): ContextDescriptor;
   available(c: SeamCall): Promise<{ ok: true } | { ok: false; reason: string; fix: string | null }>;
   classifyError(e: unknown): ErrorClass;
-  /** Bind a scope to the provider's handle (a bundle path at a commit, a brain slug); refuses a scope it cannot isolate. */
-  resolve(scope: ContextScope, c: SeamCall): Promise<{ handle: string; revision: string }>;
+  /** Bind a scope to the provider's handle (a bundle path at a commit, a brain slug); refuses a scope it cannot isolate.
+   *  A provider with `caps.bundle` names the one bundle the handle reads (placed for the agent when the brief holds it). */
+  resolve(scope: ContextScope, c: SeamCall): Promise<{ handle: string; revision: string; bundle?: ContextBundle }>;
   /** Everything the brief needs, deterministic for `(handle, revision)`. */
   index(handle: string, c: SeamCall): Promise<{ revision: string; modified: string | null; lines: readonly IndexLine[] }>;
   search(handle: string, q: ContextSearch, c: SeamCall): Promise<ContextHit[]>;

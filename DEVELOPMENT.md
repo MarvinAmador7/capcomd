@@ -80,7 +80,8 @@ src/
                   context providers; memory.ts, the project layer's provider (`.capcomd/context/` read through the
                   files mirror); limits.ts, the brief's budgets (limits.gen.ts: the eval's docs/evidence/context/
                   <model>/limits.json, regenerated with `bun scripts/gen-context-limits.ts`); providers.ts, the active
-                  providers by name
+                  providers by name; groundray.ts, a brain's provider and the project's brain mappings (`capcomd
+                  context brain`); project.ts, the project's `context` settings and their copy kept with a run
   cli/          - the CLI: index.ts, the dispatcher (serve, plugins, help, version, tui itself; every other command a
                   front door's registration, front-doors.ts); groups/, the kernel's commands by group; flags.ts, help.ts;
                   commands/, what they call
@@ -103,7 +104,8 @@ src/
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), skill-orchestration.ts, the orchestration
                   skill as an agent.preparing patch, context.ts, the context router's listener and `capcomd context`,
-                  and context-memory.ts, the `memory` context provider: every process loads them (host.ts `localHost`)
+                  and context-memory.ts and context-groundray.ts, the `memory` and `groundray` context providers: every
+                  process loads them (host.ts `localHost`)
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and

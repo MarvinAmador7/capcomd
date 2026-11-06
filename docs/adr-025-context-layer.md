@@ -580,6 +580,46 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   `scripts/gen-context-limits.ts`): the package ships `src/`, not `docs/evidence/`. Kernel floors and ceilings:
   `briefBytes` 1 KiB-100 KiB, `indexLines` 1-1000, `descriptionChars` 20-500.
 
+**Made while building step 4** (spec 1.0.22; groundray's read path, `src/context/groundray.ts`, the built-in
+`context-groundray`):
+
+- **The mapping is the project's, pinned per run by the run's record.** `capcomd context brain add <name> <repo>
+  [--branch b] [--bundle dir]` reads the brain at the branch's tip through the host's files mirror (host git only),
+  checks it and writes `{repo, branch, commit, slug, id}` under `context.brains.<name>` in the project's
+  `.capcomd/config.json`; adding it again moves the pin to the tip, another repository under the name is refused, and
+  `brain remove` drops only the mapping. groundray's own catalog (`brain add` into `~/.local/share/groundray`) isn't read:
+  reads need neither its CLI nor its files (D9), and a mapping per project keeps one company's brain out of another's
+  profiles. `run new` records the project's `context` settings with the run (kv `_context`, reserved like `_repo`), so the
+  process preparing the run's agents (the daemon, whatever its directory) reads them from the run and every agent of the
+  run reads the commit the run started with, even after the brain is mapped again.
+- **A restricted brain**, refused at `brain add` and again at every resolve (a later commit could become one): its
+  bundle's `.core-kb.yaml` says `default_sensitivity: restricted`, or one of its items says `sensitivity: restricted`
+  (groundray keeps restricted material in a separately controlled repository; capcomd would copy it into sandboxes).
+  `confidential` is not refused: a confidential brain is its own repository by groundray's rule already.
+- **Any OKF producer.** groundray's `brain.yaml` (closed schema 1) is checked when present, and the brain's identity (its
+  `id` and `slug`) must stay what it was mapped as; without one the bundle is the `--bundle` directory (default
+  `knowledge`). Items are Markdown files under the bundle with a `type` (OKF's one required field), never `index.md` or
+  `log.md`, read with `context-memory`'s parser and lexical search (`parseBundle`, `searchItems`): `updated_at`,
+  `verified`, `sources` and `confidence` are read too, and a missing `status` is `draft` (groundray requires it; OKF's
+  "absent means stable" would raise authority). Every item is kind `fact`; a brain's items have no project (`get`'s
+  `scope.projectId` is null).
+- **The settings reach the provider through the scope.** `ContextScope.settings` is a provider entry's own settings from
+  the pinned spec (everything but `name` and `layers`): `brain` is a single name, never a list.
+- **Two brains are never in one brief**: profiles already refuse a provider named twice, groundray refuses a `brain` that
+  is a list, and the router asks a provider once per brief, for its first entry (`skipped (named twice)` for another).
+- **The bundle in the sandbox is the router's, placed by the runner.** `resolve` may name the one `ContextBundle` its
+  lines point into (only with `caps.bundle`); the router keeps it for the attempt (the kernel's record of the
+  `agent.preparing` call, not the patch, so no plugin can place files), the attempt's spec records it, and the runner
+  places its tree at the commit under `<workdir>/context/<provider>/<name>` before the agent starts, through the host's
+  mirror (`sendTreeAt`), files read-only, with a `.capcomd-bundle` marker. The lines' paths point there
+  (`ContextScope.bundleRoot`, the same for every agent of a run, so the brief stays byte-identical). It is a tree, not a
+  second checkout: an agent cites `(id, commit)` and never pushes to a brain. A bundle that can't be placed leaves the
+  agent to start without it (its log says so). The environment image doesn't bake brains yet: the runner keeps a bundle
+  the sandbox already has at the commit (the marker), so `capcomd env build` placing them is the follow-up; until then
+  every agent's sandbox gets the tree at start.
+- A line's path may be 320 characters (200 before): a bundle's file is under the kernel's root.
+- `allowStale` (§10's example) isn't read: stale lines leave the brief as for any provider.
+
 ## 14. What the review changed
 
 | Lens | Blocking point | Resolution |

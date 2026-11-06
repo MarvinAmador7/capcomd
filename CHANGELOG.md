@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: business knowledge from a groundray brain. `capcomd context brain add <name> <repo>` maps a brain (a git
+  repository with groundray's `brain.yaml` and `knowledge/`, or any OKF bundle with `--bundle <dir>`) to a name in the
+  project's `.capcomd/config.json`, pinned at its branch's tip (run it again to move the pin; `capcomd context brain
+  list|remove`). A profile with `context: {providers: [{name: groundray, brain: <name>}]}` briefs its agents with one line
+  per fact of that brain (a decision, a policy, a definition…), and each agent finds the brain's files at that commit in
+  its sandbox, read-only, where the lines point. A run reads the commit the brain was pinned at when the run started.
+  A restricted brain (`default_sensitivity: restricted`, or an item marked restricted) is refused by `brain add` and
+  never briefed; a URL with a credential in it is refused. Reads need no groundray CLI. See docs/agents.md, "Business
+  knowledge: a groundray brain".
+- The context brief names a provider a profile lists twice once (`skipped (named twice)` for the other), and a line's
+  file path may now be up to 320 characters.
 - New: project memory for agents. A profile with a `context` block (`context: {providers: [{name: memory}]}`, in
   `profile.yaml` or an `agents.json` entry) briefs each of its agents, when it starts, with an index of what the project
   keeps under `.capcomd/context/` in its repository: one line per item (a lesson, feedback, a project fact) with what it

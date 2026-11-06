@@ -107,7 +107,7 @@ describe("the memory provider: items under .capcomd/context/ (ADR-025 §3.3, §1
   test("validate --conformance's run: without a scope the item cases are skipped, the rest pass", async () => {
     const r = await runContextConformance(memoryProvider({ read: tree(FILES) }), { name: "memory" });
     expect(r.every((c) => c.ok)).toBe(true);
-    expect(r.filter((c) => c.skipped).length).toBe(4);
+    expect(r.filter((c) => c.skipped).length).toBe(5);
   });
 
   test("items: memory/ and facts/ only (not index.md), the id once, supersession made reciprocal, drafts by default", () => {

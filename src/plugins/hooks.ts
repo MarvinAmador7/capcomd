@@ -231,10 +231,12 @@ const RESERVED_ENV = new Set(["BASH_ENV", "ENV", "SHELL", "IFS", "CDPATH", "PS4"
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"]);
 /**
  * The agent agent.preparing fires for (src/primitives/ops.ts `agentPreparing`), its record as the kernel just read it:
- * kernel-internal, for the kernel's own listener (src/plugins/skill-orchestration.ts), which needs the agent's limits
- * and budget the payload doesn't carry. A plugin's listener never sees it.
+ * kernel-internal, for the kernel's own listeners: the orchestration skill (src/plugins/skill-orchestration.ts), which
+ * needs the agent's limits and budget the payload doesn't carry, and the context router (src/plugins/context.ts), which
+ * leaves in `bundles` what its brief cites, for the attempt's runner to place (ADR-025 §6.2). A plugin's listener never
+ * sees it.
  */
-export const preparingAgent = new AsyncLocalStorage<{ runId: string; agentId: string; record: unknown }>();
+export const preparingAgent = new AsyncLocalStorage<{ runId: string; agentId: string; record: unknown; bundles?: unknown[] }>();
 
 /** A name agent.preparing's `env` may not add (src/agents/config.ts drops one from an attempt's spec too). */
 export const reservedEnvName = (name: string): boolean => RESERVED_ENV.has(name) || RESERVED_ENV_PREFIXES.some((p) => name.startsWith(p));

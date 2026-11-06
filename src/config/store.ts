@@ -38,7 +38,17 @@ export interface CapcomdConfig {
    * CAPCOMD_DOCKER_AGENT_MEMORY_MB wins).
    */
   sandboxes?: Record<string, { idleLifetime?: number; agentMemory?: number }>;
+  /**
+   * The context layer's project settings (ADR-025 §10; project config): `brains`, the business-knowledge brains a
+   * profile's `groundray` provider may name (`brain: <name>`), each a repository pinned to a commit by `capcomd context
+   * brain add` (src/context/groundray.ts). `run new` records them with the run.
+   */
+  context?: { brains?: Record<string, ContextBrain> };
 }
+
+/** A brain a project maps (`capcomd context brain add <name> <repo>`): where it is, the commit its agents read, and the
+ *  identity its `brain.yaml` had then (a later commit must keep it). */
+export interface ContextBrain { repo: string; branch: string; commit: string; slug: string; id: string; title?: string; bundle?: string; addedAt?: string }
 
 export type DriverApprovals = "human" | "elicit" | "client-confirmed";
 export const DRIVER_APPROVALS: DriverApprovals[] = ["human", "elicit", "client-confirmed"];

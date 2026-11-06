@@ -13,7 +13,7 @@
 // the header in the kernel's own words, never its error text, so an empty brief is never mistaken for "no facts".
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { SeamCall } from "../../packages/plugin/src/seams";
-import type { ContextKind, ContextLayer, ContextProviderSpec, ContextScope, ContextSpec, IndexLine } from "../../packages/plugin/src/context-layer";
+import { bundleDir, type ContextBundle, type ContextKind, type ContextLayer, type ContextProviderSpec, type ContextScope, type ContextSpec, type IndexLine } from "../../packages/plugin/src/context-layer";
 import { Redactor } from "../agents/redact";
 import { unmark } from "../subagents/results";
 import { limitsFor, type ContextLimits } from "./limits";
@@ -28,8 +28,8 @@ const DAY_MS = 86_400_000;
 export interface BriefInput {
   /** The pinned spec's `context` block. */
   context: ContextSpec;
-  /** Built by the kernel (`runScope`): every field but the layers, which each provider entry names. */
-  scope: Omit<ContextScope, "layers">;
+  /** Built by the kernel (`runScope`): every field but the layers and settings, which each provider entry names. */
+  scope: Omit<ContextScope, "layers" | "settings">;
   /** The agent's model (`harness.model`), whose eval file sets the default budgets. */
   model: string | null;
   /** A reviewer or a report agent judges the tree, not remembered opinions (ADR-025 D11): it gets facts, no memory. */
@@ -44,7 +44,7 @@ export interface BriefInput {
 
 export type ProviderOutcome =
   | { name: string; state: "loaded"; revision: string; modified: string | null; lines: number; shown: number }
-  | { name: string; state: "skipped"; reason: "timeout" | "not active" | "not found" | "not configured" | "unavailable" | "failed" };
+  | { name: string; state: "skipped"; reason: "timeout" | "not active" | "not found" | "not configured" | "unavailable" | "failed" | "named twice" };
 
 type SkipReason = Extract<ProviderOutcome, { state: "skipped" }>["reason"];
 
@@ -58,6 +58,35 @@ export interface Brief {
   limits: ContextLimits;
   source: string;
   providers: ProviderOutcome[];
+  /** What the kernel places in the agent's sandbox for the brief's lines to point at (ADR-025 §6.2): each loaded
+   *  bundle provider's one bundle, and where it goes (`dir`). */
+  bundles: PlacedBundle[];
+}
+
+/** A bundle the brief cites, with the provider it is of and where the kernel places it. */
+export type PlacedBundle = ContextBundle & { provider: string; dir: string };
+
+const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const BUNDLE_BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]+$/;
+/** A bundle the kernel fetches and places: of a provider that declares `caps.bundle`, from a repository URL or path with
+ *  no credential in it, at a full commit, under a plain name. Anything else isn't placed (its lines point nowhere). */
+function bundleOf(p: ActiveProvider, b: unknown, root: string | null | undefined): PlacedBundle | null {
+  if (!root || !b || typeof b !== "object") return null;
+  let declared = false;
+  try { declared = p.provider.describe().caps.bundle === true; } catch { return null; }
+  const x = b as Partial<ContextBundle>;
+  if (!declared || typeof x.remote !== "string" || typeof x.commit !== "string" || !COMMIT.test(x.commit) || typeof x.name !== "string" || !PROVIDER_NAME.test(x.name)) return null;
+  if (x.branch != null && (typeof x.branch !== "string" || !BUNDLE_BRANCH.test(x.branch))) return null;
+  const G = require("../merge/host-git") as typeof import("../merge/host-git");
+  try { G.assertRemoteUrl(x.remote); } catch { return null; }
+  if (G.inlineCredential(x.remote)) return null;
+  return { provider: p.name, remote: x.remote, branch: x.branch ?? null, commit: x.commit, name: x.name, dir: bundleDir(root, p.name, x.name) };
+}
+
+/** A provider entry's own settings: everything but its name and layers, as the pinned spec has them. */
+function settingsOf(entry: ContextProviderSpec): Readonly<Record<string, unknown>> {
+  const { name: _n, layers: _l, ...rest } = entry;
+  return Object.freeze(structuredClone(rest));
 }
 
 /** A SeamCall `ms` ahead. */
@@ -115,7 +144,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}/;
 function lineText(l: IndexLine, limits: ContextLimits, r: Redactor): string {
   const type = String(l.type ?? "").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32) || l.kind;
   const desc = oneLine(l.description.text, limits.descriptionChars ?? 150, r) || "(no description)";
-  const path = oneLine(l.path, 200, r);
+  // A bundle's file is under the kernel's root in the sandbox (`<workdir>/context/<provider>/<name>/…`): room for it.
+  const path = oneLine(l.path, 320, r);
   const paths = Array.isArray(l.paths) ? l.paths.filter((x) => typeof x === "string").slice(0, 5).map((x) => oneLine(x, 100, r)).filter(Boolean) : [];
   const date = DATE.exec(l.modified)?.[0];
   const notes = [...(paths.length ? [`paths: ${paths.join(", ")}`] : []), l.authority.status, ...(date ? [date] : [])];
@@ -146,22 +176,27 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
   const r = new Redactor(i.secrets ?? []);
   const today = Math.floor((i.now ?? Date.now()) / DAY_MS) * DAY_MS;
   const outcomes: ProviderOutcome[] = [];
+  const bundles: PlacedBundle[] = [];
   const shown: IndexLine[] = [];
   let stale = 0, reviewer = 0;
   const per = new Map<string, number>();
   // Every provider at once, each within its own deadline (so a slow one costs the brief one deadline, not one each, and
   // the listener's own timeout is never what leaves the brief out); the answers are then taken in the profile's order.
-  type Answer = { entry: ContextProviderSpec; reason: SkipReason } | { entry: ContextProviderSpec; p: ActiveProvider; lines: readonly IndexLine[]; revision: string; modified: string | null };
-  const answers = await Promise.all((i.context.providers ?? []).map(async (entry): Promise<Answer> => {
+  type Answer = { entry: ContextProviderSpec; reason: SkipReason } | { entry: ContextProviderSpec; p: ActiveProvider; lines: readonly IndexLine[]; revision: string; modified: string | null; bundle: unknown };
+  // One handle per provider per brief: a provider a profile names twice (profiles refuse it; a spec is data) is asked
+  // once, for its first entry (so two brains are never in one brief, ADR-025 §4).
+  const first = new Set<string>();
+  const answers = await Promise.all((i.context.providers ?? []).map((entry) => [entry, !first.has(entry.name) && !!first.add(entry.name)] as const).map(async ([entry, once]): Promise<Answer> => {
+    if (!once) return { entry, reason: "named twice" };
     const p = i.providers.get(entry.name);
     if (!p) return { entry, reason: "not active" };
     const { call, done } = seamCall(i.deadlineMs ?? PROVIDER_DEADLINE_MS);
     try {
-      const scope: ContextScope = { ...i.scope, layers: entry.layers?.length ? [...entry.layers] : [...DEFAULT_LAYERS] };
+      const scope: ContextScope = { ...i.scope, layers: entry.layers?.length ? [...entry.layers] : [...DEFAULT_LAYERS], settings: settingsOf(entry) };
       const bound = await bounded(Promise.resolve().then(() => p.provider.resolve(scope, call)), call.signal);
       const idx = await bounded(Promise.resolve().then(() => p.provider.index(bound.handle, call)), call.signal);
       const lines: readonly IndexLine[] = Array.isArray(idx?.lines) ? idx.lines : [];
-      return { entry, p, lines, revision: String(idx?.revision ?? bound.revision ?? ""), modified: typeof idx?.modified === "string" ? idx.modified : null };
+      return { entry, p, lines, revision: String(idx?.revision ?? bound.revision ?? ""), modified: typeof idx?.modified === "string" ? idx.modified : null, bundle: bound?.bundle };
     } catch (e) {
       return { entry, reason: reasonOf(p, e, call.signal.aborted) };
     } finally { done(); }
@@ -170,6 +205,8 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
     const { entry } = a;
     if ("reason" in a) { outcomes.push({ name: entry.name, state: "skipped", reason: a.reason }); continue; }
     const { p, lines, revision, modified } = a;
+    const bundle = bundleOf(p, a.bundle, i.scope.bundleRoot);
+    if (bundle) bundles.push(bundle);
     const ok = lines.filter((l) => wellFormed(l, p));
     const ids = new Set(ok.map((l) => l.ref.id));
     const keep: IndexLine[] = [];
@@ -205,7 +242,7 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
   let at = 0;
   for (const o of outcomes) if (o.state === "loaded") { const has = per.get(o.name) ?? 0; o.shown = Math.max(0, Math.min(has, kept.length - at)); at += has; }
   const text = [header({ loaded: kept.length, total, stale, reviewer, limits, source, providers: outcomes }), ...kept].join("\n");
-  return { text, loaded: kept.length, total, stale, bytes: Buffer.byteLength(text), limits, source, providers: outcomes };
+  return { text, loaded: kept.length, total, stale, bytes: Buffer.byteLength(text), limits, source, providers: outcomes, bundles };
 }
 
 /** A reviewer or a report agent (ADR-025 D11): a verify's reviewer has `contract.review`, a report agent `report`. */
@@ -217,9 +254,10 @@ export function roleOf(a: { contract?: unknown }): "work" | "review" {
 /**
  * The scope of an agent of run `runId` (ADR-025 §8): from the run's records only, never from an agent's `contract`.
  * The repository the run recorded (else this process's), the branch its agents start from (the run's target, else the
- * repository's merge target), the project id the API gives the run.
+ * repository's merge target), the project id the API gives the run, and where bundles go in its agents' sandboxes (under
+ * the agent work directory the run's sandbox settings give, as the runner's AgentConfig has it: `<workdir>/context`).
  */
-export async function runScope(runId: string | null, agent: { id: string | null; profile: string | null }, version = 1): Promise<Omit<ContextScope, "layers">> {
+export async function runScope(runId: string | null, agent: { id: string | null; profile: string | null }, version = 1): Promise<Omit<ContextScope, "layers" | "settings">> {
   const { runEnv } = await import("../merge/run-config");
   const { loadMergeConfig } = await import("../merge/config");
   const { projectIdOf } = await import("../api/source");
@@ -227,5 +265,7 @@ export async function runScope(runId: string | null, agent: { id: string | null;
   const cfg = (() => { try { return loadMergeConfig(source); } catch { return null; } })();
   const target = runId ? await (await import("../primitives/ops")).runTarget(runId).catch(() => undefined) : undefined;
   const repo = source.CAPCOMD_REPO ?? null;
-  return { projectId: projectIdOf(repo), repo: cfg?.remote ?? null, ref: cfg ? (target ?? cfg.target) : null, profile: { name: agent.profile ?? "", version }, runId, agentId: agent.id };
+  const { agentWorkdir } = await import("../agents/config");
+  const workdir = agentWorkdir(await (await import("../providers/run-sandbox")).runSandboxEnv(runId));
+  return { projectId: projectIdOf(repo), repo: cfg?.remote ?? null, ref: cfg ? (target ?? cfg.target) : null, profile: { name: agent.profile ?? "", version }, runId, agentId: agent.id, bundleRoot: `${workdir}/context` };
 }

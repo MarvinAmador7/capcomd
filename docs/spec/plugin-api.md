@@ -587,7 +587,17 @@ it was skipped, in the kernel's words) and one line per item (`IndexLine`, its d
 neutralised with `fence()`'s rule and capped), never an item's body. The brief is a function of the providers' indexes,
 the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
 and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
-out) on the run's stream.
+out) on the run's stream. Each provider is asked once per brief, for the profile's first entry naming it (a second is
+`skipped (named twice)`: two brains are never in one brief), with that entry's own settings as `ContextScope.settings`
+(groundray's `brain`). A provider that declares `caps.bundle` may name, from `resolve`, the one repository at a commit its
+lines point into (`ContextBundle {remote, branch, commit, name}`, ADR-025 §6.2); the router keeps it only when the
+provider loaded, the remote is a URL or path without a credential in it and the commit is full, and leaves it in the
+kernel's record of the call (`preparingAgent`, not the patch, so no plugin can place files), from which the attempt's spec
+records it (`contextBundles`, with its directory `<workdir>/context/<provider>/<name>`, `ContextScope.bundleRoot`). The
+attempt's runner places each before the agent starts: the tree at that commit from the host's mirror of the repository
+(§11.7, `sendTreeAt`), its files read-only, a `.capcomd-bundle` marker naming the commit (one the sandbox already has at
+that commit, an earlier attempt's or an environment image's, is kept). A bundle that can't be placed leaves the agent
+to start without it and its log says so.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
@@ -1155,7 +1165,7 @@ credential elsewhere (`url.*.insteadOf`, `pushInsteadOf`, a push URL, `http.prox
 1. **No git credential enters a sandbox.** The sandbox providers pass an exec exactly the env capcomd gives it, and
    capcomd runs no network git in a sandbox (no clone, fetch, push or ls-remote). Objects move through the host
    (`src/merge/transfer.ts`): to fetch (an agent's clone, `capcomd fetch`, a review's target, a continued agent's work,
-   an env build's template), the host fetches the run's repository into its mirror and uploads a bundle of what the
+   an env build's template, a context bundle at its commit), the host fetches the run's repository into its mirror and uploads a bundle of what the
    sandbox lacks, which the sandbox reads and whose refs the host names; to push (an agent's branch, its checkpoints),
    the sandbox bundles the commit, the host downloads it into its mirror, checks it is the commit asked for, and pushes
    it to the repository's URL with a lease. In the sandbox git only makes and reads bundle files.
@@ -1287,8 +1297,8 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
 - **context** (ADR-025 §3.1): `describe` names the declared provider with kinds and layers the kernel knows,
   `available` never rejects, `classifyError` classifies anything (its own `not_found` as `not_found`), `propose` is
   refused `unsupported` unless `caps.writable`, a call whose signal is already aborted rejects; with a scope that has
-  items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time,
-  `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
+  items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time
+  and names a bundle only when `caps.bundle` (a repository at a full commit, under a plain name), `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
   kind, untrusted description), `get` returns an indexed item with untrusted text and rejects an id that isn't there
   `not_found`, and `search` answers at most `limit` hits. `packages/plugin/src/context-conformance.ts`; `capcomd plugins
   validate --conformance` runs it without a scope (the item cases skipped).
@@ -1737,6 +1747,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.18 | 2026-11-06 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
 | 1.0.19 | 2026-11-06 | With ADR-024's `capcomd profiles` and `GET /v1/profiles` (its §7 step 2): the route `profiles.list` maps to exists (capability `profiles`, read scope); `ctx.profiles.list`'s `project` is its `?repo=` (§9.6). `capcomd profiles validate` is the command §7.1 names; `profiles` joins the kernel's commands (§4.7.1), and `capcomd agents` stays as its old name for one minor release. |
 | 1.0.20 | 2026-11-06 | With ADR-024's skills in the profile (its §7 step 5): `agent.preparing`'s `prompt.skills` starts with the profile's skills, pinned on the agent at spawn by hash (`PinnedSpec.skills`, additive) with their text kept with the run, read and checked per attempt (a missing or changed one fails it, code `config`); every skill an agent gets at its start is in a `<skill name="…">` block, as a message's; the orchestration skill also comes from the kernel for an attempt prepared without it (§6.6.7). |
+| 1.0.22 | 2026-11-06 | With groundray's read path (ADR-025 step 4): `ContextScope` gains `settings` (a provider entry's own settings from the pinned spec) and `bundleRoot`, `resolve` may answer a `bundle` (`ContextBundle`, a repository at a commit) when `caps.bundle` (all optional, additive); the router asks a provider once per brief (`skipped (named twice)`) and keeps the bundles its brief cites, which the attempt's runner places in the sandbox through the host's mirror (§6.6.7, §11.7); the conformance suite's bundle case (§14.2). The built-in `context-groundray` provides `context:groundray`. |
 | 1.0.21 | 2026-11-06 | With the context router (ADR-025 step 1): a `context` contribution (§4.7: `contributes.context: [{name, kinds}]`, `provides: context:<name>` in §4.6, `ctx.context.register`, a 23rd service and 78th primitive in §8.1; all additive), the term context provider (§2), its conformance suite (§14.2) and `testkit.conformance.context` (§14.5); `PinnedSpec.context` (additive); the kernel's context router as the agent.preparing listener that composes a profile's providers into the brief (§6.6.7); §11.5: `fence()` neutralises every `<<<…>>>`, and the brief is the one place untrusted text is the basis of attention from system-role text, and what fences it. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
