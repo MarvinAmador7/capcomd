@@ -81,3 +81,23 @@ export async function runIdleLifetime(runId: string | null | undefined, sandbox:
 export async function runSandboxEnv(runId: string | null | undefined, base: Env = process.env): Promise<Env> {
   return withSandbox(base, await runSandbox(runId));
 }
+
+/**
+ * Where one agent's machine runs (ADR-024 `sandbox.provider`): the sandbox its profile names, pinned on it at spawn
+ * (`own`), else its run's; null: the daemon's. A sandbox no active plugin provides is still returned: whoever uses it
+ * fails naming it, never falls back to another.
+ */
+export async function agentSandbox(runId: string | null | undefined, own: string | null | undefined): Promise<string | null> {
+  return own ?? (await runSandbox(runId));
+}
+
+/** This process's env as the agent's machine sees it: its sandbox (agentSandbox) on top. */
+export async function agentSandboxEnv(runId: string | null | undefined, own: string | null | undefined, base: Env = process.env): Promise<Env> {
+  return withSandbox(base, await agentSandbox(runId, own));
+}
+
+/** The idle machine lifetime for an agent's machine: on a sandbox of its profile's own, that place's current setting
+ *  (the run recorded only its own place's); else the run's (runIdleLifetime). */
+export async function agentIdleLifetime(runId: string | null | undefined, own: string | null | undefined, sandbox: string | null | undefined, env: Env = process.env): Promise<number> {
+  return own ? currentIdleLifetime(own, { env }).seconds : runIdleLifetime(runId, sandbox, env);
+}

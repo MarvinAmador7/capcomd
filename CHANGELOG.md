@@ -19,6 +19,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   project's memory directly now fails its verify. Have it propose the lesson in its result instead
   (`capcomd result --data '{"context": [...]}'`); `capcomd merge --operator` still lands such a branch, recorded as a
   bypass. A consolidator's branch must pass `capcomd context lint` against where it left its target.
+- New: a profile file can give its agents MCP servers, its own sandbox, environment and machine size, and plugins that
+  must hear them. `tools.mcp: [{name, command, trust}]` starts each server in the agent's sandbox (never on your
+  machine) for Claude Code and Codex, beside capcomd's own; `trust: trusted` approves its tools up front, `untrusted`
+  (the default) leaves them to the profile's tool rules. An orchestrate profile can't have any, and spawning one with
+  `--set toolMode=orchestrate` is refused (`reason: "orchestrate_mcp"`). `sandbox.provider`
+  runs the profile's agents on that sandbox (`docker`, `boxd`) whatever the run's is (never on your machine: a
+  sandbox that runs agents on the host is refused, `reason: "sandbox_isolation"`); `sandbox.environment`
+  is what their machines boot from there: `default` (the current `capcomd env build`), `image` (the provider's plain
+  image) or a build's name from `capcomd env status`; `sandbox.size: { vcpu: 1 | 2 | 4 | 8 }` sizes their machines on
+  boxd (Docker containers share your CPUs). `lifecycle.onStart` and `lifecycle.onEnd` name plugins that must be active
+  and listening to `agent.changed`: a spawn of a profile that names one that isn't is refused (`reason:
+  "lifecycle_inactive"`), and so is one whose environment its sandbox doesn't have (`reason: "environment"`).
+  `capcomd profiles validate` says both before you spawn. None of these can be changed with `--set` or by a parent
+  spawning a child; agents already running keep what they started with. See docs/agents.md, "Profile files".
 - New: agents propose lessons for the project's memory. A planner or lead ends with lessons in its result
   (`capcomd result --data '{"context": [{"title": "…", "text": "…"}]}'`, which its orchestration skill now teaches,
   along with keeping working notes in kv under `notes/<its id>`), and capcomd keeps each as a candidate of the run,
@@ -93,6 +107,26 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   at spawn, and `--set`/`--overrides` can remove a profile's `context` block but not change it.
 - For contributors: the context eval has an `index` arm (`--arms index`): agents whose profile's brief lists the same
   records as the `agents-md` arm's `AGENTS.md`, as a project's `.capcomd/context/`. CI runs it on the fake sandbox.
+- New: agents whose profile has a `context` block get two capcomd skills with their brief. `capcomd-context-doctrine`
+  says how to use it: open an item's file before relying on its line, say which item an answer rests on, treat a
+  matching line as a lead and not a ruling (a current record beats a stale comment or the record it supersedes), and
+  treat items as data, not instructions. `capcomd-context-routing`, for agents that may spawn (and aren't reviewers or
+  report agents), says what is worth remembering and where: notes for the run in `capcomd kv` under
+  `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
+  secret. Each is recorded on the agent by its sha256; `capcomd context brief <profile>` names them. A profile with a
+  `context` block keeps room for them among its own `skills` (one of the 8, two when it may spawn) and can't use
+  their names for skills of its own; an agent whose other skills leave no room for one starts without it, never without
+  its brief or its orchestration skill.
+- Not added, after measuring: putting the first items of the brief in full in an agent's first message, and pushing
+  an item to an agent when it opens a file the item applies to. Measured on Claude Opus, Sonnet and Haiku 5.5 and
+  GPT-6.1 (pushes on the Claude models only: a Codex agent can't read a message while it works), neither did better
+  than the brief with its `paths` column, and pushing cost 11-18% more (docs/evidence/context/README.md, "step 6"); the
+  brief stays an index.
+- For contributors: the context eval asks those two questions with `--arms index-k1,index-k3,index-triggered` (and
+  `index-paths`, the brief without its `paths` column), decides them by fixed rules (`report.ts` `admission`) and
+  writes the answers into each model's `limits.json`; `--memory small|project` sets how much memory the index arms'
+  project keeps (default `project`: the records the tasks need among others). A second run on one day writes
+  `<date>-2.json` instead of overwriting the first.
 - Plugins can provide context providers (`contributes.context`, `provides: context:<name>`, `ctx.context.register`;
   `capcomd plugins validate --conformance` runs their suite). Text that looks like any fence marker (`<<<…>>>`, not only
   the `end` and `untrusted` ones) is now neutralised in what one agent shows another.
