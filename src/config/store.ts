@@ -38,6 +38,16 @@ export interface CapcomdConfig {
    * CAPCOMD_DOCKER_AGENT_MEMORY_MB wins).
    */
   sandboxes?: Record<string, { idleLifetime?: number; agentMemory?: number }>;
+  /**
+   * Triggers (plugin API §16.3; user config only, read by the daemon for each trigger): per source, the actors whose
+   * requests are allowed, the threads opened to anyone's, what a request that doesn't address capcomd does (`mode`:
+   * off, observe (the default: recorded, nothing runs), auto) and the project a run it starts works in.
+   * CAPCOMD_TRIGGERS_FILE names a JSON file of this object instead. See src/triggers/intake.ts.
+   */
+  triggers?: { sources?: Record<string, { allowed?: string[]; opened?: string[]; mode?: "off" | "observe" | "auto"; project?: string }> };
+  /** A built-in plugin's settings (plugin API §10.2), by plugin name: what its manifest's config schema names, and
+   *  `enabled: false` to turn it off. CAPCOMD_PLUGIN_<NAME>_<KEY> wins. */
+  plugins?: Record<string, Record<string, unknown>>;
 }
 
 export type DriverApprovals = "human" | "elicit" | "client-confirmed";

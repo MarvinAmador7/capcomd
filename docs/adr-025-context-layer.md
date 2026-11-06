@@ -582,7 +582,7 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   `scripts/gen-context-limits.ts`): the package ships `src/`, not `docs/evidence/`. Kernel floors and ceilings:
   `briefBytes` 1 KiB-100 KiB, `indexLines` 1-1000, `descriptionChars` 20-500.
 
-**Made while building step 6** (spec 1.0.23; evidence `docs/evidence/context/README.md`, "step 6"):
+**Made while building step 6** (spec 1.0.24; evidence `docs/evidence/context/README.md`, "step 6"):
 
 - The doctrine and the routing paragraph are two skills, `capcomd-context-doctrine` and `capcomd-context-routing`
   (`src/context/skills/`, `src/context/skills.ts`), attached by the router (the `context` plugin) in the same patch as
