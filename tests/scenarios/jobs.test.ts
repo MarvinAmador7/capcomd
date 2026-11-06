@@ -12,17 +12,20 @@ import { PROFILES, trajectory, world, newRun, spawnRoot, waitAll, type World } f
 import type { Recorded } from "../plugins/fixtures/hook-recorder/index";
 
 const RECORDER = join(import.meta.dir, "..", "plugins", "fixtures", "hook-recorder");
+const STARTER = join(import.meta.dir, "..", "plugins", "fixtures", "job-starter");
 let w: World;
 let dir: string;
 let log: string;
+let jobLog: string;
 /** This file's runs: their scripted agents' and jobs' processes are named by them. */
 const runs: string[] = [];
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-scn-jobs-"));
   log = join(dir, "hooks.ndjson");
+  jobLog = join(dir, "jobs.ndjson");
   const agents = join(dir, "agents.json");
   writeFileSync(agents, JSON.stringify({ ...PROFILES, agents: { ...PROFILES.agents, router: { ...PROFILES.agents.planner, toolMode: "orchestrate" } } }));
-  w = await world("jobs", { CAPCOMD_AGENTS_FILE: agents, CAPCOMD_JOBS_POLL_MS: "200", CAPCOMD_TEST_PLUGINS: RECORDER, CAPCOMD_TEST_HOOK_LOG: log, NODE_ENV: "test" });
+  w = await world("jobs", { CAPCOMD_AGENTS_FILE: agents, CAPCOMD_JOBS_POLL_MS: "200", CAPCOMD_TEST_PLUGINS: `${RECORDER}:${STARTER}`, CAPCOMD_TEST_HOOK_LOG: log, CAPCOMD_TEST_JOB_LOG: jobLog, NODE_ENV: "test" });
 }, 120_000);
 afterAll(async () => {
   // A scenario that failed may leave a scripted agent (its "VM" outlives a crashed daemon) or a job behind: stop them.
@@ -159,4 +162,35 @@ capcomd result --summary routed >/dev/null`), { task: "route" });
   const rlogs = await logsOf(run, router);
   expect(rlogs).toContain("refused: an orchestrate agent runs nothing, in the background either");
   void r;
+}, 180_000);
+
+test("a plugin's jobs for an agent: a command in its machine answers in the foreground; its timer ends with the agent", async () => {
+  const run = await newRun(w);
+  runs.push(run);
+  const agent = await spawnRoot(w, run, "worker", w.script("plugin-jobs", `capcomd title "plugin jobs" >/dev/null
+i=0; while [ $i -lt 150 ]; do l=$(capcomd job list); case "$l" in *from-plugin*) break;; esac; i=$((i+1)); sleep 0.2; done
+echo "listed: $(printf "%s" "$l" | $S/jget jobs.0.label) $(printf "%s" "$l" | $S/jget jobs.1.label)"
+sleep 3
+capcomd result --summary "ticked" >/dev/null`), { task: "[plugin-jobs] tick" });
+  const done = (await waitAll(w, run, [agent], 120_000)).agents[0];
+  const logs = await logsOf(run, agent);
+  if (done.status !== "done") console.log(logs);
+  expect(done.status).toBe("done");
+  expect(logs).toMatch(/listed: (agent tick plugin exec|plugin exec agent tick)/);
+  const got = () => (existsSync(jobLog) ? readFileSync(jobLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+  // The plugin's command ran in the agent's machine and answered in the foreground; no message went to the agent.
+  const exec = got().find((x) => x.what === "exec");
+  expect(exec).toMatchObject({ state: "done", result: { code: 0, stdout: "from-plugin\n" } });
+  expect((await trajectory(w, run, (e) => e.type === "MESSAGE_SENT")).length).toBe(0);
+  // Its timer fired while the agent ran, and ended with it (§16.2 rule 4): no fire after.
+  const timer = got().find((x) => x.what === "timer")!;
+  let rec: any = null;
+  for (let i = 0; i < 50; i++) { rec = (await w.cj(["kv", "get", run, `_jobs/${timer.jobId}`])).j.value; if (rec?.state !== "running") break; await sleep(100); }
+  expect(rec).toMatchObject({ state: "killed", reason: "its agent ended", spec: { kind: "timer", owner: { agentId: agent } } });
+  const fires = () => got().filter((x) => x.what === "changed" && x.jobId === timer.jobId && x.change.kind === "fired").length;
+  expect(fires()).toBeGreaterThanOrEqual(2);
+  const n = fires();
+  await sleep(2500);
+  expect(fires()).toBe(n);
+  expect(got().filter((x) => x.what === "changed" && x.jobId === timer.jobId).at(-1)?.change).toEqual({ kind: "ended", state: "killed" });
 }, 180_000);

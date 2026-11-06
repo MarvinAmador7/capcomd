@@ -83,7 +83,7 @@ function workTree() {
 // Its background jobs (src/jobs/machine.ts): running (a runner alive and no exit code yet), and ended ones whose result
 // message hasn't been delivered (its `from` is the job id). One that ended more than JOB_GRACE_MS ago is let go: its
 // message may never come (capcomd was down).
-const JOB_GRACE_MS = 60_000;
+const JOB_GRACE_MS = 60_000, JOB_START_MS = 30_000;
 const deliveredJobs = new Set();
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const readText = (f) => { try { return readFileSync(f, "utf8"); } catch { return ""; } };
@@ -96,11 +96,15 @@ function jobs() {
     const d = `${cfg.jobs}/${id}`;
     let ended = 0;
     try { ended = statSync(`${d}/exit`).mtimeMs; } catch { /* still running, or never started */ }
-    // Stopped by the agent itself: no message comes (capcomd notes who stopped it in `killed`).
-    if (ended) { if (!deliveredJobs.has(id) && !/^by agt-/.test(readText(`${d}/killed`)) && Date.now() - ended < JOB_GRACE_MS) out.waiting++; continue; }
+    // No message comes for one capcomd marked `quiet` (its caller had the result in the foreground), or one the agent
+    // stopped itself (capcomd notes who stopped it in `killed`).
+    if (ended) { if (!deliveredJobs.has(id) && !existsSync(`${d}/quiet`) && !/^by agt-/.test(readText(`${d}/killed`)) && Date.now() - ended < JOB_GRACE_MS) out.waiting++; continue; }
     let rpid = 0;
     try { rpid = Number(readFileSync(`${d}/rpid`, "utf8")); } catch { /* just launched */ }
-    if (!rpid || alive(rpid)) out.running++;
+    // No runner pid yet: just launched, unless that was a while ago (its runner never started).
+    let launched = 0;
+    try { launched = statSync(`${d}/spec.json`).mtimeMs; } catch { /* not even that */ }
+    if (rpid ? alive(rpid) : Date.now() - launched < JOB_START_MS) out.running++;
   }
   return out;
 }

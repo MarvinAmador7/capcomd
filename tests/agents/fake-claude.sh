@@ -16,6 +16,7 @@
 #   [review-check] (a reviewer) run sh check.sh in the checkout; the final message is a verdict saying whether it passed
 #   [title:WORDS] name its tab: a Bash call `capcomd title "WORDS"`, run (the shim's answer and exit code in ../title-out.txt)
 #   [title-chained:WORDS] a Bash call `capcomd title WORDS && rm -rf /`, never run (not a rename)
+#   [job:N] start a background job of N seconds with `capcomd job start` (0: one that answers in the foreground)
 #   [hold:N] the first run works N seconds (default 30) before editing (a daemon restart mid-run); a run started again
 #           in the same work dir finishes at once. Each run logs start, stopped (on SIGTERM) and finished to ../hold.log
 #   [linger] after its result (its turn ended), keep running ~6s before it exits, as a CLI still open for a next turn
@@ -46,6 +47,15 @@ case "$prompt" in *"[title:"*)
   emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"n1\",\"name\":\"Bash\",\"input\":{\"command\":\"capcomd title \\\"$t\\\"\"}}]}}"
   { capcomd title "$t"; echo "exit $?"; } > ../title-out.txt 2>&1
   emit "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"n1\",\"content\":\"$(head -1 ../title-out.txt | tr -d '"\\')\"}]}}";;
+esac
+# [job:N]: a Bash call `capcomd job start` of a command that takes N seconds (0: one that ends at once), its answer in
+# job-start.txt; then the turn ends and a result message (on stdin) is written to messages.txt, as any message is
+case "$prompt" in *"[job:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[job:\([0-9]*\)\].*/\1/p')
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"j1","name":"Bash","input":{"command":"capcomd job start -- build"}}]}}'
+  if [ "${n:-0}" = 0 ]; then capcomd job start --label quick -- 'echo quick-ok' > job-start.txt 2>&1
+  else capcomd job start --label build --foreground-ms 500 -- "sleep $n; echo built-ok" > job-start.txt 2>&1; fi
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"j1","content":"started"}]}}';;
 esac
 # [title-chained:WORDS]: a Bash call that names the tab and does something else too (never run): not a rename
 case "$prompt" in *"[title-chained:"*)

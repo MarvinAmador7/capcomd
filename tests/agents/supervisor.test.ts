@@ -1,7 +1,7 @@
 // ADR-019 §1, §3: the in-VM supervisor runs the agent, reports heartbeats to its outbox, and checkpoints the workspace
 // without touching the agent's working tree, index or history. Run directly with node against a scratch repo.
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Git } from "../../src/merge/git";
@@ -110,4 +110,23 @@ while IFS= read -r m; do echo "$m" >> seen.txt; echo '{"type":"result"}' >> $JSO
   const beats = reports.filter((x) => x.type === "heartbeat").map((x) => x.jobs);
   expect(beats).toContain(1);
   expect(beats.at(-1)).toBe(0);
+}, 30_000);
+
+test("jobs: no wait for a job capcomd marked quiet, nor for one whose runner never started", async () => {
+  const s = await setup(`IFS= read -r p; echo "$p" > seen.txt; echo '{"type":"result"}' >> $JSONL
+while IFS= read -r m; do echo "$m" >> seen.txt; echo '{"type":"result"}' >> $JSONL; done; exit 0`, { input: true, checkpointEveryMs: 0, jobs: true });
+  // One ended just now that answered its caller in the foreground (quiet: no message comes); one launched a minute ago
+  // whose runner never wrote its pid.
+  const quick = join(s.dir, "jobs", "job-kquiet1"), stale = join(s.dir, "jobs", "job-kstale1");
+  for (const d of [quick, stale]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(quick, "exit"), `0:${Date.now()}`);
+  writeFileSync(join(quick, "quiet"), "");
+  writeFileSync(join(stale, "spec.json"), "{}");
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(join(stale, "spec.json"), old, old);
+  const t0 = Date.now();
+  const { code, reports } = await s.run();
+  expect(code).toBe(0);
+  expect(Date.now() - t0).toBeLessThan(10_000);
+  expect(reports.filter((x) => x.type === "heartbeat").map((x) => x.jobs).every((n) => n === 0)).toBe(true);
 }, 30_000);

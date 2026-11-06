@@ -23,7 +23,7 @@ import { hooks, iso } from "../plugins/hooks";
 import { paramsHash, stableId, TERMINAL_AGENT } from "../primitives/policy";
 import { env } from "../utils/env";
 import { stateDir } from "../utils/home";
-import { launch, look, readFrom, signal, tails, type JobMachine } from "./machine";
+import { launch, look, noMessage, readFrom, signal, tails, type JobMachine } from "./machine";
 
 export type { JobMachine } from "./machine";
 
@@ -58,6 +58,7 @@ const OUT_TAIL = 48 * 1024, ERR_TAIL = 16 * 1024, FRAME_MAX = 16 * 1024;
 /** How much of its output a job's message to its agent quotes. */
 const MESSAGE_TAIL = 4 * 1024;
 const KILL_AFTER_MS = 5_000;
+const AGENT_ENDED = "its agent ended";
 /** A foreground wait is never longer than an in-VM call may be held (as a verify's, src/subagents/rpc.ts). */
 export const FOREGROUND_MAX_MS = 90_000;
 const pollMs = () => Number(env("JOBS_POLL_MS") ?? 1000);
@@ -264,8 +265,12 @@ async function settleExec(at: Attached, w: Watch, state: "done" | "failed" | "ki
     unwatch(at, rec.jobId);
     if (ended) return; // another watcher settled it first
     tell(rec, { kind: "ended", state });
-    if (w.fg) w.fg(rec);
-    else if (!o.quiet && !w.quiet && rec.by === ownerAgent(rec)) await notifyAgent(rec).catch((e) => console.error(`[jobs] ${rec.jobId}: telling ${rec.by}: ${(e as Error)?.message ?? e}`));
+    const fg = w.fg, message = !fg && !o.quiet && !w.quiet && rec.by === ownerAgent(rec);
+    if (fg) fg(rec);
+    else if (message) await notifyAgent(rec).catch((e) => console.error(`[jobs] ${rec.jobId}: telling ${rec.by}: ${(e as Error)?.message ?? e}`));
+    // No message comes for it: its supervisor doesn't hold the agent's input open waiting for one (an agent that is
+    // ending, o.quiet, has nobody waiting). Never awaited: at worst the supervisor waits as if one might come.
+    if (!message && !o.quiet) void noMessage(at.m, rec.jobId).catch(() => {});
     settled(rec);
   } catch (e) {
     w.settling = false; // next tick tries again
@@ -298,10 +303,11 @@ async function detach(key: string, o: { ended: boolean }) {
   machines.delete(key);
   if (at.loop) { clearInterval(at.loop); at.loop = null; }
   if (!o.ended) return; // a restart attaches again
-  // The agent ended: its jobs end with it (§16.2 rule 4). TERM, up to 5 s to exit, then KILL.
+  // The agent ended: its jobs end with it (§16.2 rule 4), its timers too. TERM, up to 5 s to exit, then KILL.
+  await endAgentTimers(at.m.runId, at.m.agentId);
   const ws = [...at.watches.values()].filter((w) => !w.settling);
   if (!ws.length) return;
-  const reason = "its agent ended";
+  const reason = AGENT_ENDED;
   await Promise.all(ws.map((w) => signal(at.m, w.rec.jobId, "TERM", reason).catch(() => {})));
   const deadline = Date.now() + KILL_AFTER_MS;
   let left = ws;
@@ -328,10 +334,31 @@ function arm(r: JobRecord) {
   armed.set(r.jobId, t);
 }
 
+/** A timer stops: `killed`, with why. */
+async function endTimer(r: JobRecord, why: string): Promise<JobRecord> {
+  clearTimeout(armed.get(r.jobId)); armed.delete(r.jobId);
+  const rec: JobRecord = { ...r, state: "killed", endedAt: iso(), reason: why, nextAt: null };
+  if (!(await writeRecord(rec, "ended")).ended) { tell(rec, { kind: "ended", state: "killed" }); settled(rec); }
+  return rec;
+}
+
+/** §16.2 rule 4: timers owned by an agent end with it (run-owned and plugin-owned ones don't). */
+async function endAgentTimers(runId: string, agentId: string) {
+  const recs = await listRecords(runId).catch(() => [] as JobRecord[]);
+  for (const r of recs) if (r.spec.kind === "timer" && live(r.state) && ownerAgent(r) === agentId) await endTimer(r, AGENT_ENDED).catch(() => {});
+}
+
 async function fire(runId: string | null, jobId: string) {
   const r = await readRecord(runId, jobId).catch(() => null);
   if (!r || !live(r.state) || r.spec.kind !== "timer" || r.nextAt == null) return;
   if (r.nextAt > Date.now() + 50) { arm(r); return; } // a long delay armed in parts
+  // An agent's timer whose agent ended where no pump saw it end (an agent with no spool): it ends now, unfired.
+  const agentId = ownerAgent(r);
+  if (agentId && runId) {
+    const a = await client().scope.getOrCreate([runId]).getAgent({ agentId }).catch(() => "unreachable" as const);
+    if (a === "unreachable") { arm({ ...r, nextAt: Date.now() + 5_000 }); return; } // the engine didn't answer: soon
+    if (!a || TERMINAL_AGENT.has(a.status)) { await endTimer(r, AGENT_ENDED).catch(() => {}); return; }
+  }
   const n = (r.fired ?? 0) + 1, now = Date.now(), spec = r.spec;
   const untilMs = spec.until ? Date.parse(spec.until) : Infinity;
   const next = spec.everyMs ? Math.max(now, r.nextAt) + spec.everyMs : null;
@@ -499,12 +526,7 @@ export async function cancelJob(jobId: string, reason: string, o: { runId?: stri
   if (!r) throw new RelayError("not_found", `job ${jobId} not found`, "List jobs with capcomd job list.");
   if (!live(r.state)) return jobOf(r);
   const why = reason.trim().slice(0, 300) || "killed";
-  if (r.spec.kind === "timer") {
-    clearTimeout(armed.get(jobId)); armed.delete(jobId);
-    const rec: JobRecord = { ...r, state: "killed", endedAt: iso(), reason: why, nextAt: null };
-    if (!(await writeRecord(rec, "ended")).ended) { tell(rec, { kind: "ended", state: "killed" }); settled(rec); }
-    return jobOf(rec);
-  }
+  if (r.spec.kind === "timer") return jobOf(await endTimer(r, why));
   const at = machines.get(machineKey(r.spec.runId!, ownerAgent(r)!));
   const w = at?.watches.get(jobId);
   if (!at || !w) return jobOf(await orphaned(r));

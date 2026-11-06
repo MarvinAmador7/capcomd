@@ -21,6 +21,7 @@ import type { SandboxProvider, VmId } from "../providers/sandbox";
 import { rawProvider } from "../providers/resilient";
 import { VM_RPC_DIR } from "./skill";
 import { attachMachine, type JobMachine } from "../jobs/service";
+import { TERMINAL_AGENT } from "../primitives/policy";
 
 
 const NODE_BIN = Bun.which("node") ?? "node";
@@ -88,10 +89,14 @@ export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: Sandb
   // The pump has its own backoff and never ends the agent: it uses the provider as is (rawProvider), so a call during an
   // outage fails and is tried again next tick instead of holding up the pump (and its stop) for the outage window.
   const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, rpcDir, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
-  // Its CLI ran to its end (the work returned): its jobs end with it. A failed attempt may run again on the same
-  // machine (a restarted engine), so its jobs are left to the next pump, or settle `lost` once the agent ended.
+  // Its CLI ran to its end (the work returned), or it was cancelled under it: its jobs end with it. A failed attempt
+  // may run again on the same machine (a restarted engine), so its jobs are left to the next pump, or settle `lost`
+  // once the agent ended.
   let ended = false;
-  try { const r = await work(); ended = true; return r; } finally { await p.stop({ ended }); }
+  try { const r = await work(); ended = true; return r; } finally {
+    if (!ended) ended = await client().scope.getOrCreate([runId]).getAgent({ agentId: a.agentId }).then((x) => !x || TERMINAL_AGENT.has(x.status), () => false);
+    await p.stop({ ended });
+  }
 }
 
 export class ScriptFailed extends Error { constructor(msg: string, readonly exitCode: number) { super(msg); } }

@@ -6,6 +6,8 @@
 //   <dir>/<jobId>/out, err    its output, as it goes
 //   <dir>/<jobId>/exit        `<code>:<ms epoch>`: its exit code and when it ended (written by the runner)
 //   <dir>/<jobId>/killed      why it was stopped, when capcomd stopped it
+//   <dir>/<jobId>/quiet       no result message comes for it (its caller had the result, or capcomd stopped it for
+//                             its agent): the supervisor doesn't keep the agent's input open for one
 // The runner is a few lines of node (every machine with an in-VM capcomd has node). It starts itself again in a session
 // of its own (no `setsid` needed: macOS has none), so it outlives whatever started it, the daemon included; it starts
 // the command detached too, so a kill of its process group stops the whole command, and writes the exit code.
@@ -42,9 +44,9 @@ export const RUNNER = [
   `for(const g of["SIGTERM","SIGINT","SIGHUP"])process.on(g,()=>{try{process.kill(-c.pid,g)}catch{}});`,
 ].join("");
 
-const LAUNCH = `set -e; mkdir -p "$1"; printf %s "$2" > "$1/spec.json"; printf %s "$3" > "$1/runner.cjs"
-command -v "$4" >/dev/null 2>&1 || { echo "no node in this machine: a job needs the node capcomd runs on" >&2; exit 127; }
-cd "$1"; nohup "$4" "$1/runner.cjs" "$1" >/dev/null 2>&1 </dev/null & echo started`;
+// The node is looked for first: a job's directory with no runner in it would read as one just launched.
+const LAUNCH = `set -e; command -v "$4" >/dev/null 2>&1 || { echo "no node in this machine: a job needs the node capcomd runs on" >&2; exit 127; }
+mkdir -p "$1"; printf %s "$2" > "$1/spec.json"; printf %s "$3" > "$1/runner.cjs"; cd "$1"; nohup "$4" "$1/runner.cjs" "$1" >/dev/null 2>&1 </dev/null & echo started`;
 
 /** Start the job's runner in the machine; resolves once it is started (not when the job ends). */
 export async function launch(m: JobMachine, jobId: string, spec: { cmd: string[]; cwd: string; env?: Record<string, string> }): Promise<void> {
@@ -110,4 +112,9 @@ export async function tails(m: JobMachine, jobId: string, outMax: number, errMax
 export async function signal(m: JobMachine, jobId: string, sig: "TERM" | "KILL", why?: string): Promise<void> {
   const d = `${m.dir}/${jobId}`;
   await m.exec(["sh", "-c", `[ -n "$3" ] && [ ! -f "$1/killed" ] && printf %s "$3" > "$1/killed"; p=$(cat "$1/pid" 2>/dev/null) && kill -"$2" -"$p" 2>/dev/null; true`, "sh", d, sig, why ?? ""], { timeoutMs: 20_000 });
+}
+
+/** Note in the job's directory that no result message comes for it (`quiet`, read by the supervisor). */
+export async function noMessage(m: JobMachine, jobId: string): Promise<void> {
+  await m.exec(["sh", "-c", `[ -d "$1" ] && : > "$1/quiet"; true`, "sh", `${m.dir}/${jobId}`], { timeoutMs: 20_000 });
 }
