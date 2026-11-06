@@ -44,6 +44,7 @@ Each term is used in exactly one sense in this document and in the types.
 | **gate** | A hook whose denial stops a kernel operation that lands or releases something: `verify.*`, `merge.*`, `approval.*`, `trigger.admitting`. Gates always fail closed (§6.5). |
 | **seam** | A kernel-defined interface with exactly one implementation chosen by name per use: the sandbox provider, the agent provider and the forge (§7). |
 | **source** | A plugin contribution that turns an external system's events into **triggers** (§16.3). Many may be active at once. |
+| **context provider** | A plugin contribution that serves items of the context layer (a project's memory, a company's facts; ADR-025) under a name a profile's `context.providers` lists. Many may be active and a profile may name several; the kernel's **router** composes them into an agent's brief at `agent.preparing` (§6.6.7). Not a seam (§7.1): no use selects exactly one. |
 | **job** | Kernel-tracked work that outlives the call that started it and reports back as events: an `exec` in a sandbox machine or a `timer` (§16.2). |
 | **principal** | Who acts: `operator`, `driver`, `agent`, `viewer` or `plugin` (§3.2). |
 | **scope** | A harness.v1 token scope: `read`, `steer`, `approve`, `configure` (`src/api/clients.ts` `CLIENT_SCOPES`). The word is used in no other sense here; the event envelope's `scope` field is called a **stream** below, and `src/actors/scope.ts` is "the scope actor". |
@@ -174,12 +175,14 @@ A capability id is one of:
 |---|---|
 | `seam:sandbox/<n>`, `seam:agent/<n>`, `seam:forge/<n>` | An implementation of that seam under name `n` (§7). |
 | `source:<n>` | A trigger source named `n` (§16.3). |
+| `context:<n>` | A context provider named `n` (ADR-025 §3.1), what a profile's `context.providers[].name` selects. |
 | `plugin:<n>` | The plugin `n`, active. Every plugin provides `plugin:<own name>` implicitly. |
 | `kernel:<feature>` | A kernel feature by its harness.v1 feature-flag name (`kernel:runs.goal_branch`). |
 
 Resolution (§5.4) fails a plugin whose `requires` names a capability no active plugin or the kernel provides
 (`unresolved`), and orders providers before requirers (§6.3). Two active plugins MUST NOT provide the same `seam:` or
-`source:` id (`seam_conflict`; the later one in load order fails).
+`source:` id (`seam_conflict`; the later one in load order fails), nor register the same context provider name (`conflict`
+at `ctx.context.register`, so the later one in load order fails activation).
 
 ### 4.7 Contributions
 
@@ -194,6 +197,7 @@ suite (§14.1).
 | `hooks` | `{ [hook]: { timeoutMs?, failure? } }` (§6) | `ctx.hooks.on` |
 | `seams` | `{ kind, name }`, at most one per kind (§7) | `ctx.seams.sandbox/agent/forge` |
 | `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source) |
+| `context` | `{ name, kinds: ("fact" \| "memory")[] }`, each also in `provides` as `context:<name>` (ADR-025 §3.1) | `ctx.context.register(impl)`: `impl.describe().name` is the declared name; in process only in protocol v1, like the seams |
 | `cli` | `{ name, summary }` (§4.7.1) | `ctx.cli.command` |
 | `mcp` | `{ name, summary }` (§4.7.2) | `ctx.mcp.tool` |
 | `api` | `{ method, path, scope }` (§4.7.3) | `ctx.api.route` |
@@ -561,6 +565,16 @@ listener, `skill-orchestration`, reads the agent's record from the kernel's call
 failure never trips on a slow engine; an attempt no plugin prepared (a workflow that passed its prepare step under an
 earlier capcomd, started or restarted after an upgrade) gets the orchestration skill from the kernel, as before.
 
+The kernel's context router (ADR-025 §6.1) is the one listener that composes context providers into `prompt.append`: the
+built-in `context` plugin (`src/plugins/context.ts`, failure open), for an agent whose pinned spec has a `context` block
+with providers (an agent without one gets no patch). Its append is the brief: a kernel-written header in plain prose
+(how many index lines of how many it loaded, the budget and where it came from, each provider's revision or the reason
+it was skipped, in the kernel's words) and one line per item (`IndexLine`, its description redacted, made one line,
+neutralised with `fence()`'s rule and capped), never an item's body. The brief is a function of the providers' indexes,
+the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
+and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
+out) on the run's stream.
+
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}}`.
 `checkpointed` is the progress signal (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
@@ -810,7 +824,7 @@ caller's environment (`CAPCOMD_GH_CLI`, `GITHUB_TOKEN`) from the kernel for the 
 
 ### 8.1 Shape
 
-`PluginContext<C>` has 22 services. Everything a plugin can do is a method on one of them; there is no second entry
+`PluginContext<C>` has 23 services. Everything a plugin can do is a method on one of them; there is no second entry
 point, no global, no ambient state. The full signatures are `packages/plugin/src/context.ts`; this section states the
 rules the signatures cannot.
 
@@ -823,6 +837,7 @@ rules the signatures cannot.
 | `trace` | `span` | | §13.4 |
 | `hooks` | `on` | | §6 |
 | `seams` | `sandbox`, `agent`, `forge` | | §7 |
+| `context` | `register` | | ADR-025 §3.1 (`search`, `get`, `propose` for plugins once a consumer exists) |
 | `cli` | `command` | | §4.7.1 |
 | `mcp` | `tool`, `instructions` | | §4.7.2 |
 | `api` | `route`, `capability` | | §4.7.3 |
@@ -842,7 +857,7 @@ rules the signatures cannot.
 | `triggers` | `emit`, `subscribe`, `unsubscribe`, `subscriptions` | `emit`: the plugin must contribute the source; `subscribe`: steer | new (§16.3) |
 | `onDispose` | | | §5.3 |
 
-77 primitives in all (69 on the services above plus `log` ×5, `trace.span`, `ui.descriptor`, `onDispose`).
+78 primitives in all (70 on the services above plus `log` ×5, `trace.span`, `ui.descriptor`, `onDispose`).
 
 ### 8.2 Call options
 
@@ -1096,6 +1111,17 @@ notice details, descriptor strings) are `Untrusted`: clients render them as plai
 `cct1.`, `bxd_`) before it reaches a plugin or a stream. A plugin SHOULD run `ctx.auth.redact` on anything it writes
 itself; the kernel runs it again on what the plugin emits.
 
+Untrusted text another agent reads arrives inside a fence naming its author (`src/subagents/results.ts` `fence()`), and
+every `<<<…>>>` on one line inside it is neutralised, whatever it says, so no marker, today's or a later one, can be
+forged from inside. The context brief (§6.6.7, ADR-025 §6.1) is the one place untrusted text is the basis of a model's
+attention from system-role text (Claude Code's appended system prompt; Codex's prompt): an item's description, written
+by whoever wrote the item. What fences it there: the header is the kernel's, in plain prose, with no marker syntax and
+none of a provider's own words (a failure is named with the kernel's reason); each description is redacted (the
+kernel's shapes and the agent providers' credentials), made one line (control characters and line breaks are spaces),
+neutralised with `fence()`'s rule and capped at `limits.descriptionChars`, and so are an item's path and `paths`; an
+item's body never enters the brief. A `context` message kind, rendered fenced as recalled context that grants nothing,
+is reserved for ADR-025 §6.3 and not shipped.
+
 ### 11.6 Isolation
 
 In-process plugins are built-ins: the trust boundary is the capcomd package. Out-of-process plugins get a filtered
@@ -1242,6 +1268,14 @@ fresh context and repeat: a module must be re-activatable (§5.4 `enable`).
   allowlist, has `sandbox: "read-only"` or `denyCommands` that refuse `git commit` and `git push`). The suite is `packages/plugin/src/agent-conformance.ts`; every method it calls
   is pure, so `capcomd plugins validate --conformance` runs it with no streams, and a plugin's own tests pass theirs to
   `testkit.conformance.agent`.
+- **context** (ADR-025 §3.1): `describe` names the declared provider with kinds and layers the kernel knows,
+  `available` never rejects, `classifyError` classifies anything (its own `not_found` as `not_found`), `propose` is
+  refused `unsupported` unless `caps.writable`, a call whose signal is already aborted rejects; with a scope that has
+  items (a fixture repository the plugin's tests bring), `resolve` binds it to the same handle and revision each time,
+  `index` is deterministic for a handle and every line is well-formed (its `ref.provider` the provider, a declared
+  kind, untrusted description), `get` returns an indexed item with untrusted text and rejects an id that isn't there
+  `not_found`, and `search` answers at most `limit` hits. `packages/plugin/src/context-conformance.ts`; `capcomd plugins
+  validate --conformance` runs it without a scope (the item cases skipped).
 - **forge**: against a local bare repository (`tests/merge/gitfixture.ts`): `land direct` is a CAS (a moved target is
   `conflict`), `land` twice with the same `mrgId` is `already: true`, `pr` mode without `pullRequests` rejects
   `unsupported`, `matches` is pure; `remoteCredential`, when present, answers null for a remote the forge's service
@@ -1266,7 +1300,7 @@ checks the mode against `HOOKS` (ADR-023 step 1).
 ### 14.5 The test kit
 
 `@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext`, `load`,
-`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge}`, `call`. Implemented with ADR-023
+`loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge, context}`, `call`. Implemented with ADR-023
 step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what `test:fast` runs on
 `packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` needs the kernel's hook sites and the
 `conformance` suites the seams as plugins: they reject `unsupported` until §17.2 steps 2, 3, 4 and 6.
@@ -1659,6 +1693,7 @@ ADR-024's steps interleave: its loader (step 1 there) needs nothing here; its `h
 | 1.0.12 | 2026-11-05 | The last forge logic in the forges (§7.4, §11.7): the optional `remoteCredential` (`ForgeRemoteCredential`; additive) supplies the credential host git uses for an https remote, which `host-git.ts` applies as the only helper for the remote's own origin (forge-github: the GitHub token for `https://github.com`, as before); `GET /v1/projects/branches` `source` is a string, the forge's name when its service answered; where a goal branch's pull request is merged is said with the run's forge's label. |
 | 1.0.13 | 2026-11-06 | With the front doors (§17.2 step 8): the kernel's own front doors keep capcomd's names (`capcomd_<tool>`, the kernel's commands), named by the built-in list (`kernelSurface`), `order: pre` (§4.2); `KERNEL_COMMANDS` is the dispatcher's own commands and the front doors' (§4.7.1); a command's flags, its output, its PluginError's exit code and reason, `--help`, a kernel front door's `{exit}` (`CliExit`, additive), where an in-process command runs (§4.7.1); a tool's `title`, `_meta` and `openWorldHint` (additive), its schema listed as registered, its arguments checked and only the named ones passed on (§4.7.2); the front doors still run in the process that serves them (§6.1); `agent.preparing`'s `skills` and `env` accepted, with the kernel's rules (names that steer the agent's provider, loader, proxy or git reserved) and how they reach the agent, and the payload's `env` filled in (§6.6.7); `front-hermes` adds `capcomd hermes` (§17.1). |
 | 1.0.14 | 2026-11-06 | With the context eval (ADR-025 step 0): §7.3's `AgentRunState` gains the optional `cacheReadTokens` and `model` (additive), which the kernel records on the agent's span (`gen_ai.usage.cache_read.input_tokens`, `gen_ai.response.model`): the eval's cache-read ratio and the model a result was measured on. |
+| 1.0.15 | 2026-11-06 | With the context router (ADR-025 step 1): a `context` contribution (§4.7: `contributes.context: [{name, kinds}]`, `provides: context:<name>` in §4.6, `ctx.context.register`, a 23rd service and 78th primitive in §8.1; all additive), the term context provider (§2), its conformance suite (§14.2) and `testkit.conformance.context` (§14.5); `PinnedSpec.context` (additive); the kernel's context router as the agent.preparing listener that composes a profile's providers into the brief (§6.6.7); §11.5: `fence()` neutralises every `<<<…>>>`, and the brief is the one place untrusted text is the basis of attention from system-role text, and what fences it. |
 
 | 1.0.7 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6: `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 

@@ -391,12 +391,17 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   asked for a spawn, and the file may be a link to anything on the host).
 - **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
-- **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `context`, `sandbox.provider|environment|size`,
+- **Blocks with no runtime yet** (`identity.persona`, `skills`, `tools.mcp`, `sandbox.provider|environment|size`,
   `jobs`, `lifecycle.onStart|onEnd`, `permissions.report`, `harness.cliVersion`) are checked and kept on the resolved
   profile, not pinned; `capcomd agents validate` names the ones a profile sets. `sandbox.provider` is checked against
   the active sandbox seams.
 - **The bundled layer is empty** until step 9: `capcomd setup project` still writes its four profiles into
   `agents.json`, and shipping them as data now would make names that are unknown today resolve.
+- **`context` (and `memory`, read as it) has a runtime since ADR-025 step 1**: it is pinned with the flat spec
+  (`AgentSpec.context`, a field an `agents.json` entry may hold too), its provider names are checked against the active
+  context providers when profiles are read, and an override may remove it but never change it. The behaviour change
+  from §2.2: the memory directory is no longer mounted read/write and written back by the agent; it is the repository's
+  `.capcomd/context/`, read at the run's target and changed by reviewed commits (ADR-025 §4, D2).
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 
