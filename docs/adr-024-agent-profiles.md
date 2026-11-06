@@ -615,7 +615,9 @@ Made while building install, export and update (§7 step 7, 2026-11-06; `src/pro
   put it back when they now have a problem they didn't have (a file named outside the package, an `extends` nothing
   here answers, a child another profile extends gone). The writes' overlay (step 6) can't hold a new directory, and a
   reader sees the change for one read at most. A project with a broken profile can still install a package that adds
-  no problem.
+  no problem. A change to the user's layer is also read as every other project reads it (the user's layer alone): a
+  package the current project hides with a profile of the same name isn't resolved there, and would otherwise break
+  the user's profiles everywhere else.
 - **§2.4's hand edit "treated as a bump with a notice" is the notice only**: `show` and `validate` say a package was
   edited since it was installed (its files against its `LOCK`, the user's override left out), and `update` lists the
   edits it replaces. Its `version` stays the file's: a version made up from a hash can't keep going up, and the agent's

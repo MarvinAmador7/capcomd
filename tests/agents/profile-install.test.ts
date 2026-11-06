@@ -187,6 +187,31 @@ describe("install", () => {
     const r = await installProfile(`${repo.bare}#docs-writer`, w.o);
     expect(r).toMatchObject({ layer: "user", hiddenBy: w.path });
   });
+
+  test("a package this project hides is still checked as every other project reads your profiles", async () => {
+    const w = world();
+    // The project defines both names, so neither of your packages is resolved here.
+    writeFileSync(w.path, JSON.stringify({ schema: "capcomd.agents/v1", agents: { orphan: { provider: "codex", auth: "apikey" }, base: { provider: "codex", auth: "apikey" } } }));
+    const repo = await profileRepo({
+      "orphan/profile.yaml": yaml(["name: orphan", "extends: nobody-here"]),
+      "base/profile.yaml": yaml(["name: base", harness]),
+    });
+    await refused(installProfile(`${repo.bare}#orphan`, w.o), "config", /installing orphan would leave your profiles, as every other project reads them, unreadable.*extends "nobody-here"/);
+    expect(existsSync(join(w.user, "orphan"))).toBe(false);
+    // Your own profiles outside this project read as before.
+    const outside = join(w.env.CAPCOMD_HOME!, "agents.json");
+    expect(Object.keys(readProfiles(outside, w.env).profiles)).toEqual([]);
+    // An update that would break it, and a removal another of your profiles needs, are refused the same way.
+    await installProfile(`${repo.bare}#base`, w.o);
+    const lock = readLock(join(w.user, "base"))!;
+    await repo.commit({ "base/profile.yaml": yaml(["name: base", "extends: gone-parent"]) });
+    await refused(updateProfile("base", w.o), "config", /updating base would leave your profiles, as every other project reads them, unreadable.*gone-parent/);
+    expect(readLock(join(w.user, "base"))).toEqual(lock);
+    writeFileSync(join(w.user, "child.yaml"), yaml(["name: child", "extends: base"]));
+    expect(() => removeInstalledProfile("base", w.o)).toThrow(/removing base would leave your profiles, as every other project reads them, unreadable.*extends "base"/);
+    expect(existsSync(join(w.user, "base"))).toBe(true);
+    expect(leftovers(w.user)).toEqual([]);
+  });
 });
 
 describe("update", () => {
@@ -277,6 +302,19 @@ describe("export and remove", () => {
     expect(theirs.spec).toEqual(mine.spec);
     expect(theirs.skills.map((s) => s.hash)).toEqual(mine.skills.map((s) => s.hash));
     expect(theirs.manifest["x-acme"]).toEqual({ team: "payments" });
+
+    // A persona file that has the name a flat prompt would take keeps it; the prompt gets another.
+    mkdirSync(join(w.projectProfiles, "voice"), { recursive: true });
+    writeFileSync(join(w.projectProfiles, "voice", "profile.yaml"), yaml(["name: voice", harness, "identity: { persona: prompt.md }"]));
+    writeFileSync(join(w.projectProfiles, "voice", "prompt.md"), "I am calm.\n");
+    mkdirSync(join(w.projectProfiles, "speaker"), { recursive: true });
+    writeFileSync(join(w.projectProfiles, "speaker", "profile.yaml"), yaml(["name: speaker", "extends: voice", "prompt: { append: brief.md }"]));
+    writeFileSync(join(w.projectProfiles, "speaker", "brief.md"), "Speak slowly.\nThen stop.\n");
+    const spoken = exportProfile("speaker", { ...w.o, out: join(out, "flat"), flat: true });
+    expect(spoken.files).toEqual(["append-prompt.md", "profile.yaml", "prompt.md"]);
+    expect(readFileSync(join(spoken.dir, "prompt.md"), "utf8")).toBe("I am calm.\n");
+    expect(readFileSync(join(spoken.dir, "append-prompt.md"), "utf8")).toBe("Speak slowly.\nThen stop.\n");
+    expect(parseYaml(readFileSync(join(spoken.dir, "profile.yaml"), "utf8"))).toMatchObject({ identity: { persona: "prompt.md" }, prompt: { append: "append-prompt.md" } });
 
     // An agents.json entry exports as a profile.yaml.
     writeFileSync(w.path, JSON.stringify({ schema: "capcomd.agents/v1", default: "reviewer", agents: { reviewer: { provider: "codex", auth: "subscription", maxTurns: 12, description: "Reviews" } } }));

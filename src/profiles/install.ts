@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpat
 import { basename, dirname, join, resolve } from "node:path";
 import { parse as parseYaml, parseDocument, stringify as toYaml } from "yaml";
 import { RelayError } from "../core/errors";
-import { stateDir } from "../utils/home";
+import { stateDir, userProfilesDir } from "../utils/home";
 import { fetchPackage, FetchError } from "../install/fetch";
 import { diffTrees, hashTree, readLock, treeHash, writeLock, LOCK_SCHEMA, TreeError, type Lock, type TreeFile } from "../install/lock";
 import { parseSource, SourceError, type PackageSource } from "../install/source";
@@ -58,17 +58,29 @@ function problems(path: string, env: Env): string | null {
 }
 
 /**
- * Change the files with `apply`, then read the profiles: when that change left them with a problem they didn't have
- * (a new one, not one the project had already), `undo` it and refuse. A reader in between sees the change for as long
- * as one read takes.
+ * The agents files whose profiles a change in `layer` must leave readable: this one's, and for the user's layer also the
+ * user's own as every other project reads them (no project layer over them). A package this project hides (a project
+ * profile of the same name wins) isn't resolved here, so only that read finds what is wrong with it.
  */
-function checkedChange(path: string, env: Env, what: string, apply: () => void, undo: () => void) {
-  const was = problems(path, env);
+function views(path: string, env: Env, layer: "project" | "user"): string[] {
+  const own = join(dirname(userProfilesDir(env)), "agents.json");
+  return layer === "user" && profileLayers(path, env).length > 1 ? [path, own] : [path];
+}
+
+/**
+ * Change the files with `apply`, then read the profiles (each of `paths`): when that change left them with a problem
+ * they didn't have (a new one, not one the project had already), `undo` it and refuse. A reader in between sees the
+ * change for as long as one read takes.
+ */
+function checkedChange(paths: string[], env: Env, what: string, apply: () => void, undo: () => void) {
+  const was = paths.map((p) => problems(p, env));
   apply();
-  const now = problems(path, env);
-  if (now && now !== was) {
+  const now = paths.map((p) => problems(p, env));
+  const i = now.findIndex((n, j) => n && n !== was[j]);
+  if (i >= 0) {
     undo();
-    throw new RelayError("config", `${what} would leave the profiles unreadable, so nothing was changed: ${now}`, "capcomd profiles validate says what is wrong with the files as they are.", { code: "invalid_profile" });
+    const whose = i === 0 ? "the profiles" : "your profiles, as every other project reads them,";
+    throw new RelayError("config", `${what} would leave ${whose} unreadable, so nothing was changed: ${now[i]}`, "capcomd profiles validate says what is wrong with the files as they are.", { code: "invalid_profile" });
   }
 }
 
@@ -160,7 +172,7 @@ export async function installProfile(spec: string, o: { project?: boolean; path?
     const file = [dest, ...["yaml", "yml", "json"].map((x) => join(target.dir, `${name}.${x}`))].find((p) => existsSync(p)) ?? there;
     if (file) throw new RelayError("conflict", `profile ${name} is already in ${target.layer === "project" ? "the project's" : "your"} profiles (${file})`, readLock(dest)?.kind === PROFILE_TRUST_KIND ? `Update it with capcomd profiles update ${name}${o.project ? " --project" : ""}.` : "Remove or rename that one first: two profiles can't share a name in one place.");
     writeLock(staging, lock);
-    checkedChange(path, env, `installing ${name}`, () => renameSync(staging, dest), () => rmSync(dest, { recursive: true, force: true }));
+    checkedChange(views(path, env, target.layer), env, `installing ${name}`, () => renameSync(staging, dest), () => rmSync(dest, { recursive: true, force: true }));
   } finally { rmSync(staging, { recursive: true, force: true }); }
   let hiddenBy: string | null = null;
   try { const r = readProfiles(path, env).profiles[name]; if (r && r.source !== target.layer) hiddenBy = r.path ?? "a bundled profile"; } catch { /* checked above */ }
@@ -248,17 +260,18 @@ export async function updateProfile(name: string, o: { project?: boolean; path?:
     const out: ProfileUpdate = { name, dir, layer, from: { version: lock.version, commit: lock.commit, hash: lock.hash }, to: { version: next.version, commit: next.commit, hash: next.hash }, ...diff, skills, modified, updated: false };
     if (o.dryRun || (next.hash === lock.hash && !modified && next.commit === lock.commit)) return out;
     writeLock(staging, next);
-    // The user's override comes along into the new directory; the old one goes once the profiles resolve with the new.
+    // The user's override comes along into the new directory once it is in place (never through the staging directory,
+    // which goes whatever happens); the old one goes once the profiles resolve with the new.
     const overrides = readdirSync(dir).filter((f) => OVERRIDE_FILE.test(f));
     const old = join(dirname(dir), `.old-${name}-${process.pid}-${Date.now()}`);
-    checkedChange(path, env, `updating ${name}`, () => {
-      for (const f of overrides) renameSync(join(dir, f), join(staging, f));
+    checkedChange(views(path, env, layer), env, `updating ${name}`, () => {
       renameSync(dir, old);
-      renameSync(staging, dir);
+      try { renameSync(staging, dir); } catch (e) { renameSync(old, dir); throw e; }
+      for (const f of overrides) renameSync(join(old, f), join(dir, f));
     }, () => {
+      for (const f of overrides) renameSync(join(dir, f), join(old, f));
       renameSync(dir, staging);
       renameSync(old, dir);
-      for (const f of overrides) renameSync(join(staging, f), join(dir, f));
     });
     rmSync(old, { recursive: true, force: true });
     return { ...out, updated: true };
@@ -277,7 +290,7 @@ export function removeInstalledProfile(name: string, o: { project?: boolean; pat
   if (ov.length) throw new RelayError("conflict", `${dir} holds ${ov.join(", ")}, which is yours, not the package's`, "Move or delete it first, then remove the profile.");
   const skills = listSkills(dir);
   const gone = join(dirname(dir), `.removed-${name}-${process.pid}-${Date.now()}`);
-  checkedChange(path, env, `removing ${name}`, () => renameSync(dir, gone), () => renameSync(gone, dir));
+  checkedChange(views(path, env, layer), env, `removing ${name}`, () => renameSync(dir, gone), () => renameSync(gone, dir));
   for (const s of skills) revokeTrust(PROFILE_TRUST_KIND, s, env);
   rmSync(gone, { recursive: true, force: true });
   return { name, dir, layer };
@@ -322,20 +335,21 @@ export function exportProfile(name: string, o: { out?: string; flat?: boolean; p
   if (o.flat) {
     const doc: ProfileDoc = { ...noDefault(r.manifest) };
     delete doc.extends;
-    // Prompts as files when they hold more than a line (or would read as a file's name), else inline.
-    if (isMap(doc.prompt)) {
-      const prompt = { ...doc.prompt };
-      for (const [k, file] of [["system", "system.md"], ["append", "prompt.md"]] as const) {
-        const t = prompt[k];
-        if (typeof t === "string" && (t.includes("\n") || LOOKS_LIKE_FILE.test(t))) { files.set(file, t); prompt[k] = file; }
-      }
-      doc.prompt = prompt;
-    }
-    // The persona, from the directory of the file that named it.
+    // The persona, from the directory of the file that named it (first: its name is the manifest's).
     const persona = isMap(doc.identity) ? doc.identity.persona : undefined;
     const by = r.setBy["identity.persona"];
     const from = by === undefined ? null : r.applied[by]?.path;
     if (typeof persona === "string" && from) files.set(persona, readFileSync(join(dirname(from), persona)));
+    // Prompts as files when they hold more than a line (or would read as a file's name), else inline; a name the
+    // persona has taken gets a prefix.
+    if (isMap(doc.prompt)) {
+      const prompt = { ...doc.prompt };
+      for (const [k, name] of [["system", "system.md"], ["append", "prompt.md"]] as const) {
+        const t = prompt[k], file = files.has(name) ? `${k}-${name}` : name;
+        if (typeof t === "string" && (t.includes("\n") || LOOKS_LIKE_FILE.test(t))) { files.set(file, t); prompt[k] = file; }
+      }
+      doc.prompt = prompt;
+    }
     // Each skill it is pinned with from a package, into this one's skills/; the user's and capcomd's stay named.
     if (Array.isArray(doc.skills)) doc.skills = doc.skills.map((s) => {
       if (!isMap(s)) return s;
