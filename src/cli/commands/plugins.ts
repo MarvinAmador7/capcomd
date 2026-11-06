@@ -83,7 +83,7 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
   const manifest = loaded.manifest;
   const result = (name: string, r: Partial<ConformanceResult>) => v.conformance.push({ name, ok: false, skipped: false, ms: 0, message: null, ...r });
   if (manifest.entry.runtime !== "in-process") {
-    result("conformance", { ok: true, skipped: true, message: "out-of-process plugins are run with the process runtime (spec §17.2 step 9)" });
+    result("conformance", { ok: true, skipped: true, message: "an out-of-process plugin is checked by its own tests (the client library and test kit, spec §9.8, §14.5)" });
     return v;
   }
   let mod = t.module as PluginModule<unknown> | null;

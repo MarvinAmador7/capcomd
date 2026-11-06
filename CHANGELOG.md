@@ -5,6 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
+  `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
+  its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
+  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. If it crashes while deciding, the decision is a deny; it is started again (five crashes in ten minutes stop
+  it until `POST /v1/plugins/{name}/enable`). `capcomd plugins list` shows it with `runtime: process`. Such a plugin
+  contributes hooks and events only (no commands, tools or sandboxes), and a CLI never starts one. The client library
+  `connect()` in `@capcomd/plugin` does the talking; the plugin API spec §9 is the protocol.
+- New (harness.v1, capability `plugins.protocol`): the out-of-process protocol's routes (`/v1/plugins/{name}/sessions`,
+  `/hooks` as an event stream, `/hooks/{callId}`, `/events`, `/storage`), usable only with the token capcomd made for
+  that plugin, and `plugin.process_changed` events on the daemon stream. Capability `plugins` adds
+  `GET /v1/plugins/{name}` (a plugin's manifest and config, never a secret) and `POST /v1/plugins/{name}/enable` and
+  `/disable` (the configure scope; for the daemon's life, and a built-in can't be disabled).
 - New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
   `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd agents list|show --json`, which also
   give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether

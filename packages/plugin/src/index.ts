@@ -6,6 +6,7 @@ export * from "./hooks";
 export * from "./context";
 export * from "./seams";
 export * from "./protocol";
+export { connect, type ConnectOptions } from "./client";
 export * from "./events";
 export { EVENT_NAME_PATTERN, EVENT_TYPE_DOC, EVENT_TYPE_PATTERN, eventTypeOwner, isEventType, pluginEventType } from "./event-type";
 export * from "./load";
