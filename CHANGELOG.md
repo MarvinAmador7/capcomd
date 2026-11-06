@@ -22,6 +22,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Plugins can provide context providers (`contributes.context`, `provides: context:<name>`, `ctx.context.register`;
   `capcomd plugins validate --conformance` runs their suite). Text that looks like any fence marker (`<<<…>>>`, not only
   the `end` and `untrusted` ones) is now neutralised in what one agent shows another.
+- New: a profile file can say who it is and what it is for, and the planner sees it. `identity.title`, `tags` and
+  `sharing` (`source`, `license`) are shown by `capcomd_profiles` and `capcomd agents list|show --json`, which also
+  give each profile a `fit` line capcomd writes from its settings (read-only or not, model and effort, limits, whether
+  it leads) and a `cost` tier for its model (`low`, `medium`, `high`). `capcomd_profiles` adds each profile's
+  `capacity`: how many of it can start now, 0 while its login waits for a usage limit to reset. `permissions:
+  { report: false }` keeps a profile from being spawned with `report` (refused with `reason: "report_not_allowed"`).
+  A profile's `identity.title` and `identity.avatar` aren't passed to one that `extends` it. See docs/agents.md,
+  "Profile files".
+- Fix: a profile whose allowed tools include a plain `Bash` (any command) is no longer described as read-only (a
+  reviewer) in `capcomd_profiles` and `capcomd agents list`; a shell limited to commands (`Bash(bun test:*)`) still is.
 - New: `capcomd hermes` says whether Hermes is installed and has capcomd (what `capcomd setup check` says for it), and
   `capcomd hermes add [--approvals elicit|human] [--hermes-entry-per-project] [--yes]` adds capcomd to Hermes on its
   own, as `capcomd setup agent` does: its MCP server entry, the capcomd skills, and who approves merges into protected
