@@ -34,6 +34,7 @@ const { values: a } = parseArgs({
     concurrency: { type: "string", default: "4" }, sandbox: { type: "string" }, "max-turns": { type: "string", default: "80" },
     "agent-timeout-min": { type: "string", default: "30" }, evidence: { type: "string" }, out: { type: "string" }, expect: { type: "boolean", default: false },
     keep: { type: "boolean", default: false }, work: { type: "string" }, list: { type: "boolean", default: false },
+    memory: { type: "string", default: "project" },
   },
 });
 const ROOT = resolve(import.meta.dir, "..");
@@ -50,6 +51,8 @@ const { chains: ALL_CHAINS, pending } = suite(world);
 const chains = a.chains ? a.chains.split(",").map((id) => ALL_CHAINS.find((c) => c.id === id) ?? fail(`no chain ${id}: ${ALL_CHAINS.map((c) => c.id).join(", ")}`)) : ALL_CHAINS;
 const arms = a.arms!.split(",").map((n) => armNamed(n) ?? fail(`no arm ${n}: ${ARMS.map((x) => x.name).join(", ")}`));
 for (const arm of arms) if (!arm.files) fail(`arm ${arm.name} isn't runnable yet: it needs ${arm.needs}`);
+// How much memory the index arms' project keeps (world.ts `contextFiles`): `project` (the default) or `small`.
+const MEMORY = a.memory === "small" || a.memory === "project" ? a.memory : fail(`--memory is small or project, not ${a.memory}`);
 const models = LIVE ? (a.models ?? fail("--agents live needs --models, e.g. claude-opus-5-5,gpt-6.1-sol")).split(",") : ["fake"];
 const REPS = int("reps", a.reps!, 1), CONCURRENCY = int("concurrency", a.concurrency!, 1);
 function fail(msg: string): never { console.error(`eval-context: ${msg}`); process.exit(2); }
@@ -245,7 +248,7 @@ async function scoreStep(env: Record<string, string>, runId: string, step: Step,
 
 async function runChain(model: string, armName: string, rep: number, chain: Chain): Promise<Row[]> {
   const arm = armNamed(armName)!;
-  const files = { ...repoFiles(world), ...arm.files!(world) };
+  const files = { ...repoFiles(world), ...arm.files!(world, MEMORY) };
   const bare = makeRepo(`${profileOf(model)}-${armName}-${rep}-${chain.id}`, files);
   const env = { CAPCOMD_REPO: bare };
   const rows: Row[] = [];
@@ -295,7 +298,7 @@ const reports = models.map((model) => {
   const seen = rows.map((r) => r.metrics?.model).find((m) => m && m !== "fake") ?? null;
   return {
     schema: "capcomd.eval-context.result/v1", date, model, provider: providerOf(model), modelReported: seen, agents: LIVE ? "live" : "fake",
-    sandbox: common.CAPCOMD_SANDBOX, capcomd: { version, commit }, seed: SEED, world: { company: world.company.name, hash: worldHash(world) },
+    sandbox: common.CAPCOMD_SANDBOX, capcomd: { version, commit }, seed: SEED, world: { company: world.company.name, hash: worldHash(world), memory: MEMORY },
     reps: REPS, minutes, arms: arms.map((x) => ({ name: x.name, what: x.what })), chains: chains.map((c) => ({ id: c.id, family: c.family, title: c.title, steps: c.steps.map((s) => ({ id: s.id, prompt: s.prompt })) })),
     pending, notRun: notRun(model), summary: summarize(rows),
     // Step 6's questions (report.ts `admission`): each delivered arm against the one it would replace or extend.

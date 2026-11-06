@@ -11,7 +11,7 @@ import { ARMS, armNamed } from "../../scripts/eval-context/arms";
 import { actionsFromLogs, admission, decidedLimits, spendFromSpans, startingLimits, summarize, type Row } from "../../scripts/eval-context/report";
 import { briefItems, inlineTask, pushText, triggered } from "../../scripts/eval-context/deliver";
 import { checkCommand, FAKE_EXPECTED, parseVerdict, suite, type Step } from "../../scripts/eval-context/tasks";
-import { agentsMd, brainFiles, contextFiles, facts, generateWorld, memoryFiles, repoFiles, worldHash } from "../../scripts/eval-context/world";
+import { agentsMd, brainFiles, contextFiles, facts, generateWorld, memoryFiles, otherRecords, repoFiles, worldHash, type MemorySize } from "../../scripts/eval-context/world";
 import { buildBrief } from "../../src/context/brief";
 import { memoryProvider } from "../../src/context/memory";
 
@@ -71,8 +71,15 @@ describe("the world", () => {
     // profile that names the memory provider (ADR-025 step 1).
     const ctx = armNamed("index")!.files!(w);
     expect(Object.keys(ctx).every((f) => f.startsWith(".capcomd/context/facts/") || f.startsWith(".capcomd/context/memory/"))).toBe(true);
-    expect(Object.keys(ctx).length).toBe(facts(w).length + Object.keys(memoryFiles(w)).length);
+    const rest = otherRecords(w);
+    expect(Object.keys(contextFiles(w, "small")).length).toBe(facts(w).length + Object.keys(memoryFiles(w)).length);
+    expect(Object.keys(ctx).length).toBe(facts(w).length + Object.keys(memoryFiles(w)).length + rest.facts.length + rest.lessons.length);
     expect(contextFiles(w)).toEqual(ctx);
+    // The rest of the project's memory touches nothing a task needs, and is the same for a seed (its own generator).
+    const other = JSON.stringify(rest);
+    for (const t of ["Shipping", "Loyalty", "Active", "round", "refund", "discount", "carrier code"]) expect(other.toLowerCase()).not.toContain(t.toLowerCase());
+    expect(otherRecords(generateWorld(3))).toEqual(rest);
+    expect(new Set([...facts(w), ...rest.facts].map((f) => f.id)).size).toBe(facts(w).length + rest.facts.length);
     expect(armNamed("index")!.context).toEqual({ providers: [{ name: "memory" }] });
     // The arms later steps add are listed, not runnable.
     expect(ARMS.filter((a) => !a.files).every((a) => /ADR-025 step/.test(a.needs ?? ""))).toBe(true);
@@ -221,8 +228,8 @@ describe("metrics and results", () => {
 describe("step 6's questions: delivery and admission (ADR-025 §6.1, §6.3)", () => {
   const w = generateWorld(11);
   const files = { ...repoFiles(w), ...contextFiles(w) };
-  const brief = async (arm = "index") => {
-    const read = async () => ({ sha: "f".repeat(40), date: "2026-11-06T00:00:00.000Z", truncated: false, files: Object.entries(armNamed(arm)!.files!(w)).map(([path, text]) => ({ path, text })) });
+  const brief = async (arm = "index", memory: MemorySize = "small") => {
+    const read = async () => ({ sha: "f".repeat(40), date: "2026-11-06T00:00:00.000Z", truncated: false, files: Object.entries(armNamed(arm)!.files!(w, memory)).map(([path, text]) => ({ path, text })) });
     const b = await buildBrief({ context: armNamed(arm)!.context!, model: null, role: "work", now: Date.parse("2026-11-06T12:00:00Z"), scope: { projectId: null, repo: "/srv/eval.git", ref: "main", profile: { name: "eval", version: 1 }, runId: null, agentId: null }, providers: new Map([["memory", { name: "memory", plugin: "context-memory", kinds: ["memory", "fact"], provider: memoryProvider({ read }) }]]) });
     return b.text;
   };
@@ -234,6 +241,11 @@ describe("step 6's questions: delivery and admission (ADR-025 §6.1, §6.3)", ()
     expect(items.find((i) => i.file.endsWith(`/${w.shipping.current.id.toLowerCase()}.md`))?.paths).toEqual(["src/shipping.js"]);
     expect(items.find((i) => i.file.endsWith("money-rounding.md"))?.paths).toEqual(["src/**"]);
     expect(briefItems(await brief("index-paths")).every((i) => i.paths.length === 0)).toBe(true);
+    // A project's memory: the rest of it in the same order (facts by authority, then newest; then lessons), every line.
+    const all = briefItems(await brief("index", "project"));
+    expect(all.length).toBe(5 + otherRecords(w).facts.length + otherRecords(w).lessons.length);
+    expect(all.filter((i) => i.type === "lesson").length).toBe(5);
+    expect(briefItems(await brief("index-paths", "project")).every((i) => i.paths.length === 0)).toBe(true);
   });
 
   test("inline: the first k items whole, fenced by the kernel's fence, then the task; a marker in an item can't close it", async () => {

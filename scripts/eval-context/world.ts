@@ -203,13 +203,61 @@ export function memoryFiles(w: World): Record<string, string> {
 const governs = (w: World, f: Fact): string[] =>
   [w.shipping.old.id, w.shipping.current.id].includes(f.id) ? ["src/shipping.js"] : [w.tiers.old.id, w.tiers.current.id].includes(f.id) ? ["src/discounts.js"] : f.id === w.active.id ? ["src/customers.js"] : [];
 
+/**
+ * The rest of a project's memory: records and lessons about everything the tasks don't touch (cut-off times, packaging,
+ * gift cards, the newsletter…), dated across the same months, some with the paths they apply to. A project keeps more
+ * than the handful of items a task needs, and the brief is task-independent (§6.1): with only those, "the brief's first
+ * k items" would be all of them for k = 3, which is the agents-md arm again, not inline items. Drawn from their own
+ * generator, so the world (its hash, its repository) is the step-0 one for a seed.
+ */
+export function otherRecords(w: World): { facts: Array<Fact & { paths: string[] }>; lessons: Array<{ slug: string; description: string; paths: string[]; text: string; at: string }> } {
+  const r = rng(w.seed ^ 0x5eed5);
+  const start = [w.shipping.old.date, w.tiers.old.date, w.meetings[0]!.date].sort()[0]!;
+  // Within the months the records span (the latest current one is at most 220 days after the first).
+  const on = () => addDays(start, r.int(0, 220));
+  const day = () => r.pick(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]);
+  const base = Number(w.shipping.old.id.slice(2)) + 100;
+  const topics: Array<[Fact["type"], string, string, string[]]> = [
+    ["decision", "Warehouse cut-off", `Orders placed before ${r.int(12, 16)}:00 ship the same working day.`, []],
+    ["policy", "Packaging standard", `Parcels over ${r.int(8, 15)} kg are packed in double-wall boxes.`, []],
+    ["decision", "Newsletter cadence", `The newsletter goes out every ${day()} morning.`, ["docs/**"]],
+    ["policy", "Product photos", `Product photos are ${r.pick([1600, 2000, 2400])} px on the long edge, in WebP.`, []],
+    ["policy", "Gift card expiry", `Gift cards expire ${r.pick([12, 18, 24, 36])} months after purchase.`, []],
+    ["policy", "Supplier payment terms", `Suppliers are paid net ${r.pick([14, 30, 45, 60])} days from the invoice date.`, []],
+    ["decision", "Inventory count", `Stock is counted on the last ${day()} of each quarter.`, []],
+    ["policy", "Site speed budget", `Product pages load in under ${r.pick([1200, 1500, 1800, 2500])} ms at the 75th percentile.`, []],
+    ["decision", "Support hours", `Support answers from 9:00 to ${r.int(16, 19)}:00 on weekdays.`, []],
+    ["decision", "Warehouse hiring", `New warehouse staff start on a Monday after a ${r.int(2, 5)}-day trial.`, []],
+    ["definition", "SKU format", `A SKU is two lowercase letters, a dash and ${r.int(3, 6)} digits.`, ["data/**"]],
+    ["definition", "Low stock", `An item is low on stock below ${r.int(3, 12)} units.`, []],
+    ["decision", "Carrier collection point", `Carriers collect from the back gate, door ${r.int(1, 6)}.`, ["data/carriers.json"]],
+    ["policy", "Meeting notes", "Every meeting gets a note in docs/meetings the same day, with its decisions numbered.", ["docs/meetings/**"]],
+  ];
+  const prefix = { decision: "D", policy: "P", definition: "DEF" } as const;
+  const facts = topics.map(([type, title, text, paths], i) => ({ id: `${prefix[type]}-${base + i * 7}`, type, title, date: on(), status: "stable" as const, supersedes: null, supersededBy: null, text, paths }));
+  const lessons = [
+    { slug: "meeting-note-names", description: "Meeting notes are docs/meetings/<date>-<topic>.md, one per meeting", paths: ["docs/meetings/**"], text: "Meeting notes are named docs/meetings/<date>-<topic>.md; search by topic, not by date.", at: on() },
+    { slug: "tests-no-deps", description: "npm test runs node --test over test/; the project has no dependencies", paths: ["test/**", "package.json"], text: "npm test runs node --test over test/*.test.js. The project has no dependencies; don't add one for a test.", at: on() },
+    { slug: "readme-order-shape", description: "README.md documents the order object; update it when the shape changes", paths: ["README.md"], text: "README.md documents the order object (lines, weightKg, customer). When the shape changes, update it in the same change.", at: on() },
+  ];
+  return { facts, lessons };
+}
+
+/** How much memory the index arms' project keeps: `small`, only what the tasks need (the five records' current three
+ *  and two lessons); `project` (the default), that and the rest of a project's memory (otherRecords). */
+export type MemorySize = "small" | "project";
+
 /** A project's hand-written `.capcomd/context/` (ADR-025 §3.3), for the index arms: the business records as the
  *  project's own facts (each its title for a description, supersession and the code it governs in its frontmatter) and
- *  the memory lessons. */
-export function contextFiles(w: World): Record<string, string> {
+ *  the memory lessons; with `project`, the rest of its memory too. */
+export function contextFiles(w: World, size: MemorySize = "project"): Record<string, string> {
   const out: Record<string, string> = {};
   for (const f of facts(w)) out[`.capcomd/context/facts/${f.type}s/${f.id.toLowerCase()}.md`] = factItem(f, { paths: governs(w, f) });
   for (const [p, s] of Object.entries(memoryFiles(w))) out[`.capcomd/context/${p}`] = s;
+  if (size === "small") return out;
+  const o = otherRecords(w);
+  for (const f of o.facts) out[`.capcomd/context/facts/${f.type}s/${f.id.toLowerCase()}.md`] = factItem(f, f.paths.length ? { paths: f.paths } : {});
+  for (const l of o.lessons) out[`.capcomd/context/memory/${l.slug}.md`] = `---\n${Bun.YAML.stringify({ id: l.slug, type: "lesson", status: "stable", description: l.description, generated: { by: "human:maintainer", method: "human-authored", at: l.at }, paths: l.paths }, null, 2).trimEnd()}\n---\n\n${l.text}\n`;
   return out;
 }
 
