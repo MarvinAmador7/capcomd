@@ -58,15 +58,16 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 describe("the out-of-process runtime", () => {
   test("starts the process with only the filtered environment; secrets come once in the handshake, never in env", async () => {
     const secret = "proc-gate-secret-value-0123456789";
-    Object.assign(process.env, { PROC_GATE_SECRET: secret, GITHUB_TOKEN: "ghp_notforplugins000000000000000000000", BOXD_API_KEY: "bxd_notforplugins", ANTHROPIC_API_KEY: "sk-ant-notforplugins", CAPCOMD_RPC_KEY: "kernel-only" });
+    Object.assign(process.env, { PROC_GATE_SECRET: secret, GITHUB_TOKEN: "ghp_notforplugins000000000000000000000", BOXD_API_KEY: "bxd_notforplugins", ANTHROPIC_API_KEY: "sk-ant-notforplugins", CAPCOMD_RPC_KEY: "kernel-only", NODE_OPTIONS: "--max-old-space-size=4096", LC_ALL: "C" });
     try {
       const b = await boot({ manifest: { config: { type: "object", additionalProperties: false, properties: { apiKey: { type: "string", "x-secret": true, default: { $secret: "env:PROC_GATE_SECRET" } }, channel: { type: "string", default: "#ops" } } } } });
       const [p] = b.host.list();
       expect(p).toMatchObject({ runtime: "process", source: "user", state: "active", hooks: ["merge.landing", "run.changed"] });
       const env = JSON.parse(readFileSync(join(b.data, "env.json"), "utf8")) as Record<string, string>;
       const allowed = new Set(["PATH", "HOME", "USER", "LANG", "TERM", "TMPDIR", "PROC_GATE_MARK", "CAPCOMD_PLUGIN_NAME", "CAPCOMD_PLUGIN_ROOT", "CAPCOMD_PLUGIN_DATA", "CAPCOMD_PLUGIN_SOCKET", "CAPCOMD_PLUGIN_SESSION", "CAPCOMD_PLUGIN_TOKEN", "CAPCOMD_PLUGIN_PROTOCOL"]);
-      // What the runtime itself sets (bun's own, the OS's) is the only other thing a process may see.
-      const extra = Object.keys(env).filter((k) => !allowed.has(k) && !/^(_|PWD|OLDPWD|SHLVL|BUN_[A-Z_]*|__CF[A-Z_]*|COMMAND_MODE|LC_[A-Z]+|NODE_[A-Z_]*)$/.test(k));
+      // What the OS itself may set is the only other thing a process may see: not the daemon's BUN_OPTIONS or NODE_*,
+      // which the test preload sets in the daemon (the guard), nor its locale beyond LANG.
+      const extra = Object.keys(env).filter((k) => !allowed.has(k) && !/^(_|PWD|OLDPWD|SHLVL|__CF[A-Z_]*)$/.test(k));
       expect(extra).toEqual([]);
       expect(env).toMatchObject({ PROC_GATE_MARK: "from the manifest", CAPCOMD_PLUGIN_NAME: p!.name, CAPCOMD_PLUGIN_PROTOCOL: "1", CAPCOMD_PLUGIN_TOKEN: "(set)", CAPCOMD_PLUGIN_DATA: b.data });
       for (const k of ["GITHUB_TOKEN", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "CAPCOMD_RPC_KEY", "CAPCOMD_HOME", "CAPCOMD_ENDPOINT", "PROC_GATE_SECRET"]) expect(env[k]).toBeUndefined();
@@ -79,7 +80,7 @@ describe("the out-of-process runtime", () => {
       expect(JSON.stringify(b.host.detail(p!.name))).not.toContain(secret);
       expect(b.events.map((e) => e.type)).toEqual(expect.arrayContaining(["plugin.process_changed", "plugin.loaded"]));
       expect(b.events.find((e) => e.type === "plugin.loaded")!.data).toMatchObject({ runtime: "process" });
-    } finally { for (const k of ["PROC_GATE_SECRET", "GITHUB_TOKEN", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "CAPCOMD_RPC_KEY"]) delete process.env[k]; }
+    } finally { for (const k of ["PROC_GATE_SECRET", "GITHUB_TOKEN", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "CAPCOMD_RPC_KEY", "NODE_OPTIONS", "LC_ALL"]) delete process.env[k]; }
   }, 30_000);
 
   test("what the process writes is the daemon's log, with its token and its secrets redacted", async () => {
