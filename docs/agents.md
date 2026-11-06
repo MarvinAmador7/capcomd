@@ -233,8 +233,10 @@ Context: loaded 2 of 2 lines (…); groundray at 9f8e7d6c5b4a, modified 2026-10-
   own git access (your forge login or git's credential helpers), as it does the project's repository; no credential
   enters the sandbox, and a URL with one in it is refused.
 - One brain per agent: a profile names one, and a provider is never asked twice for one brief.
-- A restricted brain (its bundle's `default_sensitivity: restricted`, or an item marked `sensitivity: restricted`) is
-  refused by `brain add`, and an agent is never briefed from one: keep restricted knowledge outside capcomd.
+- A restricted brain (its bundle's `default_sensitivity: restricted`, or any Markdown file under it marked
+  `sensitivity: restricted`) is refused by `brain add`, and an agent is never briefed from one: keep restricted knowledge
+  outside capcomd. So is a brain capcomd can't check whole (a Markdown file over 4 MiB, more than 2000 of them).
+- A repository given as a path is recorded as an absolute path.
 - Reviewers get the brain's facts too (only memory is left out for them). Deprecated and superseded facts, and those
   past their `stale_after`, leave the brief; a fact without `status` counts as a draft.
 - Read-only for now: agents propose changes to a brain in a later release (through the brain's own pull requests).

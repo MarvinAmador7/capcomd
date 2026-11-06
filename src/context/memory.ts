@@ -18,19 +18,20 @@ export const CONTEXT_DIR = ".capcomd/context/";
 export const MEMORY_MAX_FILES = 2000, MEMORY_MAX_BYTES = 64 * 1024;
 
 /** A repository's files under `prefix` (`.capcomd/context/` unless said) at a branch's tip or a commit
- *  (src/api/run-files.ts FilesMirror.readTree); `only`, when given, picks the paths worth reading. */
-export type TreeReader = (o: { remote: string; at: { branch: string } | { sha: string }; runId: string | null; prefix?: string; only?: (path: string) => boolean }) =>
+ *  (src/api/run-files.ts FilesMirror.readTree); `only`, when given, picks the paths worth reading; a file over
+ *  `maxBytes` (MEMORY_MAX_BYTES unless said) is listed with `text: null`. */
+export type TreeReader = (o: { remote: string; at: { branch: string } | { sha: string }; runId: string | null; prefix?: string; only?: (path: string) => boolean; maxBytes?: number }) =>
   Promise<{ sha: string; date: string; files: Array<{ path: string; text: string | null }>; truncated: boolean } | { error: string }>;
 
 /** The kernel's reader: a repository through the daemon host's files mirror, by its URL (src/merge/host-git.ts is the
  *  only network git; the mirror fetches through it), kept where the run's settings keep capcomd's clones. */
-export const mirrorReader: TreeReader = async ({ remote, at, runId, prefix, only }) => {
+export const mirrorReader: TreeReader = async ({ remote, at, runId, prefix, only, maxBytes }) => {
   const { runEnv } = await import("../merge/run-config");
   const { loadMergeConfig } = await import("../merge/config");
   const cfg = loadMergeConfig({ ...(await runEnv(runId ?? undefined)), CAPCOMD_REPO: remote });
   if (!cfg) return { error: "no repository" };
   const { mirrorFor } = await import("../api/run-files");
-  return mirrorFor({ remote, target: cfg.target, workdir: cfg.workdir }).readTree(at, prefix ?? CONTEXT_DIR, { maxFiles: MEMORY_MAX_FILES, maxBytes: MEMORY_MAX_BYTES, ...(only ? { only } : {}) });
+  return mirrorFor({ remote, target: cfg.target, workdir: cfg.workdir }).readTree(at, prefix ?? CONTEXT_DIR, { maxFiles: MEMORY_MAX_FILES, maxBytes: maxBytes ?? MEMORY_MAX_BYTES, ...(only ? { only } : {}) });
 };
 
 /** One item as the parser read it: its index line, and what `get` and `search` need besides. */

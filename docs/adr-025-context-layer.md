@@ -593,9 +593,12 @@ at start"; "memory lands through a reviewed merge"; "business context from a gro
   process preparing the run's agents (the daemon, whatever its directory) reads them from the run and every agent of the
   run reads the commit the run started with, even after the brain is mapped again.
 - **A restricted brain**, refused at `brain add` and again at every resolve (a later commit could become one): its
-  bundle's `.core-kb.yaml` says `default_sensitivity: restricted`, or one of its items says `sensitivity: restricted`
+  bundle's `.core-kb.yaml` says `default_sensitivity: restricted`, or one of its files says `sensitivity: restricted`
   (groundray keeps restricted material in a separately controlled repository; capcomd would copy it into sandboxes).
-  `confidential` is not refused: a confidential brain is its own repository by groundray's rule already.
+  Every Markdown file under the bundle is checked, an item or not, in any case and as text (a frontmatter whose YAML
+  won't parse still counts), one too big to parse read again up to 4 MiB; a brain capcomd can't check whole (a file over
+  that, more files than it reads) is refused the same way. `confidential` is not refused: a confidential brain is its
+  own repository by groundray's rule already.
 - **Any OKF producer.** groundray's `brain.yaml` (closed schema 1) is checked when present, and the brain's identity (its
   `id` and `slug`) must stay what it was mapped as; without one the bundle is the `--bundle` directory (default
   `knowledge`). Items are Markdown files under the bundle with a `type` (OKF's one required field), never `index.md` or

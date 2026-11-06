@@ -8,14 +8,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, relative } from "path";
 import type { ContextProvider, ContextScope } from "../../packages/plugin/src/context-layer";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { testkit } from "../../packages/plugin/src/testkit";
 import { conformanceCall } from "../../packages/plugin/src/conformance";
 import { buildBrief, type BriefInput } from "../../src/context/brief";
 import { addBrain, groundrayProvider, listBrains, parseBrainManifest, readBrain, removeBrain } from "../../src/context/groundray";
-import { CONTEXT_DIR, memoryProvider, mirrorReader, type TreeReader } from "../../src/context/memory";
+import { CONTEXT_DIR, MEMORY_MAX_BYTES, memoryProvider, mirrorReader, type TreeReader } from "../../src/context/memory";
 import type { ActiveProvider } from "../../src/context/providers";
 import type { ContextSettings } from "../../src/context/project";
 import { loadAgentConfig } from "../../src/agents/config";
@@ -51,15 +51,17 @@ const brain = (slug: string, id: string, o: { sensitivity?: string; restrictedIt
 });
 
 /** A repository's tree as the files mirror would read it, at `sha`. */
-function treeOf(repos: Record<string, { sha: string; files: Record<string, string> }>, o: { delayMs?: number; reads?: string[] } = {}): TreeReader {
-  return async ({ remote, at, prefix, only }) => {
+function treeOf(repos: Record<string, { sha: string; files: Record<string, string> }>, o: { delayMs?: number; reads?: string[]; truncated?: boolean } = {}): TreeReader {
+  return async ({ remote, at, prefix, only, maxBytes }) => {
     o.reads?.push(`${remote} ${"sha" in at ? at.sha : at.branch} ${prefix}`);
     if (o.delayMs) await Bun.sleep(o.delayMs);
     const r = repos[remote];
     if (!r || ("sha" in at && at.sha !== r.sha)) return { error: "not found on the remote" };
     const p = prefix ?? CONTEXT_DIR;
-    const files = Object.entries(r.files).filter(([path]) => (path === p || path.startsWith(p)) && (!only || only(path))).map(([path, text]) => ({ path, text }));
-    return { sha: r.sha, date: "2026-11-01T00:00:00.000Z", truncated: false, files };
+    // As the files mirror reads them: a file over maxBytes is listed without its text.
+    const files = Object.entries(r.files).filter(([path]) => (path === p || path.startsWith(p)) && (!only || only(path)))
+      .map(([path, text]) => ({ path, text: Buffer.byteLength(text) > (maxBytes ?? MEMORY_MAX_BYTES) ? null : text }));
+    return { sha: r.sha, date: "2026-11-01T00:00:00.000Z", truncated: !!o.truncated, files };
   };
 }
 const mapping = (repo: string, sha: string, slug: string, id: string) => ({ repo, branch: "main", commit: sha, slug, id });
@@ -103,13 +105,50 @@ describe("the context-groundray built-in (ADR-025 §11.2)", () => {
     expect(by["acme refund window"]!.line).toMatchObject({ kind: "fact", type: "policy", path: "knowledge/policies/refunds.md", authority: { status: "stable", staleAfter: "2027-04-01T00:00:00.000Z" }, modified: "2026-10-01T00:00:00.000Z" });
     expect(by["acme refund window"]!.authority.verified).toEqual([{ by: "human:fixture-reviewer", at: "2026-10-02T00:00:00.000Z" }]);
     expect(by["Contribution margin"]).toMatchObject({ method: "agent-generated", by: "openai/codex", confidence: { level: "medium" } });
-    for (const [o, why] of [[{ sensitivity: "restricted" }, "its bundle's default sensitivity is restricted"], [{ restrictedItem: true }, "1 of its items is marked restricted"]] as const) {
+    for (const [o, why] of [[{ sensitivity: "restricted" }, "its bundle's default sensitivity is restricted"], [{ restrictedItem: true }, "1 of its files is marked restricted"]] as const) {
       const r = await readBrain(treeOf({ "/srv/x.git": { sha: A, files: brain("x-co", ACME_ID, o) } }), "/srv/x.git", { sha: A });
       expect("error" in r ? r.error : r.restricted).toBe(why);
     }
     // Any OKF producer: no brain.yaml, a bundle of items in a directory.
     const okf = await readBrain(treeOf({ "/srv/okf.git": { sha: A, files: { "kb/a.md": fm({ type: "concept", id: "a", description: "A fact" }, "A.") } } }), "/srv/okf.git", { sha: A }, { bundle: "kb" });
     expect("error" in okf ? okf.error : okf.parsed.items.map((i) => i.line.path)).toEqual(["kb/a.md"]);
+  });
+
+  test("restricted is read from every file the sandbox would get, an item or not; a file or a tree capcomd can't check is refused too", async () => {
+    const restrictedOf = async (files: Record<string, string>, o: { truncated?: boolean } = {}) => {
+      const r = await readBrain(treeOf({ "/srv/x.git": { sha: A, files: { ...brain("x-co", ACME_ID), ...files } } }, o), "/srv/x.git", { sha: A });
+      return "error" in r ? r.error : { restricted: r.restricted, unchecked: r.unchecked };
+    };
+    const marked = { restricted: "1 of its files is marked restricted", unchecked: null };
+    // Not an item (no type, an id seen already, index.md), the value in another case, a frontmatter YAML won't parse.
+    expect(await restrictedOf({ "knowledge/raw/no-type.md": fm({ id: "raw", sensitivity: "restricted" }, "x") })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/policies/zz-again.md": fm({ type: "policy", id: "refunds-x-co", sensitivity: "restricted" }, "x") })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/index.md": "---\nsensitivity: restricted\n---\n# Index\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/a.md": fm({ type: "concept", id: "a", sensitivity: "Restricted" }, "x") })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/a.md": "---\ntype: concept\ntitle: a\ntitle: twice\nsensitivity: restricted\n---\nx\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/.core-kb.yaml": coreKb("RESTRICTED") })).toEqual({ restricted: "its bundle's default sensitivity is restricted", unchecked: null });
+    // A body that talks about sensitivity isn't a marking; confidential is allowed.
+    expect(await restrictedOf({ "knowledge/a.md": fm({ type: "concept", id: "a", sensitivity: "confidential" }, "sensitivity: restricted") })).toEqual({ restricted: null, unchecked: null });
+    // A file too big to parse is read again for the check; one too big for that, or a tree read in part, isn't known.
+    const pad = (n: number) => "x".repeat(n);
+    expect(await restrictedOf({ "knowledge/big.md": fm({ type: "concept", id: "big", sensitivity: "restricted" }, pad(MEMORY_MAX_BYTES)) })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/big.md": fm({ type: "concept", id: "big" }, pad(MEMORY_MAX_BYTES)) })).toEqual({ restricted: null, unchecked: null });
+    expect(await restrictedOf({ "knowledge/huge.md": fm({ type: "concept", id: "huge" }, pad(4 * 1024 * 1024)) })).toEqual({ restricted: null, unchecked: "1 of its files is over 4 MiB" });
+    expect(await restrictedOf({}, { truncated: true })).toEqual({ restricted: null, unchecked: "it has more than 2000 files under knowledge/, more than capcomd reads" });
+    // Resolve refuses either.
+    const huge = { "/srv/acme.git": { sha: A, files: { ...brain("acme", ACME_ID), "knowledge/huge.md": pad(4 * 1024 * 1024 + 1) } } };
+    expect((await buildBrief(input({}, provider({ repos: huge })))).providers[0]).toEqual({ name: "groundray", state: "skipped", reason: "not configured" });
+  });
+
+  test("two brains in one repository at one commit (two bundles) are read apart", async () => {
+    const repos = { "/srv/mono.git": { sha: A, files: { "sales/a.md": fm({ type: "concept", id: "a", description: "SALES-ONLY fact" }, "s"), "eng/a.md": fm({ type: "concept", id: "a", description: "ENG-ONLY fact" }, "e") } } };
+    const at = (bundle: string) => ({ repo: "/srv/mono.git", branch: "main", commit: A, slug: bundle, id: "", bundle });
+    const p = provider({ repos, settings: { brains: { sales: at("sales"), eng: at("eng") } } });
+    const brief = async (name: string) => (await buildBrief(input({ context: { providers: [{ name: "groundray", brain: name }] } }, p))).text;
+    expect(await brief("sales")).toContain("SALES-ONLY");
+    const eng = await brief("eng");
+    expect(eng).toContain("ENG-ONLY");
+    expect(eng).not.toContain("SALES-ONLY");
   });
 
   test("the brief: the brain's facts by authority, deprecated left out, each pointing at the file in the agent's sandbox, no body; the bundle it cites", async () => {
@@ -227,6 +266,10 @@ describe("mapping a brain (capcomd context brain add) from a real repository", (
     expect(removeBrain("acme", project).removed.repo).toBe(r.bare);
     expect(listBrains(project).brains).toEqual({});
     expect(existsSync(join(r.bare, "HEAD"))).toBe(true);
+    // A path given relative to the project is kept absolute (the daemon reads it from elsewhere), so it maps the same.
+    const rel = await addBrain({ name: "acme", repo: relative(project, r.bare), cwd: project, read, defaultBranch: async () => "main" });
+    expect(rel.brain.repo).toBe(r.bare);
+    expect((await buildBrief(input({}, groundrayProvider({ read, settings })))).text).toContain("A newer fact");
   }, 60_000);
 
   test("a restricted brain is refused at brain add, and nothing is kept", async () => {
@@ -236,7 +279,7 @@ describe("mapping a brain (capcomd context brain add) from a real repository", (
       const e = await addBrain({ name: "vault", repo: r.bare, cwd: project, read, defaultBranch: async () => "main" }).then(() => null, (x: unknown) => x);
       expect(e).toBeInstanceOf(RelayError);
       expect(e).toMatchObject({ code: "config", reason: "restricted" });
-      expect((e as Error).message).toMatch(/^brain vault is restricted \((its bundle's default sensitivity is restricted|1 of its items is marked restricted)\), so capcomd won't add it/);
+      expect((e as Error).message).toMatch(/^brain vault is restricted \((its bundle's default sensitivity is restricted|1 of its files is marked restricted)\), so capcomd won't add it/);
       expect(readFileSync(join(project, ".capcomd", "config.json"), "utf8")).toBe(before);
     }
   }, 60_000);

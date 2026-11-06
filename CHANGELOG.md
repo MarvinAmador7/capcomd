@@ -11,8 +11,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   list|remove`). A profile with `context: {providers: [{name: groundray, brain: <name>}]}` briefs its agents with one line
   per fact of that brain (a decision, a policy, a definition…), and each agent finds the brain's files at that commit in
   its sandbox, read-only, where the lines point. A run reads the commit the brain was pinned at when the run started.
-  A restricted brain (`default_sensitivity: restricted`, or an item marked restricted) is refused by `brain add` and
-  never briefed; a URL with a credential in it is refused. Reads need no groundray CLI. See docs/agents.md, "Business
+  A restricted brain (`default_sensitivity: restricted`, or any file under its bundle marked restricted) is refused by
+  `brain add` and never briefed, as is one too big to check (a file over 4 MiB, more than 2000 files); a URL with a
+  credential in it is refused. Reads need no groundray CLI. See docs/agents.md, "Business
   knowledge: a groundray brain".
 - The context brief names a provider a profile lists twice once (`skipped (named twice)` for the other), and a line's
   file path may now be up to 320 characters.

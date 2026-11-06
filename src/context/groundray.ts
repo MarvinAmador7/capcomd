@@ -16,13 +16,14 @@
 // host git, src/merge/transfer.ts `sendTreeAt`), at `<bundleRoot>/groundray/<name>`, which is where each index line's
 // path points. The write path (proposals as brain pull requests through the groundray CLI) is ADR-025 step 5.
 import { existsSync } from "fs";
+import { resolve as resolvePath } from "path";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { SeamCall } from "../../packages/plugin/src/seams";
 import { bundleDir, type ContextDescriptor, type ContextHit, type ContextItem, type ContextProvider, type ContextRef, type ContextScope, type ContextSearch } from "../../packages/plugin/src/context-layer";
 import type { ContextBrain } from "../config/store";
 import { RelayError } from "../core/errors";
 import { assertRemoteUrl, inlineCredential } from "../merge/host-git";
-import { aborted, classifyContextError, contextItem, mirrorReader, parseBundle, searchItems, type Parsed, type TreeReader } from "./memory";
+import { aborted, classifyContextError, contextItem, MEMORY_MAX_FILES, mirrorReader, parseBundle, searchItems, type Parsed, type TreeReader } from "./memory";
 import { contextSettings, type ContextSettings } from "./project";
 
 export const GROUNDRAY = "groundray";
@@ -68,6 +69,8 @@ export interface BrainTree {
   sensitivity: string | null;
   /** Why it is restricted (refused), or null. */
   restricted: string | null;
+  /** Why capcomd couldn't check that it isn't (refused too), or null. */
+  unchecked: string | null;
   /** Its items, at their paths in the repository. */
   parsed: Parsed;
   truncated: boolean;
@@ -92,16 +95,38 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
   if ("error" in t) return t;
   const parsed = parseBundle(t.files, { revision: head.sha, date: head.date }, { provider: GROUNDRAY, root: `${bundle}/`, kindOf: () => "fact", shown: (p) => p, defaultType: () => "fact", requireType: true });
   if (!yaml && !parsed.items.length) return { error: `no brain.yaml, and no OKF items under ${bundle}/` };
-  const cfg = t.files.find((f) => f.path === config);
+  // The whole tree is placed in agents' sandboxes, so every file read is checked, an item or not (no `type`, an id seen
+  // already, index.md), as text (a frontmatter whose YAML won't parse still says it); one too big to parse is read again
+  // for the check alone. A tree capcomd couldn't read whole isn't known not to be restricted.
+  let checked = t.files;
+  const big = new Set(t.files.filter((f) => f.text === null).map((f) => f.path));
+  if (big.size) {
+    const again = await read({ remote, at: { sha: head.sha }, runId, prefix: `${bundle}/`, only: (p) => big.has(p), maxBytes: BRAIN_CHECK_MAX_BYTES });
+    if ("error" in again) return again;
+    checked = [...t.files.filter((f) => f.text !== null), ...again.files];
+  }
+  const cfg = checked.find((f) => f.path === config);
   let sensitivity: string | null = null;
   if (cfg?.text) {
     const { parse } = require("yaml") as typeof import("yaml");
-    try { const c = parse(cfg.text, { maxAliasCount: 0, prettyErrors: false }); if (isMap(c) && typeof c.default_sensitivity === "string") sensitivity = c.default_sensitivity; } catch { /* not YAML: says nothing */ }
+    try { const c = parse(cfg.text, { maxAliasCount: 0, prettyErrors: false }); if (isMap(c) && typeof c.default_sensitivity === "string") sensitivity = c.default_sensitivity.trim(); } catch { /* not YAML: its line, below */ }
+    if (sensitivity === null && /^default_sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(cfg.text)) sensitivity = "restricted";
   }
-  const marked = parsed.items.filter((i) => i.sensitivity === "restricted").length;
-  const restricted = sensitivity === "restricted" ? "its bundle's default sensitivity is restricted"
-    : marked ? `${marked} of its items ${marked === 1 ? "is" : "are"} marked restricted` : null;
-  return { commit: head.sha, date: head.date, manifest, bundle, sensitivity, restricted, parsed, truncated: t.truncated };
+  const marked = checked.filter((f) => f.text !== null && f.path !== config && marksRestricted(f.text)).length;
+  const restricted = sensitivity?.toLowerCase() === "restricted" ? "its bundle's default sensitivity is restricted"
+    : marked ? `${marked} of its files ${marked === 1 ? "is" : "are"} marked restricted` : null;
+  const unread = checked.filter((f) => f.text === null).length;
+  const unchecked = t.truncated ? `it has more than ${MEMORY_MAX_FILES} files under ${bundle}/, more than capcomd reads`
+    : unread ? `${unread} of its files ${unread === 1 ? "is" : "are"} over ${BRAIN_CHECK_MAX_BYTES / 1024 / 1024} MiB` : null;
+  return { commit: head.sha, date: head.date, manifest, bundle, sensitivity, restricted, unchecked, parsed, truncated: t.truncated };
+}
+
+/** The most capcomd reads of one file of a brain to check its sensitivity (an item is parsed up to MEMORY_MAX_BYTES). */
+const BRAIN_CHECK_MAX_BYTES = 4 * 1024 * 1024;
+/** Whether a file's frontmatter says `sensitivity: restricted` (OKF's handling hint), in any case. */
+function marksRestricted(text: string): boolean {
+  const m = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+  return !!m && /^sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(m[1]!);
 }
 
 /** A project's mapping, as `run new` recorded it (or the file has it): checked, since the file is hand-editable. */
@@ -120,7 +145,7 @@ interface Handle { name: string; remote: string; commit: string; branch: string;
 export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: string | null) => Promise<ContextSettings> } = {}): ContextProvider {
   const read = o.read ?? mirrorReader;
   const settingsOf = o.settings ?? contextSettings;
-  /** Brains read, by (repository, commit): a commit's tree never changes. */
+  /** Brains read, by (repository, commit, bundle): a commit's tree never changes. */
   const cache = new Map<string, BrainTree>();
   const reading = new Map<string, Promise<BrainTree | { error: string }>>();
   const handleOf = (h: string): Handle => {
@@ -130,7 +155,7 @@ export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: str
   /** The brain at the mapping's commit: from memory, else read once however many agents ask at once. A remote that won't
    *  serve a commit by name is fetched at the mapped branch, which has it. */
   const brainAt = async (m: { repo: string; commit: string; branch: string; bundle?: string }, runId: string | null): Promise<BrainTree> => {
-    const key = `${m.repo}\0${m.commit}`;
+    const key = `${m.repo}\0${m.commit}\0${m.bundle || "knowledge"}`;
     const had = cache.get(key);
     if (had) return had;
     let p = reading.get(key);
@@ -174,6 +199,7 @@ export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: str
       // The repository at the pinned commit must still be the brain that was mapped, and still not restricted.
       if (t.manifest ? t.manifest.id !== m.id || t.manifest.slug !== m.slug : !!m.id) throw new PluginError("invalid", `the repository mapped as brain ${brain} isn't the brain it was at ${m.commit.slice(0, 12)}`);
       if (t.restricted) throw new PluginError("invalid", `brain ${brain} is restricted at ${m.commit.slice(0, 12)}: ${t.restricted}`);
+      if (t.unchecked) throw new PluginError("invalid", `brain ${brain} can't be checked at ${m.commit.slice(0, 12)}: ${t.unchecked}`);
       const dir = scope.bundleRoot ? bundleDir(scope.bundleRoot, GROUNDRAY, brain) : null;
       const h: Handle = { name: brain, remote: m.repo, commit: t.commit, branch: m.branch, bundle: t.bundle, dir };
       return { handle: JSON.stringify(h), revision: t.commit, ...(dir ? { bundle: { remote: m.repo, branch: m.branch, commit: t.commit, name: brain } } : {}) };
@@ -242,7 +268,10 @@ export async function addBrain(o: { name: string; repo: string; branch?: string;
   const env = o.env ?? process.env;
   const path = projectFile(o.cwd ?? process.cwd(), env);
   if (!BRAIN_NAME.test(o.name)) throw new RelayError("usage", `brain name ${JSON.stringify(o.name).slice(0, 80)} isn't lowercase letters, digits, - and _`, "Name it as profiles will: capcomd context brain add acme <repository>.");
-  const repo = o.repo.trim();
+  // A path (git's rule: no `scheme://`, no `host:` before its first `/`) is kept absolute: the mapping is read by
+  // processes that run elsewhere (the daemon), and git resolves a relative one against the host's mirror.
+  const given = o.repo.trim();
+  const repo = !/^[a-z][a-z0-9+.-]*:\/\//i.test(given) && !/^[^/]*:/.test(given) ? resolvePath(o.cwd ?? process.cwd(), given) : given;
   if (inlineCredential(repo)) throw new RelayError("usage", "the repository URL has a credential in it", "Give its URL without one: capcomd's host git uses your forge login or git's own credential helpers.");
   try { assertRemoteUrl(repo); } catch (e) { throw new RelayError("usage", (e as Error).message, "Give the brain's repository URL or path."); }
   if (o.branch !== undefined && !BRANCH.test(o.branch)) throw new RelayError("usage", `bad --branch ${JSON.stringify(o.branch).slice(0, 80)}`, "Name a branch, e.g. --branch main.");
@@ -254,6 +283,7 @@ export async function addBrain(o: { name: string; repo: string; branch?: string;
   const t = await readBrain(o.read ?? mirrorReader, repo, { branch }, o.bundle ? { bundle: o.bundle } : {});
   if ("error" in t) throw new RelayError("config", `can't read brain ${o.name} from ${repo} (${branch}): ${t.error}`, "Check the repository and branch: it needs groundray's brain.yaml, or an OKF bundle (--bundle <dir>).");
   if (t.restricted) throw new RelayError("config", `brain ${o.name} is restricted (${t.restricted}), so capcomd won't add it: its files would be copied into agents' sandboxes`, "Keep restricted knowledge in its own controlled repository, outside capcomd; map a brain that isn't restricted.", { code: "restricted" });
+  if (t.unchecked) throw new RelayError("config", `capcomd can't check that brain ${o.name} isn't restricted (${t.unchecked}), so it won't add it: its files would be copied into agents' sandboxes`, "Keep a brain to at most 2000 Markdown files of at most 4 MiB each (split a bigger one).", { code: "unchecked" });
   if (previous && t.manifest && (previous.id !== t.manifest.id || previous.slug !== t.manifest.slug)) throw new RelayError("conflict", `the repository mapped as brain ${o.name} now holds another brain (${t.manifest.slug})`, `Remove it first: capcomd context brain remove ${o.name}`);
   const brain: ContextBrain = {
     repo, branch, commit: t.commit, slug: t.manifest?.slug ?? o.name, id: t.manifest?.id ?? "", ...(t.manifest ? { title: t.manifest.name } : {}),
