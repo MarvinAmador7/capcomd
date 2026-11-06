@@ -324,10 +324,12 @@ if (a.evidence) {
     for (let i = 2; existsSync(join(dir, name)); i++) name = `${date}-${i}.json`;
     writeFileSync(join(dir, name), `${JSON.stringify(r, null, 2)}\n`);
     // The limits file: D4's starting values the first time; then what this run decided (inline items, triggered
-    // injection), when it ran the arms that decide it.
+    // injection), when it ran the arms that decide it on a project's memory (a `small` one holds only what the tasks
+    // need, so its first k items are the answers: it is reported, never decides).
     const lf = join(dir, "limits.json");
     const prev = existsSync(lf) ? JSON.parse(readFileSync(lf, "utf8")) : startingLimits(r.model);
-    writeFileSync(lf, `${JSON.stringify(decidedLimits(prev, r.admission, name), null, 2)}\n`);
+    const next = `${JSON.stringify(MEMORY === "project" ? decidedLimits(prev, r.admission, name) : prev, null, 2)}\n`;
+    if (!existsSync(lf) || readFileSync(lf, "utf8") !== next) writeFileSync(lf, next);
     log(`wrote ${join(dir, name)}`);
   }
   // The world itself isn't kept with the evidence: the seed and the generator's commit give it back (world.yaml is in
