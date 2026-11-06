@@ -19,8 +19,10 @@ process.env.CAPCOMD_HARNESS_SOCKET = privateHarnessSocket();
 // their own still set one.
 const scratch = mkdtempSync(join(tmpdir(), "capcomd-test-home-"));
 process.env.CAPCOMD_HOME = scratch;
-// The host's token signing key is read from ~/.capcomd/rpc.key whatever CAPCOMD_HOME says (src/subagents/token.ts).
-process.env.CAPCOMD_RPC_KEY_FILE ??= join(scratch, "rpc.key");
+// The host's token signing key is a file in that home too (<home>/rpc.key, src/subagents/token.ts), unless a key file
+// from the environment (a live e2e script's) names another: tests sign with a key of their own.
+delete process.env.CAPCOMD_RPC_KEY_FILE;
+delete process.env.RELAY_RPC_KEY_FILE;
 // No endpoint means the default, a developer's daemon on :6420: a test that forgets its own engine gets a closed port
 // instead (the discard port; nothing listens there) and fails as "engine unreachable". And nothing starts an engine for
 // it there: `capcomd mcp` starts one when nothing answers (src/core/engine-start.ts), detached, outliving the test. The

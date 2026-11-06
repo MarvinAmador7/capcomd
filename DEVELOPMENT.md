@@ -22,10 +22,10 @@ Run the CLI from the checkout with `bun capcomd â€¦` (or `bun src/cli/index.ts â
 
 A git checkout keeps state next to the code: `.relay/` (auth profiles, env snapshot ledger, boxd VM ledger, run
 logs, driver pids), `.traces/` (spans) and `.capcomd/agents.json`. An installed CLI, or any CLI with
-`CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`). The daemon's `harness-state.json` and the
-engine autostart's `engine.log` follow the same rule: `.relay/` in a checkout, the top of `~/.capcomd` otherwise. `src/utils/home.ts` decides; the
+`CAPCOMD_HOME` set, uses `~/.capcomd` (`state/`, `traces/`, `agents.json`). The daemon's `harness-state.json`, the
+engine autostart's `engine.log` and the agent token signing key `rpc.key` follow the same rule: `.relay/` in a checkout, the top of `~/.capcomd` otherwise. `src/utils/home.ts` decides; the
 per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_LEDGER`, `CAPCOMD_TRACE_DIR`,
-`CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`, `CAPCOMD_RUNS_INDEX`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
+`CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`, `CAPCOMD_RUNS_INDEX`, `CAPCOMD_RPC_KEY_FILE`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
 
 The Rivet engine's data is always under the capcomd home (`~/.capcomd`, or `$CAPCOMD_HOME`), checkout or not, one
 directory per port (`src/engine/data.ts`; `CAPCOMD_ENGINE_DATA` names another): `engine/<port>/db` (RocksDB),
