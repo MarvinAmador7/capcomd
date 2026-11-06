@@ -1,5 +1,6 @@
-// capcomd in Hermes (Nous Research's hermes-agent): `capcomd setup agent` registers `capcomd mcp` as an MCP server in
-// Hermes's config.yaml and installs the capcomd skills in its skills directory; `capcomd setup check` reports it.
+// capcomd in Hermes (Nous Research's hermes-agent), the built-in front door front-hermes's config writer (./hermes.ts;
+// plugin API §17.1): `capcomd setup agent` and `capcomd hermes add` register `capcomd mcp` as an MCP server in Hermes's
+// config.yaml and install the capcomd skills in its skills directory; `capcomd setup check` and `capcomd hermes` report it.
 // What Hermes reads (checked against NousResearch/hermes-agent@e5ea5fd, 2026-10-27):
 //   - home: $HERMES_HOME, else ~/.hermes, or ~/.hermes/profiles/<name> when ~/.hermes/active_profile names one;
 //   - MCP servers: `mcp_servers.<name>` in <home>/config.yaml ({command, args, env, cwd, trust, enabled, timeout, …}); a

@@ -73,18 +73,27 @@ export interface CliCommandSpec {
   summary: string;
   /** Usage lines for `--help`. */
   usage: string[];
-  /** Runs with the caller's principal (§11.2). `args` are the words after the command name; `flags` the parsed `--k v` pairs. */
-  run(input: { args: string[]; flags: Record<string, string | boolean>; json: boolean; principal: Principal; signal: AbortSignal }): Promise<Envelope>;
+  /** Runs with the caller's principal (§11.2). `args` are the words after the command name; `flags` the parsed `--k v`
+   *  pairs (a flag given more than once: a list). Answers with an envelope, which the CLI prints (§4.7.1). */
+  run(input: { args: string[]; flags: Record<string, string | boolean | string[]>; json: boolean; principal: Principal; signal: AbortSignal }): Promise<Envelope | CliExit>;
 }
+/** A built-in front door's own answer (§4.7.1): the kernel's commands print text, stream and prompt themselves, then
+ *  exit with `exit`. The dispatcher takes it from those alone; from any other plugin it is an error. */
+export interface CliExit { exit: number }
 export interface CliService { command(spec: CliCommandSpec): Disposable }
 
 export interface McpToolSpec {
   /** Declared in `contributes.mcp`; registered as `capcomd_<plugin>_<name>`. */
   name: string;
+  /** A short human title, for clients that show one. */
+  title?: string;
   description: string;
-  /** JSON Schema (draft 2020-12) of the arguments. */
+  /** JSON Schema of the arguments (an object schema, draft 2020-12 or draft-07): listed as it is; the arguments are
+   *  checked against it before `run`, and properties it doesn't name are dropped (§4.7.2). */
   inputSchema: Record<string, unknown>;
-  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean };
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
+  /** The tool's listed `_meta`, e.g. `{"anthropic/requiresUserInteraction": true}` so a client asks its person first. */
+  _meta?: Record<string, unknown>;
   run(input: { args: Record<string, unknown>; principal: Principal; signal: AbortSignal }): Promise<Envelope>;
 }
 export interface McpService {
