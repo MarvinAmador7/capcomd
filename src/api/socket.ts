@@ -1,7 +1,7 @@
 // harness.v1 transport: a 0600 Unix socket (docs/harness-architecture.md §6.3 option A).
 // Path precedence: --harness-socket flag > CAPCOMD_HARNESS_SOCKET > config `harness.socket` > ~/.capcomd/harness.sock.
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { capcomdHome } from "../utils/home";
 import type { CapcomdConfig } from "../config/store";
 
@@ -9,6 +9,12 @@ export function harnessSocketPath(o: { flag?: string; env?: Record<string, strin
 	const env = o.env ?? process.env;
 	const p = o.flag || env.CAPCOMD_HARNESS_SOCKET || o.config?.harness?.socket;
 	return p ? resolve(p.replace(/^~(?=\/)/, process.env.HOME ?? "~")) : join(capcomdHome(env), "harness.sock");
+}
+
+/** The socket the daemon's out-of-process plugins connect to (plugin API §9.2, CAPCOMD_PLUGIN_SOCKET): beside the
+ *  harness socket, bound before the plugins load and serving only their tokens (§5.5 step 4). */
+export function pluginSocketPath(harnessSocket: string): string {
+	return join(dirname(harnessSocket), `${basename(harnessSocket).replace(/\.sock$/, "")}-plugins.sock`);
 }
 
 /**
