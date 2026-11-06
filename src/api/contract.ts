@@ -32,10 +32,11 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
 	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "invalid", "internal", "unavailable"])
-		.describe("stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"),
+		.describe("stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
-	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub"),
+	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub. From PUT /v1/profiles/{name} (capability profiles.edit): the field id the value is about (limits.maxTurns), rev, or repo"),
+	rev: z.string().optional().describe("409 conflict from PUT /v1/profiles/{name} (capability profiles.edit): the profile's current `rev`"),
 	problem: z.string().optional().describe("422 invalid from POST /v1/projects (and the projects.git routes): the inspect problem code that blocks the folder (not_git, home, no_origin, not_github, not_found)"),
 });
 export const ERROR_STATUSES = [401, 404, 409, 422] as const;
@@ -306,6 +307,11 @@ const PluginEventData = {
 		plugin: z.string(), kept: z.string().describe("builtin, user or project: where the one kept came from"), refused: z.string().describe("Where the refused one came from"),
 		path: z.string().describe("The refused plugin's directory, or (built-in)"),
 	}).describe(`${PLUGIN_EVENT}. A second plugin with a name already discovered was refused (spec §4.8): it is failed with cause duplicate`),
+	"plugin.config_refused": z.looseObject({
+		plugin: z.string(),
+		errors: z.array(z.looseObject({ path: z.string().describe("The setting, under plugins.<name> (e.g. stalledAfterMs)"), message: z.string() })),
+		layer: z.string().describe("Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), or run (more may come)"),
+	}).describe(`${PLUGIN_EVENT}. A plugin's settings failed its config schema (spec §10.4): it is failed with cause config_invalid, never run with defaults`),
 	"plugin.hook_failed": z.looseObject({
 		plugin: z.string(), hook: z.string(), callId: z.string(),
 		kind: z.string().describe("timeout, threw, crashed, invalid_result, disconnected or suspended"),
@@ -349,6 +355,12 @@ const TriggerEventData = {
 	}).describe(`${TRIGGER_EVENT}. A run no longer follows a thread. \`entity\` is run:<runId>`),
 } as const;
 
+/** One value of a profile that changed (PUT /v1/profiles/{name}, profile.changed). */
+export const ProfileChange = z.object({
+	path: z.string().describe("The value's path (a field's `id`)"),
+	from: z.string().nullable().describe("Before, as the field's `value` said it (null: unset, a prompt, or a value outside capcomd's rows)"),
+	to: z.string().nullable().describe("After, the same way"),
+});
 /** SSE event payloads (data field) by dotted type. docs/events.md is generated from this map. */
 export const EventData = {
 	...LegacyEventData,
@@ -399,6 +411,15 @@ export const EventData = {
 		gitignored: z.boolean().optional().describe("`.capcomd/` was added to the checkout's .gitignore (the body asked for `gitignore`)"),
 		clientId: z.string().describe("The API client that set it up (cli-…)"),
 	}).describe("Capability projects.setup. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client set a folder up as a capcomd project with POST /v1/projects and something changed (its settings, its profiles or capcomd's project list). `entity` is project:<name>; the envelope text is daemon-written (\"Set up app (~/src/app): pull requests into main, with Claude Code and Codex.\"). Never a secret"),
+	"profile.changed": z.looseObject({
+		name: ProfileName.describe("The profile"),
+		version: z.number().int().positive().describe("Its version now (an agents.json entry's stays 1)"),
+		previousVersion: z.number().int().positive().describe("Its version before"),
+		layer: z.string().describe("The layer it is found in: project, user (more may be added)"),
+		path: z.string().describe("The file written, on the daemon's machine"),
+		changes: z.array(ProfileChange).describe("Every value that changed, as PUT /v1/profiles/{name} answers them"),
+		clientId: z.string().describe("The API client that changed it (cli-…)"),
+	}).describe("Capability profiles.edit. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client changed a profile with PUT /v1/profiles/{name}. `entity` is profile:<name>; the envelope text is daemon-written and names each value that changed, with the values only where capcomd wrote them (numbers, toggles, choices, names): \"Profile reviewer changed: limits.maxTurns 20 → 40, description changed.\" A change made by editing the file, or with `capcomd profiles set`, isn't an event"),
 	"project.git_initialized": z.looseObject({
 		path: z.string().describe("The folder (absolute), now a checkout's root"),
 		name: z.string().describe("The name capcomd would give the project"),
@@ -494,6 +515,7 @@ export const CAPABILITIES = {
 	profiles: "GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there",
 	"plugins.protocol": "The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process",
 	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from",
+	"profiles.edit": "GET /v1/profiles/{name}: one profile as typed rows a client renders and edits (each with the file that sets it, `source` and `editable`) and its `rev`; PUT /v1/profiles/{name} (the `configure` scope, an Idempotency-Key): change them in the profile's own file, its version bumped; each write is a profile.changed event on the daemon stream",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -740,6 +762,45 @@ export const ProfilesQuery = z.object({
 	repo: z.string().refine((p) => p.startsWith("/"), "repo must be an absolute path").optional()
 		.describe("Absolute path of a project checkout on the daemon's machine, as POST /v1/runs `repo`: that project's profiles. Omitted: the daemon's own."),
 });
+export const FieldChoice = z.object({ value: z.string(), label: z.string().describe("Daemon-written, e.g. \"1 hour\"") });
+/** GET/PUT /v1/profiles/{name} (capability profiles.edit): ADR-024 §3, one profile as the rows a client renders and edits. */
+export const ProfileField = z.object({
+	id: z.string().describe("The value's path in a profile file (limits.maxTurns, harness.model, tags): what PUT's `values` names it by. A value outside capcomd's rows has its path as its id. More may be added"),
+	type: z.string().describe("choice (a Picker of `choices`), toggle, number, text, list (strings), or info (read-only). Render a type you don't know as a read-only row of `label` and `display`"),
+	label: z.string().describe("Row title (daemon-written; a row outside capcomd's rows is labelled by its path)"),
+	help: z.string().nullable().describe("A footnote under the row (daemon-written): what it does, and why it can't be changed here when `editable` is false; null when none"),
+	value: z.string().nullable().describe("The value as PUT takes it: a number in decimal (\"40\", \"2.5\"), a toggle \"true\"/\"false\", a choice's `value`, text as it is, a list as a JSON array of strings (\"[\\\"review\\\",\\\"security\\\"]\"). null when unset, for a prompt (its text is never served) and for a row outside capcomd's rows"),
+	display: z.string().describe("The value as a short sentence (\"40 turns\", \"No limit\", \"Set (1240 characters)\"): what a row shows. When `untrusted`, it is the profile file's text"),
+	choices: z.array(FieldChoice).describe("A choice's options, in order (harness.provider: the active agent providers; harness.effort: the provider's levels); empty for other types"),
+	source: z.string().describe("Which file sets it: unset (none: capcomd's default, as `display` says), inherited (a profile it extends), profile (its own file), override (an override.yaml laid over it). More may be added"),
+	from: z.number().int().nonnegative().nullable().describe("The index of that file in the profile's `applied`; null when unset"),
+	editable: z.boolean().describe("PUT can change it: the profile's own file can hold it (a v2 profile file holds every value; an agents.json entry only its v1 fields) and no file laid after it sets it. false for info rows and bundled profiles; `help` says why"),
+	untrusted: z.boolean().describe("`display` (and `value`) is the profile file's own text, which agents may have written (a project's files are in its repository): render it as plain text, never markdown, links or actions. true for description, identity.title and rows outside capcomd's rows"),
+});
+export const ProfileDetail = z.object({
+	profile: ProfileSummary.describe("The profile as GET /v1/profiles lists it"),
+	fields: z.array(ProfileField).describe("Its rows, in the order a details screen shows them: capcomd's (title, description, tags, extends, the harness, tools, prompts, limits, sandbox, permissions, children, jobs), then each other value its files set, read-only"),
+	rev: z.string().describe("Changes whenever any of the files laid together to make it does (by a write or by hand); PUT sends it back (a stale one is 409 conflict)"),
+	writesTo: z.string().nullable().describe("The file a PUT changes, on the daemon's machine: the profile's own (its profile.yaml, <name>.yaml or the agents.json holding it), never an ancestor or an override. null for a profile bundled with capcomd"),
+	warnings: z.array(z.string()).describe("This profile's warnings, as `capcomd profiles validate` prints them"),
+});
+export const ProfileWritten = ProfileDetail.extend({
+	changed: z.boolean().describe("Something was written. A PUT that sets every value to what it is already writes nothing and is still 200"),
+	changes: z.array(ProfileChange).describe("Every value that changed, in the rows' order of the profile's values (its version is not one: `profile.version` is the new one)"),
+});
+export const ProfileWriteBody = z.object({
+	values: z.record(z.string(), z.string().nullable()).describe("Field id → its new value as the field's `value` encodes it, or null to remove it from the profile's own file (an inherited value then shows again). Only fields with `editable`"),
+	rev: z.string().min(1).max(200).describe("The `rev` of the GET /v1/profiles/{name} the change was made from"),
+});
+export const ProfileQuery = z.object({
+	name: ProfileName,
+	repo: ProfilesQuery.shape.repo,
+});
+export const PROFILE_DOC = "Capability profiles.edit. One agent profile as the rows a client renders and edits (typed like a place's settings, GET /v1/sandboxes/{name}): each value with the file that sets it and whether PUT can change it, and the `rev` to send back. Needs the `read` scope. Local files only. Never contains a credential or a prompt's text. " +
+	"`repo` as GET /v1/profiles (422 `invalid` when it isn't a project checkout). 404 `not_found` for a name that isn't a profile; 422 `invalid` when the profiles can't be read (`message` says why, as `capcomd profiles validate`).";
+export const PROFILE_WRITE_DOC = "Capability profiles.edit. Change a profile: each field by id with its new value (or null to remove it), and the `rev` it was read with. Needs the `configure` scope (403 `forbidden` without it: a profile is what every later agent of it runs with) and an `Idempotency-Key` (the same key with the same request replays the first 200; with another, 409 `idempotency_conflict`). " +
+	"Written to the profile's own file (`writesTo`), atomically, keeping a YAML file's comments; a profile file's `version` goes up by one (an agents.json entry has none and stays 1). Agents already spawned keep the spec and version they started with; the next spawn uses the new one. Every write that changed something is audited: a durable profile.changed event on the `daemon` stream. Answers like GET /v1/profiles/{name}, with `changed` and `changes`. " +
+	"409 `conflict` when `rev` isn't the current one (the body carries the current `rev`: read the profile again, then retry). 422 `invalid` with `field` for a field it doesn't have or that isn't `editable`, or a value not of its type; 422 `invalid` when the profiles the change would leave can't be read (a value out of range, a widening child, a missing parent: `message` says which, as `capcomd profiles validate`), which writes nothing. 404 `not_found` for a name that isn't a profile.";
 export const SERVICE_DOC = "Capability service. Whether capcomd runs as a background service. Needs the `read` scope. Reads the service definition, and asks launchd (systemd) whether it is loaded at most every few seconds, for at most a second.";
 
 
@@ -774,7 +835,6 @@ export const SandboxSummary = SandboxDescriptor.extend({
 	default: z.boolean().describe("The daemon's own CAPCOMD_SANDBOX: what a run without `sandbox` uses"),
 });
 export const Sandboxes = z.object({ sandboxes: z.array(SandboxSummary).describe("Every listed place, in order: today docker, then boxd") });
-export const FieldChoice = z.object({ value: z.string(), label: z.string().describe("Daemon-written, e.g. \"1 hour\"") });
 export const SandboxField = z.object({
 	id: z.string().describe("Stable id: idleLifetime, agentMemory (settings); logins, checkpoints, agentSlots (info). More may be added"),
 	type: z.string().describe("choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"),
@@ -1239,6 +1299,9 @@ export const contract = {
 	},
 	profiles: {
 		list: oc.route({ method: "GET", path: "/v1/profiles", description: PROFILES_DOC }).input(ProfilesQuery).output(Profiles),
+		get: oc.route({ method: "GET", path: "/v1/profiles/{name}", description: PROFILE_DOC }).input(ProfileQuery).output(ProfileDetail),
+		update: oc.route({ method: "PUT", path: "/v1/profiles/{name}", inputStructure: "detailed", description: PROFILE_WRITE_DOC })
+			.input(z.object({ params: z.object({ name: ProfileName }), query: z.object({ repo: ProfilesQuery.shape.repo }), headers: IdempotencyHeaders, body: ProfileWriteBody })).output(ProfileWritten),
 	},
 	skills: {
 		list: oc.route({ method: "GET", path: "/v1/skills", description: "Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills." }).output(z.array(Skill)),
