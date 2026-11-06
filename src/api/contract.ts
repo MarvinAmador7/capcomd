@@ -295,6 +295,11 @@ const PluginEventData = {
 		plugin: z.string(), kept: z.string().describe("builtin, user or project: where the one kept came from"), refused: z.string().describe("Where the refused one came from"),
 		path: z.string().describe("The refused plugin's directory, or (built-in)"),
 	}).describe(`${PLUGIN_EVENT}. A second plugin with a name already discovered was refused (spec §4.8): it is failed with cause duplicate`),
+	"plugin.config_refused": z.looseObject({
+		plugin: z.string(),
+		errors: z.array(z.looseObject({ path: z.string().describe("The setting, under plugins.<name> (e.g. stalledAfterMs)"), message: z.string() })),
+		layer: z.string().describe("Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), or run (more may come)"),
+	}).describe(`${PLUGIN_EVENT}. A plugin's settings failed its config schema (spec §10.4): it is failed with cause config_invalid, never run with defaults`),
 	"plugin.hook_failed": z.looseObject({
 		plugin: z.string(), hook: z.string(), callId: z.string(),
 		kind: z.string().describe("timeout, threw, crashed, invalid_result, disconnected or suspended"),

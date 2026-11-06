@@ -27,8 +27,10 @@ export interface Candidate {
   module?: PluginModule<never>;
   /** `plugins.<name>.enabled` in config (§4.8); default true. */
   enabled?: boolean;
-  /** The plugin's config over its schema's defaults (§10.2; layering lands with the config service). */
+  /** The plugin's config over its schema's defaults: the user, project and environment layers merged (§10.2). */
   config?: Record<string, unknown>;
+  /** What its schema refused in those layers (§10.4): an enabled plugin with any is failed `config_invalid`. */
+  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env" }>;
   /** One of the kernel's own front doors (§4.2, §4.7.1): its CLI groups take the kernel's command names and its MCP
    *  tools are `capcomd_<tool>`. The kernel's built-in list sets it; honoured for `source: "builtin"` only. */
   kernelSurface?: boolean;
@@ -235,6 +237,15 @@ export class PluginHost {
     for (const w of loaded.warnings) this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `manifest: ${w.path}: ${w.message}`, fields: {} });
     if (loaded.manifest.entry.runtime === "in-process" && r.source !== "builtin")
       return this.fail(r, "untrusted", "only built-in plugins run in process (§5.2)");
+    // §10.4: invalid config fails the plugin rather than run it with defaults (a disabled one isn't run either way).
+    const errors = r.enabled ? c.configErrors ?? [] : [];
+    if (errors.length) {
+      for (const layer of [...new Set(errors.map((e) => e.layer))]) {
+        const mine = errors.filter((e) => e.layer === layer).map(({ path, message }) => ({ path, message }));
+        this.o.emit({ type: "plugin.config_refused", stream: "daemon", entity: `plugin:${r.name}`, text: `The ${r.name} plugin's settings were refused.`, data: { plugin: r.name, errors: mine, layer } });
+      }
+      return this.fail(r, "config_invalid", errors.map((e) => `${e.layer}: plugins.${r.name}.${e.path}: ${e.message}`).join("; "));
+    }
     this.set(r, "validated", r.enabled ? null : "disabled");
   }
 

@@ -97,6 +97,8 @@ Usage:
         [--mode pr|direct] [--target B] [--check CMD] [--budget USD] [--service|--no-service] [--no-plugin] [--no-store]
         [--org NAME]                   (the boxd org for the key setup creates with your boxd CLI login)
         [--sandbox docker|boxd]        (setup project: where this project's agents run, over your user config's)
+        [--no-watchdog]                (setup service: leave the watchdog off; on, it notices an agent whose work
+                                       hasn't changed for 15 min and stops it after 45 min)
         [--env-build|--no-env-build]   (setup project on Docker: build the env image with a warm checkout now, or don't ask)
         [--default-project]            (setup project/agent: make this checkout the default project of capcomd's MCP tools)
         [--no-hermes] [--approvals elicit|human] [--hermes-entry-per-project]

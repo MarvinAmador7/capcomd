@@ -5,7 +5,7 @@
 //   2. project   repository, target branch, PR or direct merges, a default check, worker/reviewer/planner profiles
 //   3. agent     the capcomd plugin (MCP tools and skills) for Claude Code and Codex, capcomd in Hermes (MCP server
 //                and skills in its config), and a prompt to try
-//   4. service   the engine as a background service
+//   4. service   the engine as a background service, and its watchdog (plugin API §16.4) turned on
 // Each step also runs alone (`capcomd setup project`). Without a terminal, or with --yes, prompts take their
 // defaults and flags, so agents and scripts can run setup too. Settings land in ~/.capcomd/config.json (user)
 // and <project>/.capcomd/config.json; the boxd key never sits in a file unless there is no keychain and you agree.
@@ -512,6 +512,26 @@ export async function hermesStep(p: Prompter, v: Values, cwd = process.cwd(), ma
 /** Hermes's MCP client name (initialize clientInfo.name; NousResearch/hermes-agent tools/mcp_tool_transport.py). */
 export const HERMES_CLIENT = "hermes-agent";
 
+/**
+ * 4. The watchdog (plugin API §16.4): a built-in that's off until setup turns it on, with its defaults, in the user's
+ * config (`plugins.watchdog.enabled`). One you turned off stays off; `--no-watchdog` leaves it as it is. Before the
+ * service step, so an engine that service starts has it.
+ */
+export function watchdogStep(v: Values, env: Record<string, string | undefined> = process.env): Step {
+  const path = userConfigPath(env);
+  const set = readConfig(path).plugins?.watchdog ?? {};
+  const W = require("../../plugins/watchdog") as typeof import("../../plugins/watchdog");
+  const props = (W.manifest.config as { properties: Record<string, { default: number }> }).properties;
+  const num = (k: string) => (typeof set[k] === "number" ? (set[k] as number) : props[k]!.default);
+  const what = `an agent whose work hasn't changed for ${W.spoken(num("stalledAfterMs"))} gets a stalled notice${num("stopAfterMs") > 0 ? `, and is stopped after ${W.spoken(num("stopAfterMs"))}` : ""}`;
+  const where = `plugins.watchdog in ${path}`;
+  if (set.enabled === false) return { step: "watchdog", ok: true, detail: `off: turned off in ${where}` };
+  if (set.enabled === true) return { step: "watchdog", ok: true, detail: `on: ${what}` };
+  if (v["no-watchdog"] === true) return { step: "watchdog", ok: true, detail: `off (--no-watchdog): turn it on with "enabled": true in ${where}` };
+  writeConfig(path, { plugins: { watchdog: { enabled: true } } });
+  return { step: "watchdog", ok: true, detail: `on: ${what} (${where}; a running engine picks it up when it restarts)` };
+}
+
 /** 4. The engine as a background service. */
 export async function serviceStep(p: Prompter, v: Values): Promise<Step> {
   if (v["no-service"] === true || !(v.service === true || await p.confirm("Run the capcomd engine in the background (starts at login)?", true))) return { step: "engine", ok: true, detail: "not installed as a service: run `capcomd serve` when you need it" };
@@ -594,6 +614,11 @@ export async function checkSetup(cwd = process.cwd(), o: { mcpClient?: boolean }
   const { localPort } = await import("../../core/engine-start");
   const st: any = await S.serviceStatus({ port: localPort() ?? undefined });
   out.push({ step: "engine", ok: st.running, detail: st.running ? `running on :${st.port}${st.installed ? " (service)" : ""}` : `not running${st.installed ? " (service installed)" : ""}`, ...(st.running ? {} : { hint: "`capcomd service install`, or `capcomd serve`." }) });
+  // The watchdog (plugin API §16.4) as the engine loads it: the user's, the project's and the environment's settings.
+  const W = await import("../../plugins/watchdog");
+  const wd = (await import("../../plugins/config")).pluginSettings(W.manifest, { cwd });
+  if (wd.enabled && wd.errors.length) out.push({ step: "watchdog", ok: false, detail: `its settings are refused, so it won't load: ${wd.errors.map((e) => `${e.layer}: plugins.watchdog.${e.path} ${e.message}`).join("; ")}`, hint: "Fix plugins.watchdog in your config, then restart the engine." });
+  else out.push({ step: "watchdog", ok: true, detail: wd.enabled ? "on" : "off (`capcomd setup service` turns it on)" });
   return out;
 }
 
@@ -622,6 +647,6 @@ export async function setup(part: string | undefined, v: Values, log: (s: string
   }
   if (all || part === "project") { section("Project"); steps.push(...(await projectStep(p, v, process.cwd(), log))); }
   if (all || part === "agent") { section("Agent integration"); steps.push(...(await agentIntegrationStep(p, v))); }
-  if (all || part === "service") { section("Engine"); steps.push(await serviceStep(p, v)); }
+  if (all || part === "service") { section("Engine"); steps.push(watchdogStep(v)); steps.push(await serviceStep(p, v)); }
   return steps;
 }

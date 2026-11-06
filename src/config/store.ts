@@ -38,6 +38,11 @@ export interface CapcomdConfig {
    * CAPCOMD_DOCKER_AGENT_MEMORY_MB wins).
    */
   sandboxes?: Record<string, { idleLifetime?: number; agentMemory?: number }>;
+  /**
+   * Plugin settings by plugin name (plugin API §10.2, src/plugins/config.ts): `enabled`, and the plugin's own keys
+   * (its manifest's config schema), e.g. `{"watchdog": {"enabled": true, "stalledAfterMs": 900000}}`.
+   */
+  plugins?: Record<string, Record<string, unknown>>;
 }
 
 export type DriverApprovals = "human" | "elicit" | "client-confirmed";
@@ -69,11 +74,15 @@ export function readConfig(path: string | null): CapcomdConfig {
   try { const v = JSON.parse(readFileSync(path, "utf8")); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
 
-/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key; other keys are replaced). */
+/** `patch` merged into `cur` as writeConfig does it (env and run merge key by key, plugins plugin by plugin and then key
+ *  by key; other keys are replaced). */
 export function mergeConfig(cur: CapcomdConfig, patch: CapcomdConfig): CapcomdConfig {
-  const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) } };
+  const plugins: Record<string, Record<string, unknown>> = { ...(cur.plugins ?? {}) };
+  for (const [name, p] of Object.entries(patch.plugins ?? {})) plugins[name] = { ...(plugins[name] ?? {}), ...p };
+  const next: CapcomdConfig = { ...cur, ...patch, env: { ...(cur.env ?? {}), ...(patch.env ?? {}) }, run: { ...(cur.run ?? {}), ...(patch.run ?? {}) }, plugins };
   if (!Object.keys(next.env!).length) delete next.env;
   if (!Object.keys(next.run!).length) delete next.run;
+  if (!Object.keys(next.plugins!).length) delete next.plugins;
   return next;
 }
 /** A config file's bytes. */

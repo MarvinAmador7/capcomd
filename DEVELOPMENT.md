@@ -97,7 +97,10 @@ src/
                   a CLI's verify loads them with the built-in gates too); sandboxes.ts, the sandbox seams the kernel asks
                   for a provider by name (`capcomd plugins validate --conformance <name>` runs one's suite); front/, the
                   front doors (the CLI's groups, front-mcp, front-hermes), and skill-orchestration.ts, the orchestration
-                  skill as an agent.preparing patch: every process loads them (host.ts `localHost`)
+                  skill as an agent.preparing patch: every process loads them (host.ts `localHost`); watchdog.ts, the
+                  daemon's watchdog (off until `capcomd setup` turns it on); config.ts, a plugin's settings from the
+                  user's and the project's config and CAPCOMD_PLUGIN_<NAME>_<KEY>; services.ts, the daemon's `ctx.agents`
+                  and `ctx.storage`
   primitives/   - ADR-016 operations, policy, task board, kv
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), resolution, pins and overrides

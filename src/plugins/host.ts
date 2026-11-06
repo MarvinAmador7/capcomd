@@ -12,10 +12,12 @@ import { CAPABILITY_NAMES } from "../api/contract";
 import { Redactor } from "../agents/redact";
 import { stateDir } from "../utils/home";
 import { VERSION } from "../utils/self";
-import { BUILTINS, candidateOf } from "./builtins";
+import { BUILTINS, candidateWith, type Builtin } from "./builtins";
 import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 import { pluginJobs } from "../jobs/service";
+import { pluginConfigFiles, pluginSettings } from "./config";
+import { pluginAgents, pluginStorage } from "./services";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
 export type DaemonEventSink = (e: { type: string; entity: string; text: string; data: Record<string, unknown> }) => { seq: number };
@@ -23,7 +25,13 @@ export type DaemonEventSink = (e: { type: string; entity: string; text: string; 
 /** What the daemon discovers (§4.8). Built-ins only in this version: user and project plugins arrive with the
  *  out-of-process runtime and `capcomd plugins install|trust` (§17.2 steps 9 and 12). */
 export function builtinCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.map(candidateOf), ...testPlugins(env)];
+  return [...configured(BUILTINS, env), ...testPlugins(env)];
+}
+
+/** Built-ins with their settings: `plugins.<name>` in the user's and the project's config, and the environment (§10.2). */
+function configured(bs: readonly Builtin[], env: Record<string, string | undefined>): Candidate[] {
+  const files = pluginConfigFiles({ env });
+  return bs.map((b) => candidateWith(b, pluginSettings(b.manifest as { name: string; config?: unknown }, { env, files })));
 }
 
 /** Tests only (`bun test` sets NODE_ENV=test): CAPCOMD_TEST_PLUGINS, `:`-separated plugin directories, load in process
@@ -89,8 +97,9 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
   };
 }
 
-/** `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2; a CLI's local host has none: `unsupported`). */
-export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean } = {}): PluginHost {
+/** `daemon`: the daemon's host, whose plugins get `ctx.jobs` (§16.2), `ctx.agents` and `ctx.storage` (§8.1); a CLI's
+ *  local host has none of them (`unsupported`). */
+export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; daemon?: boolean } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
     if (e.stream !== "daemon") throw new PluginError("unsupported", `the host writes its own events on the daemon stream only (${e.type})`);
@@ -109,7 +118,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
       try { record(e); } catch { /* not a daemon-stream event */ }
     },
     dataDir: (name) => join(stateDir(), "plugins", name),
-    ...(o.jobs ? { services: (m) => ({ jobs: pluginJobs(m.name) }) } : {}),
+    ...(o.daemon ? { services: (m) => ({ jobs: pluginJobs(m.name), agents: pluginAgents(m.name), storage: pluginStorage(m.name) }) } : {}),
     secret: async (m, key) => resolveSecret(m, key),
     sinks: {
       redact: (t) => redactor.text(t),
@@ -124,7 +133,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
 /** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges, the
  *  front doors, the orchestration skill), and in tests CAPCOMD_TEST_PLUGINS. */
 export function localCandidates(env: Record<string, string | undefined> = process.env): Candidate[] {
-  return [...BUILTINS.filter((b) => b.everyProcess).map(candidateOf), ...testPlugins(env)];
+  return [...configured(BUILTINS.filter((b) => b.everyProcess), env), ...testPlugins(env)];
 }
 
 let local: Promise<PluginHost> | null = null;

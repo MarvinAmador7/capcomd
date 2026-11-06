@@ -279,7 +279,9 @@ In this order; a later manifest with a name already seen is refused with `plugin
    (`capcomd plugins trust <name>`; event `plugin.trusted`), because opening a repository MUST NOT run code on the host.
    A changed hash resets trust.
 
-`plugins.<name>.enabled: false` in config (§10) keeps a discovered plugin at `validated`.
+`plugins.<name>.enabled: false` in config (§10) keeps a discovered plugin at `validated`. A built-in is enabled by
+default except one a person turns on: the watchdog (§16.4) is listed but held at `validated` (`disabled`) until
+`plugins.watchdog.enabled: true`, which `capcomd setup` writes (`src/plugins/builtins.ts` `off`).
 
 ### 4.9 Validation
 
@@ -870,7 +872,15 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
   read-only (`forbidden`). Values ≤ 64 KB.
 - `agents.spawn`: subject to `spawnChecks`, `checkSpawn` and the plugin's budget share as any caller; a plugin cannot
   pass `operator`. `agents.notice`: a plugin may raise kinds the kernel does not (`stalled`) and clear only notices it
-  raised.
+  raised: raising a kernel kind is `forbidden`; a clear (`null`) takes away only a plugin kind, and the kernel's own
+  clear takes away only the kind it raised (the runner's stuck notices, its sandbox outage), so a plugin's notice stays
+  until progress or the plugin clears it. A notice needs a running agent (a later one replaces an earlier one of another
+  kind, as the kernel's do). `agents.cancel` cancels the agent and its descendants as `capcomd cancel` does, the reason
+  recorded as `by the <plugin> plugin: <reason>`. A call never creates a run (an unknown run is `not_found`).
+- In the daemon since §17.2 step 11, beside `jobs`: `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice`
+  (`src/plugins/services.ts`), and `storage` at daemon scope (a JSON file per key under the plugin's data directory; a
+  key with an empty, `.` or `..` part is `invalid`). Storage at run scope and the rest of `agents` answer `unsupported`
+  until a later step; a CLI's local host has none of them.
 - `gates.merge`: no `operator`; a plugin that wants to bypass vetoes cannot (§11.3).
 - `sandboxes.provider(name)`: the kernel's wrapped object (§7.1), never a raw plugin object; a provider plugin asking
   for itself gets the wrapper too.
@@ -1023,7 +1033,11 @@ replace, `null` deletes), as `src/config/store.ts` `applyConfig` and `driverPoli
    `x-per-run` properties; refused (422) otherwise.
 
 Layers 1–4 are read at `resolved` (§5.4) and are what `ctx.config.get()` returns; they change only through
-`disable`/`enable` (§5.4). Layer 5 is run data, not plugin config: the kernel validates it at run creation and stores it
+`disable`/`enable` (§5.4). Since §17.2 step 11 the kernel reads them for its built-ins (`src/plugins/config.ts`): the
+project layer is the `.capcomd/config.json` found from where the process runs, an environment value that parses as JSON
+is that value (`CAPCOMD_PLUGIN_WATCHDOG_STALLEDAFTERMS=600000` is a number), else a string; `CAPCOMD_NO_CONFIG` skips
+the files, not the environment. A secret property (`x-secret`) is never read from a layer yet: its reference is the
+schema's (§10.3). Layer 5 is run data, not plugin config: the kernel validates it at run creation and stores it
 at `ctx.storage` run scope under the key `config` (readable by the plugin, written only by the kernel), so a listener on
 a run-scoped hook reads `await ctx.storage.get({runId}, "config")` for that run's overrides. Decision: `config.get()`
 is a constant for the plugin's life, which keeps every listener a pure function of its call plus one read.
@@ -1046,7 +1060,9 @@ existing keychain entry is mapped to it by the config migration (§17).
 
 Config is validated against the schema at `resolved` (layers 1–4) and at run creation (layer 5). Invalid config is
 `failed(config_invalid)` with `plugin.config_refused {errors: [{path, message}], layer}`; the plugin is **not** run with
-defaults. `capcomd plugins validate` and `GET /v1/plugins/{name}` show the errors. A run-layer error is a 422 on `POST
+defaults. Each layer is checked on its own, so an error names its layer (one event per layer); the kernel checks the
+subset of JSON Schema manifests use (`type`, `enum`, `minimum`/`maximum` and their exclusive forms, `minLength`/
+`maxLength`, `items`, `required`, `properties`, `additionalProperties`); a disabled plugin's settings aren't checked. `capcomd plugins validate` and `GET /v1/plugins/{name}` show the errors. A run-layer error is a 422 on `POST
 /v1/runs` with `field: "plugins.<name>.<path>"`.
 
 ## 11. Security model
@@ -1328,7 +1344,8 @@ sentence from daemon-written fields (agent text escaped as plain text), posts wi
 
 ### 15.5 A watchdog (`watchdog`, in-process)
 
-`examples/watchdog`. §16.4. Observe hooks plus one `timer` job; raises `stalled`, then cancels.
+`examples/watchdog`. §16.4. Observe hooks plus one `timer` job; raises `stalled`, then cancels. capcomd's built-in is
+`src/plugins/watchdog.ts` (§16.4 says what it counts as progress).
 
 ## 16. Super-agent primitives
 
@@ -1592,6 +1609,31 @@ the plugin does, and `capcomd setup` enables the built-in `watchdog` with conser
 45 min to cancel). Raising an ask is the `stalled` notice (the app shows the amber hand; a planner sees it on its child)
 and, through §16.5, one message to the person only when the watchdog stops an agent.
 
+The built-in (`src/plugins/watchdog.ts`, §17.2 step 11) is in the daemon only and off until `plugins.watchdog.enabled:
+true` (§4.8), which `capcomd setup` (its `service` part) writes in the user's config unless the user set it false or
+passed `--no-watchdog`; `capcomd setup check` says whether it is on. Its config: `stalledAfterMs` (default 900 000),
+`stopAfterMs` (default 2 700 000; 0 never stops; otherwise more than `stalledAfterMs`, else the plugin fails to
+activate), both counted from the agent's last progress, and `everyMs` (default 60 000), how often it looks. Its
+definition of progress:
+
+- the agent's files changed (`checkpointed`: the supervisor reports a checkpoint only for a new tree), or an agent
+  under it did;
+- an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
+- a background job (`job.changed`), a verification it asked for (`verify.changed`, its principal) or an approval it
+  waits on (`approval.changed`) ended.
+
+Tool calls (`step`) and the activity line are not progress. While it, or an agent under it, waits on a job, a
+verification or an approval, or is paused, its clock doesn't run. An agent with agents of its own running is judged
+through them: they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and
+the planner can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it
+confirms the agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in
+`detail`) or cancels (`agents.cancel`, then `plugin.watchdog.stopped {agentId, quietMs, stalledAt}` on the run's
+stream: the one message). Progress clears its notice; a notice that went some other way is raised again while the agent
+stays quiet. What it knows of each agent is in its daemon storage (`agents/<runId>/<agentId>`), with the time of its
+last look (`clock`): after a restart the time the daemon was down is added to every agent's clock, so downtime never
+counts as an agent's quiet. Agents that never change files by design (a reviewer, a report-only task) are judged by the
+same clock.
+
 ### 16.5 The attention budget
 
 Adopted as a design rule for every plugin that talks to people (notifiers, sources' replies, MCP instructions, UI
@@ -1687,6 +1729,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.16 | 2026-11-05 | §16.1, the owner's two follow-ups to 1.0.6 (numbered 1.0.7 by mistake when it landed, next to the forge row): `capcomd check [<ref>]` (`capcomd_check`, in-VM op `check`): the run's checks on a ref's commit as it is, in a sandbox, merging nothing, deduplicated by commit and command, within the place's machine slots, recorded as `check.started`/`check.passed`/`check.failed` (additive) and in the trace; and an orchestrate agent whose checkout has changed files or new commits at the end of a turn or of its run fails (`orchestrate_wrote_files`, naming the files), whatever its provider, and is never checkpointed. |
 | 1.0.17 | 2026-11-05 | With the jobs service (§17.2 step 7, §16.2): `exec` runs in the owner agent's machine through its spool pump's exec, as a detached runner whose files (`<spool>/jobs/<id>/`) outlive the daemon; the machine is attached while the agent runs, so re-attaching after a restart is the agent's pump starting again; a job whose agent ended unwatched settles `lost` when it is next read. A run-owned job machine (`owner: {run: true}` for `exec`) is refused `unsupported` until a later step; a job's `env` values are not kept on its record. The in-VM ops are `job.start`, `job.output`, `job.list`, `job.kill`, in every agent token (where an in-VM capcomd runs); a start's answer is the job as its agent reads it, and a job the agent stops itself sends no message. A single-string `cmd` runs with `sh -c`, more are argv. `afterTurnMs` is a job's default timeout (from its start), not yet counted from the agent's last step; daemon defaults are `CAPCOMD_JOBS_MAX`, `CAPCOMD_JOBS_FOREGROUND_MS`, `CAPCOMD_JOBS_AFTER_TURN_MS` (config `env`). The `jobs` block is pinned as is (`PinnedSpec.jobs`), from a v2 profile and as the flat field of a `capcomd.agents/v1` entry. A settled record keeps the last 48 KB of stdout and 16 KB of stderr; a job no message comes for is marked `quiet` in its directory, so the supervisor doesn't keep the CLI's input open for one. An agent's timers end with it (`killed`; one whose agent ended where no pump saw it, at its next fire). A timer may set both `at` (its first fire) and `everyMs`. An orchestrate agent starts no `exec` job (§16.1 item 6). The Docker sweep is `sandbox-docker`'s own timer (§15.1). `job.started`/`job.ended` are run events (additive), on the daemon stream for a plugin's timer. |
 | 1.0.18 | 2026-11-06 | With ADR-024's version pin (its §7 step 3): the `Agent` shape gains `profileVersion` and `profileSource` (optional, nullable; additive, §3.1), fixed at spawn, and `agent.preparing`'s `spec` carries `PinnedSpec.profile` when the agent recorded one (§6.6.7). |
+| 1.0.19 | 2026-11-06 | With the watchdog (§17.2 step 11): the built-in `watchdog`, off until `plugins.watchdog.enabled: true`, which `capcomd setup` writes (§4.8); its config, its definition of progress (files changed, an agent under it spawned or ended, a job, verification or approval it waited on ended; never tool calls), waiting holding its clock, an agent judged through the agents under it, `stopAfterMs` counted from the last progress like `stalledAfterMs`, its memory across a restart (§16.4; the worked example's `stopAfterMs` now means the same). Config layers 1–4 read for the built-ins, the schema subset checked, one `plugin.config_refused` per layer (a harness.v1 daemon event, additive), secret properties not read from layers yet (§10.2, §10.4). In the daemon: `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice` and daemon-scope `storage`; a plugin raises and clears only its own notice kinds and the kernel's clear only the kind it raised (§8.4). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

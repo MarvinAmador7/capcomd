@@ -70,6 +70,7 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   "no-skill": { type: "boolean" },
   "no-plugin": { type: "boolean" },
   "no-hermes": { type: "boolean" },
+  "no-watchdog": { type: "boolean" },
   "hermes-entry-per-project": { type: "boolean" },
   "default-project": { type: "boolean" },
   "env-build": { type: "boolean" },

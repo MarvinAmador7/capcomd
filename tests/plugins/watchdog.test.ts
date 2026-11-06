@@ -1,0 +1,217 @@
+// The watchdog built-in (docs/spec/plugin-api.md §15.5, §16.4) on the test kit's context, with the kernel's services
+// faked and the clock set by the test: what counts as progress (files changed, an agent under it spawned or ended, the
+// end of a job, verification or approval it waited on) and what doesn't (tool calls), `stalled` at stalledAfterMs and a
+// stop at stopAfterMs (both from the last progress), progress clearing the notice, waiting holding the clock, an agent
+// with agents of its own judged through them, its memory across a restart (the time the daemon was down doesn't count),
+// its one timer, and its config refused when the stop comes before the notice. The same against a daemon:
+// tests/scenarios/watchdog.test.ts.
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { testkit } from "../../packages/plugin/src/testkit";
+import { PluginError } from "../../packages/plugin/src/errors";
+import type { Agent, Job, JobSpec, Principal } from "../../packages/plugin/src/shapes";
+import type { AgentChange } from "../../packages/plugin/src/hooks";
+import type { StorageService } from "../../packages/plugin/src/context";
+import { manifest, plugin, stalledDetail, watchdog, type WatchdogConfig } from "../../src/plugins/watchdog";
+import { pluginStorage } from "../../src/plugins/services";
+
+const MIN = 60_000;
+const T0 = Date.parse("2026-11-06T10:00:00.000Z");
+const CFG: WatchdogConfig = { stalledAfterMs: 15 * MIN, stopAfterMs: 45 * MIN, everyMs: MIN };
+const RUN = "run-wd1";
+let now = T0;
+const at = (ms: number) => { now = T0 + ms; setSystemTime(new Date(now)); };
+beforeEach(() => at(0));
+afterEach(() => setSystemTime());
+
+/** The kernel, faked: agents by id, the notices and cancels asked for, the plugin's timers. */
+function kernel() {
+  const agents = new Map<string, Agent>();
+  const notices: Array<{ agentId: string; notice: { kind: string; detail: string } | null }> = [];
+  const cancels: Array<{ agentId: string; reason: string }> = [];
+  const timers: Array<{ spec: JobSpec; key?: string | undefined; jobId: string; state: Job["state"] }> = [];
+  const agent = (id: string, parent: string | null = null, status: Agent["status"] = "running"): Agent => {
+    const a: Agent = { id, runId: RUN, parent, depth: parent ? 1 : 0, profile: "worker", status, text: "", task: "t", provider: "claude", model: null, effort: null, updatedAt: null };
+    agents.set(id, a);
+    return a;
+  };
+  const job = (t: (typeof timers)[number]): Job => ({ jobId: t.jobId, plugin: "watchdog", spec: t.spec, state: t.state, startedAt: new Date(T0).toISOString(), endedAt: null, result: null, reason: null });
+  const services = {
+    agents: {
+      get: async (_run: string, id: string) => { const a = agents.get(id); if (!a) throw new PluginError("not_found", `agent ${id} not found`); return a; },
+      notice: async (_run: string, agentId: string, notice: { kind: string; detail: string } | null) => { notices.push({ agentId, notice }); },
+      cancel: async (_run: string, agentId: string, reason: string) => { cancels.push({ agentId, reason }); const a = agents.get(agentId); if (a) a.status = "cancelled"; },
+    },
+    jobs: {
+      start: async (spec: JobSpec, o?: { key?: string }) => {
+        const had = timers.find((t) => t.key === o?.key);
+        if (had) return job(had);
+        const t = { spec, key: o?.key, jobId: `job-${timers.length + 1}aaaaaa`, state: "running" as const };
+        timers.push(t);
+        return job(t);
+      },
+      list: async () => timers.filter((t) => t.state === "running").map(job),
+      cancel: async (jobId: string) => { const t = timers.find((x) => x.jobId === jobId)!; t.state = "killed"; return job(t); },
+    },
+  };
+  return { agents, notices, cancels, timers, agent, services };
+}
+
+async function boot(k: ReturnType<typeof kernel>, o: { cfg?: Partial<WatchdogConfig>; storage?: StorageService } = {}) {
+  const root = join(mkdtempSync(join(tmpdir(), "capcomd-wd-")), "storage");
+  const storage = o.storage ?? pluginStorage("watchdog", () => root);
+  const fake = testkit.fakeContext(manifest, { ...CFG, ...o.cfg }, { services: { ...k.services, storage } as never });
+  const w = watchdog(fake.ctx as never);
+  await w.start();
+  const changed = (a: Agent, change: AgentChange, principal?: Principal) => fake.fire("agent.changed", { agent: a, change }, principal ? { principal } : {});
+  return { fake, w, storage, changed, tick: async () => { await w.tick(); await w.flushed(); } };
+}
+
+const ckpt = (): AgentChange => ({ kind: "checkpointed", files: 1, commit: "a".repeat(40), at: new Date(now).toISOString() });
+const step = (): AgentChange => ({ kind: "step", step: { kind: "Bash", n: 1, startedAt: new Date(now).toISOString(), endedAt: new Date(now).toISOString() } });
+const started = (): AgentChange => ({ kind: "started", machine: null, attempt: 1 });
+const kinds = (k: ReturnType<typeof kernel>) => k.notices.map((n) => `${n.agentId}:${n.notice?.kind ?? "cleared"}`);
+
+describe("the watchdog", () => {
+  test("no change to its files: stalled at 15 min, cleared by progress, stopped at 45 min, said once on the run's stream", async () => {
+    const k = kernel();
+    const a = k.agent("agt-w1");
+    const { changed, tick, fake } = await boot(k);
+    await changed(a, started());
+    at(5 * MIN); await changed(a, ckpt());
+    // Tool calls alone are activity, not progress.
+    for (const m of [10, 15, 19]) { at(m * MIN); await changed(a, step()); await tick(); }
+    expect(k.notices).toEqual([]);
+    at(20 * MIN); await tick();
+    expect(k.notices).toEqual([{ agentId: "agt-w1", notice: { kind: "stalled", detail: stalledDetail(15 * MIN, CFG) } }]);
+    expect(k.notices[0]!.notice!.detail).toBe("no progress for 15 min (no file changed; no agent, job, check or approval of its own finished); the watchdog stops it after 45 min without progress");
+    // Raised once, however long it stays quiet.
+    at(21 * MIN); await tick();
+    expect(k.notices).toHaveLength(1);
+    // Its files change: the notice goes, the clock starts again.
+    at(22 * MIN); await changed(a, ckpt());
+    await Bun.sleep(0);
+    expect(kinds(k)).toEqual(["agt-w1:stalled", "agt-w1:cleared"]);
+    at(22 * MIN + 15 * MIN - 1); await tick();
+    expect(k.notices).toHaveLength(2);
+    at(37 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-w1:stalled", "agt-w1:cleared", "agt-w1:stalled"]);
+    at(66 * MIN); await tick();
+    expect(k.cancels).toEqual([]);
+    at(67 * MIN); await tick();
+    expect(k.cancels).toEqual([{ agentId: "agt-w1", reason: "no progress for 45 min (no file changed; no agent, job, check or approval of its own finished)" }]);
+    expect(fake.emitted()).toEqual([{ type: "plugin.watchdog.stopped", stream: RUN, data: { agentId: "agt-w1", quietMs: 45 * MIN, stalledAt: new Date(T0 + 37 * MIN).toISOString() } }]);
+    // It ends (cancelled): forgotten; nothing more about it.
+    await changed({ ...a, status: "cancelled" }, { kind: "ended", status: "cancelled", result: null });
+    at(90 * MIN); await tick();
+    expect(k.cancels).toHaveLength(1);
+    expect(fake.emitted()).toHaveLength(1);
+  });
+
+  test("an agent with agents of its own is judged through them: their progress is its, their end too", async () => {
+    const k = kernel();
+    const p = k.agent("agt-p"), c1 = k.agent("agt-c1", "agt-p"), c2 = k.agent("agt-c2", "agt-p");
+    const { changed, tick } = await boot(k);
+    await changed(p, started());
+    at(1 * MIN); await changed(c1, { kind: "spawned" }); await changed(c1, started());
+    await changed(c2, { kind: "spawned" }); await changed(c2, started());
+    // c1 keeps changing files; c2 doesn't: c2 alone stalls (at 16 min) and is stopped (at 46), its parent is never judged.
+    for (let m = 2; m <= 48; m += 2) {
+      at(m * MIN); await changed(c1, ckpt()); await tick();
+      expect(kinds(k)).toEqual(m < 16 ? [] : ["agt-c2:stalled"]);
+      expect(k.cancels.map((c) => c.agentId)).toEqual(m < 46 ? [] : ["agt-c2"]);
+    }
+    await changed({ ...c2, status: "cancelled" }, { kind: "ended", status: "cancelled", result: null });
+    // c1 hands back at 50 min: the planner's clock starts there, and it is judged on its own from then on.
+    at(50 * MIN); await changed({ ...c1, status: "done" }, { kind: "ended", status: "done", result: null });
+    at(64 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-c2:stalled"]);
+    at(65 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-c2:stalled", "agt-p:stalled"]);
+  });
+
+  test("waiting on a job, a verification, an approval or a paused agent under it holds the clock; their end is progress", async () => {
+    const k = kernel();
+    const p = k.agent("agt-p"), c = k.agent("agt-c", "agt-p");
+    const { changed, tick, fake } = await boot(k);
+    await changed(p, started()); await changed(c, { kind: "spawned" }); await changed(c, started());
+    const exec: Job = { jobId: "job-x1aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-c" }, cmd: ["npm test"], label: "tests" }, state: "running", startedAt: new Date(now).toISOString(), endedAt: null, result: null, reason: null };
+    await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
+    at(40 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    at(41 * MIN); await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
+    at(55 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    // A verification it asked for (its principal), then an approval it waits on.
+    const agentC: Principal = { kind: "agent", agentId: "agt-c", runId: RUN };
+    const v = { vfyId: "vfy-1", runId: RUN, ref: "agt-c", target: "main", check: null, state: "running" as const, tested: null, passed: null, reasons: [] };
+    await fake.fire("verify.changed", { verification: v, change: { kind: "started" } }, { principal: agentC });
+    at(95 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    await fake.fire("verify.changed", { verification: { ...v, state: "passed", passed: true }, change: { kind: "finished", passed: true } }, { principal: agentC });
+    const ap = { approvalId: "apr-1", runId: RUN, agentId: "agt-c", kind: "merge" as const, question: "Merge?", subject: {}, status: "pending" as const, requestedAt: new Date(now).toISOString(), expiresAt: null };
+    await fake.fire("approval.changed", { approval: ap, change: { kind: "requested" } });
+    at(300 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    await fake.fire("approval.changed", { approval: { ...ap, status: "approved" }, change: { kind: "decided", decision: { approvalId: "apr-1", status: "approved", decidedBy: null, decidedAt: new Date(now).toISOString(), reason: null } } });
+    // Paused (a usage limit) for hours: neither it nor its parent stalls; resumed, its clock starts again.
+    at(301 * MIN); await changed({ ...c, status: "paused" }, { kind: "paused", by: "quota" });
+    k.agents.get("agt-c")!.status = "paused";
+    at(600 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    k.agents.get("agt-c")!.status = "running";
+    await changed(c, { kind: "resumed", by: "capcomd" });
+    at(614 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    at(615 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-c:stalled"]);
+  });
+
+  test("across a restart: it remembers what it knew, and the time the daemon was down doesn't count", async () => {
+    const k = kernel();
+    const a = k.agent("agt-r1"), gone = k.agent("agt-gone");
+    const first = await boot(k);
+    await first.changed(a, started()); await first.changed(gone, started());
+    at(10 * MIN); await first.tick();
+    await first.w.flushed();
+    // Down for two hours; meanwhile one agent ended where nobody told the watchdog.
+    k.agents.delete("agt-gone");
+    at(130 * MIN);
+    const second = await boot(k, { storage: first.storage });
+    expect([...second.w.watched.keys()].sort()).toEqual([`${RUN}/agt-gone`, `${RUN}/agt-r1`]);
+    at(134 * MIN); await second.tick();
+    expect(k.notices).toEqual([]);
+    at(135 * MIN); await second.tick();
+    expect(kinds(k)).toEqual(["agt-r1:stalled"]);
+    expect([...second.w.watched.keys()]).toEqual([`${RUN}/agt-r1`]);
+    // Its one timer: kept by its key across the restart; another interval's is stopped.
+    expect(k.timers.map((t) => [t.key, t.spec, t.state])).toEqual([["clock-60000", { kind: "timer", runId: null, owner: { plugin: true }, label: "watchdog clock", everyMs: MIN }, "running"]]);
+    await boot(k, { storage: first.storage, cfg: { everyMs: 30_000 } });
+    expect(k.timers.map((t) => [t.key, t.state])).toEqual([["clock-60000", "killed"], ["clock-30000", "running"]]);
+  });
+
+  test("its own clock's fire makes it look; stopAfterMs 0 never stops; a stop before the notice is refused", async () => {
+    const k = kernel();
+    const a = k.agent("agt-z1");
+    const root = mkdtempSync(join(tmpdir(), "capcomd-wd-"));
+    const fake = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 0 }, { services: { ...k.services, storage: pluginStorage("watchdog", () => root) } as never });
+    await testkit.load(fake, plugin as never);
+    await fake.fire("agent.changed", { agent: a, change: started() });
+    at(500 * MIN);
+    const clock = k.timers[0]!;
+    await fake.fire("job.changed", { job: { jobId: clock.jobId, plugin: "watchdog", spec: clock.spec, state: "running", startedAt: new Date(T0).toISOString(), endedAt: null, result: null, reason: null }, change: { kind: "fired", n: 1 } });
+    for (let i = 0; i < 50 && !k.notices.length; i++) await Bun.sleep(5);
+    expect(k.notices).toEqual([{ agentId: "agt-z1", notice: { kind: "stalled", detail: "no progress for 500 min (no file changed; no agent, job, check or approval of its own finished)" } }]);
+    expect(k.cancels).toEqual([]);
+    await fake.dispose();
+    const bad = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 10 * MIN }, { services: k.services as never });
+    await expect(testkit.load(bad, plugin as never)).rejects.toThrow(/stopAfterMs \(600000\) is 0 or more than stalledAfterMs \(900000\)/);
+  });
+
+  test("it loads and disposes cleanly, and answers every hook it declares", async () => {
+    await testkit.loadDispose(manifest, plugin as never);
+    await testkit.hookContract(manifest, plugin as never);
+  });
+});

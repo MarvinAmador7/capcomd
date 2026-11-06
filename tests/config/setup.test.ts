@@ -206,4 +206,30 @@ describe("setup steps (non-interactive)", () => {
     const bad = json(run(["setup", "project", "--yes", "--sandbox", "kubernetes", "--json"], { cwd: r3, env: e }).out);
     expect(bad.steps[0]).toMatchObject({ ok: false, detail: "--sandbox kubernetes?" });
   }, 60_000);
+
+  test("service: turns the watchdog on in the user's config (plugin API §16.4); one you turned off stays off", () => {
+    const h = mkdtempSync(join(tmpdir(), "capcomd-setup-wd-home-"));
+    const e = { HOME: h, CAPCOMD_HOME: join(h, ".capcomd"), CAPCOMD_NO_CONFIG: "" };
+    const user = () => JSON.parse(readFileSync(join(h, ".capcomd", "config.json"), "utf8"));
+    mkdirSync(join(h, ".capcomd"), { recursive: true });
+    writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ env: { CAPCOMD_SANDBOX: "docker" }, plugins: { other: { x: 1 } } }));
+    const skipped = json(run(["setup", "service", "--yes", "--no-service", "--no-watchdog", "--json"], { cwd: h, env: e }).out);
+    expect(skipped.steps.find((s: any) => s.step === "watchdog")).toMatchObject({ ok: true, detail: expect.stringContaining("off (--no-watchdog)") });
+    expect(user().plugins).toEqual({ other: { x: 1 } });
+    const r = json(run(["setup", "service", "--yes", "--no-service", "--json"], { cwd: h, env: e }).out);
+    expect(r.steps.map((s: any) => s.step)).toEqual(["watchdog", "engine"]);
+    expect(r.steps[0]).toMatchObject({ ok: true, detail: expect.stringContaining("on: an agent whose work hasn't changed for 15 min gets a stalled notice, and is stopped after 45 min") });
+    expect(user()).toEqual({ env: { CAPCOMD_SANDBOX: "docker" }, plugins: { other: { x: 1 }, watchdog: { enabled: true } } });
+    const c = json(run(["setup", "check", "--json"], { cwd: h, env: { ...e, BOXD_API_KEY: "" } }).out);
+    expect(c.steps.find((s: any) => s.step === "watchdog")).toEqual({ step: "watchdog", ok: true, detail: "on" });
+    // Your own settings show, and an "enabled": false stays.
+    writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ plugins: { watchdog: { enabled: false, stalledAfterMs: 1_200_000 } } }));
+    const off = json(run(["setup", "service", "--yes", "--no-service", "--json"], { cwd: h, env: e }).out);
+    expect(off.steps[0].detail).toContain("off: turned off in plugins.watchdog");
+    expect(user().plugins.watchdog).toEqual({ enabled: false, stalledAfterMs: 1_200_000 });
+    expect(json(run(["setup", "check", "--json"], { cwd: h, env: { ...e, BOXD_API_KEY: "" } }).out).steps.find((s: any) => s.step === "watchdog").detail).toBe("off (`capcomd setup service` turns it on)");
+    writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ plugins: { watchdog: { enabled: true, stalledAfterMs: 1_200_000, everyMs: 5 } } }));
+    expect(json(run(["setup", "service", "--yes", "--no-service", "--json"], { cwd: h, env: e }).out).steps[0].detail).toBe("on: an agent whose work hasn't changed for 20 min gets a stalled notice, and is stopped after 45 min");
+    expect(json(run(["setup", "check", "--json"], { cwd: h, env: { ...e, BOXD_API_KEY: "" } }).out).steps.find((s: any) => s.step === "watchdog")).toMatchObject({ ok: false, detail: expect.stringContaining("user: plugins.watchdog.everyMs must be at least 1000") });
+  }, 60_000);
 });
