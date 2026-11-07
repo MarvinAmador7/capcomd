@@ -25,6 +25,7 @@ beforeAll(async () => {
   const agentsFile = join(dir, "agents.json");
   writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: {
     lead: { provider: "claude", auth: "apikey", maxTurns: 20, children: { allowSpawn: true, maxDepth: 1, maxChildren: 1, allowedChildProfiles: ["lead"] } },
+    worker: { provider: "claude", auth: "apikey", maxTurns: 20 },
   } }));
   env = {
     ...r.env,
@@ -86,6 +87,24 @@ test("a long job answers running; the CLI's input stays open and the job's resul
   expect(heard).toContain("built-ok");
   const kv = await cj(["kv", "get", run, `_jobs/${started.jobId}`]);
   expect(kv.j?.value).toMatchObject({ state: "done", result: { code: 0, stdout: "built-ok\n" } });
+}, 120_000);
+
+test("a worker that may not spawn has the in-VM capcomd too: its long job's result reaches it; its final message is its summary", async () => {
+  const run = (await cj(["run", "new"])).j?.runId;
+  runs.push(run);
+  const id = (await cj(["spawn", run, "--profile", "worker", "--task", "[job:4] run the suite", "--key", "worker"])).j?.agentId;
+  expect(id).toMatch(/^agt-/);
+  const agent = (await cj(["await", run, id, "--timeout-ms", "90000"])).j?.agents?.[0];
+  expect(agent?.status).toBe("done");
+  const started = JSON.parse(await repo.show(agent.result.branch, "job-start.txt"));
+  expect(started).toMatchObject({ ok: true, state: "running", label: "build" });
+  const heard = await repo.show(agent.result.branch, "messages.txt");
+  expect(heard).toContain(`Your background job ${started.jobId} (build) finished (exit 0)`);
+  expect(heard).toContain("built-ok");
+  expect((await cj(["kv", "get", run, `_jobs/${started.jobId}`])).j?.value).toMatchObject({ state: "done", by: id, result: { code: 0, stdout: "built-ok\n" } });
+  // It declared no summary (the fake CLI never runs `capcomd result`): its final message is its summary, here its
+  // answer to the job's message (the fake CLI answers each message with "answered").
+  expect(agent.result.summary).toBe("answered");
 }, 120_000);
 
 test("a cancelled agent's job is stopped with it and its record ends", async () => {

@@ -64,7 +64,7 @@ export const manifest: PluginManifest = {
 /** What the brief is built from besides the payload (a test replaces it). */
 export const contextKernel = {
   /** The agent's record as the kernel prepares it (src/primitives/ops.ts `agentPreparing`), else read from the engine. */
-  agent: async (runId: string, agentId: string): Promise<Pick<ScopeAgent, "contract"> & { limits?: Pick<ScopeAgent["limits"], "allowSpawn"> }> => {
+  agent: async (runId: string, agentId: string): Promise<Pick<ScopeAgent, "contract"> & { limits?: Pick<ScopeAgent["limits"], "allowSpawn">; profile?: string | null }> => {
     const p = preparingAgent.getStore();
     if (p && p.runId === runId && p.agentId === agentId) return p.record as ScopeAgent;
     return (await import("../primitives/ops")).getAgentOrThrow(runId, agentId);
@@ -344,7 +344,9 @@ export const plugin = definePlugin({
       const { contextSkills } = await import("../context/skills");
       const has = call.payload.prompt.skills;
       let slots = SKILLS_MAX - has.length, bytes = SKILL_BYTES_MAX - has.reduce((n, s) => n + Buffer.byteLength(s.text), 0);
-      const wanted = contextSkills({ role, maySpawn: a.limits?.allowSpawn === true }).filter((s) => !has.some((x) => x.name === s.name));
+      const { hasVmCapcomd } = await import("../subagents/skill");
+      const capcomd = hasVmCapcomd({ limits: { allowSpawn: a.limits?.allowSpawn === true }, contract: a.contract, profile: a.profile ?? agent.profile });
+      const wanted = contextSkills({ role, capcomd }).filter((s) => !has.some((x) => x.name === s.name));
       const skills = wanted.filter((s) => {
         const size = Buffer.byteLength(s.text);
         if (slots < 1 || size > bytes) return false;
@@ -402,7 +404,9 @@ export const plugin = definePlugin({
         const role = flags.review === true ? "review" : "work";
         const b = await briefFor({ runId, agentId: null, profile: name, spec: { ...spec, ...(resolved.profile ? { profile: resolved.profile } : {}) }, role });
         const { contextSkills } = await import("../context/skills");
-        const skills = contextSkills({ role, maySpawn: spec.children?.allowSpawn === true }).map(({ name: n, hash }) => ({ name: n, hash }));
+        const { hasVmCapcomd } = await import("../subagents/skill");
+        const capcomd = hasVmCapcomd({ limits: { allowSpawn: spec.children?.allowSpawn === true }, profile: name });
+        const skills = contextSkills({ role, capcomd }).map(({ name: n, hash }) => ({ name: n, hash }));
         return {
           schema: SCHEMA, ok: true, profile: name, brief: b.text, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes, budget: { ...b.limits, source: b.source }, providers: b.providers, skills,
           text: `${b.text}\n\nWith the skills: ${skills.map((s) => `${s.name} (sha256 ${s.hash.slice(0, 12)})`).join(", ")}.`,
