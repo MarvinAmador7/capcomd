@@ -1,6 +1,7 @@
 // ADR-017 driver glue: give an agent its in-VM capcomd (token + spool pump) for as long as it runs.
-//  - Real agents (allowSpawn only): VmSpool over boxd exec; the runner installs the CLI + skill. (Agents that may not
-//    spawn name their tab with a local shim the daemon reads from their tool calls: no RPC, see runner.ts.)
+//  - Real agents (every one that may spawn or does work of its own: skill.ts `hasVmCapcomd`): VmSpool over boxd exec;
+//    the runner installs the CLI + skill. (A reviewer, a report agent and the consolidator answer with their final
+//    message and name their tab with a local shim the daemon reads from their tool calls: no RPC, see runner.ts.)
 //  - Scripted fake agents (CAPCOMD_SPAWN_EXEC=script, tests/scenarios): the contract's `script` runs
 //    on this host with a scrubbed env (no host secrets, no engine endpoint) and the same CLI on a
 //    LocalSpool, so scenarios exercise exactly the in-VM code path minus boxd.
@@ -13,7 +14,7 @@ import { client } from "../core/relay";
 import type { ScopeAgent } from "../actors/scope";
 import { handleRpc } from "./rpc";
 import { LocalSpool, VmSpool, startPump } from "./spool";
-import { mint, opsFor } from "./token";
+import { mayRunCommands, mint, opsFor } from "./token";
 import { activityReporter } from "../agents/activity";
 import { killpoint } from "../utils/killpoint";
 import { env } from "../utils/env";
@@ -46,7 +47,7 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   const attached = attachMachine(machine).catch((e) => { console.error(`[jobs] ${a.agentId}: ${(e as Error)?.message ?? e}`); return null; });
   const pump = startPump({
     spool, intervalMs, refreshMs: Math.max(1000, ttlMs / 2),
-    mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits), ttlMs }); jti = t.claims.jti; return t.token; },
+    mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits, { jobs: mayRunCommands(a.spec) }), ttlMs }); jti = t.claims.jti; return t.token; },
     handle: async (req) => {
       driverKillpoint(`rpc.${req.op}.before`);
       const r = await handleRpc(req, { runId, agentId: a.agentId, exec, upload, jobs: machine });

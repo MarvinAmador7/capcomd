@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
+  agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
+  job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
+  to it as a message), keep notes (`capcomd kv`), propose lessons for the project's memory (`capcomd result --data
+  '{"context": [...]}'`), read the run's tree, and end with a summary (`capcomd result --summary`); its instructions
+  say so. It still can't spawn, verify or merge (refused), and a worker whose profile runs no commands of its own (an
+  allow-list without a plain `Bash`, or a read-only Codex sandbox) gets no background jobs. Reviewers, `--report`
+  agents and the context consolidator are unchanged.
+- Changed: an agent that ends without declaring a summary gets its final message as its `result.summary` (up to
+  2,000 characters), so a parent, the driver and the apps always have something to read; a reviewer's verdict is
+  never used as one.
+
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

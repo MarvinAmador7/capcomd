@@ -45,8 +45,13 @@ refreshed by the driver every TTL/2 while the agent runs. A token is refused if:
 format is bad, it is expired, its jti is in the scope's `revoked` table (`capcomd token revoke`;
 the driver revokes on agent exit), its agent is terminal, or it arrives through another agent's
 spool (`sub` must match the spool's owner, so a stolen token is useless elsewhere).
-Ops: spawners get all verbs. Others get no CLI at all for real agents (scripted test agents get
-status/kv/task/inbox/send/result/heartbeat).
+Ops: spawners get all verbs. Every other agent that does work of its own (not verify's reviewer, a
+`--report` agent or the context consolidator, which answer with their final message) gets the CLI too,
+with a leaf token (`LEAF_OPS` in `src/subagents/token.ts`): title, the reads (status, tree, inspect,
+logs, events, budget), heartbeat, kv, task, inbox, send, result, and the job ops (plugin API §16.2)
+when its profile lets it run a command of its own (`mayRunCommands`: no allow-list without an
+unrestricted shell, no denied shell, no read-only Codex sandbox). Never spawn, await, cancel,
+handoff, verify, merge, grant, fetch or check. Scripted test agents get the same tokens.
 
 Authority comes only from the token and the scope's limits, never from request text:
 - **Writes** (spawn, cancel, send, verify, merge, handoff) reach only the caller's subtree;
@@ -118,7 +123,13 @@ For agents whose *effective* limits allow spawning, the driver passes the orches
 (`src/subagents/skill.ts`: the agent's own limits, budget, core loop, fan-out sizing guidance,
 trust rules) to the runner. For claude it is appended to `--append-system-prompt` (alongside the
 profile's own append), and claude gets `Bash(capcomd:*)` and `mcp__capcomd` tools. For codex it is
-appended to the prompt. Agents without `children.allowSpawn` get no CLI, no MCP server and no skill.
+appended to the prompt. An agent without `children.allowSpawn` that has the CLI (above) gets the same
+CLI, MCP server (its `tools/list` shows only the tools its token allows) and tools, and the worker's
+lines instead of the skill (`workerSkill`: its tab, long commands as background jobs, notes and
+lessons, the summary it ends with); one that ends with no change of its own still fails
+(`no_changes`), as before. A reviewer, a report agent and the consolidator get only the naming shim.
+An agent that declares no summary has its final message as `result.summary` (capped at 2,000
+characters; a reviewer's final message is its verdict, never a summary).
 
 ## Testing
 - `tests/scenarios/` (regression gate in CI, `bun run test:scenarios`): scripted fake agents
