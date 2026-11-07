@@ -551,7 +551,7 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
   `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
   warning when no daemon runs.
-- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.40, 2026-11-07;
+- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.41, 2026-11-07;
   `src/plugins/snapshot.ts` `seamPresence`): a seam only the daemon loads made every resolution in the CLI fail,
   `capcomd profiles list` included, so outside the daemon a name is a built-in or one the running daemon lists from an
   active, enabled plugin; any other is an error while a daemon runs and a warning (from every reader of profiles, not
