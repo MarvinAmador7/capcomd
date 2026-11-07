@@ -314,12 +314,23 @@ export function readOnlyTools(allowed: readonly string[] | undefined): boolean {
   return !!allowed?.length && !allowed.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\((:?\*)?\))?$/.test(t.trim()));
 }
 
+/**
+ * Whether the profile can't edit files, from what its provider applies: Claude Code its tool allow-list
+ * (readOnlyTools; it ignores `sandbox.codex`), Codex its own sandbox (`sandbox.codex: read-only`; it has no per-tool
+ * allow-list, so `tools.allowed` doesn't limit it). Another provider's: not known, so not read-only. No provider (a
+ * bare spec): its allow-list.
+ */
+export function readOnlySpec(s: { provider?: string; allowedTools?: readonly string[]; sandbox?: string }): boolean {
+  const kind = s.provider === undefined ? "claude-code" : kindOf(s.provider);
+  return kind === "claude-code" ? readOnlyTools(s.allowedTools) : kind === "codex" ? s.sandbox === "read-only" : false;
+}
+
 /** What a profile is for, in plain words (capcomd_profiles, `capcomd profiles list`). */
-export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & { toolMode?: string }): string {
+export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & Partial<Pick<AgentSpec, "provider" | "sandbox">> & { toolMode?: string }): string {
   const lead = leadText(s);
   const mode = s.toolMode === "orchestrate" ? `. ${ORCHESTRATE_TEXT}` : "";
   if (lead) return `leads a part: spawns ${lead}, and verifies and merges their work (spawn it with children: {maxChildren, maxDepth} to size it)${mode}`;
-  return readOnlyTools(s.allowedTools) ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
+  return readOnlySpec(s) ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
 }
 
 /**

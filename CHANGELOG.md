@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: `capcomd_profiles` and `capcomd profiles list` call a profile read-only (`fit`, `does`) only when its agent
+  really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by `sandbox.codex: read-only`.
+  A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a Claude Code profile with a
+  read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only.
+- Fix: a profile with `permissions: { report: false }` is also refused when a plugin adds `report` to the spawn
+  (`reason: "report_not_allowed"`), not only when the spawner asks for it.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

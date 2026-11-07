@@ -456,13 +456,16 @@ Made while pinning the version (§7 step 3, 2026-11-05; `src/actors/scope.ts`, `
 Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src/profiles/describe.ts`):
 
 - **`permissions.report: false` refuses a spawn with `report`** (`reason: report_not_allowed`), checked on the host
-  where every spawn is (`ops.spawnAgent`, after `profile.resolved`), not pinned. Unset means allowed, as before any
-  profile could say: `true` changes nothing at spawn and says, in `fit`, that the profile answers with a report.
+  where every spawn is (`ops.spawnAgent`, after `profile.resolved`, and again after `agent.spawning`, whose plugins may
+  add contract keys, `report` among them), not pinned. Unset means allowed, as before any profile could say: `true`
+  changes nothing at spawn and says, in `fit`, that the profile answers with a report.
 - **`identity.title` and `identity.avatar` are not inherited**, like `name`: a `lead` that extends `worker` would
   otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
   a reviewer until it says otherwise).
 - **`fit` is built from the resolved spec and `permissions` only**: what the tools allow (orchestrate, read-only,
-  edits; a plain `Bash` isn't read-only, `Bash(<cmd>:*)` rules are, as `does` says), report, provider label, model,
+  edits; a plain `Bash` isn't read-only, `Bash(<cmd>:*)` rules are, as `does` says; read-only is what the provider
+  applies, `src/profiles/v1.ts` `readOnlySpec`: Claude Code's tool allow-list, Codex's `sandbox.codex: read-only`
+  since it has no per-tool allow-list, never for a provider capcomd doesn't know), report, provider label, model,
   effort, cost, limits, an egress allowlist's size, whether it leads (`leadText`). No `description`,
   `tags`, `title` or `sharing` goes into it, so a shared package can't word it.
 - **`cost` is a tier by model family** (Haiku, `-mini`, `-nano`: low; Sonnet, GPT, `o<N>`: medium; Opus, `-pro`:
