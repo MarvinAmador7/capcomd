@@ -3,6 +3,7 @@
 // exactly one auth mode and harness limits; tasks and runs select one by name. Env (CAPCOMD_AGENT, CAPCOMD_AGENT_*)
 // stays an override on top.
 import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
+import { seamPresence } from "../plugins/snapshot";
 import type { ContextSpec } from "../../packages/plugin/src/context-layer";
 
 export const AGENTS_SCHEMA = "capcomd.agents/v1";
@@ -180,8 +181,19 @@ const KEYS = new Set(Object.keys(AGENTS_JSON_SCHEMA.$defs.agent.properties));
  */
 export interface SpecLabels { prefix: string; key?: (field: string) => string }
 
-/** Validate one profile; returns errors (empty = ok). */
-export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { prefix: `agents.${name}` }): string[] {
+/**
+ * Where reading profiles reports a provider no daemon is running to confirm, and the env (CAPCOMD_HOME) whose daemon is
+ * asked (src/plugins/snapshot.ts `seamPresence`). Without one (a candidate checked before it is written, an override)
+ * such a provider is an error, and the daemon asked is process.env's.
+ */
+export interface SeamCheck { warnings: string[]; env?: Record<string, string | undefined> }
+
+/**
+ * Validate one profile; returns errors (empty = ok). Its provider is an active agent seam's name: a built-in, or
+ * outside the daemon one the running daemon lists; one that is neither, with no daemon running to ask, is a warning in
+ * `seams` (spec §7.1, ADR-024 §9).
+ */
+export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { prefix: `agents.${name}` }, seams?: SeamCheck): string[] {
   const e: string[] = [];
   const at = (m: string) => e.push(`${labels.prefix}: ${m}`);
   const k$ = labels.key ?? ((k: string) => k);
@@ -193,7 +205,12 @@ export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { 
   const legacyKey = "apiKey" in s || "apikey" in s, legacySub = "subscription" in s;
   if (legacyKey && legacySub) at("both an API key and a subscription are configured; set exactly one via auth: \"apikey\" | \"subscription\"");
   if (s.provider === undefined && labels.key) at(`${k$("provider")} is required (${agentProviderNames().join(", ")}, or a plugin's agent provider)`);
-  else if (typeof s.provider !== "string" || !agentProviderNames().includes(s.provider)) at(unknownProviderText(s.provider));
+  else if (typeof s.provider !== "string") at(unknownProviderText(s.provider));
+  else {
+    const has = seamPresence("agent", s.provider, agentProviderNames().includes(s.provider), seams?.env);
+    if (has === "unchecked" && seams) seams.warnings.push(`${labels.prefix}: ${k$("provider")} "${s.provider}" isn't a built-in agent provider, and no daemon is running to say whether one of its plugins provides it (the daemon checks when an agent uses the profile)`);
+    else if (has !== "active") at(unknownProviderText(s.provider, seams?.env));
+  }
   if (s.auth === undefined) at(legacyKey || legacySub ? `use auth: "${legacyKey ? "apikey" : "subscription"}" instead of a credential field` : `${k$("auth")} is required ("apikey" or "subscription"): neither is configured`);
   else if (!["apikey", "subscription"].includes(s.auth as string)) at(`${k$("auth")} must be "apikey" or "subscription"`);
   const posInt = (k: string, min = 1) => { if (s[k] !== undefined && (!Number.isInteger(s[k]) || (s[k] as number) < min)) at(`${k$(k)} must be an integer >= ${min}`); };
@@ -360,15 +377,15 @@ export function widenings(base: AgentSpec, next: AgentSpec): string[] {
   return w;
 }
 
-export function validateFile(raw: unknown): string[] {
-  const e = validateFileShape(raw);
+export function validateFile(raw: unknown, seams?: SeamCheck): string[] {
+  const e = validateFileShape(raw, undefined, seams);
   if (!e.length) e.push(...childNarrowing((raw as AgentsFile).agents));
   return e;
 }
 
 /** Everything validateFile checks but the parent → child narrowing, which runs on resolved specs (`childNarrowing`).
  *  `defined`: the names a `default` may name (the v2 loader passes every profile it resolved). */
-export function validateFileShape(raw: unknown, defined?: (name: string) => boolean): string[] {
+export function validateFileShape(raw: unknown, defined?: (name: string) => boolean, seams?: SeamCheck): string[] {
   if (!raw || typeof raw !== "object") return ["file must be a JSON object"];
   const f = raw as Record<string, any>;
   const e: string[] = [];
@@ -376,7 +393,7 @@ export function validateFileShape(raw: unknown, defined?: (name: string) => bool
   for (const k of Object.keys(f)) if (!["schema", "default", "agents", "$schema", "$comment"].includes(k)) e.push(`unknown top-level field "${k}"`);
   if (f.$comment !== undefined && typeof f.$comment !== "string") e.push("$comment must be a string");
   if (!f.agents || typeof f.agents !== "object") e.push("agents must be an object");
-  else for (const [n, s] of Object.entries(f.agents)) e.push(...validateSpec(n, s));
+  else for (const [n, s] of Object.entries(f.agents)) e.push(...validateSpec(n, s, undefined, seams));
   if (f.default !== undefined && !(defined ? defined(f.default) : f.agents?.[f.default])) e.push(`default "${f.default}" is not a defined agent`);
   return e;
 }
