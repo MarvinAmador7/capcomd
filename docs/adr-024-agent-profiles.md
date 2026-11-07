@@ -583,7 +583,10 @@ Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`,
   in the encoding `PUT` takes (a list as a JSON array), as the settings rows' are. A prompt row says whether it is set
   and how long, never its text (`GET /v1/profiles` serves no prompt; neither does this). Values capcomd has no row for
   (`skills`, `tools.mcp`, `x-` fields) are read-only rows labelled by their path, so they show without an app release;
-  `tools.mcp` shows its servers' names only, since a command line may carry a token.
+  `tools.mcp` and `context.providers` show their names only, since a command line or a provider's own settings may
+  carry a token, and any other such row has the redactor's token shapes taken out. Files are written through a
+  temporary file with an unguessable name, created exclusively, and keep their mode: a project's profiles directory
+  is its repository's, and a link planted at a predictable name would be written through.
 - **`PUT` takes an `Idempotency-Key` and the `rev`**: the key makes a retry after a lost response replay its first
   answer (the write-route rules), the `rev` refuses a change made from a read that is out of date (409 with the current
   one), as `PATCH /v1/sandboxes/{name}/settings` does. The `configure` scope, as project setup. Writes in the daemon

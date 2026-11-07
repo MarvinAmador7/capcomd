@@ -4,7 +4,8 @@
 // layer over it. `agents.json` (v1) is still read: its entries are profiles of the layer it sits in, and a v2 profile
 // of the same name in that layer wins. Every profile resolves to the flat v1 spec (./v1.ts AgentSpec, the pin), and
 // the parent → child narrowing is checked on those, never on the files.
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { env as envVar } from "../utils/env";
@@ -40,12 +41,23 @@ export function writeAgentsFile(f: AgentsFile, path = agentsFilePath()) {
 }
 /** An agents.json's text as capcomd writes it. */
 export const agentsFileText = (f: AgentsFile): string => JSON.stringify({ $schema: AGENTS_JSON_SCHEMA.$id, ...f }, null, 2) + "\n";
-/** Write a file whole or not at all (a reader never sees half of it): a temporary file beside it, renamed over it. */
+/**
+ * Write a file whole or not at all (a reader never sees half of it): a temporary file beside it, renamed over it. The
+ * temporary name is unguessable and created exclusively: a profile's directory may be a repository's, and a link
+ * planted at a predictable name would have the write go through it to any file on the host. The file keeps its mode.
+ */
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+  let mode = 0o644;
+  try { mode = statSync(path).mode & 0o777; } catch { /* a new file */ }
+  try {
+    writeFileSync(tmp, text, { flag: "wx", mode });
+    renameSync(tmp, path);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 /**

@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: `capcomd profiles add|set|rm`, `capcomd setup project` and `PUT /v1/profiles/{name}` write profile files
+  through a temporary file with an unguessable name, so a link a repository plants beside its profiles can't redirect
+  the write to another file; an edited file keeps its permissions. `GET /v1/profiles/{name}` shows a context
+  provider by its name only and hides token-shaped text in other read-only rows, and `PUT` refuses a number too large
+  to store exactly instead of writing it as `1e+23`.
 - Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
   agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
   job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back

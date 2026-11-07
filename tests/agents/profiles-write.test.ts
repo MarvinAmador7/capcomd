@@ -1,7 +1,7 @@
 // ADR-024 §7 step 6: writing profiles. A write changes the one file a profile is defined in and bumps its version; it is
 // checked as the files would be after it and changes nothing when they wouldn't resolve, or when a later file hides it.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, type ProfileWriteError } from "../../src/profiles";
@@ -98,6 +98,21 @@ describe("editProfile: the profile's own file", () => {
     expect(w.read("P/lead.yaml")).toBe(text);
   });
 
+  test("written through an unguessable, exclusive temporary file: a link planted beside the profile isn't written through; the file keeps its mode", () => {
+    const w = world({ "P/lead.yaml": LEAD }, { worker });
+    // A repository's profiles may hold anything, a link at the old predictable temporary name included.
+    const victim = join(dirname(w.agentsFile), "victim.txt");
+    writeFileSync(victim, "untouched\n");
+    symlinkSync(victim, `${w.at("P/lead.yaml")}.tmp-${process.pid}`);
+    chmodSync(w.at("P/lead.yaml"), 0o600);
+    editProfile("lead", { "limits.maxTurns": 30 }, w.o);
+    expect(readFileSync(victim, "utf8")).toBe("untouched\n");
+    expect(w.read("P/lead.yaml")).toContain("maxTurns: 30");
+    expect(statSync(w.at("P/lead.yaml")).mode & 0o777).toBe(0o600);
+    // No temporary file is left beside it.
+    expect(readdirSync(dirname(w.at("P/lead.yaml"))).sort()).toEqual(["lead.yaml", `lead.yaml.tmp-${process.pid}`]);
+  });
+
   test("a parent's edit: the child keeps its own version, and its rev changes", () => {
     const w = world({ "P/lead.yaml": LEAD }, { worker });
     const rev = profileRev(w.load().profiles.lead!);
@@ -167,10 +182,17 @@ describe("profileFields: the rows a client edits", () => {
     // An MCP server by its name only: its command line may hold a token.
     expect(f["tools.mcp"]).toMatchObject({ type: "info", value: null, display: "gh, docs", editable: false });
     expect(JSON.stringify(profileFields(lead))).not.toContain("ghp_secret");
+    // A context provider by its name only (its settings may hold a token); any other value with a token's shape redacted.
+    const ctx = world({ "P/lead.yaml": `${LEAD}context: { providers: [{ name: groundray, url: "https://x-access-token:s3cr3t@example.com" }] }\nx-hook: { token: ghp_abcdefghijklmnopqrstuvwxyz0123 }\n` }, { worker });
+    const cf = Object.fromEntries(profileFields(ctx.load().profiles.lead!).map((r) => [r.id, r]));
+    expect([cf["context.providers"]?.display, cf["x-hook.token"]?.display]).toEqual(["groundray", "[REDACTED]"]);
+    expect(JSON.stringify(profileFields(ctx.load().profiles.lead!))).not.toMatch(/s3cr3t|ghp_abc/);
     // PUT's values: an editable row with a value of its type.
     expect(editOf(lead, { "limits.maxTurns": "60", tags: '["a"]', "permissions.report": "false", "harness.model": null })).toEqual({ edit: { "limits.maxTurns": 60, tags: ["a"], "permissions.report": false, "harness.model": null } });
     expect(editOf(lead, { "harness.effort": "high" })).toMatchObject({ field: "harness.effort" });
     expect(editOf(lead, { "limits.maxTurns": "many" })).toEqual({ field: "limits.maxTurns", message: "limits.maxTurns: must be a number" });
+    // Past 2^53 a number isn't the one sent: refused, not written as 1e+23.
+    expect(editOf(lead, { "limits.maxTurns": "99999999999999999999999" })).toEqual({ field: "limits.maxTurns", message: `limits.maxTurns: must be at most ${Number.MAX_SAFE_INTEGER}` });
     expect(editOf(lead, { "tools.mode": "sideways" })).toEqual({ field: "tools.mode", message: "tools.mode: must be one of execute, orchestrate" });
     expect(editOf(lead, { tags: "a,b" })).toEqual({ field: "tags", message: "tags: must be a JSON array of strings" });
     expect(editOf(lead, { "prompt.append": "x" })).toMatchObject({ field: "prompt.append" });
