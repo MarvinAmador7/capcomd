@@ -5,6 +5,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
+  is written (a quoted `"sensitivity"` key, the value on the next line or as a block scalar, a flow mapping, a key given
+  twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a brain could be added and its
+  files copied into agents' sandboxes.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its
