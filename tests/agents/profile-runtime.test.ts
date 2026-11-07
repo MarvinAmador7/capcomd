@@ -63,6 +63,9 @@ describe("the runtime blocks of a profile", () => {
     expect(errorOf(() => bad.load())).toContain("lifecycle.onEnd: must be a list of plugin names");
     const nowhere = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { provider: nowhere }"]) });
     expect(errorOf(() => nowhere.load())).toContain(`sandbox.provider "nowhere" isn't an active sandbox provider`);
+    // The fix names a command that exists: builds are listed by `capcomd env status` (there is no `env build --name`).
+    const unnamed = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { environment: Not.A.Build }"]) });
+    expect(errorOf(() => unnamed.load())).toContain("sandbox.environment: must be default, image or a build's name (capcomd env status lists them)");
   });
 
   test("an override that makes a profile with MCP servers orchestrate is refused at spawn, and its CLI would get none", async () => {
