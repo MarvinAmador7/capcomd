@@ -61,7 +61,7 @@ export const TRUST_LOCK = { waitMs: 5_000, staleMs: 30_000 };
 
 /** Another change held trust.json.lock past TRUST_LOCK.waitMs: nothing was changed. */
 export class TrustLockedError extends RelayError {
-  constructor(message: string) { super("conflict", message, "Run it again once the other change is done.", { code: "locked", retryable: true }); }
+  constructor(message: string, hint = "Run it again once the other change is done.") { super("conflict", message, hint, { code: "locked", retryable: true }); }
 }
 
 const gone = (pid: unknown) => {
@@ -83,7 +83,18 @@ function locked<T>(env: Env, change: () => T): T {
   for (;;) {
     try { writeFileSync(p, me, { flag: "wx", mode: 0o600 }); break; } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
     let text: string, age: number;
-    try { text = readFileSync(p, "utf8"); age = Date.now() - lstatSync(p).mtimeMs; } catch { continue; /* released meanwhile */ }
+    try {
+      const st = lstatSync(p);
+      // One no change made (a directory, a link, a file that can't be read) is never released: refused at once, not
+      // waited on in a loop that never ends.
+      if (!st.isFile()) throw new TrustLockedError(`${p} isn't a lock capcomd made (not a plain file), so nothing was changed`, `Remove ${p}, then run it again.`);
+      text = readFileSync(p, "utf8");
+      age = Date.now() - st.mtimeMs;
+    } catch (e) {
+      if (e instanceof TrustLockedError) throw e;
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") continue; // released meanwhile
+      throw new TrustLockedError(`${p} can't be read (${(e as NodeJS.ErrnoException).code ?? (e as Error).message}), so nothing was changed`, `Remove ${p}, then run it again.`);
+    }
     let pid: unknown = null;
     try { pid = (JSON.parse(text) as { pid?: unknown }).pid; } catch { /* still being written */ }
     if (gone(pid) || age > TRUST_LOCK.staleMs) {
@@ -139,6 +150,8 @@ export function revokeTrust(kind: string, dir: string, env: Env = process.env): 
  */
 export function announce(kind: string, dir: string, hash: string, env: Env = process.env): TrustEntry | null {
   const where = real(dir);
+  // Marked already, or not trusted here: nothing to change, so the daemon doesn't take (or wait on) the lock to learn it.
+  if (!read(env).some((x) => same(x, kind, where) && x.hash === hash && !x.announced)) return null;
   try {
     return locked(env, () => {
       const all = read(env);

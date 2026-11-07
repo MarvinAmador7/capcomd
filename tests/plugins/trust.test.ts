@@ -264,6 +264,44 @@ describe("trust.json, changed by the CLI and the daemon at once", () => {
     expect(existsSync(lock)).toBe(false);
   });
 
+  test("a lock no change made (a directory, a dangling link) is refused at once, not spun on; announce skips it", () => {
+    const lock = join(home, "trust.json.lock"), dir = join(home, "places", "w");
+    mkdirSync(home, { recursive: true });
+    recordTrust({ kind: "plugin", name: "w", dir, hash: "sha256:1", by: "operator" });
+    for (const plant of [() => mkdirSync(lock), () => symlinkSync(join(home, "nowhere"), lock)]) {
+      plant();
+      try {
+        // In a child with a deadline: before, both spun forever (the daemon's announce too).
+        const p = Bun.spawnSync(["bun", "-e", `
+          const { announce, recordTrust } = await import(${JSON.stringify(new URL("../../src/install/trust.ts", import.meta.url).pathname)});
+          const out = { announce: announce("plugin", ${JSON.stringify(dir)}, "sha256:1") };
+          try { recordTrust({ kind: "plugin", name: "v", dir: ${JSON.stringify(join(home, "places", "v"))}, hash: "sha256:2", by: "operator" }); } catch (e) { out.record = [e.constructor.name, e.message, e.hint]; }
+          console.log(JSON.stringify(out));
+        `], { env: { ...process.env, CAPCOMD_HOME: home }, timeout: 15_000 });
+        expect(p.signalCode ?? null).toBeNull();
+        const out = JSON.parse(p.stdout.toString().trim());
+        expect(out.announce).toBeNull();
+        expect(out.record).toEqual(["TrustLockedError", expect.stringContaining("isn't a lock capcomd made"), `Remove ${lock}, then run it again.`]);
+      } finally { rmSync(lock, { recursive: true, force: true }); }
+    }
+    expect(trustState("plugin", join(home, "places", "v"), "sha256:2").state).toBe("untrusted");
+    expect(trustState("plugin", dir, "sha256:1").entry?.announced).toBe(false);
+  }, 40_000);
+
+  test("announce of a trust marked already doesn't wait on a held lock", () => {
+    const lock = join(home, "trust.json.lock"), dir = join(home, "places", "m");
+    mkdirSync(home, { recursive: true });
+    recordTrust({ kind: "plugin", name: "m", dir, hash: "sha256:1", by: "operator" });
+    expect(announce("plugin", dir, "sha256:1")).toMatchObject({ announced: true });
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "held" }));
+    try {
+      const t = Date.now();
+      expect(announce("plugin", dir, "sha256:1")).toBeNull();
+      expect(announce("plugin", dir, "sha256:other")).toBeNull();
+      expect(Date.now() - t).toBeLessThan(TRUST_LOCK.waitMs / 2);
+    } finally { rmSync(lock, { force: true }); }
+  });
+
   test("a link where the temporary file used to be (trust.json.<pid>.tmp) is never written through", () => {
     mkdirSync(home, { recursive: true });
     const victim = join(home, "victim.txt"), planted = join(home, `trust.json.${process.pid}.tmp`);

@@ -14,7 +14,7 @@ import { RelayError } from "../../src/core/errors";
 import { exportProfile, installedFacts, installProfile, packageWarnings, removeInstalledProfile, updateProfile } from "../../src/profiles/install";
 import { projectSkillTrust, readProfiles, resolveAgent, trustProfileSkills, untrustedSkillsProblem } from "../../src/profiles";
 import { hashTree, readLock } from "../../src/install/lock";
-import { trustState } from "../../src/install/trust";
+import { TRUST_LOCK, TrustLockedError, trustState } from "../../src/install/trust";
 
 const CLI = new URL("../../src/cli/index.ts", import.meta.url).pathname;
 const sha = (t: string) => new Bun.CryptoHasher("sha256").update(t).digest("hex");
@@ -294,6 +294,23 @@ describe("update", () => {
     expect(leftovers(w.user)).toEqual([]);
   });
 
+  test("a new package file whose name differs from one you added only in case (or Unicode form) is a conflict too", async () => {
+    // macOS's file system folds case and Unicode form: kept where it is, your Notes.md would replace the package's notes.md.
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, w.o);
+    const dir = join(w.user, "security-critic");
+    writeFileSync(join(dir, "Notes.md"), "Mine.\n");
+    mkdirSync(join(dir, "Docs"));
+    writeFileSync(join(dir, "Docs", "a.md"), "Mine.\n");
+    writeFileSync(join(dir, "caf\u0065\u0301.md"), "Mine.\n");
+    const lock = readLock(dir)!;
+    await repo.commit({ "profiles/security-critic/notes.md": "The package's.\n", "profiles/security-critic/docs": "a file\n", "profiles/security-critic/caf\u00e9.md": "The package's.\n" });
+    await refused(updateProfile("security-critic", w.o), "conflict", /needs the place of files you added.*: Docs\/a\.md, Notes\.md, caf/);
+    expect(readLock(dir)).toEqual(lock);
+    expect(readFileSync(join(dir, "Notes.md"), "utf8")).toBe("Mine.\n");
+    expect(leftovers(w.user)).toEqual([]);
+  });
+
   test("an update the profiles wouldn't resolve with is put back, with the files you added", async () => {
     const w = world(), repo = await profileRepo(twoProfiles());
     await installProfile(`${repo.bare}#security-critic`, w.o);
@@ -387,6 +404,23 @@ describe("export and remove", () => {
     expect(trustState("profile", skill, `sha256:${sha(THREAT)}`, w.env).state).toBe("untrusted");
     expect(JSON.parse(readFileSync(join(w.env.CAPCOMD_HOME!, "trust.json"), "utf8")).entries).toEqual([]);
     expect(leftovers(w.projectProfiles)).toEqual([]);
+  });
+
+  test("rm while trust.json stays locked by another change is refused and leaves the package where it was", async () => {
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, { ...w.o, project: true });
+    const dir = join(w.projectProfiles, "security-critic"), skill = join(dir, "skills", "threat-model", "SKILL.md");
+    trustProfileSkills(w.load().profiles["security-critic"]!.skills, { env: w.env });
+    const lock = join(w.env.CAPCOMD_HOME!, "trust.json.lock");
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "held" }));
+    const wait = TRUST_LOCK.waitMs;
+    TRUST_LOCK.waitMs = 50;
+    try {
+      expect(() => removeInstalledProfile("security-critic", { ...w.o, project: true })).toThrow(TrustLockedError);
+    } finally { TRUST_LOCK.waitMs = wait; rmSync(lock, { force: true }); }
+    expect(existsSync(join(dir, "profile.yaml"))).toBe(true);
+    expect(leftovers(w.projectProfiles)).toEqual([]);
+    expect(trustState("profile", skill, `sha256:${sha(THREAT)}`, w.env).state).toBe("trusted");
   });
 });
 

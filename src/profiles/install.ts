@@ -272,11 +272,17 @@ function sameFile(abs: string, f: TreeFile): boolean {
 
 /**
  * Of the user's files `kept`, those the new package has a file at, or a file where one of them needs a directory, or a
- * directory where one of them is a file: the update can't keep them where they are.
+ * directory where one of them is a file: the update can't keep them where they are. Names are compared as macOS's file
+ * system does (case and Unicode form folded), so a Notes.md of yours never lands on the package's notes.md.
  */
 function clashes(kept: string[], next: Record<string, TreeFile>): string[] {
-  const dirs = new Set(Object.keys(next).flatMap((f) => f.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"))));
-  return kept.filter((p) => Object.hasOwn(next, p) || dirs.has(p) || p.split("/").slice(0, -1).some((_, i, a) => Object.hasOwn(next, a.slice(0, i + 1).join("/"))));
+  const fold = (p: string) => p.normalize("NFC").toLowerCase();
+  const files = new Set(Object.keys(next).map(fold));
+  const dirs = new Set([...files].flatMap((f) => f.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"))));
+  return kept.filter((k) => {
+    const p = fold(k);
+    return files.has(p) || dirs.has(p) || p.split("/").slice(0, -1).some((_, i, a) => files.has(a.slice(0, i + 1).join("/")));
+  });
 }
 
 /**
@@ -346,7 +352,8 @@ export function removeInstalledProfile(name: string, o: { project?: boolean; pat
   const skills = listSkills(dir);
   const gone = join(dirname(dir), `.removed-${name}-${process.pid}-${Date.now()}`);
   checkedChange(views(path, env, layer), env, `removing ${name}`, () => renameSync(dir, gone), () => renameSync(gone, dir));
-  for (const s of skills) revokeTrust(PROFILE_TRUST_KIND, s, env);
+  // trust.json held by another change past its wait: the package goes back, so the refusal's "nothing was changed" holds.
+  try { for (const s of skills) revokeTrust(PROFILE_TRUST_KIND, s, env); } catch (e) { renameSync(gone, dir); throw e; }
   rmSync(gone, { recursive: true, force: true });
   return { name, dir, layer };
 }
