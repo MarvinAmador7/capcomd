@@ -41,7 +41,7 @@ test("the daemon's plugin hears its note on the daemon stream and a new run's ev
   await sleep(1500);   // a few more polls: nothing else comes
 
   const mine = heard().filter((h) => h.stream === run);
-  const want = (await trajectory(w, run) as Array<{ seq: number; type: string }>).map((e) => ({ seq: e.seq, type: /^[A-Z]/.test(e.type) ? dottedType(e.type) : e.type }))
+  const want = (await trajectory(w, run)).map((e: any) => ({ seq: e.seq, type: /^[A-Z]/.test(e.type) ? dottedType(e.type) : e.type }))
     .filter((e) => e.type === "run.created" || e.type === "agent.spawned");
   expect(mine.map((h) => [h.type, h.seq])).toEqual(want.map((e) => [e.type, e.seq]));
   expect(mine.map((h) => h.type)).toEqual(["run.created", "agent.spawned"]);
