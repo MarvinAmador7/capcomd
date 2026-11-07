@@ -882,8 +882,9 @@ daemon's: the daemon asks its own host; another process (the CLI, the MCP server
 a seam the running daemon's listing has from an active, enabled plugin (§13.2, `<home>/state/plugins.json`), since a
 plugin may be loaded only there, and refuses any other name while a daemon runs. With no daemon running there is
 nobody to ask: reading the profiles warns about a name that isn't a built-in instead of refusing it, and the daemon
-checks it when it resolves the profile. A candidate checked before it is written (`capcomd agents validate --spec`,
-`set`) and an override still need a provider this process or the running daemon has. For a forge that is the run's `merge.forge`: `POST /v1/runs` refuses it (422
+checks it when it resolves the profile. A candidate checked before it is written (`capcomd agents validate --spec`),
+a write (`capcomd profiles add`, `set`, `rm`: one that leaves a profile naming such a name it didn't name before,
+unless a running daemon lists it) and an override still need a provider this process or the running daemon has. For a forge that is the run's `merge.forge`: `POST /v1/runs` refuses it (422
 `invalid`, "merge.forge names <name>, which no active plugin provides" and the active forges), and so do `capcomd run`
 and `capcomd_run_new` (relay.v1 `config`, reason `forge`), before any merge. The kernel wraps every seam object in its
 traced, resilient wrappers (`src/providers/resilient.ts`, `tracedProvider`; for a forge, `src/plugins/forges`
@@ -1098,14 +1099,17 @@ its secrets' values among what is redacted). A runtime on the user's machine is 
 `plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
 
 The kernel's launcher is `src/plugins/process.ts`. The process leads a process group of its own (the daemon's terminal
-signals don't reach it; a kill takes what it started too). Its stdin is a pipe the daemon holds and never writes: it
-closes when the daemon is gone, and the process SHOULD exit then (the client library ends its hooks stream, §9.8). Each
+signals don't reach it; a kill takes what it started too, and so does its exit: once the process is gone, what is left
+of its group is killed, so nothing it started outlives its token or holds what the next start needs). Its stdin is a
+pipe the daemon holds and never writes: it closes when the daemon is gone, and the process SHOULD exit then (the client
+library ends its hooks stream, §9.8). Each
 start is recorded in `<data>/process.json`; a process an earlier daemon started and never stopped (it died) is killed
 before the next start, only while that pid still runs the recorded command. `CAPCOMD_PLUGIN_SOCKET` is the daemon's
 **plugin socket**, `<harness socket without .sock>-plugins.sock` (`src/api/socket.ts` `pluginSocketPath`, 0600), bound
 before the plugins load (§5.5 step 4): it serves the harness.v1 API to plugin tokens only (401 for any other,
 `src/api/server.ts` `pluginsOnly`). Only the daemon starts processes: a CLI's local host has no launcher, so a
-`process` plugin stays `validated` there.
+`process` plugin stays `validated` there, and an operation a CLI or the MCP server runs itself fires its `ops.ts` gates
+where the plugin doesn't listen (§6.1): a process plugin's gates judge what the daemon runs.
 
 ### 9.3 Handshake and token
 
@@ -1282,7 +1286,9 @@ key `config` of the run scope is the kernel's, and a plugin's write or delete of
 Config files never hold secret values. A property marked `x-secret` takes a **reference** `{"$secret": "<ref>"}` where
 `ref` is `env:<VAR>` (an environment variable of the daemon) or `keychain:<account>` (the OS keychain through
 `src/config/keychain.ts`, service `capcomd`; not resolved yet: `unsupported`). The reference is the user layer's, else one
-held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else the schema's `default`; a project's or a run's is `config_invalid` (a
+held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else, for a built-in only, the schema's `default`: a plugin from a directory (a
+user's or a project's) never names its own, as its author would choose which of the daemon's variables it gets, so its
+secret is unset (`not_found`) until the user points it at one. A project's or a run's reference is `config_invalid` (a
 repository must not point a plugin at another of the daemon's variables), and so is a value where a reference belongs. A
 reference that resolves to nothing is the plugin's to report: `ctx.config.secret` rejects `not_found`, and a process
 plugin's is left out of `SessionOpened.secrets` with a warning (§9.3), so a built-in such as `sandbox-boxd` still loads
@@ -2138,7 +2144,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
-| 1.0.37 | 2026-11-07 | A profile's `harness.provider` and `sandbox.provider` outside the daemon (§7.1): a built-in or a seam the running daemon's listing has from an active, enabled plugin; any other name is refused while a daemon runs and a warning when none does (the daemon checks it at resolution), as `lifecycle` already was (§6.6.8). Reading profiles in the CLI no longer fails for a seam only the daemon loads. A candidate before a write and an override still need one. No hook, seam, route or contract shape changes. |
+| 1.0.37 | 2026-11-07 | From the review of §17.2 step 9: a secret's reference falls back to the schema's `default` for a built-in only (§10.3): a user's or a project's plugin named any of the daemon's variables in its own manifest (`env:GITHUB_TOKEN`) and got its value in `SessionOpened.secrets`, past §9.2's filter; the host's `secret` option gets the plugin's `source` (additive); `capcomd plugins trust` shows such a secret as unset. An out-of-process plugin's exit kills what is left of its process group, as a kill does, so a helper it started can't outlive its token or hold what the next start needs (§9.2); §9.2 says, after §6.1, that a process plugin's gates judge only what the daemon runs. The client library forgets observe calls' deadlines (§9.8). No hook, seam, route or contract shape changes. |
+| 1.0.38 | 2026-11-07 | A profile's `harness.provider` and `sandbox.provider` outside the daemon (§7.1): a built-in or a seam the running daemon's listing has from an active, enabled plugin; any other name is refused while a daemon runs and a warning when none does (the daemon checks it at resolution), as `lifecycle` already was (§6.6.8). Reading profiles in the CLI no longer fails for a seam only the daemon loads. A candidate before a write, a write that brings in such a name (`profiles add|set|rm`) and an override still need one. No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
