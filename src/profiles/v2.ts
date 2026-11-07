@@ -197,7 +197,7 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
 
   const sb = block("sandbox");
   if (sb.provider != null && (typeof sb.provider !== "string" || !NAME.test(sb.provider))) at("sandbox.provider", "must be a sandbox plugin's name (docker, boxd, …)");
-  if (sb.environment != null && (typeof sb.environment !== "string" || !NAME.test(sb.environment))) at("sandbox.environment", "must be an environment's name (capcomd env build --name)");
+  if (sb.environment != null && (typeof sb.environment !== "string" || !NAME.test(sb.environment))) at("sandbox.environment", "must be default, image or a build's name (capcomd env status lists them)");
   if (sb.size != null && !(isMap(sb.size) && Object.keys(sb.size).every((k) => k === "vcpu") && [1, 2, 4, 8].includes(sb.size.vcpu as number))) at("sandbox.size", "must be { vcpu: 1 | 2 | 4 | 8 }");
 
   const l = block("lifecycle");
