@@ -13,6 +13,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   start when no GitHub repositories are trigger sources (nor for source-schedule without schedules, or sandbox-boxd
   with `CAPCOMD_TEMPLATE_REFRESH_HOURS=0`).
 - Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
+- Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
+  is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
+  flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
+  brain could be added and its files copied into agents' sandboxes.
 - Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
   agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
   job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
