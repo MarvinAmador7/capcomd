@@ -13,7 +13,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   longer counts as progress by itself, but the time it ran doesn't count either. The stalled notice and the stop now say
   what the watchdog saw: `no file change seen`, how many tool steps the agent finished meanwhile, and a command it has
   been waiting on. `capcomd setup` (and `setup check`) warns when `plugins.watchdog.stalledAfterMs` is under a minute,
-  since progress can take that long to show.
+  since progress can take that long to show. This holds whatever an agent's checkpoint interval: an agent whose profile
+  saves its work hourly (`checkpointEveryMs`, `--checkpoint-every-ms`, `CAPCOMD_AGENT_CHECKPOINT_MS`) is no longer
+  flagged between its checkpoints or stopped at 45 minutes while it works, and gets the same 15 and 45 minutes as any
+  other.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its

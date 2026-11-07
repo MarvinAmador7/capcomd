@@ -3,9 +3,10 @@
 // `worked`, an agent under it spawned or ended, the end of a verification or approval it waited on) and what doesn't
 // (tool calls, a job's end), `stalled` at stalledAfterMs and a stop at stopAfterMs (both from the last progress) saying
 // what it saw, progress clearing the notice, waiting (a job, a check, an approval, a foreground command, up to a limit
-// for a command) holding the clock, an agent with agents of its own judged through them, its memory across a restart
+// for commands) holding the clock, an agent with agents of its own judged through them, its memory across a restart
 // (the time the daemon was down doesn't count), its one timer, its config refused when the stop comes before the notice
-// and warned about when the notice would come before progress can show. The same against a daemon:
+// and warned about when the notice would come before progress can show, and an agent it stopped forgotten even when
+// nobody said it ended. The same against a daemon:
 // tests/scenarios/watchdog.test.ts.
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -384,6 +385,22 @@ describe("the watchdog", () => {
     const k = kernel();
     const { fake } = await boot(k, { cfg: { stalledAfterMs: 30_000, stopAfterMs: 0 } });
     expect(fake.logs().filter((l) => l.level === "warn").map((l) => l.message)).toEqual([configWarning({ stalledAfterMs: 30_000 })!]);
+  });
+
+  test("an agent it stopped whose end nobody told is forgotten at a later look, and its parent is judged again", async () => {
+    const k = kernel();
+    const p = k.agent("agt-sp"), c = k.agent("agt-sc", "agt-sp");
+    const { changed, tick, w } = await boot(k);
+    await changed(p, started()); await changed(c, { kind: "spawned" }); await changed(c, started());
+    at(46 * MIN); await tick();
+    expect(k.cancels.map((x) => x.agentId)).toEqual(["agt-sc"]);
+    // Its end never reaches the watchdog: the next look that checks on it lets it go.
+    k.agents.delete("agt-sc");
+    at(61 * MIN); await tick();
+    expect([...w.watched.keys()]).toEqual([`${RUN}/agt-sp`]);
+    // The planner, quiet since it spawned it, is judged on its own again.
+    at(62 * MIN); await tick();
+    expect(k.cancels.map((x) => x.agentId)).toEqual(["agt-sc", "agt-sp"]);
   });
 
   test("it loads and disposes cleanly, and answers every hook it declares", async () => {

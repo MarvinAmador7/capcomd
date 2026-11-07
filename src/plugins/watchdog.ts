@@ -328,12 +328,13 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
         return w.waits.length > 0 || onCommand(w, now) || (children.get(k) ?? []).some((c) => held(c, seen));
       };
       for (const w of all) {
-        if (!watched.has(keyOf(w.runId, w.agentId)) || w.stopping) continue;
+        if (!watched.has(keyOf(w.runId, w.agentId))) continue;
         const quiet = now - w.since;
         // Look it up when it may need acting on, and now and then anyway (one that ended while the daemon was down, or
         // whose ending nobody told, is forgotten).
         const stale = now - (w.checkedAt ?? 0) >= cfg.stalledAfterMs;
-        const judged = !held(w) && !(children.get(keyOf(w.runId, w.agentId)) ?? []).length && quiet >= cfg.stalledAfterMs;
+        // One being stopped is only looked up (it is forgotten once it ended, even if nobody said so).
+        const judged = !w.stopping && !held(w) && !(children.get(keyOf(w.runId, w.agentId)) ?? []).length && quiet >= cfg.stalledAfterMs;
         if (!judged && !stale) continue;
         const a = await ctx.agents.get(w.runId, w.agentId).catch((e: unknown) => (e instanceof PluginError && (e.code === "not_found" || e.code === "invalid") ? null : undefined));
         if (a === undefined) continue; // the engine didn't answer: next time
@@ -349,6 +350,8 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
           save(w);
         }
         if (w.blind) continue;
+        // (Its files changing show within a supervisor heartbeat, `worked`, whatever its checkpoint interval: the
+        // configured windows hold for every agent.)
         if (cfg.stopAfterMs > 0 && quiet >= cfg.stopAfterMs) await stop(w, quiet);
         else if (w.stalledAt === null && !w.other) await stalled(w, quiet);
       }
