@@ -255,6 +255,57 @@ describe("update", () => {
     expect(leftovers(w.user)).toEqual([]);
   });
 
+  test("files you added beside the package are kept and said to be; one the new package needs the place of is a conflict", async () => {
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, w.o);
+    const dir = join(w.user, "security-critic");
+    // Yours: a note at the top, one inside a skill the update removes, and one the new package ships as it is.
+    writeFileSync(join(dir, "notes.md"), "My notes on this profile.\n");
+    writeFileSync(join(dir, "skills", "threat-model", "mine.md"), "Mine too.\n");
+    writeFileSync(join(dir, "CHANGES.md"), "v2\n");
+    const v2 = critic({ version: 2 }).replace("skills: [{ name: threat-model }]\n", "");
+    await repo.commit({ "profiles/security-critic/profile.yaml": v2, "profiles/security-critic/skills/threat-model/SKILL.md": null, "profiles/security-critic/CHANGES.md": "v2\n" });
+    const dry = await updateProfile("security-critic", { ...w.o, dryRun: true });
+    expect(dry).toMatchObject({ updated: false, kept: ["notes.md", "skills/threat-model/mine.md"], removed: ["skills/threat-model/SKILL.md"], added: ["CHANGES.md"] });
+    const text = w.cli(["profiles", "update", "security-critic", "--dry-run"]).out;
+    expect(text).toContain("added by you, kept: notes.md, skills/threat-model/mine.md");
+    expect(text).not.toContain("replaced by the update");
+    const u = await updateProfile("security-critic", w.o);
+    expect(u).toMatchObject({ updated: true, kept: ["notes.md", "skills/threat-model/mine.md"], to: { version: "2" } });
+    expect(readFileSync(join(dir, "notes.md"), "utf8")).toBe("My notes on this profile.\n");
+    expect(readFileSync(join(dir, "skills", "threat-model", "mine.md"), "utf8")).toBe("Mine too.\n");
+    expect(existsSync(join(dir, "skills", "threat-model", "SKILL.md"))).toBe(false);
+    expect(readLock(dir)!.files["CHANGES.md"]).toBeDefined();
+    expect(readLock(dir)!.files["notes.md"]).toBeUndefined();
+    expect(leftovers(w.user)).toEqual([]);
+    // Up to date, your files still there: nothing to replace.
+    expect(await updateProfile("security-critic", w.o)).toMatchObject({ updated: false, kept: ["notes.md", "skills/threat-model/mine.md"] });
+    expect(w.cli(["profiles", "update", "security-critic"]).out).toContain("security-critic is up to date");
+    // The package now ships a notes.md of its own, a directory where your mine.md is, and a file where your docs/ is:
+    // refused, nothing changed.
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "a.md"), "Mine.\n");
+    const lock = readLock(dir)!;
+    await repo.commit({ "profiles/security-critic/notes.md": "The package's notes.\n", "profiles/security-critic/skills/threat-model/mine.md/x.md": "x\n", "profiles/security-critic/docs": "a file\n" });
+    await refused(updateProfile("security-critic", { ...w.o, dryRun: true }), "conflict", /needs the place of files you added.*: docs\/a\.md, notes\.md, skills\/threat-model\/mine\.md .*Move them out/);
+    await refused(updateProfile("security-critic", w.o), "conflict", /notes\.md/);
+    expect(readLock(dir)).toEqual(lock);
+    expect(readFileSync(join(dir, "notes.md"), "utf8")).toBe("My notes on this profile.\n");
+    expect(leftovers(w.user)).toEqual([]);
+  });
+
+  test("an update the profiles wouldn't resolve with is put back, with the files you added", async () => {
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, w.o);
+    const dir = join(w.user, "security-critic");
+    writeFileSync(join(dir, "notes.md"), "Mine.\n");
+    await repo.commit({ "profiles/security-critic/profile.yaml": critic({ extra: ["extends: gone-parent"] }) });
+    await refused(updateProfile("security-critic", w.o), "config", /gone-parent/);
+    expect(readFileSync(join(dir, "notes.md"), "utf8")).toBe("Mine.\n");
+    expect(readFileSync(join(dir, "profile.yaml"), "utf8")).toBe(critic());
+    expect(leftovers(w.user)).toEqual([]);
+  });
+
   test("an update the profiles wouldn't resolve with is put back", async () => {
     const w = world(), repo = await profileRepo(twoProfiles());
     await installProfile(`${repo.bare}#security-critic`, w.o);

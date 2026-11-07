@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: `capcomd profiles update <name>` no longer deletes files you added to an installed profile's directory (a
+  `notes.md`, an extra file in a skill's folder). It keeps every file the package didn't install, as it keeps your
+  `override.yaml`, and lists them as "added by you, kept" (`kept` in `--json`). If the new version of the package
+  ships a file in the place of one of yours, the update is refused and nothing changes: move your file and update
+  again.
+- Fixed: trusting or untrusting plugins and profile skills from the CLI while the daemon also records a trust no
+  longer loses one of the two changes in `~/.capcomd/trust.json`. If another change holds the file for more than 5
+  seconds, the command fails with nothing changed; run it again.
+- Fixed: writing a profile file, `agents.json` or `trust.json` never writes through a link a repository placed next
+  to it under the name of the temporary file capcomd used.
+
 - Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
   agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
   job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
