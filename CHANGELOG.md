@@ -11,8 +11,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only.
 - Fix: a profile with `permissions: { report: false }` is also refused when a plugin adds `report` to the spawn
   (`reason: "report_not_allowed"`), not only when the spawner asks for it.
-- Fix: `capcomd profiles list` shows control characters in a profile's `identity.title` as `\u{…}` instead of
-  printing them, so an installed profile's title can't redraw or hide lines in your terminal.
+- Fix: `capcomd profiles list` and `capcomd profiles show` show control characters in a profile's `identity.title`
+  (and `show` in any text value it lists) as `\u{…}` instead of printing them, so an installed profile can't redraw or
+  hide lines in your terminal.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its

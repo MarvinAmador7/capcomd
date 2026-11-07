@@ -486,6 +486,11 @@ describe("profiles v2: loader and resolution", () => {
     expect(out).not.toContain("\x1b");
     // --json keeps it as written: JSON escapes it.
     expect(JSON.parse(cli(["profiles", "list", "--json"], env).out).profiles[0].title).toBe("Critic\x1b[2J\nworker ready");
+    // show too: its title line and its values (a string value prints its first line).
+    const show = cli(["profiles", "show", "critic"], env).out;
+    expect(show).toContain("Critic\\u{1b}[2J\\u{a}worker ready");
+    expect(show).toMatch(/identity\.title\s+Critic\\u\{1b\}\[2J…/);
+    expect(show).not.toContain("\x1b");
   }, 30_000);
 
   // ADR-024 §7 step 4: the blocks that need no runtime, and what capcomd writes about a profile for a planner (§4).
