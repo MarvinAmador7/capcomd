@@ -216,7 +216,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
   (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
   starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
-  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  the goal (checked as a goal you type is: one that starts with `[agent:…]`, or is over 16 KB, starts nothing, so whoever
+  wrote it can't pick the run's agent profile); one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
   with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
   there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
   `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
