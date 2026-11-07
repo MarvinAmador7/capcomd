@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { kernelHost, pluginDataDir, userPlugins } from "../../src/plugins/host";
 import { loadManifest } from "../../packages/plugin/src/load";
 import { pluginStore } from "../../src/plugins/storage";
+import { envName } from "../../src/plugins/config";
 import { recordTrust } from "../../src/install/trust";
 import { hashTree } from "../../src/install/lock";
 import { harnessApp, pluginsOnly } from "../../src/api/server";
@@ -61,9 +62,16 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 describe("the out-of-process runtime", () => {
   test("starts the process with only the filtered environment; secrets come once in the handshake, never in env", async () => {
     const secret = "proc-gate-secret-value-0123456789";
-    Object.assign(process.env, { PROC_GATE_SECRET: secret, GITHUB_TOKEN: "ghp_notforplugins000000000000000000000", BOXD_API_KEY: "bxd_notforplugins", ANTHROPIC_API_KEY: "sk-ant-notforplugins", CAPCOMD_RPC_KEY: "kernel-only", NODE_OPTIONS: "--max-old-space-size=4096", LC_ALL: "C" });
+    const name = `proc-gate-env-${Math.random().toString(36).slice(2, 8)}`;
+    // The user points the plugin's secret at one of their variables (§10.3); the manifest's own defaults name the
+    // daemon's GITHUB_TOKEN and BOXD_API_KEY, which a plugin from a directory is never given.
+    const ref = envName(name, "apiKey");
+    Object.assign(process.env, { [ref]: '{"$secret":"env:PROC_GATE_SECRET"}', PROC_GATE_SECRET: secret, GITHUB_TOKEN: "ghp_notforplugins000000000000000000000", BOXD_API_KEY: "bxd_notforplugins", ANTHROPIC_API_KEY: "sk-ant-notforplugins", CAPCOMD_RPC_KEY: "kernel-only", NODE_OPTIONS: "--max-old-space-size=4096", LC_ALL: "C" });
     try {
-      const b = await boot({ manifest: { config: { type: "object", additionalProperties: false, properties: { apiKey: { type: "string", "x-secret": true, default: { $secret: "env:PROC_GATE_SECRET" } }, channel: { type: "string", default: "#ops" } } } } });
+      const b = await boot({ name, manifest: { config: { type: "object", additionalProperties: false, properties: {
+        apiKey: { type: "string", "x-secret": true }, channel: { type: "string", default: "#ops" },
+        github: { type: "string", "x-secret": true, default: { $secret: "env:GITHUB_TOKEN" } }, boxd: { type: "string", "x-secret": true, default: { $secret: "env:BOXD_API_KEY" } },
+      } } } });
       const [p] = b.host.list();
       expect(p).toMatchObject({ runtime: "process", source: "user", state: "active", hooks: ["merge.landing", "run.changed"] });
       const env = JSON.parse(readFileSync(join(b.data, "env.json"), "utf8")) as Record<string, string>;
@@ -78,22 +86,25 @@ describe("the out-of-process runtime", () => {
       const opened = JSON.parse(readFileSync(join(b.data, "opened.json"), "utf8"));
       expect(opened).toMatchObject({ protocol: 1, plugin: { name: p!.name, scopes: ["read", "steer"] }, config: { channel: "#ops" }, hookTimeoutsMs: { "merge.landing": 10_000, "run.changed": 30_000 } });
       expect(opened.config.apiKey).toBeUndefined();
+      // Only the secret the user pointed: not the GITHUB_TOKEN or BOXD_API_KEY its manifest's defaults name.
       expect(opened.secrets).toEqual({ apiKey: createHash("sha256").update(secret).digest("hex") });
       // The detail route shows the config, never the secret.
       expect(JSON.stringify(b.host.detail(p!.name))).not.toContain(secret);
       expect(b.events.map((e) => e.type)).toEqual(expect.arrayContaining(["plugin.process_changed", "plugin.loaded"]));
       expect(b.events.find((e) => e.type === "plugin.loaded")!.data).toMatchObject({ runtime: "process" });
-    } finally { for (const k of ["PROC_GATE_SECRET", "GITHUB_TOKEN", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "CAPCOMD_RPC_KEY", "NODE_OPTIONS", "LC_ALL"]) delete process.env[k]; }
+    } finally { for (const k of [ref, "PROC_GATE_SECRET", "GITHUB_TOKEN", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "CAPCOMD_RPC_KEY", "NODE_OPTIONS", "LC_ALL"]) delete process.env[k]; }
   }, 30_000);
 
   test("what the process writes is the daemon's log, with its token and its secrets redacted", async () => {
     const secret = "proc-gate-secret-value-for-the-log";
-    process.env.PROC_GATE_SECRET = secret;
+    const pname = `proc-gate-log-${Math.random().toString(36).slice(2, 8)}`;
+    const ref = envName(pname, "apiKey");
+    Object.assign(process.env, { PROC_GATE_SECRET: secret, [ref]: '{"$secret":"env:PROC_GATE_SECRET"}' });
     const lines: string[] = [];
     const log = console.log;
     console.log = (...a: unknown[]) => { lines.push(a.map(String).join(" ")); };
     try {
-      const b = await boot({ log: true, control: { print: true }, manifest: { config: { type: "object", properties: { apiKey: { type: "string", "x-secret": true, default: { $secret: "env:PROC_GATE_SECRET" } } } } } });
+      const b = await boot({ name: pname, log: true, control: { print: true }, manifest: { config: { type: "object", properties: { apiKey: { type: "string", "x-secret": true } } } } });
       const name = nameOf(b);
       await until(() => lines.filter((l) => l.includes(`"plugin":"${name}"`) && l.includes("secrets")).length === 2);
       const mine = lines.filter((l) => l.includes(`"plugin":"${name}"`));
@@ -102,7 +113,7 @@ describe("the out-of-process runtime", () => {
         expect.objectContaining({ level: "info", message: "token [REDACTED] secrets [REDACTED]" }),
         expect.objectContaining({ level: "warn", message: "secrets [REDACTED]", fields: { token: "[REDACTED]" } }),
       ]));
-    } finally { console.log = log; delete process.env.PROC_GATE_SECRET; }
+    } finally { console.log = log; delete process.env.PROC_GATE_SECRET; delete process.env[ref]; }
   }, 30_000);
 
   test("a gate call goes to the process and its answer decides; observe calls arrive too", async () => {
@@ -140,13 +151,18 @@ describe("the out-of-process runtime", () => {
   }, 30_000);
 
   test("a crash with a gate call in flight denies it (crashed); the process starts again with a new session and token", async () => {
-    const b = await boot({ control: { "merge.landing": "crash" }, timings: { backoffMs: () => 200 } });
+    const b = await boot({ control: { "merge.landing": "crash", child: true }, timings: { backoffMs: () => 200 } });
     const name = nameOf(b);
     const first = JSON.parse(readFileSync(join(b.data, "opened.json"), "utf8")).session as string;
+    const helper = Number(readFileSync(join(b.data, "child.pid"), "utf8"));
+    expect(alive(helper)).toBe(true);
     const tokens = pluginClients().filter((c) => c.plugin === name).map((c) => c.id);
     expect(tokens).toHaveLength(1);
     expect(await b.host.hooks.fire("merge.landing", "veto", merge, OPERATOR)).toMatchObject({ decision: "deny", plugin: name, failure: "crashed" });
     expect(b.events.find((e) => e.type === "plugin.hook_failed")!.data).toMatchObject({ kind: "crashed", effect: "denied" });
+    // What the crashed process started goes with it (its process group, §9.2): nothing it left can hold the files or
+    // ports the next start needs.
+    await until(() => !alive(helper), 5000);
     writeFileSync(join(b.data, "control.json"), JSON.stringify({ "merge.landing": "allow" }));
     await until(() => { try { return JSON.parse(readFileSync(join(b.data, "opened.json"), "utf8")).session !== first; } catch { return false; } });
     await until(() => b.events.filter((e) => e.type === "plugin.process_changed" && e.data.event === "started").length === 2);

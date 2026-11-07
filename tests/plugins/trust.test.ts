@@ -210,8 +210,10 @@ describe("capcomd plugins trust (the prompt)", () => {
     expect(asked.code).toBe(2);
     expect(asked.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u202e]/);
     expect(asked.stdout).toContain("harmless\\u{1b}[1A\\u{1b}[2K\\u{d}  runs");
-    // What it gets of yours at its start: a secret's reference (here the manifest's own default).
-    expect(asked.stdout).toContain("secrets  token ← env:GITHUB_TOKEN");
+    // What it gets of yours at its start: a secret's reference, the one you set. The manifest's own default
+    // (env:GITHUB_TOKEN) is never followed: the repository doesn't choose which of your variables it gets (§10.3).
+    expect(asked.stdout).toContain("secrets  token (none set)");
+    expect(asked.stdout).not.toContain("GITHUB_TOKEN");
     expect(asked.stdout).toContain(`runs     ./run.sh "x\\u001b[1A\\u001b[2K\\r" --flag=1 "a\\u{202e}b"  (on this machine`);
   });
 });
