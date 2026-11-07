@@ -226,9 +226,13 @@ async function record(type: "trigger.received" | "trigger.subscribed" | "trigger
 const usage = (m: string, hint?: string): never => { throw new PluginError("invalid", m, hint); };
 const SOURCE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const TEXT_MAX = 64 * 1024, DATA_MAX = 64 * 1024;
+/** Control characters (a terminal's escapes among them): `capcomd triggers log` prints a source's ids as they are. */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const CONTROLS = new RegExp(CONTROL.source, "g");
 const short = (v: unknown, what: string, max: number): string => {
   if (typeof v !== "string" || !v.trim()) usage(`${what} is a non-empty string`);
   if ((v as string).length > max) usage(`${what} is longer than ${max} characters`);
+  if (CONTROL.test(v as string)) usage(`${what} has a control character`);
   return v as string;
 };
 
@@ -240,7 +244,8 @@ export function checkTrigger(t: Trigger): Trigger {
   const at = typeof t.at === "string" && Number.isFinite(Date.parse(t.at)) ? new Date(t.at).toISOString() : usage("trigger.at is an ISO time");
   const a = t.actor as Trigger["actor"] | undefined;
   if (!a || typeof a !== "object" || typeof a.bot !== "boolean") usage("trigger.actor is {id, display, bot}", "Fill it from the source's own facts: who sent it, and whether a bot did.");
-  const actor = { id: short(a!.id, "trigger.actor.id", 200), display: typeof a!.display === "string" && a!.display.trim() ? a!.display.slice(0, 200) : a!.id, bot: a!.bot };
+  const display = typeof a!.display === "string" ? a!.display.replace(CONTROLS, " ").trim().slice(0, 200) : "";
+  const actor = { id: short(a!.id, "trigger.actor.id", 200), display: display || a!.id, bot: a!.bot };
   if (t.addressed !== null && t.addressed !== "mention" && t.addressed !== "direct") usage("trigger.addressed is mention, direct or null");
   const raw = t.text as Untrusted | string | undefined;
   const text = typeof raw === "string" ? raw : raw && typeof raw === "object" && typeof raw.text === "string" ? raw.text : usage("trigger.text is what was said: a string, or {text, untrusted: true, by}");
@@ -332,8 +337,12 @@ async function decide(t: Trigger, principal: Principal): Promise<{ decision: Tri
   // 5. The accept mode.
   if (strength === "inferred" && g.mode === "off") return { decision: { kind: "denied", by: "mode", reason: `${t.source} is off for requests that don't address capcomd (triggers.sources.${t.source}.mode)` }, gate };
   if (strength === "inferred" && g.mode === "observe") return { decision: { kind: "recorded", wouldHave: "start", runId: null }, gate };
-  // 6. Act: a run on the source's project, following the thread from now on.
-  const { runId } = await deps.startRun({ goal: t.text.text.trim(), ...(g.project ? { repo: g.project } : {}) }, principal);
+  // 6. Act: a run on the source's project, following the thread from now on. Its goal is checked as POST /v1/runs checks
+  // one: above all, a source's words never pick the run's agent profile (a leading `[agent:NAME]`).
+  const goal = t.text.text.trim();
+  const checked = (await import("../api/contract")).CreateRunBody.shape.goal.safeParse(goal);
+  if (!checked.success) throw new PluginError("invalid", `trigger ${t.source}/${t.id} can't be a run's goal: ${checked.error.issues[0]?.message ?? "invalid"}`);
+  const { runId } = await deps.startRun({ goal, ...(g.project ? { repo: g.project } : {}) }, principal);
   writeAtomic(dir("runs", `${runId}.json`), JSON.stringify({ source: t.source, id: t.id, thread: t.thread, actor: t.actor, at: t.at }));
   await subscribe({ runId, source: t.source, thread: t.thread }, "intake", { started: true }).catch((e) => console.error(`[triggers] ${runId}: subscribing to ${t.thread}: ${(e as Error)?.message ?? e}`));
   return { decision: { kind: "started", runId }, gate };

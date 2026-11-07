@@ -139,8 +139,8 @@ test("two agents of one profile start with the same brief: header and index line
   const printed = await cj(["context", "brief", "worker"]);
   expect(printed.code).toBe(0);
   expect(printed.j?.brief).toBe(brief);
-  // … and names the context skills they get with it: the doctrine; the routing paragraph too for one with the in-VM
-  // capcomd (a worker that may not spawn has it as well, as its agents above got), unless it is asked as a reviewer's.
+  // … and names the context skills they get with it: the doctrine; the routing paragraph too for one that does work
+  // with the in-VM capcomd (a worker has it for run notes and lessons, as above), unless it is asked as a reviewer's.
   const pin = (s: { name: string; hash: string }) => ({ name: s.name, hash: s.hash });
   expect(printed.j?.skills).toEqual([pin(DOCTRINE_SKILL), pin(ROUTING_SKILL)]);
   expect(printed.j?.text).toEndWith(`With the skills: ${DOCTRINE_SKILL.name} (sha256 ${DOCTRINE_SKILL.hash.slice(0, 12)}), ${ROUTING_SKILL.name} (sha256 ${ROUTING_SKILL.hash.slice(0, 12)}).`);
