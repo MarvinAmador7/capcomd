@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { world, waitAll, WORKER, type World } from "./harness";
+import { world, spawnRoot, waitAll, WORKER, type World } from "./harness";
 import { CLI } from "../helpers/engine";
 
 const CHECK = "grep -qx good src/p.txt";
@@ -53,6 +53,25 @@ test("run new in a project's checkout verifies with the project's one named chec
   expect(v).toMatchObject({ state: "passed", check: "unit", checks: CHECK });
   const m = (await w.cj(["merge", run, "--ref", good, "--require", v.id, "--key", "m-good"])).j;
   expect(m).toMatchObject({ state: "merged", result: { merged: true } });
+}, 180_000);
+
+test("an unpinned child's in-VM verify takes the project's one check too, though naming it from the VM is still refused", async () => {
+  // The live run's shape: a lead verifies its children from its VM, none pinned to a check at spawn.
+  const run = await runNewInProject("vm");
+  const p = w.script("vm-verify", `W=${JSON.stringify(worker)}
+c=$(capcomd spawn --profile worker --task "write p" --key c --budget turns=10 --children.maxChildren=0 --contract "$($S/json script="FILE=src/p.txt CONTENT=bad SPENT=2 $W")" | $S/jget agentId)
+capcomd await $c >/dev/null || exit 1
+capcomd verify --ref $c --check unit --key named; echo "named rc=$?"
+v=$(capcomd verify --ref $c --key v-c)
+echo "recorded: $(echo "$v" | $S/jget check) $(echo "$v" | $S/jget state)"
+capcomd result --summary checked >/dev/null`);
+  const root = await spawnRoot(w, run, "planner", p);
+  expect((await waitAll(w, run, [root])).agents[0].status).toBe("done");
+  const logs = (await w.cj(["logs", run, root])).j.lines.map((l: any) => l.line).join("\n");
+  // ADR-017: a child gets a named check only through a pin; the run's one check is the run's checks, not a name it picks.
+  expect(logs).toMatch(/verify → error forbidden: agt-\S+ has no pinned check; named checks are pinned at spawn/);
+  // Before, it passed on "no test command configured" without running anything.
+  expect(logs).toContain("recorded: unit failed");
 }, 180_000);
 
 test("with several named checks and no repository command, an unpinned verify is as it was: nothing is chosen for it", async () => {

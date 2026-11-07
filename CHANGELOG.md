@@ -10,7 +10,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
   With several named checks, verify still needs the check pinned at spawn (`--check NAME`) or named on the verify.
 - Fixed: the daemon's log no longer says "declared but never registered: hook job.changed" for forge-github at every
-  start when no GitHub repositories are trigger sources (nor for source-schedule without schedules).
+  start when no GitHub repositories are trigger sources (nor for source-schedule without schedules, or sandbox-boxd
+  with `CAPCOMD_TEMPLATE_REFRESH_HOURS=0`).
 - Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
