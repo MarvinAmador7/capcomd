@@ -63,13 +63,17 @@ export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceC
   for (const repo of await reposToPoll(ctx, cfg)) {
     const key = `github/${repo}`;
     // `retry`: a comment whose emit failed for now, read again from `since` and not taken for an old one's edit.
-    const pos = (await ctx.storage.get("daemon", key)) as { since?: string; retry?: number } | undefined;
+    // `read`: the comments updated at `since` itself that were read: GitHub's `since` includes that second, so they come
+    // back at every poll, and without it each poll would hand them to the intake again (a `deduped` line each minute).
+    const pos = (await ctx.storage.get("daemon", key)) as { since?: string; read?: number[]; retry?: number } | undefined;
     // The first look at a repository: comments from now on, not its history.
     if (!pos?.since) { await ctx.storage.put("daemon", key, { since: new Date().toISOString() }); continue; }
     let comments: IssueComment[];
     try { comments = await gh.listIssueComments(repo, pos.since); } catch (e) { ctx.log.warn(`github source: reading ${repo}'s comments failed`, { error: String((e as Error)?.message ?? e) }); continue; }
-    let since = pos.since, retry: number | undefined;
+    const before = new Set(pos.read ?? []);
+    let since = pos.since, read = new Set(before), retry: number | undefined;
     for (const c of comments) {
+      if (before.has(c.id) && Date.parse(c.updated_at) === Date.parse(pos.since)) continue;
       // An edit of a comment from before the position isn't a new request.
       const t = Date.parse(c.created_at) < Date.parse(pos.since) && c.id !== pos.retry ? null : commentTrigger(repo, c, me, cfg.sourceCommand);
       if (t) {
@@ -80,9 +84,11 @@ export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceC
         // The intake couldn't act now (the trigger may come again): the position stays before it, for the next poll.
         if (again) { retry = c.id; break; }
       }
-      if (c.updated_at > since) since = c.updated_at;
+      if (Date.parse(c.updated_at) > Date.parse(since)) { since = c.updated_at; read = new Set(); }
+      if (Date.parse(c.updated_at) === Date.parse(since)) read.add(c.id);
     }
-    if (since !== pos.since || retry !== pos.retry) await ctx.storage.put("daemon", key, { since, ...(retry !== undefined ? { retry } : {}) });
+    const same = since === pos.since && read.size === before.size && [...read].every((id) => before.has(id));
+    if (!same || retry !== pos.retry) await ctx.storage.put("daemon", key, { since, ...(read.size ? { read: [...read] } : {}), ...(retry !== undefined ? { retry } : {}) });
   }
   return n;
 }

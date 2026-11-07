@@ -1889,8 +1889,9 @@ messages and events outside what it listens to before emitting, keep its own rea
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
 structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
-ISO time, `actor {id, display, bot}`, text and data ≤ 64 KB each) and refuses a malformed trigger `invalid` before
-recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
+log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
+before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -1910,10 +1911,12 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
   comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
-  position before it, so the next poll reads it again. The source's `job.changed` listener is registered whatever its
-  settings, as its manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as
-  `source-schedule` schedules nothing without a schedule); the built-in sandboxes listen there already, so the daemon
-  reads background jobs' output (§6.6.19) either way.
+  position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
+  keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
+  `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
+  manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
+  nothing without a schedule); the built-in sandboxes listen there already, so the daemon reads background jobs'
+  output (§6.6.19) either way.
 
 #### 16.3.2 The intake
 
@@ -1946,7 +1949,9 @@ with the `TriggerDecision`:
 6. **Act**: start a run on the configured project (`project`, a checkout set up with `capcomd setup project`; unset,
    the daemon's own repository) with the trigger's text as the goal (`POST /v1/runs` semantics: `run.creating` fires,
    with the source plugin as the principal; harness.v1's additive `Run.trigger {source, id, thread, actor, at}`, under
-   the capability `triggers`) → `started`, and subscribe the run to the thread. `recorded.wouldHave` is `start` in
+   the capability `triggers`) → `started`, and subscribe the run to the thread. The goal is checked as `POST /v1/runs`
+   checks one (`CreateRunBody.goal`: not empty, ≤ 16 KB, no NUL, no leading `[agent:NAME]`, so a source's words never
+   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start` in
    this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
    §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
@@ -2160,7 +2165,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.37 | 2026-11-07 | From the review of §17.2 step 9: a secret's reference falls back to the schema's `default` for a built-in only (§10.3): a user's or a project's plugin named any of the daemon's variables in its own manifest (`env:GITHUB_TOKEN`) and got its value in `SessionOpened.secrets`, past §9.2's filter; the host's `secret` option gets the plugin's `source` (additive); `capcomd plugins trust` shows such a secret as unset. An out-of-process plugin's exit kills what is left of its process group, as a kill does, so a helper it started can't outlive its token or hold what the next start needs (§9.2); §9.2 says, after §6.1, that a process plugin's gates judge only what the daemon runs. The client library forgets observe calls' deadlines (§9.8). No hook, seam, route or contract shape changes. |
 | 1.0.38 | 2026-11-07 | The watchdog's review (§17.2 step 11): an agent's windows are at least its checkpoint interval's (`stalled` no sooner than 1.5 × its `checkpointEveryMs`, the stop as much later), since its files changing show only at its checkpoints; the defaults are unchanged (§16.4). No hook, seam, route or contract shape changes. |
 | 1.0.39 | 2026-11-07 | Every agent that does work of its own has the in-VM capcomd (§16.2 rule 1, ADR-017 §2), not only one that may spawn: with the profiles `capcomd setup project` writes, no agent could run a job (planner and lead orchestrate, workers had none) or propose a lesson. An agent that may not spawn gets the CLI, the MCP server and a leaf token: `title`, `status`, `tree`, `inspect`, `logs`, `events`, `budget`, `heartbeat`, `kv`, `task`, `inbox`, `send`, `result`, and `job.*` only when its profile and the config it runs with (the daemon's `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS`, a Codex agent's `CAPCOMD_CODEX_SANDBOX`; none when that config can't be read) let it run a command of its own; never `spawn`, `await`, `wait-any`, `cancel`, `handoff`, `verify`, `merge`, `grant`, `fetch` or `check` (the op list stays closed; a spawner's token is unchanged but loses `job.*` the same way). It is told so in its instructions (its tab, jobs, notes and lessons, its summary), still fails `no_changes` when it changed nothing, and its MCP `tools/list` shows only what its token allows. Verify's reviewer, a report agent and the consolidator keep the naming shim. §6.6.7's routing paragraph goes to every agent with the in-VM capcomd (not the consolidator), with no profile room kept for it unless it may spawn. Any agent that declared no `result.summary` has its final message as one (≤ 2,000 characters; never a reviewer's verdict): additive. An in-VM `result` with no summary, artifacts or data is refused (`usage`), so a tool called with no arguments can't record an empty result or erase a declared one. The worker's lines name nothing of the agent's own, so a profile's agents keep one cached prefix (ADR-025 §6.1). No hook, route or contract shape changes. |
-| 1.0.40 | 2026-11-07 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7, §16.3.1); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
+| 1.0.40 | 2026-11-07 | Triggers, after review: §16.3.2 step 6, a trigger's text is checked as `POST /v1/runs` checks a goal before a run starts (a leading `[agent:NAME]` from a source no longer picks the run's agent profile; over 16 KB, empty or with a NUL: `invalid`, logged `failed`); §16.3.1, a trigger's `id`, `thread` and actor id carry no control characters (the display name loses them), and the `github` source keeps the comments it read at its position's second (GitHub's `since` includes it) so a poll with nothing new emits nothing. |
+| 1.0.41 | 2026-11-07 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7, §16.3.1); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
