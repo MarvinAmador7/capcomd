@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: `capcomd plugins install` and `capcomd profiles install` refuse a package with a link that leaves it only by
+  going through another of its links (each target looked inside on its own), and a project plugin holding one can't
+  be trusted. Before, such a link was installed, and what it pointed to outside the package wasn't part of the hash
+  that `update` and `plugins trust` check.
+- Fixed: `capcomd run --plugin-config` and `POST /v1/runs` `plugins` accept settings for a plugin version you allowed
+  with `capcomd plugins allow-version`; before, they answered "no plugin … here" although the daemon ran it.
+  `--plugin-config` also refuses `__proto__`, `constructor` and `prototype` in a setting's path.
 - Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
   agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
   job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back

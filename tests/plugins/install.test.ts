@@ -149,6 +149,21 @@ describe("install", () => {
     expect(existsSync(userPluginsDir()) ? readdirSync(userPluginsDir()).filter((n) => n.startsWith(".staging")) : []).toEqual([]);
   });
 
+  test("a link that leaves the package through another of its links is refused (each target inside, taken literally)", async () => {
+    // `d1/d2/b -> ../../x` is `x`, inside; `p -> d1/d2/b/../..` reads `d1` literally, but through `b` it is `x/..`,
+    // then the package's parent: <home>/plugins, and with more `..` anything the operator can read.
+    const repo = await pluginRepo({
+      "plugins/chain/plugin.json": JSON.stringify(manifest("chain")),
+      "plugins/chain/run.sh": { exec: "#!/bin/sh\n" },
+      "plugins/chain/x/keep": "keep\n",
+      "plugins/chain/d1/d2/b": { link: "../../x" },
+      "plugins/chain/p": { link: "d1/d2/b/../../other/plugin.json" },
+    });
+    await refused(installPlugin(`${repo.bare}#chain`), "run_failed", /p links outside the package .*through another of its links/);
+    expect(existsSync(join(userPluginsDir(), "chain"))).toBe(false);
+    expect(readdirSync(userPluginsDir()).filter((n) => n.startsWith(".staging"))).toEqual([]);
+  });
+
   test("an in-process plugin, a built-in's name and a bad manifest are refused", async () => {
     const repo = await pluginRepo({
       "a/plugin.json": JSON.stringify(manifest("inproc", { entry: { runtime: "in-process", module: "./index.ts" } })),
@@ -251,5 +266,28 @@ describe("the package tree", () => {
     symlinkSync("../../outside", join(d, "sub", "up"));
     expect(() => hashTree(d)).toThrow(/links outside the package/);
     expect(lstatSync(join(d, "sub", "up")).isSymbolicLink()).toBe(true);
+  });
+
+  test("a link is read through the package's other links: one that only leaves through another is refused too", () => {
+    const top = mkdtempSync(join(tmpdir(), "capcomd-tree-chain-"));
+    writeFileSync(join(top, "outside.txt"), "not the package's");
+    const d = join(top, "pkg");
+    mkdirSync(join(d, "x"), { recursive: true });
+    mkdirSync(join(d, "d1", "d2"), { recursive: true });
+    symlinkSync("../../x", join(d, "d1", "d2", "b"));
+    // Through `b` (which is `x`), `..` twice is `top`: the hash would never cover what `p` reads.
+    symlinkSync("d1/d2/b/../x", join(d, "ok"));
+    expect(hashTree(d).files["ok"]!.mode).toBe("120000");
+    symlinkSync("d1/d2/b/../../outside.txt", join(d, "p"));
+    expect(readFileSync(join(d, "p"), "utf8")).toBe("not the package's");
+    expect(() => hashTree(d)).toThrow(/p links outside the package/);
+    rmSync(join(d, "p"));
+    // A loop is refused rather than followed for ever; a link to a file not there yet is read literally.
+    symlinkSync("l2", join(d, "l1"));
+    symlinkSync("l1", join(d, "l2"));
+    expect(() => hashTree(d)).toThrow(/l1 links outside the package/);
+    rmSync(join(d, "l1")); rmSync(join(d, "l2"));
+    symlinkSync("x/later.txt", join(d, "dangling"));
+    expect(hashTree(d).files["dangling"]!.mode).toBe("120000");
   });
 });

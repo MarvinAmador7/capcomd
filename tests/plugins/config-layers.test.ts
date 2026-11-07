@@ -3,7 +3,8 @@
 // user's or the environment's, never a project's; `config.sources` per layer; a run may set only x-per-run settings
 // (layer 5), kept in the plugin's run storage under `config`.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { allowVersion, compatibilityPath } from "../../src/plugins/install";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost, type Candidate } from "../../packages/plugin/src/host/host";
@@ -124,7 +125,8 @@ describe("layer 5: a run's plugin config (§10.2)", () => {
     const cfg = parsePluginConfigFlags(["notify.channel=#ops", "notify.quiet=true", "other.a.b=[1,2]"]);
     expect(cfg).toEqual({ notify: { channel: "#ops", quiet: true }, other: { a: { b: [1, 2] } } });
     expect(parsePluginConfigFlags(pluginConfigFlags(cfg).map((f) => f.slice("--plugin-config=".length)))).toEqual(cfg);
-    for (const bad of ["notify", "notify.=x", ".x=1", "notify.channel"]) expect(() => parsePluginConfigFlags([bad])).toThrow(/not <plugin>\.<key>=<value>/);
+    for (const bad of ["notify", "notify.=x", ".x=1", "notify.channel", "__proto__.polluted=1", "notify.__proto__.polluted=1", "notify.constructor.prototype.polluted=1"]) expect(() => parsePluginConfigFlags([bad])).toThrow(/not <plugin>\.<key>=<value>/);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   test("checked against the plugins the daemon would load: unknown plugins and other settings are refused with their field", async () => {
@@ -140,6 +142,19 @@ describe("layer 5: a run's plugin config (§10.2)", () => {
     expect(await field([])).toBe("plugins");
     // A built-in without per-run settings refuses any.
     expect(await field({ "forge-github": { pollMs: 50 } })).toBe("plugins.forge-github.pollMs");
+    // A version outside its engines range is known once the operator allowed that version (§4.4), as the host loads it.
+    const old = join(process.env.CAPCOMD_HOME!, "plugins", "oldie");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "plugin.json"), JSON.stringify({ ...M, name: "oldie", engines: { capcomd: "<0.0.1" }, entry: { runtime: "process", command: ["./run.sh"] }, contributes: { hooks: { "run.changed": {} } } }));
+    writeFileSync(join(old, "run.sh"), "#!/bin/sh\n");
+    try {
+      expect(await field({ oldie: { channel: "#run" } })).toBe("plugins.oldie");
+      allowVersion("oldie@1.0.0", { acceptRisk: true });
+      expect(await checkRunPluginConfig({ oldie: { channel: "#run" } })).toEqual({ oldie: { channel: "#run" } });
+    } finally {
+      rmSync(old, { recursive: true, force: true });
+      rmSync(compatibilityPath(), { force: true });
+    }
   });
 
   test("the run's `config` in a plugin's run storage is the kernel's: the plugin can't write or delete it", async () => {
