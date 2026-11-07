@@ -11,6 +11,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only.
 - Fix: a profile with `permissions: { report: false }` is also refused when a plugin adds `report` to the spawn
   (`reason: "report_not_allowed"`), not only when the spawner asks for it.
+- Fix: `capcomd profiles list` shows control characters in a profile's `identity.title` as `\u{…}` instead of
+  printing them, so an installed profile's title can't redraw or hide lines in your terminal.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

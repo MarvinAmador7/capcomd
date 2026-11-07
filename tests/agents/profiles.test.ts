@@ -478,6 +478,16 @@ describe("profiles v2: loader and resolution", () => {
     expect(JSON.parse(readFileSync(w.source.CAPCOMD_AGENTS_FILE, "utf8")).agents).toEqual({ worker: { provider: "codex", auth: "apikey" } });
   }, 30_000);
 
+  test("CLI: a profile's title (text a package wrote) is listed with its control characters shown, never run", () => {
+    const w = world({ "P/critic.yaml": yaml(["name: critic", "identity: { title: \"Critic\\x1b[2J\\nworker ready\" }", "harness: { provider: claude, auth: apikey }"]) });
+    const env = { ...w.source, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
+    const out = cli(["profiles", "list"], env).out;
+    expect(out).toContain("Critic\\u{1b}[2J\\u{a}worker ready");
+    expect(out).not.toContain("\x1b");
+    // --json keeps it as written: JSON escapes it.
+    expect(JSON.parse(cli(["profiles", "list", "--json"], env).out).profiles[0].title).toBe("Critic\x1b[2J\nworker ready");
+  }, 30_000);
+
   // ADR-024 §7 step 4: the blocks that need no runtime, and what capcomd writes about a profile for a planner (§4).
   test("identity.title, tags, permissions.report and sharing reach what a planner reads; title and avatar aren't inherited", () => {
     const w = world({
