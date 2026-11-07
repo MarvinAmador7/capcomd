@@ -2,17 +2,34 @@
 // a declaration never registered is a warning the host writes at every start, which the daemon's log showed for
 // forge-github (no GitHub repositories as trigger sources) and source-schedule (no schedules) on every start. Each
 // listener that only matters under some settings is registered anyway and does nothing without them.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { PluginHost } from "../../packages/plugin/src/host/host";
-import { testkit } from "../../packages/plugin/src/testkit";
+import type { PluginContext } from "../../packages/plugin/src/context";
+import type { HookCall } from "../../packages/plugin/src/hooks";
+import { samplePayload, testkit } from "../../packages/plugin/src/testkit";
 import { loadManifest } from "../../packages/plugin/src/load";
 import { BUILTINS, candidateOf } from "../../src/plugins/builtins";
-import { sandboxBoxd } from "../../src/plugins/builtin/sandbox-boxd";
+import { REFRESH_LABEL, sandboxBoxd } from "../../src/plugins/builtin/sandbox-boxd";
+import { SOURCE_TIMER, startGitHubSource } from "../../src/plugins/forges/github-source";
+import { setGitHubApi } from "../../src/plugins/forges/github-rest";
+import * as templates from "../../src/env/templates";
 import { VERSION } from "../../src/utils/self";
+
+// A refresh's first step asks whether the daemon keeps project templates: counted here, and always "no", so a refresh
+// that runs touches nothing.
+let refreshes = 0;
+mock.module("../../src/env/templates", () => ({ ...templates, keepsProjectTemplates: () => { refreshes++; return false; } }));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** A fired timer of `plugin` labelled `label`, as job.changed tells it. */
+function fired(plugin: string, label: string) {
+  const p = samplePayload("job.changed");
+  return { ...p, job: { ...p.job, plugin, spec: { ...p.job.spec, label } }, change: { kind: "fired" as const, n: 1 } };
+}
 
 const endpoint = process.env.CAPCOMD_ENDPOINT;
 const refresh = process.env.CAPCOMD_TEMPLATE_REFRESH_HOURS;
 afterEach(() => {
+  setGitHubApi(null);
   if (endpoint === undefined) delete process.env.CAPCOMD_ENDPOINT; else process.env.CAPCOMD_ENDPOINT = endpoint;
   if (refresh === undefined) delete process.env.CAPCOMD_TEMPLATE_REFRESH_HOURS; else process.env.CAPCOMD_TEMPLATE_REFRESH_HOURS = refresh;
 });
@@ -45,5 +62,50 @@ describe("built-ins register what they declare (§4.7)", () => {
       if (!m.ok) throw new Error(JSON.stringify(m.issues));
       await testkit.loadDispose(m.manifest, b.module as never);
     }
+  });
+});
+
+describe("a listener registered without its settings does nothing", () => {
+  test("forge-github never polls with no source repositories, though a timer of its fires", async () => {
+    // A timer from earlier settings can fire before it is cancelled; a poll would read the threads runs follow.
+    let asked = 0;
+    let listener: ((call: HookCall<"job.changed">) => void) | undefined;
+    setGitHubApi({ listIssueComments: async () => { asked++; return []; } } as never);
+    const ctx = {
+      plugin: { name: "forge-github" }, hooks: { on: (_: string, f: typeof listener) => { listener = f; } }, log: { warn: () => {} },
+      jobs: { list: async () => [], cancel: async () => {} },
+      triggers: { subscriptions: async () => { asked++; return [{ runId: "run-1", source: "github", thread: "acme/app#3", until: null }]; } },
+      storage: { get: async () => ({ since: "2026-11-01T00:00:00Z" }), put: async () => {} },
+    } as unknown as PluginContext<unknown>;
+    const cfg = { api: "http://127.0.0.1:9", sourceRepos: [] as string[], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+    startGitHubSource(ctx, cfg);
+    listener!({ payload: fired("forge-github", SOURCE_TIMER) } as HookCall<"job.changed">);
+    await sleep(100);
+    expect(asked).toBe(0);
+    // With a repository the same fire polls (the stand-ins above are what a poll reads).
+    startGitHubSource(ctx, { ...cfg, sourceRepos: ["acme/app"] });
+    listener!({ payload: fired("forge-github", SOURCE_TIMER) } as HookCall<"job.changed">);
+    for (let i = 0; i < 40 && asked < 2; i++) await sleep(25);
+    expect(asked).toBeGreaterThanOrEqual(2);
+  });
+
+  test("sandbox-boxd refreshes nothing with the refresh off, though its timer (kept across restarts) fires", async () => {
+    process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9";
+    const fire = async (hours: string) => {
+      process.env.CAPCOMD_TEMPLATE_REFRESH_HOURS = hours;
+      const host = new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: () => "/nonexistent", sinks: { log: () => {} } });
+      try {
+        await host.start([{ source: "builtin", manifest: sandboxBoxd.manifest, module: sandboxBoxd.module, enabled: true } as never]);
+        host.hooks.fire("job.changed", "observe", fired("sandbox-boxd", REFRESH_LABEL), { principal: { kind: "operator", clientId: null }, entity: "job-test1#fired1", runId: null });
+        for (let i = 0; i < 20 && !refreshes; i++) await sleep(25);
+      } finally {
+        await host.stop();
+      }
+    };
+    await fire("0");
+    expect(refreshes).toBe(0);
+    // With the refresh on, the same fire refreshes.
+    await fire("24");
+    expect(refreshes).toBe(1);
   });
 });
