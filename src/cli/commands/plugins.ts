@@ -182,10 +182,10 @@ async function trustCommand(args: string[], values: Values): Promise<number> {
     if (m.entry.runtime === "process") console.log(`  runs     ${m.entry.command.map((a) => /^[\w./${}=:@%+,-]+$/.test(a) ? a : visible(JSON.stringify(a))).join(" ")}  (on this machine, as you, out of process)`);
     console.log(`  scopes   ${(m.scopes ?? []).join(", ") || "none"}`);
     console.log(`  hooks    ${Object.keys(m.contributes?.hooks ?? {}).join(", ") || "none"}`);
-    // Its secrets reach it at its start (§10.3): a manifest's default reference names a variable of yours.
+    // Its secrets reach it at its start (§10.3), each from the reference you set for it (never its manifest's default).
     const { secretKeys } = await import("../../../packages/plugin/src/host/host");
     const { secretRef } = await import("../../plugins/secrets");
-    const refs = secretKeys(m, p.dir).map((k) => { try { return `${k} ← ${visible(secretRef(m, k, process.env, p.dir))}`; } catch { return `${k} (none set)`; } });
+    const refs = secretKeys(m, p.dir).map((k) => { try { return `${k} ← ${visible(secretRef(m, k, process.env, p.dir, { builtin: false }))}`; } catch { return `${k} (none set)`; } });
     console.log(`  secrets  ${refs.join(", ") || "none"}`);
     console.log(`  hash     ${p.hash}`);
     if (p.trust === "changed") console.log(`  You trusted other content before (${p.trustedHash}): its files changed since.`);

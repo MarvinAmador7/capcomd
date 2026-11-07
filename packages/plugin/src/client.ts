@@ -116,7 +116,13 @@ export function connect(env: ProcessEnvironment = process.env as unknown as Proc
           while (frames.length) {
             const f = frames.shift()!;
             last = f.seq;
-            if (f.frame === "hook.call") deadlines.set(f.call.callId, Date.parse(f.call.deadline));
+            // Only a gate or modify call is answered (§9.4): remember its deadline, and forget the ones past theirs, so a
+            // plugin that watches a busy daemon for days holds none of its observe calls.
+            if (f.frame === "hook.call" && f.call.mode !== "observe") {
+              const now = Date.now();
+              for (const [id, t] of deadlines) if (t < now) deadlines.delete(id);
+              deadlines.set(f.call.callId, Date.parse(f.call.deadline));
+            }
             yield f;
             if (f.frame === "session.closing") return;
           }

@@ -1,8 +1,9 @@
 // How the daemon starts an out-of-process plugin (docs/spec/plugin-api.md §9.2, §9.3): a token minted for this start
 // (src/api/clients.ts `mintPluginClient`: the manifest's scopes, held in memory, revoked when the process is gone), the
-// manifest's command run in the plugin's directory in a process group of its own, with ONLY the base variables (PATH,
-// HOME, USER, LANG, TERM, TMPDIR), the manifest's `entry.env` and the CAPCOMD_PLUGIN_* ones: no other CAPCOMD_* of the
-// daemon's, no BOXD_*, no GITHUB_TOKEN, no provider key, never a secret (those go once in the handshake's answer, §10.3).
+// manifest's command run in the plugin's directory in a process group of its own (killed when the process exits, so
+// nothing it started outlives it), with ONLY the base variables (PATH, HOME, USER, LANG, TERM, TMPDIR), the manifest's
+// `entry.env` and the CAPCOMD_PLUGIN_* ones: no other CAPCOMD_* of the daemon's, no BOXD_*, no GITHUB_TOKEN, no
+// provider key, never a secret (those go once in the handshake's answer, §10.3).
 // stdin stays open while the daemon lives (a process should exit when it closes); stdout and stderr lines are the
 // plugin's log (§13.3), redacted, its own token and secrets among what is redacted. Chaos (CAPCOMD_KILLPOINT): `plugin.hook.mid`
 // kills the daemon, `plugin.process.crash` the plugin's process, right after a gate or modify call went out to it.
@@ -94,7 +95,12 @@ export function processLauncher(o: { socket: string; log(line: Line): void }): P
       }
       if (child) {
         child.on("error", (e) => { o.log({ plugin: manifest.name, level: "error", message: `could not start ${cmd}: ${redact(e.message)}`, fields: {} }); done({ code: null, signal: null }); });
-        child.on("exit", (code, signal) => done({ code, signal }));
+        child.on("exit", (code, signal) => {
+          // What it started goes with it (its group): a helper it left (a crash, an exit) holds no files or ports the
+          // next start needs, and outlives no token. The group's id isn't reused while any of it still runs.
+          if (child?.pid) try { process.kill(-child.pid, "SIGKILL"); } catch { /* nothing left */ }
+          done({ code, signal });
+        });
         child.stdin?.on("error", () => {});
         for (const stream of [child.stdout, child.stderr]) if (stream) createInterface({ input: stream }).on("line", (l) => { if (l.trim()) o.log(logLine(manifest.name, l, redact)); });
       }
