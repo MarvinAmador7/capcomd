@@ -10,6 +10,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   the write to another file; an edited file keeps its permissions. `GET /v1/profiles/{name}` shows a context
   provider by its name only and hides token-shaped text in other read-only rows, and `PUT` refuses a number too large
   to store exactly instead of writing it as `1e+23`.
+- Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
+  is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
+  flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
+  brain could be added and its files copied into agents' sandboxes.
 - Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
   agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
   job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
