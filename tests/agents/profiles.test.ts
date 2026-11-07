@@ -504,6 +504,17 @@ describe("profiles v2: loader and resolution", () => {
       listing(w, [{ kind: "sandbox", name: "fly" }]);
       expect(validate()).toMatchObject({ code: 2, ok: false, errors: [expect.stringContaining(`sandbox.provider "modal" isn't an active sandbox provider`)] });
     }, 30_000);
+
+    test("`validate` leaves a sandbox.environment on a sandbox only the daemon has to the daemon, instead of failing on it", () => {
+      const w = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { provider: modal, environment: gpu }"]) });
+      const env = { ...w.source, ANTHROPIC_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json") };
+      const validate = () => { const r = cli(["agents", "validate", "--json"], env); return { code: r.code, ...JSON.parse(r.out) }; };
+      expect(validate()).toMatchObject({ code: 0, ok: true, warnings: [`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`] });
+      listing(w, [{ kind: "sandbox", name: "modal" }]);
+      const ok = validate();
+      expect(ok).toMatchObject({ code: 0, ok: true });
+      expect(ok.warnings).toBeUndefined();
+    }, 30_000);
   });
 
   test("overrides take v2 paths (v1 names stay aliases) and still only narrow", () => {

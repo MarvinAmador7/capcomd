@@ -98,6 +98,7 @@ async function hostChecks(set: ProfileSet): Promise<{ errors: string[]; warnings
   const { lifecycleCheck } = await import("../../plugins/lifecycle");
   const { bootSnapshot, EnvironmentProblem } = await import("../../env/resolve");
   const { withSandbox } = await import("../../providers/run-sandbox");
+  const { sandboxSeam } = await import("../../plugins/sandboxes");
   for (const [n, r] of Object.entries(set.profiles)) {
     const names = lifecyclePlugins(r.runtime.lifecycle);
     if (names.length) {
@@ -105,7 +106,9 @@ async function hostChecks(set: ProfileSet): Promise<{ errors: string[]; warnings
       if (c.problem) errors.push(`profiles.${n}: ${c.problem}`);
       else if (!c.checked) warnings.push(`profiles.${n}: lifecycle names ${names.join(", ")}: no daemon is running to say whether ${names.length === 1 ? "it is" : "they are"} active (a spawn checks again)`);
     }
-    if (r.runtime.environment) {
+    // Only on a sandbox this process has: one only the running daemon's plugins provide (or none, with no daemon to
+    // ask) keeps its environments there, and a spawn checks them.
+    if (r.runtime.environment && (!r.runtime.sandboxProvider || sandboxSeam(r.runtime.sandboxProvider))) {
       try { bootSnapshot({ environment: r.runtime.environment, real: false }, withSandbox(process.env, r.runtime.sandboxProvider)); } catch (e) {
         if (!(e instanceof EnvironmentProblem)) throw e;
         warnings.push(`profiles.${n}: ${e.message}`);

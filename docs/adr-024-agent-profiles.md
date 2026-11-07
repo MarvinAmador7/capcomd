@@ -559,7 +559,8 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   it is written and an override, which have nowhere to put a warning, still need one this process or the daemon has;
   so does a write (`profiles add|set|rm`, `src/profiles/write.ts` `checked`) that leaves a profile naming one it didn't
   name before (a typo is caught where it is made), while one a profile already names doesn't stop a change to
-  something else.
+  something else. `validate` looks for a `sandbox.environment` only in a sandbox this process has: one only the
+  daemon's plugins provide keeps its environments there, and a spawn checks it.
 
 Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`, `src/profiles/fields.ts`,
 `src/api/profiles.ts`):
