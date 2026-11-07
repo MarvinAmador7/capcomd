@@ -15,7 +15,6 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   seconds, the command fails with nothing changed; run it again.
 - Fixed: writing a profile file, `agents.json` or `trust.json` never writes through a link a repository placed next
   to it under the name of the temporary file capcomd used.
-
 - Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
   is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
   flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
