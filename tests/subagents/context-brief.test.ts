@@ -3,7 +3,8 @@
 // host-exec sandbox (it writes the appended system prompt it was given). Two agents of the profile start with the same
 // brief, byte for byte: the kernel's header, then one line per item, no body, the item that tries to forge a fence
 // neutralised and the secret it carries redacted; an agent of a profile without the block gets none; the run records
-// plugin.context.loaded; `capcomd context brief` prints what the agents got.
+// plugin.context.loaded; `capcomd context brief` prints what the agents got. With the brief come the context skills
+// (ADR-025 step 6): the doctrine for every one, the routing paragraph for one that may spawn, after its orchestration skill.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -34,6 +35,7 @@ beforeAll(async () => {
   writeFileSync(agentsFile, JSON.stringify({ schema: "capcomd.agents/v1", agents: {
     worker: { provider: "claude", auth: "apikey", maxTurns: 20, appendSystemPrompt: "Work carefully.", context: { providers: [{ name: "memory" }] } },
     plain: { provider: "claude", auth: "apikey", maxTurns: 20 },
+    lead: { provider: "claude", auth: "apikey", maxTurns: 20, context: { providers: [{ name: "memory" }] }, children: { allowSpawn: true, maxChildren: 1, maxDepth: 1, allowedChildProfiles: ["worker"] } },
   } }));
   env = {
     ...r.env,
@@ -104,14 +106,24 @@ test("two agents of one profile start with the same brief: header and index line
   await (await import("../../src/plugins/hooks")).gates();
   const ops = await import("../../src/primitives/ops");
   const retried = await ops.agentPreparing(run, await ops.getAgentOrThrow(run, a.id), 2);
-  // After the brief, the doctrine skill, pinned on the attempt's spec by its hash (a worker that may not spawn has no
-  // in-VM capcomd for run notes, so no routing paragraph).
+  // After the brief, the doctrine and routing skills, pinned on the attempt's spec by their hashes (a worker that may
+  // not spawn has the in-VM capcomd for run notes and lessons, so it gets the routing paragraph too).
   const { DOCTRINE_SKILL, ROUTING_SKILL } = await import("../../src/context/skills");
   const { skillBlock } = await import("../../src/agents/skills");
-  expect(retried?.appendSystemPrompt).toBe(`Work carefully.\n\n${brief}\n\n${skillBlock(DOCTRINE_SKILL.name, DOCTRINE_SKILL.text)}`);
-  expect(retried?.skills).toEqual([{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin" }]);
+  expect(retried?.appendSystemPrompt).toBe(`Work carefully.\n\n${brief}\n\n${skillBlock(DOCTRINE_SKILL.name, DOCTRINE_SKILL.text)}\n\n${skillBlock(ROUTING_SKILL.name, ROUTING_SKILL.text)}`);
+  expect(retried?.skills).toEqual([{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin" }, { name: ROUTING_SKILL.name, hash: ROUTING_SKILL.hash, source: "builtin" }]);
   expect(a.system).toContain(`<skill name="${DOCTRINE_SKILL.name}">`);
-  expect(a.system).not.toContain(ROUTING_SKILL.name);
+  expect(a.system).toContain(`<skill name="${ROUTING_SKILL.name}">`);
+
+  // One that may spawn has the in-VM capcomd: the routing paragraph too, each skill once, after the orchestration skill.
+  const l = await finished(run, "lead", "l");
+  const at = (name: string) => l.system.indexOf(`<skill name="${name}">`);
+  for (const name of ["capcomd-orchestration", DOCTRINE_SKILL.name, ROUTING_SKILL.name]) {
+    expect(at(name)).toBeGreaterThan(l.system.indexOf("Context: loaded"));
+    expect(l.system.split(`<skill name="${name}">`).length).toBe(2);
+  }
+  expect(at("capcomd-orchestration")).toBeLessThan(at(DOCTRINE_SKILL.name));
+  expect(at(DOCTRINE_SKILL.name)).toBeLessThan(at(ROUTING_SKILL.name));
 
   // A profile without a context block: no brief, no context skill.
   const p = await finished(run, "plain", "p");
@@ -127,6 +139,13 @@ test("two agents of one profile start with the same brief: header and index line
   const printed = await cj(["context", "brief", "worker"]);
   expect(printed.code).toBe(0);
   expect(printed.j?.brief).toBe(brief);
+  // … and names the context skills they get with it: the doctrine; the routing paragraph too for one that may spawn,
+  // unless it is asked as a reviewer's.
+  const pin = (s: { name: string; hash: string }) => ({ name: s.name, hash: s.hash });
+  expect(printed.j?.skills).toEqual([pin(DOCTRINE_SKILL)]);
+  expect(printed.j?.text).toEndWith(`With the skills: ${DOCTRINE_SKILL.name} (sha256 ${DOCTRINE_SKILL.hash.slice(0, 12)}).`);
+  expect((await cj(["context", "brief", "lead"])).j?.skills).toEqual([pin(DOCTRINE_SKILL), pin(ROUTING_SKILL)]);
+  expect((await cj(["context", "brief", "lead", "--review"])).j?.skills).toEqual([pin(DOCTRINE_SKILL)]);
   const none = await cj(["context", "brief", "plain"]);
   expect(none.j).toMatchObject({ ok: true, brief: null });
 }, 240_000);

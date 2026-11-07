@@ -230,6 +230,8 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     }
     case "result": {
       const r = normalizeResult(args);
+      // An empty call (a tool called before its schema was read gives `{}`) would record nothing, or erase a result.
+      if (!r.summary.trim() && !r.artifacts.length && r.data === undefined) throw new RelayError("usage", "result needs a summary (or artifacts or data): nothing was recorded", "capcomd result --summary \"<what you did, what you checked, what is left>\" [--data JSON]");
       await S.kvWrite(run, { k: `_result/${c.sub}`, value: r, writer: c.sub });
       return { recorded: true, ...(r.truncated ? { truncated: r.truncated } : {}) };
     }

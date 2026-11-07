@@ -76,8 +76,10 @@ export function profileSkills(prefix: string, list: unknown, dirs: Array<{ dir: 
     skills.push({ name, source: found.source, hash, text: found.text, path: found.path });
   });
   // The context router's skills (src/context/skills.ts) for a profile with a context block: the doctrine, and the
-  // routing paragraph for an agent that may spawn.
-  const kept = hasContext ? contextSkills({ role: "work", maySpawn }) : [];
+  // routing paragraph for an agent that may spawn. An agent that may not spawn gets the routing paragraph too (it has
+  // the in-VM capcomd) when its other skills leave room, but no room is kept for it: a profile that resolved before
+  // workers had capcomd still does (the router leaves out what doesn't fit, and logs it).
+  const kept = hasContext ? contextSkills({ role: "work", capcomd: maySpawn }) : [];
   const most = SKILLS_PER_MESSAGE_MAX - (maySpawn ? 1 : 0) - kept.length;
   const room = SKILL_MAX_BYTES - (maySpawn ? ORCHESTRATION_RESERVE_BYTES : 0) - kept.reduce((n, s) => n + Buffer.byteLength(s.text), 0);
   const ours = list.filter((s) => !(isMap(s) && s.name === ORCHESTRATION_SKILL_NAME)).length;
