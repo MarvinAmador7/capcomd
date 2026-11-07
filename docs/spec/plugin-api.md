@@ -1047,7 +1047,9 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 - `storage`: private to the plugin. Keys `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$`, values JSON ≤ 64 KB. Run scope is
   deleted with the run; daemon scope lives in `dataDir` and survives updates and reinstalls.
 - `kv`: the run's shared blackboard; reserved prefixes (`_`, `approval/`, `recipe/`, `handoff/`, `plugin/`) are
-  read-only (`forbidden`). Values ≤ 64 KB.
+  read-only (`forbidden`). Values ≤ 64 KB. A write's writer is `plugin:<name>`; `cas` compares the JSON of the current
+  value (`expect` undefined: the key must not exist) and answers `false` on a mismatch; `list` leaves out the run's `_`
+  settings unless the prefix starts with `_`, as `capcomd kv list` does.
 - `agents.spawn`: subject to `spawnChecks`, `checkSpawn` and the plugin's budget share as any caller; a plugin cannot
   pass `operator`. `agents.notice`: a plugin may raise kinds the kernel does not (`stalled`) and clear only notices it
   raised: raising a kernel kind is `forbidden`; a clear (`null`) takes away only a plugin kind, and the kernel's own
@@ -1055,14 +1057,38 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
   until progress or the plugin clears it. A notice needs a running agent (a later one replaces an earlier one of another
   kind, as the kernel's do). `agents.cancel` cancels the agent and its descendants as `capcomd cancel` does, the reason
   recorded as `by the <plugin> plugin: <reason>`. A call never creates a run (an unknown run is `not_found`).
-- In the daemon since §17.2 step 11, beside `jobs` and `storage`: `agents.get`, `agents.tree`, `agents.cancel`,
-  `agents.notice` (`src/plugins/services.ts`). The rest of `agents` answers `unsupported` until a later step; a CLI's
-  local host has none of them.
+- Which process has which (`src/plugins/services.ts`). The daemon's host only, beside `jobs`, `storage` and `triggers`:
+  `runs`, `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice`, `messages`, `kv`, `board`, `gates.pending` and
+  `profiles` (they act on the engine, or resolve as the daemon's spawns do, through its `profile.resolved` listeners).
+  Every process's host, as the gates are: `sandboxes` and `auth` (facts about that process's places and logins). A CLI's
+  local host answers `unsupported` for the daemon's; the rest of `agents` and `gates.verify`, `gates.merge` answer
+  `unsupported` everywhere until a later step.
+- A primitive's caller is the plugin (§11.2): what it writes is `plugin:<name>`'s (a message's sender, a kv writer, a
+  board holder, a run's or title's `setBy`), and a mutating call's `key` (§8.2) is the plugin's own, kept apart from the
+  CLI's and every other plugin's. A call never creates a run: an unknown run is `not_found` for every service.
+- `runs.new`: `ops.runNew`, with `run.creating` (§6.6.3) naming the plugin's principal; the answer is the run as
+  `GET /v1/runs/{id}` shows it. `runs.end` records the run's end (`by the <plugin> plugin: <reason>`) and cancels its
+  agents, as `capcomd cancel <run>` does. `runs.pause`, `resume` and `title` are `capcomd pause`, `resume` and
+  `title --run` on the whole run.
+- `messages.send`: to an agent of the run, from `plugin:<name>`, a body ≤ 64 KB, `skills` pinned by the sha256 of their
+  text; a replayed key answers its first message's `seq`. `messages.inbox`: the agent's messages after `seq`, each body
+  `Untrusted`.
+- `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task is `pending`, `leased`
+  while held, `released` once open again after a lease, or `done`; `running` is unused today. The plugin holds what it
+  claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds (`conflict` otherwise).
 - `gates.merge`: no `operator`; a plugin that wants to bypass vetoes cannot (§11.3).
 - `sandboxes.provider(name)`: the kernel's wrapped object (§7.1), never a raw plugin object; a provider plugin asking
-  for itself gets the wrapper too.
+  for itself gets the wrapper too. It is the seam's shape over the kernel's provider for the place
+  (`src/dependencies.ts` `providerNamed`: traced, riding out outages, `sandbox.ensuring` and `sandbox.changed` fired),
+  frozen, and a call waits until its `SeamCall`'s deadline at most (`timeout`). An unknown or inactive place is
+  `not_found`. `forRun` is the place the run was started on, else the process's own.
 - `auth`: facts, never values. The only way a plugin gets a secret is `config.secret` for its own declared secrets (§10.3).
+  `credentialMode` is how an agent of that provider with that `auth` gets its credential in this process (`none` when
+  it has none it could use); `loginPresent` is whether `GET /v1/logins` shows a login there. An unknown provider or
+  place is `not_found`.
 - `profiles.resolve`: fires `profile.resolved` (§6.6.5); the result is the same pinned shape the kernel spawns with.
+  `overrides` only narrow (`widening` otherwise), as a spawn's do; `project` reads that project's profiles, as
+  `GET /v1/profiles?repo=` does. An unknown profile is `not_found`.
 
 ### 8.5 What a plugin never gets
 
@@ -2132,6 +2158,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
+| 1.0.37 | 2026-11-06 | The in-process primitives the context promised (§8.1, §8.4): `runs`, `messages`, `kv`, `board`, `gates.pending` and `profiles` in the daemon's host (beside `jobs`, `storage`, `triggers` and the `agents` reads, cancel and notice), and `sandboxes` and `auth` in every process's, with the plugin as the caller (its writes `plugin:<name>`'s, its keys its own) and an unknown run `not_found` everywhere; `runs.new` names the plugin's principal to `run.creating`, `profiles.resolve` to `profile.resolved`; §8.4 says which process has which, what each writes, and the board's states. `RunsService` declares `new` as a method (`"new"(…)`: bare, it declared a constructor). No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
