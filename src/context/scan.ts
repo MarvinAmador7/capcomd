@@ -25,6 +25,10 @@ const SHAPES: readonly RegExp[] = [
   /\bbxds?_[A-Za-z0-9_-]{16,}/,                          // boxd keys
   /\bAIza[0-9A-Za-z_-]{35}/,                             // Google API keys
   /\b[rs]k_live_[0-9A-Za-z]{16,}/,                       // Stripe live keys
+  /\bglpat-[A-Za-z0-9_-]{20,}/,                          // GitLab personal access tokens
+  /\bnpm_[A-Za-z0-9]{36}\b/,                             // npm tokens
+  /\bhf_[A-Za-z0-9]{30,}\b/,                             // Hugging Face tokens
+  /\bya29\.[A-Za-z0-9_-]{20,}/,                          // Google OAuth access tokens
   /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i,        // a URL with a password in it
 ];
 
@@ -50,9 +54,15 @@ function entropy(s: string): number {
  *  close to random (a 32-character base62 key has about 4.6 bits a character, English and code names under 4). */
 const randomLooking = (w: string) => w.length >= 32 && /\d/.test(w) && /[a-z]/.test(w) && /[A-Z]/.test(w) && entropy(w) >= 4.3;
 
-/** The text as the scan reads it: invisible format characters dropped, so nothing hides behind one, and look-alikes
- *  folded (NFKC: full-width letters and digits, no-break spaces; every dash a hyphen), so none passes for another. */
-const plain = (t: string) => String(t ?? "").replace(/\p{Cf}+/gu, "").normalize("NFKC").replace(/\p{Pd}/gu, "-");
+/** The text as the scan reads it: look-alikes folded (NFKC: full-width letters and digits, no-break spaces; every dash a
+ *  hyphen), so none passes for another, then invisible characters dropped (format characters, variation selectors, the
+ *  combining grapheme joiner, Hangul fillers, tag characters: every default-ignorable one) and so are combining marks
+ *  (NFKD), so nothing hides behind one. */
+const plain = (t: string) => String(t ?? "").normalize("NFKC").replace(/\p{Pd}/gu, "-")
+  .normalize("NFKD").replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}\p{M}]+/gu, "");
+/** A run's secret is looked for with every space and line break taken out of both, so one wrapped or spaced out is
+ *  still found. */
+const squashed = (t: string) => t.replace(/\s+/g, "");
 
 /**
  * A scan seeded with `secrets` (values shorter than 8 characters are ignored: they would match too much): `scan(text)`
@@ -60,11 +70,12 @@ const plain = (t: string) => String(t ?? "").replace(/\p{Cf}+/gu, "").normalize(
  * string, a credentials path.
  */
 export function secretScan(secrets: ReadonlyArray<string | null | undefined> = []): (text: string) => ScanHit | null {
-  const seeded = [...new Set(secrets.filter((s): s is string => typeof s === "string").map((s) => plain(s).trim()).filter((s) => s.length >= 8))];
+  const seeded = [...new Set(secrets.filter((s): s is string => typeof s === "string").map((s) => squashed(plain(s))).filter((s) => s.length >= 8))];
   const hit = (reason: ScanReason): ScanHit => ({ reason, what: WHAT[reason] });
   return (text: string) => {
     const t = plain(text);
-    if (seeded.some((s) => t.includes(s))) return hit("secret");
+    const flat = seeded.length ? squashed(t) : "";
+    if (seeded.some((s) => flat.includes(s))) return hit("secret");
     if (PATTERNS.some((p) => t.search(p) >= 0) || SHAPES.some((p) => p.test(t))) return hit("token");
     if (t.split(/[^A-Za-z0-9+_=-]+/).some(randomLooking)) return hit("entropy");
     if (PATHS.some((p) => p.test(t))) return hit("path");
@@ -75,6 +86,7 @@ export function secretScan(secrets: ReadonlyArray<string | null | undefined> = [
 /** Variables that hold a credential by their name: GITHUB_TOKEN, OPENAI_API_KEY, AWS_SECRET_ACCESS_KEY, … */
 const SECRET_NAME = /(?:^|_)(?:API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)(?:_|$)/i;
 /** A value that can be a secret: not a number, a flag or a path (CAPCOMD_TOKEN_TTL_MS is named like one). */
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const valueOf = (v: unknown): string | null => {
   const s = typeof v === "string" ? v.trim() : "";
   return s.length >= 8 && !/^[\d.:_-]+$/.test(s) && !/^(?:true|false|yes|no|on|off)$/i.test(s) && !s.startsWith("/") && !s.startsWith("~") ? s : null;
@@ -99,6 +111,14 @@ export async function runSecrets(o: { runId?: string | null; remote?: string | n
     const m = b.manifest as { name: string; config?: { properties?: Record<string, { "x-secret"?: unknown } | undefined> } };
     for (const [k, p] of Object.entries(m.config?.properties ?? {})) if (p?.["x-secret"] === true) add(secretOrUndefined(m, k, source));
   }
+  // Any other plugin's (the user's own, a project's): only the user points one at a value (§10.3), so every reference
+  // in ~/.capcomd/config.json's `plugins` or in a CAPCOMD_PLUGIN_<NAME>_<KEY> variable, whichever plugin it is for.
+  const { secretRefOf } = await import("../plugins/config");
+  const { readConfig, userConfigPath } = await import("../config/store");
+  const refs: unknown[] = Object.entries(source).filter(([k]) => k.startsWith("CAPCOMD_PLUGIN_")).map(([, v]) => { try { return JSON.parse(v ?? ""); } catch { return null; } });
+  const configured = source.CAPCOMD_NO_CONFIG ? undefined : readConfig(userConfigPath(source)).plugins;
+  for (const c of Object.values(isRecord(configured) ? configured : {})) if (isRecord(c)) refs.push(...Object.values(c));
+  for (const r of refs) { const named = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(secretRefOf(r) ?? ""); if (named) add(source[named[1]!]); }
   for (const [k, v] of Object.entries(source)) if (SECRET_NAME.test(k)) add(v);
   add(source.CAPCOMD_RPC_KEY);
   try {
