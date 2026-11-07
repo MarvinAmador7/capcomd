@@ -271,17 +271,22 @@ function sameFile(abs: string, f: TreeFile): boolean {
 }
 
 /**
- * Of the user's files `kept`, those the new package has a file at, or a file where one of them needs a directory, or a
- * directory where one of them is a file: the update can't keep them where they are. Names are compared as macOS's file
- * system does (case and Unicode form folded), so a Notes.md of yours never lands on the package's notes.md.
+ * Of the user's files `kept`, those the new package (its files at `staging`, beside the package's directory) needs the
+ * place of: it has a file or a directory at that name, or a file or a link where one of them needs a directory. The file
+ * system that will hold them is asked, never a guess at how it compares names: on macOS's, which folds case and Unicode
+ * form (fully: STRASSE.md is straße.md), a Notes.md of yours never lands on the package's notes.md, and on one that
+ * tells them apart both stay.
  */
-function clashes(kept: string[], next: Record<string, TreeFile>): string[] {
-  const fold = (p: string) => p.normalize("NFC").toLowerCase();
-  const files = new Set(Object.keys(next).map(fold));
-  const dirs = new Set([...files].flatMap((f) => f.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"))));
+function clashes(kept: string[], staging: string): string[] {
+  const at = (p: string) => { try { return lstatSync(join(staging, p)); } catch { return null; } };
   return kept.filter((k) => {
-    const p = fold(k);
-    return files.has(p) || dirs.has(p) || p.split("/").slice(0, -1).some((_, i, a) => files.has(a.slice(0, i + 1).join("/")));
+    const parts = k.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const st = at(parts.slice(0, i).join("/"));
+      if (!st) return false;
+      if (!st.isDirectory()) return true;
+    }
+    return !!at(k);
   });
 }
 
@@ -307,7 +312,8 @@ export async function updateProfile(name: string, o: { project?: boolean; path?:
     // Files the user added beside the package's are theirs: kept where they are (one the new package ships as it is
     // becomes the package's). One the new package needs the place of is a conflict, before anything changes.
     const kept = userFiles(dir, lock).filter((p) => !(Object.hasOwn(next.files, p) && sameFile(join(dir, p), next.files[p]!)));
-    const clash = clashes(kept, next.files);
+    const overrides = readdirSync(dir).filter((f) => OVERRIDE_FILE.test(f));
+    const clash = clashes([...overrides, ...kept], staging);
     if (clash.length) throw new RelayError("conflict", `the update of ${name} needs the place of ${clash.length === 1 ? "a file" : "files"} you added to ${dir}: ${clash.join(", ")}`, "Move them out of the profile's directory (or delete them), then update again; nothing was changed.");
     const out: ProfileUpdate = { name, dir, layer, from: { version: lock.version, commit: lock.commit, hash: lock.hash }, to: { version: next.version, commit: next.commit, hash: next.hash }, ...diff, skills, modified, kept, updated: false };
     const replaces = !!modified && (modified.changed.length > 0 || modified.removed.length > 0);
@@ -315,7 +321,7 @@ export async function updateProfile(name: string, o: { project?: boolean; path?:
     writeLock(staging, next);
     // The user's override and files come along into the new directory once it is in place (never through the staging
     // directory, which goes whatever happens); the old one goes once the profiles resolve with the new.
-    const theirs = [...readdirSync(dir).filter((f) => OVERRIDE_FILE.test(f)), ...kept];
+    const theirs = [...overrides, ...kept];
     const old = join(dirname(dir), `.old-${name}-${process.pid}-${Date.now()}`);
     const back = (moved: string[]) => {
       for (const f of moved) renameSync(join(dir, f), join(old, f));

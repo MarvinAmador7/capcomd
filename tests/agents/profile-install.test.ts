@@ -294,20 +294,48 @@ describe("update", () => {
     expect(leftovers(w.user)).toEqual([]);
   });
 
-  test("a new package file whose name differs from one you added only in case (or Unicode form) is a conflict too", async () => {
-    // macOS's file system folds case and Unicode form: kept where it is, your Notes.md would replace the package's notes.md.
+  test("a new package file at a name the file system takes for one you added (case, Unicode form, full folding) is a conflict; one it tells apart isn't", async () => {
+    // macOS's file system folds case and Unicode form, fully (STRASSE.md is straße.md there): kept where it is, your
+    // Notes.md would replace the package's notes.md. Whether two names are one is the file system's to say, so the test
+    // asks it; on one that tells them apart (Linux's) both files stay, side by side.
     const w = world(), repo = await profileRepo(twoProfiles());
     await installProfile(`${repo.bare}#security-critic`, w.o);
     const dir = join(w.user, "security-critic");
-    writeFileSync(join(dir, "Notes.md"), "Mine.\n");
-    mkdirSync(join(dir, "Docs"));
-    writeFileSync(join(dir, "Docs", "a.md"), "Mine.\n");
-    writeFileSync(join(dir, "caf\u0065\u0301.md"), "Mine.\n");
+    const yours: Record<string, string> = { "Notes.md": "notes.md", "Docs/a.md": "docs", "cafe\u0301.md": "caf\u00E9.md", "STRASSE.md": "stra\u00DFe.md", "\uFB01le.md": "file.md" };
+    for (const f of Object.keys(yours)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), "Mine.\n"); }
     const lock = readLock(dir)!;
-    await repo.commit({ "profiles/security-critic/notes.md": "The package's.\n", "profiles/security-critic/docs": "a file\n", "profiles/security-critic/caf\u00e9.md": "The package's.\n" });
-    await refused(updateProfile("security-critic", w.o), "conflict", /needs the place of files you added.*: Docs\/a\.md, Notes\.md, caf/);
-    expect(readLock(dir)).toEqual(lock);
-    expect(readFileSync(join(dir, "Notes.md"), "utf8")).toBe("Mine.\n");
+    await repo.commit(Object.fromEntries(Object.values(yours).map((p) => [`profiles/security-critic/${p}`, "The package's.\n"])));
+    // Whether this file system takes two names for one: asked, beside where the profiles are.
+    const probe = mkdtempSync(join(tmpdir(), "fold-"));
+    const oneName = (a: string, b: string) => { writeFileSync(join(probe, a), ""); try { return existsSync(join(probe, b)); } finally { rmSync(join(probe, a)); } };
+    const folded = Object.keys(yours).filter((f) => oneName(f.split("/")[0]!, yours[f]!)).sort();
+    const foldsCase = oneName("override.yaml", "Override.yaml");
+    rmSync(probe, { recursive: true });
+    // macOS's default volume takes them all for the package's; even a case-sensitive one folds the Unicode form.
+    if (process.platform === "darwin") expect(folded.length).toBeGreaterThan(0);
+    if (process.platform === "linux") expect(folded).toEqual([]);
+    if (folded.length) {
+      const names = folded.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(", ");
+      await refused(updateProfile("security-critic", { ...w.o, dryRun: true }), "conflict", new RegExp(`needs the place of (a file|files) you added.*: ${names} `));
+      await refused(updateProfile("security-critic", w.o), "conflict", /needs the place of/);
+      expect(readLock(dir)).toEqual(lock);
+    } else {
+      expect(await updateProfile("security-critic", w.o)).toMatchObject({ updated: true, kept: Object.keys(yours).sort() });
+      for (const p of Object.values(yours)) expect(readFileSync(join(dir, p), "utf8")).toBe("The package's.\n");
+    }
+    for (const f of Object.keys(yours)) expect(readFileSync(join(dir, f), "utf8")).toBe("Mine.\n");
+    expect(leftovers(w.user)).toEqual([]);
+    // Your override.yaml is yours the same way: a package's Override.yaml, where the file system takes it for yours,
+    // would have it land on the package's file.
+    for (const f of Object.keys(yours)) rmSync(join(dir, f));
+    rmSync(join(dir, "Docs"), { recursive: true, force: true });
+    writeFileSync(join(dir, "override.yaml"), yaml(["limits: { maxTurns: 7 }"]));
+    await repo.commit({ "profiles/security-critic/Override.yaml": "The package's.\n" });
+    if (foldsCase) {
+      await refused(updateProfile("security-critic", w.o), "conflict", /needs the place of (a file|files) you added.*: override\.yaml /);
+      expect(readLock(dir)).toEqual(lock);
+    } else expect(await updateProfile("security-critic", w.o)).toMatchObject({ updated: true });
+    expect(readFileSync(join(dir, "override.yaml"), "utf8")).toBe(yaml(["limits: { maxTurns: 7 }"]));
     expect(leftovers(w.user)).toEqual([]);
   });
 

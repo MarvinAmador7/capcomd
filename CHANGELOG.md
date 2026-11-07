@@ -8,8 +8,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fixed: `capcomd profiles update <name>` no longer deletes files you added to an installed profile's directory (a
   `notes.md`, an extra file in a skill's folder). It keeps every file the package didn't install, as it keeps your
   `override.yaml`, and lists them as "added by you, kept" (`kept` in `--json`). If the new version of the package
-  ships a file in the place of one of yours (a name that differs only in case counts), the update is refused and
-  nothing changes: move your file and update again.
+  ships a file in the place of one of yours (on macOS, a name that differs only in case or accents counts), the
+  update is refused and nothing changes: move your file and update again.
 - Fixed: trusting or untrusting plugins and profile skills from the CLI while the daemon also records a trust no
   longer loses one of the two changes in `~/.capcomd/trust.json`. If another change holds the file for more than 5
   seconds, the command fails with nothing changed; run it again. If `trust.json.lock` is something capcomd didn't
