@@ -180,7 +180,10 @@ your secrets' values are redacted from it.
 
 - `"x-secret": true`: the value is a **reference**, never the secret itself: `{"$secret": "env:SLACK_WEBHOOK"}` (an
   environment variable of the daemon). Your process gets the resolved value once, in the handshake's `secrets`, never
-  in its environment or arguments.
+  in its environment or arguments. A reference may not name one of capcomd's own variables (`BOXD_API_KEY`,
+  `GITHUB_TOKEN`, `GH_TOKEN`, `CAPCOMD_*`, `GIT_*`, `RIVET*`, `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*`, `CODEX_*`), as your
+  default or in the user's config: the plugin fails `config_invalid` instead (§10.3). Name a variable of your own
+  (`env:MY_PLUGIN_GITHUB_TOKEN`); `capcomd plugins validate` flags a default that doesn't.
 - `"x-per-run": true`: a run may set it (`capcomd run --plugin-config my-gate.strict=true`, or `plugins` in
   `POST /v1/runs`).
 

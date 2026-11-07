@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a plugin you install, or a project's, can no longer read capcomd's own keys through a secret reference. A
+  reference that names one of capcomd's variables (`BOXD_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, any `CAPCOMD_*`, `GIT_*`
+  or `RIVET*`, and the agents' `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*` and `CODEX_*`) is refused, whether it is the
+  plugin's own default, in your `~/.capcomd/config.json` or in `CAPCOMD_PLUGIN_<NAME>_<KEY>`: the plugin doesn't start
+  (`capcomd plugins list` shows it failed, `config_invalid`, naming the setting) and the variable is never read. Give
+  the plugin a variable of its own instead: `export GH_NOTIFY_TOKEN=…` and `"plugins": {"<name>": {"token":
+  {"$secret": "env:GH_NOTIFY_TOKEN"}}}`. `capcomd plugins validate <dir>` flags such a default and `capcomd plugins
+  trust` marks the reference as refused. capcomd's built-in plugins keep theirs (`sandbox-boxd` still reads
+  `BOXD_API_KEY`).
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

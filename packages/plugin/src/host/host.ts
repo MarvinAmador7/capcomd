@@ -35,7 +35,7 @@ export interface Candidate {
   config?: Record<string, unknown>;
   /** What its schema refused in those layers (§10.4): an enabled plugin with any is failed `config_invalid`, except for
    *  those `setAside` (a project's settings for a plugin not its own, left out of `config`): those are only reported. */
-  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env"; setAside?: true }>;
+  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env" | "default"; setAside?: true }>;
   /** The layer each top-level key of `config` came from (`GET /v1/plugins/{name}` `config.sources`); a key not listed
    *  is the user's. */
   configSources?: Record<string, "user" | "project" | "env">;
