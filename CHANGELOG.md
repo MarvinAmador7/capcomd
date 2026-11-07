@@ -12,6 +12,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   half of its interval without progress, and is stopped that much later too (saving hourly: 90 and 120 minutes). At
   the default interval the watchdog's 15 and 45 minutes are unchanged; a `stalledAfterMs` you set below 15 minutes
   now waits that long too, since a change can't show sooner.
+- Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
+  (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
+  `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its
+  snapshot on boxd with nothing recording it. Run it with `--sandbox boxd` (or `CAPCOMD_SANDBOX=boxd`), or in a project
+  checkout whose `.capcomd/config.json` sets the boxd sandbox.
+- For contributors: the live context eval (`scripts/eval-context.ts --agents live`) and the e2e scripts that create a
+  throwaway repository (`mac-e2e.sh`, `mac-subagents-e2e.sh`, `mac-agent-ops-e2e.sh`, `mac-plugin-e2e.sh`) run with
+  project templates off (`CAPCOMD_PROJECT_TEMPLATES=off` unless you set it), so they no longer leave a boxd snapshot of
+  8 GB or more per repository behind; with `CAPCOMD_PROJECT_TEMPLATES=auto`, remove the template afterwards with
+  `capcomd env templates rm --repo URL --sandbox boxd`. The team-shape eval no longer kills itself (exit 137) at the end
+  when given `--work`, and refuses a `--work` folder that isn't empty (it deletes the folder at the end), as the context
+  eval does. Neither eval's end-of-run cleanup kills the shell or command that started it any more.
+
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
