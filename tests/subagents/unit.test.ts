@@ -3,10 +3,10 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { mint, verifyToken, opsFor } from "../../src/subagents/token";
+import { mint, verifyToken, opsFor, mayRunCommands } from "../../src/subagents/token";
 import { capText, fence, normalizeResult, rollups, stuckReason, textTree, treeView, subtree } from "../../src/subagents/results";
 import { LocalSpool, VmSpool, startPump } from "../../src/subagents/spool";
-import { orchestrationSkill } from "../../src/subagents/skill";
+import { hasVmCapcomd, orchestrationSkill, workerSkill } from "../../src/subagents/skill";
 import { FakeProvider } from "../../src/providers/fake";
 
 const CLI = new URL("../../src/subagents/vm-cli.mjs", import.meta.url).pathname;
@@ -24,6 +24,55 @@ test("tokens: signed, scoped, expiring; tampering and other keys rejected", () =
   expect(body).toBeTruthy();
   expect(opsFor({ allowSpawn: false })).not.toContain("spawn");
   expect(opsFor({ allowSpawn: true })).toContain("spawn");
+});
+
+test("an agent that may not spawn: jobs, notes, result, title and reads; nothing that starts, lands or pays for work", () => {
+  const leaf = opsFor({ allowSpawn: false });
+  for (const op of ["title", "status", "tree", "inspect", "logs", "events", "budget", "heartbeat", "kv", "task", "inbox", "send", "result", "job.start", "job.output", "job.list", "job.kill"] as const) expect(leaf).toContain(op);
+  for (const op of ["spawn", "await", "wait-any", "cancel", "handoff", "verify", "merge", "grant", "fetch", "check"] as const) expect(leaf).not.toContain(op);
+  // A profile that runs no command of its own gets no job ops: `job start` would be a shell around its tool policy.
+  expect(opsFor({ allowSpawn: false }, { jobs: false }).filter((o) => o.startsWith("job."))).toEqual([]);
+  expect(opsFor({ allowSpawn: true }, { jobs: false })).not.toContain("job.start");
+  expect(opsFor({ allowSpawn: true }, { jobs: false })).toContain("spawn");
+  expect(mayRunCommands(undefined)).toBe(true);
+  expect(mayRunCommands({ allowedTools: ["Read", "Edit", "Bash"] })).toBe(true);
+  expect(mayRunCommands({ allowedTools: ["Read", "Bash(*)"] })).toBe(true);
+  expect(mayRunCommands({ allowedTools: ["Read", "Grep", "Bash(bun test:*)"] })).toBe(false);   // a reviewer's
+  expect(mayRunCommands({ allowedTools: ["Read", "Edit"] })).toBe(false);
+  expect(mayRunCommands({ disallowedTools: ["Bash"] })).toBe(false);
+  expect(mayRunCommands({ sandbox: "read-only" })).toBe(false);
+  expect(mayRunCommands({ sandbox: "workspace-write", toolMode: "orchestrate" })).toBe(true); // refused by name in the RPC
+});
+
+test("who gets the in-VM capcomd, and what a worker is told", () => {
+  const leaf = { allowSpawn: false };
+  expect(hasVmCapcomd({ limits: { allowSpawn: true } })).toBe(true);
+  expect(hasVmCapcomd({ limits: leaf, contract: null, profile: "worker" })).toBe(true);
+  expect(hasVmCapcomd({ limits: leaf, contract: { review: { verifyId: "vfy-1" } }, profile: "reviewer" })).toBe(false);
+  expect(hasVmCapcomd({ limits: leaf, contract: { report: true }, profile: "worker" })).toBe(false);
+  expect(hasVmCapcomd({ limits: leaf, contract: null, profile: "context-consolidator" })).toBe(false);
+  const s = workerSkill({ mcp: true, jobs: true });
+  expect(s).toContain("# Name your tab (capcomd)");
+  expect(s).toContain("capcomd job start -- <command>");
+  expect(s).toContain("kv under notes/<your agent id>");
+  // Nothing of the agent's own: every agent of a profile starts with the same instructions (one cached prefix).
+  expect(s).not.toMatch(/agt-/);
+  expect(s).toContain(`--data '{"context": [{"title": "…", "text": "…"}]}'`);
+  expect(s).toContain('capcomd result --summary "<what you changed');
+  expect(s).not.toContain("Orchestrating child agents");
+  expect(workerSkill({ mcp: false, jobs: false })).not.toContain("job start");
+});
+
+test("MCP tools/list shows the tools the token allows; without a token, all", async () => {
+  const { toolsFor, TOOLS } = await import(CLI);
+  const names = (t: string) => toolsFor(t).map((x: { name: string }) => x.name);
+  const leaf = mint({ run: "run-1", sub: "agt-w", ops: opsFor({ allowSpawn: false }) }, key).token;
+  expect(names(leaf)).toContain("capcomd_job_start");
+  expect(names(leaf)).toContain("capcomd_result");
+  expect(names(leaf)).toContain("capcomd_kv");
+  for (const n of ["capcomd_spawn", "capcomd_await", "capcomd_wait_any", "capcomd_verify", "capcomd_merge"]) expect(names(leaf)).not.toContain(n);
+  expect(names(mint({ run: "run-1", sub: "agt-p", ops: opsFor({ allowSpawn: true }) }, key).token)).toEqual(TOOLS.map((t: { name: string }) => t.name));
+  expect(names("")).toEqual(TOOLS.map((t: { name: string }) => t.name));
 });
 
 test("fence neutralizes look-alike markers; caps truncate explicitly", () => {
@@ -144,13 +193,14 @@ test("VmSpool: the same CLI round-trips through boxd-style exec/upload (FakeProv
   await pump.stop();
 });
 
-test("skill injection: spawners get capcomd + MCP + skill; others get nothing", async () => {
+test("skill injection: agents with the in-VM capcomd get it + MCP + their skill; others get nothing", async () => {
   const { bareRepo } = await import("../merge/gitfixture");
   const { runClaudeCode } = await import("../../src/agents/claude-code");
   const { loadAgentConfig } = await import("../../src/agents/config");
   const { taskBranch } = await import("../../src/merge/config");
   const FAKE = new URL("../agents/fake-claude.sh", import.meta.url).pathname;
-  const run = async (withSkill: boolean, env: Record<string, string> = {}) => {
+  const run = async (withSkill: boolean, env: Record<string, string> = {}, o: { goal?: string; worker?: boolean } = {}) => {
+    const worker = o.worker ? o : null;
     const r = await bareRepo();
     const workdir = mkdtempSync(join(tmpdir(), "capcomd-agent-"));
     const rpcDir = mkdtempSync(join(tmpdir(), "capcomd-rpcdir-"));
@@ -158,12 +208,23 @@ test("skill injection: spawners get capcomd + MCP + skill; others get nothing", 
     const { id } = await provider.ensure({ idemKey: `t-${Math.random()}`, isolated: true, ttlSeconds: 60, egressAllow: [], labels: {} });
     await provider.waitReady(id, 1000);
     const cfg = loadAgentConfig({ CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_CLAUDE_BIN: FAKE, CAPCOMD_AGENT_POLL_MS: "50", ...env });
-    const task = { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: r.bare, goal: "make the failing test pass" };
-    const skill = orchestrationSkill({ agentId: "agt-p", limits: { allowSpawn: true, maxDepth: 1, maxChildren: 3, allowedChildProfiles: ["worker"], budgetShare: 0.5 }, budget: { turns: 40 }, mcp: true });
-    await runClaudeCode(provider, id, task, cfg, { apiKey: "sk-ant-x", ...(withSkill ? { subagents: { skill, cliSource: readFileSync(CLI, "utf8"), rpcDir } } : {}) } as any);
+    const task = { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: r.bare, goal: o.goal ?? "make the failing test pass" };
+    const skill = worker ? workerSkill({ mcp: true, jobs: true }) : orchestrationSkill({ agentId: "agt-p", limits: { allowSpawn: true, maxDepth: 1, maxChildren: 3, allowedChildProfiles: ["worker"], budgetShare: 0.5 }, budget: { turns: 40 }, mcp: true });
+    const out = await runClaudeCode(provider, id, task, cfg, { apiKey: "sk-ant-x", ...(withSkill ? { subagents: { skill, cliSource: readFileSync(CLI, "utf8"), rpcDir, ...(worker ? { maySpawn: false } : {}) } } : {}) } as any).then((x) => x, (e: Error) => e);
     const W = join(workdir, "task-1-e1");
-    return { argv: readFileSync(join(W, "argv.txt"), "utf8").split("\n"), W, rpcDir };
+    return { argv: readFileSync(join(W, "argv.txt"), "utf8").split("\n"), W, rpcDir, out };
   };
+  // A worker that may not spawn: its capcomd and its own lines; its work is its own, so ending with no change fails it
+  // (an orchestrator's work is its children's: no change is fine), and its final message comes back with the push.
+  const worker = await run(true, {}, { worker: true });
+  expect(worker.argv).toContain("--mcp-config");
+  expect(readFileSync(join(worker.W, "append-system.txt"), "utf8")).toContain("# Your capcomd");
+  expect(readFileSync(join(worker.W, "append-system.txt"), "utf8")).not.toContain("# Orchestrating child agents (capcomd)");
+  expect(existsSync(join(worker.rpcDir, "bin", "capcomd"))).toBe(true);
+  expect(worker.out).toMatchObject({ resultText: "fixed sum" });
+  expect((worker.out as { sha: string }).sha).toMatch(/^[0-9a-f]{40}$/);
+  expect((await run(true, {}, { worker: true, goal: "fix it [nochange]" })).out).toMatchObject({ kind: "no_changes" });
+  expect((await run(true, {}, { goal: "plan it [nochange]" })).out).toMatchObject({ sha: "", resultText: "fixed sum" });
   const yes = await run(true);
   expect(yes.argv).toContain("--mcp-config");
   expect(yes.argv[yes.argv.indexOf("--permission-mode") + 1]).toBe("bypassPermissions"); // every tool, capcomd's included

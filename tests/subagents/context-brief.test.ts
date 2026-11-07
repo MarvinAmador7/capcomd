@@ -104,14 +104,14 @@ test("two agents of one profile start with the same brief: header and index line
   await (await import("../../src/plugins/hooks")).gates();
   const ops = await import("../../src/primitives/ops");
   const retried = await ops.agentPreparing(run, await ops.getAgentOrThrow(run, a.id), 2);
-  // After the brief, the doctrine skill, pinned on the attempt's spec by its hash (a worker that may not spawn has no
-  // in-VM capcomd for run notes, so no routing paragraph).
+  // After the brief, the doctrine and routing skills, pinned on the attempt's spec by their hashes (a worker that may
+  // not spawn has the in-VM capcomd for run notes and lessons, so it gets the routing paragraph too).
   const { DOCTRINE_SKILL, ROUTING_SKILL } = await import("../../src/context/skills");
   const { skillBlock } = await import("../../src/agents/skills");
-  expect(retried?.appendSystemPrompt).toBe(`Work carefully.\n\n${brief}\n\n${skillBlock(DOCTRINE_SKILL.name, DOCTRINE_SKILL.text)}`);
-  expect(retried?.skills).toEqual([{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin" }]);
+  expect(retried?.appendSystemPrompt).toBe(`Work carefully.\n\n${brief}\n\n${skillBlock(DOCTRINE_SKILL.name, DOCTRINE_SKILL.text)}\n\n${skillBlock(ROUTING_SKILL.name, ROUTING_SKILL.text)}`);
+  expect(retried?.skills).toEqual([{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin" }, { name: ROUTING_SKILL.name, hash: ROUTING_SKILL.hash, source: "builtin" }]);
   expect(a.system).toContain(`<skill name="${DOCTRINE_SKILL.name}">`);
-  expect(a.system).not.toContain(ROUTING_SKILL.name);
+  expect(a.system).toContain(`<skill name="${ROUTING_SKILL.name}">`);
 
   // A profile without a context block: no brief, no context skill.
   const p = await finished(run, "plain", "p");

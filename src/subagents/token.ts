@@ -76,7 +76,36 @@ export function verifyToken(token: string, key = signingKey(), now = Date.now())
   return { ok: true, claims };
 }
 
-/** Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator). */
-export function opsFor(limits: { allowSpawn: boolean }): Op[] {
-  return limits.allowSpawn ? [...ALL_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result", "title", "job.start", "job.output", "job.list", "job.kill"];
+/** Background jobs in the agent's own machine (plugin API §16.2). */
+export const JOB_OPS: readonly Op[] = ["job.start", "job.output", "job.list", "job.kill"];
+/** What an agent that may not spawn may call: name its tab, read what it sees of the tree (its own subtree and its
+ *  siblings'), keep notes and coordinate (kv, task, send, inbox), report progress and declare its result (where its
+ *  lessons go, ADR-025). Nothing that starts, stops, lands or pays for another agent's work. */
+export const LEAF_OPS: readonly Op[] = ["title", "status", "tree", "inspect", "logs", "events", "budget", "heartbeat", "kv", "task", "inbox", "send", "result"];
+
+/**
+ * Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator), LEAF_OPS and the job
+ * ops for any other. `jobs: false` (its profile lets it run no command of its own: `mayRunCommands`) leaves the job ops
+ * out, so `capcomd job start` is never a way around its tool policy.
+ */
+export function opsFor(limits: { allowSpawn: boolean }, o: { jobs?: boolean } = {}): Op[] {
+  const ops = limits.allowSpawn ? [...ALL_OPS] : [...LEAF_OPS, ...JOB_OPS];
+  return o.jobs === false ? ops.filter((x) => !JOB_OPS.includes(x)) : ops;
+}
+
+const SHELL = /^Bash(\((\*)?\))?$/;
+/**
+ * Whether an agent's profile lets it run any command of its own: a background job runs whatever it is given, so only
+ * such an agent's token has the job ops. Not when its allow-list names tools but no unrestricted shell (`Bash`,
+ * `Bash(*)`; a reviewer's `Bash(bun test:*)` is a command, not a shell), its deny-list names the shell, or its Codex
+ * sandbox is read-only. An orchestrate agent keeps them in its token: the RPC refuses its `job start` by name (plugin API
+ * §16.1 item 6), and `job list` is harmless.
+ */
+export function mayRunCommands(spec: unknown): boolean {
+  const s = (spec ?? {}) as { allowedTools?: unknown; disallowedTools?: unknown; sandbox?: unknown };
+  const tools = (v: unknown) => (Array.isArray(v) ? v.map((t) => String(t).trim()) : null);
+  const allowed = tools(s.allowedTools), denied = tools(s.disallowedTools);
+  if (allowed?.length && !allowed.some((t) => SHELL.test(t))) return false;
+  if (denied?.some((t) => SHELL.test(t))) return false;
+  return s.sandbox !== "read-only";
 }
