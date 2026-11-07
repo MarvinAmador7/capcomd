@@ -3,7 +3,7 @@
 // exactly one auth mode and harness limits; tasks and runs select one by name. Env (CAPCOMD_AGENT, CAPCOMD_AGENT_*)
 // stays an override on top.
 import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
-import { seamPresence } from "../plugins/snapshot";
+import { seamPresence, unconfirmedSeam } from "../plugins/snapshot";
 import type { ContextSpec } from "../../packages/plugin/src/context-layer";
 
 export const AGENTS_SCHEMA = "capcomd.agents/v1";
@@ -208,7 +208,7 @@ export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { 
   else if (typeof s.provider !== "string") at(unknownProviderText(s.provider));
   else {
     const has = seamPresence("agent", s.provider, agentProviderNames().includes(s.provider), seams?.env);
-    if (has === "unchecked" && seams) seams.warnings.push(`${labels.prefix}: ${k$("provider")} "${s.provider}" isn't a built-in agent provider, and no daemon is running to say whether one of its plugins provides it (the daemon checks when an agent uses the profile)`);
+    if (has === "unchecked" && seams) seams.warnings.push(unconfirmedSeam(labels.prefix, k$("provider"), "agent", s.provider));
     else if (has !== "active") at(unknownProviderText(s.provider, seams?.env));
   }
   if (s.auth === undefined) at(legacyKey || legacySub ? `use auth: "${legacyKey ? "apikey" : "subscription"}" instead of a credential field` : `${k$("auth")} is required ("apikey" or "subscription"): neither is configured`);

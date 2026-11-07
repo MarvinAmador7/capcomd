@@ -148,6 +148,43 @@ describe("addProfileFile and removeProfile", () => {
   });
 });
 
+// Spec §7.1: reading profiles outside the daemon only warns about a provider no daemon is running to confirm; a write
+// that names one is refused, as a candidate is (`capcomd agents validate --spec`), and one a running daemon lists is fine.
+describe("a write naming a provider no daemon is running to confirm", () => {
+  /** The running daemon's listing in this world's home: this process stands in for the daemon (its pid is alive). */
+  const listing = (w: ReturnType<typeof world>, seams: Array<{ kind: "sandbox" | "agent"; name: string }>) => {
+    mkdirSync(join(w.o.source.CAPCOMD_HOME, "state"), { recursive: true });
+    const plugin = { name: "third-party", version: "1.0.0", apiVersion: 1, runtime: "in-process", source: "user", state: "active", enabled: true, cause: null, hooks: [], seams, hooksSuspended: false, stats: {} };
+    writeFileSync(join(w.o.source.CAPCOMD_HOME, "state", "plugins.json"), JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins: [plugin] }));
+  };
+  const SOLO = "name: solo\nharness: { provider: claude, auth: subscription }\n";
+  const unconfirmed = (at: string, field: string, kind: string, name: string) => `${at}: ${field} "${name}" isn't a built-in ${kind} provider, and no daemon is running to say whether one of its plugins provides it, so nothing was changed`;
+
+  test("set and add are refused and change nothing; with a daemon that lists it they write", () => {
+    const w = world({ "P/solo.yaml": SOLO }, { worker });
+    const agents = readFileSync(w.agentsFile, "utf8");
+    expect(refusal(() => editProfile("solo", { "harness.provider": "gemini" }, w.o))).toMatchObject({ code: "invalid", message: expect.stringContaining(unconfirmed("profiles.solo", "harness.provider", "agent", "gemini")) });
+    expect(refusal(() => editProfile("solo", { "sandbox.provider": "modal" }, w.o))?.message).toContain(unconfirmed("profiles.solo", "sandbox.provider", "sandbox", "modal"));
+    expect(refusal(() => editProfile("worker", { provider: "gemini" }, w.o))?.message).toContain(unconfirmed("agents.worker", "provider", "agent", "gemini"));
+    expect(refusal(() => addProfileFile("cloud", { extends: "worker", "sandbox.provider": "modal" }, w.o))?.message).toContain(unconfirmed("profiles.cloud", "sandbox.provider", "sandbox", "modal"));
+    expect([w.read("P/solo.yaml"), readFileSync(w.agentsFile, "utf8"), existsSync(w.at("P/cloud.yaml"))]).toEqual([SOLO, agents, false]);
+    listing(w, [{ kind: "agent", name: "gemini" }, { kind: "sandbox", name: "modal" }]);
+    editProfile("solo", { "harness.provider": "gemini", "sandbox.provider": "modal" }, w.o);
+    addProfileFile("cloud", { extends: "worker", "sandbox.provider": "modal" }, w.o);
+    expect(w.load()).toMatchObject({ warnings: [], profiles: { solo: { spec: { provider: "gemini" }, runtime: { sandboxProvider: "modal" } }, cloud: { runtime: { sandboxProvider: "modal" } } } });
+  });
+
+  test("a profile that already names one can still be changed otherwise, and removed", () => {
+    const w = world({ "P/solo.yaml": "name: solo\nharness: { provider: claude, auth: subscription }\nsandbox: { provider: modal }\n", "P/other.yaml": SOLO.replace("solo", "other") });
+    expect(w.load().warnings).toHaveLength(1);
+    expect(editProfile("solo", { "limits.maxTurns": 30 }, w.o)).toMatchObject({ changed: true, version: 2 });
+    expect(editProfile("other", { "limits.maxTurns": 30 }, w.o)).toMatchObject({ changed: true, version: 2 });
+    expect(refusal(() => editProfile("solo", { "sandbox.provider": "fly" }, w.o))?.message).toContain(unconfirmed("profiles.solo", "sandbox.provider", "sandbox", "fly"));
+    removeProfile("solo", w.o);
+    expect(w.load().warnings).toEqual([]);
+  });
+});
+
 describe("profileFields: the rows a client edits", () => {
   test("each value with its type, encoding, display, the file that sets it and whether PUT can change it", () => {
     const w = world({ "P/lead.yaml": LEAD.replace("description: Leads a part.", "description: Leads a part.\nprompt: { append: Plan first. }\nx-perfloop: { gestures: [scroll] }\ntools: { mcp: [{ name: gh, command: [gh-mcp, --token, ghp_secret] }, { name: docs, command: [docs-mcp] }] }"), "P/lead/override.yaml": "harness: { effort: low }\n" }, { worker });

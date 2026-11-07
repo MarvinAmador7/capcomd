@@ -10,7 +10,7 @@ import { parse as parseYaml } from "yaml";
 import { env as envVar } from "../utils/env";
 import { defaultAgentsFile, userProfilesDir } from "../utils/home";
 import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile, type SeamCheck } from "./v1";
-import { seamPresence } from "../plugins/snapshot";
+import { seamPresence, unconfirmedSeam } from "../plugins/snapshot";
 import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layerOver, notApplied, setByOver, toFlat, v2Path, withContext, type ProfileDoc, type SetBy } from "./v2";
 import { runtimeOf, runtimeProblems, type ProfileRuntime } from "./runtime";
 import { profileSkills, type ProfileSkill } from "./skills";
@@ -341,7 +341,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
         const { sandboxSeam } = require("../plugins/sandboxes") as typeof import("../plugins/sandboxes");
         const has = seamPresence("sandbox", sandbox, !!sandboxSeam(sandbox), source);
         if (has === "missing") e.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't an active sandbox provider (see \`capcomd plugins list\`)`);
-        else if (has === "unchecked") warnings.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't a built-in sandbox provider, and no daemon is running to say whether one of its plugins provides it (the daemon checks when an agent uses the profile)`);
+        else if (has === "unchecked") warnings.push(unconfirmedSeam(`profiles.${name}`, "sandbox.provider", "sandbox", sandbox));
       }
       const runtime = runtimeOf(doc);
       e.push(...runtimeProblems(name, runtime, spec));

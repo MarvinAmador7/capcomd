@@ -48,3 +48,13 @@ export function seamPresence(kind: SeamKind, name: string, here: boolean, env: E
   if (!listed) return inDaemon() ? "missing" : "unchecked";
   return listed.includes(name) ? "active" : "missing";
 }
+
+const UNCONFIRMED = "and no daemon is running to say whether one of its plugins provides it";
+const CHECKED_LATER = " (the daemon checks when an agent uses the profile)";
+/** The warning reading profiles gives for a seam `unchecked` (`at`: the profile, `field`: where it names the seam). */
+export const unconfirmedSeam = (at: string, field: string, kind: SeamKind, name: string): string =>
+  `${at}: ${field} "${name}" isn't a built-in ${kind} provider, ${UNCONFIRMED}${CHECKED_LATER}`;
+/** An unconfirmedSeam warning without what it says about later (a write refuses one, src/profiles/write.ts); null for
+ *  any other warning. */
+export const unconfirmedOf = (warning: string): string | null =>
+  warning.includes(UNCONFIRMED) && warning.endsWith(CHECKED_LATER) ? warning.slice(0, -CHECKED_LATER.length) : null;
