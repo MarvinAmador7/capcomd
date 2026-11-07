@@ -105,12 +105,20 @@ function projectOf(values: Record<string, any>) {
   return cfg;
 }
 
+/** Project templates are a VM sandbox's (boxd's). Anywhere else there are none to build, list or remove: the fake
+ *  sandbox shares boxd's ledger file, so `env templates rm` there would forget a boxd template without deleting its
+ *  snapshot. */
+function keepsTemplates(): void {
+  if (sandboxCaps().isolation === "vm") return;
+  throw new RelayError("usage", `the ${sandboxName()} sandbox keeps no project templates`, sandboxCaps().isolation === "container" ? "On Docker, `capcomd env build` keeps the project's warm checkout in the env image." : "Use the boxd sandbox (CAPCOMD_SANDBOX=boxd, or --sandbox boxd).");
+}
+
 /** `capcomd env build --project`: the project's template, built now (its progress as it goes), on a place that keeps
  *  them (src/env/templates.ts). */
 async function templateBuild(values: Record<string, any>, log: (l: string) => void): Promise<number> {
   const json = !!values.json;
   const T = await import("../../env/templates");
-  if (sandboxCaps().isolation !== "vm") throw new RelayError("usage", `the ${sandboxName()} sandbox keeps no project templates`, sandboxCaps().isolation === "container" ? "On Docker, `capcomd env build` keeps the project's warm checkout in the env image." : "Use the boxd sandbox (CAPCOMD_SANDBOX=boxd, or --sandbox boxd).");
+  keepsTemplates();
   const cfg = projectOf(values);
   const setup = process.env.CAPCOMD_SETUP_COMMAND?.trim() || undefined;
   const egress = (process.env.CAPCOMD_SETUP_EGRESS ?? "").split(",").map((d) => d.trim()).filter(Boolean);
@@ -128,6 +136,7 @@ const fmtAge = (ms: number) => ms < 3600_000 ? `${Math.max(1, Math.round(ms / 60
 async function templatesCommand(pos: string[], values: Record<string, any>): Promise<number> {
   const json = !!values.json;
   const T = await import("../../env/templates");
+  keepsTemplates();
   if (pos[2] === "rm") {
     const removed = await T.removeProjectTemplate(platform(), projectOf(values).remote);
     emit(json, { removed }, removed.length ? `removed: ${removed.join(", ")}` : "no template for that project");
