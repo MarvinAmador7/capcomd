@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: the watchdog no longer stops agents that save their work less often than every 10 minutes. It sees an
+  agent's files change only when the agent saves a checkpoint, so with a profile's "Saves its work every"
+  (`checkpointEveryMs`, `--checkpoint-every-ms`) or `CAPCOMD_AGENT_CHECKPOINT_MS` set to an hour, a busy agent got
+  "stalled" between checkpoints and was stopped at 45 minutes. Now such an agent gets "stalled" only after one and a
+  half of its interval without progress, and is stopped that much later too (saving hourly: 90 and 120 minutes). At
+  the default interval the watchdog's 15 and 45 minutes are unchanged; a `stalledAfterMs` you set below 15 minutes
+  now waits that long too, since a change can't show sooner.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
