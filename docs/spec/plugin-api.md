@@ -256,6 +256,23 @@ else 500 with the message replaced by "plugin error" (the message goes to the da
 `openapi/capcomd.json`; `GET /v1/plugins/{name}` lists them. A route MUST NOT serve SSE (streams are the kernel's; a
 plugin publishes events instead).
 
+As served (capability `plugins.routes`): a `{param}` segment of a route's path takes one non-empty path segment,
+percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters). Only an active
+plugin's registrations are served: a disposed or disabled plugin's routes are 404 `not_found`, as is a path or method no
+route of an active plugin matches; the token's scope is checked after the route is found (the route's declared scope,
+whatever the method: a `GET` that declares `steer` needs `steer`), so an unknown route is 404 to any token and a missing
+token is 401 first. The scopes are not ranked (a `configure` route needs a token with `configure`). The principal is
+the caller's (§11.2): a plugin's token is that `plugin`, a token with only `read` is a `viewer`, any other client an
+`operator` with its client id. A body is parsed as JSON for `POST`, `PUT` and `PATCH` (an empty one is `undefined`; one
+that isn't JSON is 422 `invalid`), never for `GET` or `DELETE`; `query` has the first value of each name. A
+`PluginError` with a mapped code answers `{code, message}` with its `hint` when it has one; the 500 is `{code:
+"internal", message: "plugin error"}` and the daemon log gets one JSON line `{plugin, level: "error", message, fields}`
+with the method, path and real message, redacted. A handler that answers `undefined` is 204 with no body; one that answers a
+`Response`, a stream or anything `JSON.stringify` refuses is that 500 (so no route can stream). `ctx.api.capability`'s
+flag `x.<name>.<flag>` is in `GET /v1/health` `capabilities` while the plugin is active; `GET /v1/plugins/{name}` has
+`routes` (`{method, path, scope}`, full paths: the registered ones while active, the manifest's otherwise) and
+`capabilities` (`{name, doc}`, while active), both additive. Routes are in process only (§9.6).
+
 #### 4.7.4 Events
 
 `plugin.<name>.<type>` on the `daemon` stream or a run's. Durable, so they are replayed by `GET /v1/events` and the
@@ -1496,7 +1513,8 @@ process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin'
 
 Every discovered plugin with `state`, `enabled`, `cause`, `hooks`, `seams`, `hooksSuspended` and `stats {calls, failures,
 dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
-secrets. `capcomd plugins list|show` print the same. `/v1/health` gains the feature flag `plugins`.
+secrets, and its API routes and feature flags (§4.7.3, capability `plugins.routes`). `capcomd plugins list|show` print the
+same. `/v1/health` gains the feature flag `plugins`.
 
 ### 13.3 Logs
 
@@ -2132,6 +2150,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
+| 1.0.37 | 2026-11-06 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

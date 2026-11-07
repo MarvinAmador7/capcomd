@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: plugins built into the daemon can serve their own API routes at `/v1/x/<plugin>/…` on the harness API, called
+  with your client token. A route needs the scope it declares (`read`, `steer` or `configure`), takes and answers JSON,
+  and runs as you; a plugin's own failure answers 500 "plugin error" with the details only in the daemon log.
+  `GET /v1/plugins/{name}` (and `capcomd plugins show --json`) now lists a plugin's `routes` and the feature flags it
+  adds to `GET /v1/health` (`x.<plugin>.<flag>`). Clients can check for the `plugins.routes` capability.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

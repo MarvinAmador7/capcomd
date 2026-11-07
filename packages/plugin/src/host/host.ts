@@ -94,10 +94,15 @@ export interface HostOptions {
   processTimings?: ProcessTimings;
 }
 
-/** `GET /v1/plugins/{name}` (§13.2): the summary, the validated manifest and the config without secrets. */
+/** `GET /v1/plugins/{name}` (§13.2): the summary, the validated manifest, the config without secrets, and what it
+ *  serves on the API (§4.7.3). */
 export interface PluginDetail extends PluginSummary {
   manifest: PluginManifest | null;
   config: { values: Record<string, unknown>; sources: Record<string, "default" | "user" | "project" | "env"> };
+  /** Its routes under `/v1/x/<name>`, full paths: those it registered while active, those its manifest declares otherwise. */
+  routes: Array<{ method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path: string; scope: "read" | "steer" | "configure" }>;
+  /** Its harness.v1 feature flags (`x.<name>.<flag>`, `ctx.api.capability`) with their docs: registered, so active only. */
+  capabilities: Array<{ name: string; doc: string }>;
 }
 
 /** The out-of-process protocol's routes as the host answers them (§9.3-§9.6); the gateway maps HTTP onto these. Every
@@ -259,7 +264,12 @@ export class PluginHost {
     const own = Object.fromEntries(Object.entries(r.candidate.config ?? {}).filter(([k]) => !secret.has(k)));
     const values = { ...defaults, ...own };
     const sources = Object.fromEntries(Object.keys(values).map((k) => [k, k in own ? r.candidate.configSources?.[k] ?? "user" as const : "default" as const]));
-    return { ...this.summary(r), manifest: r.manifest, config: { values, sources } };
+    const active = r.state === "active";
+    const routes = active
+      ? this.contributions.list("api").filter((e) => e.plugin === r.name).map(({ value: { spec } }) => ({ method: spec.method, path: `/v1/x/${r.name}${spec.path}`, scope: spec.scope }))
+      : (r.manifest?.contributes?.api ?? []).map((a) => ({ method: a.method, path: `/v1/x/${r.name}${a.path}`, scope: a.scope }));
+    const capabilities = active ? this.contributions.list("capability").filter((e) => e.plugin === r.name).map((e) => ({ name: e.key, doc: e.value.doc })) : [];
+    return { ...this.summary(r), manifest: r.manifest, config: { values, sources }, routes, capabilities };
   }
 
   /** The out-of-process protocol (§9), for the gateway. */
