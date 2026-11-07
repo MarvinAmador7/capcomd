@@ -98,7 +98,7 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
   const bundle = manifest?.bundle ?? o.bundle ?? "knowledge";
   if (!BUNDLE.test(bundle)) return { error: `${JSON.stringify(bundle).slice(0, 80)} isn't a directory in the repository` };
   const config = `${bundle}/.core-kb.yaml`;
-  const t = await read({ remote, at: { sha: head.sha }, runId, prefix: `${bundle}/`, only: (p) => p.endsWith(".md") || p === config });
+  const t = await read({ remote, at: { sha: head.sha }, runId, prefix: `${bundle}/`, only: (p) => MARKDOWN.test(p) || p === config });
   if ("error" in t) return t;
   const parsed = parseBundle(t.files, { revision: head.sha, date: head.date }, { provider: GROUNDRAY, root: `${bundle}/`, kindOf: () => "fact", shown: (p) => p, defaultType: () => "fact", requireType: true });
   if (!yaml && !parsed.items.length) return { error: `no brain.yaml, and no OKF items under ${bundle}/` };
@@ -115,9 +115,9 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
   const cfg = checked.find((f) => f.path === config);
   let sensitivity: string | null = null;
   if (cfg?.text) {
-    const { parse } = require("yaml") as typeof import("yaml");
-    try { const c = parse(cfg.text, { maxAliasCount: 0, prettyErrors: false }); if (isMap(c) && typeof c.default_sensitivity === "string") sensitivity = c.default_sensitivity.trim(); } catch { /* not YAML: its line, below */ }
-    if (sensitivity === null && /^default_sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(cfg.text)) sensitivity = "restricted";
+    const said = valuesOf(cfg.text, "default_sensitivity");
+    sensitivity = said.find((v) => v.toLowerCase() === "restricted") ?? said[0] ?? null;
+    if (sensitivity?.toLowerCase() !== "restricted" && /^default_sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(cfg.text)) sensitivity = "restricted";
   }
   const marked = checked.filter((f) => f.text !== null && f.path !== config && marksRestricted(f.text)).length;
   const restricted = sensitivity?.toLowerCase() === "restricted" ? "its bundle's default sensitivity is restricted"
@@ -130,10 +130,23 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
 
 /** The most capcomd reads of one file of a brain to check its sensitivity (an item is parsed up to MEMORY_MAX_BYTES). */
 const BRAIN_CHECK_MAX_BYTES = 4 * 1024 * 1024;
-/** Whether a file's frontmatter says `sensitivity: restricted` (OKF's handling hint), in any case. */
+/** A Markdown file, whatever the case of its extension: `git archive` places every one. */
+const MARKDOWN = /\.(?:md|markdown)$/i;
+/** Every value a YAML mapping gives `key` at its top level, as text: a key quoted or not, a value on the next line, a
+ *  block scalar, a flow mapping, and each of a key given twice (which a strict parse refuses). */
+function valuesOf(text: string, key: string): string[] {
+  const Y = require("yaml") as typeof import("yaml");
+  let doc: ReturnType<typeof Y.parseDocument>;
+  try { doc = Y.parseDocument(text, { uniqueKeys: false, prettyErrors: false }); } catch { return []; }
+  if (!Y.isMap(doc.contents)) return [];
+  return doc.contents.items.flatMap((p) => (Y.isScalar(p.key) && String(p.key.value) === key && Y.isScalar(p.value) && p.value.value != null ? [String(p.value.value).trim()] : []));
+}
+/** Whether a file's frontmatter says `sensitivity: restricted` (OKF's handling hint), in any case and any YAML spelling
+ *  (its line too, when the YAML around it doesn't parse). */
 function marksRestricted(text: string): boolean {
   const m = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
-  return !!m && /^sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(m[1]!);
+  if (!m) return false;
+  return valuesOf(m[1]!, "sensitivity").some((v) => v.toLowerCase() === "restricted") || /^sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(m[1]!);
 }
 
 /** A project's mapping, as `run new` recorded it (or the file has it): checked, since the file is hand-editable. */
