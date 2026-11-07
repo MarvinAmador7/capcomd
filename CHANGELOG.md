@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: an in-process plugin's `ctx.events.subscribe` now delivers events, and `ctx.events.replay` works. In the daemon
+  a subscription to `daemon` or a run id gets that stream's events (the ones `GET /v1/events` lists) in order, one at a
+  time, filtered by `types` if you give them, from `after` or else from now; a handler that throws is logged and that
+  event skipped. Outside the daemon, and in the test kit's `fakeContext`, both now fail with `unsupported` instead of
+  `subscribe` quietly never calling your handler.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

@@ -18,7 +18,7 @@ import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
 import { CreateRunError, entityOf, envelopes, messagesOf, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
-import { harnessState, type DaemonEvent, type HarnessState } from "./state";
+import { daemonEnvelope, harnessState, type HarnessState } from "./state";
 import { parseSettingsPatch } from "./sandboxes";
 import { runFiles } from "./run-files";
 import { isListedProvider, PROVIDER_LABEL } from "../providers/registry";
@@ -93,11 +93,6 @@ export function harnessApp(o: ServerOptions) {
 	// holding hundreds of runs this daemon doesn't list (another ledger's) turned every tick into hundreds of actor calls.
 	const deletionChecked = new Set<string>();
 
-	/** A daemon-scope event (state.recordDaemonEvent) as the stream and GET /v1/events?scope=daemon send it. */
-	const daemonEnvelope = (e: DaemonEvent) => ({
-		v: 1 as const, id: `evt_daemon_${e.seq}`, scope: "daemon", seq: e.seq, entity: e.entity, entitySeq: e.entitySeq, type: e.type, typeVersion: 1,
-		durability: "durable" as const, ts: isoTs(e.at), epochMs: e.at, projectId: null, runId: null, agentId: null, text: e.text, data: e.data,
-	});
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
 	const router = {
