@@ -1872,8 +1872,9 @@ messages and events outside what it listens to before emitting, keep its own rea
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
 structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
-ISO time, `actor {id, display, bot}`, text and data ≤ 64 KB each) and refuses a malformed trigger `invalid` before
-recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
+log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
+before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -1893,7 +1894,9 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
   comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
-  position before it, so the next poll reads it again. The source listens to `job.changed` only when `sourceRepos`
+  position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
+  keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
+  `deduped` decision a minute). The source listens to `job.changed` only when `sourceRepos`
   names a repository (as `source-schedule` only with a schedule): a listener there makes the daemon read every
   background job's output (§6.6.19).
 
@@ -1928,7 +1931,9 @@ with the `TriggerDecision`:
 6. **Act**: start a run on the configured project (`project`, a checkout set up with `capcomd setup project`; unset,
    the daemon's own repository) with the trigger's text as the goal (`POST /v1/runs` semantics: `run.creating` fires,
    with the source plugin as the principal; harness.v1's additive `Run.trigger {source, id, thread, actor, at}`, under
-   the capability `triggers`) → `started`, and subscribe the run to the thread. `recorded.wouldHave` is `start` in
+   the capability `triggers`) → `started`, and subscribe the run to the thread. The goal is checked as `POST /v1/runs`
+   checks one (`CreateRunBody.goal`: not empty, ≤ 16 KB, no NUL, no leading `[agent:NAME]`, so a source's words never
+   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start` in
    this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
    §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
@@ -2132,6 +2137,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
+| 1.0.37 | 2026-11-07 | Triggers, after review: §16.3.2 step 6, a trigger's text is checked as `POST /v1/runs` checks a goal before a run starts (a leading `[agent:NAME]` from a source no longer picks the run's agent profile; over 16 KB, empty or with a NUL: `invalid`, logged `failed`); §16.3.1, a trigger's `id`, `thread` and actor id carry no control characters (the display name loses them), and the `github` source keeps the comments it read at its position's second (GitHub's `since` includes it) so a poll with nothing new emits nothing. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
