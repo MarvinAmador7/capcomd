@@ -2,10 +2,11 @@
 // ADR-019 §1, §3: the in-VM supervisor. It runs next to the agent CLI (run.sh starts it when the VM has node), and
 // reports up through an outbox the engine drains: heartbeats while it is alive, and checkpoints of the workspace.
 // Dependency-free, like vm-cli.mjs. Config (JSON file, argv[2]):
-//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree?, jobs? }
+//   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree?, treeShare?, jobs? }
 // With `reportTree`, each heartbeat carries the workspace's tree hash (for "no change in the workspace", ADR-019 §2).
-// `reportTree: "progress"` (the agent's files changing as its progress, plugin API §16.4) skips heartbeats in a checkout
-// where hashing it is slow, so it takes at most a twentieth of the time.
+// `reportTree: "progress"` (the agent's files changing as its progress, plugin API §16.4) carries a fingerprint of the
+// workspace instead (workPrint: nothing is written to the repository), and skips heartbeats in a checkout where taking
+// it is slow, so it takes at most a `treeShare`th (default 20th) of the time.
 // With `jobs` (the agent's background jobs' directory, plugin API §16.2), each heartbeat says how many run, and the
 // agent's input stays open while one runs or one ended whose result message hasn't reached it yet: the CLI is still
 // there to read the result when it comes, and the agent keeps its slot.
@@ -14,7 +15,9 @@
 // the supervisor sends the prompt, then each message the engine appends to `inbox`, and closes stdin once the agent
 // has finished (a result) with nothing sent since, which ends the CLI.
 import { spawn, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 
 const cfg = JSON.parse(readFileSync(process.argv[2], "utf8"));
 let seq = 0;
@@ -82,16 +85,37 @@ function workTree() {
   } catch { return undefined; }
 }
 
-// The tree for this heartbeat: every one with `reportTree: true`; with "progress", none until a twentieth of the
-// time is spent hashing it (one that took 3 s is next hashed a minute later).
+// The working tree's state as a fingerprint, for its files changing (plugin API §16.4): HEAD, and each path git status
+// sees differ from it (untracked files included) with its size and modification time. Unlike workTree it writes
+// nothing: no blob for a changed file (a big generated file changing at every heartbeat would fill the object store)
+// and no index (GIT_OPTIONAL_LOCKS=0: status doesn't refresh the agent's own).
+function workPrint() {
+  try {
+    const status = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"], {
+      cwd: cfg.repo, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 << 20,
+    });
+    const h = createHash("sha1").update(git(["rev-parse", "HEAD"]));
+    for (const entry of status.split("\0")) {
+      if (!entry) continue;
+      let seen = "-";
+      try { const st = statSync(join(cfg.repo, entry.slice(3))); seen = `${st.size}:${st.mtimeMs}`; } catch { /* deleted */ }
+      h.update(`\0${entry}\0${seen}`);
+    }
+    return h.digest("hex");
+  } catch { return undefined; }
+}
+
+// What this heartbeat carries: with `reportTree: true` the tree, every time; with "progress" the fingerprint, none
+// until a `treeShare`th of the time is spent taking it (one that took 3 s is next taken a minute later).
 let treeAfter = 0;
 function heartbeatTree() {
   if (!cfg.reportTree) return undefined;
-  if (cfg.reportTree !== true && Date.now() < treeAfter) return undefined;
+  if (cfg.reportTree === true) return workTree();
+  if (Date.now() < treeAfter) return undefined;
   const t0 = Date.now();
-  const tree = workTree();
-  treeAfter = t0 + (Date.now() - t0) * 20;
-  return tree;
+  const print = workPrint();
+  treeAfter = t0 + (Date.now() - t0) * (Number(cfg.treeShare) || 20);
+  return print;
 }
 
 // Its background jobs (src/jobs/machine.ts): running (a runner alive and no exit code yet), and ended ones whose result

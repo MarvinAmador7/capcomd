@@ -322,6 +322,14 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(cmds[0]!.commandSince!).toBeGreaterThanOrEqual(t0);
     const last = creports.lastIndexOf(cmds.at(-1)!);
     expect(creports.slice(last + 1).filter((x) => x.type === "worked" && x.commandSince !== null)).toEqual([]);
+    // A Bash call whose result never came, then its turn ended and the CLI stays open (a next turn): it waits on nothing.
+    const l = await setup("[command-lost] [linger] run the tests");
+    let ended = false;
+    const after: SupervisorReport[] = [];
+    const lres = await runClaudeCode(l.provider, l.id, l.task, l.cfg, { apiKey: KEY, heartbeatMs: 200, onEvent: (ev) => { if (ev.type === "result") ended = true; }, onReport: (x) => { if (ended && x.type === "worked") after.push(x); } });
+    expect(lres.stopReason).toBe("success");
+    expect(ended).toBe(true);
+    expect(after.filter((x) => x.type === "worked" && x.commandSince !== null)).toEqual([]);
   }, 60_000);
 
   test("timeout kills the agent process group", async () => {

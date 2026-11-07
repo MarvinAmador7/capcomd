@@ -339,6 +339,23 @@ describe("the watchdog", () => {
     expect(kinds(k)).toEqual(["agt-j1:stalled", "agt-j2:stalled"]);
   });
 
+  test("a foreground job and the command that waits on it count once: their end isn't progress", async () => {
+    const k = kernel();
+    const a = k.agent("agt-fg");
+    const { changed, tick, fake } = await boot(k);
+    await changed(a, started());
+    // Quiet 4 min, then `capcomd job run` in the foreground for 10 min: a job, and a command of its CLI waiting on it.
+    const exec: Job = { jobId: "job-f1aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-fg" }, cmd: ["npm", "test"], label: "tests" }, state: "running", startedAt: new Date(T0 + 4 * MIN).toISOString(), endedAt: null, result: null, reason: null };
+    at(4 * MIN); await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
+    for (let s = 4 * 60 + 30; s <= 14 * 60; s += 30) { at(s * 1000); await changed(a, worked({ commandAt: 4 * MIN })); if (s % 60 === 0) await tick(); }
+    at(14 * MIN); await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
+    // The 4 min before it still count: stalled 11 min after it ended, not 15.
+    at(24.9 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    at(25 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-fg:stalled"]);
+  });
+
   test("a stall limit shorter than progress takes to show is warned about, not refused", async () => {
     expect(configWarning({ stalledAfterMs: 60_000 })).toBeNull();
     expect(configWarning({ stalledAfterMs: 59_999 })).toBe("plugins.watchdog.stalledAfterMs is 59999: below 60000, how long an agent's progress (its files changing, a command it waits on) may take to show, so an agent that is working may be flagged");

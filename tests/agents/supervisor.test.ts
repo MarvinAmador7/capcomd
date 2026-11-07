@@ -8,7 +8,7 @@ import { Git } from "../../src/merge/git";
 
 const SUPERVISOR = new URL("../../src/agents/supervisor.mjs", import.meta.url).pathname;
 
-async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boolean; jobs?: boolean; reportTree?: true | "progress"; env?: Record<string, string> } = {}) {
+async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boolean; jobs?: boolean; reportTree?: true | "progress"; treeShare?: number; env?: Record<string, string> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-sup-"));
   const repo = join(dir, "repo");
   const g = new Git(dir);
@@ -25,6 +25,7 @@ async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boo
     ...(o.input ? { input: { prompt: join(dir, "prompt.txt"), inbox: join(dir, "inbox.jsonl") } } : {}),
     ...(o.jobs ? { jobs: join(dir, "jobs") } : {}),
     ...(o.reportTree ? { reportTree: o.reportTree } : {}),
+    ...(o.treeShare ? { treeShare: o.treeShare } : {}),
   }));
   if (o.input) writeFileSync(join(dir, "prompt.txt"), "do the thing");
   const run = async () => {
@@ -67,14 +68,20 @@ test("a commit by the agent is checkpointed at once, not at the next interval", 
   expect((await s.r.ok(["rev-parse", `${cps[0].sha}^`])).trim()).toBe((await s.r.ok(["rev-parse", "HEAD"])).trim());
 }, 30_000);
 
-test("progress (plugin API §16.4): heartbeats carry the workspace's tree, a new one as files change; less often where hashing is slow", async () => {
-  const s = await setup(`sleep 0.5; echo two >> a.txt; sleep 1.5; echo new > b.txt; sleep 1.5`, { checkpointEveryMs: 0, reportTree: "progress" });
+test("progress (plugin API §16.4): heartbeats carry the workspace's fingerprint, a new one as files change, writing nothing; less often where taking it is slow", async () => {
+  // (treeShare 1: at every heartbeat that isn't still taking the last one, so a loaded machine doesn't skip a change.)
+  const s = await setup(`sleep 0.5; echo two >> a.txt; sleep 1; echo three >> a.txt; sleep 1; echo new > b.txt; sleep 1`, { checkpointEveryMs: 0, reportTree: "progress", treeShare: 1 });
   const { reports } = await s.run();
-  // (A heartbeat 150 ms apart may skip it: hashing this small checkout takes more than a twentieth of that.)
   const trees = reports.filter((x) => x.type === "heartbeat" && typeof x.tree === "string").map((x) => x.tree);
-  // HEAD's, then with a.txt changed, then with b.txt too: what the runner reads as its files changing.
-  expect([...new Set(trees)]).toHaveLength(3);
-  // A git that takes 0.2 s a call: hashing takes over half a second, so the next one waits 20 times that.
+  // HEAD's, then a.txt changed, changed again (git status says the same of it), then b.txt too: what the runner reads
+  // as its files changing.
+  expect([...new Set(trees)]).toHaveLength(4);
+  // Nothing written to the repository: no object for the new file (a big file changing at each heartbeat would fill the
+  // object store), and its index as it was.
+  const blob = (await s.r.ok(["hash-object", "b.txt"])).trim();
+  expect((await s.r.run(["cat-file", "-e", blob])).code).not.toBe(0);
+  expect((await s.r.ok(["diff", "--cached", "--name-only"])).trim()).toBe("");
+  // A git that takes 0.2 s a call: taking it takes over half a second, so the next one waits 20 times that.
   const bin = join(s.dir, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "git"), `#!/bin/sh\nsleep 0.2\nexec ${Bun.which("git")} "$@"\n`, { mode: 0o755 });

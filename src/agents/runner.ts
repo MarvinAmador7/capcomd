@@ -29,7 +29,7 @@ export type SupervisorReport =
   | { type: "heartbeat"; events: number; lastEventAt: number; source: "supervisor" | "events" }
   | { type: "checkpoint"; sha: string; ref: string; reason: string; files: number }
   /** Plugin API §16.4: what the agent did since the last one (at most one a heartbeat, only when there is something to
-   *  say): its checkout's files changed (the supervisor's tree hash of it), a foreground command running since then. */
+   *  say): its checkout's files changed (the supervisor's tree hash or fingerprint of it), a foreground command running since then. */
   | { type: "worked"; files: boolean; commandSince: number | null };
 
 export interface AgentTask {
@@ -813,7 +813,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         // §16.1: an orchestrate agent's checkout is never snapshotted (a checkpoint is a commit, pushed to its ref).
         ...(orchestrate ? { checkpoints: false } : {}),
         // The tree with each heartbeat: for "no change in the workspace" (every one), and as the progress the watchdog
-        // reads for an agent whose work shows as files changing (plugin API §16.4; less often in a slow checkout).
+        // reads for an agent whose work shows as files changing (plugin API §16.4: a fingerprint that writes nothing to
+        // the repository, less often in a slow checkout).
         ...(cfg.noChangeAfterMs ? { reportTree: true } : task.review || task.report || orchestrate ? {} : { reportTree: "progress" }),
         ...(streaming ? { input: { prompt: `${W}/prompt.txt`, inbox: inboxFile } } : {}),
         // Plugin API §16.2: its background jobs (in-VM `capcomd job`, next to its spool) keep it here while they run.
@@ -960,6 +961,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         watch.observe(ev, now());
         for (const id of ev.commands?.ended ?? []) commands.delete(id);
         for (const id of ev.commands?.started ?? []) if (!commands.has(id)) commands.set(id, now());
+        // A turn that ended (or failed) waits on no command of it, whether or not its end was said.
+        if (TURN_ENDS.has(ev.type) || ev.type === "turn_failed") commands.clear();
         addSpanEvent(span, `agent.${ev.type}${ev.subtype ? `.${ev.subtype}` : ""}`, {
           ...(ev.tool ? { "agent.tool": ev.tool } : {}), ...(ev.text ? { "agent.text": ev.text } : {}),
         });

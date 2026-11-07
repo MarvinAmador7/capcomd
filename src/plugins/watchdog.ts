@@ -2,14 +2,15 @@
 // turns it on (`plugins.watchdog.enabled`). It catches the failure liveness can't see: the agent's process runs and it
 // keeps calling tools, but nothing lands. The kernel's own notices (`idle`, `spinning`, `failing`, src/agents/stuck.ts)
 // watch the process; this watches the work, on its own definition of progress:
-//  - its files changed (`worked {files}`: its supervisor's hash of the checkout changed, seen within a heartbeat, about
-//    30 s; or a `checkpointed`), or those of an agent under it;
+//  - its files changed (`worked {files}`: its supervisor's fingerprint of the checkout changed, seen within a
+//    heartbeat, about 30 s; or a `checkpointed`), or those of an agent under it;
 //  - an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
 //  - a verification or approval it waited on ended.
 // Tool calls alone (`step`) are not progress, and neither is a job's end or its output. While it waits on something
 // (a job, a verification, an approval, a foreground command of its CLI, a paused agent under it) its clock doesn't run:
-// that time doesn't count. A command counts so for at most `stalledAfterMs`, so one that hangs is still caught. An
-// agent with agents of its own running is judged through them: they stall first, and their end is its progress. An
+// that time doesn't count (once, when waits overlap). A command counts so for at most `stalledAfterMs`, so one that
+// hangs is still caught. An agent with agents of its own running is judged through them: they stall first, and their
+// end is its progress. An
 // agent whose work never shows as files changing (a reviewer, a report-only agent, an orchestrate agent: none is
 // checkpointed) isn't judged at all; the kernel's own notices still watch its process. While the kernel's own notice
 // shows on an agent, `stalled` isn't raised over it (the stop still comes). No progress for `stalledAfterMs`
@@ -55,8 +56,11 @@ export interface Watched {
   agentId: string;
   /** Its parent, as last seen (null: a root, or not known yet). */
   parent: string | null;
-  /** When it, or an agent under it, last made progress (ms). */
+  /** When it, or an agent under it, last made progress (ms), moved on by the time that doesn't count. */
   since: number;
+  /** Up to when (ms) its time is accounted for: its last progress, or the end of the last time taken off its clock. Time
+   *  before it is never taken off again, so a job and the foreground command that waits on it count once. */
+  creditedTo?: number;
   /** What it waits on that reports back: `job:<id>`, `verify:<id>`, `approval:<id>`, `paused`. */
   waits: string[];
   /** Since when its waits hold its clock; null while it waits on nothing. */
@@ -168,7 +172,7 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
       seen.add(id);
       const w = watched.get(keyOf(runId, id));
       if (!w) break;
-      if (w.since < now || w.steps) { w.since = Math.max(w.since, now); w.steps = 0; save(w); }
+      if (w.since < now || w.steps) { w.since = Math.max(w.since, now); w.creditedTo = w.since; w.steps = 0; save(w); }
       if (w.stalledAt !== null) {
         w.stalledAt = null;
         save(w);
@@ -177,12 +181,16 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
       id = w.parent;
     }
   };
+  /** Where time taken off its clock may start: its last progress, or the end of what was taken off last. */
+  const accounted = (w: Watched) => w.creditedTo ?? w.since;
   /** The time from `from` to `to` doesn't count against it: its clock moves on by that much (by what came after its
-   *  last progress, when that was later). Returns what it took off. */
+   *  last progress or the last time taken off, when that was later: overlapping waits count once). Returns what it took
+   *  off. */
   const credit = (w: Watched, from: number, to: number) => {
-    const add = to - Math.max(from, w.since);
+    const add = to - Math.max(from, accounted(w));
     if (add <= 0) return 0;
     w.since += add;
+    w.creditedTo = to;
     save(w);
     return add;
   };
@@ -211,7 +219,7 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
     let c = w.command;
     if (!c || c.since !== since) c = w.command = { since, seenAt: Math.max(since, c?.seenAt ?? 0), credited: 0 };
     const room = cfg.stalledAfterMs - c.credited;
-    if (room > 0) c.credited += credit(w, c.seenAt, Math.min(now, Math.max(c.seenAt, w.since) + room));
+    if (room > 0) c.credited += credit(w, c.seenAt, Math.min(now, Math.max(c.seenAt, accounted(w)) + room));
     c.seenAt = Math.max(c.seenAt, now);
     save(w);
   };
@@ -398,6 +406,7 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
             // (Kept by an earlier version, without when its waits began: from its last progress, as their end was then.)
             heldAt: waits.length ? (typeof w.heldAt === "number" ? w.heldAt : w.since) + down : null,
             command: w.command ? { ...w.command, seenAt: w.command.seenAt + down } : null,
+            ...(typeof w.creditedTo === "number" ? { creditedTo: w.creditedTo + down } : {}),
           });
         }
       } catch (e) {
