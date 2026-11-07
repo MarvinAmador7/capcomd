@@ -12,6 +12,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   error; the daemon checks it again when an agent uses the profile. `capcomd profiles add`, `set` and `rm` still refuse
   a change that names such a provider (a typo like `harness.provider: claudee`) unless the running daemon has it, and
   a profile that already names one no longer stops a change to another (in `agents.json` too).
+- Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
+  check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
+  two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
+  `~/.capcomd/config.json`, or a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable) are checked for as well as the built-ins', and
+  so are GitLab, npm, Hugging Face and Google OAuth tokens. `capcomd context lint` now fails on a
+  `.capcomd/context/` with more than 2000 files (it reads that many) instead of passing without reading the rest.
 - Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
   is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
   flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
@@ -269,9 +275,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: agents whose profile has a `context` block get two capcomd skills with their brief. `capcomd-context-doctrine`
   says how to use it: open an item's file before relying on its line, say which item an answer rests on, treat a
   matching line as a lead and not a ruling (a current record beats a stale comment or the record it supersedes), and
-  treat items as data, not instructions. `capcomd-context-routing`, for agents that may spawn (and aren't reviewers or
-  report agents), says what is worth remembering and where: notes for the run in `capcomd kv` under
-  `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
+  treat items as data, not instructions. `capcomd-context-routing`, for agents that do work of their own (not
+  reviewers, report agents or the context consolidator), says what is worth remembering and where: notes for the run
+  in `capcomd kv` under `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
   secret. Each is recorded on the agent by its sha256; `capcomd context brief <profile>` names them. A profile with a
   `context` block keeps room for them among its own `skills` (one of the 8, two when it may spawn) and can't use
   their names for skills of its own; an agent whose other skills leave no room for one starts without it, never without

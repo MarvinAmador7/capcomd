@@ -5,6 +5,9 @@
 // token wrote, with plugin.context.proposed and plugin.context.refused on the run. Engine-free; the end to end run is
 // tests/scenarios/context-capture.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { samplePayload, testkit } from "../../packages/plugin/src/testkit";
 import type { AgentChanged } from "../../packages/plugin/src/hooks";
 import { capture, type CaptureRecord } from "../../src/context/capture";
@@ -40,6 +43,52 @@ describe("the seeded secret scan (ADR-025 §8): it refuses, it never redacts", (
     ]) expect(scan(t)).toBeNull();
     // Values too short to mean anything aren't seeded.
     expect(secretScan(["abc", "", null, undefined])("abc")).toBeNull();
+  });
+
+  test("nothing hides a run's secret: a variation selector, a combining mark, a Hangul filler, a line break, spaces", () => {
+    const S = "hunter2-fixture-secret-AB12";
+    const s = secretScan([S]);
+    for (const hidden of [
+      `${S.slice(0, 4)}️${S.slice(4)}`, `${S.slice(0, 4)}͏${S.slice(4)}`, `${S.slice(0, 4)}́${S.slice(4)}`,
+      `${S.slice(0, 4)}ㅤ${S.slice(4)}`, `${S.slice(0, 4)}\u{E0041}${S.slice(4)}`, `${S.slice(0, 9)}\n${S.slice(9)}`, S.split("").join(" "),
+    ]) expect(s(`the login is ${hidden} today`)?.reason).toBe("secret");
+    // Accented text still reads as text, and words that only touch once spaces are gone don't make a secret.
+    expect(s("la sesión está en src/auth.ts; hunter2 is a famous password")).toBeNull();
+    // Credential shapes too short or too regular for the entropy check (put together here, so no fixture reads as a
+    // real token to a scanner of this file).
+    const fill = (n: number) => "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH".slice(0, n);
+    for (const [prefix, n] of [["glpat-", 20], ["npm_", 36], ["hf_", 34], ["ya29.", 24]] as const) expect(s(`${prefix}${fill(n)}`)?.reason).toBe("token");
+  });
+
+  test("the run's secrets include every other plugin's the user points at a value (§10.3), not only the built-ins'", async () => {
+    const saved = { ...process.env };
+    const home = mkdtempSync(join(tmpdir(), "capcomd-scan-home-"));
+    try {
+      // A user's plugin (and a project's, which has no manifest here): its own default reference isn't followed (§10.3),
+      // the user's config and a CAPCOMD_PLUGIN_ variable are.
+      mkdirSync(join(home, "plugins", "notify-pager"), { recursive: true });
+      writeFileSync(join(home, "plugins", "notify-pager", "plugin.json"), JSON.stringify({
+        schema: "capcomd.plugin/v1", name: "notify-pager", version: "0.1.0",
+        config: { type: "object", properties: { routing: { type: "string", "x-secret": true, default: { $secret: "env:PAGER_DEFAULT_REF" } } } },
+      }));
+      writeFileSync(join(home, "config.json"), JSON.stringify({ plugins: { "notify-pager": { routing: { $secret: "env:PAGER_ROUTING_CRED" } } } }));
+      delete process.env.CAPCOMD_NO_CONFIG;
+      Object.assign(process.env, {
+        CAPCOMD_HOME: home, PAGER_ROUTING_CRED: "pager-routing-fixture-5", PAGER_DEFAULT_REF: "pager-default-fixture-6",
+        CAPCOMD_PLUGIN_REPO_HOOKS_WEBHOOK: JSON.stringify({ $secret: "env:HOOKS_HMAC_VALUE" }), HOOKS_HMAC_VALUE: "hooks-hmac-fixture-7",
+      });
+      const secrets = await runSecrets();
+      expect(secrets).toContain("pager-routing-fixture-5");
+      expect(secrets).toContain("hooks-hmac-fixture-7");
+      expect(secrets).not.toContain("pager-default-fixture-6");
+      // CAPCOMD_NO_CONFIG: the user's config isn't read, here either.
+      process.env.CAPCOMD_NO_CONFIG = "1";
+      expect(await runSecrets()).not.toContain("pager-routing-fixture-5");
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("the run's secrets: the agent providers' credentials and every variable named like a credential, not numbers or paths", async () => {
