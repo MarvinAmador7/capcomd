@@ -140,8 +140,7 @@ test("two agents of one profile start with the same brief: header and index line
   expect(printed.code).toBe(0);
   expect(printed.j?.brief).toBe(brief);
   // … and names the context skills they get with it: the doctrine; the routing paragraph too for one that does work
-  // (every working agent has the in-VM capcomd since 1.0.39, a worker too, as the agents above were briefed), unless it
-  // is asked as a reviewer's.
+  // with the in-VM capcomd (a worker has it for run notes and lessons, as above), unless it is asked as a reviewer's.
   const pin = (s: { name: string; hash: string }) => ({ name: s.name, hash: s.hash });
   expect(printed.j?.skills).toEqual([pin(DOCTRINE_SKILL), pin(ROUTING_SKILL)]);
   expect(printed.j?.text).toEndWith(`With the skills: ${DOCTRINE_SKILL.name} (sha256 ${DOCTRINE_SKILL.hash.slice(0, 12)}), ${ROUTING_SKILL.name} (sha256 ${ROUTING_SKILL.hash.slice(0, 12)}).`);
