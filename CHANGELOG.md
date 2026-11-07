@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a profile with `permissions: {report: false}` is now never spawned to report, even when a plugin's
+  `agent.spawning` listener adds `report: true` to the spawn's contract. Such a spawn is refused with reason
+  `report_not_allowed`, the same as when the spawner asks for `--report` itself.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
