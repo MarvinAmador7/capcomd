@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { credentialReady, plannerDriver } from "../../src/agents/run-driver";
 import { decodeAgentRef, resolveAgent } from "../../src/profiles";
@@ -163,6 +163,7 @@ describe("GET /v1/run-options", () => {
 				{ name: "docker", label: "Local", available: true, reason: null, default: false },
 				{ name: "boxd", label: "Cloud", available: true, reason: null, default: true },
 			],
+			planners: [{ name: "planner", title: null, provider: "claude", model: "claude-opus-5-5", default: true, available: true, reason: null }],
 		});
 	});
 
@@ -592,6 +593,87 @@ describe("GET /v1/run-options?repo= (capability runs.options.repo)", () => {
 		writeFileSync(join(d, ".capcomd", "config.json"), JSON.stringify({ env: { CAPCOMD_REPO: "/srv/git/app.git" } }));
 		return d;
 	};
+});
+
+describe("GET /v1/run-options planners (capability runs.options.planners; ADR-024 §5, §8)", () => {
+	/** A project's agents.json with profile files beside it (`files`, under its profiles/), and a CAPCOMD_HOME on boxd with
+	 *  an agent environment (and `builds`, older ones) and a Claude plan login kept in an image made from `loginEnv`. */
+	function place(files: Record<string, string>, o: { builds?: string[]; loginEnv?: string } = {}) {
+		const d = mkdtempSync(join(dir, "pl-"));
+		const proj = join(d, "proj"), home = join(d, "home");
+		for (const [rel, body] of Object.entries(files)) { mkdirSync(dirname(join(proj, "profiles", rel)), { recursive: true }); writeFileSync(join(proj, "profiles", rel), body); }
+		mkdirSync(proj, { recursive: true });
+		writeFileSync(join(proj, "agents.json"), JSON.stringify(PROFILES));
+		mkdirSync(join(home, "state"), { recursive: true });
+		writeFileSync(join(home, "state", "envs.json"), JSON.stringify({ current: { name: "capcomd-env-boxd" }, history: (o.builds ?? []).map((name) => ({ name })) }));
+		writeFileSync(join(home, "state", "auths.json"), JSON.stringify({ "claude-code": { ...login("claude-code"), env: o.loginEnv ?? "x" } }));
+		return { CAPCOMD_AGENTS_FILE: join(proj, "agents.json"), CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_SANDBOX: "boxd", BOXD_API_KEY: "bxd_test", PATH: process.env.PATH ?? "" } as Record<string, string>;
+	}
+	const NIGHT = ["name: night", "identity: { title: Night shift }", "harness: { provider: claude, auth: subscription }", "children: { allowSpawn: true, allowedChildProfiles: [worker] }", "sandbox: { environment: nightly }"].join("\n") + "\n";
+
+	test("every profile that can plan, in the profiles' order, with its title; the one named planner is the default; workers aren't listed", async () => {
+		resetDockerCheck();
+		const o = await runOptions(place({ "night/profile.yaml": NIGHT }, { builds: ["nightly"], loginEnv: "nightly" }), dockerUp);
+		expect(RunOptions.parse(o)).toEqual(o);
+		expect(o.planners).toEqual([
+			{ name: "planner", title: null, provider: "claude", model: "claude-opus-5-5", default: true, available: true, reason: null },
+			{ name: "night", title: "Night shift", provider: "claude", model: null, default: false, available: true, reason: null },
+		]);
+		resetDockerCheck();
+	});
+
+	test("a profile whose sandbox.environment the sandbox has no build of: not ready, with the reason; built, it is", async () => {
+		resetDockerCheck();
+		const o = await runOptions(place({ "night/profile.yaml": NIGHT }), dockerUp);
+		expect(o.planners!.find((p) => p.name === "night")).toEqual({
+			name: "night", title: "Night shift", provider: "claude", model: null, default: false, available: false,
+			reason: "profile night: sandbox.environment nightly isn't an environment of the boxd sandbox (`capcomd env status --sandbox boxd` lists its builds; default is the current one, image the provider's plain image)",
+		});
+		// The other planner is unaffected; the drivers (the default planner on each provider) too.
+		expect(o.planners!.find((p) => p.name === "planner")).toMatchObject({ available: true, reason: null });
+		expect(o.drivers[0]).toMatchObject({ available: true });
+		// Built, but the plan login is kept in an image made from another environment: what its spawn would refuse too.
+		expect((await runOptions(place({ "night/profile.yaml": NIGHT }, { builds: ["nightly"] }), dockerUp)).planners![1]).toMatchObject({
+			available: false, reason: "profile night: the claude-code plan login is kept in an image made from the environment x, and this profile's sandbox.environment is nightly: use environment default (or x), or an API key (auth: apikey)",
+		});
+		resetDockerCheck();
+	});
+
+	test("a lifecycle plugin that isn't active on the daemon, a project skill not trusted, no login: not ready, each with what fixes it", async () => {
+		resetDockerCheck();
+		const files = {
+			"night/profile.yaml": NIGHT.replace("sandbox: { environment: nightly }", "lifecycle: { onStart: [notes] }"),
+			"rev/profile.yaml": "name: rev\nharness: { provider: claude, auth: subscription }\nchildren: { allowSpawn: true, allowedChildProfiles: [worker] }\nskills: [{ name: house-rules }]\n",
+			"rev/skills/house-rules/SKILL.md": "---\nname: house-rules\ndescription: How we review.\n---\nReview carefully.\n",
+			"cx/profile.yaml": "name: cx\nharness: { provider: codex, auth: subscription }\nchildren: { allowSpawn: true, allowedChildProfiles: [worker] }\n",
+		};
+		const env = place(files);
+		// No daemon to ask: the lifecycle isn't held against it (its spawn asks again).
+		const before = await runOptions(env, dockerUp);
+		expect(before.planners!.find((p) => p.name === "night")).toMatchObject({ available: true, reason: null });
+		// The running daemon's listing (this process stands in for it): notes is there but disabled.
+		const row = { name: "notes", version: "1.0.0", apiVersion: 1, runtime: "in-process", source: "user", state: "disposed", enabled: false, cause: "disabled", hooks: ["agent.changed"], seams: [], hooksSuspended: false, stats: { calls: 0, failures: 0, p50Ms: null, p95Ms: null, lastFailureAt: null } };
+		writeFileSync(join(env.CAPCOMD_HOME!, "state", "plugins.json"), JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins: [row] }));
+		const o = await runOptions(env, dockerUp);
+		const by = Object.fromEntries(o.planners!.map((p) => [p.name, p]));
+		expect(by.night).toMatchObject({ available: false, reason: "profile night can't be spawned: its lifecycle names notes, which isn't an active plugin listening to agent.changed on this daemon (`capcomd plugins list` shows each plugin and its state)" });
+		expect(by.rev).toMatchObject({ available: false, reason: "profile rev can't be spawned: its project skill house-rules isn't trusted (run `capcomd profiles trust rev`)" });
+		expect(by.cx).toMatchObject({ provider: "codex", available: false, reason: "Not logged in to Codex (run capcomd auth login codex)" });
+		expect(by.planner).toMatchObject({ available: true });
+		resetDockerCheck();
+	});
+
+	test("published: planners is optional (older daemons don't send it), each with its readiness; profiles that can't be read: none", async () => {
+		const out = (spec as any).paths["/v1/run-options"].get.responses["200"].content["application/json"].schema;
+		expect(out.required).toEqual(["drivers", "sandboxes"]);
+		expect(out.properties.planners.items.required).toEqual(["name", "title", "provider", "model", "default", "available", "reason"]);
+		expect(out.properties.planners.items.properties.title["x-untrusted"]).toBe(true);
+		expect(CAPABILITY_NAMES).toContain("runs.options.planners");
+		resetDockerCheck();
+		const env = place({ "bad/profile.yaml": "name: bad\nextends: nobody\n" });
+		expect((await runOptions(env, dockerUp)).planners).toEqual([]);
+		resetDockerCheck();
+	});
 });
 
 describe("the planner's model (capability runs.options.models)", () => {
