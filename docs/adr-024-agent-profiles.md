@@ -218,7 +218,7 @@ treats a distribution-owned `SOUL.md` that way).
 - `capcomd profiles update <name>` re-fetches at the locked source and replaces only the **package-owned** files
   (`profile.yaml`, `SOUL.md`, `prompt.md`, `skills/`); a project's `override.yaml` and the profile's memory (§2.2
   `memory`) are user-owned and never touched. So is any file the user added in the package's directory (one its `LOCK`
-  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.40; before, the
+  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.42; before, the
   update replaced the whole directory but the override). A changed hash on a pinned skill or persona is shown before
   it is applied.
   **From the research:** Hermes's `distribution_owned` list is exactly this split; adopted as is.
