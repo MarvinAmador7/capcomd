@@ -663,6 +663,29 @@ describe("GET /v1/run-options planners (capability runs.options.planners; ADR-02
 		resetDockerCheck();
 	});
 
+	test("what its spawn refuses for its sandbox: egress limits a sandbox can't enforce, a sandbox.provider outside isolation", async () => {
+		resetDockerCheck();
+		const plans = (children: string) => `harness: { provider: claude, auth: subscription }\nchildren: { allowSpawn: true, allowedChildProfiles: [${children}] }\n`;
+		const files = {
+			// Its children may only narrow its egress: fenced keeps the same limit.
+			"fence/profile.yaml": `name: fence\n${plans("fenced")}sandbox: { egress: [github.com] }\n`,
+			"fenced/profile.yaml": "name: fenced\nharness: { provider: claude, auth: subscription }\nsandbox: { egress: [github.com] }\n",
+			"loose/profile.yaml": `name: loose\n${plans("worker")}sandbox: { provider: fake-host }\n`,
+		};
+		// On boxd (an egress allowlist, isolated VMs): the egress limit is enforced; fake-host runs on this host, outside it.
+		const boxd = Object.fromEntries((await runOptions(place(files), dockerUp)).planners!.map((p) => [p.name, p]));
+		expect(boxd.fence).toMatchObject({ available: true, reason: null });
+		expect(boxd.loose).toMatchObject({ available: false, reason: "profile loose: sandbox.provider fake-host runs its agents on this host, outside any sandbox, and this run's agents are isolated (boxd) (name an isolated sandbox in its sandbox.provider, or remove it)" });
+		// On Docker (no allowlist), with its agent environment and login: the limit couldn't be kept, so its spawn is refused.
+		const env: Record<string, string> = { ...place(files), CAPCOMD_SANDBOX: "docker" };
+		writeFileSync(join(env.CAPCOMD_HOME!, "state", "envs-docker.json"), JSON.stringify({ current: { name: "capcomd-env-docker" }, history: [] }));
+		writeFileSync(join(env.CAPCOMD_HOME!, "state", "auths-docker.json"), JSON.stringify({ "claude-code": login("claude-code") }));
+		const docker = Object.fromEntries((await runOptions(env, dockerUp)).planners!.map((p) => [p.name, p]));
+		expect(docker.planner).toMatchObject({ available: true, reason: null });
+		expect(docker.fence).toMatchObject({ available: false, reason: "profile fence limits egress (github.com), and the docker sandbox can't enforce an egress allowlist (remove its egress, or run it on boxd)" });
+		resetDockerCheck();
+	});
+
 	test("published: planners is optional (older daemons don't send it), each with its readiness; profiles that can't be read: none", async () => {
 		const out = (spec as any).paths["/v1/run-options"].get.responses["200"].content["application/json"].schema;
 		expect(out.required).toEqual(["drivers", "sandboxes"]);

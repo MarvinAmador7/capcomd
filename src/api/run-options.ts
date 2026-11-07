@@ -14,7 +14,7 @@ import { untrustedSkillsProblem } from "../profiles/trust";
 import { readConfig, userConfigPath } from "../config/store";
 import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } from "../providers/registry";
 import { withSandbox } from "../providers/run-sandbox";
-import { envSnapshotProblem } from "../primitives/ops";
+import { egressProblem, envSnapshotProblem, isolationProblem } from "../primitives/ops";
 import { capcomdHome } from "../utils/home";
 import { harnessModels, type HarnessModel } from "../config/models";
 
@@ -91,9 +91,10 @@ export function driverFit(provider: "claude" | "codex", name: RunSandbox, source
 
 /**
  * Can a run start with planner profile `p` now (GET /v1/run-options `planners`)? What its spawn would refuse, asked
- * before the run instead of at it (ADR-024 §8): its login, its project skills' trust, its `sandbox.environment` on its
- * sandbox (its profile's `sandbox.provider`, else the run's), an agent environment there, and the plugins its
- * `lifecycle` names. Local files, and the daemon's plugin host (or, outside the daemon, its listing; with no daemon to
+ * before the run instead of at it (ADR-024 §8): its login, its project skills' trust, a `sandbox.provider` outside the
+ * run's isolation, its `sandbox.environment` on its sandbox (its profile's `sandbox.provider`, else the run's), an agent
+ * environment there, an egress limit that sandbox can't enforce, and the plugins its `lifecycle` names (the spawn's own
+ * checks, src/primitives/ops.ts). Local files, and the daemon's plugin host (or, outside the daemon, its listing; with no daemon to
  * ask, a lifecycle isn't held against it: the spawn asks again). The first problem is the reason.
  */
 export async function plannerReadiness(p: ResolvedProfile, source: Env = process.env): Promise<DriverFit> {
@@ -104,6 +105,8 @@ export async function plannerReadiness(p: ResolvedProfile, source: Env = process
 	if (!login.ready) return { available: false, reason: login.reason };
 	const untrusted = untrustedSkillsProblem(p.name, p.skills, source);
 	if (untrusted) return { available: false, reason: `${untrusted} (run \`capcomd profiles trust ${p.name}\`)` };
+	const outside = isolationProblem(p.name, rt.sandboxProvider, source);
+	if (outside) return { available: false, reason: `${outside} (name an isolated sandbox in its sandbox.provider, or remove it)` };
 	if (rt.environment) {
 		// A plan login kept in an image boots that image: the profile's environment must be the one it was made from.
 		const kept = p.spec.auth === "subscription" ? profileFor(providerKind(provider), s) : null;
@@ -114,6 +117,8 @@ export async function plannerReadiness(p: ResolvedProfile, source: Env = process
 	}
 	const env = envSnapshotProblem(provider, s, rt.environment);
 	if (env) return { available: false, reason: env };
+	const unkept = egressProblem(p.name, p.spec.egress, s);
+	if (unkept) return { available: false, reason: `${unkept} (remove its egress, or run it on boxd)` };
 	const unheard = (await lifecycleCheck(lifecyclePlugins(rt.lifecycle), source)).problem;
 	if (unheard) return { available: false, reason: `profile ${p.name} can't be spawned: its ${unheard} (\`capcomd plugins list\` shows each plugin and its state)` };
 	return { available: true, reason: null };

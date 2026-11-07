@@ -13,8 +13,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   and `untrustedSkills` too. Capability `profiles.facts`.
 - New: `GET /v1/run-options` lists `planners`: every profile that can plan, each with whether a run can start with it
   now and why not: no login, a project skill not trusted yet, a `sandbox.environment` its sandbox has no build of, a
-  `lifecycle` plugin that isn't active on the daemon, or no agent environment built. Before, a missing environment or
-  an inactive lifecycle plugin only showed when the planner's spawn was refused. Capability `runs.options.planners`.
+  `lifecycle` plugin that isn't active on the daemon, no agent environment built, an egress limit its sandbox can't
+  enforce (Docker), or a `sandbox.provider` that would run it outside the run's isolation. Before, these only showed
+  when the planner's spawn was refused. Capability `runs.options.planners`.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its

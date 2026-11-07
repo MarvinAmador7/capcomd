@@ -446,19 +446,29 @@ function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string
   const rp = resolved.spec ? runtimeProblems(resolved.name ?? resolved.kind, rt, resolved.spec) : [];
   if (rp.length) throw new RelayError("config", rp.join("; "), "Spawn it without making it orchestrate (tools.mode), or give the MCP servers to the profiles it spawns.", { code: "orchestrate_mcp" });
   const source = rt.sandboxProvider ? withSandbox(runSource, rt.sandboxProvider) : runSource;
-  // A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
-  // commands run in a sandbox, never on the host): a sandbox that runs them on this host (the test fakes) only when the
-  // run's own does too.
-  if (rt.sandboxProvider && !realSandbox(source) && realSandbox(runSource))
-    throw new RelayError("config", `profile ${resolved.name}: sandbox.provider ${rt.sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
+  const outside = isolationProblem(resolved.name, rt.sandboxProvider, runSource);
+  if (outside) throw new RelayError("config", outside, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
   const envProblem = envSnapshotProblem(spec?.provider, source, rt.environment);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
   if (rt.environment) environmentCheck(resolved, source);
-  // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
-  const egress = spec?.egress as string[] | undefined;
-  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox(source) && !sandboxCaps(source).egressAllowlist)
-    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
+  const unkept = egressProblem(resolved.name, spec?.egress as string[] | undefined, source);
+  if (unkept) throw new RelayError("config", unkept, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   return { resolved, spec };
+}
+
+/** A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
+ *  commands run in a sandbox, never on the host): its `sandbox.provider` may run them on this host (the test fakes) only
+ *  when the run's own sandbox (`runSource`'s) does too. Why not, or null. Also asked by GET /v1/run-options `planners`. */
+export function isolationProblem(name: string | null | undefined, sandboxProvider: string | undefined, runSource: Record<string, string | undefined>): string | null {
+  if (!sandboxProvider || realSandbox(withSandbox(runSource, sandboxProvider)) || !realSandbox(runSource)) return null;
+  return `profile ${name}: sandbox.provider ${sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`;
+}
+
+/** A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist): why its
+ *  agents can't on `source`'s sandbox (their own), or null. Also asked by GET /v1/run-options `planners`. */
+export function egressProblem(name: string | null | undefined, egress: readonly string[] | undefined, source: Record<string, string | undefined>): string | null {
+  if (!egress?.length || egress.includes(OPEN_EGRESS) || !realSandbox(source) || sandboxCaps(source).egressAllowlist) return null;
+  return `profile ${name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`;
 }
 
 /** ADR-024 `sandbox.environment`: the sandbox has it, and a plan login kept in an image is one made from it (the agent

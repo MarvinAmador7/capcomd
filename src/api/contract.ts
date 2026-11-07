@@ -523,7 +523,7 @@ export const CAPABILITIES = {
 	"profiles.edit": "GET /v1/profiles/{name}: one profile as typed rows a client renders and edits (each with the file that sets it, `source` and `editable`) and its `rev`; PUT /v1/profiles/{name} (the `configure` scope, an Idempotency-Key): change them in the profile's own file, its version bumped; each write is a profile.changed event on the daemon stream",
 	"plugins.config": "Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.trusted on the daemon stream audits a trust",
 	"profiles.facts": "GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) and `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for",
-	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, a sandbox.environment that isn't built, a lifecycle plugin that isn't active, no agent environment)",
+	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -597,7 +597,7 @@ export const PlannerOption = z.object({
 	model: z.string().nullable().describe("Its model; null: the provider CLI's default"),
 	default: z.boolean().describe("The planner a run without one uses (the profile named planner); `drivers[]` are this one on each provider"),
 	available: z.boolean().describe("A run can start with it now, in the daemon's sandbox (its profile's sandbox.provider when it names one)"),
-	reason: z.string().nullable().describe("Why not, one short sentence written by the daemon naming what fixes it (trusted; never a credential): its login, a project skill not trusted yet, its sandbox.environment that sandbox has no build of, a lifecycle plugin that isn't active on this daemon, or no agent environment built there. null when available"),
+	reason: z.string().nullable().describe("Why not, one short sentence written by the daemon naming what fixes it (trusted; never a credential): its login, a project skill not trusted yet, a sandbox.provider that runs its agents outside the run's isolation, its sandbox.environment that sandbox has no build of, no agent environment built there, an egress limit that sandbox can't enforce, or a lifecycle plugin that isn't active on this daemon. null when available"),
 });
 export const RunOptions = z.object({
 	drivers: z.array(DriverOption).describe("Always claude, then codex"),
