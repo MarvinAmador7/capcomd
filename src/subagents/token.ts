@@ -111,3 +111,18 @@ export function mayRunCommands(spec: unknown): boolean {
   if (denied?.some((t) => SHELL.test(t))) return false;
   return s.sandbox !== "read-only";
 }
+
+/**
+ * Whether a real agent's token has the job ops: its profile lets it run commands of its own (`mayRunCommands`), and so
+ * does the config it runs with (src/agents/config.ts `loadAgentConfig`), which the daemon's CAPCOMD_AGENT_ALLOWED_TOOLS,
+ * CAPCOMD_AGENT_DISALLOWED_TOOLS and, for a Codex agent, CAPCOMD_CODEX_SANDBOX narrow too. `effective` null (a config
+ * that can't be read): none (fail closed; the run reports the config itself). An orchestrate agent's is its profile's
+ * alone: its config is its provider's orchestrate policy, and the RPC refuses its `job start` by name.
+ */
+export function mayRunJobs(spec: unknown, effective: { allowedTools?: string[]; disallowedTools?: string[]; codexSandbox?: string } | null): boolean {
+  const s = (spec ?? {}) as { toolMode?: unknown; provider?: unknown };
+  if (!mayRunCommands(spec)) return false;
+  if (s.toolMode === "orchestrate") return true;
+  if (!effective) return false;
+  return mayRunCommands({ allowedTools: effective.allowedTools, disallowedTools: effective.disallowedTools, ...(s.provider === "codex" ? { sandbox: effective.codexSandbox } : {}) });
+}

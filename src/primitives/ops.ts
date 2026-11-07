@@ -26,7 +26,7 @@ import { untrustedSkillsHint, untrustedSkillsProblem } from "../profiles/trust";
 import { attachmentId } from "../api/inline-cap";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { hasVmCapcomd } from "../subagents/skill";
-import { mayRunCommands } from "../subagents/token";
+import { mayRunJobs } from "../subagents/token";
 import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
 import { parseVerdict } from "./review";
@@ -1336,9 +1336,13 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
   const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
   const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
   const maySpawn = a.limits.allowSpawn;
-  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ mcp: true, jobs: mayRunCommands(a.spec) });
+  // The job ops: by its profile and the config it runs with (the daemon's tool and sandbox settings narrow it too).
+  const effective = await (async () => { try { return (await import("../agents/config")).loadAgentConfig(withSandbox(process.env, sandbox), a.ref, a.spec); } catch { return null; } })();
+  const jobs = mayRunJobs(a.spec, effective);
+  const orchestrate = (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate";
+  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ mcp: true, jobs: jobs && !orchestrate });
   const params = { kind, rpcDir, ...(skill ? { skill } : {}), ...(maySpawn ? {} : { maySpawn: false }) };
-  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
+  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir, { jobs }) };
 }
 
 /**

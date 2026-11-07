@@ -31,9 +31,10 @@ const NODE_BIN = Bun.which("node") ?? "node";
  * `steps`: also record its step history (agent.step) from these ops. Only for scripted agents, whose ops are all the
  * daemon sees of them; a real agent's steps come from its own events (worker.ts), which include its capcomd calls.
  * `jobs`: where its background jobs run by default, and its node (plugin API §16.2): the machine is attached to the
- * jobs service while the pump runs, so jobs it started before a restart are watched again.
+ * jobs service while the pump runs, so jobs it started before a restart are watched again. `jobOps`: whether its token
+ * has the job ops (a real agent's, by its profile and the config it runs with: token.ts `mayRunJobs`); else by its profile.
  */
-function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number, o: { steps?: boolean; jobs?: { cwd: string; node?: string } } = {}) {
+function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, intervalMs: number, o: { steps?: boolean; jobs?: { cwd: string; node?: string }; jobOps?: boolean } = {}) {
   const s = client().scope.getOrCreate([runId]);
   const ttlMs = Number(env("TOKEN_TTL_MS") ?? 30 * 60_000);
   let jti: string | null = null;
@@ -47,7 +48,7 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   const attached = attachMachine(machine).catch((e) => { console.error(`[jobs] ${a.agentId}: ${(e as Error)?.message ?? e}`); return null; });
   const pump = startPump({
     spool, intervalMs, refreshMs: Math.max(1000, ttlMs / 2),
-    mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits, { jobs: mayRunCommands(a.spec) }), ttlMs }); jti = t.claims.jti; return t.token; },
+    mintToken: () => { const t = mint({ run: runId, sub: a.agentId, ops: opsFor(a.limits, { jobs: o.jobOps ?? mayRunCommands(a.spec) }), ttlMs }); jti = t.claims.jti; return t.token; },
     handle: async (req) => {
       driverKillpoint(`rpc.${req.op}.before`);
       const r = await handleRpc(req, { runId, agentId: a.agentId, exec, upload, jobs: machine });
@@ -85,11 +86,12 @@ async function localExec(cmd: string[], o: { cwd?: string; timeoutMs?: number })
     (e, stdout, stderr) => done({ code: e ? (typeof (e as { code?: unknown }).code === "number" ? (e as { code: number }).code : 1) : 0, stdout: stdout ?? "", stderr: stderr || (e ? String(e.message) : "") })));
 }
 
-/** Real agent VM: pump while `work` runs (the worker actor's pushBranch). `rpcDir`: its spool in the VM. */
-export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: SandboxProvider, vmId: VmId, jsonl: string | undefined, work: () => Promise<T>, rpcDir = VM_RPC_DIR): Promise<T> {
+/** Real agent VM: pump while `work` runs (the worker actor's pushBranch). `rpcDir`: its spool in the VM. `jobs`: whether
+ *  its token has the job ops (token.ts `mayRunJobs`; unset: by its profile alone). */
+export async function withVmRpc<T>(runId: string, a: ScopeAgent, provider: SandboxProvider, vmId: VmId, jsonl: string | undefined, work: () => Promise<T>, rpcDir = VM_RPC_DIR, o: { jobs?: boolean } = {}): Promise<T> {
   // The pump has its own backoff and never ends the agent: it uses the provider as is (rawProvider), so a call during an
   // outage fails and is tried again next tick instead of holding up the pump (and its stop) for the outage window.
-  const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, rpcDir, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000));
+  const p = pumpFor(runId, a, new VmSpool(rawProvider(provider), vmId, rpcDir, jsonl), Number(env("VM_RPC_POLL_MS") ?? 1000), o.jobs === undefined ? {} : { jobOps: o.jobs });
   // Its CLI ran to its end (the work returned), or it was cancelled under it: its jobs end with it. A failed attempt
   // may run again on the same machine (a restarted engine), so its jobs are left to the next pump, or settle `lost`
   // once the agent ended.

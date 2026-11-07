@@ -50,7 +50,9 @@ Ops: spawners get all verbs. Every other agent that does work of its own (not ve
 with a leaf token (`LEAF_OPS` in `src/subagents/token.ts`): title, the reads (status, tree, inspect,
 logs, events, budget), heartbeat, kv, task, inbox, send, result, and the job ops (plugin API §16.2)
 when its profile lets it run a command of its own (`mayRunCommands`: no allow-list without an
-unrestricted shell, no denied shell, no read-only Codex sandbox). Never spawn, await, cancel,
+unrestricted shell, no denied shell, no read-only Codex sandbox), and so does the config it runs with
+(`mayRunJobs`: the daemon's `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS` and a
+Codex agent's `CAPCOMD_CODEX_SANDBOX` narrow it too; none when that config can't be read). Never spawn, await, cancel,
 handoff, verify, merge, grant, fetch or check. Scripted test agents get the same tokens.
 
 Authority comes only from the token and the scope's limits, never from request text:

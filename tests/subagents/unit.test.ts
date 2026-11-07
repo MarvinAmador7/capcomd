@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { mint, verifyToken, opsFor, mayRunCommands } from "../../src/subagents/token";
+import { mint, verifyToken, opsFor, mayRunCommands, mayRunJobs } from "../../src/subagents/token";
 import { capText, fence, normalizeResult, rollups, stuckReason, textTree, treeView, subtree } from "../../src/subagents/results";
 import { LocalSpool, VmSpool, startPump } from "../../src/subagents/spool";
 import { hasVmCapcomd, orchestrationSkill, workerSkill } from "../../src/subagents/skill";
@@ -46,6 +46,18 @@ test("an agent that may not spawn: jobs, notes, result, title and reads; nothing
   expect(mayRunCommands({ allowedTools: ["Read", "Edit", "Bash(:*)"] })).toBe(true);
   expect(mayRunCommands({ sandbox: "read-only" })).toBe(false);
   expect(mayRunCommands({ sandbox: "workspace-write", toolMode: "orchestrate" })).toBe(true); // refused by name in the RPC
+  // A real agent's: its profile's, narrowed by the config it runs with (the daemon's CAPCOMD_AGENT_ALLOWED_TOOLS,
+  // CAPCOMD_AGENT_DISALLOWED_TOOLS, a Codex agent's CAPCOMD_CODEX_SANDBOX); a config that can't be read gives none.
+  const open = { allowedTools: undefined, disallowedTools: [], codexSandbox: "danger-full-access" };
+  expect(mayRunJobs({ provider: "claude" }, open)).toBe(true);
+  expect(mayRunJobs({ provider: "claude" }, { ...open, disallowedTools: ["Bash"] })).toBe(false);
+  expect(mayRunJobs({ provider: "claude" }, { ...open, allowedTools: ["Read", "Grep"] })).toBe(false);
+  expect(mayRunJobs({ provider: "codex" }, { ...open, codexSandbox: "read-only" })).toBe(false);
+  expect(mayRunJobs({ provider: "claude" }, { ...open, codexSandbox: "read-only" })).toBe(true); // not Claude's sandbox
+  expect(mayRunJobs({ provider: "claude" }, null)).toBe(false);
+  expect(mayRunJobs({ provider: "claude", allowedTools: ["Read"] }, open)).toBe(false);
+  // An orchestrate agent's config is its provider's orchestrate policy: its profile decides (the RPC refuses by name).
+  expect(mayRunJobs({ provider: "claude", toolMode: "orchestrate" }, { ...open, allowedTools: ["Read"] })).toBe(true);
 });
 
 test("who gets the in-VM capcomd, and what a worker is told", () => {

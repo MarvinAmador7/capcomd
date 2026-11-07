@@ -10,8 +10,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
   to it as a message), keep notes (`capcomd kv`), propose lessons for the project's memory (`capcomd result --data
   '{"context": [...]}'`), read the run's tree, and end with a summary (`capcomd result --summary`); its instructions
-  say so. It still can't spawn, verify or merge (refused), and a worker whose profile runs no commands of its own (an
-  allow-list without a plain `Bash`, or a read-only Codex sandbox) gets no background jobs. Reviewers, `--report`
+  say so. It still can't spawn, verify or merge (refused), and a worker that runs no commands of its own (its
+  profile's allow-list has no plain `Bash` or denies it, its Codex sandbox is read-only, or the daemon's
+  `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS` or `CAPCOMD_CODEX_SANDBOX` say so) gets no
+  background jobs. Reviewers, `--report`
   agents and the context consolidator are unchanged.
 - Changed: an agent that ends without declaring a summary gets its final message as its `result.summary` (up to
   2,000 characters), so a parent, the driver and the apps always have something to read; a reviewer's verdict is
