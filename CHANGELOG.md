@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: a profile whose `sandbox.provider` or `harness.provider` names a plugin the daemon has loaded no longer
+  breaks `capcomd profiles list`, `validate` and every other profile command outside the daemon. They now ask the
+  running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
+  with no daemon running a name that isn't built in is a warning (`capcomd profiles validate` lists it) instead of an
+  error; the daemon checks it again when an agent uses the profile.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

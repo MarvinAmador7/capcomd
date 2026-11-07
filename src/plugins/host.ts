@@ -22,6 +22,7 @@ import { pluginTriggers } from "../triggers/intake";
 import { announce } from "../install/trust";
 import { isExempt, projectOf, projectPluginDirs, projectPluginTrusted } from "./install";
 import { pluginStore, storageService } from "./storage";
+import { pluginsSnapshotPath, type PluginsSnapshot } from "./snapshot";
 import { processLauncher } from "./process";
 import type { ProcessTimings } from "../../packages/plugin/src/host/process";
 
@@ -81,9 +82,8 @@ function testPlugins(env: Record<string, string | undefined>): Candidate[] {
 /** A plugin's data directory (§4.2): <home>/state/plugins/<name>/, made by whoever writes there first. */
 export const pluginDataDir = (name: string, env: Record<string, string | undefined> = process.env) => join(stateDir(env), "plugins", name);
 
-/** Where the running daemon keeps its plugin listing for `capcomd plugins list` (the CLI has no API token). */
-export const pluginsSnapshotPath = (env: Record<string, string | undefined> = process.env) => join(stateDir(env), "plugins.json");
-export type PluginsSnapshot = { pid: number; at: string; plugins: PluginSummary[] };
+/** The running daemon's listing (src/plugins/snapshot.ts): where it is, reading it. */
+export { pluginsSnapshotPath, readSnapshot, type PluginsSnapshot } from "./snapshot";
 
 function writeSnapshot(path: string, plugins: PluginSummary[]) {
   try {
@@ -92,16 +92,6 @@ function writeSnapshot(path: string, plugins: PluginSummary[]) {
     writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins } satisfies PluginsSnapshot), { mode: 0o600 });
     renameSync(tmp, path);
   } catch { /* the listing is a convenience; the daemon runs without it */ }
-}
-
-/** The running daemon's listing, or null when there is none or the daemon that wrote it is gone. */
-export function readSnapshot(path = pluginsSnapshotPath()): PluginsSnapshot | null {
-  if (!existsSync(path)) return null;
-  try {
-    const s = JSON.parse(readFileSync(path, "utf8")) as PluginsSnapshot;
-    process.kill(s.pid, 0);
-    return Array.isArray(s.plugins) ? s : null;
-  } catch { return null; }
 }
 
 /** Remove the listing on the way out, only while it is still this process's. */

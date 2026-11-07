@@ -62,7 +62,8 @@ describe("the runtime blocks of a profile", () => {
     const bad = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "lifecycle: { onEnd: [Not A Plugin] }"]) });
     expect(errorOf(() => bad.load())).toContain("lifecycle.onEnd: must be a list of plugin names");
     const nowhere = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { provider: nowhere }"]) });
-    expect(errorOf(() => nowhere.load())).toContain(`sandbox.provider "nowhere" isn't an active sandbox provider`);
+    // With no daemon running to say whether a plugin provides it, a warning (tests/agents/profiles.test.ts has the rest).
+    expect(nowhere.load().warnings).toEqual([expect.stringContaining(`sandbox.provider "nowhere" isn't a built-in sandbox provider, and no daemon is running`)]);
   });
 
   test("an override that makes a profile with MCP servers orchestrate is refused at spawn, and its CLI would get none", async () => {

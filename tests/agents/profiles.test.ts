@@ -432,6 +432,80 @@ describe("profiles v2: loader and resolution", () => {
     expect(defaultAgentsFile({ CAPCOMD_HOME: both.source.CAPCOMD_HOME }, repo)).toBe(join(repo, ".capcomd", "agents.json"));
   });
 
+  // Spec §7.1, ADR-024 §9: outside the daemon a seam a profile names is one of the built-ins or one the running daemon
+  // lists (<home>/state/plugins.json, which `capcomd serve` writes), since a plugin can be loaded only there.
+  describe("sandbox.provider and harness.provider outside the daemon", () => {
+    /** The running daemon's listing in this world's home: this process stands in for the daemon (its pid is alive). */
+    const listing = (w: ReturnType<typeof world>, seams: Array<{ kind: "sandbox" | "agent"; name: string }>, o: { state?: string; enabled?: boolean } = {}) => {
+      mkdirSync(join(w.source.CAPCOMD_HOME, "state"), { recursive: true });
+      const plugin = { name: "third-party", version: "1.0.0", apiVersion: 1, runtime: "in-process", source: "user", state: o.state ?? "active", enabled: o.enabled ?? true, cause: null, hooks: [], seams, hooksSuspended: false, stats: {} };
+      writeFileSync(join(w.source.CAPCOMD_HOME, "state", "plugins.json"), JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins: [plugin] }));
+    };
+    const profile = (sandbox: string, provider = "claude") => ({ "P/w.yaml": yaml(["name: w", `harness: { provider: ${provider}, auth: apikey }`, `sandbox: { provider: ${sandbox} }`]) });
+    const noDaemon = (what: string) => `isn't a built-in ${what} provider, and no daemon is running to say whether one of its plugins provides it (the daemon checks when an agent uses the profile)`;
+
+    test("a sandbox only the daemon's listing has resolves; one unknown to both is an error while a daemon runs, a warning when none does", () => {
+      const only = world(profile("modal"));
+      // No daemon: nobody to ask, so the profile resolves with a warning (the daemon checks it again).
+      expect(only.load().warnings).toEqual([`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`]);
+      expect(only.load().profiles.w!.runtime.sandboxProvider).toBe("modal");
+      // A daemon that lists it: it resolves, and nothing is said.
+      listing(only, [{ kind: "sandbox", name: "modal" }]);
+      const set = only.load();
+      expect(set.warnings).toEqual([]);
+      expect(set.profiles.w!.runtime.sandboxProvider).toBe("modal");
+      // A daemon that doesn't: an error, as in the daemon. A plugin it lists but hasn't active (disabled, failed) isn't one.
+      const nowhere = world(profile("nowhere"));
+      listing(nowhere, [{ kind: "sandbox", name: "modal" }]);
+      expect(errorOf(() => nowhere.load())).toContain(`profiles.w: sandbox.provider "nowhere" isn't an active sandbox provider`);
+      listing(only, [{ kind: "sandbox", name: "modal" }], { enabled: false });
+      expect(errorOf(() => only.load())).toContain(`sandbox.provider "modal" isn't an active sandbox provider`);
+      listing(only, [{ kind: "sandbox", name: "modal" }], { state: "failed" });
+      expect(errorOf(() => only.load())).toContain(`sandbox.provider "modal" isn't an active sandbox provider`);
+      // An agent seam of that name isn't a sandbox; the built-ins need no daemon.
+      listing(only, [{ kind: "agent", name: "modal" }]);
+      expect(errorOf(() => only.load())).toContain(`sandbox.provider "modal" isn't an active sandbox provider`);
+      expect(world(profile("docker")).load().warnings).toEqual([]);
+      // A listing left by a daemon that is gone is no daemon.
+      const gone = world(profile("modal"));
+      mkdirSync(join(gone.source.CAPCOMD_HOME, "state"), { recursive: true });
+      writeFileSync(join(gone.source.CAPCOMD_HOME, "state", "plugins.json"), JSON.stringify({ pid: 2 ** 22 + 12345, at: "", plugins: [] }));
+      expect(gone.load().warnings).toEqual([`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`]);
+    });
+
+    test("harness.provider likewise, in a v2 profile and an agents.json entry; a candidate checked before a write still needs one", () => {
+      const v2 = world(profile("docker", "gemini"));
+      const v1 = world({}, { g: { provider: "gemini", auth: "apikey" } });
+      expect(v2.load().warnings).toEqual([`profiles.w: harness.provider "gemini" ${noDaemon("agent")}`]);
+      expect(v1.load()).toMatchObject({ agents: { g: { provider: "gemini" } }, warnings: [`agents.g: provider "gemini" ${noDaemon("agent")}`] });
+      for (const w of [v2, v1]) listing(w, [{ kind: "agent", name: "gemini" }]);
+      expect(v2.load()).toMatchObject({ agents: { w: { provider: "gemini" } }, warnings: [] });
+      expect(v1.load().warnings).toEqual([]);
+      for (const w of [v2, v1]) listing(w, [{ kind: "agent", name: "mistral" }]);
+      // The error names what this process and the daemon have.
+      expect(errorOf(() => v2.load())).toContain(`profiles.w: provider "gemini" isn't an active agent provider (one of claude, codex, mistral;`);
+      expect(errorOf(() => v1.load())).toContain(`agents.g: provider "gemini" isn't an active agent provider`);
+      // Without a place for a warning (a candidate, an override), a provider nobody can confirm is still refused.
+      expect(validateSpec("x", { provider: "gemini", auth: "apikey" }).join()).toContain(`provider "gemini" isn't an active agent provider`);
+    });
+
+    test("the CLI: `agents list` resolves a profile whose sandbox only the daemon has; `validate` warns with no daemon, refuses with one that lacks it", () => {
+      const w = world(profile("modal"));
+      const env = { ...w.source, ANTHROPIC_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
+      const validate = () => { const r = cli(["agents", "validate", "--json"], env); return { code: r.code, ...JSON.parse(r.out) }; };
+      expect(validate()).toMatchObject({ code: 0, ok: true, warnings: [`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`] });
+      listing(w, [{ kind: "sandbox", name: "modal" }]);
+      const list = cli(["agents", "list", "--json"], env);
+      expect(list.code).toBe(0);
+      expect(JSON.parse(list.out).agents.map((a: any) => a.name)).toEqual(["w"]);
+      const ok = validate();
+      expect(ok).toMatchObject({ code: 0, ok: true });
+      expect(ok.warnings).toBeUndefined();
+      listing(w, [{ kind: "sandbox", name: "fly" }]);
+      expect(validate()).toMatchObject({ code: 2, ok: false, errors: [expect.stringContaining(`sandbox.provider "modal" isn't an active sandbox provider`)] });
+    }, 30_000);
+  });
+
   test("overrides take v2 paths (v1 names stay aliases) and still only narrow", () => {
     const w = world({ "P/lead/profile.yaml": yaml(["name: lead", "harness: { provider: claude, auth: subscription }", "limits: { maxTurns: 40 }", "tools: { allowed: [Read, Grep, Edit] }", "sandbox: { egress: [github.com, api.anthropic.com] }"]) });
     expect(parseSetPairs(["limits.maxTurns=5", "tools.allowed=Read,Grep", "sandbox.egress=github.com"])).toEqual({ limits: { maxTurns: 5 }, tools: { allowed: ["Read", "Grep"] }, sandbox: { egress: ["github.com"] } });
