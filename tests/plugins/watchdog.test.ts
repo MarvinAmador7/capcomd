@@ -309,6 +309,28 @@ describe("the watchdog", () => {
     expect(kinds(k)).toEqual(["agt-short:stalled", "agt-hung:stalled", "agt-hung:cleared"]);
   });
 
+  test("a command run again and again is caught like one that hangs: its time doesn't count for more than stalledAfterMs between signs of progress", async () => {
+    const k = kernel();
+    const poll = k.agent("agt-poll"), fixer = k.agent("agt-fix");
+    const { changed, tick } = await boot(k);
+    await changed(poll, started()); await changed(fixer, started());
+    // From 1 min on, both run 10-minute commands with 10 s between them (a test run, a wait on CI); only the fixer's
+    // files change after each of its commands.
+    for (let s = 60; s <= 120 * 60; s += 10) {
+      at(s * 1000);
+      const n = Math.floor((s - 60) / 610), into = (s - 60) % 610, commandAt = (60 + n * 610) * 1000;
+      if (into < 600) { await changed(poll, worked({ commandAt })); await changed(fixer, worked({ commandAt })); }
+      else if (into === 600) await changed(fixer, worked({ files: true }));
+      if (s % 60 === 0) await tick();
+      if (s === 29 * 60) expect(kinds(k)).toEqual([]);
+    }
+    // 15 min of its commands' time didn't count, then the clock ran: 1 min before the first and 10 s between the first
+    // two, and the rest from 16 min 10 s on, so stalled at 30 min, in the middle of its third command.
+    expect(kinds(k)).toEqual(["agt-poll:stalled"]);
+    expect(k.notices[0]!.notice!.detail).toBe("no progress for 15 min: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished no tool step meanwhile; it has been waiting on one command for 9 min; the watchdog stops it after 45 min without progress");
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-poll"]);
+  });
+
   test("a job's end isn't progress, but the time it ran doesn't count, even across a restart", async () => {
     const k = kernel();
     const a = k.agent("agt-j1");

@@ -6,16 +6,16 @@
 //    heartbeat, about 30 s; or a `checkpointed`), or those of an agent under it;
 //  - an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
 //  - a verification or approval it waited on ended.
-// Tool calls alone (`step`) are not progress, and neither is a job's end or its output. While it waits on something
-// (a job, a verification, an approval, a foreground command of its CLI, a paused agent under it) its clock doesn't run:
-// that time doesn't count (once, when waits overlap). A command counts so for at most `stalledAfterMs`, so one that
-// hangs is still caught. An agent with agents of its own running is judged through them: they stall first, and their
-// end is its progress. An
-// agent whose work never shows as files changing (a reviewer, a report-only agent, an orchestrate agent: none is
+// Tool calls alone (`step`) are not progress, and neither is a job's end or its output. While it waits on something (a
+// job, a verification, an approval, a foreground command of its CLI, a paused agent under it) its clock doesn't run:
+// that time doesn't count (once, when waits overlap). Commands count so for at most `stalledAfterMs` in all between two
+// signs of progress, however many there are, so one that hangs, or one run again and again, is still caught. An agent
+// with agents of its own running is judged through them: they stall first, and their end is its progress. An agent
+// whose work never shows as files changing (a reviewer, a report-only agent, an orchestrate agent: none is
 // checkpointed) isn't judged at all; the kernel's own notices still watch its process. While the kernel's own notice
-// shows on an agent, `stalled` isn't raised over it (the stop still comes). No progress for `stalledAfterMs`
-// (15 min) raises the `stalled` notice (the app's amber hand; a parent sees it on its child); for `stopAfterMs` (45 min,
-// both counted from the last progress) cancels the agent and its descendants, and says so once on the run's stream
+// shows on an agent, `stalled` isn't raised over it (the stop still comes). No progress for `stalledAfterMs` (15 min)
+// raises the `stalled` notice (the app's amber hand; a parent sees it on its child); for `stopAfterMs` (45 min, both
+// counted from the last progress) cancels the agent and its descendants, and says so once on the run's stream
 // (`plugin.watchdog.stopped`, the one message §16.5 allows). Progress clears the notice.
 // Its clock is one plugin timer (§16.2, re-armed by the daemon after a restart); what it knows of each agent is kept in
 // its storage, and the time the daemon was down doesn't count.
@@ -65,9 +65,10 @@ export interface Watched {
   waits: string[];
   /** Since when its waits hold its clock; null while it waits on nothing. */
   heldAt?: number | null;
-  /** The foreground command it was last seen waiting on: when it started, when it was last seen running, and how much
-   *  of its time was taken off the clock (at most stalledAfterMs). */
-  command?: { since: number; seenAt: number; credited: number } | null;
+  /** The foreground command it was last seen waiting on: when it started, and when it was last seen running. */
+  command?: { since: number; seenAt: number } | null;
+  /** How much of its commands' time was taken off its clock since its last progress (at most stalledAfterMs). */
+  commanded?: number;
   /** Steps of its tools that finished since its last progress (what the notice says it did meanwhile). */
   steps?: number;
   /** When the watchdog raised `stalled` on it; null when it hasn't or the notice went. */
@@ -172,7 +173,7 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
       seen.add(id);
       const w = watched.get(keyOf(runId, id));
       if (!w) break;
-      if (w.since < now || w.steps) { w.since = Math.max(w.since, now); w.creditedTo = w.since; w.steps = 0; save(w); }
+      if (w.since < now || w.steps || w.commanded) { w.since = Math.max(w.since, now); w.creditedTo = w.since; w.steps = 0; w.commanded = 0; save(w); }
       if (w.stalledAt !== null) {
         w.stalledAt = null;
         save(w);
@@ -213,18 +214,19 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
     progress(runId, agentId);
   };
   /** A foreground command it waits on, seen running now: the time since it was last seen (or started) doesn't count, up
-   *  to stalledAfterMs for one command. */
+   *  to stalledAfterMs for all its commands since its last progress (a command run again and again, polling, is no
+   *  more progress than one that hangs). */
   const commanding = (w: Watched, since: number) => {
     const now = Date.now();
     let c = w.command;
-    if (!c || c.since !== since) c = w.command = { since, seenAt: Math.max(since, c?.seenAt ?? 0), credited: 0 };
-    const room = cfg.stalledAfterMs - c.credited;
-    if (room > 0) c.credited += credit(w, c.seenAt, Math.min(now, Math.max(c.seenAt, accounted(w)) + room));
+    if (!c || c.since !== since) c = w.command = { since, seenAt: Math.max(since, c?.seenAt ?? 0) };
+    const room = cfg.stalledAfterMs - (w.commanded ?? 0);
+    if (room > 0) w.commanded = (w.commanded ?? 0) + credit(w, c.seenAt, Math.min(now, Math.max(c.seenAt, accounted(w)) + room));
     c.seenAt = Math.max(c.seenAt, now);
     save(w);
   };
-  /** It waits on a command still: one seen running within PROGRESS_SIGNAL_MS whose time doesn't count yet. */
-  const onCommand = (w: Watched, now: number) => !!w.command && now - w.command.seenAt <= PROGRESS_SIGNAL_MS && w.command.credited < cfg.stalledAfterMs;
+  /** It waits on a command still: one seen running within PROGRESS_SIGNAL_MS, while its commands' time doesn't count. */
+  const onCommand = (w: Watched, now: number) => !!w.command && now - w.command.seenAt <= PROGRESS_SIGNAL_MS && (w.commanded ?? 0) < cfg.stalledAfterMs;
   const forget = (runId: string, agentId: string) => { if (watched.delete(keyOf(runId, agentId))) save(keyOf(runId, agentId)); };
 
   // ---- the signals ---------------------------------------------------------------------------------------------------

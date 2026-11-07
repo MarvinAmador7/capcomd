@@ -5,15 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
-- Fixed: the watchdog no longer flags an agent that is working. It used to see an agent's files change only at its
+- Fix: the watchdog no longer flags an agent that is working. It used to see an agent's files change only at its
   checkpoints (every 10 minutes), so with a shorter `stalledAfterMs` it flagged agents in the middle of editing, and it
   flagged agents waiting on a long command. Now an agent's files changing counts within about 30 seconds, and the time
-  an agent spends waiting on a foreground command (a test run, a build) doesn't count against it, up to
-  `stalledAfterMs` for one command, so a command that hangs is still caught. A job ending no longer counts as progress
-  by itself, but the time it ran doesn't count either. The stalled notice and the stop now say what the watchdog saw:
-  `no file change seen`, how many tool steps the agent finished meanwhile, and a command it has been waiting on.
-  `capcomd setup` (and `setup check`) warns when `plugins.watchdog.stalledAfterMs` is under a minute, since progress
-  can take that long to show.
+  an agent spends waiting on a foreground command (a test run, a build) doesn't count against it, up to `stalledAfterMs`
+  between two signs of progress, so a command that hangs, or one run again and again, is still caught. A job ending no
+  longer counts as progress by itself, but the time it ran doesn't count either. The stalled notice and the stop now say
+  what the watchdog saw: `no file change seen`, how many tool steps the agent finished meanwhile, and a command it has
+  been waiting on. `capcomd setup` (and `setup check`) warns when `plugins.watchdog.stalledAfterMs` is under a minute,
+  since progress can take that long to show.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its

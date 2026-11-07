@@ -2027,29 +2027,29 @@ heartbeats while taking it would use more than a twentieth of the time, so a slo
 isn't `run_in_background` until its `tool_result`, Codex's `command_execution` from `item.started` to
 `item.completed`: the provider's `AgentEvent.commands`, §7.3; a turn that ends or fails ends every command of it).
 
-Tool calls (`step`), the activity line, a job's output and a job's end are not progress: a job, in the foreground or
-the background, is a command like any other, and what it leads to (files changing, a hand-back) is. While it waits on
-something its clock doesn't run, and the time it waited doesn't count when the wait ends: a job (`job.changed`
-`started` to `ended`), a verification, an approval, being paused, or a foreground command (from its start, while
-`worked` keeps saying it runs; once it isn't said for `PROGRESS_SIGNAL_MS` it has ended), the last for at most
-`stalledAfterMs` per command, so a command that hangs is still judged. Waits that overlap (a foreground job and the
-command that waits on it) count once. Its notice and its stop's reason say what it
-saw rather than what it assumed: `no progress for <time>: no file change seen, no agent of its own started or ended, no
-check or approval it waited on finished; it finished <n> tool steps meanwhile` (or `no tool step`), and `; it has been
-waiting on one command for <time>` when a command still running has used up the time that doesn't count. Whether a job
-that ends counts as progress was an open question; the built-in says no, as above (a quick foreground job is no
-different from a shell tool call). An agent with agents of its own running is judged
-through them: they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and
-the planner can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it
-confirms the agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in
-`detail`) or cancels (`agents.cancel`, then `plugin.watchdog.stopped {agentId, quietMs, stalledAt}` on the run's
-stream: the one message). Progress clears its notice; a notice that went some other way is raised again while the agent
-stays quiet, but never over a notice of the kernel's (`idle`, `spinning`, `failing`, …) while that one shows: the stop
-still comes. An agent whose work never shows as files changing isn't judged at all: a reviewer (`contract.review`), a
-report-only agent (`contract.report`) and an orchestrate agent (`toolMode: orchestrate`) are never checkpointed, so the
-watchdog can't see their progress (the kernel's own notices still watch their process); the built-in asks the kernel
-once per agent, when the agent is first due (`src/plugins/services.ts` `showsFileChanges`, a kernel helper outside
-`ctx`, as `skill-orchestration` reads the kernel's record). What it knows of each agent is in its daemon storage
+Tool calls (`step`), the activity line, a job's output and a job's end are not progress: a job, in the foreground or the
+background, is a command like any other, and what it leads to (files changing, a hand-back) is. While it waits on
+something its clock doesn't run, and the time it waited doesn't count when the wait ends: a job (`job.changed` `started`
+to `ended`), a verification, an approval, being paused, or a foreground command (from its start, while `worked` keeps
+saying it runs; once it isn't said for `PROGRESS_SIGNAL_MS` it has ended), the last for at most `stalledAfterMs` in all
+between two signs of progress, however many commands, so a command that hangs, or one run again and again (a poll), is
+still judged. Waits that overlap (a foreground job and the command that waits on it) count once. Its notice and its
+stop's reason say what it saw rather than what it assumed: `no progress for <time>: no file change seen, no agent of its
+own started or ended, no check or approval it waited on finished; it finished <n> tool steps meanwhile` (or `no tool
+step`), and `; it has been waiting on one command for <time>` when a command still running has used up the time that
+doesn't count. Whether a job that ends counts as progress was an open question; the built-in says no, as above (a quick
+foreground job is no different from a shell tool call). An agent with agents of its own running is judged through them:
+they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and the planner
+can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it confirms the
+agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in `detail`) or
+cancels (`agents.cancel`, then `plugin.watchdog.stopped {agentId, quietMs, stalledAt}` on the run's stream: the one
+message). Progress clears its notice; a notice that went some other way is raised again while the agent stays quiet, but
+never over a notice of the kernel's (`idle`, `spinning`, `failing`, …) while that one shows: the stop still comes. An
+agent whose work never shows as files changing isn't judged at all: a reviewer (`contract.review`), a report-only agent
+(`contract.report`) and an orchestrate agent (`toolMode: orchestrate`) are never checkpointed, so the watchdog can't see
+their progress (the kernel's own notices still watch their process); the built-in asks the kernel once per agent, when
+the agent is first due (`src/plugins/services.ts` `showsFileChanges`, a kernel helper outside `ctx`, as
+`skill-orchestration` reads the kernel's record). What it knows of each agent is in its daemon storage
 (`agents/<runId>/<agentId>`), with the time of its last look (`clock`): after a restart the time the daemon was down is
 added to every agent's clock, so downtime never counts as an agent's quiet.
 
@@ -2167,7 +2167,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
 | 1.0.37 | 2026-11-07 | From the review of §17.2 step 9: a secret's reference falls back to the schema's `default` for a built-in only (§10.3): a user's or a project's plugin named any of the daemon's variables in its own manifest (`env:GITHUB_TOKEN`) and got its value in `SessionOpened.secrets`, past §9.2's filter; the host's `secret` option gets the plugin's `source` (additive); `capcomd plugins trust` shows such a secret as unset. An out-of-process plugin's exit kills what is left of its process group, as a kill does, so a helper it started can't outlive its token or hold what the next start needs (§9.2); §9.2 says, after §6.1, that a process plugin's gates judge only what the daemon runs. The client library forgets observe calls' deadlines (§9.8). No hook, seam, route or contract shape changes. |
-| 1.0.38 | 2026-11-07 | The watchdog's progress from real activity (§16.4, the live run's L3): `agent.changed` `worked {files, command, at}` (additive; no event in the run's log, never replayed, §6.6.8) from the agent's runner at most once a supervisor heartbeat: its checkout's files changed (the supervisor fingerprints the working tree from `git status` and each changed path's size and time at each heartbeat for an agent whose work is checkpointed, writing nothing to the repository, less often in a slow checkout), a foreground shell command running since when (`AgentEvent.commands`, additive, §7.3); the built-in counts `worked {files}` as progress, holds its clock while a foreground command runs (at most `stalledAfterMs` per command; a turn's end ends its commands) and while a job runs (overlapping waits count once), and no longer counts a job's end as progress (the time it ran doesn't count instead; the open question decided); its notice and stop say what it saw (`no file change seen`, the tool steps it finished, a command it waits on); a `stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`) is warned about by `capcomd setup` and in its log, not refused. |
+| 1.0.38 | 2026-11-07 | The watchdog's progress from real activity (§16.4, the live run's L3): `agent.changed` `worked {files, command, at}` (additive; no event in the run's log, never replayed, §6.6.8) from the agent's runner at most once a supervisor heartbeat: its checkout's files changed (the supervisor fingerprints the working tree from `git status` and each changed path's size and time at each heartbeat for an agent whose work is checkpointed, writing nothing to the repository, less often in a slow checkout), a foreground shell command running since when (`AgentEvent.commands`, additive, §7.3); the built-in counts `worked {files}` as progress, holds its clock while a foreground command runs (at most `stalledAfterMs` of commands between two signs of progress, so a hung or repeated command is still judged; a turn's end ends its commands) and while a job runs (overlapping waits count once), and no longer counts a job's end as progress (the time it ran doesn't count instead; the open question decided); its notice and stop say what it saw (`no file change seen`, the tool steps it finished, a command it waits on); a `stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`) is warned about by `capcomd setup` and in its log, not refused. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
