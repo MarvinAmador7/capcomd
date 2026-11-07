@@ -16,6 +16,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, read
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { reapUnder } from "./reap";
 
 const { values: a } = parseArgs({
   options: {
@@ -32,6 +33,8 @@ if (a.analyze) { report(resolve(a.analyze)); process.exit(0); }
 const PORT = Number(a.port);
 // The engine takes the port, the next one and port+10: keep two evals at least 20 apart.
 if ([6420, 6421, 6430].some((p) => [PORT, PORT + 1, PORT + 10].includes(p))) throw new Error("6420 is the user's daemon: pick another --port");
+// The folder is deleted at the end and whatever runs from it is killed: never one that holds anything already.
+if (a.work && existsSync(a.work) && readdirSync(a.work).length) throw new Error(`--work ${a.work} isn't empty: the eval deletes its work folder at the end, so give it a new one`);
 const WORK = a.work ? resolve(a.work) : mkdtempSync(join(process.env.CAPCOMD_EVAL_TMP ?? tmpdir(), "capcomd-eval-"));
 mkdirSync(WORK, { recursive: true });
 const log = (s: string) => console.error(`[eval ${a.ref ?? "checkout"}] ${s}`);
@@ -146,7 +149,7 @@ const probe = spawnSync("bun", [join(ROOT, "tests", "helpers", "ready-probe.ts")
 if (probe.status !== 0) {
   stopAll();
   await new Promise((r) => setTimeout(r, 3000));
-  spawnSync("sh", ["-c", `ps -axo pid=,command= | grep -F ${JSON.stringify(WORK)} | grep -v grep | awk -v me=$$ '$1 != me {print $1}' | xargs kill -9 2>/dev/null || true`]);
+  reapUnder(WORK);
   if (!a.keep) rmSync(WORK, { recursive: true, force: true });
   throw new Error(`engine not ready: ${probe.stderr}`);
 }
@@ -196,8 +199,9 @@ report(WORK);
 // ── 7. cleanup ───────────────────────────────────────────────────────────────────────────────────
 stopAll();
 await new Promise((r) => setTimeout(r, 3000));
-// The engine's own child (rivet-engine) and any scripted agent still running, by their scratch paths.
-spawnSync("sh", ["-c", `ps -axo pid=,command= | grep -F ${JSON.stringify(WORK)} | grep -v grep | awk -v me=$$ '$1 != me {print $1}' | xargs kill -9 2>/dev/null || true`]);
+// The engine's own child (rivet-engine) and any scripted agent still running, by their scratch paths (not this process,
+// whose command line names the folder too when --work does).
+reapUnder(WORK);
 if (!a.keep) rmSync(WORK, { recursive: true, force: true });
 else log(`kept ${WORK}`);
 process.exit(0);

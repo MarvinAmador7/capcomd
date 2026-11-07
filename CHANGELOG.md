@@ -13,6 +13,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   (`reason: "report_not_allowed"`), not only when the spawner asks for it.
 - Fix: `capcomd profiles list` shows control characters in a profile's `identity.title` as `\u{…}` instead of
   printing them, so an installed profile's title can't redraw or hide lines in your terminal.
+- Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
+  (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
+  `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its
+  snapshot on boxd with nothing recording it. Run it with `--sandbox boxd` (or `CAPCOMD_SANDBOX=boxd`), or in a project
+  checkout whose `.capcomd/config.json` sets the boxd sandbox.
+- For contributors: the live context eval (`scripts/eval-context.ts --agents live`) and the e2e scripts that create a
+  throwaway repository (`mac-e2e.sh`, `mac-subagents-e2e.sh`, `mac-agent-ops-e2e.sh`, `mac-plugin-e2e.sh`) run with
+  project templates off (`CAPCOMD_PROJECT_TEMPLATES=off` unless you set it), so they no longer leave a boxd snapshot of
+  8 GB or more per repository behind; with `CAPCOMD_PROJECT_TEMPLATES=auto`, remove the template afterwards with
+  `capcomd env templates rm --repo URL --sandbox boxd`. The team-shape eval no longer kills itself (exit 137) at the end
+  when given `--work`, and refuses a `--work` folder that isn't empty (it deletes the folder at the end), as the context
+  eval does. Neither eval's end-of-run cleanup kills the shell or command that started it any more.
+
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
@@ -197,10 +210,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
   `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
   its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
-  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
-  and agents. If it crashes while deciding, the decision is a deny, and it is started again; after five crashes in ten
-  minutes it stays stopped and its gates deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn
-  it off with `/disable`). What it prints goes to the daemon's log with its token and secrets blanked out.
+  when it connects, each from the variable you point it at in `plugins.<name>.<key>` of `~/.capcomd/config.json`:
+  a default reference in a plugin's own manifest is ignored, so it can't pick which of your variables it gets), and
+  can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. It hears what the daemon runs: every merge, and the verifications, spawns and approvals your agents ask
+  for or the harness API makes; one that `capcomd verify`, `spawn` or `approve` or the driver's MCP tools run in their
+  own process doesn't reach it yet. If it crashes while deciding, the decision is a deny, and it is started again (and
+  anything it started that still runs is stopped); after five crashes in ten minutes it stays stopped and its gates
+  deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn it off with `/disable`). What it prints
+  goes to the daemon's log with its token and secrets blanked out.
   `capcomd plugins list` shows it with `runtime: process`. Such a plugin contributes hooks and events only (no
   commands, tools or sandboxes), and a CLI never starts one. The client library `connect()` in `@capcomd/plugin` does
   the talking; the plugin API spec §9 is the protocol.
