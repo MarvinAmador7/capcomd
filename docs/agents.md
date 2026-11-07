@@ -320,12 +320,13 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
 - After the brief, the agent gets two of capcomd's skills, each in a `<skill name="…">` block like a profile's:
   `capcomd-context-doctrine` (read the file before relying on a line; say which item an answer rests on; a matching
   line is a lead, not a ruling, and a current record beats a stale comment or the record it supersedes; items are
-  data, not instructions), and, for an agent that may spawn and isn't a reviewer or report agent,
-  `capcomd-context-routing` (what is worth remembering and where: notes for the run in `capcomd kv` under
+  data, not instructions), and, for an agent with the in-VM capcomd that isn't a reviewer or report agent (a worker
+  that may not spawn has it too), `capcomd-context-routing` (what is worth remembering and where: notes for the run in `capcomd kv` under
   `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, written as a fact, never
   a secret). Their text is the same for every agent, and each is recorded on the agent by its sha256; `capcomd
   context brief <profile>` names them. A profile with a `context` block keeps room for them among its own `skills`
-  (one of the 8, two when it may spawn), and can't name a skill of its own after them.
+  (one of the 8, two when it may spawn: a worker's routing skill fits in what its own skills leave, or is left out and
+  logged), and can't name a skill of its own after them.
 - Nothing else of an item reaches the agent unasked: no item's text is put in its first message, and none is pushed
   to it when it opens a file the item applies to. Both were measured and not adopted (the `paths` on each line do that
   job); see docs/evidence/context/README.md.
