@@ -850,7 +850,8 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
     }
     const res = await resultOf(runId, agentId);
     const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
-    // A failed agent's machine goes too (its worker retries a destroy the provider didn't answer).
+    // A failed agent's jobs settle and its machine goes too (its worker retries a destroy the provider didn't answer).
+    await endJobs(runId, agentId, "its agent failed");
     await workerOf(runId, agentId, fin.agent.epoch).drainWorker({ workerId: agentId }).catch(() => {});
     stampSpent(span, fin.agent);
     return fin.agent;
@@ -1259,8 +1260,19 @@ export async function settleAttempt(runId: string, agentId: string, epoch: numbe
 /** Ended without a push (cancelled, or a handoff finished it): release its VM when it was cancelled. */
 export async function settleEnded(runId: string, agentId: string, epoch: number): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
-  if (a.status === "cancelled") await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  if (a.status === "cancelled") {
+    await endJobs(runId, agentId, "its agent was cancelled");
+    await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  }
   return getAgentOrThrow(runId, agentId);
+}
+
+/**
+ * Plugin API §16.2 rule 4: an agent that ended for good (failed or cancelled) has its background jobs settled now, before
+ * its machine goes: killed while its machine is attached here, else `lost`; never left `running` until someone reads them.
+ */
+async function endJobs(runId: string, agentId: string, reason: string): Promise<void> {
+  await (await import("../jobs/service")).endAgentJobs(runId, agentId, reason).catch((e) => console.error(`[jobs] ${agentId}: ending its jobs: ${(e as Error)?.message ?? e}`));
 }
 
 /** Record one failed attempt (DRIVE_FAILED) and say whether to try again: the driver's rules (3 attempts, N identical
@@ -1301,8 +1313,9 @@ export async function recordAgentRunSpan(runId: string, agentId: string, started
 export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string }): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
   if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
-  // Its machine goes once it has failed (here too when an earlier settle recorded the failure but stopped before this).
-  const drain = () => workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  // Its jobs settle and its machine goes once it has failed (here too when an earlier settle recorded the failure but
+  // stopped before this).
+  const drain = async () => { await endJobs(runId, agentId, "its agent failed"); await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {}); };
   if (TERMINAL_AGENT.has(a.status)) { if (a.status === "failed") await drain(); return a; }
   const res = await resultOf(runId, agentId);
   const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });

@@ -260,8 +260,9 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
       return { ok: false, code: "children_limit", error: `children.maxTotalDescendants=${max} reached at ${a.agentId}` };
   }
   if (!x.operator && p.spec && x.childSpec) {
-    // A child's provider, auth and tool mode are its own (an orchestrator's children do the work: plugin API §16.1).
-    const w = widenings(p.spec, x.childSpec).filter((s) => !s.startsWith("provider ") && !s.startsWith("auth ") && !s.startsWith("toolMode "));
+    // A child's provider, auth and tool mode are its own (an orchestrator's children do the work: plugin API §16.1), and
+    // with its tool mode how long its job starts wait (jobs.foregroundMs, §16.2 rule 2).
+    const w = widenings(p.spec, x.childSpec).filter((s) => !s.startsWith("provider ") && !s.startsWith("auth ") && !s.startsWith("toolMode ") && !s.startsWith("jobs.foregroundMs "));
     if (w.length) return { ok: false, code: "widening", error: `child spec widens parent ${p.agentId}: ${w.join("; ")} (pass --operator to allow)` };
   }
   const avail = available(p.budget, p.spent, x.siblings);

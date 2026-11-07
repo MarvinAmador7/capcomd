@@ -4,7 +4,7 @@
 // sandbox-docker's own timer. A run's jobs (records in its kv, the agent's message) are tests/scenarios/jobs.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Candidate } from "../../packages/plugin/src/host/host";
@@ -12,6 +12,8 @@ import type { PluginContext, PluginModule } from "../../packages/plugin/src/cont
 import type { HookCall } from "../../packages/plugin/src/hooks";
 import { PluginError } from "../../packages/plugin/src/errors";
 import { launch, look, signal, tails, type JobMachine } from "../../src/jobs/machine";
+import { fitJobRecord } from "../../src/jobs/record";
+import { valueBytes } from "../../src/primitives/board";
 import { jobLimits, jobMessage, resetJobs, resumeTimers, useDaemonEvents, type JobRecord } from "../../src/jobs/service";
 import { kernelHost } from "../../src/plugins/host";
 import { useHooks } from "../../src/plugins/hooks";
@@ -91,6 +93,28 @@ describe("limits and messages", () => {
     try { expect(jobLimits(null).max).toBe(3); } finally { delete process.env.CAPCOMD_JOBS_MAX; }
   });
 
+  test("a settled record fits the kv's 64 KB: its output's tails lose their oldest part, the longer one first", () => {
+    const max = 64 * 1024;
+    const rec = (stdout: string, stderr: string) => ({ jobId: "job-fit1", plugin: null, spec: { kind: "exec", runId: "run-t", owner: { agentId: "agt-t" }, cmd: [`: ${"c".repeat(16_000)}`], label: "big" }, state: "done", startedAt: "2026-11-05T10:00:00.000Z", endedAt: "2026-11-05T10:01:00.000Z", result: { code: 0, stdout, stderr, truncated: false }, reason: null, by: "agt-t", timeoutMs: null, paramsHash: "h" });
+    // 48 KB of lines of quotes (each " is two bytes in JSON, each newline two) and 16 KB of stderr, under a 16 KB cmd.
+    const out = `${'"x"\n'.repeat(12 * 1024 - 1)}last-line\n`, err = "e".repeat(16 * 1024);
+    const big = rec(out, err);
+    expect(valueBytes(big)).toBeGreaterThan(max);
+    const fit = fitJobRecord(big, max);
+    expect(valueBytes(fit)).toBeLessThanOrEqual(max);
+    expect(valueBytes(fit)).toBeGreaterThan(max - 16);
+    expect(fit.result).toMatchObject({ code: 0, stderr: err, truncated: true });
+    expect(out.endsWith(fit.result.stdout)).toBe(true);
+    expect(fit.result.stdout).toEndWith('"x"\nlast-line\n');
+    expect(fit.spec).toEqual(big.spec);
+    // One that fits is stored as it is; a cut never leaves half a character.
+    const small = rec("ok\n", "");
+    expect(fitJobRecord(small, max)).toBe(small);
+    const emoji = fitJobRecord(rec("😀".repeat(20_000), ""), max);
+    expect(valueBytes(emoji)).toBeLessThanOrEqual(max);
+    expect(emoji.result.stdout).toMatch(/^(😀)+$/u);
+  });
+
   test("the message an agent gets says how its job ended, with the end of its output", () => {
     const r = { jobId: "job-k1", plugin: null, spec: { kind: "exec", runId: "run-t", owner: { agentId: "agt-t" }, cmd: ["npm test"], label: "tests" }, state: "failed", startedAt: "2026-11-05T10:00:00.000Z", endedAt: "2026-11-05T10:00:42.000Z", result: { code: 1, stdout: `${"x".repeat(9000)}\n1 failing\n`, stderr: "", truncated: false }, reason: null, by: "agt-t", timeoutMs: null, paramsHash: "h" } as JobRecord;
     const text = jobMessage(r);
@@ -102,10 +126,10 @@ describe("limits and messages", () => {
 });
 
 /** A test plugin that listens to job.changed and hands its context out. */
-function recorder(told: HookCall<"job.changed">[], got: (ctx: PluginContext) => void): Candidate {
+function recorder(told: HookCall<"job.changed">[], got: (ctx: PluginContext) => void, name = "tick-test"): Candidate {
   return {
     source: "builtin",
-    manifest: { schema: "capcomd.plugin/v1", name: "tick-test", version: "1.0.0", description: "Listens to jobs.", apiVersion: 1, engines: { capcomd: ">=0.0.0" }, entry: { runtime: "in-process", module: "./index.ts" }, scopes: ["read", "steer"], contributes: { hooks: { "job.changed": {} } } },
+    manifest: { schema: "capcomd.plugin/v1", name, version: "1.0.0", description: "Listens to jobs.", apiVersion: 1, engines: { capcomd: ">=0.0.0" }, entry: { runtime: "in-process", module: "./index.ts" }, scopes: ["read", "steer"], contributes: { hooks: { "job.changed": {} } } },
     module: { activate(ctx) { got(ctx); ctx.hooks.on("job.changed", (call) => { told.push(call); }); } } as PluginModule<never>,
   };
 }
@@ -163,6 +187,41 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     expect(await ctx.jobs.start(spec, { key: "hourly" })).toMatchObject({ jobId: a.jobId, state: "killed" });
     await host.stop();
   }, 20_000);
+
+  test("one owner (§16.2 rule 8): a plugin can't get, wait on or cancel another plugin's timer, nor list it", async () => {
+    let a!: PluginContext, b!: PluginContext;
+    const host = kernelHost({ log: false, jobs: true });
+    useHooks(host.hooks);
+    await host.start([recorder([], (c) => { a = c; }, "plugin-a"), recorder([], (c) => { b = c; }, "plugin-b")]);
+    const spec = { kind: "timer", runId: null, owner: { plugin: true }, label: "hourly", everyMs: 3_600_000 } as const;
+    const theirs = await b.jobs.start(spec, { key: "hourly" });
+    const ours = await a.jobs.start(spec, { key: "hourly" });
+    expect(ours.jobId).not.toBe(theirs.jobId);
+    // To plugin A, B's timer is a job that doesn't exist: the same answer as an id nobody made.
+    const missing = { code: "not_found", message: `job ${theirs.jobId} not found` };
+    await expect(a.jobs.get(theirs.jobId)).rejects.toMatchObject(missing);
+    await expect(a.jobs.cancel(theirs.jobId, "mine now")).rejects.toMatchObject(missing);
+    await expect(a.jobs.wait(theirs.jobId, { timeoutMs: 100 })).rejects.toMatchObject(missing);
+    await expect(a.jobs.get("job-nobodymadethis")).rejects.toMatchObject({ code: "not_found" });
+    expect((await a.jobs.list({})).map((j) => j.jobId)).toEqual([ours.jobId]);
+    // B's timer runs on, and B still reaches it; A reaches its own.
+    expect(await b.jobs.get(theirs.jobId)).toMatchObject({ plugin: "plugin-b", state: "running" });
+    expect(await a.jobs.cancel(ours.jobId, "done")).toMatchObject({ state: "killed", reason: "by the plugin-a plugin: done" });
+    expect(await b.jobs.cancel(theirs.jobId, "done")).toMatchObject({ state: "killed", reason: "by the plugin-b plugin: done" });
+    await host.stop();
+  });
+
+  test("a run job's pointer says when it settled and goes a day later (§16.2 rule 6)", async () => {
+    const dir = join(stateDir(), "jobs");
+    mkdirSync(dir, { recursive: true });
+    const old = join(dir, "job-prunedpointer1.run"), recent = join(dir, "job-keptpointer1.run");
+    writeFileSync(old, JSON.stringify({ runId: "run-gone", kind: "exec", endedAt: Date.now() - 25 * 3_600_000 }));
+    writeFileSync(recent, JSON.stringify({ runId: "run-gone", kind: "exec", endedAt: Date.now() - 3_600_000 }));
+    await resumeTimers();
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(recent)).toBe(true);
+    rmSync(recent);
+  });
 
   test("checked: a timer fires at most once a second, an exec job is an agent's, a run-owned one isn't made yet", async () => {
     let ctx!: PluginContext;

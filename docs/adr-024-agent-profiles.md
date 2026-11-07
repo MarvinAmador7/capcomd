@@ -182,7 +182,10 @@ treats a distribution-owned `SOUL.md` that way).
   `allowedChildProfiles` entry is no wider than its parent (`widenings`). That stays, on resolved specs. A profile
   that `extends` another may widen it (a lead is a worker that can also spawn) because `extends` is authoring, not
   delegation; only the parent → child spawn relation is narrow-only. This distinction is the main thing to get right
-  in review.
+  in review. The `jobs` block is limits like `limits` (spec §16.2 rule 2): an override or a `profile.resolved` patch
+  may lower `max`, `foregroundMs` or `afterTurnMs` (`--set jobs.max=2` keeps the block's other values), never raise
+  one the profile sets or unset it; a spawned profile is held to its spawner's `max` and `afterTurnMs`, while its
+  `foregroundMs` is its own, as its tool mode is (an orchestrate planner waits 5 s, its workers 60 s).
 - **Per-run and per-spawn overrides** keep today's mechanism: `--set k=v` and `--overrides` produce an `Overrides`
   that `applyOverrides` merges and checks (`profiles.ts`); the ref encoding `name;ov=…[;op=1]` is unchanged, so the
   planner → worker carry (`encodeAgentRef`/`decodeAgentRef`) needs no change. Keys use the v2 paths

@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: an agent that fails now has its background jobs (`capcomd job start`) stopped and recorded as ended when it
+  fails, as a cancelled one's are, instead of showing as running until something reads them. A job with a lot of
+  output keeps a record within the run's 64 KB limit (the oldest output is cut first), and `capcomd job output` on a
+  finished job says when it was cut.
+- **Breaking:** a profile's `jobs` block (`max`, `foregroundMs`, `afterTurnMs`) is a limit like `limits`. An override
+  (`--set jobs.max=2`, which now keeps the block's other values) may lower one, but raising or unsetting one the
+  profile sets is refused unless you pass `--operator`. A profile in another's `children.allowedChildProfiles` may not
+  allow more jobs at once (`max`) or longer ones (`afterTurnMs`) than the profile that spawns it (its `foregroundMs`
+  is its own); `capcomd profiles validate` names one that does. Lower the child's values, or raise the spawner's.
+- Changed: plugins only reach their own jobs and the jobs of a run's agents: `ctx.jobs.get`, `wait` and `cancel` on
+  another plugin's job answer `not_found`, and `ctx.jobs.list` leaves those out.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
