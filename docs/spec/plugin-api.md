@@ -1367,12 +1367,15 @@ admitted either.
 What an agent proposes for a durable layer (a candidate lesson, §6.6.8; an item lint checks, ADR-025 §5.3) is not
 redacted but **refused** when it holds a secret (`src/context/scan.ts`): a redacted text could still hold a shorter
 secret. The scan is seeded with every secret value the kernel puts in the run (the agent providers' credentials, the
-plugins' secrets of §10.3, every variable of the run's environment named like a credential, the in-VM tokens' signing
-key, the forge's credential for the run's repository), then the redactor's shapes and a few more (AWS, Slack, boxd and
-Google keys, a private key, a URL with a password), a long random-looking string, and the paths credentials are kept
-in (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`), over the text with invisible characters dropped and look-alikes
-folded (NFKC, every dash a hyphen). Every string a candidate keeps is scanned, and a field name it ignores is repeated
-only when it holds no secret. Its reasons are the kernel's words, never the matched text.
+plugins' secrets of §10.3, the built-ins' and every reference the user sets for any other plugin, every variable of the run's environment named
+like a credential, the in-VM tokens' signing key, the forge's credential for the run's repository), then the
+redactor's shapes and a few more (AWS, Slack, boxd, GitLab, npm, Hugging Face and Google keys, a private key, a URL
+with a password), a long random-looking string, and the paths credentials are kept in (`.env*`, `*.pem`, `secrets/`,
+`~/.aws`, `~/.ssh`), over the text with look-alikes folded (NFKC, every dash a hyphen) and invisible characters
+(every default-ignorable one: format characters, variation selectors, Hangul fillers, tag characters) and combining
+marks dropped; a run's secret is also found with spaces or line breaks put into it. Every string a candidate keeps is
+scanned, and a field name it ignores is repeated only when it holds no secret. Its reasons are the kernel's words,
+never the matched text. Lint that can't read the whole directory (more than 2000 files) fails rather than passes.
 
 ### 11.6 Isolation
 
@@ -2138,6 +2141,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
 | 1.0.37 | 2026-11-07 | From the review of §17.2 step 9: a secret's reference falls back to the schema's `default` for a built-in only (§10.3): a user's or a project's plugin named any of the daemon's variables in its own manifest (`env:GITHUB_TOKEN`) and got its value in `SessionOpened.secrets`, past §9.2's filter; the host's `secret` option gets the plugin's `source` (additive); `capcomd plugins trust` shows such a secret as unset. An out-of-process plugin's exit kills what is left of its process group, as a kill does, so a helper it started can't outlive its token or hold what the next start needs (§9.2); §9.2 says, after §6.1, that a process plugin's gates judge only what the daemon runs. The client library forgets observe calls' deadlines (§9.8). No hook, seam, route or contract shape changes. |
+| 1.0.38 | 2026-11-07 | Review of capture and lint (ADR-025 step 2), §11.5: the seeded scan drops every default-ignorable character and combining marks (not only format characters) and finds a run's secret with spaces or line breaks put into it; it is seeded with every secret reference the user sets for a plugin that isn't built in (`plugins` in the user's config, a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable; such a plugin's own default isn't followed, per 1.0.37) as well as the built-ins'; GitLab, npm, Hugging Face and Google OAuth token shapes. Lint fails, never passes, on a directory with more files than it reads (2000), and `--base` takes a ref, never an option. No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

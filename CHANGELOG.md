@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
+  check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
+  two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
+  `~/.capcomd/config.json`, or a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable) are checked for as well as the built-ins', and
+  so are GitLab, npm, Hugging Face and Google OAuth tokens. `capcomd context lint` now fails on a
+  `.capcomd/context/` with more than 2000 files (it reads that many) instead of passing without reading the rest.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its
