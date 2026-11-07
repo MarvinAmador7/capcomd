@@ -211,10 +211,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
   `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
   its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
-  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
-  and agents. If it crashes while deciding, the decision is a deny, and it is started again; after five crashes in ten
-  minutes it stays stopped and its gates deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn
-  it off with `/disable`). What it prints goes to the daemon's log with its token and secrets blanked out.
+  when it connects, each from the variable you point it at in `plugins.<name>.<key>` of `~/.capcomd/config.json`:
+  a default reference in a plugin's own manifest is ignored, so it can't pick which of your variables it gets), and
+  can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. It hears what the daemon runs: every merge, and the verifications, spawns and approvals your agents ask
+  for or the harness API makes; one that `capcomd verify`, `spawn` or `approve` or the driver's MCP tools run in their
+  own process doesn't reach it yet. If it crashes while deciding, the decision is a deny, and it is started again (and
+  anything it started that still runs is stopped); after five crashes in ten minutes it stays stopped and its gates
+  deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn it off with `/disable`). What it prints
+  goes to the daemon's log with its token and secrets blanked out.
   `capcomd plugins list` shows it with `runtime: process`. Such a plugin contributes hooks and events only (no
   commands, tools or sandboxes), and a CLI never starts one. The client library `connect()` in `@capcomd/plugin` does
   the talking; the plugin API spec §9 is the protocol.
