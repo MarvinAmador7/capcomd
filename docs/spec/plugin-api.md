@@ -192,7 +192,9 @@ at `ctx.context.register`, so the later one in load order fails activation).
 app and the MCP server can describe a plugin without loading it (VS Code's `contributes`, research §4). The code MAY
 register only what the manifest declares; a registration not declared is `conflict` and fails activation (§5.4). A
 declaration the code never registers is a warning in `capcomd plugins validate --strict` and an error in the conformance
-suite (§14.1).
+suite (§14.1), and the host logs it at each activation (`declared but never registered`): a listener that matters only
+under some settings is registered anyway and does nothing without them, as the built-ins' `job.changed` listeners do
+(forge-github with no `sourceRepos`, source-schedule with no schedules, sandbox-boxd with the template refresh off).
 
 | Key | Item | Registered through |
 |---|---|---|
@@ -786,7 +788,8 @@ When `operator` is true the decisions are recorded and bypassed (§6.5). Once pe
 `merge.requested` + `merge.gating` pair (decision: one gate under the lock; a cheap policy denial a few hundred ms
 later costs nothing that matters). It fires before the forge's path is chosen: `fastPath` says the merge has a verified
 commit to try the fast path with, and `sha` and `target.sha` are that commit and the target it was verified on (empty
-without one). A held merge carries the hold (`heldBy {plugin, reason, holdId?}`) on its record and its approval (the
+without one). A held merge carries the hold (`heldBy {plugin, reason, holdId?}`) on its record, with the holds a person
+approved for it (`approvedHolds`, each added when the person approves it; `heldBy` stays the last one), and its approval (the
 question and `subject.heldBy`, the park event, the elicitation prompt), so the person sees the plugin's reason, and the
 files the merge changes (`subject.files`, `filesTotal`, `added`, `removed`), read as a protected target's park reads
 them. A person's approval of that hold satisfies **only that hold**: the same plugin and, when the hold carries a
@@ -1750,7 +1753,10 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    combined code without executing anything itself (in-VM `verify` takes only a child, and a host verify of the goal
    branch onto itself runs no checks). Rules: the commit is the branch's tip when asked (`result.commit`); the command is
    an operator-named check (`--check`), else the one pinned to the agent checked, else the run's (the repository's command; with none,
-   the run's one named check, and with several the caller must name one; an in-VM call can't pass `--checks`); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
+   the run's one named check, and with several the caller must name one; an in-VM call can't pass `--checks`; a verify
+   takes its command the same way, the run's one named check recorded as its `check` and re-run by its merge, so a run
+   whose project names one check in `run.checks` never verifies on "no test command configured", but with several it
+   keeps the repository's command, as an unpinned child's in-VM verify can't name one); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
    run once and a later one gets the record (`--key` checks a commit again); a tree that already passed the same
    command in the run isn't run again (`checks.where: "reused"`); the check's sandbox takes a machine slot where the
    run's place has a cap (§16.2 rule 3; `src/providers/capacity.ts` `holdSlot`), waiting with the agents, and gives up
@@ -2132,6 +2138,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
+| 1.0.37 | 2026-11-07 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
