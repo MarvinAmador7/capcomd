@@ -112,7 +112,9 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `identity.persona` is checked but doesn't change what an agent does yet; `capcomd profiles validate` lists it when a
   profile sets it. `context` (with `memory` read as its old name) does: see "Project memory" below. `jobs`
   (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
-  field does in `agents.json`.
+  field does in `agents.json`. They are limits like `limits`: an override (`--set jobs.max=2`, which keeps the
+  block's other values) may lower one but not raise or unset one the profile sets (without `--operator`), and a
+  profile in `children.allowedChildProfiles` may not either.
 - `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
   untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
   (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says

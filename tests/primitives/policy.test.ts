@@ -52,6 +52,14 @@ test("child spec may only narrow the parent unless operator; terminal parent can
   expect(checkSpawn(x)).toMatchObject({ ok: false, code: "widening" });
   expect(checkSpawn({ ...x, operator: true })).toMatchObject({ ok: true });
   expect(checkSpawn({ ...x, parent: { ...p, status: "cancelled" } })).toMatchObject({ ok: false, code: "parent_terminal" });
+  // The jobs block is limits too (plugin API §16.2 rule 2); how long a job start waits is the child's own, as its tool
+  // mode is (an orchestrate planner's 5 s isn't its workers').
+  const planner = row("sup-a", { ...sup, toolMode: "orchestrate", jobs: { max: 4, foregroundMs: 5000 } } as AgentSpec);
+  const under = (jobs: AgentSpec["jobs"]) => checkSpawn({ ...x, parent: planner, ancestors: [planner], childSpec: { ...coder, jobs } as AgentSpec });
+  expect(under({ max: 2 })).toMatchObject({ ok: true });
+  expect(under({ max: 4, foregroundMs: 60_000 })).toMatchObject({ ok: true });
+  expect(under({ max: 8 })).toMatchObject({ ok: false, code: "widening", error: expect.stringContaining("jobs.max 8 > 4") });
+  expect(under(undefined)).toMatchObject({ ok: false, code: "widening", error: expect.stringContaining("jobs.max unset (would lift 4)") });
 });
 
 test("stable ids and params hash", () => {
