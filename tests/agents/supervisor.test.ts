@@ -8,7 +8,7 @@ import { Git } from "../../src/merge/git";
 
 const SUPERVISOR = new URL("../../src/agents/supervisor.mjs", import.meta.url).pathname;
 
-async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boolean; jobs?: boolean } = {}) {
+async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boolean; jobs?: boolean; reportTree?: true | "progress"; env?: Record<string, string> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-sup-"));
   const repo = join(dir, "repo");
   const g = new Git(dir);
@@ -24,10 +24,11 @@ async function setup(agent: string, o: { checkpointEveryMs?: number; input?: boo
     heartbeatMs: 150, checkpointEveryMs: o.checkpointEveryMs ?? 400,
     ...(o.input ? { input: { prompt: join(dir, "prompt.txt"), inbox: join(dir, "inbox.jsonl") } } : {}),
     ...(o.jobs ? { jobs: join(dir, "jobs") } : {}),
+    ...(o.reportTree ? { reportTree: o.reportTree } : {}),
   }));
   if (o.input) writeFileSync(join(dir, "prompt.txt"), "do the thing");
   const run = async () => {
-    const p = Bun.spawn(["node", SUPERVISOR, join(dir, "sup.json")], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawn(["node", SUPERVISOR, join(dir, "sup.json")], { cwd: repo, stdout: "pipe", stderr: "pipe", ...(o.env ? { env: { ...process.env, ...o.env } } : {}) });
     const code = await p.exited;
     const reports = readFileSync(outbox, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     return { code, reports };
@@ -64,6 +65,28 @@ test("a commit by the agent is checkpointed at once, not at the next interval", 
   const cps = reports.filter((x) => x.type === "checkpoint");
   expect(cps.map((c) => c.reason)).toEqual(["commit"]);
   expect((await s.r.ok(["rev-parse", `${cps[0].sha}^`])).trim()).toBe((await s.r.ok(["rev-parse", "HEAD"])).trim());
+}, 30_000);
+
+test("progress (plugin API §16.4): heartbeats carry the workspace's tree, a new one as files change; less often where hashing is slow", async () => {
+  const s = await setup(`sleep 0.5; echo two >> a.txt; sleep 1.5; echo new > b.txt; sleep 1.5`, { checkpointEveryMs: 0, reportTree: "progress" });
+  const { reports } = await s.run();
+  // (A heartbeat 150 ms apart may skip it: hashing this small checkout takes more than a twentieth of that.)
+  const trees = reports.filter((x) => x.type === "heartbeat" && typeof x.tree === "string").map((x) => x.tree);
+  // HEAD's, then with a.txt changed, then with b.txt too: what the runner reads as its files changing.
+  expect([...new Set(trees)]).toHaveLength(3);
+  // A git that takes 0.2 s a call: hashing takes over half a second, so the next one waits 20 times that.
+  const bin = join(s.dir, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "git"), `#!/bin/sh\nsleep 0.2\nexec ${Bun.which("git")} "$@"\n`, { mode: 0o755 });
+  const slow = await setup(`sleep 2`, { checkpointEveryMs: 0, reportTree: "progress", env: { PATH: `${bin}:${process.env.PATH}` } });
+  const beats = (await slow.run()).reports.filter((x) => x.type === "heartbeat");
+  expect(beats.length).toBeGreaterThanOrEqual(3);
+  expect(beats.filter((x) => typeof x.tree === "string")).toHaveLength(1);
+  // `reportTree: true` (no change in the workspace, ADR-019 §2) hashes it at every heartbeat, however slow.
+  const every = await setup(`sleep 2`, { checkpointEveryMs: 0, reportTree: true, env: { PATH: `${bin}:${process.env.PATH}` } });
+  const all = (await every.run()).reports.filter((x) => x.type === "heartbeat");
+  expect(all.length).toBeGreaterThanOrEqual(2);
+  expect(all.every((x) => typeof x.tree === "string")).toBe(true);
 }, 30_000);
 
 test("an untouched workspace makes no checkpoint", async () => {

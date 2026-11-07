@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: the watchdog no longer flags an agent that is working. It used to see an agent's files change only at its
+  checkpoints (every 10 minutes), so with a shorter `stalledAfterMs` it flagged agents in the middle of editing, and it
+  flagged agents waiting on a long command. Now an agent's files changing counts within about 30 seconds, and the time
+  an agent spends waiting on a foreground command (a test run, a build) doesn't count against it, up to
+  `stalledAfterMs` for one command, so a command that hangs is still caught. A job ending no longer counts as progress
+  by itself, but the time it ran doesn't count either. The stalled notice and the stop now say what the watchdog saw:
+  `no file change seen`, how many tool steps the agent finished meanwhile, and a command it has been waiting on.
+  `capcomd setup` (and `setup check`) warns when `plugins.watchdog.stalledAfterMs` is under a minute, since progress
+  can take that long to show.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

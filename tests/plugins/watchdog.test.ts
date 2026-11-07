@@ -1,9 +1,11 @@
 // The watchdog built-in (docs/spec/plugin-api.md §15.5, §16.4) on the test kit's context, with the kernel's services
-// faked and the clock set by the test: what counts as progress (files changed, an agent under it spawned or ended, the
-// end of a job, verification or approval it waited on) and what doesn't (tool calls), `stalled` at stalledAfterMs and a
-// stop at stopAfterMs (both from the last progress), progress clearing the notice, waiting holding the clock, an agent
-// with agents of its own judged through them, its memory across a restart (the time the daemon was down doesn't count),
-// its one timer, and its config refused when the stop comes before the notice. The same against a daemon:
+// faked and the clock set by the test: what counts as progress (files changed, as a checkpoint or as the runner's
+// `worked`, an agent under it spawned or ended, the end of a verification or approval it waited on) and what doesn't
+// (tool calls, a job's end), `stalled` at stalledAfterMs and a stop at stopAfterMs (both from the last progress) saying
+// what it saw, progress clearing the notice, waiting (a job, a check, an approval, a foreground command, up to a limit
+// for a command) holding the clock, an agent with agents of its own judged through them, its memory across a restart
+// (the time the daemon was down doesn't count), its one timer, its config refused when the stop comes before the notice
+// and warned about when the notice would come before progress can show. The same against a daemon:
 // tests/scenarios/watchdog.test.ts.
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -14,7 +16,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import type { Agent, Job, JobSpec, Principal } from "../../packages/plugin/src/shapes";
 import type { AgentChange } from "../../packages/plugin/src/hooks";
 import type { StorageService } from "../../packages/plugin/src/context";
-import { manifest, plugin, stalledDetail, watchdog, watchdogPlugin, type WatchdogConfig, type WatchdogOptions } from "../../src/plugins/watchdog";
+import { configWarning, manifest, plugin, stalledDetail, watchdog, watchdogPlugin, type WatchdogConfig, type WatchdogOptions } from "../../src/plugins/watchdog";
 import { pluginStore, storageService } from "../../src/plugins/storage";
 
 const MIN = 60_000;
@@ -72,6 +74,8 @@ async function boot(k: ReturnType<typeof kernel>, o: { cfg?: Partial<WatchdogCon
 const ckpt = (): AgentChange => ({ kind: "checkpointed", files: 1, commit: "a".repeat(40), at: new Date(now).toISOString() });
 const step = (): AgentChange => ({ kind: "step", step: { kind: "Bash", n: 1, startedAt: new Date(now).toISOString(), endedAt: new Date(now).toISOString() } });
 const started = (): AgentChange => ({ kind: "started", machine: null, attempt: 1 });
+/** The runner's report: its files changed, and/or it waits on a command started at `commandAt` (ms from T0). */
+const worked = (o: { files?: boolean; commandAt?: number } = {}): AgentChange => ({ kind: "worked", files: o.files ?? false, command: o.commandAt === undefined ? null : { since: new Date(T0 + o.commandAt).toISOString() }, at: new Date(now).toISOString() });
 const kinds = (k: ReturnType<typeof kernel>) => k.notices.map((n) => `${n.agentId}:${n.notice?.kind ?? "cleared"}`);
 
 describe("the watchdog", () => {
@@ -85,8 +89,9 @@ describe("the watchdog", () => {
     for (const m of [10, 15, 19]) { at(m * MIN); await changed(a, step()); await tick(); }
     expect(k.notices).toEqual([]);
     at(20 * MIN); await tick();
-    expect(k.notices).toEqual([{ agentId: "agt-w1", notice: { kind: "stalled", detail: stalledDetail(15 * MIN, CFG) } }]);
-    expect(k.notices[0]!.notice!.detail).toBe("no progress for 15 min (no file changed; no agent, job, check or approval of its own finished); the watchdog stops it after 45 min without progress");
+    expect(k.notices).toEqual([{ agentId: "agt-w1", notice: { kind: "stalled", detail: stalledDetail(15 * MIN, CFG, { steps: 3, commandMs: null }) } }]);
+    // What it saw: no progress, and the three steps it took meanwhile.
+    expect(k.notices[0]!.notice!.detail).toBe("no progress for 15 min: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished 3 tool steps meanwhile; the watchdog stops it after 45 min without progress");
     // Raised once, however long it stays quiet.
     at(21 * MIN); await tick();
     expect(k.notices).toHaveLength(1);
@@ -101,7 +106,7 @@ describe("the watchdog", () => {
     at(66 * MIN); await tick();
     expect(k.cancels).toEqual([]);
     at(67 * MIN); await tick();
-    expect(k.cancels).toEqual([{ agentId: "agt-w1", reason: "no progress for 45 min (no file changed; no agent, job, check or approval of its own finished)" }]);
+    expect(k.cancels).toEqual([{ agentId: "agt-w1", reason: "no progress for 45 min: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished no tool step meanwhile" }]);
     expect(fake.emitted()).toEqual([{ type: "plugin.watchdog.stopped", stream: RUN, data: { agentId: "agt-w1", quietMs: 45 * MIN, stalledAt: new Date(T0 + 37 * MIN).toISOString() } }]);
     // It ends (cancelled): forgotten; nothing more about it.
     await changed({ ...a, status: "cancelled" }, { kind: "ended", status: "cancelled", result: null });
@@ -132,7 +137,7 @@ describe("the watchdog", () => {
     expect(kinds(k)).toEqual(["agt-c2:stalled", "agt-p:stalled"]);
   });
 
-  test("waiting on a job, a verification, an approval or a paused agent under it holds the clock; their end is progress", async () => {
+  test("waiting on a job, a verification, an approval or a paused agent under it holds the clock; a check's or approval's end is progress", async () => {
     const k = kernel();
     const p = k.agent("agt-p"), c = k.agent("agt-c", "agt-p");
     const { changed, tick, fake } = await boot(k);
@@ -203,7 +208,7 @@ describe("the watchdog", () => {
     const clock = k.timers[0]!;
     await fake.fire("job.changed", { job: { jobId: clock.jobId, plugin: "watchdog", spec: clock.spec, state: "running", startedAt: new Date(T0).toISOString(), endedAt: null, result: null, reason: null }, change: { kind: "fired", n: 1 } });
     for (let i = 0; i < 50 && !k.notices.length; i++) await Bun.sleep(5);
-    expect(k.notices).toEqual([{ agentId: "agt-z1", notice: { kind: "stalled", detail: "no progress for 500 min (no file changed; no agent, job, check or approval of its own finished)" } }]);
+    expect(k.notices).toEqual([{ agentId: "agt-z1", notice: { kind: "stalled", detail: "no progress for 500 min: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished no tool step meanwhile" } }]);
     expect(k.cancels).toEqual([]);
     await fake.dispose();
     const bad = testkit.fakeContext(manifest, { ...CFG, stopAfterMs: 10 * MIN }, { services: k.services as never });
@@ -254,6 +259,92 @@ describe("the watchdog", () => {
     expect(kinds(k)).toEqual(["agt-n1:stalled"]);
     at(45 * MIN); await tick();
     expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-n1"]);
+  });
+
+  test("its files changing between checkpoints is progress: an editing agent isn't flagged under a 90 s limit, a silent one is", async () => {
+    const k = kernel();
+    const ed = k.agent("agt-ed"), quiet = k.agent("agt-quiet");
+    const cfg = { stalledAfterMs: 90_000, stopAfterMs: 300_000, everyMs: 10_000 };
+    const { changed, tick, fake } = await boot(k, { cfg });
+    expect(fake.logs().filter((l) => l.level === "warn")).toEqual([]);
+    await changed(ed, started()); await changed(quiet, started());
+    // No checkpoint in five minutes (they come every 10): the editor's runner says its files changed every 30 s.
+    for (let s = 10; s <= 300; s += 10) {
+      at(s * 1000);
+      if (s % 30 === 0) await changed(ed, worked({ files: true }));
+      await tick();
+    }
+    expect(kinds(k)).toEqual(["agt-quiet:stalled"]);
+    expect(k.notices[0]!.notice!.detail).toBe("no progress for 90 s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished no tool step meanwhile; the watchdog stops it after 5 min without progress");
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-quiet"]);
+    // A report with no file change in it (a command, already gone) isn't progress.
+    at(330_000); await changed(ed, worked({ commandAt: 329_000 }));
+    at(400_000); await tick();
+    expect(kinds(k)).toEqual(["agt-quiet:stalled", "agt-ed:stalled"]);
+  });
+
+  test("a foreground command holds the clock while it runs, for up to stalledAfterMs; one that hangs is flagged saying so", async () => {
+    const k = kernel();
+    const short = k.agent("agt-short"), hung = k.agent("agt-hung");
+    const { changed, tick } = await boot(k);
+    await changed(short, started()); await changed(hung, started());
+    // Both quiet for 10 min, then each starts a command: the short one's runs 12 min, the hung one's never ends.
+    for (let s = 10 * 60; s <= 40 * 60; s += 30) {
+      at(s * 1000);
+      if (s <= 22 * 60) await changed(short, worked({ commandAt: 10 * MIN }));
+      await changed(hung, worked({ commandAt: 10 * MIN }));
+      if (s % 60 === 0) await tick();
+      // 26 min after it started (12 of them in its command), the short one isn't flagged: its command's time didn't count.
+      if (s === 26 * 60) expect(kinds(k)).toEqual([]);
+      // Nor the hung one at 29 min: 15 min of its command didn't count, and 10 before it plus 4 after are 14.
+      if (s === 29 * 60) expect(kinds(k)).toEqual(["agt-short:stalled"]);
+    }
+    // The short one: quiet 10 min before its command and 5 after it (at 27 min); the hung one at 30 min, saying why.
+    expect(kinds(k)).toEqual(["agt-short:stalled", "agt-hung:stalled"]);
+    expect(k.notices[0]!.notice!.detail).toBe("no progress for 15 min: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished no tool step meanwhile; the watchdog stops it after 45 min without progress");
+    expect(k.notices[1]!.notice!.detail).toBe("no progress for 15 min: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished no tool step meanwhile; it has been waiting on one command for 20 min; the watchdog stops it after 45 min without progress");
+    // Its files changing while the command runs is progress, as ever: the notice goes.
+    at(41 * MIN); await changed(hung, worked({ files: true, commandAt: 10 * MIN }));
+    await Bun.sleep(0);
+    expect(kinds(k)).toEqual(["agt-short:stalled", "agt-hung:stalled", "agt-hung:cleared"]);
+  });
+
+  test("a job's end isn't progress, but the time it ran doesn't count, even across a restart", async () => {
+    const k = kernel();
+    const a = k.agent("agt-j1");
+    const first = await boot(k);
+    await first.changed(a, started());
+    const exec: Job = { jobId: "job-q1aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-j1" }, cmd: ["ls"], label: "quick" }, state: "running", startedAt: new Date(now).toISOString(), endedAt: null, result: null, reason: null };
+    // A quick one at 10 min (half a minute): the clock moves on by that half minute, no more.
+    at(10 * MIN); await first.fake.fire("job.changed", { job: exec, change: { kind: "started" } });
+    at(10.5 * MIN); await first.fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
+    at(15.4 * MIN); await first.tick();
+    expect(k.notices).toEqual([]);
+    at(15.5 * MIN); await first.tick();
+    expect(kinds(k)).toEqual(["agt-j1:stalled"]);
+    // A longer one, from 20 min, across two hours with the daemon down: the time it ran while the daemon was up doesn't
+    // count, once.
+    const b = k.agent("agt-j2");
+    at(16 * MIN); await first.changed(b, started());
+    const long: Job = { ...exec, jobId: "job-l1aaaaaa", spec: { ...exec.spec, owner: { agentId: "agt-j2" } } as JobSpec };
+    at(20 * MIN); await first.fake.fire("job.changed", { job: long, change: { kind: "started" } });
+    at(25 * MIN); await first.tick(); await first.w.flushed();
+    at(145 * MIN);
+    const second = await boot(k, { storage: first.storage });
+    at(150 * MIN); await second.fake.fire("job.changed", { job: { ...long, state: "done" }, change: { kind: "ended", state: "done" } });
+    // 4 min quiet before it: stalled 11 min after it ended, not sooner.
+    at(160.9 * MIN); await second.tick();
+    expect(kinds(k)).toEqual(["agt-j1:stalled"]);
+    at(161 * MIN); await second.tick();
+    expect(kinds(k)).toEqual(["agt-j1:stalled", "agt-j2:stalled"]);
+  });
+
+  test("a stall limit shorter than progress takes to show is warned about, not refused", async () => {
+    expect(configWarning({ stalledAfterMs: 60_000 })).toBeNull();
+    expect(configWarning({ stalledAfterMs: 59_999 })).toBe("plugins.watchdog.stalledAfterMs is 59999: below 60000, how long an agent's progress (its files changing, a command it waits on) may take to show, so an agent that is working may be flagged");
+    const k = kernel();
+    const { fake } = await boot(k, { cfg: { stalledAfterMs: 30_000, stopAfterMs: 0 } });
+    expect(fake.logs().filter((l) => l.level === "warn").map((l) => l.message)).toEqual([configWarning({ stalledAfterMs: 30_000 })!]);
   });
 
   test("it loads and disposes cleanly, and answers every hook it declares", async () => {

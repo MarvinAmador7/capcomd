@@ -27,7 +27,10 @@ export const checkpointRef = (agentId: string) => `refs/capcomd/checkpoints/${ag
 /** ADR-019 §1: what the in-VM supervisor reports up (its outbox), or the runner on its behalf without one. */
 export type SupervisorReport =
   | { type: "heartbeat"; events: number; lastEventAt: number; source: "supervisor" | "events" }
-  | { type: "checkpoint"; sha: string; ref: string; reason: string; files: number };
+  | { type: "checkpoint"; sha: string; ref: string; reason: string; files: number }
+  /** Plugin API §16.4: what the agent did since the last one (at most one a heartbeat, only when there is something to
+   *  say): its checkout's files changed (the supervisor's tree hash of it), a foreground command running since then. */
+  | { type: "worked"; files: boolean; commandSince: number | null };
 
 export interface AgentTask {
   /** ADR-017 / TUI contract: scope agent id and its parent (null at root), stamped on agent.* spans. */
@@ -809,7 +812,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         heartbeatMs: opts.heartbeatMs ?? 30_000, checkpointEveryMs: task.review || task.report || orchestrate ? 0 : cfg.checkpointEveryMs,
         // §16.1: an orchestrate agent's checkout is never snapshotted (a checkpoint is a commit, pushed to its ref).
         ...(orchestrate ? { checkpoints: false } : {}),
-        ...(cfg.noChangeAfterMs ? { reportTree: true } : {}),
+        // The tree with each heartbeat: for "no change in the workspace" (every one), and as the progress the watchdog
+        // reads for an agent whose work shows as files changing (plugin API §16.4; less often in a slow checkout).
+        ...(cfg.noChangeAfterMs ? { reportTree: true } : task.review || task.report || orchestrate ? {} : { reportTree: "progress" }),
         ...(streaming ? { input: { prompt: `${W}/prompt.txt`, inbox: inboxFile } } : {}),
         // Plugin API §16.2: its background jobs (in-VM `capcomd job`, next to its spool) keep it here while they run.
         ...(opts.subagents ? { jobs: `${opts.subagents.rpcDir}/jobs` } : {}),
@@ -850,6 +855,19 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck, noChangeAfterMs: cfg.noChangeAfterMs }, now());
     let noticed: string | null = null, grantSeen = 0, spendStep = 0, inboxSeq = 0;
+    // Plugin API §16.4: what the agent works on, reported up at most once a heartbeat: its files changing (a new tree in
+    // a supervisor's heartbeat; the first is where it started) and the foreground commands it waits on (by call id).
+    const workEveryMs = opts.heartbeatMs ?? 30_000;
+    let lastTree: string | null = null, filesChanged = false, workedAt = 0;
+    const commands = new Map<string, number>();
+    const reportWork = () => {
+      if (now() - workedAt < workEveryMs) return;
+      const since = commands.size ? Math.min(...commands.values()) : null;
+      if (!filesChanged && since === null) return;
+      workedAt = now();
+      opts.onReport?.({ type: "worked", files: filesChanged, commandSince: since });
+      filesChanged = false;
+    };
     // The supervisor takes it at its next heartbeat; reviewers and reporting agents don't checkpoint.
     const requestCheckpoint = async (reason: string) => {
       if (supervised && !task.review && !task.report && !orchestrate) await sh(`printf %s ${sq(reason)} > ${sq(`${W}/checkpoint.request`)}`).catch(() => {});
@@ -919,7 +937,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         outConsumed++;
         // Its start is a heartbeat too: the first interval hasn't passed yet.
         if (rep.type === "heartbeat" || rep.type === "start") opts.onReport?.({ type: "heartbeat", events: Number(rep.events ?? 0), lastEventAt: Number(rep.lastEventAt ?? now()), source: "supervisor" });
-        if (rep.type === "heartbeat" && typeof rep.tree === "string") watch.observeTree(rep.tree, now());
+        if (rep.type === "heartbeat" && typeof rep.tree === "string") {
+          watch.observeTree(rep.tree, now());
+          if (lastTree !== null && rep.tree !== lastTree) filesChanged = true;
+          lastTree = rep.tree;
+        }
         // §16.2 rule 3: an agent waiting on its background job isn't idle: no notice is raised while one runs.
         if (rep.type === "heartbeat" && Number(rep.jobs) > 0) watch.reset(now());
         if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
@@ -936,6 +958,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         if (!ev) { if (i === lines.length - 1 && !final) break; consumed++; continue; }
         consumed++; state.events++;
         watch.observe(ev, now());
+        for (const id of ev.commands?.ended ?? []) commands.delete(id);
+        for (const id of ev.commands?.started ?? []) if (!commands.has(id)) commands.set(id, now());
         addSpanEvent(span, `agent.${ev.type}${ev.subtype ? `.${ev.subtype}` : ""}`, {
           ...(ev.tool ? { "agent.tool": ev.tool } : {}), ...(ev.text ? { "agent.text": ev.text } : {}),
         });
@@ -989,6 +1013,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         continue;
       }
       if (exitCode !== null) break;
+      reportWork();
       // §16.1: an orchestrate agent that wrote something in the turn that just ended is stopped there (it fails below).
       if (turnEnded) {
         turnEnded = false;

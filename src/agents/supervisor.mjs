@@ -4,6 +4,8 @@
 // Dependency-free, like vm-cli.mjs. Config (JSON file, argv[2]):
 //   { script, dir, repo, jsonl, outbox, ref, agentId, heartbeatMs, checkpointEveryMs, checkpoints?, input?, reportTree?, jobs? }
 // With `reportTree`, each heartbeat carries the workspace's tree hash (for "no change in the workspace", ADR-019 §2).
+// `reportTree: "progress"` (the agent's files changing as its progress, plugin API §16.4) skips heartbeats in a checkout
+// where hashing it is slow, so it takes at most a twentieth of the time.
 // With `jobs` (the agent's background jobs' directory, plugin API §16.2), each heartbeat says how many run, and the
 // agent's input stays open while one runs or one ended whose result message hasn't reached it yet: the CLI is still
 // there to read the result when it comes, and the agent keeps its slot.
@@ -78,6 +80,18 @@ function workTree() {
     git(["add", "-A"], idx);
     return git(["write-tree"], idx);
   } catch { return undefined; }
+}
+
+// The tree for this heartbeat: every one with `reportTree: true`; with "progress", none until a twentieth of the
+// time is spent hashing it (one that took 3 s is next hashed a minute later).
+let treeAfter = 0;
+function heartbeatTree() {
+  if (!cfg.reportTree) return undefined;
+  if (cfg.reportTree !== true && Date.now() < treeAfter) return undefined;
+  const t0 = Date.now();
+  const tree = workTree();
+  treeAfter = t0 + (Date.now() - t0) * 20;
+  return tree;
 }
 
 // Its background jobs (src/jobs/machine.ts): running (a runner alive and no exit code yet), and ended ones whose result
@@ -164,7 +178,8 @@ if (cfg.input) {
 
 const beat = setInterval(() => {
   sample();
-  report("heartbeat", { events, lastEventAt, ...(cfg.reportTree ? { tree: workTree() } : {}), ...(cfg.jobs ? { jobs: jobs().running } : {}) });
+  const tree = heartbeatTree();
+  report("heartbeat", { events, lastEventAt, ...(tree ? { tree } : {}), ...(cfg.jobs ? { jobs: jobs().running } : {}) });
   // The agent committed (claude and codex may): checkpoint the new HEAD now rather than at the next interval.
   try { const h = git(["rev-parse", "HEAD"]); if (lastHead && h !== lastHead) checkpoint("commit"); } catch {}
   // The engine asks for one (the file says why): the agent looks stuck (ADR-019 §2), so the work is safe before

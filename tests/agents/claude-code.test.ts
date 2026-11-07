@@ -296,6 +296,34 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(span.events.map((e) => e.name)).toContain("agent.checkpoint");
   }, 60_000);
 
+  test("progress the watchdog reads (plugin API §16.4): its files changing between checkpoints, and a foreground command it waits on", async () => {
+    // Files: changed every 0.25 s for 5 s, long before its first checkpoint (10 min): said again and again, at most once a
+    // heartbeat (fewer when hashing the checkout is slow: a loaded machine).
+    const e = await setup("[editing:5] keep editing");
+    const reports: SupervisorReport[] = [];
+    let at = 0;
+    const gaps: number[] = [];
+    const res = await runClaudeCode(e.provider, e.id, e.task, e.cfg, { apiKey: KEY, heartbeatMs: 200, onReport: (x) => { if (x.type === "worked") { if (at) gaps.push(Date.now() - at); at = Date.now(); } reports.push(x); } });
+    expect(res.stopReason).toBe("success");
+    expect(reports.filter((x) => x.type === "checkpoint")).toEqual([]);
+    const files = reports.filter((x) => x.type === "worked" && x.files);
+    expect(files.length).toBeGreaterThanOrEqual(2);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(200);
+    expect(JSON.parse(readFileSync(join(e.W, "supervisor.json"), "utf8")).reportTree).toBe("progress");
+    // A command: one Bash call running 3 s, no events meanwhile: said with when it started, and not once it ended.
+    const c = await setup("[command:3] run the tests");
+    const creports: SupervisorReport[] = [];
+    const t0 = Date.now();
+    const cres = await runClaudeCode(c.provider, c.id, c.task, c.cfg, { apiKey: KEY, heartbeatMs: 200, onReport: (x) => creports.push(x) });
+    expect(cres.stopReason).toBe("success");
+    const cmds = creports.filter((x): x is Extract<SupervisorReport, { type: "worked" }> => x.type === "worked" && x.commandSince !== null);
+    expect(cmds.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(cmds.map((x) => x.commandSince)).size).toBe(1);
+    expect(cmds[0]!.commandSince!).toBeGreaterThanOrEqual(t0);
+    const last = creports.lastIndexOf(cmds.at(-1)!);
+    expect(creports.slice(last + 1).filter((x) => x.type === "worked" && x.commandSince !== null)).toEqual([]);
+  }, 60_000);
+
   test("timeout kills the agent process group", async () => {
     const s = await setup("[sleep] hang", { CAPCOMD_AGENT_TIMEOUT_MS: "1500" });
     const t0 = Date.now();

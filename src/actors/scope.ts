@@ -18,7 +18,7 @@ import { killpoint } from "../utils/killpoint";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { startDriver } from "../primitives/drivers";
 import { agentWorkflowOn } from "../utils/agent-workflow-flag";
-import { changedHooks } from "../plugins/changes";
+import { changedHooks, tellWorked } from "../plugins/changes";
 import { hooks, principalOf } from "../plugins/hooks";
 
 /**
@@ -834,6 +834,22 @@ export const scopeActor = actor({
     async heartbeat(c, params: { agentId: string; note?: string }) {
       await c.db.execute("UPDATE agents_v2 SET heartbeat_at = ?, heartbeat_note = COALESCE(?, heartbeat_note) WHERE agent_id = ?", Date.now(), params.note?.slice(0, 200) ?? null, params.agentId);
       return { ok: true };
+    },
+
+    /**
+     * Plugin API §16.4: what the agent's runner saw it doing since its last report: its files changed (`files`), a
+     * foreground command of its CLI running since `commandSince`. A sign of life (its heartbeat), and `agent.changed`
+     * `worked` for the plugins that judge progress (the watchdog), told only while it runs. No event in the run's log.
+     */
+    async worked(c, params: { agentId: string; files: boolean; commandSince?: number | null }) {
+      const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
+      if (!r.length || r[0]!.status !== "running") return { told: false };
+      const at = Date.now();
+      await c.db.execute("UPDATE agents_v2 SET heartbeat_at = ? WHERE agent_id = ?", at, params.agentId);
+      const since = Number(params.commandSince ?? 0);
+      const a = rowToAgent(r[0]);
+      tellWorked(a.runId, a, { files: params.files === true, commandSince: Number.isFinite(since) && since > 0 ? Math.min(since, at) : null, at });
+      return { told: true };
     },
 
     /**

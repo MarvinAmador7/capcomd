@@ -148,6 +148,14 @@ describe("codex adapter (fake codex exec --json)", () => {
     const bad = codexAdapter.parse('{"type":"item.completed","item":{"type":"command_execution","command":"npm test","exit_code":1,"status":"failed","aggregated_output":"1 failing: expected 3"}}', r, st, cfg)!;
     expect(bad.results).toEqual([{ call: 'command "npm test"', error: "1 failing: expected 3" }]);
     expect(codexAdapter.parse('{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}', r, st, cfg)!.calls).toBeUndefined();
+    // A command it waits on (plugin API §16.4): from its start to its completion, by the item's id.
+    expect(codexAdapter.parse('{"type":"item.started","item":{"id":"i7","type":"command_execution","command":"npm test","status":"in_progress"}}', r, st, cfg)!.commands).toEqual({ started: ["i7"] });
+    expect(codexAdapter.parse('{"type":"item.completed","item":{"id":"i7","type":"command_execution","command":"npm test","exit_code":0,"status":"completed"}}', r, st, cfg)!.commands).toEqual({ ended: ["i7"] });
+    expect(codexAdapter.parse('{"type":"item.started","item":{"id":"i8","type":"mcp_tool_call","server":"x","tool":"y"}}', r, st, cfg)!.commands).toBeUndefined();
+    // Claude Code: a Bash call it waits on (not one sent to the background), until the tool's result.
+    const cs: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
+    expect(claudeAdapter.parse('{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"npm test"}},{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"npm run dev","run_in_background":true}},{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"a"}}]}}', r, cs, cfg)!.commands).toEqual({ started: ["b1"] });
+    expect(claudeAdapter.parse('{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"ok"}]}}', r, cs, cfg)!.commands).toEqual({ ended: ["b1"] });
     // Usage per turn, cached input counted apart (the context eval's cache ratio): two turns add up.
     const tu: AgentRunState = { events: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, done: false };
     codexAdapter.parse('{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":600,"output_tokens":50}}', r, tu, cfg);
