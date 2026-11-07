@@ -2,7 +2,7 @@
   "schema": "capcomd.plugin/v1",
   "name": "event-listener",
   "version": "1.0.0",
-  "description": "Test plugin: subscribes to the daemon stream for its own events and profile changes, records what it hears, and hands its context to the test.",
+  "description": "Test plugin: subscribes to the daemon stream and to each new run's, records what it hears, and notes on the daemon stream when the daemon starts.",
   "apiVersion": 1,
   "engines": {
     "capcomd": ">=0.0.0"
@@ -13,6 +13,10 @@
   },
   "scopes": ["read", "steer"],
   "contributes": {
+    "hooks": {
+      "daemon.started": {},
+      "run.changed": {}
+    },
     "events": ["noted"]
   }
 }
