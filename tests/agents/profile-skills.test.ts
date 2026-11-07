@@ -138,6 +138,30 @@ describe("profile skills", () => {
     expect((PROFILE_JSON_SCHEMA.properties.skills as any).items.properties.source.enum).toEqual(["package", "user", "bundled"]);
   });
 
+  test("a profile with a context block keeps room for the context skills the router attaches (ADR-025 step 6), its `memory:` alias too", () => {
+    const seven = Array.from({ length: 7 }, (_, i) => `s${i}`), eight = [...seven, "s7"];
+    const list = (names: string[]) => `skills: [${names.map((n) => `{ name: ${n} }`).join(", ")}]`;
+    const files: Record<string, string> = {
+      "P/plain/profile.yaml": yaml(["name: plain", worker, list(eight)]),
+      "P/fits/profile.yaml": yaml(["name: fits", worker, "context: { providers: [{ name: memory }] }", list(seven)]),
+      "P/full/profile.yaml": yaml(["name: full", worker, "context: { providers: [{ name: memory }] }", list(eight)]),
+      "P/old/profile.yaml": yaml(["name: old", worker, "memory: { scope: project }", list(eight)]),
+      "P/boss/profile.yaml": yaml(["name: boss", worker, lead, "context: { providers: [{ name: memory }] }", list(seven.slice(0, 6))]),
+      "P/worker/profile.yaml": yaml(["name: worker", worker]),
+    };
+    for (const p of ["plain", "fits", "full", "old", "boss"]) for (const n of eight) files[`P/${p}/skills/${n}/SKILL.md`] = md(n, `skill ${n}`);
+    const e = errorOf(() => world(files).load());
+    expect(e).not.toContain("profiles.plain");
+    expect(e).not.toContain("profiles.fits");
+    expect(e).toContain("profiles.full: skills: at most 7 skills (a profile with a context block keeps room for its context skills), and it names 8");
+    expect(e).toContain("profiles.old: skills: at most 7 skills (a profile with a context block keeps room for its context skills), and it names 8");
+    // One that may spawn keeps three: the orchestration skill, the doctrine and the routing paragraph.
+    expect(e).toContain("profiles.boss: skills: at most 5 skills (an agent that may spawn keeps room for capcomd's orchestration skill; a profile with a context block keeps room for its context skills), and it names 6");
+    // Their names are capcomd's, whether or not the profile has a context block.
+    const taken = errorOf(() => world({ "P/x/profile.yaml": yaml(["name: x", worker, "skills: [{ name: capcomd-context-routing }]"]) }).load());
+    expect(taken).toContain("profiles.x: skills[0] (capcomd-context-routing): that name is capcomd's own skill");
+  });
+
   test("source: user is the user's ~/.claude/skills, as `capcomd send --skill` reads them; `agents show` prints each pin", () => {
     const w = world({
       "P/critic/profile.yaml": yaml(["name: critic", worker, "skills: [{ name: owasp, source: user }, { name: own }]"]),
