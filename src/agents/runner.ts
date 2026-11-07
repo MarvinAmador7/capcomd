@@ -141,11 +141,14 @@ export interface AgentRunOptions {
   onNotice?: (n: { kind: Stuck["kind"]; detail: string } | null) => void;
   secrets?: string[];
   now?: () => number;
-  /** ADR-017: install in-VM capcomd (CLI + MCP). Only set for agents allowed to spawn. Their orchestration skill is in
-   *  `cfg.appendSystemPrompt` (agent.preparing); `skill`, when given, is appended after it. */
-  subagents?: { skill?: string; cliSource: string; rpcDir: string };
+  /** ADR-017: install in-VM capcomd (CLI + MCP), for every agent that may spawn or does work of its own
+   *  (src/subagents/skill.ts `hasVmCapcomd`). An orchestration skill is in `cfg.appendSystemPrompt` (agent.preparing);
+   *  `skill`, when given (the worker's lines for one that may not spawn), is appended after it. `maySpawn: false`: its
+   *  work is its own, so finishing with no changes still fails it (unset: it may spawn, as before the field). */
+  subagents?: { skill?: string; cliSource: string; rpcDir: string; maySpawn?: boolean };
   /**
-   * Capability agents.title, for an agent without `subagents`: a `capcomd` on its PATH that only names its tab (the
+   * Capability agents.title, for an agent without `subagents` (a reviewer, a report agent, the consolidator): a
+   * `capcomd` on its PATH that only names its tab (the
    * shim, src/primitives/title-rules.mjs: it checks the title and talks to nobody) and the lines that ask it to. Each
    * `capcomd title …` it runs by itself, as its tool calls show it, is `onTitle` (once per call id).
    */
@@ -737,7 +740,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     } else {
       promptText = [cfg.systemPrompt, promptText, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
     }
-    // ADR-017: agents allowed to spawn get capcomd (CLI on PATH + MCP server) and the skill.
+    // ADR-017: agents with the in-VM capcomd get it (CLI on PATH + MCP server) and their skill.
     let capcomdCtx: { cli: string; mcpConfig: string } | undefined;
     let capcomdPrelude = "";
     if (opts.subagents) {
@@ -1160,13 +1163,16 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     }
 
     // 5. Commit with capcomd trailers and push the task branch.
+    // Its final message: its summary when it declared none (src/primitives/ops.ts settlePushed).
+    const finalWords = limit ? "" : r.text(state.resultText ?? "").slice(-4000);
     must(await git(["add", "-A"], repo), "git add");
     const status = await git(["status", "--porcelain"], repo);
     const ahead = await git(["rev-list", "--count", `origin/${task.target}..HEAD`], repo);
     if (!status.stdout.trim() && Number(ahead.stdout.trim()) === 0) {
-      // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine. A paused agent
-      // (quota, or the operator's pause) has nothing to keep yet either: it starts over when it resumes.
-      if (opts.subagents || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt }; }
+      // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine (not for an agent
+      // with capcomd that may not spawn: its work is its own). A paused agent (quota, or the operator's pause) has
+      // nothing to keep yet either: it starts over when it resumes.
+      if ((opts.subagents && opts.subagents.maySpawn !== false) || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(finalWords ? { resultText: finalWords } : {}), ...(limit ? { limit } : {}), ...resetAt }; }
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before changing anything`);
       throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
     }
@@ -1183,7 +1189,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // The host pushes it (from its mirror, leased at where the branch was when the agent started: there, or absent).
     await viaHost("git push", () => pushFromSandbox(host, box, repo, { sha, ref: `refs/heads/${task.branch}`, expect: branchExists ? existing : null, near: [task.target, task.branch], timeoutMs: 300_000, spanRef: `HEAD:refs/heads/${task.branch}`, onProgress: progress("git push") }));
     setSpanAttributes(span, { "git.sha": sha });
-    return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(limit ? { limit } : {}), ...resetAt };
+    return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(finalWords ? { resultText: finalWords } : {}), ...(limit ? { limit } : {}), ...resetAt };
   } catch (err) {
     // An agent cancelled mid-step (its machine destroyed under it, so a command failed before the cancel was seen) was
     // cancelled, not an error: said so in its trace, which the TUI and the apps read.

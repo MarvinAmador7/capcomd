@@ -282,10 +282,11 @@ export type PushBranchParams = {
   goal?: string;
   /** ADR-017: scripted fake agent's declared file (fake sandbox only). */
   fakePath?: string; fakeContent?: string;
-  /** ADR-017: install in-VM capcomd (agents allowed to spawn). `rpcDir`: where its spool is in the VM. Its skill comes in
-   *  the agent's spec (agent.preparing, src/plugins/skill-orchestration.ts); `skill` only for an attempt no plugin prepared
-   *  (src/primitives/ops.ts `unpreparedSkill`). */
-  subagents?: { skill?: string; kind?: string; rpcDir?: string };
+  /** ADR-017: install in-VM capcomd (src/subagents/skill.ts `hasVmCapcomd`). `rpcDir`: where its spool is in the VM. A
+   *  spawner's skill comes in the agent's spec (agent.preparing, src/plugins/skill-orchestration.ts); `skill` only for an
+   *  attempt no plugin prepared (src/primitives/ops.ts `unpreparedSkill`), or the worker's lines of one that may not spawn
+   *  (`maySpawn: false`). */
+  subagents?: { skill?: string; kind?: string; rpcDir?: string; maySpawn?: boolean };
   conflictFiles?: string[];
   /** Agent profile name for this task. */
   agent?: string;
@@ -473,13 +474,14 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       },
       ...(activity ? { onEvent: activity.event } : {}),
       ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
-      // Every agent's tool calls, refusals and words; one that may spawn also gets a `[capcomd] <op> → …` line per
+      // Every agent's tool calls, refusals and words; one with the in-VM capcomd also gets a `[capcomd] <op> → …` line per
       // capcomd call from its spool pump (driver.ts).
       ...(scope ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),
       ...(items ? { onItems: items } : {}),
-      ...(params.subagents ? { subagents: { ...(params.subagents.skill ? { skill: params.subagents.skill } : {}), cliSource: VM_CLI_SOURCE, rpcDir: params.subagents.rpcDir ?? "/tmp/capcomd-rpc" } } : {}),
-      // agents.title: an agent that may not spawn names its tab with a local shim; its `capcomd title …` calls, read
-      // from its tool calls, are its own renames (rate limited like any; a refusal goes to its log).
+      ...(params.subagents ? { subagents: { ...(params.subagents.skill ? { skill: params.subagents.skill } : {}), cliSource: VM_CLI_SOURCE, rpcDir: params.subagents.rpcDir ?? "/tmp/capcomd-rpc", ...(params.subagents.maySpawn === false ? { maySpawn: false } : {}) } } : {}),
+      // agents.title: an agent without the in-VM capcomd (a reviewer, a report agent, the consolidator) names its tab
+      // with a local shim; its `capcomd title …` calls, read from its tool calls, are its own renames (rate limited like
+      // any; a refusal goes to its log).
       ...(scope && !params.subagents ? {
         naming: { shimSource: TITLE_SHIM_SOURCE, skill: namingSkill({ mcp: false }) },
         onTitle: (t: { title: string; callId: string }) => {

@@ -17,6 +17,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   saves its work hourly (`checkpointEveryMs`, `--checkpoint-every-ms`, `CAPCOMD_AGENT_CHECKPOINT_MS`) is no longer
   flagged between its checkpoints or stopped at 45 minutes while it works, and gets the same 15 and 45 minutes as any
   other.
+- Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
+  is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
+  flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
+  brain could be added and its files copied into agents' sandboxes.
+- Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
+  agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
+  job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
+  to it as a message), keep notes (`capcomd kv`), propose lessons for the project's memory (`capcomd result --data
+  '{"context": [...]}'`), read the run's tree, and end with a summary (`capcomd result --summary`); its instructions
+  say so. It still can't spawn, verify or merge (refused), and a worker that runs no commands of its own (its
+  profile's allow-list has no plain `Bash` or denies it, its Codex sandbox is read-only, or the daemon's
+  `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS` or `CAPCOMD_CODEX_SANDBOX` say so) gets no
+  background jobs. Reviewers, `--report`
+  agents and the context consolidator are unchanged.
+- Changed: an agent that ends without declaring a summary gets its final message as its `result.summary` (up to
+  2,000 characters), so a parent, the driver and the apps always have something to read; a reviewer's verdict is
+  never used as one. `capcomd result` with nothing in it (no summary, artifacts or data) is refused instead of
+  recording an empty result over the one the agent declared.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its
