@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
+  as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
+  agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
+  With several named checks, verify still needs the check pinned at spawn (`--check NAME`) or named on the verify.
+- Fixed: the daemon's log no longer says "declared but never registered: hook job.changed" for forge-github at every
+  start when no GitHub repositories are trigger sources (nor for source-schedule without schedules).
+- Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
+
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
