@@ -822,7 +822,7 @@ says why):
 - §12's "a `paths` column vs none" ablation is an arm (`index-paths`, the items without `paths`) run on the fake
   sandbox in CI; "each doctrine skill present vs absent" is not an arm yet (the index arms all get the skills).
 
-**Changed since: every working agent has the in-VM capcomd** (spec 1.0.38). A live run showed that with the profiles
+**Changed since: every working agent has the in-VM capcomd** (spec 1.0.39). A live run showed that with the profiles
 `capcomd setup project` writes no agent could propose a lesson (the workers can't spawn, so they had no `capcomd
 result`) or run a job. Now every agent that does work of its own has the in-VM capcomd with a leaf token (ADR-017 §2):
 notes in `kv`, `capcomd result --data '{"context": […]}'`, jobs, reads; never spawn, verify or merge. So the routing
