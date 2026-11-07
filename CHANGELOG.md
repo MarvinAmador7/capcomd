@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `GET /v1/profiles` (and `GET /v1/profiles/{name}`) rows say what a planner chooses a profile by: its `title`,
+  `fit` (one sentence capcomd writes from its settings, never from its description), `cost` (low, medium or high),
+  `canReport`, the `skills` its agents get (names and hashes, never their text), and `untrustedSkills`, the project
+  skills you haven't trusted yet, so the app and a planner see that a spawn of it would be refused before trying
+  (`capcomd profiles trust <name>` trusts them). `capcomd_profiles` and `capcomd profiles list --json` carry `skills`
+  and `untrustedSkills` too. Capability `profiles.facts`.
+- New: `GET /v1/run-options` lists `planners`: every profile that can plan, each with whether a run can start with it
+  now and why not: no login, a project skill not trusted yet, a `sandbox.environment` its sandbox has no build of, a
+  `lifecycle` plugin that isn't active on the daemon, or no agent environment built. Before, a missing environment or
+  an inactive lifecycle plugin only showed when the planner's spawn was refused. Capability `runs.options.planners`.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

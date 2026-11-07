@@ -4,8 +4,13 @@
 // seconds and shared by concurrent requests.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { DRIVER_LABEL, DRIVERS, plannerDriver, plannerProfile } from "../agents/run-driver";
-import { agentsFilePath, providerDefaultEffort, providerEfforts, readProfiles } from "../profiles";
+import { agentModel } from "../agents/config";
+import { credentialReady, DEFAULT_PLANNER, DRIVER_LABEL, DRIVERS, plannerDriver, plannerProfile } from "../agents/run-driver";
+import { profileFor } from "../auth/profiles";
+import { bootSnapshot, EnvironmentProblem } from "../env/resolve";
+import { lifecycleCheck } from "../plugins/lifecycle";
+import { agentsFilePath, lifecyclePlugins, profileFacts, providerDefaultEffort, providerEfforts, providerKind, readProfiles, type ProfileSet, type ResolvedProfile } from "../profiles";
+import { untrustedSkillsProblem } from "../profiles/trust";
 import { readConfig, userConfigPath } from "../config/store";
 import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } from "../providers/registry";
 import { withSandbox } from "../providers/run-sandbox";
@@ -22,6 +27,8 @@ export const SANDBOX_LABEL: Record<RunSandbox, string> = PROVIDER_LABEL;
 export interface DriverFit { available: boolean; reason: string | null }
 export interface DriverOption { provider: "claude" | "codex"; label: string; model: string | null; models: HarnessModel[]; efforts: string[]; effort: string | null; available: boolean; reason: string | null; default: boolean; sandboxes: Record<RunSandbox, DriverFit> }
 export interface SandboxOption { name: RunSandbox; label: string; available: boolean; reason: string | null; default: boolean }
+export interface PlannerOption { name: string; title: string | null; provider: string; model: string | null; default: boolean; available: boolean; reason: string | null }
+export interface RunOptionsBody { drivers: DriverOption[]; sandboxes: SandboxOption[]; planners: PlannerOption[] }
 
 // ---- Docker: is a daemon reachable? (`docker version`, cached) ----
 const DOCKER_TTL_MS = 5_000;
@@ -82,15 +89,59 @@ export function driverFit(provider: "claude" | "codex", name: RunSandbox, source
 	return { available: true, reason: null };
 }
 
+/**
+ * Can a run start with planner profile `p` now (GET /v1/run-options `planners`)? What its spawn would refuse, asked
+ * before the run instead of at it (ADR-024 §8): its login, its project skills' trust, its `sandbox.environment` on its
+ * sandbox (its profile's `sandbox.provider`, else the run's), an agent environment there, and the plugins its
+ * `lifecycle` names. Local files, and the daemon's plugin host (or, outside the daemon, its listing; with no daemon to
+ * ask, a lifecycle isn't held against it: the spawn asks again). The first problem is the reason.
+ */
+export async function plannerReadiness(p: ResolvedProfile, source: Env = process.env): Promise<DriverFit> {
+	const rt = p.runtime, provider = p.spec.provider;
+	const s = withSandbox(source, rt.sandboxProvider);
+	const where = rt.sandboxProvider ? { name: rt.sandboxProvider, label: (SANDBOX_LABEL as Record<string, string>)[rt.sandboxProvider] ?? rt.sandboxProvider } : undefined;
+	const login = credentialReady(provider, p.spec.auth, s, where);
+	if (!login.ready) return { available: false, reason: login.reason };
+	const untrusted = untrustedSkillsProblem(p.name, p.skills, source);
+	if (untrusted) return { available: false, reason: `${untrusted} (run \`capcomd profiles trust ${p.name}\`)` };
+	if (rt.environment) {
+		// A plan login kept in an image boots that image: the profile's environment must be the one it was made from.
+		const kept = p.spec.auth === "subscription" ? profileFor(providerKind(provider), s) : null;
+		try { bootSnapshot({ environment: rt.environment, real: false, login: kept ? { agent: providerKind(provider), ...(kept.snapshot ? { snapshot: kept.snapshot } : {}), env: kept.env } : null }, s); } catch (e) {
+			if (!(e instanceof EnvironmentProblem)) throw e;
+			return { available: false, reason: `profile ${p.name}: ${e.message}` };
+		}
+	}
+	const env = envSnapshotProblem(provider, s, rt.environment);
+	if (env) return { available: false, reason: env };
+	const unheard = (await lifecycleCheck(lifecyclePlugins(rt.lifecycle), source)).problem;
+	if (unheard) return { available: false, reason: `profile ${p.name} can't be spawned: its ${unheard} (\`capcomd plugins list\` shows each plugin and its state)` };
+	return { available: true, reason: null };
+}
+
+/** GET /v1/run-options `planners` (ADR-024 §5): every profile that can plan (it may spawn), in the profiles' order. */
+export async function plannerOptions(source: Env = process.env): Promise<PlannerOption[]> {
+	let set: ProfileSet;
+	try { set = readProfiles(agentsFilePath(source), source); } catch { return []; } // GET /v1/profiles says why
+	const planners = Object.values(set.profiles).filter((p) => p.spec.children?.allowSpawn);
+	// A check that throws (a sandbox.provider this host doesn't know, say) leaves that planner not ready, in the daemon's
+	// words (never the error's text); the others are still listed.
+	const ready = (p: ResolvedProfile) => plannerReadiness(p, source).catch((): DriverFit => ({ available: false, reason: `profile ${p.name} can't be checked here (\`capcomd profiles validate\` says why)` }));
+	return Promise.all(planners.map(async (p): Promise<PlannerOption> => ({
+		name: p.name, title: profileFacts(p).title, provider: p.spec.provider, model: agentModel(p.spec, source) ?? null, default: p.name === DEFAULT_PLANNER,
+		...(await ready(p)),
+	})));
+}
+
 /** GET /v1/run-options?repo=: for a run of that project (its settings and agent profiles), as POST /v1/runs starts it. */
-export async function runOptionsFor(repo: string | undefined, base: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<{ drivers: DriverOption[]; sandboxes: SandboxOption[] }> {
+export async function runOptionsFor(repo: string | undefined, base: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<RunOptionsBody> {
 	if (repo === undefined) return runOptions(base, ask);
 	const { projectSource } = await import("./create-run");
 	return runOptions(projectSource(repo, base), ask);
 }
 
 /** GET /v1/run-options. Both drivers and both sandboxes, always, in that order. */
-export async function runOptions(source: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<{ drivers: DriverOption[]; sandboxes: SandboxOption[] }> {
+export async function runOptions(source: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<RunOptionsBody> {
 	let current: string | null = null;
 	try { current = sandboxName(source); } catch { /* unknown CAPCOMD_SANDBOX: no default */ }
 	const sandboxes = await Promise.all(RUN_SANDBOXES.map(async (name): Promise<SandboxOption> => ({ name, label: SANDBOX_LABEL[name], ...(await sandboxAvailable(name, source, ask)), default: current === name })));
@@ -104,5 +155,5 @@ export async function runOptions(source: Env = process.env, ask?: Parameters<typ
 		const sandboxes = Object.fromEntries(RUN_SANDBOXES.map((n) => [n, driverFit(provider, n, source)])) as Record<RunSandbox, DriverFit>;
 		return { provider, label: DRIVER_LABEL[provider], model: d.model, models: harnessModels(provider, source), efforts: [...providerEfforts(provider)], effort: d.defaultEffort, available: d.ok, reason: d.ok ? null : d.reason, default: defaultProvider === provider, sandboxes };
 	});
-	return { drivers, sandboxes };
+	return { drivers, sandboxes, planners: await plannerOptions(source) };
 }

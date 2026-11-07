@@ -31,7 +31,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `runs.options.models`: GET /v1/run-options `drivers[].models`: the models each driver's planner can run on (an id, a display name and a one-line note); POST /v1/runs takes `model`, one of them; `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.known`: GET /v1/projects/known: capcomd's projects with their checkout folders on the daemon's machine, and which is the default; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`; `runs.goal_branch`: Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events; `agents.title`: Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled; `agents.thread_tail`: GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages; `plugins`: GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; GET /v1/plugins/{name} (its manifest and config, never a secret); POST /v1/plugins/{name}/enable and /disable (the configure scope, an Idempotency-Key); plugin.* events on the daemon stream audit the plugin host; `profiles`: GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there; `plugins.protocol`: The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process; `triggers`: Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from; `profiles.edit`: GET /v1/profiles/{name}: one profile as typed rows a client renders and edits (each with the file that sets it, `source` and `editable`) and its `rev`; PUT /v1/profiles/{name} (the `configure` scope, an Idempotency-Key): change them in the profile's own file, its version bumped; each write is a profile.changed event on the daemon stream; `plugins.config`: Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.trusted on the daemon stream audits a trust. This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
+                      "description": "Features this daemon has: a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. `run.controls`: POST /v1/runs/{runId}/pause, /resume and /cancel; `agents.messages`: POST /v1/runs/{runId}/agents/{agentId}/messages: steer an agent with a message; `steer.skills`: POST …/agents/{agentId}/messages takes `skills`: names from GET /v1/skills, sent to the agent with the message; `agent.pause`: POST /v1/runs/{runId}/agents/{agentId}/pause and /resume: one agent and its descendants; `runs.options`: POST /v1/runs takes `driver` (claude or codex), `effort` (the driver's reasoning effort) and `sandbox` (docker or boxd); GET /v1/run-options lists them and whether each is available; `runs.options.repo`: GET /v1/run-options takes `repo` (a project checkout, as POST /v1/runs `repo`): the options for a run of that project, with its own agent profiles; `runs.options.sandbox`: GET /v1/run-options `drivers[].sandboxes`: whether each driver can run in each sandbox (logins and agent environments are per sandbox); POST /v1/runs refuses a `driver` and `sandbox` that can't go together (422); `runs.options.models`: GET /v1/run-options `drivers[].models`: the models each driver's planner can run on (an id, a display name and a one-line note); POST /v1/runs takes `model`, one of them; `agent.steps`: agent.step events: one durable event per finished step of an agent (its kind, count, start and end), in order, replayed by GET /v1/events and delivered on run streams; `logins`: GET /v1/logins: whether agents can log in to Claude and Codex in each sandbox, how (plan or API key), and the command that logs in; `environments`: GET /v1/environments: each sandbox's agent environment (ready, missing, building or failed), its tool versions, and the command that builds it; `service`: GET /v1/service: whether capcomd runs as a background service (installed, loaded), and the commands that install and uninstall it; `sandboxes`: GET /v1/sandboxes and /v1/sandboxes/{name}: each place agents run as a provider descriptor (label, kind, caps, which settings, info rows and actions it has), with its settings and info as typed fields; GET /v1/logins and /v1/environments take `sandbox`, and logins carry `hostBound` and `boundTo`; `sandboxes.resources`: GET /v1/sandboxes/{name}/resources and …/resources/{id}: the machines capcomd's agents run on at that place (owned by an agent, or orphaned), and the `capcomd sandbox shell` command that opens a shell in one; `sandboxes.settings`: PATCH /v1/sandboxes/{name}/settings (the `configure` scope): change a place's settings (the idle machine lifetime; Docker's memory per agent); fields carry `editable` and `source`, and each change is a sandbox.settings_changed event on the daemon stream. Machines of capcomd's own jobs (checks, logins, environment builds) carry an owner of their `kind` instead of reading as orphaned; `sandboxes.actions`: POST /v1/sandboxes/{name}/resources/{id}/actions/delete (the steer scope, an Idempotency-Key): delete a machine. An agent's machine is deleted by cancelling that agent, a machine left behind by its provider; capcomd's own jobs' machines can't be. Resources carry `destructive` and the daemon's `confirm` question; sandbox.resource_action and sandbox.resource_deleted audit it on the daemon stream; `projects.setup`: GET /v1/projects/inspect and POST /v1/projects (the `configure` scope, an Idempotency-Key): set up a folder on the daemon's machine as a capcomd project (a GitHub checkout), as `capcomd setup project` does, and add it to capcomd's projects; each setup is a project.configured event on the daemon stream; `projects.known`: GET /v1/projects/known: capcomd's projects with their checkout folders on the daemon's machine, and which is the default; `projects.git`: POST /v1/projects/git-init, GET /v1/projects/publish-options and POST /v1/projects/publish (the `configure` scope for the POSTs, each with an Idempotency-Key): take a plain folder to a GitHub checkout before setting it up: start a git repository in it, then create its GitHub repository with the GitHub CLI (the first commit made when there is none, likely secrets refused) and push. Audited as project.git_initialized and project.published on the daemon stream. POST /v1/projects takes `check` as optional and `gitignore`; `runs.goal_branch`: Goal branches: POST /v1/runs takes `base` and `goalBranch`; Run.goalBranch; GET /v1/projects/branches (the base menu and the suggested goal branch); GET /v1/runs/{runId}/goal (the branch against its base, what landed and what didn't, the planner's summary); POST /v1/runs/{runId}/pull-request and /keep-branch (the steer scope); run.goal_completed, run.pr_opened and run.branch_kept events; `agents.title`: Agent titles: Agent.title and titleSource (the user's, else the agent's own, its parent's or the driving harness's, else derived from the task); PUT and DELETE /v1/runs/{runId}/agents/{agentId}/title (the steer scope): the user's title, which sticks until they clear it; agent.titled on run streams and the lifecycle feed; Run.titleSource agent (the planner named the run) and run.titled; `agents.thread_tail`: GET /v1/runs/{runId}/agents/{agentId}/thread/tail: an agent's newest thread items by position, with `before` (the page above them, for scrolling up) and `cursor` (where GET …/thread and live frames take over), so a long thread opens on its latest messages; `plugins`: GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; GET /v1/plugins/{name} (its manifest and config, never a secret); POST /v1/plugins/{name}/enable and /disable (the configure scope, an Idempotency-Key); plugin.* events on the daemon stream audit the plugin host; `profiles`: GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there; `plugins.protocol`: The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process; `triggers`: Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from; `profiles.edit`: GET /v1/profiles/{name}: one profile as typed rows a client renders and edits (each with the file that sets it, `source` and `editable`) and its `rev`; PUT /v1/profiles/{name} (the `configure` scope, an Idempotency-Key): change them in the profile's own file, its version bumped; each write is a profile.changed event on the daemon stream; `plugins.config`: Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.trusted on the daemon stream audits a trust; `profiles.facts`: GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) and `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for; `runs.options.planners`: GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, a sandbox.environment that isn't built, a lifecycle plugin that isn't active, no agent environment). This daemon always sends it; optional because daemons from before capabilities don't: treat a missing list as empty"
                     }
                   },
                   "required": [
@@ -6657,6 +6657,63 @@
                         ]
                       },
                       "description": "Every listed place, in order: today docker, then boxd"
+                    },
+                    "planners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                            "description": "The profile (GET /v1/profiles has the rest of it): `capcomd run --planner <name>`"
+                          },
+                          "title": {
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "x-untrusted": true,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "provider": {
+                            "type": "string",
+                            "description": "The agent provider it runs on, by its plugin's name: claude or codex today"
+                          },
+                          "model": {
+                            "description": "Its model; null: the provider CLI's default",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "default": {
+                            "type": "boolean",
+                            "description": "The planner a run without one uses (the profile named planner); `drivers[]` are this one on each provider"
+                          },
+                          "available": {
+                            "type": "boolean",
+                            "description": "A run can start with it now, in the daemon's sandbox (its profile's sandbox.provider when it names one)"
+                          },
+                          "reason": {
+                            "description": "Why not, one short sentence written by the daemon naming what fixes it (trusted; never a credential): its login, a project skill not trusted yet, its sandbox.environment that sandbox has no build of, a lifecycle plugin that isn't active on this daemon, or no agent environment built there. null when available",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "title",
+                          "provider",
+                          "model",
+                          "default",
+                          "available",
+                          "reason"
+                        ]
+                      },
+                      "description": "Capability runs.options.planners. Every profile that can plan (it may spawn agents: children.allowSpawn), in the profiles' order (GET /v1/profiles), each with whether a run can start with it now and why not. Empty when none can, or the profiles can't be read"
                     }
                   },
                   "required": [
@@ -11532,6 +11589,78 @@
                               ]
                             },
                             "description": "The files laid together to make it, first to last (a later one wins): its `extends` ancestors (root first), itself, then its overrides (the user's, then the project's)"
+                          },
+                          "title": {
+                            "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                            "x-untrusted": true,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fit": {
+                            "type": "string",
+                            "description": "Capability profiles.facts. What it is fit for, one sentence written by the daemon from its settings only, never from its description or title (what it may do, whether it reports, provider, model, effort and cost, limits, whom it leads), e.g. \"read-only; answers with a report (spawn it with report); Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn\": as capcomd_profiles gives it to a planner"
+                          },
+                          "cost": {
+                            "description": "Capability profiles.facts. Its model's list price, relative to the others its provider offers: what a planner gives mechanical parts the low one by. null when its model is the CLI's default or one capcomd doesn't rate",
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high",
+                              null
+                            ],
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "canReport": {
+                            "type": "boolean",
+                            "description": "Capability profiles.facts. It may be spawned to answer with a report (its `permissions.report`; unset: it may)"
+                          },
+                          "skills": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "The skill's name (a profile file's `skills[].name`: lowercase letters, digits, - and _)"
+                                },
+                                "source": {
+                                  "type": "string",
+                                  "description": "Where its SKILL.md came from: project (a profile package in the project's profiles), user (yours: ~/.capcomd/profiles, or ~/.claude/skills), builtin. More may be added: treat one you don't know as user"
+                                },
+                                "hash": {
+                                  "type": "string",
+                                  "description": "sha256:<hex> of its SKILL.md: what an agent of the profile is pinned with"
+                                },
+                                "trusted": {
+                                  "type": "boolean",
+                                  "description": "false: a project skill the operator hasn't trusted as it is now; a spawn of the profile is refused until `capcomd profiles trust <name>` (an interactive prompt that shows each). Yours and capcomd's need no trust: always true"
+                                },
+                                "changed": {
+                                  "type": "boolean",
+                                  "description": "It was trusted before with other content (its SKILL.md changed since); `trusted` is then false"
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "source",
+                                "hash",
+                                "trusted",
+                                "changed"
+                              ]
+                            },
+                            "description": "Capability profiles.facts. The skills its agents are pinned with, in its order: names and hashes, never their text (`capcomd profiles show <name>` names each file). Empty when it has none"
+                          },
+                          "untrustedSkills": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Capability profiles.facts. The names of its project skills that aren't trusted as they are (`skills[].trusted` false): a spawn of it is refused until `capcomd profiles trust <name>`. Empty when none: nothing is refused for trust"
                           }
                         },
                         "required": [
@@ -11811,6 +11940,78 @@
                             ]
                           },
                           "description": "The files laid together to make it, first to last (a later one wins): its `extends` ancestors (root first), itself, then its overrides (the user's, then the project's)"
+                        },
+                        "title": {
+                          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                          "x-untrusted": true,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "fit": {
+                          "type": "string",
+                          "description": "Capability profiles.facts. What it is fit for, one sentence written by the daemon from its settings only, never from its description or title (what it may do, whether it reports, provider, model, effort and cost, limits, whom it leads), e.g. \"read-only; answers with a report (spawn it with report); Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn\": as capcomd_profiles gives it to a planner"
+                        },
+                        "cost": {
+                          "description": "Capability profiles.facts. Its model's list price, relative to the others its provider offers: what a planner gives mechanical parts the low one by. null when its model is the CLI's default or one capcomd doesn't rate",
+                          "enum": [
+                            "low",
+                            "medium",
+                            "high",
+                            null
+                          ],
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "canReport": {
+                          "type": "boolean",
+                          "description": "Capability profiles.facts. It may be spawned to answer with a report (its `permissions.report`; unset: it may)"
+                        },
+                        "skills": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "The skill's name (a profile file's `skills[].name`: lowercase letters, digits, - and _)"
+                              },
+                              "source": {
+                                "type": "string",
+                                "description": "Where its SKILL.md came from: project (a profile package in the project's profiles), user (yours: ~/.capcomd/profiles, or ~/.claude/skills), builtin. More may be added: treat one you don't know as user"
+                              },
+                              "hash": {
+                                "type": "string",
+                                "description": "sha256:<hex> of its SKILL.md: what an agent of the profile is pinned with"
+                              },
+                              "trusted": {
+                                "type": "boolean",
+                                "description": "false: a project skill the operator hasn't trusted as it is now; a spawn of the profile is refused until `capcomd profiles trust <name>` (an interactive prompt that shows each). Yours and capcomd's need no trust: always true"
+                              },
+                              "changed": {
+                                "type": "boolean",
+                                "description": "It was trusted before with other content (its SKILL.md changed since); `trusted` is then false"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "source",
+                              "hash",
+                              "trusted",
+                              "changed"
+                            ]
+                          },
+                          "description": "Capability profiles.facts. The skills its agents are pinned with, in its order: names and hashes, never their text (`capcomd profiles show <name>` names each file). Empty when it has none"
+                        },
+                        "untrustedSkills": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Capability profiles.facts. The names of its project skills that aren't trusted as they are (`skills[].trusted` false): a spawn of it is refused until `capcomd profiles trust <name>`. Empty when none: nothing is refused for trust"
                         }
                       },
                       "required": [
@@ -12228,6 +12429,78 @@
                             ]
                           },
                           "description": "The files laid together to make it, first to last (a later one wins): its `extends` ancestors (root first), itself, then its overrides (the user's, then the project's)"
+                        },
+                        "title": {
+                          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                          "x-untrusted": true,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "fit": {
+                          "type": "string",
+                          "description": "Capability profiles.facts. What it is fit for, one sentence written by the daemon from its settings only, never from its description or title (what it may do, whether it reports, provider, model, effort and cost, limits, whom it leads), e.g. \"read-only; answers with a report (spawn it with report); Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn\": as capcomd_profiles gives it to a planner"
+                        },
+                        "cost": {
+                          "description": "Capability profiles.facts. Its model's list price, relative to the others its provider offers: what a planner gives mechanical parts the low one by. null when its model is the CLI's default or one capcomd doesn't rate",
+                          "enum": [
+                            "low",
+                            "medium",
+                            "high",
+                            null
+                          ],
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "canReport": {
+                          "type": "boolean",
+                          "description": "Capability profiles.facts. It may be spawned to answer with a report (its `permissions.report`; unset: it may)"
+                        },
+                        "skills": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "The skill's name (a profile file's `skills[].name`: lowercase letters, digits, - and _)"
+                              },
+                              "source": {
+                                "type": "string",
+                                "description": "Where its SKILL.md came from: project (a profile package in the project's profiles), user (yours: ~/.capcomd/profiles, or ~/.claude/skills), builtin. More may be added: treat one you don't know as user"
+                              },
+                              "hash": {
+                                "type": "string",
+                                "description": "sha256:<hex> of its SKILL.md: what an agent of the profile is pinned with"
+                              },
+                              "trusted": {
+                                "type": "boolean",
+                                "description": "false: a project skill the operator hasn't trusted as it is now; a spawn of the profile is refused until `capcomd profiles trust <name>` (an interactive prompt that shows each). Yours and capcomd's need no trust: always true"
+                              },
+                              "changed": {
+                                "type": "boolean",
+                                "description": "It was trusted before with other content (its SKILL.md changed since); `trusted` is then false"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "source",
+                              "hash",
+                              "trusted",
+                              "changed"
+                            ]
+                          },
+                          "description": "Capability profiles.facts. The skills its agents are pinned with, in its order: names and hashes, never their text (`capcomd profiles show <name>` names each file). Empty when it has none"
+                        },
+                        "untrustedSkills": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Capability profiles.facts. The names of its project skills that aren't trusted as they are (`skills[].trusted` false): a spawn of it is refused until `capcomd profiles trust <name>`. Empty when none: nothing is refused for trust"
                         }
                       },
                       "required": [
