@@ -694,8 +694,9 @@ export function harnessApp(o: ServerOptions) {
 		return idempotent(c, [`plugins.${action}`, name], async (client) => {
 			const d = host.detail(name);
 			if (!d) return gone(`plugin ${name.slice(0, 64)}`);
-			// The kernel's own plugins hold the places, agents, forges and front doors the daemon runs on: they stay up.
-			if (action === "disable" && d.source === "builtin") return { status: 409, body: { code: "conflict", message: `${name} is built into capcomd: it can't be disabled while the daemon runs` } };
+			// The kernel's own plugins hold the places, agents, forges and front doors the daemon runs on: they stay up. One
+			// a person turns on (the watchdog) they may turn off.
+			if (action === "disable" && d.source === "builtin" && !(await import("../plugins/builtins")).OPT_IN.has(name)) return { status: 409, body: { code: "conflict", message: `${name} is built into capcomd: it can't be disabled` } };
 			try { return { status: 200, body: action === "enable" ? await host.enable(name, `client:${client.clientId}`) : await host.disable(name) }; } catch (e) {
 				if (e instanceof PluginError) return { status: PLUGIN_STATUS[e.code], body: { code: e.code, message: e.message } };
 				throw e;

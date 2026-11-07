@@ -534,6 +534,25 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
     expect(((await (await app.request("/v1/health")).json()) as { capabilities: string[] }).capabilities).toContain("plugins");
   });
 
+  test("POST /v1/plugins/{name}/disable refuses a built-in (409) except the watchdog, which a person turns on and may turn off", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-plugins-toggle-"));
+    const cpath = join(dir, "clients.json");
+    const token = addClient("operator", ["read", "configure"], cpath).token;
+    const { BUILTINS, candidateOf } = await import("../../src/plugins/builtins");
+    const { host } = makeHost();
+    await host.start(BUILTINS.filter((b) => ["forge-git", "watchdog"].includes((b.manifest as M).name as string)).map((b) => ({ ...candidateOf(b), enabled: true })));
+    const app = harnessApp({ source: memorySource({}), clients: () => loadClients(cpath), state: harnessState(null), plugins: () => host.list(), pluginHost: host });
+    const post = (p: string, key: string) => app.request(p, { method: "POST", headers: { authorization: `Bearer ${token}`, "idempotency-key": key } });
+    const refused = await post("/v1/plugins/forge-git/disable", "key-toggle-1");
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ code: "conflict", message: "forge-git is built into capcomd: it can't be disabled" });
+    expect(host.get("forge-git")).toMatchObject({ state: "active" });
+    const off = await post("/v1/plugins/watchdog/disable", "key-toggle-2");
+    expect(off.status).toBe(200);
+    expect(await off.json()).toMatchObject({ name: "watchdog", state: "disposed", cause: "disabled", enabled: false });
+    await host.stop();
+  });
+
   test("capcomd plugins list: the running daemon's listing, else what one would load (the built-ins)", async () => {
     const home = mkdtempSync(join(tmpdir(), "capcomd-plugins-cli-"));
     const cli = (...args: string[]) => {

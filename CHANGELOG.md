@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `capcomd plugins disable <name>` and `capcomd plugins enable <name>` turn a plugin off and on. The choice is
+  saved in your config (`plugins.<name>.enabled` in `~/.capcomd/config.json`), so it survives a daemon restart, and a
+  running daemon applies it at once (`enable` also resets a plugin whose hooks were suspended after failing). With no
+  daemon running, only the config changes and the command says so. Built-in plugins can't be disabled, except the
+  watchdog, which you turn on yourself. Before, only the API could do this, and only until the daemon restarted.
+- Changed: a command whose plugin isn't running (`capcomd <command>` from a plugin that is disabled or failed to
+  start) now names the plugin and why it isn't running, with the next step (`capcomd plugins enable <name>`), instead
+  of "unknown command". `GET /v1/plugins` lists the CLI commands each plugin declares (`commands`).
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its

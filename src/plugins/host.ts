@@ -81,15 +81,16 @@ function testPlugins(env: Record<string, string | undefined>): Candidate[] {
 /** A plugin's data directory (§4.2): <home>/state/plugins/<name>/, made by whoever writes there first. */
 export const pluginDataDir = (name: string, env: Record<string, string | undefined> = process.env) => join(stateDir(env), "plugins", name);
 
-/** Where the running daemon keeps its plugin listing for `capcomd plugins list` (the CLI has no API token). */
+/** Where the running daemon keeps its plugin listing for `capcomd plugins list` (the CLI has no API token), with the
+ *  harness socket it serves (`socket`), where `capcomd plugins enable|disable` reach it (src/cli/daemon.ts). */
 export const pluginsSnapshotPath = (env: Record<string, string | undefined> = process.env) => join(stateDir(env), "plugins.json");
-export type PluginsSnapshot = { pid: number; at: string; plugins: PluginSummary[] };
+export type PluginsSnapshot = { pid: number; at: string; plugins: PluginSummary[]; socket?: string };
 
-function writeSnapshot(path: string, plugins: PluginSummary[]) {
+function writeSnapshot(path: string, plugins: PluginSummary[], socket: string | undefined) {
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins } satisfies PluginsSnapshot), { mode: 0o600 });
+    writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins, ...(socket ? { socket } : {}) } satisfies PluginsSnapshot), { mode: 0o600 });
     renameSync(tmp, path);
   } catch { /* the listing is a convenience; the daemon runs without it */ }
 }
@@ -141,9 +142,10 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
  * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2), `ctx.agents` (§8.4, src/plugins/services.ts) and
  * `ctx.storage` (§8.4; one process writes a plugin's storage): a CLI's local host has none of them, `unsupported`.
  * `triggers`: they get `ctx.triggers` too (§16.3; the daemon's only). `process`: the plugin socket out-of-process
- * plugins connect to (§9.2); without it they stay `validated` (a CLI's local host).
+ * plugins connect to (§9.2); without it they stay `validated` (a CLI's local host). `snapshot`: where the listing goes,
+ * with `socket`, the harness socket the daemon serves.
  */
-export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
+export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; socket?: string; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
     if (e.stream !== "daemon") throw new PluginError("unsupported", `the host writes its own events on the daemon stream only (${e.type})`);
@@ -183,7 +185,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
     },
     sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent },
     ...(o.process ? { launcher: processLauncher({ socket: o.process.socket, log }), ...(o.process.timings ? { processTimings: o.process.timings } : {}) } : {}),
-    ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins) } : {}),
+    ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins, o.socket) } : {}),
   });
 }
 

@@ -147,6 +147,24 @@ describe("a plugin's command answers with the envelope and the caller's principa
     expect(h.code).toBe(0);
     expect(JSON.parse(h.out)).toMatchObject({ schema: "relay.v1", ok: true, hermes: { found: expect.any(Boolean), ok: expect.any(Boolean) } });
   });
+
+  test("a command whose plugin isn't running names the plugin and why, not an unknown command; its listing has its commands", () => {
+    const run = (extra: Record<string, string>, ...args: string[]) => {
+      const p = Bun.spawnSync([process.execPath, CLI, ...args], { cwd: home, env: { ...childEnv(), ...extra }, stdout: "pipe", stderr: "pipe" });
+      return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+    };
+    expect(JSON.parse(cli("plugins", "list", "--json").out).plugins.find((p: { name: string }) => p.name === "echo")).toMatchObject({ commands: ["echo"] });
+    const off = run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "hi", "--json");
+    expect(off.code).toBe(2);
+    expect(JSON.parse(off.out)).toEqual({ schema: "relay.v1", ok: false, error: { code: "config", message: "capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)", hint: "Turn it on: capcomd plugins enable echo", reason: "plugin:echo" } });
+    // With a flag the kernel's table doesn't know, too.
+    expect(run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "--channel", "x").err).toContain("capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)");
+    const broken = run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "maybe" }, "echo", "hi");
+    expect(broken.code).toBe(2);
+    expect(broken.err).toContain("✗ capcomd echo is the echo plugin's command, and echo isn't running: failed (config_invalid)");
+    expect(broken.err).toContain("capcomd plugins show echo says more.");
+    expect(run({}, "frobnicate")).toMatchObject({ code: 2, err: expect.stringContaining("unknown command: frobnicate") });
+  });
 });
 
 describe("a plugin's tool answers with the envelope and the driver's principal (§4.7.2, §11.2)", () => {

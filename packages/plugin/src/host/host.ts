@@ -58,6 +58,9 @@ export interface PluginSummary {
   seams: Array<{ kind: "sandbox" | "agent" | "forge"; name: string }>;
   hooksSuspended: boolean;
   stats: HookStats;
+  /** The CLI commands its manifest declares (`capcomd <command>`, §4.7.1); absent when it adds none. A front door that
+   *  isn't active is listed with them, so `capcomd <command>` can say which plugin it needs and why it isn't running. */
+  commands?: string[];
 }
 
 type HostSinks = Pick<ContextOptions<unknown>, "emit" | "subscribe" | "replay" | "log" | "span" | "redact" | "secret">;
@@ -538,6 +541,7 @@ export class PluginHost {
       seams: r.state === "active" ? regs.flatMap((x) => x.kind === "seam" ? [{ kind: x.seam, name: x.name }] : []) : (m?.contributes?.seams ?? []).map((s) => ({ kind: s.kind, name: s.name })),
       hooksSuspended: r.state === "active" && this.hooks.suspended(r.name),
       stats: this.hooks.stats(r.name),
+      ...(m?.contributes?.cli?.length ? { commands: m.contributes.cli.map((c) => c.name) } : {}),
     };
   }
 }

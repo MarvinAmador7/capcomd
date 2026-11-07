@@ -227,7 +227,9 @@ looks every other one up among the registrations of the process's plugin host (`
 built-ins every process loads, the front doors among them). A kernel front door's command is parsed with the kernel's
 own flag table (a misspelled flag is a usage error before anything runs), prints its own output (the kernel's text, its
 streams, its prompts) and MAY answer `{exit: number}` (`CliExit`) instead of an envelope; from any other plugin that is an
-error. An in-process command runs in the CLI's own process, so only a built-in's (or, under `bun test`, a
+error. A command no active plugin registered, but whose plugin's manifest declares it (`commands` in the listing, §13.2),
+is refused naming that plugin, its state and cause (`config`, reason `plugin:<name>`; for a disabled one the hint is
+`capcomd plugins enable <name>`), not as an unknown command. An in-process command runs in the CLI's own process, so only a built-in's (or, under `bun test`, a
 `CAPCOMD_TEST_PLUGINS` directory's) can. A third-party plugin runs out of process, and protocol 1 carries no command (§9.6):
 its manifest can't declare one (§4.9), so no command of it can run host code, with or without the host.
 
@@ -1210,9 +1212,14 @@ The routes are in the committed contract, `openapi/capcomd.json`, generated from
 /v1/plugins/{name}/events`, `GET /v1/plugins/{name}/storage`, `GET|PUT|DELETE /v1/plugins/{name}/storage/{key}` (feature
 flag `plugins.protocol`), with their bodies (`PluginDetail`, `SessionOpen`, `SessionOpened`, `HookFrame`, `HookAnswer`,
 `EmitBody`, `StorageEntry`) and the `plugin.*` events the host writes. The draft fragment they were specified in
-(`openapi/drafts/plugin-api.fragment.json`) is deleted (§17.2 step 9). `enable` and `disable` act for the daemon's life
-(config doesn't record `plugins.<name>.enabled` until §10.2's layering), and a built-in can't be disabled through the
-API (409: the kernel runs on its places, agents, forges and front doors). The events not written yet
+(`openapi/drafts/plugin-api.fragment.json`) is deleted (§17.2 step 9). `enable` and `disable` act on the running daemon
+and don't write config; `capcomd plugins enable|disable <name>` records `plugins.<name>.enabled` in the user's config
+(§10.2), which the daemon reads at its start, and then calls them on the running daemon if one runs, so the change acts
+now and lasts. The CLI reaches the daemon at the harness socket the daemon records beside its listing
+(`state/plugins.json`), with a token it makes for that call and deletes once answered (`src/cli/daemon.ts`); with no
+daemon running it only writes the config and says so. A built-in can't be disabled (409, and the CLI refuses it as a
+`conflict` before writing anything: the kernel runs on its places, agents, forges and front doors), except one a person
+turns on, the watchdog (§16.4). The events not written yet
 (`plugin.config_refused`, `plugin.hook_deprecated`, `plugin.trusted`, `trigger.*`) join the contract with the steps that
 write them; their data shapes are `packages/plugin/src/events.ts`. `packages/plugin/test/protocol.test.ts` checks the
 contract holds every route and that its frames and hook names are the package's.
@@ -1495,7 +1502,8 @@ process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin'
 ### 13.2 `GET /v1/plugins`
 
 Every discovered plugin with `state`, `enabled`, `cause`, `hooks`, `seams`, `hooksSuspended` and `stats {calls, failures,
-dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
+dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2), and `commands`, the CLI
+commands its manifest declares, whatever its state (absent when none; §4.7.1); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
 secrets. `capcomd plugins list|show` print the same. `/v1/health` gains the feature flag `plugins`.
 
 ### 13.3 Logs
@@ -2132,6 +2140,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
+| 1.0.37 | 2026-11-06 | `capcomd plugins enable\|disable <name>` (§5.4, §6.5, §9.9): they record `plugins.<name>.enabled` in the user's config and call `POST /v1/plugins/{name}/enable\|disable` on the running daemon (at the harness socket it now records in `state/plugins.json`, with a token made for the call and deleted after), so a toggle lasts past a restart; with no daemon only the config changes. A built-in is still refused (409, the CLI's `conflict`), except the watchdog, which a person turns on and may turn off. `GET /v1/plugins` lists each plugin's declared CLI `commands` (§13.2, additive), and a command whose plugin isn't running is refused naming the plugin and its cause instead of as an unknown command (§4.7.1). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

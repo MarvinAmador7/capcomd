@@ -653,6 +653,7 @@ export const PluginSummary = z.object({
 		p95Ms: z.number().nullable(),
 		lastFailureAt: Timestamp.nullable(),
 	}),
+	commands: z.array(z.string()).optional().describe("The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"),
 });
 export const Plugins = z.object({ plugins: z.array(PluginSummary).describe("In load order, then the plugins that didn't load, in the order they were discovered") });
 export const PLUGINS_DOC = "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. " +
