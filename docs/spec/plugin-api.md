@@ -1009,7 +1009,7 @@ rules the signatures cannot.
 | `mcp` | `tool`, `instructions` | | §4.7.2 |
 | `api` | `route`, `capability` | | §4.7.3 |
 | `ui` | `descriptor` | | §4.7.5 |
-| `events` | `emit`, `subscribe`, `replay` | `emit`: steer; others: read | scope `appendEvent`, the SSE source (`src/api/source.ts`) |
+| `events` | `emit`, `subscribe`, `replay` | `emit`: steer; others: read | scope `recordPluginEvent`, the daemon's events; `subscribe`, `replay`: `src/plugins/events.ts` (the daemon only, §8.4) |
 | `storage` | `get`, `put`, `cas`, `delete`, `list` | | kv with the `plugin/<name>/` prefix; `state/plugins/<name>/` |
 | `runs` | `new`, `get`, `list`, `end`, `pause`, `resume`, `title` | steer (`get`, `list`: read) | `ops.runNew`, `endRun`, `pauseAgents`, `recentRuns`, `setRunTitle` |
 | `agents` | `spawn`, `get`, `tree`, `await`, `cancel`, `grant`, `title`, `notice` | steer (`get`, `tree`, `await`: read) | `spawnAgent`, `treeOf`, `awaitAgents`, `cancelAgents`, `grantBudget`, `setAgentTitle`, `notice` |
@@ -1044,6 +1044,18 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 
 - `events.emit`: only `plugin.<name>.<type>` with a declared `type`; `data` redacted and ≤ 64 KB; `text` ≤ 500 chars.
   `subscribe` delivers in order and never concurrently to one handler; a handler that throws is logged and skipped.
+- `events.subscribe` and `events.replay` are the daemon's host's (`src/plugins/events.ts`). A stream is `daemon` or a
+  run id; anything else is `invalid`. Both give the durable envelopes `GET /v1/events` gives, with its `seq` and
+  `entitySeq`: on `daemon` the daemon's own events (not the `run.created` frames the SSE stream makes from the run
+  list), on a run its scope events, read through the engine; never an ephemeral frame. `replay(stream, after)` is every
+  such event after `after`; a run that doesn't exist is `not_found`. `subscribe` delivers what comes after
+  `filter.after`, or without it after the stream's head (the daemon's when it is called, a run's when it first reads
+  it); `filter.types` names exact types, none: every type. The host polls each subscription (500 ms), one read at a
+  time, and awaits each handler before calling it again; a read that fails is retried from the same cursor, and a run
+  that doesn't exist delivers nothing (logged) and isn't polled again. Disposing the subscription, or the plugin, stops
+  delivery: a handler already running finishes, and none is called after. A host that isn't the daemon's (a CLI's, the
+  MCP server's) has no stream to read and refuses both `unsupported`; so does a host with no sink for them (the test
+  kit), rather than register a subscription that never delivers.
 - `storage`: private to the plugin. Keys `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$`, values JSON ≤ 64 KB. Run scope is
   deleted with the run; daemon scope lives in `dataDir` and survives updates and reinstalls.
 - `kv`: the run's shared blackboard; reserved prefixes (`_`, `approval/`, `recipe/`, `handoff/`, `plugin/`) are
@@ -2132,6 +2144,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
+| 1.0.37 | 2026-11-06 | `ctx.events.subscribe` delivers and `ctx.events.replay` answers, in the daemon's host (§8.4, `src/plugins/events.ts`): the envelopes `GET /v1/events` gives, on `daemon` (its own events, not the SSE stream's `run.created` frames) or a run's stream (through the engine); a stream that is neither is `invalid`, a run that doesn't exist `not_found` on replay; `subscribe` from `filter.after` or else the head, `filter.types` exact, polled, one handler call at a time; a host that isn't the daemon's, or has no sink for them (the test kit), refuses both `unsupported` instead of registering a subscription that never delivers. No contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
