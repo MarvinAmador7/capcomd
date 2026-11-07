@@ -25,6 +25,8 @@ import { ORCHESTRATION_SKILL_NAME, pinnedSkills } from "../profiles/skills";
 import { untrustedSkillsHint, untrustedSkillsProblem } from "../profiles/trust";
 import { attachmentId } from "../api/inline-cap";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
+import { hasVmCapcomd } from "../subagents/skill";
+import { mayRunJobs } from "../subagents/token";
 import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
 import { parseVerdict } from "./review";
@@ -969,7 +971,7 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
     await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
     return { kind: "ended" };
   }
-  const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId, prepared) : null;
+  const vmRpc = exec && hasVmCapcomd(a) ? await vmRpcFor(runId, a, w, agentId, prepared) : null;
   const review = reviewOf(a);
   const report = (a.contract as any)?.report === true;
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
@@ -987,7 +989,8 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const machine = pinnedMachine(a.spec);
   const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(consolidate ? { consolidate } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
-  return { kind: "pushed", pushed, vmRpc: !!vmRpc };
+  // `vmRpc`: an agent that may spawn ran with its capcomd, so its work may be all its children's (no branch of its own).
+  return { kind: "pushed", pushed, vmRpc: !!vmRpc && a.limits.allowSpawn };
 }
 
 /** After a push: charge it, release the VM, then finish the agent (or pause it at a usage limit or the operator's ask). */
@@ -1045,10 +1048,12 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   // Plugin API §16.1: an orchestrate agent's work is the agents it spawns. One that spawned none (its tools refused,
   // or it gave up) did nothing that can land: it failed, with its own last words, never a silent "done".
   const orchestrate = (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate";
-  const lastWords = orchestrate && typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
+  const lastWords = typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
   const blocked = orchestrate && !limit && !(await s.listAgents({})).some((x: ScopeAgent) => x.parent === agentId)
     ? { error: `${agentId} is an orchestrate agent and spawned no agents, so nothing it did can land${lastWords ? `. It said: ${lastWords.slice(0, 500)}` : ""}`, errorKind: "orchestrate_no_children" } : {};
-  const said = orchestrate && !declared.summary && lastWords ? { summary: lastWords } : {};
+  // An agent that declared no summary (`capcomd result --summary`) has its final message as one, so its parent reads
+  // what it said it did (a reviewer's final message is its verdict, not a summary).
+  const said = !review && !declared.summary && lastWords ? { summary: lastWords } : {};
   // ADR-025 §5.2: a consolidator's answer is staged on its branch by the kernel; that branch is its work.
   const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;
   // A consolidator's work is only what was staged: no list, nothing to stage or a staging that failed is no branch.
@@ -1326,7 +1331,8 @@ function fakeFileParams(f: { path?: string; content?: string }) {
   return f.path ? { fakePath: f.path, fakeContent: f.content ?? "" } : {};
 }
 
-/** Real agent allowed to spawn: token + pump on its VM; the runner installs CLI, MCP and skill. */
+/** Real agent with the in-VM capcomd (`hasVmCapcomd`): token + pump on its VM; the runner installs CLI, MCP and skill
+ *  (the orchestration skill for one that may spawn, the worker's lines for any other). */
 async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, prepared: PreparedSpec) {
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
@@ -1334,14 +1340,19 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
   // Its machine's sandbox, as recorded on its worker when it was made (its profile's, else the run's).
   const made = typeof wk?.context?.sandbox === "string" && wk.context.sandbox ? wk.context.sandbox as string : null;
   const { provider, sandbox } = await (await import("../dependencies")).providerForAgent(runId, pinnedMachine(a.spec).sandbox ?? made);
-  const { VM_RPC_DIR } = await import("../subagents/skill");
+  const { VM_RPC_DIR, workerSkill } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
   // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.
   const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
   const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
-  const skill = await unpreparedSkill(runId, a, prepared);
-  const params = { kind, rpcDir, ...(skill ? { skill } : {}) };
-  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
+  const maySpawn = a.limits.allowSpawn;
+  // The job ops: by its profile and the config it runs with (the daemon's tool and sandbox settings narrow it too).
+  const effective = await (async () => { try { return (await import("../agents/config")).loadAgentConfig(withSandbox(process.env, sandbox), a.ref, a.spec); } catch { return null; } })();
+  const jobs = mayRunJobs(a.spec, effective);
+  const orchestrate = (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate";
+  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ mcp: true, jobs: jobs && !orchestrate });
+  const params = { kind, rpcDir, ...(skill ? { skill } : {}), ...(maySpawn ? {} : { maySpawn: false }) };
+  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir, { jobs }) };
 }
 
 /**
@@ -1494,7 +1505,7 @@ export async function messageNote(runId: string, to: string): Promise<string | n
   if (!a) return null;
   if (TERMINAL_AGENT.has(a.status)) return `${to} is ${a.status}: nothing will read this message`;
   if ((a.spec as { provider?: string } | null)?.provider !== "codex") return null;
-  return a.limits.allowSpawn
+  return hasVmCapcomd(a)
     ? `${to} is a Codex agent: it can't read messages while it works, only when it checks its inbox (capcomd inbox)`
     : `${to} is a Codex agent that can't read messages while it works: this one stays in its inbox, unread`;
 }
