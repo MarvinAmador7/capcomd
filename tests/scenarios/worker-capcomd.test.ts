@@ -76,12 +76,15 @@ test("a worker whose profile runs no command of its own has no job ops: its job 
   runs.push(run);
   const agent = await spawnRoot(w, run, "tester", w.script("tester-capcomd", `r=$(capcomd job start -- 'echo should-not-run'); code=$?
 echo "job: exit $code $(printf "%s" "$r" | $S/jget error.reason)"
-capcomd result --summary "read the code" >/dev/null || exit 4`));
+capcomd result --summary "read the code" >/dev/null || exit 4
+e=$(capcomd result); echo "empty result: exit $? $(printf "%s" "$e" | $S/jget error.code)"`));
   const done = (await waitAll(w, run, [agent], 120_000)).agents[0];
   const logs = await logsOf(run, agent);
   if (done.status !== "done") console.log(logs);
   expect(done.status).toBe("done");
+  // An empty `capcomd result` (a tool called with no arguments) is refused, so it can't erase the one declared before.
   expect(done.result.summary).toBe("read the code");
+  expect(logs).toContain("empty result: exit 2 usage");
   expect(logs).toContain("job: exit 1 forbidden");
   expect(logs).toMatch(/\[capcomd\] job\.start → error forbidden: op "job\.start" is not in your token/);
   expect((await w.cj(["kv", "list", run, "--prefix", "_jobs/"])).j.entries ?? []).toEqual([]);

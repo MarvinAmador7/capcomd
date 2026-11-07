@@ -1336,7 +1336,7 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
   const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
   const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
   const maySpawn = a.limits.allowSpawn;
-  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ agentId, mcp: true, jobs: mayRunCommands(a.spec) });
+  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ mcp: true, jobs: mayRunCommands(a.spec) });
   const params = { kind, rpcDir, ...(skill ? { skill } : {}), ...(maySpawn ? {} : { maySpawn: false }) };
   return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
 }

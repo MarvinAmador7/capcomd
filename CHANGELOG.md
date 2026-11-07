@@ -15,7 +15,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agents and the context consolidator are unchanged.
 - Changed: an agent that ends without declaring a summary gets its final message as its `result.summary` (up to
   2,000 characters), so a parent, the driver and the apps always have something to read; a reviewer's verdict is
-  never used as one.
+  never used as one. `capcomd result` with nothing in it (no summary, artifacts or data) is refused instead of
+  recording an empty result over the one the agent declared.
 
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile

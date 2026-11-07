@@ -36,28 +36,31 @@ function notesAndLessons(agentId: string): string {
 /**
  * What an agent that may not spawn is told about its in-VM capcomd (appended to its instructions by the runner, as the
  * naming lines were): its tab, long commands as background jobs when its token has them (`jobs`), working notes and
- * lessons for the project's memory (ADR-025 §5.1), and the summary its parent reads.
+ * lessons for the project's memory (ADR-025 §5.1), and the summary its parent reads. Nothing in it is the agent's own
+ * (not even its id), so every agent of a profile starts with the same instructions and shares one cached prefix
+ * (ADR-025 §6.1's byte-identity): `capcomd status` tells it its id.
  */
-export function workerSkill(o: { agentId: string; mcp: boolean; jobs: boolean }): string {
+export function workerSkill(o: { mcp: boolean; jobs: boolean }): string {
   const tool = (name: string) => (o.mcp ? ` (capcomd_${name})` : "");
   return `${namingSkill({ mcp: o.mcp })}
 
 # Your capcomd
 
-You are agent ${o.agentId}. The \`capcomd\` command${o.mcp ? " (or the equivalent capcomd_* MCP tools)" : ""} talks to the orchestrator that runs
-you; all output is JSON and \`capcomd help\` lists the commands. You work alone: spawning, verifying and merging are
-your parent's (they are refused for you).
+The \`capcomd\` command${o.mcp ? " (or the equivalent capcomd_* MCP tools)" : ""} talks to the orchestrator that runs you; all output is JSON
+and \`capcomd help\` lists the commands (\`capcomd status\` shows your own record, with your agent id). You work alone:
+spawning, verifying and merging are your parent's (they are refused for you).
 ${o.jobs ? `
 ## Long commands run as background jobs
-A command that may take more than a minute (a whole test suite, a build, a benchmark) runs best as a job:
-\`capcomd job start -- <command>\`${tool("job_start")}, e.g. \`capcomd job start -- npm test\`. It answers with the result
+A command that may take more than a minute (a whole test suite, a build, a benchmark) runs as a job, not in your shell
+tool (which cuts a long command off): \`capcomd job start -- <command>\`${tool("job_start")}, e.g.
+\`capcomd job start -- npm test\`. It answers with the result
 when the command ends within a minute; otherwise with state "running" and a job id, and you keep working: the result
 comes to you as a message from the job when it ends. \`capcomd job output <job>\` shows its output so far (and its
 result once it ended, if no message reached you), \`capcomd job list\` your jobs, \`capcomd job kill <job>\` stops one.
 Your jobs end when you do: wait for the results you need before you finish.
 ` : ""}
 ## Notes and lessons
-${notesAndLessons(o.agentId)}
+${notesAndLessons("<your agent id>")}
 - Never change .capcomd/context/ yourself.
 
 ## Before you finish

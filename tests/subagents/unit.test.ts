@@ -51,14 +51,16 @@ test("who gets the in-VM capcomd, and what a worker is told", () => {
   expect(hasVmCapcomd({ limits: leaf, contract: { review: { verifyId: "vfy-1" } }, profile: "reviewer" })).toBe(false);
   expect(hasVmCapcomd({ limits: leaf, contract: { report: true }, profile: "worker" })).toBe(false);
   expect(hasVmCapcomd({ limits: leaf, contract: null, profile: "context-consolidator" })).toBe(false);
-  const s = workerSkill({ agentId: "agt-w", mcp: true, jobs: true });
+  const s = workerSkill({ mcp: true, jobs: true });
   expect(s).toContain("# Name your tab (capcomd)");
   expect(s).toContain("capcomd job start -- <command>");
-  expect(s).toContain("kv under notes/agt-w");
+  expect(s).toContain("kv under notes/<your agent id>");
+  // Nothing of the agent's own: every agent of a profile starts with the same instructions (one cached prefix).
+  expect(s).not.toMatch(/agt-/);
   expect(s).toContain(`--data '{"context": [{"title": "…", "text": "…"}]}'`);
   expect(s).toContain('capcomd result --summary "<what you changed');
   expect(s).not.toContain("Orchestrating child agents");
-  expect(workerSkill({ agentId: "agt-w", mcp: false, jobs: false })).not.toContain("job start");
+  expect(workerSkill({ mcp: false, jobs: false })).not.toContain("job start");
 });
 
 test("MCP tools/list shows the tools the token allows; without a token, all", async () => {
@@ -207,7 +209,7 @@ test("skill injection: agents with the in-VM capcomd get it + MCP + their skill;
     await provider.waitReady(id, 1000);
     const cfg = loadAgentConfig({ CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_CLAUDE_BIN: FAKE, CAPCOMD_AGENT_POLL_MS: "50", ...env });
     const task = { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: r.bare, goal: o.goal ?? "make the failing test pass" };
-    const skill = worker ? workerSkill({ agentId: "agt-w", mcp: true, jobs: true }) : orchestrationSkill({ agentId: "agt-p", limits: { allowSpawn: true, maxDepth: 1, maxChildren: 3, allowedChildProfiles: ["worker"], budgetShare: 0.5 }, budget: { turns: 40 }, mcp: true });
+    const skill = worker ? workerSkill({ mcp: true, jobs: true }) : orchestrationSkill({ agentId: "agt-p", limits: { allowSpawn: true, maxDepth: 1, maxChildren: 3, allowedChildProfiles: ["worker"], budgetShare: 0.5 }, budget: { turns: 40 }, mcp: true });
     const out = await runClaudeCode(provider, id, task, cfg, { apiKey: "sk-ant-x", ...(withSkill ? { subagents: { skill, cliSource: readFileSync(CLI, "utf8"), rpcDir, ...(worker ? { maySpawn: false } : {}) } } : {}) } as any).then((x) => x, (e: Error) => e);
     const W = join(workdir, "task-1-e1");
     return { argv: readFileSync(join(W, "argv.txt"), "utf8").split("\n"), W, rpcDir, out };

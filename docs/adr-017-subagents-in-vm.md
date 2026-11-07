@@ -129,7 +129,10 @@ lines instead of the skill (`workerSkill`: its tab, long commands as background 
 lessons, the summary it ends with); one that ends with no change of its own still fails
 (`no_changes`), as before. A reviewer, a report agent and the consolidator get only the naming shim.
 An agent that declares no summary has its final message as `result.summary` (capped at 2,000
-characters; a reviewer's final message is its verdict, never a summary).
+characters; a reviewer's final message is its verdict, never a summary), and an empty `result` call
+(no summary, artifacts or data: a live Claude worker called `capcomd_result` with `{}`) is refused.
+The worker's lines name nothing of the agent's own (`capcomd status` gives it its id), so every
+agent of a profile starts with the same instructions.
 
 ## Testing
 - `tests/scenarios/` (regression gate in CI, `bun run test:scenarios`): scripted fake agents
