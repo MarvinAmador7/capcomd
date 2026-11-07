@@ -505,6 +505,19 @@ describe("profiles v2: loader and resolution", () => {
       expect(validate()).toMatchObject({ code: 2, ok: false, errors: [expect.stringContaining(`sandbox.provider "modal" isn't an active sandbox provider`)] });
     }, 30_000);
 
+    test("the CLI: an agents.json entry no daemon is running to confirm doesn't stop `set` and `add` on another; a new one naming such a provider is refused", () => {
+      const w = world({}, { g: { provider: "gemini", auth: "apikey" }, c: { provider: "claude", auth: "apikey" } }, "g");
+      const env = { ...w.source, ANTHROPIC_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json") };
+      const run = (args: string[]) => { const r = cli(["profiles", ...args, "--json"], env); return { code: r.code, ...JSON.parse(r.out || r.err) }; };
+      expect(run(["set", "c", "--max-turns", "5"])).toMatchObject({ code: 0, ok: true });
+      expect(run(["set", "g", "--max-turns", "6"])).toMatchObject({ code: 0, ok: true });
+      expect(run(["add", "other", "--provider", "claude", "--auth", "apikey"])).toMatchObject({ code: 0, ok: true });
+      expect(run(["add", "typo", "--provider", "claudee", "--auth", "apikey"])).toMatchObject({ ok: false, error: { message: expect.stringContaining(`provider "claudee" isn't an active agent provider`) } });
+      const f = JSON.parse(readFileSync(w.source.CAPCOMD_AGENTS_FILE, "utf8"));
+      expect(f).toMatchObject({ default: "g", agents: { g: { provider: "gemini", maxTurns: 6 }, c: { maxTurns: 5 }, other: { provider: "claude" } } });
+      expect(f.agents.typo).toBeUndefined();
+    }, 30_000);
+
     test("`validate` leaves a sandbox.environment on a sandbox only the daemon has to the daemon, instead of failing on it", () => {
       const w = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { provider: modal, environment: gpu }"]) });
       const env = { ...w.source, ANTHROPIC_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json") };

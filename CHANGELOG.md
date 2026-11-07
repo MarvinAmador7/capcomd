@@ -10,7 +10,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
   with no daemon running a name that isn't built in is a warning (`capcomd profiles validate` lists it) instead of an
   error; the daemon checks it again when an agent uses the profile. `capcomd profiles add`, `set` and `rm` still refuse
-  a change that names such a provider (a typo like `harness.provider: claudee`) unless the running daemon has it.
+  a change that names such a provider (a typo like `harness.provider: claudee`) unless the running daemon has it, and
+  a profile that already names one no longer stops a change to another (in `agents.json` too).
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its

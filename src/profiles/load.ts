@@ -21,9 +21,10 @@ const jsonError = (e: unknown) => (e as Error).message.replace(/\s*["'`][^]*$/, 
 export function agentsFilePath(source: Record<string, string | undefined> = process.env): string {
   return envVar("AGENTS_FILE", source) ?? defaultAgentsFile(source);
 }
-/** The v1 file alone, as written (what `capcomd profiles add|set|rm` edit). Every reader of profiles uses readProfiles. */
-export function readAgentsFile(path = agentsFilePath()): AgentsFile {
-  return parseAgentsFile(path, existsSync(path) ? readFileSync(path, "utf8") : null);
+/** The v1 file alone, as written (what `capcomd profiles add|set|rm` edit). Every reader of profiles uses readProfiles.
+ *  `seams`: where a provider no daemon is running to confirm goes instead of an error (src/profiles/v1.ts `SeamCheck`). */
+export function readAgentsFile(path = agentsFilePath(), seams?: SeamCheck): AgentsFile {
+  return parseAgentsFile(path, existsSync(path) ? readFileSync(path, "utf8") : null, seams);
 }
 /** An agents.json's text (null: no file) as readAgentsFile reads it. */
 function parseAgentsFile(path: string, text: string | null, seams?: SeamCheck): AgentsFile {
@@ -34,8 +35,8 @@ function parseAgentsFile(path: string, text: string | null, seams?: SeamCheck): 
   if (errs.length) throw new AgentConfigError(`${path}: ${errs.join("; ")}`);
   return raw as AgentsFile;
 }
-export function writeAgentsFile(f: AgentsFile, path = agentsFilePath()) {
-  const errs = validateFile(f);
+export function writeAgentsFile(f: AgentsFile, path = agentsFilePath(), seams?: SeamCheck) {
+  const errs = validateFile(f, seams);
   if (errs.length) throw new AgentConfigError(errs.join("; "));
   writeAtomic(path, agentsFileText(f));
 }
