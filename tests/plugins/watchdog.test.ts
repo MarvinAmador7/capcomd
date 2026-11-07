@@ -3,7 +3,8 @@
 // end of a job, verification or approval it waited on) and what doesn't (tool calls), `stalled` at stalledAfterMs and a
 // stop at stopAfterMs (both from the last progress), progress clearing the notice, waiting holding the clock, an agent
 // with agents of its own judged through them, its memory across a restart (the time the daemon was down doesn't count),
-// its one timer, and its config refused when the stop comes before the notice. The same against a daemon:
+// its one timer, its config refused when the stop comes before the notice, longer windows for an agent checkpointed
+// less often, and an agent it stopped forgotten even when nobody said it ended. The same against a daemon:
 // tests/scenarios/watchdog.test.ts.
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -14,7 +15,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import type { Agent, Job, JobSpec, Principal } from "../../packages/plugin/src/shapes";
 import type { AgentChange } from "../../packages/plugin/src/hooks";
 import type { StorageService } from "../../packages/plugin/src/context";
-import { manifest, plugin, stalledDetail, watchdog, watchdogPlugin, type WatchdogConfig, type WatchdogOptions } from "../../src/plugins/watchdog";
+import { manifest, plugin, stalledDetail, watchdog, watchdogPlugin, windowsFor, type WatchdogConfig, type WatchdogOptions } from "../../src/plugins/watchdog";
 import { pluginStore, storageService } from "../../src/plugins/storage";
 
 const MIN = 60_000;
@@ -254,6 +255,76 @@ describe("the watchdog", () => {
     expect(kinds(k)).toEqual(["agt-n1:stalled"]);
     at(45 * MIN); await tick();
     expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-n1"]);
+  });
+
+  test("an agent checkpointed less often than every 10 min gets longer windows: its files' changes show only then", async () => {
+    // The default interval keeps the default windows; one that isn't known too.
+    expect(windowsFor(CFG, 10 * MIN)).toEqual({ stalledAfterMs: 15 * MIN, stopAfterMs: 45 * MIN });
+    expect(windowsFor(CFG, null)).toEqual({ stalledAfterMs: 15 * MIN, stopAfterMs: 45 * MIN });
+    expect(windowsFor(CFG, 60 * MIN)).toEqual({ stalledAfterMs: 90 * MIN, stopAfterMs: 120 * MIN });
+    expect(windowsFor({ ...CFG, stopAfterMs: 0 }, 60 * MIN)).toEqual({ stalledAfterMs: 90 * MIN, stopAfterMs: 0 });
+    const k = kernel();
+    const hourly = k.agent("agt-h1"), plain = k.agent("agt-d1");
+    const asked: string[] = [];
+    let answering = false;
+    const checkpointEvery = async (_run: string, id: string) => { asked.push(id); if (!answering) throw new PluginError("unavailable", "no engine"); return id === "agt-h1" ? 60 * MIN : null; };
+    const { changed, tick } = await boot(k, { options: { showsWork: async () => true, checkpointEvery } });
+    await changed(hourly, started()); await changed(plain, started());
+    // The kernel didn't answer: neither is judged this time.
+    at(16 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    answering = true;
+    at(17 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-d1:stalled"]);
+    // Checkpointed hourly while its files keep changing: each checkpoint is its progress, and it is never stalled.
+    for (let m = 20; m <= 180; m += 5) {
+      at(m * MIN);
+      if (m % 60 === 0) await changed(hourly, ckpt());
+      await tick();
+    }
+    expect(kinds(k)).toEqual(["agt-d1:stalled"]);
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-d1"]);
+    // Its files stop changing after 180 min: stalled 90 min after (the detail says when the stop comes), stopped at 120.
+    at(269 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-d1:stalled"]);
+    at(270 * MIN); await tick();
+    expect(k.notices.at(-1)).toEqual({ agentId: "agt-h1", notice: { kind: "stalled", detail: stalledDetail(90 * MIN, { stopAfterMs: 120 * MIN }) } });
+    expect(k.notices.at(-1)!.notice!.detail).toEndWith("the watchdog stops it after 120 min without progress");
+    at(299 * MIN); await tick();
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-d1"]);
+    at(300 * MIN); await tick();
+    expect(k.cancels.map((c) => c.agentId)).toEqual(["agt-d1", "agt-h1"]);
+    // Asked once each once the kernel answered.
+    expect(asked).toEqual(["agt-h1", "agt-d1", "agt-h1", "agt-d1"]);
+  });
+
+  test("the kernel's answer: the interval the agent's worker reads; none for an agent no supervisor checkpoints", async () => {
+    const { checkpointEveryOf } = await import("../../src/plugins/services");
+    const source = { CAPCOMD_NO_CONFIG: "1", CAPCOMD_AGENTS_FILE: join(mkdtempSync(join(tmpdir(), "capcomd-wd-")), "agents.json"), CAPCOMD_AGENT: "claude", ANTHROPIC_API_KEY: "sk-test" };
+    // A profile's spec as it is pinned at spawn.
+    const hourly = { ref: "worker", spec: { kind: "claude-code", provider: "claude", auth: "apikey", checkpointEveryMs: 60 * MIN } };
+    expect(await checkpointEveryOf(hourly, source)).toBe(60 * MIN);
+    expect(await checkpointEveryOf({ ref: null, spec: null }, source)).toBe(10 * MIN);
+    expect(await checkpointEveryOf({ ref: null, spec: null }, { ...source, CAPCOMD_AGENT_CHECKPOINT_MS: String(30 * MIN) })).toBe(30 * MIN);
+    // Scripted and fake agents run under no supervisor.
+    expect(await checkpointEveryOf(hourly, { ...source, CAPCOMD_SPAWN_EXEC: "script" })).toBeNull();
+    expect(await checkpointEveryOf({ ref: null, spec: null }, { ...source, CAPCOMD_AGENT: "fake" })).toBeNull();
+  });
+
+  test("an agent it stopped whose end nobody told is forgotten at a later look, and its parent is judged again", async () => {
+    const k = kernel();
+    const p = k.agent("agt-sp"), c = k.agent("agt-sc", "agt-sp");
+    const { changed, tick, w } = await boot(k);
+    await changed(p, started()); await changed(c, { kind: "spawned" }); await changed(c, started());
+    at(46 * MIN); await tick();
+    expect(k.cancels.map((x) => x.agentId)).toEqual(["agt-sc"]);
+    // Its end never reaches the watchdog: the next look that checks on it lets it go.
+    k.agents.delete("agt-sc");
+    at(61 * MIN); await tick();
+    expect([...w.watched.keys()]).toEqual([`${RUN}/agt-sp`]);
+    // The planner, quiet since it spawned it, is judged on its own again.
+    at(62 * MIN); await tick();
+    expect(k.cancels.map((x) => x.agentId)).toEqual(["agt-sc", "agt-sp"]);
   });
 
   test("it loads and disposes cleanly, and answers every hook it declares", async () => {

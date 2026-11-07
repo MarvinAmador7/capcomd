@@ -189,8 +189,12 @@ test("capcomd logs shows what a real (CLI) agent does, and --follow streams it u
 
 test("send says when the agent can't read the message now: a Codex worker, a finished agent; nothing for a Claude worker", async () => {
   const run = (await cj(["run", "new"])).j?.runId;
+  // A Codex worker has the in-VM capcomd (every agent that does work), so it reads the message when it checks its inbox;
+  // a Codex report agent has none, so the message stays unread.
   const codex = (await cj(["spawn", run, "--profile", "coder", "--task", "x", "--key", "cx", "--no-start"])).j?.agentId;
-  expect((await cj(["send", run, codex, "hello"])).j?.note).toContain("Codex agent that can't read messages while it works");
+  expect((await cj(["send", run, codex, "hello"])).j?.note).toBe(`${codex} is a Codex agent: it can't read messages while it works, only when it checks its inbox (capcomd inbox)`);
+  const reporter = (await cj(["spawn", run, "--profile", "coder", "--task", "x", "--key", "cr", "--report", "--no-start"])).j?.agentId;
+  expect((await cj(["send", run, reporter, "hello"])).j?.note).toContain("Codex agent that can't read messages while it works");
   const claude = (await cj(["spawn", run, "--profile", "listener", "--task", "y", "--key", "cl", "--no-start"])).j?.agentId;
   expect((await cj(["send", run, claude, "hello"])).j?.note).toBeUndefined();
   await cj(["cancel", run, claude]);

@@ -646,7 +646,7 @@ this list says why):
   unset), but the agent works as a reporting agent does: a read-only checkout of the run's target, nothing of it kept,
   its final message its answer (a JSON block; a scripted agent's `capcomd result --data`). It reads its run in its
   prompt (every candidate fenced as its agent's text, refusals by number and reason, the run's verifies and merges by
-  id), since an agent that may not spawn has no in-VM `capcomd` to read kv with.
+  id), since a consolidator has no in-VM `capcomd` to read kv with (it answers with its final message).
 - The staging rules (deterministic: a replay stages the same files, and a branch already there is the answer): an `add`
   whose words are mostly an active item's (Jaccard ≥ 0.8) adds nothing and counts one more `helpful` (a memory item's: a
   fact's file, counters too, is a person's to change), an `add` titled as an active memory item supersedes it (the
@@ -821,6 +821,17 @@ says why):
   have admitted k = 1 and k = 3 for one model (sonnet), which is the point.
 - §12's "a `paths` column vs none" ablation is an arm (`index-paths`, the items without `paths`) run on the fake
   sandbox in CI; "each doctrine skill present vs absent" is not an arm yet (the index arms all get the skills).
+
+**Changed since: every working agent has the in-VM capcomd** (spec 1.0.39). A live run showed that with the profiles
+`capcomd setup project` writes no agent could propose a lesson (the workers can't spawn, so they had no `capcomd
+result`) or run a job. Now every agent that does work of its own has the in-VM capcomd with a leaf token (ADR-017 §2):
+notes in `kv`, `capcomd result --data '{"context": […]}'`, jobs, reads; never spawn, verify or merge. So the routing
+paragraph goes to every such agent (the router's test is `src/subagents/skill.ts` `hasVmCapcomd`, not
+`children.allowSpawn`), and the worker's own lines (`workerSkill`) carry step 2's short "Notes and lessons" paragraph,
+as the orchestration skill does. Still not to a reviewer, a report agent or the consolidator (D11; a consolidator's
+`result.data.context` is its answer, never candidates). A profile keeps room for the routing paragraph only when it may
+spawn, as before: a worker's profile that resolved before still does, and the router leaves the paragraph out (and logs
+it) when its other skills leave no room.
 
 ## 14. What the review changed
 
