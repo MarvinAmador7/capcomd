@@ -31,6 +31,9 @@ R='{"provider":"claude","auth":"subscription","maxTurns":15,"timeoutMs":600000,"
 printf '{"schema":"capcomd.agents/v1","agents":{"claude-worker":%s,"codex-worker":%s,"reviewer":%s}}\n' "$C" "$X" "$R" > "$AGENTS"
 export CAPCOMD_AGENTS_FILE="$AGENTS"
 export CAPCOMD_SANDBOX=boxd
+# No project template for the throwaway repository: it would be a boxd snapshot (8 GB or more) that nothing deletes.
+# Templates have their own tests; CAPCOMD_PROJECT_TEMPLATES=auto runs this with one.
+export CAPCOMD_PROJECT_TEMPLATES="${CAPCOMD_PROJECT_TEMPLATES:-off}"
 export CAPCOMD_REPO="https://github.com/$REPO.git" CAPCOMD_GITHUB_REPO="$REPO"
 export CAPCOMD_MERGE_MODE=pr CAPCOMD_MERGE_STRATEGY=squash CAPCOMD_MERGE_TARGET=integration CAPCOMD_TEST_COMMAND="bun test"
 export CAPCOMD_WORKDIR="$WORK/merge" CAPCOMD_TRACE_DIR="$WORK/traces" CAPCOMD_RPC_KEY_FILE="$WORK/rpc.key"
