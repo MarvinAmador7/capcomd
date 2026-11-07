@@ -211,7 +211,8 @@ describe("capcomd plugins trust (the prompt)", () => {
     expect(asked.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u202e]/);
     expect(asked.stdout).toContain("harmless\\u{1b}[1A\\u{1b}[2K\\u{d}  runs");
     // What it gets of yours at its start: a secret's reference (here the manifest's own default).
-    expect(asked.stdout).toContain("secrets  token ← env:GITHUB_TOKEN");
+    // The kernel's own variable is flagged: the daemon would fail it config_invalid (§10.3).
+    expect(asked.stdout).toContain("secrets  token ← env:GITHUB_TOKEN (refused: one of capcomd's own variables");
     expect(asked.stdout).toContain(`runs     ./run.sh "x\\u001b[1A\\u001b[2K\\r" --flag=1 "a\\u{202e}b"  (on this machine`);
   });
 });

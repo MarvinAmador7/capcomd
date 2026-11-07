@@ -1,7 +1,7 @@
 // A plugin's settings (docs/spec/plugin-api.md §10.2, §10.4; src/plugins/config.ts): the user's, then the project's
 // `plugins.<name>`, then CAPCOMD_PLUGIN_<NAME>_<KEY>, over the schema's defaults; `enabled` at any layer; what the schema
 // refuses fails the plugin `config_invalid` with `plugin.config_refused`. A built-in that is off until asked for (the
-// watchdog).
+// watchdog). A plugin that isn't a shipped built-in never names one of the kernel's own variables as a secret (§10.3).
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,8 +11,10 @@ import type { HostEvent } from "../../packages/plugin/src/host/registry";
 import { definePlugin } from "../../packages/plugin/src/context";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
-import { checkSchema, envName, mergePatch, pluginSettings } from "../../src/plugins/config";
-import { builtinCandidates } from "../../src/plugins/host";
+import { checkSchema, envName, kernelSecretRef, mergePatch, pluginSettings } from "../../src/plugins/config";
+import { builtinCandidates, kernelHost } from "../../src/plugins/host";
+import { resolveSecret, secretOrUndefined } from "../../src/plugins/secrets";
+import { manifest as boxdManifest } from "../../src/plugins/builtin/sandbox-boxd";
 import { mergeConfig } from "../../src/config/store";
 
 const SCHEMA = {
@@ -95,6 +97,69 @@ describe("the host and the built-ins", () => {
     expect(off).toMatchObject({ state: "validated", enabled: false, cause: "disabled" });
     await host([]).start([{ source: "builtin", manifest, module, config: { everyMs: 2000 } }]);
     expect(seen).toEqual([{ everyMs: 2000, mode: "quiet" }]);
+  });
+
+  test("a user's plugin whose default secret names the kernel's BOXD_API_KEY fails config_invalid; its secret is never read", async () => {
+    const p = place(undefined, undefined);
+    const dir = join(p.env.CAPCOMD_HOME!, "plugins", "boxd-peek");
+    mkdirSync(dir, { recursive: true });
+    const peek: PluginManifest = {
+      ...manifest, name: "boxd-peek", entry: { runtime: "process", command: ["./run.sh"] },
+      config: { type: "object", additionalProperties: false, properties: { apiKey: { type: "object", "x-secret": true, default: { $secret: "env:BOXD_API_KEY" } } } },
+    };
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify(peek));
+    writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
+    const c = builtinCandidates({ ...p.env, BOXD_API_KEY: "bxd_kernel" }, p.cwd).find((x) => x.dir === dir)!;
+    expect(c.configErrors).toEqual([{ path: "apiKey", layer: "default", message: expect.stringContaining("names env:BOXD_API_KEY, one of capcomd's own variables") }]);
+    const asked: string[] = [];
+    const events: HostEvent[] = [];
+    const h = new PluginHost({ capcomd: "1.0.0", kernel: [], emit: (e) => { events.push(e); }, dataDir: (n) => `/nonexistent/${n}`, secret: async (_m, key) => { asked.push(key); return "x"; } });
+    const [r] = await h.start([c]);
+    expect(r).toMatchObject({ name: "boxd-peek", state: "failed", cause: "config_invalid" });
+    expect(h.message("boxd-peek")).toContain("default: plugins.boxd-peek.apiKey: is a secret whose default names env:BOXD_API_KEY");
+    expect(events.find((e) => e.type === "plugin.config_refused")?.data).toMatchObject({ plugin: "boxd-peek", layer: "default" });
+    expect(asked).toEqual([]);
+    // Resolving it anyway is refused without reading the variable; only the kernel's own built-in may.
+    const read: string[] = [];
+    const env = new Proxy({ ...p.env, BOXD_API_KEY: "bxd_kernel" } as Record<string, string | undefined>, { get: (t, k: string) => { read.push(k); return t[k]; } });
+    expect(() => resolveSecret(peek, "apiKey", env, dir)).toThrow(expect.objectContaining({ code: "forbidden" }));
+    expect(read).not.toContain("BOXD_API_KEY");
+    expect(resolveSecret(peek, "apiKey", env, null, true)).toBe("bxd_kernel");
+  });
+
+  test("an override in the user's config or CAPCOMD_PLUGIN_* that names a kernel variable is refused; a variable of its own isn't", () => {
+    const user = place({ token: { $secret: "env:GITHUB_TOKEN" } }, undefined);
+    expect(pluginSettings(M, { ...user, source: "user", dir: "/plugins/my-plugin" }).errors).toEqual([{ path: "token", layer: "user", message: expect.stringContaining("names env:GITHUB_TOKEN, one of capcomd's own variables") }]);
+    const env = { ...place(undefined, undefined).env, CAPCOMD_PLUGIN_MY_PLUGIN_TOKEN: '{"$secret":"env:CAPCOMD_RPC_KEY"}' };
+    expect(pluginSettings(M, { env, source: "user", dir: "/plugins/my-plugin" }).errors).toMatchObject([{ path: "token", layer: "env" }]);
+    for (const v of ["GH_TOKEN", "BOXD_API_KEY", "ANTHROPIC_API_KEY", "CAPCOMD_TOKEN_FILE"]) expect(kernelSecretRef(`env:${v}`)).toContain(v);
+    expect(kernelSecretRef("env:MY_GH_TOKEN")).toBeNull();
+    // The user's own variable over a kernel default: the default is never used, so the plugin runs.
+    const kernelDefault = { name: "my-plugin", config: { ...SCHEMA, properties: { ...SCHEMA.properties, token: { "x-secret": true, default: { $secret: "env:GITHUB_TOKEN" } } } } };
+    expect(pluginSettings(kernelDefault, { ...place({ token: { $secret: "env:MY_TOKEN" } }, undefined), source: "user", dir: "/plugins/my-plugin" }).errors).toEqual([]);
+    expect(pluginSettings(kernelDefault, { ...place(undefined, undefined), source: "user", dir: "/plugins/my-plugin" }).errors).toMatchObject([{ path: "token", layer: "default" }]);
+  });
+
+  test("sandbox-boxd, the kernel's own, still resolves its default env:BOXD_API_KEY", async () => {
+    const p = place(undefined, undefined);
+    const c = builtinCandidates({ ...p.env, BOXD_API_KEY: "bxd_kernel" }, p.cwd).find((x) => (x.manifest as { name?: string } | undefined)?.name === "sandbox-boxd")!;
+    expect(c.configErrors).toBeUndefined();
+    expect(secretOrUndefined(boxdManifest, "apiKey", { BOXD_API_KEY: "bxd_kernel" })).toBe("bxd_kernel");
+    // Through the daemon's host: a built-in (no directory) gets it from ctx.config.secret.
+    const seen: string[] = [];
+    const before = process.env.BOXD_API_KEY;
+    process.env.BOXD_API_KEY = "bxd_kernel";
+    try {
+      const host = kernelHost({ log: false });
+      await host.start([{ source: "builtin", manifest: { ...manifest, name: "sandbox-boxd", config: boxdManifest.config } as PluginManifest, module: { async activate(ctx) {
+        seen.push(await ctx.config.secret("apiKey"));
+        ctx.hooks.on("run.changed", () => {});
+      } } }]);
+      expect(seen).toEqual(["bxd_kernel"]);
+      await host.stop();
+    } finally {
+      if (before === undefined) delete process.env.BOXD_API_KEY; else process.env.BOXD_API_KEY = before;
+    }
   });
 
   test("the watchdog is a built-in that's off until enabled; its settings come from the layers", () => {
