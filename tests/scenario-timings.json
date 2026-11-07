@@ -70,6 +70,7 @@
     "tests/subagents/thread.test.ts": 27519,
     "tests/subagents/titles.test.ts": 21480,
     "tests/subagents/unit.test.ts": 6125,
+    "tests/subagents/watchdog-progress.test.ts": 30000,
     "tests/subagents/workflow-mode.test.ts": 26277,
     "tests/subagents/workflow-upgrade.test.ts": 140763,
     "tests/subagents/workflow.test.ts": 245537
