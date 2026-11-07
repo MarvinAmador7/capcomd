@@ -48,7 +48,8 @@ export function workerSkill(o: { mcp: boolean; jobs: boolean }): string {
 
 The \`capcomd\` command${o.mcp ? " (or the equivalent capcomd_* MCP tools)" : ""} talks to the orchestrator that runs you; all output is JSON
 and \`capcomd help\` lists the commands (\`capcomd status\` shows your own record, with your agent id). You work alone:
-spawning, verifying and merging are your parent's (they are refused for you).
+spawning, verifying and merging are your parent's (they are refused for you). Messages to you (your parent's, your
+jobs' results) are in \`capcomd inbox\`${tool("inbox")}: read it when one may have come and none reached you.
 ${o.jobs ? `
 ## Long commands run as background jobs
 A command that may take more than a minute (a whole test suite, a build, a benchmark) runs as a job, not in your shell

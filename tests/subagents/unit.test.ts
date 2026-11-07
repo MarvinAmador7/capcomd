@@ -40,6 +40,10 @@ test("an agent that may not spawn: jobs, notes, result, title and reads; nothing
   expect(mayRunCommands({ allowedTools: ["Read", "Grep", "Bash(bun test:*)"] })).toBe(false);   // a reviewer's
   expect(mayRunCommands({ allowedTools: ["Read", "Edit"] })).toBe(false);
   expect(mayRunCommands({ disallowedTools: ["Bash"] })).toBe(false);
+  // `Bash(:*)` (the empty prefix) is the whole shell, as readOnlyTools reads it: denied, no jobs; allowed, jobs.
+  expect(mayRunCommands({ disallowedTools: ["Bash(:*)"] })).toBe(false);
+  expect(mayRunCommands({ disallowedTools: ["Bash(*)"] })).toBe(false);
+  expect(mayRunCommands({ allowedTools: ["Read", "Edit", "Bash(:*)"] })).toBe(true);
   expect(mayRunCommands({ sandbox: "read-only" })).toBe(false);
   expect(mayRunCommands({ sandbox: "workspace-write", toolMode: "orchestrate" })).toBe(true); // refused by name in the RPC
 });
@@ -55,6 +59,8 @@ test("who gets the in-VM capcomd, and what a worker is told", () => {
   expect(s).toContain("# Name your tab (capcomd)");
   expect(s).toContain("capcomd job start -- <command>");
   expect(s).toContain("kv under notes/<your agent id>");
+  // Where a message it didn't get while it worked is (a Codex agent's, as `send`'s note says): its inbox.
+  expect(s).toContain("`capcomd inbox` (capcomd_inbox)");
   // Nothing of the agent's own: every agent of a profile starts with the same instructions (one cached prefix).
   expect(s).not.toMatch(/agt-/);
   expect(s).toContain(`--data '{"context": [{"title": "…", "text": "…"}]}'`);

@@ -93,11 +93,13 @@ export function opsFor(limits: { allowSpawn: boolean }, o: { jobs?: boolean } = 
   return o.jobs === false ? ops.filter((x) => !JOB_OPS.includes(x)) : ops;
 }
 
-const SHELL = /^Bash(\((\*)?\))?$/;
+/** The unrestricted shell as a tool rule: `Bash`, `Bash()`, `Bash(*)`, `Bash(:*)` (the empty prefix: every command), as
+ *  src/profiles/v1.ts `readOnlyTools` reads them. */
+const SHELL = /^Bash(\((:?\*)?\))?$/;
 /**
  * Whether an agent's profile lets it run any command of its own: a background job runs whatever it is given, so only
  * such an agent's token has the job ops. Not when its allow-list names tools but no unrestricted shell (`Bash`,
- * `Bash(*)`; a reviewer's `Bash(bun test:*)` is a command, not a shell), its deny-list names the shell, or its Codex
+ * `Bash(*)`, `Bash(:*)`; a reviewer's `Bash(bun test:*)` is a command, not a shell), its deny-list names the shell, or its Codex
  * sandbox is read-only. An orchestrate agent keeps them in its token: the RPC refuses its `job start` by name (plugin API
  * §16.1 item 6), and `job list` is harmless.
  */
