@@ -656,14 +656,18 @@ that commit, an earlier attempt's or an environment image's, is kept). A bundle 
 to start without it and its log says so.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
-`AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
+`AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|worked{files, command, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
+`worked` (additive) is what the agent's runner saw it doing between checkpoints (§16.4): its files changed, a
+foreground command running `{since}` (null: none). It is the one change with no event in the run's log (one every
+heartbeat for each working agent would crowd it): told by the scope's `worked` while the agent's record says it runs,
+so it is never replayed (§6.7), and its `principal` is the agent.
 `lifecycle: {onStart[], onEnd[]}` is present when the agent's profile names plugins (ADR-024 `lifecycle.onStart|onEnd`,
 pinned at spawn; additive): there is no per-profile hook, so a plugin a profile names listens here and filters on its own
 name. The kernel refuses a spawn of such a profile (`config`, reason `lifecycle_inactive`), and the agent's start (its
 claim, before its machine is ensured), while a named plugin isn't active and listening to this hook: the daemon asks its
 own host, another process the running daemon's listing (§13.2; with no daemon running, nothing is refused there and the
 daemon asks at the start). `capcomd profiles validate` reports it the same way (§7.1).
-`checkpointed` is the progress signal (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
+`checkpointed` and `worked` are the progress signals (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
 recorded when the agent is claimed, before its machine is ensured, so its `machine` is null (`sandbox.changed`
 `ready` names the machine); it is told once, at the agent's first claim, which is always attempt 1 (a retried attempt
 prepares again, `agent.preparing`; a resumed agent is `resumed`). Each change's `principal` is who caused it: the agent
@@ -935,7 +939,10 @@ returning it (today `Redactor.text`); `redactJson` (`packages/plugin/src/seams.t
 kernel's own rule, a credential-named key's string replaced whole. The kernel keeps one `AgentRunState` object per run,
 so a provider may keep fields of its own on it between lines. A provider whose CLI reports them sets the optional
 `cacheReadTokens` (of `inputTokens`) and `model` (the model the CLI says it ran); the kernel puts them on the agent's
-span as `gen_ai.usage.cache_read.input_tokens` and `gen_ai.response.model`. The `AgentConfig` a provider reads has the kernel's
+span as `gen_ai.usage.cache_read.input_tokens` and `gen_ai.response.model`. A parsed `AgentEvent` may carry the
+optional `commands {started?, ended?}` (additive): the CLI call ids of the foreground shell commands the event starts
+and of the calls it ends, from which the runner reports a command the agent waits on (§16.4); a provider that sets none
+has none reported. The `AgentConfig` a provider reads has the kernel's
 `credentialMode` values (`auto` included) and `usdPerMtok`, the operator's token rates for a CLI that reports tokens and
 not cost, and `denyCommands`, the command prefixes an orchestrate agent's CLI must refuse (§16.1). The optional, pure
 `refusal(line, redact)` reads a tool call the CLI refused from one line of its stderr, for a CLI that reports refusals
@@ -1985,7 +1992,8 @@ Essay: a "separate, scheduled" session judges "whether each Worker is making rea
 its clock, `ctx.agents.notice` to raise `stalled` (a new `AgentNotice.kind`, raised only by plugins), and
 `ctx.agents.cancel` to stop. Progress signals the kernel provides in `agent.changed`: `step {kind, n}` (tool kinds and
 counts), `checkpointed {files, commit}` (the supervisor's checkpoints, ADR-019 §3: files changed is the hardest signal
-that something landed), `notice`, and the agent's `activity` line in `Agent`. The kernel does not define "progress";
+that something landed), `worked {files, command}` (what the agent's runner saw between checkpoints, below), `notice`,
+and the agent's `activity` line in `Agent`. The kernel does not define "progress";
 the plugin does, and `capcomd setup` enables the built-in `watchdog` with conservative defaults (15 min to `stalled`,
 45 min to cancel). Raising an ask is the `stalled` notice (the app shows the amber hand; a planner sees it on its child)
 and, through §16.5, one message to the person only when the watchdog stops an agent.
@@ -1994,17 +2002,38 @@ The built-in (`src/plugins/watchdog.ts`, §17.2 step 11) is in the daemon only a
 true` (§4.8), which `capcomd setup` (its `service` part) writes in the user's config unless the user set it false or
 passed `--no-watchdog`; `capcomd setup check` says whether it is on. Its config: `stalledAfterMs` (default 900 000),
 `stopAfterMs` (default 2 700 000; 0 never stops; otherwise more than `stalledAfterMs`, else the plugin fails to
-activate), both counted from the agent's last progress, and `everyMs` (default 60 000), how often it looks. Its
-definition of progress:
+activate), both counted from the agent's last progress, and `everyMs` (default 60 000), how often it looks. A
+`stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`, how long a working agent's progress may take to show) is accepted
+but warned about, by `capcomd setup` (its `service` step and `check`, as advice) and in the plugin's log when it
+starts: it flags agents that are working. Its definition of progress:
 
-- the agent's files changed (`checkpointed`: the supervisor reports a checkpoint only for a new tree), or an agent
-  under it did;
+- the agent's files changed, or an agent under it did: `worked {files: true}`, or `checkpointed` (the supervisor
+  reports a checkpoint only for a new tree, by default every 10 minutes, so it is not what shows work in between);
 - an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
-- a background job (`job.changed`), a verification it asked for (`verify.changed`, its principal) or an approval it
-  waits on (`approval.changed`) ended.
+- a verification it asked for (`verify.changed`, its principal) or an approval it waits on (`approval.changed`) ended.
 
-Tool calls (`step`) and the activity line are not progress. While it, or an agent under it, waits on a job, a
-verification or an approval, or is paused, its clock doesn't run. An agent with agents of its own running is judged
+`worked` (§6.6.8) comes from the agent's runner, at most once per supervisor heartbeat (30 s) and only when there is
+something to say: `files`, the checkout's working tree has a new fingerprint since the last heartbeat that had one
+(the supervisor takes it at each heartbeat for an agent whose work is checkpointed, `reportTree: "progress"`: HEAD and
+each path `git status` sees differ from it, untracked files included, with its size and modification time, so editing
+a file that already differs counts too; it writes nothing to the repository, no object and no index; it skips
+heartbeats while taking it would use more than a twentieth of the time, so a slow checkout reports less often);
+`command`, a foreground shell command of the agent's CLI is running, and since when (Claude Code's `Bash` call that
+isn't `run_in_background` until its `tool_result`, Codex's `command_execution` from `item.started` to
+`item.completed`: the provider's `AgentEvent.commands`, §7.3; a turn that ends or fails ends every command of it).
+
+Tool calls (`step`), the activity line, a job's output and a job's end are not progress: a job, in the foreground or
+the background, is a command like any other, and what it leads to (files changing, a hand-back) is. While it waits on
+something its clock doesn't run, and the time it waited doesn't count when the wait ends: a job (`job.changed`
+`started` to `ended`), a verification, an approval, being paused, or a foreground command (from its start, while
+`worked` keeps saying it runs; once it isn't said for `PROGRESS_SIGNAL_MS` it has ended), the last for at most
+`stalledAfterMs` per command, so a command that hangs is still judged. Waits that overlap (a foreground job and the
+command that waits on it) count once. Its notice and its stop's reason say what it
+saw rather than what it assumed: `no progress for <time>: no file change seen, no agent of its own started or ended, no
+check or approval it waited on finished; it finished <n> tool steps meanwhile` (or `no tool step`), and `; it has been
+waiting on one command for <time>` when a command still running has used up the time that doesn't count. Whether a job
+that ends counts as progress was an open question; the built-in says no, as above (a quick foreground job is no
+different from a shell tool call). An agent with agents of its own running is judged
 through them: they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and
 the planner can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it
 confirms the agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in
@@ -2132,6 +2161,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
+| 1.0.37 | 2026-11-07 | The watchdog's progress from real activity (§16.4, the live run's L3): `agent.changed` `worked {files, command, at}` (additive; no event in the run's log, never replayed, §6.6.8) from the agent's runner at most once a supervisor heartbeat: its checkout's files changed (the supervisor fingerprints the working tree from `git status` and each changed path's size and time at each heartbeat for an agent whose work is checkpointed, writing nothing to the repository, less often in a slow checkout), a foreground shell command running since when (`AgentEvent.commands`, additive, §7.3); the built-in counts `worked {files}` as progress, holds its clock while a foreground command runs (at most `stalledAfterMs` per command; a turn's end ends its commands) and while a job runs (overlapping waits count once), and no longer counts a job's end as progress (the time it ran doesn't count instead; the open question decided); its notice and stop say what it saw (`no file change seen`, the tool steps it finished, a command it waits on); a `stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`) is warned about by `capcomd setup` and in its log, not refused. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

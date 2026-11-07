@@ -253,5 +253,12 @@ describe("setup steps (non-interactive)", () => {
     // A stop before the notice: the schema takes it, the watchdog's activation doesn't, and check says so.
     writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ plugins: { watchdog: { enabled: true, stalledAfterMs: 1_200_000, stopAfterMs: 600_000 } } }));
     expect(json(run(["setup", "check", "--json"], { cwd: h, env: { ...e, BOXD_API_KEY: "" } }).out).steps.find((s: any) => s.step === "watchdog")).toMatchObject({ ok: false, detail: "it won't load: plugins.watchdog.stopAfterMs is 600000: it must be 0 (never stop) or more than stalledAfterMs (1200000), since both count from the last progress" });
+    // A stall limit shorter than an agent's progress takes to show: it loads, and both say it would flag working agents.
+    writeFileSync(join(h, ".capcomd", "config.json"), JSON.stringify({ plugins: { watchdog: { enabled: true, stalledAfterMs: 30_000 } } }));
+    const why = "plugins.watchdog.stalledAfterMs is 30000: below 60000, how long an agent's progress (its files changing, a command it waits on) may take to show, so an agent that is working may be flagged";
+    expect(json(run(["setup", "check", "--json"], { cwd: h, env: { ...e, BOXD_API_KEY: "" } }).out).steps.find((s: any) => s.step === "watchdog"))
+      .toMatchObject({ ok: true, advice: true, detail: `on, but ${why}`, hint: expect.stringContaining("stalledAfterMs to 60000 or more") });
+    expect(json(run(["setup", "service", "--yes", "--no-service", "--json"], { cwd: h, env: e }).out).steps[0])
+      .toMatchObject({ ok: true, advice: true, detail: "on: an agent whose work hasn't changed for 30 s gets a stalled notice, and is stopped after 45 min", hint: expect.stringContaining(why) });
   }, 60_000);
 });

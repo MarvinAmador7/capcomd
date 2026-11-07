@@ -6,6 +6,9 @@
 #   [quota] or [quota:N] edit, then stop at a plan usage limit resetting in N seconds (default 3600), as
 #           claude 2.1.303 does; a resumed run (its prompt says it was stopped earlier) works normally
 #   [steady] edit, then keep working for ~3s (checkpoints, supervisor heartbeats)
+#   [editing:N] edit, then change a file every 0.25 s for N s (its files changing between checkpoints, plugin API §16.4)
+#   [command:N] edit, then run one Bash command that takes N s with nothing said meanwhile (a foreground command)
+#   [command-lost] edit, then start a Bash call whose result never comes: its turn ends without it
 #   [spend] edit, then keep working for ~10s, each message reporting 100k output tokens (live spend)
 #   [spin] or [spin:N] edit, then make the same Read call N times (default 30, 0.15s apart), then finish normally (stuck: spinning)
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
@@ -125,6 +128,20 @@ case "$prompt" in *"stopped earlier by your provider's usage limit"*) ;; *"[quot
 esac
 case "$prompt" in *"[steady]"*)
   for i in $(seq 1 12); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"step $i\"}]}}"; done;;
+esac
+case "$prompt" in *"[editing:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[editing:\([0-9]*\)\].*/\1/p')
+  for i in $(seq 1 $(( n * 4 ))); do sleep 0.25; echo "line $i" >> src/notes.txt
+    emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"w$i\",\"name\":\"Write\",\"input\":{\"file_path\":\"src/notes.txt\",\"line\":$i}}]}}"; done;;
+esac
+case "$prompt" in *"[command:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[command:\([0-9]*\)\].*/\1/p')
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"npm test"}}]}}'
+  sleep "$n"
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"all passed"}]}}';;
+esac
+case "$prompt" in *"[command-lost]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"npm test"}}]}}';;
 esac
 case "$prompt" in *"[listen]"*|*"[listen:"*)
   n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen:\([0-9]*\)\].*/\1/p')
