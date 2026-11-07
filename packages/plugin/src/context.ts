@@ -154,7 +154,8 @@ export interface StorageService {
 }
 
 export interface RunsService {
-  new(input: { budget: Budget; label?: string; goal?: string; checks?: Record<string, string>; reviewer?: string; target?: string; sandbox?: string }, o?: CallOptions): Promise<Run>;
+  /** Quoted: a bare `new(` in an interface declares a constructor, not this method. */
+  "new"(input: { budget: Budget; label?: string; goal?: string; checks?: Record<string, string>; reviewer?: string; target?: string; sandbox?: string }, o?: CallOptions): Promise<Run>;
   get(runId: string, o?: CallOptions): Promise<Run>;
   list(input: { limit?: number }, o?: CallOptions): Promise<Run[]>;
   end(runId: string, input: { state: "failed" | "cancelled"; reason: string }, o?: CallOptions): Promise<void>;
