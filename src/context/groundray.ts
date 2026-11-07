@@ -132,14 +132,20 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
 const BRAIN_CHECK_MAX_BYTES = 4 * 1024 * 1024;
 /** A Markdown file, whatever the case of its extension: `git archive` places every one. */
 const MARKDOWN = /\.(?:md|markdown)$/i;
-/** Every value a YAML mapping gives `key` at its top level, as text: a key quoted or not, a value on the next line, a
- *  block scalar, a flow mapping, and each of a key given twice (which a strict parse refuses). */
+/** Every value a YAML mapping gives `key` (in any case) at its top level, as text: a key quoted or not, a value on the
+ *  next line, a block scalar, an alias to an anchored value, a flow mapping, and each of a key given twice (which a
+ *  strict parse refuses). */
 function valuesOf(text: string, key: string): string[] {
   const Y = require("yaml") as typeof import("yaml");
   let doc: ReturnType<typeof Y.parseDocument>;
   try { doc = Y.parseDocument(text, { uniqueKeys: false, prettyErrors: false }); } catch { return []; }
   if (!Y.isMap(doc.contents)) return [];
-  return doc.contents.items.flatMap((p) => (Y.isScalar(p.key) && String(p.key.value) === key && Y.isScalar(p.value) && p.value.value != null ? [String(p.value.value).trim()] : []));
+  return doc.contents.items.flatMap((p) => {
+    if (!Y.isScalar(p.key) || String(p.key.value).toLowerCase() !== key) return [];
+    let v: unknown = p.value;
+    try { if (Y.isAlias(v)) v = v.resolve(doc); } catch { return []; }
+    return Y.isScalar(v) && v.value != null ? [String(v.value).trim()] : [];
+  });
 }
 /** Whether a file's frontmatter says `sensitivity: restricted` (OKF's handling hint), in any case and any YAML spelling
  *  (its line too, when the YAML around it doesn't parse). */

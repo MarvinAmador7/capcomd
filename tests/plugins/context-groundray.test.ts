@@ -138,6 +138,10 @@ describe("the context-groundray built-in (ADR-025 §11.2)", () => {
     expect(await restrictedOf({ "knowledge/a.markdown": fm({ type: "concept", id: "long", sensitivity: "restricted" }, "x") })).toEqual(marked);
     expect(await restrictedOf({ "knowledge/.core-kb.yaml": "\"default_sensitivity\": restricted\n" })).toEqual({ restricted: "its bundle's default sensitivity is restricted", unchecked: null });
     expect(await restrictedOf({ "knowledge/.core-kb.yaml": "default_sensitivity:\n  restricted\ndefault_sensitivity: internal\n" })).toEqual({ restricted: "its bundle's default sensitivity is restricted", unchecked: null });
+    // An alias to an anchored value (which the item's own parse follows), and the key in any case, as its line is read.
+    expect(await restrictedOf({ "knowledge/a.md": "---\ntype: concept\ntitle: &r restricted\nsensitivity: *r\n---\nx\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/a.md": "---\ntype: concept\nSensitivity:\n  restricted\n---\nx\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/.core-kb.yaml": "level: &l restricted\ndefault_sensitivity: *l\n" })).toEqual({ restricted: "its bundle's default sensitivity is restricted", unchecked: null });
     // A body that talks about sensitivity isn't a marking; confidential is allowed.
     expect(await restrictedOf({ "knowledge/a.md": fm({ type: "concept", id: "a", sensitivity: "confidential" }, "sensitivity: restricted") })).toEqual({ restricted: null, unchecked: null });
     // A file too big to parse is read again for the check; one too big for that, or a tree read in part, isn't known.
