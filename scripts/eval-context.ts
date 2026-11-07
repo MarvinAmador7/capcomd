@@ -106,7 +106,7 @@ const common: Record<string, string> = {
   CAPCOMD_MERGE_MODE: "direct", CAPCOMD_MERGE_STRATEGY: "squash", CAPCOMD_TEST_COMMAND: "", GIT_SSH_COMMAND: "false",
   // No project templates (boxd snapshots of 8 GB or more): every chain's repository is new, so each would get its own
   // build and snapshot, none deleted, and a template appearing mid-run would change how later agents' checkouts start.
-  ...(LIVE ? { CAPCOMD_SANDBOX: a.sandbox ?? "boxd", CAPCOMD_PROJECT_TEMPLATES: process.env.CAPCOMD_PROJECT_TEMPLATES ?? "off" } : {
+  ...(LIVE ? { CAPCOMD_SANDBOX: a.sandbox ?? "boxd", CAPCOMD_PROJECT_TEMPLATES: process.env.CAPCOMD_PROJECT_TEMPLATES || "off" } : {
     CAPCOMD_SANDBOX: "fake-host", CAPCOMD_AGENT_CLAUDE_BIN: fakeBin, CAPCOMD_AGENT_WORKDIR: join(WORK, "vm"), CAPCOMD_AGENT_POLL_MS: "200",
     CAPCOMD_VM_RPC_POLL_MS: "200", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_ENV: "image", ANTHROPIC_API_KEY: "sk-ant-api03-EVALCONTEXT-abcdefghijklmnopqrstuvwxyz0123",
     CAPCOMD_AUTH_LEDGER: join(WORK, "auths.json"), CAPCOMD_ENV_LEDGER: join(WORK, "envs.json"),
