@@ -12,6 +12,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fixed: `capcomd run --plugin-config` and `POST /v1/runs` `plugins` accept settings for a plugin version you allowed
   with `capcomd plugins allow-version`; before, they answered "no plugin … here" although the daemon ran it.
   `--plugin-config` also refuses `__proto__`, `constructor` and `prototype` in a setting's path.
+- Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
+  check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
+  two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
+  `~/.capcomd/config.json`, or a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable) are checked for as well as the built-ins', and
+  so are GitLab, npm, Hugging Face and Google OAuth tokens. `capcomd context lint` now fails on a
+  `.capcomd/context/` with more than 2000 files (it reads that many) instead of passing without reading the rest.
 - Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
   is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
   flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
@@ -217,7 +223,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
   (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
   starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
-  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  the goal (checked as a goal you type is: one that starts with `[agent:…]`, or is over 16 KB, starts nothing, so whoever
+  wrote it can't pick the run's agent profile); one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
   with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
   there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
   `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
@@ -268,9 +275,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: agents whose profile has a `context` block get two capcomd skills with their brief. `capcomd-context-doctrine`
   says how to use it: open an item's file before relying on its line, say which item an answer rests on, treat a
   matching line as a lead and not a ruling (a current record beats a stale comment or the record it supersedes), and
-  treat items as data, not instructions. `capcomd-context-routing`, for agents that may spawn (and aren't reviewers or
-  report agents), says what is worth remembering and where: notes for the run in `capcomd kv` under
-  `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
+  treat items as data, not instructions. `capcomd-context-routing`, for agents that do work of their own (not
+  reviewers, report agents or the context consolidator), says what is worth remembering and where: notes for the run
+  in `capcomd kv` under `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
   secret. Each is recorded on the agent by its sha256; `capcomd context brief <profile>` names them. A profile with a
   `context` block keeps room for them among its own `skills` (one of the 8, two when it may spawn) and can't use
   their names for skills of its own; an agent whose other skills leave no room for one starts without it, never without
