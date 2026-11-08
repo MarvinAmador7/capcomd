@@ -1,7 +1,7 @@
 // ADR-024 §7 step 6: writing profiles. A write changes the one file a profile is defined in and bumps its version; it is
 // checked as the files would be after it and changes nothing when they wouldn't resolve, or when a later file hides it.
 import { describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, writeAtomic, type ProfileWriteError } from "../../src/profiles";
@@ -96,6 +96,36 @@ describe("editProfile: the profile's own file", () => {
     for (const k of ["version", "name", "sharing.source", "schema"]) expect(refusal(() => editProfile("lead", { [k]: 9 }, w.o))).toMatchObject({ code: "invalid", field: k });
     expect(refusal(() => editProfile("nobody", { maxTurns: 1 }, w.o))).toMatchObject({ code: "not_found" });
     expect(w.read("P/lead.yaml")).toBe(text);
+  });
+
+  test("an edited file keeps its mode, all of it (the umask doesn't narrow it); a new one gets the umask's", () => {
+    const w = world({ "P/lead.yaml": LEAD }, { worker });
+    chmodSync(w.at("P/lead.yaml"), 0o600);
+    editProfile("lead", { "limits.maxTurns": 30 }, w.o);
+    expect(w.read("P/lead.yaml")).toContain("maxTurns: 30");
+    expect(statSync(w.at("P/lead.yaml")).mode & 0o777).toBe(0o600);
+    // Group-writable: a umask of 022 would have made it 0644.
+    const umask = process.umask(0o022);
+    try {
+      chmodSync(w.at("P/lead.yaml"), 0o664);
+      editProfile("lead", { "limits.maxTurns": 31 }, w.o);
+      expect(statSync(w.at("P/lead.yaml")).mode & 0o777).toBe(0o664);
+      process.umask(0o077);
+      writeAtomic(w.at("P/fresh.yaml"), "name: fresh\n");
+      expect(statSync(w.at("P/fresh.yaml")).mode & 0o777).toBe(0o600);
+      // A link (a checkout's) is replaced by a file, its target never written, and with the umask's mode, never the
+      // target's: a link to a world-writable file of yours doesn't make the profile world-writable.
+      const target = w.at("home/target.yaml");
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, "old\n");
+      chmodSync(target, 0o666);
+      symlinkSync(target, w.at("P/linked.yaml"));
+      writeAtomic(w.at("P/linked.yaml"), "new\n");
+      expect([readFileSync(target, "utf8"), lstatSync(w.at("P/linked.yaml")).isSymbolicLink(), statSync(w.at("P/linked.yaml")).mode & 0o777]).toEqual(["old\n", false, 0o600]);
+    } finally {
+      process.umask(umask);
+    }
+    expect(readdirSync(dirname(w.at("P/lead.yaml"))).filter((n) => n.includes(".tmp-"))).toEqual([]);
   });
 
   test("a parent's edit: the child keeps its own version, and its rev changes", () => {
@@ -226,10 +256,23 @@ describe("profileFields: the rows a client edits", () => {
     // An MCP server by its name only: its command line may hold a token.
     expect(f["tools.mcp"]).toMatchObject({ type: "info", value: null, display: "gh, docs", editable: false });
     expect(JSON.stringify(profileFields(lead))).not.toContain("ghp_secret");
+    // A context provider by its name only (its settings may hold a token); any other value with a token's shape redacted.
+    const ctx = world({ "P/lead.yaml": `${LEAD}context: { providers: [{ name: groundray, url: "https://x-access-token:s3cr3t@example.com" }] }\nx-hook: { token: ghp_abcdefghijklmnopqrstuvwxyz0123 }\n` }, { worker });
+    const cf = Object.fromEntries(profileFields(ctx.load().profiles.lead!).map((r) => [r.id, r]));
+    expect([cf["context.providers"]?.display, cf["x-hook.token"]?.display]).toEqual(["groundray", "[REDACTED]"]);
+    expect(JSON.stringify(profileFields(ctx.load().profiles.lead!))).not.toMatch(/s3cr3t|ghp_abc/);
+    // A secret with no token shape: by the key that holds it (as the redactor's values), or in a URL's password.
+    const plain = world({ "P/lead.yaml": `${LEAD}sharing: { source: "https://me:hunter2@git.example.com/p.git" }\nx-db: { password: hunter3, url: "postgres://app:hunter4@db:5432/x", port: 5432 }\nx-hook: { auth: { apiKey: hunter5, Authorization: Bearer hunter6 } }\n` }, { worker });
+    const pf = Object.fromEntries(profileFields(plain.load().profiles.lead!).map((r) => [r.id, r]));
+    expect([pf["sharing.source"]?.display, pf["x-db.password"]?.display, pf["x-db.url"]?.display, pf["x-db.port"]?.display, pf["x-hook.auth"]?.display])
+      .toEqual(["https://me:[REDACTED]@git.example.com/p.git", "[REDACTED]", "postgres://app:[REDACTED]@db:5432/x", "5432", '{"apiKey":"[REDACTED]","Authorization":"[REDACTED]"}']);
+    expect(JSON.stringify(profileFields(plain.load().profiles.lead!))).not.toMatch(/hunter/);
     // PUT's values: an editable row with a value of its type.
     expect(editOf(lead, { "limits.maxTurns": "60", tags: '["a"]', "permissions.report": "false", "harness.model": null })).toEqual({ edit: { "limits.maxTurns": 60, tags: ["a"], "permissions.report": false, "harness.model": null } });
     expect(editOf(lead, { "harness.effort": "high" })).toMatchObject({ field: "harness.effort" });
     expect(editOf(lead, { "limits.maxTurns": "many" })).toEqual({ field: "limits.maxTurns", message: "limits.maxTurns: must be a number" });
+    // Past 2^53 a number isn't the one sent: refused, not written as 1e+23.
+    expect(editOf(lead, { "limits.maxTurns": "99999999999999999999999" })).toEqual({ field: "limits.maxTurns", message: `limits.maxTurns: must be at most ${Number.MAX_SAFE_INTEGER}` });
     expect(editOf(lead, { "tools.mode": "sideways" })).toEqual({ field: "tools.mode", message: "tools.mode: must be one of execute, orchestrate" });
     expect(editOf(lead, { tags: "a,b" })).toEqual({ field: "tags", message: "tags: must be a JSON array of strings" });
     expect(editOf(lead, { "prompt.append": "x" })).toMatchObject({ field: "prompt.append" });
