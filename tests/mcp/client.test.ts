@@ -144,7 +144,7 @@ describe("capcomd mcp: the driver's tools", () => {
       });
       expect(by.coder).toMatchObject({ title: null, tags: [], canReport: true, cost: null, fit: "edits and runs code; Claude Code, the CLI's default model; up to 20 turns; can't spawn" });
       // Its skills and the project ones not trusted yet: the planner learns that before a spawn is refused for it.
-      expect(by.critic).toMatchObject({ skills: [], untrustedSkills: [] });
+      expect(by.critic).toMatchObject({ skills: [], untrustedSkills: [], untrustedPersona: null });
       const r = await ok("capcomd_run_new", { budget: "usd=5,turns=100", label: "report", key: `rp-${Date.now()}` });
       const refused = await call("capcomd_spawn", { runId: r.runId, task: "where is sum defined?", profile: "critic", report: true, budget: "usd=1,turns=10", key: "q" });
       expect(refused.isError).toBe(true);

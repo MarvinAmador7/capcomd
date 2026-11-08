@@ -735,6 +735,13 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
     let promptText = task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : task.consolidate ? buildConsolidatePrompt(task as AgentTask & { consolidate: NonNullable<AgentTask["consolidate"]> }) : task.report ? buildReportPrompt(task) : buildPrompt(task);
     let systemFile: string | undefined, appendSystemFile: string | undefined;
+    // ADR-024 `identity.persona` (pinned at spawn, attached at agent.preparing): the first text of its instructions.
+    // Claude Code's own system prompt stays unless the profile replaces it (`prompt.system`), so the persona leads
+    // what is appended to it, or the profile's replacement; a CLI without the flags reads the system prompt first.
+    if (cfg.persona) {
+      const first = (text: string | undefined) => [cfg.persona, text].filter(Boolean).join("\n\n");
+      cfg = adapter.kind === "claude-code" && !cfg.systemPrompt ? { ...cfg, appendSystemPrompt: first(cfg.appendSystemPrompt) } : { ...cfg, systemPrompt: first(cfg.systemPrompt) };
+    }
     if (adapter.kind === "claude-code") {
       if (cfg.systemPrompt) { systemFile = `${W}/system.txt`; await provider.upload(vmId, systemFile, new TextEncoder().encode(r.text(cfg.systemPrompt))); }
       if (cfg.appendSystemPrompt) { appendSystemFile = `${W}/append-system.txt`; await provider.upload(vmId, appendSystemFile, new TextEncoder().encode(r.text(cfg.appendSystemPrompt))); }

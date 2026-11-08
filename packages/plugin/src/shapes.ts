@@ -97,6 +97,11 @@ export interface PinnedSpec {
   /** ADR-024 `skills` (§7 step 5): the profile's skills, pinned at spawn by the sha256 of each SKILL.md; agent.preparing
    *  (§6.6.7) has their text in `prompt.skills`. */
   skills?: Array<Pick<AttachedSkill, "name" | "hash" | "source">>;
+  /** ADR-024 `identity.persona`: the profile's persona, pinned at spawn by the sha256 of its text; agent.preparing
+   *  (§6.6.7) has the text in `prompt.persona`. */
+  persona?: Pick<AttachedPersona, "hash" | "source">;
+  /** ADR-024 `harness.cliVersion`: the semver range its environment's agent CLI satisfied when it was spawned. */
+  cliVersion?: string;
 }
 
 export type ApprovalKind = "merge" | "budget" | "egress" | "secret" | "spawn_widen" | "custom";
@@ -181,6 +186,9 @@ export type AgentResult = { ok: boolean; summary: Untrusted | null; claim: Untru
 
 /** A skill attached to an agent's prompt or a message (`src/agents/skills.ts` AttachedSkill), pinned by hash. */
 export interface AttachedSkill { name: string; hash: string; source: "builtin" | "user" | "project" | "plugin"; text: string }
+/** A profile's persona (ADR-024 `identity.persona`) as an agent gets it: the layer its file is in, the sha256 (hex) of
+ *  its text, and the text. */
+export interface AttachedPersona { hash: string; source: "project" | "user"; text: string }
 
 /** A background job (§16.2): work that outlives the call that started it and reports back as events. `exec` runs argv
  *  in a sandbox machine (the owner agent's, or a run-owned job machine); `timer` fires at a time or on an interval. */

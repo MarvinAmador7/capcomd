@@ -15,6 +15,7 @@ import { seamPresence, unconfirmedSeam } from "../plugins/snapshot";
 import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layerOver, notApplied, setByOver, toFlat, v2Path, withContext, type ProfileDoc, type SetBy } from "./v2";
 import { runtimeOf, runtimeProblems, type ProfileRuntime } from "./runtime";
 import { profileSkills, type ProfileSkill } from "./skills";
+import { profilePersona, type ProfilePersona } from "./persona";
 
 /** A JSON parse error as a profile file's error says it: where it went wrong, never what is there (readDoc). */
 const jsonError = (e: unknown) => (e as Error).message.replace(/\s*["'`][^]*$/, "");
@@ -121,6 +122,8 @@ export interface ResolvedProfile {
   /** Its `skills`, read and hashed (./skills.ts), which an agent of it is pinned with too; not capcomd's orchestration
    *  skill, which every agent that may spawn gets by itself. */
   skills: ProfileSkill[];
+  /** Its `identity.persona`, read and hashed (./persona.ts), which an agent of it is pinned with too; null: it has none. */
+  persona: ProfilePersona | null;
 }
 /** Every profile a project sees, resolved: `agents` and `default` read as a v1 file's do, so every reader of
  *  `readAgentsFile(…).agents[name]` reads v2 profiles the same way. */
@@ -167,7 +170,7 @@ function readDoc(path: string, fs: View): unknown {
 export const LOOKS_LIKE_FILE = /^\S+\.(?:md|txt)$/;
 /**
  * A manifest's file references, read: `prompt.system`/`prompt.append` that name a file (`prompt.md`) become its text,
- * and `identity.persona` must exist. Only in a profile directory, and only inside it (`..`, an absolute path and a
+ * and `identity.persona` must exist (it is read when the profile resolves, ./persona.ts). Only in a profile directory, and only inside it (`..`, an absolute path and a
  * symlink out of it are refused): a package carries its files and reads nothing else of the host (ADR-024 §2.5).
  */
 function readFiles(doc: ProfileDoc, dir: string | null, errs: string[], where: string): ProfileDoc {
@@ -280,7 +283,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     if (bad.length) throw new AgentConfigError(bad.join("; "));
     const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => {
       const manifest = fromFlat(name, spec);
-      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [], runtime: {} }];
+      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [], persona: null, runtime: {} }];
     }));
     const { $comment: _, ...file } = f;
     return { ...file, profiles, warnings };
@@ -372,13 +375,16 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       // Its skills, read from the nearest directory that has each (an override's, its own, then its ancestors').
       const sk = profileSkills(`profiles.${name}`, doc.skills, [...dirs].reverse(), spec.children?.allowSpawn === true, !!spec.context?.providers?.length);
       e.push(...sk.errors);
+      // Its persona, from the directory of the file that named it (its own, an ancestor's or an override's).
+      const pe = profilePersona(`profiles.${name}`, doc, setBy, applied);
+      e.push(...pe.errors);
       e.push(...contextProblems(name, spec));
       if (e.length) return fail(e.join("; "));
       dirsOf.set(name, dirs);
       if (def?.on) defaults.push({ name, at: def.at, v1: false });
       const notYet = notApplied(doc);
       if (notYet.length) warnings.push(`profiles.${name}: ${notYet.join(", ")} ${notYet.length > 1 ? "are" : "is"} read but not used yet by this capcomd`);
-      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec, skills: sk.skills, runtime };
+      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec, skills: sk.skills, persona: pe.persona, runtime };
       done.set(name, r);
       return r;
     } finally { resolving.pop(); }

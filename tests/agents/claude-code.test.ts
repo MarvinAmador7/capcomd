@@ -107,6 +107,19 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(getFinishedSpans().some((x) => x.name === "agent.claude_code" && x.attributes["agent.report"] === true)).toBe(true);
   });
 
+  test("a persona (ADR-024 identity.persona) is the first text of its instructions: before what is appended, or the profile's own system prompt", async () => {
+    // From the attempt's spec, as agent.preparing leaves it (src/primitives/ops.ts agentPreparing).
+    expect(loadAgentConfig({}, null, { provider: "claude", auth: "apikey", personaPrompt: "# You are Vera" }).persona).toBe("# You are Vera");
+    const s = await setup("make the failing test pass");
+    await runClaudeCode(s.provider, s.id, s.task, { ...s.cfg, persona: "# You are Vera", appendSystemPrompt: "Review the diff." }, { apiKey: KEY });
+    expect(readFileSync(join(s.W, "append-system.txt"), "utf8")).toBe("# You are Vera\n\nReview the diff.");
+    expect(existsSync(join(s.W, "system.txt"))).toBe(false); // Claude Code's own system prompt stays
+    const o = await setup("make the failing test pass");
+    await runClaudeCode(o.provider, o.id, o.task, { ...o.cfg, persona: "# You are Vera", systemPrompt: "You review code.", appendSystemPrompt: "Review the diff." }, { apiKey: KEY });
+    expect(readFileSync(join(o.W, "system.txt"), "utf8")).toBe("# You are Vera\n\nYou review code.");
+    expect(readFileSync(join(o.W, "append-system.txt"), "utf8")).toBe("Review the diff.");
+  });
+
   test("redaction: a leaking agent never puts the key into trace, events, commit or errors", async () => {
     const s = await setup("[leak] do it");
     const events: any[] = [];

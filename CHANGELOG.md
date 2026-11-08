@@ -10,6 +10,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `capcomd-context-routing` skills, so a run shows what those skills change (success, work, cost, the planted-instruction
   probe, citations). CI runs it on the fake sandbox, where `--expect` now also checks each agent's delivered prompt:
   the brief in every index arm, the skills in each but this one.
+- New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at
+  most 32 KiB) is now the first thing each of its agents reads, once, before the profile's prompt and its skills. The
+  agent keeps the text it was spawned with; a later edit reaches only agents spawned after it. A persona from the
+  project's profiles is used only once you trust it, as the project's skills are: `capcomd profiles trust <name>`
+  shows it and asks, a spawn before that is refused (`untrusted`), and a changed file needs trusting again.
+  `capcomd profiles show` and `validate` say whether it is trusted, and the profile lists (`capcomd profiles list
+  --json`, `capcomd_profiles`, `GET /v1/profiles`) name an untrusted one in `untrustedPersona`, so a planner can pick
+  another profile instead of having its spawn refused. Your own profiles' personas need no trust.
+- New: `harness.cliVersion` in a profile is enforced. It is a semver range (`">=2.1"`, `"^2.1.0"`) that the agent CLI
+  in the environment its agents boot from must satisfy, as recorded by `capcomd env build`. A spawn is refused
+  (`environment`) when the recorded version is outside the range, or when the environment recorded none (the
+  sandbox's plain image, or no build yet); `capcomd run` refuses such a planner the same way, the app shows it as not
+  ready, and `capcomd profiles validate` warns. A range that isn't a semver range is now an error when the profile is
+  read. Before, both settings were read and ignored (`validate` said so).
 - Lessons now reach the project's memory in a default team without your help. Fixed: the planner `capcomd setup
   project` writes couldn't spawn the consolidator it writes (refused as "context changed"); a child is briefed by its
   own profile. The planner's brief and skill now say when and how: put its own lessons in its result, read

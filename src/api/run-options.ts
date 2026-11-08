@@ -10,7 +10,8 @@ import { profileFor } from "../auth/profiles";
 import { bootSnapshot, EnvironmentProblem } from "../env/resolve";
 import { lifecycleCheck } from "../plugins/lifecycle";
 import { agentsFilePath, lifecyclePlugins, profileFacts, providerDefaultEffort, providerEfforts, providerKind, readProfiles, type ProfileSet, type ResolvedProfile } from "../profiles";
-import { untrustedSkillsProblem } from "../profiles/trust";
+import { untrustedProfileProblem } from "../profiles/trust";
+import { cliVersionProblem } from "../env/cli-version";
 import { readConfig, userConfigPath } from "../config/store";
 import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } from "../providers/registry";
 import { withSandbox } from "../providers/run-sandbox";
@@ -91,9 +92,9 @@ export function driverFit(provider: "claude" | "codex", name: RunSandbox, source
 
 /**
  * Can a run start with planner profile `p` now (GET /v1/run-options `planners`)? What its spawn would refuse, asked
- * before the run instead of at it (ADR-024 §8): its login, its project skills' trust, a `sandbox.provider` outside the
- * run's isolation, its `sandbox.environment` on its sandbox (its profile's `sandbox.provider`, else the run's), an agent
- * environment there, an egress limit that sandbox can't enforce, and the plugins its `lifecycle` names (the spawn's own
+ * before the run instead of at it (ADR-024 §8): its login, its project skills' and persona's trust, a `sandbox.provider`
+ * outside the run's isolation, its `sandbox.environment` on its sandbox (its profile's `sandbox.provider`, else the
+ * run's), an agent environment there, the CLI it recorded against `harness.cliVersion`, an egress limit that sandbox can't enforce, and the plugins its `lifecycle` names (the spawn's own
  * checks, src/primitives/ops.ts). Local files, and the daemon's plugin host (or, outside the daemon, its listing; with no daemon to
  * ask, a lifecycle isn't held against it: the spawn asks again). The first problem is the reason.
  */
@@ -103,7 +104,7 @@ export async function plannerReadiness(p: ResolvedProfile, source: Env = process
 	const where = rt.sandboxProvider ? { name: rt.sandboxProvider, label: (SANDBOX_LABEL as Record<string, string>)[rt.sandboxProvider] ?? rt.sandboxProvider } : undefined;
 	const login = credentialReady(provider, p.spec.auth, s, where);
 	if (!login.ready) return { available: false, reason: login.reason };
-	const untrusted = untrustedSkillsProblem(p.name, p.skills, source);
+	const untrusted = untrustedProfileProblem(p.name, p.skills, p.persona, source);
 	if (untrusted) return { available: false, reason: `${untrusted} (run \`capcomd profiles trust ${p.name}\`)` };
 	const outside = isolationProblem(p.name, rt.sandboxProvider, source);
 	if (outside) return { available: false, reason: `${outside} (name an isolated sandbox in its sandbox.provider, or remove it)` };
@@ -117,6 +118,8 @@ export async function plannerReadiness(p: ResolvedProfile, source: Env = process
 	}
 	const env = envSnapshotProblem(provider, s, rt.environment);
 	if (env) return { available: false, reason: env };
+	const cli = cliVersionProblem({ name: p.name, provider, auth: p.spec.auth, range: rt.cliVersion, environment: rt.environment }, s);
+	if (cli) return { available: false, reason: `${cli} (build an environment with a CLI in that range, or change its harness.cliVersion)` };
 	const unkept = egressProblem(p.name, p.spec.egress, s);
 	if (unkept) return { available: false, reason: `${unkept} (remove its egress, or run it on boxd)` };
 	const unheard = (await lifecycleCheck(lifecyclePlugins(rt.lifecycle), source)).problem;

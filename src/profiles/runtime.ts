@@ -1,12 +1,13 @@
 // The blocks of a profile that change where and with what its agents run, beyond the flat v1 spec (ADR-024 §7 step 8):
 // `tools.mcp` (MCP servers the agent's CLI gets, run in its sandbox), `sandbox.provider|environment|size` (the sandbox
-// its machine is made on, the environment it boots from, its size) and `lifecycle.onStart|onEnd` (plugins that must be
-// active for it, which hear its `agent.changed`). Read from the resolved manifest, checked with it, and pinned on the
+// its machine is made on, the environment it boots from, its size), `lifecycle.onStart|onEnd` (plugins that must be
+// active for it, which hear its `agent.changed`) and `harness.cliVersion` (the range its environment's agent CLI must
+// satisfy, checked at spawn: src/env/cli-version.ts). Read from the resolved manifest, checked with it, and pinned on the
 // agent at spawn beside the flat spec (src/primitives/ops.ts `spawnAgent`), so whoever runs it runs what was resolved.
 // They aren't flat fields: no `--set`, `--overrides` or `profile.resolved` patch reaches them (a parent can't add an MCP
 // server to its child, or move it to another sandbox), and agents.json (v1) has none of them.
 import { NAME, type AgentSpec } from "./v1";
-import type { ProfileDoc } from "./v2";
+import { CLI_VERSION_MAX, CLI_VERSION_RANGE, type ProfileDoc } from "./v2";
 
 /** One `tools.mcp` entry: a server the agent's CLI starts in its sandbox (never on the host, ADR-017 §1). `trusted`:
  *  its tools are approved up front, as capcomd's own are; `untrusted` (the default): the profile's tool rules decide. */
@@ -22,9 +23,11 @@ export interface ProfileRuntime {
   environment?: string;
   size?: MachineSize;
   lifecycle?: Lifecycle;
+  /** `harness.cliVersion`: a semver range the agent CLI its environment recorded must satisfy (checked at spawn). */
+  cliVersion?: string;
 }
 /** The pinned spec's keys for them (packages/plugin/src/shapes.ts PinnedSpec). */
-export const RUNTIME_KEYS = ["mcp", "sandboxProvider", "environment", "size", "lifecycle"] as const;
+export const RUNTIME_KEYS = ["mcp", "sandboxProvider", "environment", "size", "lifecycle", "cliVersion"] as const;
 
 const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const block = (doc: ProfileDoc, b: string): Record<string, unknown> => (isMap(doc[b]) ? (doc[b] as Record<string, unknown>) : {});
@@ -34,7 +37,7 @@ const SIZES = [1, 2, 4, 8];
 /** The runtime blocks of a resolved manifest (checked by ./v2.ts checkManifest); empty lists and unset values left out. */
 export function runtimeOf(doc: ProfileDoc): ProfileRuntime {
   const out: ProfileRuntime = {};
-  const t = block(doc, "tools"), sb = block(doc, "sandbox"), l = block(doc, "lifecycle");
+  const t = block(doc, "tools"), sb = block(doc, "sandbox"), l = block(doc, "lifecycle"), h = block(doc, "harness");
   const mcp = Array.isArray(t.mcp) ? t.mcp.filter(isMap).map((m): McpServer => ({ name: String(m.name), command: names(m.command), trust: m.trust === "trusted" ? "trusted" : "untrusted" })) : [];
   if (mcp.length) out.mcp = mcp;
   if (typeof sb.provider === "string") out.sandboxProvider = sb.provider;
@@ -42,6 +45,7 @@ export function runtimeOf(doc: ProfileDoc): ProfileRuntime {
   if (isMap(sb.size) && SIZES.includes(sb.size.vcpu as number)) out.size = { vcpu: sb.size.vcpu as MachineSize["vcpu"] };
   const onStart = names(l.onStart), onEnd = names(l.onEnd);
   if (onStart.length || onEnd.length) out.lifecycle = { onStart, onEnd };
+  if (typeof h.cliVersion === "string" && h.cliVersion) out.cliVersion = h.cliVersion;
   return out;
 }
 
@@ -76,6 +80,7 @@ export function pinnedRuntime(spec: unknown): ProfileRuntime {
     const onStart = names(spec.lifecycle.onStart), onEnd = names(spec.lifecycle.onEnd);
     if (onStart.length || onEnd.length) out.lifecycle = { onStart, onEnd };
   }
+  if (typeof spec.cliVersion === "string" && spec.cliVersion.length <= CLI_VERSION_MAX && CLI_VERSION_RANGE.test(spec.cliVersion)) out.cliVersion = spec.cliVersion;
   return out;
 }
 
