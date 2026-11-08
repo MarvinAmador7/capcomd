@@ -27,12 +27,15 @@ export function readSnapshot(path = pluginsSnapshotPath()): PluginsSnapshot | nu
 export type SeamKind = "sandbox" | "agent";
 
 /** The seams of `kind` the running daemon's active plugins provide, by name; null in the daemon (its own host is the
- *  answer) and when no daemon runs. */
+ *  answer) and when no daemon runs. An entry of the listing that isn't the shape the daemon writes provides nothing
+ *  (every profile command reads this, so a damaged listing must not stop them). */
 export function daemonSeamNames(kind: SeamKind, env: Env = process.env): string[] | null {
   if (inDaemon()) return null;
   const snap = readSnapshot(pluginsSnapshotPath(env));
   if (!snap) return null;
-  return snap.plugins.filter((p) => p.state === "active" && p.enabled).flatMap((p) => (p.seams ?? []).filter((s) => s.kind === kind).map((s) => s.name));
+  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+  return snap.plugins.filter((p) => isObject(p) && p.state === "active" && p.enabled === true && Array.isArray(p.seams))
+    .flatMap((p) => p.seams!.filter((s) => isObject(s) && s.kind === kind && typeof s.name === "string").map((s) => s.name));
 }
 
 /**

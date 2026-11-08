@@ -473,6 +473,19 @@ describe("profiles v2: loader and resolution", () => {
       expect(gone.load().warnings).toEqual([`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`]);
     });
 
+    test("a damaged listing from a live daemon doesn't break reading profiles: entries not of the daemon's shape provide nothing", () => {
+      const w = world(profile("modal"));
+      mkdirSync(join(w.source.CAPCOMD_HOME, "state"), { recursive: true });
+      const write = (plugins: unknown[]) => writeFileSync(join(w.source.CAPCOMD_HOME, "state", "plugins.json"), JSON.stringify({ pid: process.pid, at: "", plugins }));
+      const good = { name: "third-party", state: "active", enabled: true, seams: [{ kind: "sandbox", name: "modal" }] };
+      for (const bad of [null, "x", { state: "active", enabled: true, seams: { kind: "sandbox", name: "modal" } }, { state: "active", enabled: true, seams: [null, { kind: "sandbox" }] }, { state: "active", enabled: "yes", seams: [{ kind: "sandbox", name: "modal" }] }]) {
+        write([bad]);
+        expect(errorOf(() => w.load())).toContain(`sandbox.provider "modal" isn't an active sandbox provider`);
+        write([bad, good]);
+        expect(w.load().warnings).toEqual([]);
+      }
+    });
+
     test("harness.provider likewise, in a v2 profile and an agents.json entry; a candidate checked before a write still needs one", () => {
       const v2 = world(profile("docker", "gemini"));
       const v1 = world({}, { g: { provider: "gemini", auth: "apikey" } });
