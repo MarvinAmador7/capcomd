@@ -6,12 +6,13 @@ import { assertEngine, type RunOptions, type RunResult } from "../core/relay";
 import { RelayError } from "../core/errors";
 import { awaitAgents, endRun, runNew, spawnAgent, treeOf } from "../primitives/ops";
 import { TERMINAL_AGENT } from "../primitives/policy";
+import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
 
 // The planner choice lives with the run's driver choice (src/agents/run-driver.ts), which GET /v1/run-options reads too.
 export { DEFAULT_PLANNER, plannerProfile } from "../agents/run-driver";
 import { DEFAULT_PLANNER } from "../agents/run-driver";
 
-export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: string | null; target: string | null; base?: string | null }, o: { orchestrate?: boolean } = {}): string {
+export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: string | null; target: string | null; base?: string | null }, o: { orchestrate?: boolean; consolidator?: boolean } = {}): string {
   // A goal branch (gates.base set): merges land on it with no approval, and the user reads the summary before opening
   // a pull request into the base, so the summary is written for them.
   const goalBranch = gates.base && gates.target ? gates.target : null;
@@ -30,9 +31,12 @@ export function plannerBrief(goal: string, gates: { checks: string[]; reviewer: 
       " A worker has capcomd too: it runs long commands (the whole test suite, a build) as background jobs, can propose lessons for the project's memory, and ends with a summary of what it changed and checked, which you read in its result.",
     "2. `capcomd await` them. Verify each finished child (`capcomd verify --ref <agt> --key v-<agt>`" + (gates.reviewer ? "; a reviewer agent also reviews it, so give the command a 10-minute timeout and run it again if it is cut off" : "") + `), and merge the ones that pass (\`capcomd merge --ref <agt> --require <vfyId>\`) into ${target}. Run each capcomd command on its own and read the ids from its JSON output (a shell variable like \`id=$(capcomd spawn …)\` can't be checked, so it is refused).`,
     "3. A child that failed or didn't pass: spawn one replacement with the failure in its task, or continue its work with `capcomd spawn --continue <agt>`; then verify and merge it.",
+    // ADR-025 §5.2, D6: the planner spawns the consolidator as its run's last child; its brief says when and how, not
+    // only its skill (a live run's planner never did).
+    ...(o.consolidator ? [`4. The project's memory, once every other child has ended: first put what this run found out that a later agent would otherwise learn the hard way (and anything the goal asks to remember) in your result as lessons: \`capcomd result --summary "<so far>" --data '{"context": [{"title": "…", "text": "…"}]}'\`. Then \`capcomd status\`: its \`lessons\` counts the run's candidate lessons. When there are any, spawn the consolidator as your last child (\`capcomd spawn --profile ${CONSOLIDATOR_PROFILE} --task "Consolidate this run's lessons" --key consolidate\`), await it, and verify and merge its branch as any child's: its merge waits for a person's approval, which is expected (it has no branch when it has nothing to change).`] : []),
     goalBranch
-      ? `4. Finish with \`capcomd result --summary "<summary>"\`: it opens the pull request's description, so write it for the person who reviews it: what the change does and why, then per task what landed on ${goalBranch} (child, verified, reviewed) and what didn't (and why), whether the checks ran on the combined code (the last merge's \`result.combined\` says, or \`capcomd check\` of ${goalBranch}), and what is left to do.`
-      : '4. Finish with `capcomd result --summary "<per task: child, verified?, merged?; whether the checks ran on the combined code (result.combined); what is left>"`.',
+      ? `${o.consolidator ? 5 : 4}. Finish with \`capcomd result --summary "<summary>"\`: it opens the pull request's description, so write it for the person who reviews it: what the change does and why, then per task what landed on ${goalBranch} (child, verified, reviewed) and what didn't (and why), whether the checks ran on the combined code (the last merge's \`result.combined\` says, or \`capcomd check\` of ${goalBranch}), and what is left to do.`
+      : `${o.consolidator ? 5 : 4}. Finish with \`capcomd result --summary "<per task: child, verified?, merged?; whether the checks ran on the combined code (result.combined); what is left>"\`.`,
   ].join("\n");
 }
 
@@ -59,8 +63,11 @@ export async function runWithPlanner(opts: RunOptions & { profile: string; drive
     const { rootAgentIdFor, PLANNER_KV } = await import("../primitives/ops");
     await (await import("../primitives/state")).kvWrite(runId, { k: PLANNER_KV, value: { agentId: rootAgentIdFor(runId, "planner") }, writer: "operator" });
     // An orchestrate planner (plugin API §16.1) is told what its mode means; its profile says (overrides can't lift it).
-    const orchestrate = (() => { try { return (require("../profiles") as typeof import("../profiles")).resolveAgent(planner).spec?.toolMode === "orchestrate"; } catch { return false; } })();
-    root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates, { orchestrate }), key: "planner" });
+    // And whether it may spawn the consolidator (ADR-025 §5.2): its brief then says when and how.
+    const spec = (() => { try { return (require("../profiles") as typeof import("../profiles")).resolveAgent(planner).spec; } catch { return undefined; } })();
+    const orchestrate = spec?.toolMode === "orchestrate";
+    const consolidator = !!spec?.children?.allowSpawn && (spec.children.allowedChildProfiles ?? []).includes(CONSOLIDATOR_PROFILE);
+    root = await spawnAgent({ runId, profile: opts.profile, task: plannerBrief(opts.goal, gates, { orchestrate, consolidator }), key: "planner" });
   } catch (e) {
     // The run started, but its planner can't: the run ends failed with the reason (not left "started" with no agent).
     const reason = (e as Error)?.message ?? String(e);

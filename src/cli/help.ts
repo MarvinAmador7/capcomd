@@ -98,6 +98,8 @@ Usage:
   capcomd verify <runId> --ref <agt|branch> [--check NAME | --checks CMD] [--acceptance JSON|file] [--review-profile P] [--target T] [--key K]  → vfy-…
                                        (checks, then the reviewer agent: the run's --reviewer or --review-profile; both must pass)
   capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--operator] [--key K]   (only the verified commit lands)
+                                       a protected target needs --request-approval (parked for \`capcomd approve\`, every
+                                       plugin's gate still asked) or --operator (lands it, recorded as bypassing their vetoes)
   capcomd check <runId> [<agt|branch>] [--check NAME | --checks CMD] [--key K]  → chk-…  the run's checks on that branch's
                                        commit as it is (default: the run's target), in a sandbox like verify's; merges and
                                        reviews nothing; prints pass/fail and the output (--id chk-… shows a check again)

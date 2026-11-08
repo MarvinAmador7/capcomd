@@ -6,7 +6,8 @@
 // no `context` block gets nothing and costs nothing. As an agent.changed
 // listener it collects the lessons an agent proposed in its result (`result.data.context`) when it ends: attributed to
 // the token that wrote the result, checked by the seeded secret scan, kept as candidates of the run in kv
-// `_context/<agentId>` (src/context/capture.ts); a consolidator's answer isn't collected (the kernel stages it on its
+// `_context/<agentId>` (src/context/capture.ts), and, before a consolidator starts, those an agent still working declared
+// already (its planner's own: `collectPending`); a consolidator's answer isn't collected (the kernel stages it on its
 // branch, src/context/consolidator.ts), only told. Its events, on the run's stream: `plugin.context.loaded` (what a
 // brief held), `plugin.context.skipped` (a provider left out, and why), `plugin.context.proposed` (a candidate kept),
 // `plugin.context.refused` (one refused, and why, never its text), `plugin.context.staged` (what a consolidator's
@@ -116,6 +117,18 @@ export const captureKernel = {
     const cfg = await (await import("../merge/run-config")).mergeConfigFor(runId).catch(() => null);
     return runSecrets({ runId, remote: cfg?.remote ?? null });
   },
+  /** The run's agents whose declared result has lessons that capture has no record of yet (src/context/consolidator.ts
+   *  `lessonsOf`'s pending ones): what a consolidator's start collects first. */
+  uncollected: async (runId: string): Promise<Array<Pick<Agent, "id" | "runId" | "profile" | "model">>> => {
+    const { CANDIDATES_KV } = await import("../context/capture");
+    const { pendingOf } = await import("../context/consolidator");
+    const S = await import("../primitives/state");
+    // Any record of an agent (one with every lesson refused too): capture has seen it.
+    const kept = ((await S.kvList(runId, CANDIDATES_KV)).entries as Array<{ k: string }>).map((e) => ({ agentId: e.k.slice(CANDIDATES_KV.length) }));
+    const said = (await S.kvList(runId, "_result/")).entries as import("../context/consolidator").DeclaredRow[];
+    const agents = (await (await import("../core/relay")).client().scope.getOrCreate([runId]).listAgents({})) as ScopeAgent[];
+    return pendingOf(agents, kept, said).map(({ agent: a }) => ({ id: a.agentId, runId, profile: a.profile, model: (a.spec as { model?: string } | null)?.model ?? null }));
+  },
 };
 
 /** One run's captures at a time (in this process), so the run's limit on lessons counts each agent's once. */
@@ -159,6 +172,20 @@ export async function collect(agent: Pick<Agent, "id" | "runId" | "profile" | "m
     for (const x of r.refused) await emit("refused", `${agent.id}'s lesson ${x.n} was refused: it ${x.what}.`, { agentId: agent.id, profile: origin.profile, n: x.n, reason: x.reason });
     return rec;
   });
+}
+
+/**
+ * The checkpoint before a consolidator starts (ADR-025 §5.2, D6 as amended): the lessons the run's agents declared that
+ * capture hasn't collected yet are collected now, as each agent's end would have, so the consolidator reads them. The
+ * one that matters is the planner's own: it spawns the consolidator as its last child, before it ends, so its lessons
+ * (declared with `capcomd result --data '{"context": […]}'` before that spawn) would otherwise be collected only after
+ * the consolidator read the run. An agent's lessons are collected once: what it declares after this isn't read again.
+ * Returns how many agents' lessons it collected.
+ */
+export async function collectPending(runId: string, emitFor: (agentId: string) => Emit): Promise<number> {
+  let n = 0;
+  for (const a of await captureKernel.uncollected(runId)) if (await collect(a, emitFor(a.id))) n++;
+  return n;
 }
 
 /** The repository `cwd` is in (its nearest directory with a .git), else `cwd`. */
@@ -331,6 +358,11 @@ export const plugin = definePlugin({
   activate(ctx) {
     ctx.hooks.on("agent.preparing", async (call) => {
       const { agent, spec } = call.payload;
+      // A consolidator reads the run's candidates when it starts: what its agents declared and capture hasn't collected
+      // yet (its planner's own lessons, the planner still running) is collected first. Never fails its start.
+      if (agent.profile === CONSOLIDATOR_PROFILE) {
+        await collectPending(agent.runId, (id) => emitter(ctx, agent.runId, id)).catch((e: unknown) => ctx.log.warn("could not collect the run's lessons before its consolidator started", { agentId: agent.id, error: (e as Error)?.message ?? String(e) }));
+      }
       // A fake agent (the tests' and the dry run's) reads no prompt; a profile without a context block gets no brief.
       if (!spec.provider || !spec.context?.providers?.length) return { decision: "allow" };
       const a = await contextKernel.agent(agent.runId, agent.id);
