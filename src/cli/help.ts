@@ -172,6 +172,9 @@ Usage:
                                        would run and asks; a changed file needs trusting again
   capcomd plugins allow-version <name>@<version> --accept-risk
                                        Let that exact version run on a capcomd its engines range leaves out
+  capcomd plugins enable|disable <name>   Turn a plugin on or off: recorded in your config (plugins.<name>.enabled)
+                                       and applied to the running daemon now; a built-in stays on (the
+                                       watchdog aside)
   capcomd ui                            Launch the web UI
 
 Options:

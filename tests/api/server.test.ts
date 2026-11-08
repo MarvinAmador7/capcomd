@@ -46,7 +46,7 @@ describe("harness server", () => {
 	test("health needs no token; everything else does", async () => {
 		const { req } = setup();
 		const h = await req("/v1/health");
-		expect(await h.json()).toEqual({ ok: true, api: "harness.v1", version: "test", capabilities: ["run.controls", "agents.messages", "steer.skills", "agent.pause", "runs.options", "runs.options.repo", "runs.options.sandbox", "runs.options.models", "agent.steps", "logins", "environments", "service", "sandboxes", "sandboxes.resources", "sandboxes.settings", "sandboxes.actions", "projects.setup", "projects.known", "projects.git", "runs.goal_branch", "agents.title", "agents.thread_tail", "plugins", "profiles", "plugins.protocol", "triggers", "profiles.edit", "plugins.config", "profiles.facts", "runs.options.planners"] });
+		expect(await h.json()).toEqual({ ok: true, api: "harness.v1", version: "test", capabilities: ["run.controls", "agents.messages", "steer.skills", "agent.pause", "runs.options", "runs.options.repo", "runs.options.sandbox", "runs.options.models", "agent.steps", "logins", "environments", "service", "sandboxes", "sandboxes.resources", "sandboxes.settings", "sandboxes.actions", "projects.setup", "projects.known", "projects.git", "runs.goal_branch", "agents.title", "agents.thread_tail", "plugins", "profiles", "plugins.protocol", "triggers", "profiles.edit", "plugins.config", "profiles.facts", "runs.options.planners", "plugins.routes"] });
 		const r = await req("/v1/runs");
 		expect(r.status).toBe(401);
 		expect(((await r.json()) as any).code).toBe("unauthorized");
