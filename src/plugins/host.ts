@@ -22,6 +22,7 @@ import { pluginTriggers } from "../triggers/intake";
 import { announce } from "../install/trust";
 import { isExempt, projectOf, projectPluginDirs, projectPluginTrusted } from "./install";
 import { pluginStore, storageService } from "./storage";
+import { eventSinks, noEventSinks, scopeEvents, type EventReads } from "./events";
 import { processLauncher } from "./process";
 import type { ProcessTimings } from "../../packages/plugin/src/host/process";
 
@@ -138,12 +139,15 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
 }
 
 /**
+ * `events`: where the daemon's host reads streams for `ctx.events.subscribe` and `replay` (§8.4, src/plugins/events.ts):
+ * the daemon's own events, and a run's through the engine unless given. A host without it (a CLI's, the MCP server's)
+ * refuses both, `unsupported`: the streams are the daemon's.
  * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2), `ctx.agents` (§8.4, src/plugins/services.ts) and
  * `ctx.storage` (§8.4; one process writes a plugin's storage): a CLI's local host has none of them, `unsupported`.
  * `triggers`: they get `ctx.triggers` too (§16.3; the daemon's only). `process`: the plugin socket out-of-process
  * plugins connect to (§9.2); without it they stay `validated` (a CLI's local host).
  */
-export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
+export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: EventReads["daemon"]; run?: EventReads["run"]; pollMs?: number }; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
     if (e.stream !== "daemon") throw new PluginError("unsupported", `the host writes its own events on the daemon stream only (${e.type})`);
@@ -151,6 +155,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
   };
   const pluginEvent = pluginEventWriter({ ...(o.record ? { daemon: o.record } : {}), ...(o.run ? { run: o.run } : {}) });
   const dataDir = pluginDataDir;
+  const streams = o.events ? eventSinks({ daemon: o.events.daemon, run: o.events.run ?? scopeEvents }, o.events.pollMs ? { pollMs: o.events.pollMs } : {}) : noEventSinks;
   // §13.3: one JSON line per log call in the daemon's log, never an event. A CLI's local host keeps its output clean.
   const log = (l: { plugin: string; level: string; message: string; fields: Record<string, unknown> }) => { if (o.log !== false) console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })); };
   return new PluginHost({
@@ -182,7 +187,7 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
       }
       return t.trusted;
     },
-    sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent },
+    sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent, subscribe: streams.subscribe, replay: streams.replay },
     ...(o.process ? { launcher: processLauncher({ socket: o.process.socket, log }), ...(o.process.timings ? { processTimings: o.process.timings } : {}) } : {}),
     ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins) } : {}),
   });
