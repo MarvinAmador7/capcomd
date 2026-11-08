@@ -112,7 +112,10 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `identity.persona` is checked but doesn't change what an agent does yet; `capcomd profiles validate` lists it when a
   profile sets it. `context` (with `memory` read as its old name) does: see "Project memory" below. `jobs`
   (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
-  field does in `agents.json`.
+  field does in `agents.json`. They are limits like `limits`: an override (`--set jobs.max=2`, which keeps the
+  block's other values) may lower one but not raise or unset one the profile sets (without `--operator`), and a
+  profile in `children.allowedChildProfiles` may not either. A job started with a longer `--timeout-ms` than the
+  profile's `afterTurnMs` gets `afterTurnMs`.
 - `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
   untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
   (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says
@@ -263,7 +266,9 @@ capcomd profiles export lead --flat --out ./shared
   changed before replacing it: the files changed, added and removed, each skill whose `SKILL.md` hash changes, the old
   and new commit and hash, and any file you edited since it was installed (which the update replaces; `capcomd
   profiles show` and `validate` say when a package was edited). `--dry-run` stops there. An `override.yaml` you put
-  beside the package stays; an update the profiles wouldn't resolve with is put back. A name installed in both places
+  beside the package stays, and so does any other file you added there (it is listed as "added by you, kept"); when
+  the new package has a file of its own in the place of one of yours, the update is refused until you move yours. An
+  update the profiles wouldn't resolve with is put back. A name installed in both places
   is the project's, as it resolves (`--project` looks only there).
 - `export <name>` writes the profile as a package to `./<name>/` (`--out DIR` for another place): its own files as
   they are, `extends` kept (whoever installs it needs a profile of that name), or with `--flat` what it resolves to:

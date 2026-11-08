@@ -398,7 +398,8 @@ describe("lifecycle states (§5.4) and plugin.* events (§13.1)", () => {
         ctx.onDispose(() => { log.push(`second:${ctx.signal.aborted}`); });
       },
     };
-    const { host, of } = makeHost();
+    // The subscription is the host's (src/plugins/events.ts in the daemon): disposed with the rest.
+    const { host, of } = makeHost({ sinks: { subscribe: (stream) => ({ dispose: () => { log.push(`unsubscribed:${stream}`); } }) } });
     await host.start([{ source: "builtin", manifest: m, module: mod as PluginModule<never> }]);
     expect(host.get("full")).toMatchObject({ state: "active", hooks: ["merge.landing", "run.changed"], seams: [{ kind: "sandbox", name: "full" }] });
     const store = () => (["seam", "cli", "mcp", "instructions", "api", "capability", "ui"] as const).map((k) => host.contributions.list(k).map((x) => x.key)).flat();
@@ -406,7 +407,7 @@ describe("lifecycle states (§5.4) and plugin.* events (§13.1)", () => {
     expect(of("plugin.loaded")[0]!.data).toMatchObject({ plugin: "full", hooks: ["merge.landing", "run.changed"], seams: ["sandbox/full"] });
 
     await host.disable("full");
-    expect(log).toEqual(["second:true", "first"]);
+    expect(log).toEqual(["second:true", "first", "unsubscribed:daemon"]);
     expect(store()).toEqual([]);
     expect(host.hooks.order("merge.landing")).toEqual([]);
     expect(await host.hooks.fire("merge.landing", "veto", samplePayload("merge.landing"), at("mrg-1"))).toEqual({ decision: "allow" });

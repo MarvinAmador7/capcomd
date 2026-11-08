@@ -70,7 +70,7 @@ Authority comes only from the token and the scope's limits, never from request t
   operator may still verify with any check. The vfy record keeps the check name and exact command.
   When nothing names or pins a check and the repo has no test command, verify runs the run's only
   named check (the project's `run.checks` that `run new` records), as `capcomd check` does; with
-  several it stays the repo's (plugin API §16.1, 1.0.42).
+  several it stays the repo's (plugin API §16.1, 1.0.47).
 - `merge --require vfy` re-runs the checks that verification passed with, not the repo default, when the target moved since the verify; when it didn't, the verified commit lands as it is (ADR-016, step 2's fast path).
 - `merge` needs a passing `verify` of that exact commit. A merge into a protected target is parked
   (`awaiting_approval`) for the operator (`capcomd approve <runId> <mrgId>`, or `--deny`), not refused.
