@@ -218,6 +218,34 @@ describe("dispatch by mode (§6.2)", () => {
     expect(events.map((e) => e.type)).toEqual(["plugin.hook_failed", "plugin.hook_failed", "plugin.hook_failed", "plugin.suspended"]);
   });
 
+  test("observe: a job.changed listener that declared `changes` is called, and counted as listening, for those kinds only", async () => {
+    const got: Record<string, string[]> = { timer: [], all: [] };
+    const listen = (name: string, decl: M) => builtin(manifest(name, hooks({ "job.changed": decl })), (ctx) => {
+      ctx.hooks.on("job.changed", (call) => { got[name]!.push(call.payload.change.kind); });
+    });
+    const job = (change: M) => ({ ...samplePayload("job.changed"), change }) as ReturnType<typeof samplePayload<"job.changed">>;
+    const { host } = makeHost();
+    await host.start([listen("timer", { changes: ["fired"] })]);
+    // Only a timer's listener: nobody wants a running job's output (the jobs service reads none, §6.6.19).
+    expect(host.hooks.listening("job.changed")).toBe(true);
+    expect(host.hooks.listening("job.changed", "fired")).toBe(true);
+    expect(host.hooks.listening("job.changed", "output")).toBe(false);
+    expect(host.hooks.listening("job.changed", "started")).toBe(false);
+    for (const c of [{ kind: "started" }, { kind: "output", stdout: "x", stderr: "" }, { kind: "fired", n: 1 }, { kind: "ended", state: "done" }]) host.hooks.fire("job.changed", "observe", job(c), at("job-1"));
+    await host.hooks.idle();
+    expect(got.timer).toEqual(["fired"]);
+    expect(host.hooks.stats("timer").calls).toBe(1);
+
+    // One that declares none is called for every kind, as before.
+    const { host: h2 } = makeHost();
+    await h2.start([listen("timer", { changes: ["fired"] }), listen("all", {})]);
+    expect(h2.hooks.listening("job.changed", "output")).toBe(true);
+    for (const c of [{ kind: "output", stdout: "x", stderr: "" }, { kind: "fired", n: 2 }]) h2.hooks.fire("job.changed", "observe", job(c), at("job-1"));
+    await h2.hooks.idle();
+    expect(got.timer).toEqual(["fired", "fired"]);
+    expect(got.all).toEqual(["output", "fired"]);
+  });
+
   test("a hook fired with the wrong mode is refused", () => {
     const { host } = makeHost();
     expect(() => host.hooks.fire("merge.landing" as never, "observe", samplePayload("merge.landing") as never, at())).toThrow(/veto hook, fired as observe/);
@@ -512,6 +540,22 @@ describe("the test kit (§14.5)", () => {
     await sleep(80);
     expect(call.signal.aborted).toBe(true);
     expect(await fake.dispose()).toEqual([]);
+  });
+
+  test("a fake context, like the host, doesn't call a job.changed listener for a kind its `changes` leave out (§4.7)", async () => {
+    const m = (await import("../../packages/plugin/src/manifest")).PluginManifest.parse(manifest("starts", hooks({ "job.changed": { changes: ["started", "ended"] } })));
+    const got: string[] = [];
+    const mod: PluginModule = { activate(ctx) { ctx.hooks.on("job.changed", (call) => { got.push(call.payload.change.kind); }); } };
+    const fake = testkit.fakeContext(m);
+    await testkit.load(fake, mod);
+    // A test that fires an output frame at it can't pass on a call the daemon never makes.
+    await expect(fake.fire("job.changed", { ...samplePayload("job.changed"), change: { kind: "output", stdout: "x", stderr: "" } })).rejects.toThrow(/starts is not called for job.changed output: its manifest's changes are started, ended/);
+    await expect(fake.fire("job.changed", samplePayload("job.changed"))).rejects.toThrow(/not called for job.changed fired/);
+    expect(await fake.fire("job.changed", { ...samplePayload("job.changed"), change: { kind: "started" } })).toMatchObject({ failure: null });
+    expect(got).toEqual(["started"]);
+    await fake.dispose();
+    // The hook contract calls it with a change it declared, not the sample's `fired`.
+    await testkit.hookContract(m, mod);
   });
 });
 

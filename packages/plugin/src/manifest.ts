@@ -29,6 +29,9 @@ export const MANIFEST_HOOK_NAMES = [
 ] as const;
 export const HookNameSchema = z.enum(MANIFEST_HOOK_NAMES);
 
+/** The kinds of a `job.changed` call's `change` (§6.6.19). Mirrors `JobChange` in hooks.ts; the test asserts the two agree. */
+export const JOB_CHANGE_KINDS = ["started", "output", "fired", "ended"] as const;
+
 /** harness.v1 token scopes a plugin's principal may hold (§11.1). `approve` is never grantable to a plugin. */
 export const PLUGIN_SCOPES = ["read", "steer", "configure"] as const;
 export const PluginScope = z.enum(PLUGIN_SCOPES);
@@ -42,6 +45,7 @@ export const CapabilityId = z.string().regex(new RegExp(CAPABILITY_ID_PATTERN))
 export const HookDeclaration = z.object({
   timeoutMs: z.number().int().min(100).optional().describe("The listener's deadline. May lower the hook's default; may never exceed the hook's maximum (§6.4). Default: the hook's default"),
   failure: z.enum(["closed", "open"]).optional().describe("What a timeout, throw, crash or invalid result means: closed denies the operation (naming this plugin), open skips this listener. Gate hooks are always closed (declaring open is a validation error); other veto/modify hooks default to open; observe hooks are always open"),
+  changes: z.array(z.enum(JOB_CHANGE_KINDS)).min(1).optional().describe("job.changed only: the change kinds this listener is called for (§6.6.19). Default: every kind. A plugin that only keeps a timer declares [\"fired\"], and the kernel then reads no running job's output for it"),
 }).strict();
 
 export const CliCommandContribution = z.object({
@@ -164,6 +168,7 @@ export const PluginManifest = z.object({
   for (const [hook, decl] of Object.entries(m.contributes?.hooks ?? {})) {
     const gate = /^(verify|merge|approval|trigger\.admitting)/.test(hook);
     if (gate && decl.failure === "open") ctx.addIssue({ code: "custom", path: ["contributes", "hooks", hook, "failure"], message: `${hook} is a gate hook: failure is always closed (§6.5)` });
+    if (decl.changes && hook !== "job.changed") ctx.addIssue({ code: "custom", path: ["contributes", "hooks", hook, "changes"], message: `changes is for job.changed only, not ${hook} (§4.7)` });
   }
   if (m.entry.runtime === "in-process" && (m.contributes?.hooks ? Object.keys(m.contributes.hooks).length : 0) === 0 && !seams.length && !sources.length && !contexts.length && !m.contributes?.cli?.length && !m.contributes?.mcp?.length && !m.contributes?.api?.length && !m.contributes?.ui?.length && !m.contributes?.events?.length)
     ctx.addIssue({ code: "custom", path: ["contributes"], message: "a plugin must contribute something (§4.7)" });

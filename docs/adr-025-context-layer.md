@@ -848,7 +848,7 @@ as the orchestration skill does. Still not to a reviewer, a report agent or the 
 spawn, as before: a worker's profile that resolved before still does, and the router leaves the paragraph out (and logs
 it) when its other skills leave no room.
 
-**Changed since: consolidation is reachable in a default team** (spec 1.0.56; D6 as amended by D6a, §15). A live run
+**Changed since: consolidation is reachable in a default team** (spec 1.0.57; D6 as amended by D6a, §15). A live run
 whose goal asked for lessons ended with none consolidated: its planner proposed none and never spawned the consolidator.
 Four things stood between D6 and a held memory change, each fixed:
 

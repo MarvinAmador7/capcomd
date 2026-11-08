@@ -39,7 +39,7 @@ export const manifest = {
   scopes: ["read", "steer"],
   contributes: {
     sources: [{ name: "schedule", summary: "A fire of a schedule set in the plugin's config (actor schedule:<name>, thread schedule:<name>@<when>)" }],
-    hooks: { "job.changed": {} },
+    hooks: { "job.changed": { changes: ["fired"] } },
   },
   config: {
     type: "object",
@@ -113,8 +113,8 @@ export const plugin = definePlugin<ScheduleConfig>({
       else ctx.log.warn(`schedule ${name} is left out: ${c.why}`);
     }
     // Listening with no schedules too, as the manifest declares it (a declaration the code never registers is a warning
-    // at every start, §4.7): it returns at once for any job that isn't one of its schedules' timers. The built-in
-    // sandboxes listen to job.changed already, so the daemon reads background jobs' output either way (§6.6.19).
+    // at every start, §4.7): it returns at once for any job that isn't one of its schedules' timers. It is called only
+    // for `fired` (its manifest's `changes`), so it never makes the daemon read a running job's output (§6.6.19).
     ctx.hooks.on("job.changed", (call) => {
       const { job, change } = call.payload;
       if (job.plugin !== ctx.plugin.name || change.kind !== "fired" || !job.spec.label.startsWith(LABEL)) return;
