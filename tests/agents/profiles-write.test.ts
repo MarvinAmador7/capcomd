@@ -1,10 +1,10 @@
 // ADR-024 §7 step 6: writing profiles. A write changes the one file a profile is defined in and bumps its version; it is
 // checked as the files would be after it and changes nothing when they wouldn't resolve, or when a later file hides it.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, type ProfileWriteError } from "../../src/profiles";
+import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, writeAtomic, type ProfileWriteError } from "../../src/profiles";
 
 /** A project (repo/.capcomd/) and a CAPCOMD_HOME (home/) with these files; `P/` is the project's profiles, `U/` the user's. */
 function world(files: Record<string, string>, agents?: Record<string, unknown>, def?: string) {
@@ -117,6 +117,28 @@ describe("addProfileFile and removeProfile", () => {
     expect(refusal(() => addProfileFile("worker", { extends: "worker" }, w.o))).toMatchObject({ code: "conflict", message: `profile "worker" already exists (${w.agentsFile})` });
     expect(refusal(() => addProfileFile("orphan", { extends: "nobody" }, w.o))?.message).toContain('extends "nobody", which isn\'t a profile here');
     expect(existsSync(w.at("P/orphan.yaml"))).toBe(false);
+  });
+
+  test("a link a checkout put where the write's temporary file would be is never written through", () => {
+    const w = world({}, { worker });
+    // The project's checkout carries a link at the name a write used to take (<file>.tmp-<pid>), to a file of yours.
+    const victim = w.at("home/victim.txt");
+    mkdirSync(dirname(victim), { recursive: true });
+    writeFileSync(victim, "yours\n");
+    const file = w.at("P/reviewer.yaml");
+    mkdirSync(dirname(file), { recursive: true });
+    symlinkSync(victim, `${file}.tmp-${process.pid}`);
+    symlinkSync(victim, `${w.agentsFile}.tmp-${process.pid}`);
+    addProfileFile("reviewer", { extends: "worker" }, w.o);
+    editProfile("worker", { "limits.maxTurns": 30 }, w.o);
+    expect(readFileSync(victim, "utf8")).toBe("yours\n");
+    expect(w.read("P/reviewer.yaml")).toContain("name: reviewer");
+    expect(w.load().profiles.worker!.spec.maxTurns).toBe(30);
+    expect(lstatSync(w.agentsFile).isSymbolicLink()).toBe(false);
+    // A write that fails leaves no temporary file of its own (a directory is in the file's place).
+    mkdirSync(w.at("P/taken.yaml/inside"), { recursive: true });
+    expect(() => writeAtomic(w.at("P/taken.yaml"), "x\n")).toThrow();
+    expect(readdirSync(dirname(file)).filter((n) => n.includes(".tmp-")).sort()).toEqual([`reviewer.yaml.tmp-${process.pid}`]);
   });
 
   test("rm: a single profile file, or an agents.json entry (the default moves on); a package and a parent others extend stay", () => {
