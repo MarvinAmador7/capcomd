@@ -83,11 +83,12 @@ export function readiness(name: string, spec: AgentSpec, source = process.env) {
   return { ready: !!p, detail: p ? `logged in (${p.store === "secret" ? "boxd secret" : p.snapshot})` : `not logged in: capcomd auth login ${spec.provider}` };
 }
 
-/** A value as `show` prints it: a string as written (its first line, cut at 48 characters), anything else as JSON. */
+/** A value as `show` prints it: a string as written (its first line, control characters as \u{…}, cut at 48
+ *  characters), anything else as JSON. */
 function shown(v: unknown): string {
   const t = typeof v === "string" ? v : JSON.stringify(v);
-  const line = t.split("\n")[0]!;
-  return line.length > 48 ? `${line.slice(0, 47)}…` : line === t ? t : `${line}…`;
+  const first = t.split("\n")[0]!, line = visible(first);
+  return line.length > 48 ? `${line.slice(0, 47)}…` : first === t ? line : `${line}…`;
 }
 const appliedText = (a: AppliedFile) => `${a.as.padEnd(8)} ${a.name.padEnd(16)} ${a.layer.padEnd(7)} ${a.path ?? "(bundled with capcomd)"}`;
 
@@ -172,7 +173,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
         return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name) };
       });
       const warned = f.warnings.length ? `\n(${f.warnings.length} warning${f.warnings.length === 1 ? "" : "s"}: \`${cmd} validate\` lists ${f.warnings.length === 1 ? "it" : "them"})` : "";
-      out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title, r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
+      out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${visible(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title && visible(r.title), r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
       return 0;
     }
     case "show": {
@@ -196,7 +197,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       const text = [
         `${n}: version ${r.version}, found in ${{ project: "the project's profiles", user: "your profiles", bundled: "capcomd's bundled profiles" }[r.source]}${isDefault ? ", the default" : ""}`,
         ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces your edits and keeps files you added)` : ""}`] : []),
-        ...(facts.title || facts.tags.length ? [[facts.title, facts.tags.length ? `tags: ${facts.tags.join(", ")}` : null].filter(Boolean).join(" · ")] : []),
+        ...(facts.title || facts.tags.length ? [[facts.title && visible(facts.title), facts.tags.length ? `tags: ${facts.tags.join(", ")}` : null].filter(Boolean).join(" · ")] : []),
         `Fit: ${facts.fit}`,
         "Files, first to last (a later one wins):",
         ...r.applied.map((a, i) => `  ${String(i + 1).padStart(2)}  ${appliedText(a)}`),

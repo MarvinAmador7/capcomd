@@ -93,8 +93,9 @@ export function opsFor(limits: { allowSpawn: boolean }, o: { jobs?: boolean } = 
   return o.jobs === false ? ops.filter((x) => !JOB_OPS.includes(x)) : ops;
 }
 
-/** The unrestricted shell as a tool rule: `Bash`, `Bash()`, `Bash(*)`, `Bash(:*)` (the empty prefix: every command), as
- *  src/profiles/v1.ts `readOnlyTools` reads them. */
+/** The unrestricted shell as a tool rule: `Bash`, `Bash()`, `Bash(*)`, `Bash(:*)` (the empty prefix: every command).
+ *  src/profiles/v1.ts `readOnlyTools` also counts a rule that starts with a wildcard as the shell (a description leans
+ *  to "can write"); here such a rule leaves the job ops out (the token leans to fewer ops). */
 const SHELL = /^Bash(\((:?\*)?\))?$/;
 /**
  * Whether an agent's profile lets it run any command of its own: a background job runs whatever it is given, so only

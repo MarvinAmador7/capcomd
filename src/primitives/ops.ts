@@ -43,7 +43,7 @@ import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
 import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import { agentSeam } from "../plugins/agents";
-import type { PluginHold } from "../merge/types";
+import { sameHold, type PluginHold } from "../merge/types";
 import { isInternalActorError } from "../utils/actor-errors";
 export { startDriver };
 
@@ -240,6 +240,12 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
     throw new RelayError("usage", `no check named "${name}" in ${runId}`, known.length ? `Known checks: ${known.join(", ")}.` : "This run has no named checks (the operator sets them with `capcomd run new --checks-set name='cmd'`).");
   }
   return cmd;
+}
+
+/** The names of the run's operator-named checks (`run new --checks-set`, or the project's `run.checks`). */
+async function namedCheckNames(runId: string): Promise<string[]> {
+  const set = (await (await import("./state")).kvGet(runId, CHECKS_KV)).value as Record<string, unknown> | null;
+  return set ? Object.keys(set).filter((k) => typeof set[k] === "string") : [];
 }
 
 export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string;
@@ -1809,6 +1815,14 @@ async function verifyOnce(o: VerifyOpts, vfyId: string) {
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
   // A child pinned to a check at spawn is verified with it unless the caller names another.
   if (o.check === undefined && !o.checks && pinnedCheck) o = { ...o, check: pinnedCheck };
+  // No check named, given or pinned, and no command configured for the repository: the run's one named check (the
+  // project's `run.checks` that `run new` recorded, or a lone --checks-set), as `capcomd check` takes it, so the verify
+  // doesn't pass on "no test command configured". With several, the repository's as before: an unpinned child's in-VM
+  // verify can't name one.
+  if (o.check === undefined && !o.checks && cfg && !cfg.testCommand.trim()) {
+    const names = await namedCheckNames(o.runId);
+    if (names.length === 1) o = { ...o, check: names[0]! };
+  }
   const checks = o.check !== undefined ? await namedCheck(o.runId, o.check) : o.checks;
   const reviewProfile = o.reviewProfile ?? o.judgeProfile ?? (await runReviewer(o.runId));
   if (reviewProfile) reviewerSpec(reviewProfile); // an unknown reviewer is refused before anything runs
@@ -2016,8 +2030,7 @@ async function resolveCheck(o: CheckOpts): Promise<{ ref: string; branch: string
   // No command named and none configured for the repository, but the run has named checks (the project's
   // `run.checks`): its one check is the run's checks; with several, the caller picks one (never "nothing ran: pass").
   if (check === undefined && !o.checks && cfg && !cfg.testCommand.trim()) {
-    const set = (await (await import("./state")).kvGet(o.runId, CHECKS_KV)).value as Record<string, unknown> | null;
-    const names = set ? Object.keys(set).filter((k) => typeof set[k] === "string") : [];
+    const names = await namedCheckNames(o.runId);
     if (names.length === 1) check = names[0]!;
     else if (names.length > 1) throw new RelayError("usage", `this run has ${names.length} named checks and no default one: name the one to run`, `Pass --check NAME (check: in the tool): ${names.join(", ")}.`);
   }
@@ -2179,7 +2192,9 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   // listens there, so it always says. A running merge with a plugin's hold on record is one a person approved after that
   // hold (decideOp): that hold, and the ones approved before it, no longer stop it; any other plugin's still does. Each
   // approved hold makes the next landing a new attempt (its own idempotency key, §6.7); a replay of one keeps its key.
-  const approvedHolds = [...(d.approvedHolds ?? []), ...(d.heldBy ? [d.heldBy] : [])];
+  // The approval put that hold on the record's `approvedHolds` already (decideOp); a merge approved before it did, not.
+  const prior = d.approvedHolds ?? [];
+  const approvedHolds = [...prior, ...(d.heldBy && !prior.some((h) => sameHold(h, { ...d.heldBy!, text: d.heldBy!.reason })) ? [d.heldBy] : [])];
   const gate: import("../merge/types").MergeGate = {
     merge: mergeOf(runId, op), verification: v ? verificationOf(runId, v) : null, operator: !!d.operator, requestedBy: principalOf(d.askedBy ?? null, runId),
     attempt: approvedHolds.length + 1, ...(approvedHolds.length ? { approvedHolds } : {}),

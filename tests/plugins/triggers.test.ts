@@ -324,8 +324,9 @@ describe("the schedule source (source-schedule)", () => {
     host = await start({});
     for (let i = 0; i < 100 && timers().some((t) => t.state === "running"); i++) await sleep(50);
     expect(timers().filter((t) => t.state === "running")).toEqual([]);
-    // With no schedule it doesn't listen to job.changed (a listener makes the daemon read every job's output).
-    expect(host.hooks.listening("job.changed")).toBe(false);
+    // With no schedule it still registers the job.changed listener its manifest declares (no warning at every start,
+    // §4.7), and nothing is scheduled.
+    expect(host.hooks.listening("job.changed")).toBe(true);
     await host.stop();
     resetJobs();
     // Set back to the hourly settings it had: its timer (cancelled under that key) runs again.

@@ -17,6 +17,23 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `.capcomd/config.json` could hand any of your plugins such a setting although its schema allowed none, and a
   `__proto__` key carried values past the checks (a secret reference among them). A project's are set aside with a
   warning, as its other refused settings for your plugins are.
+- Fix: `capcomd_profiles`, `capcomd profiles list` and `GET /v1/profiles` call a profile read-only (`fit`, `does`)
+  only when its agent really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by
+  `sandbox.codex: read-only`. A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a
+  Claude Code profile with a read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only,
+  nor is one allowed a shell rule that starts with a wildcard (`Bash(* *)`), which lets it run any program.
+- Fix: `capcomd profiles list` and `capcomd profiles show` show control characters in a profile's `identity.title`
+  and `harness.model` (and `show` in any text value it lists) as `\u{…}` instead of printing them, so an installed
+  profile can't redraw or hide lines in your terminal.
+- Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
+  as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
+  agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
+  With several named checks, verify still picks none of them: pin one when you spawn the agent (`--check NAME`) or
+  name it on the verify, or it passes without running any, as before.
+- Fixed: the daemon's log no longer says "declared but never registered: hook job.changed" for forge-github at every
+  start when no GitHub repositories are trigger sources (nor for source-schedule without schedules, or sandbox-boxd
+  with `CAPCOMD_TEMPLATE_REFRESH_HOURS=0`).
+- Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
 - Fixed: a profile whose `sandbox.provider` or `harness.provider` names a plugin the daemon has loaded no longer
   breaks `capcomd profiles list`, `validate` and every other profile command outside the daemon. They now ask the
   running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
