@@ -40,9 +40,11 @@ async function until<T>(f: () => Promise<T | null | undefined | false>, ms = 15_
 describe("a job's process in its machine (src/jobs/machine.ts)", () => {
   test("it runs detached, its output and exit code land in its directory, and a look reports each", async () => {
     const m = hostMachine();
-    await launch(m, "job-aaaaaa1", { cmd: ["echo out-1; echo err-1 >&2; sleep 0.5; echo out-2; exit 3"], cwd: m.cwd });
+    // It waits for the test's go, so the first look sees it running however slow this machine is.
+    await launch(m, "job-aaaaaa1", { cmd: ["echo out-1; echo err-1 >&2; while [ ! -e go ]; do sleep 0.05; done; echo out-2; exit 3"], cwd: m.cwd });
     await launch(m, "job-aaaaaa2", { cmd: ["printf", "%s|", "a b", "$HOME"], cwd: m.cwd, env: { CAPCOMD_X: "1" } });
     expect((await look(m, ["job-aaaaaa1"])).get("job-aaaaaa1")?.state).toBe("running");
+    writeFileSync(join(m.cwd, "go"), "");
     const s = await until(async () => { const x = (await look(m, ["job-aaaaaa1", "job-aaaaaa2", "job-nothere"])); return x.get("job-aaaaaa1")?.state === "exited" && x.get("job-aaaaaa2")?.state === "exited" ? x : null; });
     expect(s.get("job-aaaaaa1")).toMatchObject({ state: "exited", code: 3, out: 12, err: 6, killed: null });
     expect((s.get("job-aaaaaa1") as { at: number }).at).toBeGreaterThan(Date.now() - 10_000);
@@ -51,6 +53,24 @@ describe("a job's process in its machine (src/jobs/machine.ts)", () => {
     expect(await tails(m, "job-aaaaaa1", 6, 1000)).toEqual({ stdout: "out-2\n", stderr: "err-1\n", truncated: true });
     // argv runs without a shell: nothing is expanded.
     expect((await tails(m, "job-aaaaaa2", 100, 100)).stdout).toBe("a b|$HOME|");
+  });
+
+  test("a job that ends while a look is at it is reported with all of its output (its sizes are read after its exit)", async () => {
+    // The job ends exactly between the look's reads: a `cat` that, on the look's first read of its exit file, writes
+    // the job's last output and its exit code before reading it. A look that read the sizes first would say out: 6.
+    const m = hostMachine(), bin = join(m.cwd, "bin"), j = join(m.dir, "job-dddddd1"), cat = Bun.which("cat") ?? "/bin/cat";
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(j, { recursive: true });
+    const ends = `if [ ! -e "$1.ended" ]; then : > "$1.ended"; printf 'out-2\\n' >> "$(dirname "$1")/out"; printf 3:1793966671326 > "$1"; fi`;
+    writeFileSync(join(bin, "cat"), `#!/bin/sh\ncase "$1" in */exit) ${ends};; esac\nexec ${cat} "$@"\n`);
+    chmodSync(join(bin, "cat"), 0o755);
+    writeFileSync(join(j, "out"), "out-1\n");
+    writeFileSync(join(j, "err"), "");
+    writeFileSync(join(j, "rpid"), String(process.pid));
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` };
+    const ending: JobMachine = { ...m, exec: (cmd, o) => new Promise((done) => execFile(cmd[0]!, cmd.slice(1), { cwd: o.cwd, env, timeout: o.timeoutMs, encoding: "utf8" }, (e, stdout, stderr) => done({ code: e ? 1 : 0, stdout, stderr }))) };
+    expect((await look(ending, ["job-dddddd1"])).get("job-dddddd1")).toEqual({ state: "exited", code: 3, at: 1793966671326, out: 12, err: 0, killed: null });
+    expect(readFileSync(join(j, "out"), "utf8")).toBe("out-1\nout-2\n");
   });
 
   test("a signal stops its whole process group, noting why; a runner that died without an exit code is gone", async () => {

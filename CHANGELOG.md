@@ -5,6 +5,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: a docker CLI that hangs no longer hangs capcomd with it. `capcomd setup`, the run options the apps show and
+  starting a run on Docker now say "Docker isn't running" after 3 seconds, even when the CLI (or something it started)
+  never lets go.
 - Faster: `capcomd env build` (and `env build --project`) now puts the brains your project maps (`capcomd context
   brain add`) into the environment image, each at the commit it is pinned to, so agents start with them instead of
   copying the brain in at every start. Map a brain at a newer commit and the next `capcomd env build` builds a new image.
