@@ -81,7 +81,8 @@ Usage:
              [--planner-effort LEVEL]      the planner's reasoning effort (claude low..max, codex minimal..high)
              [--planner-model ID]          the planner's model (one its provider offers: GET /v1/run-options models;
                                            claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5; codex gpt-5.6)
-             [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX)
+             [--sandbox docker|boxd]       where this run's agents and checks run (default: CAPCOMD_SANDBOX);
+                                           every agent, whatever its profile's sandbox.provider
              [--plugin-config P.K=V]…      a plugin's per-run setting for this run (also with run new)
   capcomd run <goal> [--recipe|--legacy]   (CAPCOMD_RUN_PATH) the built-in flow with a placeholder planner: offline and tests
   capcomd clients add <name> [--scopes read,steer,approve,configure] | list | revoke <id>   harness.v1 API tokens (shown once; steer: start, pause/resume/cancel runs, messages; configure: change settings, set up projects)

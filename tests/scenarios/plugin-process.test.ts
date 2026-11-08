@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { world, waitAll, trajectory, WORKER, type World } from "./harness";
 
-const MAIN = join(import.meta.dir, "..", "plugins", "fixtures", "proc-gate", "main.ts");
+import { PROC_GATE_COMMAND, putProcGate } from "../plugins/fixtures/proc-gate";
 const home = process.env.CAPCOMD_HOME!;
 const pluginDir = join(home, "plugins", "proc-gate");
 const data = join(home, "state", "plugins", "proc-gate");
@@ -40,9 +40,10 @@ const mergeOf = (run: string, v: { id: string; vfy: string }, key: string) => w.
 
 beforeAll(async () => {
   mkdirSync(pluginDir, { recursive: true });
+  await putProcGate(pluginDir);
   writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({
     schema: "capcomd.plugin/v1", name: "proc-gate", version: "1.0.0", description: "proc-gate, as a user's plugin", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
-    entry: { runtime: "process", command: ["bun", MAIN] }, scopes: ["read", "steer"], contributes: { hooks: { "merge.landing": {}, "run.changed": {} }, events: ["answered"] },
+    entry: { runtime: "process", command: PROC_GATE_COMMAND }, scopes: ["read", "steer"], contributes: { hooks: { "merge.landing": {}, "run.changed": {} }, events: ["answered"] },
   }));
   mkdirSync(data, { recursive: true });
   control({});

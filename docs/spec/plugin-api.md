@@ -320,7 +320,8 @@ hooks, filters or submodules, no link that leaves the directory, nothing written
 written (paths that differ only in case or normalization, which macOS reads as one), at most 5 000 files and 100 MB.
 `install` refuses a
 manifest §4.9 refuses (a `command[0]` or `$ref` resolving outside the directory among it), an `in-process` plugin
-(§5.2), a built-in's name, a name already installed, and an incompatible one (§4.4). `LOCK` (JSON, schema
+(§5.2), a built-in's name, a name already installed, an incompatible one (§4.4), and one that isn't self-contained
+(§4.9: it would run code from outside its directory; `config`, code `not_self_contained`, naming each path). `LOCK` (JSON, schema
 `capcomd.lock/v1`) records `kind`, `name`, `version`, `source`, `remote`, `ref`, `commit`, `path` (the directory in the
 repository), `files` (each file's `sha256` and git `mode`) and `hash`, the **content hash**: sha256 over the sorted
 `path, mode, sha256` of every file but `LOCK` (a link counts as its target). `capcomd plugins update <name>` fetches
@@ -346,7 +347,8 @@ change that waits 5 s for another, or that finds there something no change made 
 read) or a left-over lock it can't move aside, is refused with nothing changed (`conflict`, code `locked`), except the daemon's mark that it wrote
 `plugin.trusted`, which waits for the next time it acts on that trust (a trust it marked already needs no lock). In a checkout the hash covers every
 file, a `LOCK` there included (only a copy capcomd installed leaves out the `LOCK` it wrote). `capcomd plugins trust
-<name>` is the prompt: it shows what would run (the command, the scopes its token gets, the hooks it answers, the secret
+<name>` refuses a plugin that isn't self-contained (§4.9), naming each path, before it asks anything: the hash covers
+its directory only, so code it runs from elsewhere would change without asking again. Otherwise it is the prompt: it shows what would run (the command, the scopes its token gets, the hooks it answers, the secret
 references it is given, its directory and hash; the manifest's text with control and format characters shown escaped,
 so it can't redraw the prompt) and asks;
 `--yes` answers for a script (without a terminal it is required). An untrusted project plugin is listed `validated` with
@@ -361,11 +363,35 @@ project's `plugins.use` and config are not read with `CAPCOMD_NO_CONFIG`; its ow
 `PluginManifest.superRefine`, path containment (a `module`, `$ref` or `command[0]` under `./` MUST resolve inside the
 plugin's directory), the `engines` check, the kernel-command collision check, the out-of-process rule (a `process`
 plugin contributes hooks and events only: `seams`, `sources`, `context`, `cli`, `mcp`, `api` and `ui` are refused, as protocol 1
-carries none of them, §9.6) and, with `--conformance`, the seam suites (§14.2). Output is a list of `{path, message}`;
-the exit code is 1 on any error. `--strict` adds review guidance as warnings (`warnings`, printed `!`), never errors,
-so the exit code stays what it was: today the attention-budget check (`attentionWarnings` in
+carries none of them, §9.6), for a plugin directory whose entry is a `process`, that it is **self-contained** (below)
+and, with `--conformance`, the seam suites (§14.2). Output is a list of `{path, message}` (`--json` adds `outside`:
+`{from, specifier, resolved}` per reference); the exit code is 1 on any error.
+`--strict` adds review guidance as warnings (`warnings`, printed `!`), never errors, so the exit code stays what it was: today the attention-budget check (`attentionWarnings` in
 `packages/plugin/src/load.ts`, §16.5). A plugin's config schema the CLI can't read (a built-in's `$ref`) isn't held
 against it.
+
+**Self-contained** (the owner's decision of 2026-11-08, ADR-023 §9 decision 7; `src/plugins/contained.ts`). A
+third-party plugin runs only code inside its own directory, where its `LOCK` and its trust hash see it: what it ran from
+anywhere else (a parent `node_modules`, `../lib`, a link that points out, its data directory) could change without its
+hash changing. Without running any of its code the check reads every element of `entry.command` that names a path (one
+with a `/`, or `..`; `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` substituted; a flag's value after `=`) or a module as a
+runtime finds one (`.`, `src`, `main`: a directory's `package.json` `main` or index, a name without its extension, each
+followed to that module), the first excepted
+when it is a bare program name (`bun`, `node`, `sh`: the runtime on the `PATH`; a runtime named by its path, `/usr/bin/env`
+among them, is a program outside the directory); `entry.env`'s `NODE_PATH` and the paths `NODE_OPTIONS` and
+`BUN_OPTIONS` name; `bunfig.toml`'s `preload`; and every JavaScript or TypeScript module those reach, followed through
+static imports, re-exports, `require()` and `import()` of a literal, each resolved as Bun resolves it and made real.
+Each must lie inside the directory (its own `node_modules` is inside). Allowed wherever they are: `node:` and Node's
+built-in modules, `bun` and `bun:` ones. The client library `@capcomd/plugin` (§9.8) is allowed from outside the
+directory only as the kernel provides it: capcomd's own copy, when capcomd runs from its files (a checkout; not followed,
+as capcomd's integrity covers it). A copy anywhere else outside (a parent `node_modules`, a `package.json` above the
+directory that names itself `@capcomd/plugin`) is outside like any module, and one inside the directory (installed in its
+`node_modules`, or bundled) is checked like the plugin's own code. A relative specifier that leaves the
+directory is outside whether or not its target exists; a bare one that resolves nowhere is a warning; a module the check
+can't read is refused. `install` and `update` (§4.8), `trust` (§4.8) and `validate` refuse a plugin with any such
+reference; the host fails it `untrusted` when it validates it and refuses to start its process when one has appeared
+since (§12.5); built-ins are exempt. What a static read can't see (a specifier computed at run time, what a shell script
+or any program that isn't JavaScript loads) is held, for Bun and Node, by the runtime guard (§9.2, §11.6).
 
 ## 5. Plugin lifecycle
 
@@ -386,7 +412,7 @@ disposal of every registration (§5.3). `definePlugin` is an identity function t
 | Runtime | Who | Where the code runs | Isolation |
 |---|---|---|---|
 | `in-process` | **built-ins only** (ADR-023 decision 1) | the daemon process | none beyond scope checks on `ctx` |
-| `process` | third-party plugins | a child process the host starts | a filtered environment, a scoped token, the harness.v1 API (§9) |
+| `process` | third-party plugins | a child process the host starts | a filtered environment, a scoped token, the harness.v1 API (§9), its own directory's code only (§4.9) |
 
 A third-party manifest with `entry.runtime: "in-process"` is `failed(untrusted)`. The design leaves the door open (the
 host's loader is the same for both; a future `plugins.<name>.trusted` key could lift the rule), but this version does
@@ -590,7 +616,8 @@ member, not a new hook).
 `sandbox` must be a listed, available provider (available: an active plugin provides its seam, §7.2); `checks`, `reviewer`, `target` and `goalBranch` are the operator's and
 read-only (ADR-018 §4). For cost caps and run policies. Fires once per run. At `POST /v1/runs` (the daemon, before
 it starts `capcomd run`) only `sandbox` applies: the request has no label or budget to lower, so such a patch there
-is `invalid_result`.
+is `invalid_result`. A `sandbox` the patch picks is the run's own, as one the caller asked for: it beats every agent
+profile's `sandbox.provider` (§7.1).
 
 #### 6.6.4 `run.changed` · observe · after the run's event is committed
 `RunChanged {run, change: created|started|paused|resumed|titled|ended{state, reason}}`. Notifiers, the runs index,
@@ -622,8 +649,8 @@ not through the contract's `budget` or `children`, which are read before this ho
 `spec` is the agent's pinned spec with `profile: {name, version, source}` when the agent recorded one at spawn (as
 `profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same), and its profile's runtime
 blocks when it has them (ADR-024 §7 step 8: `mcp`, `sandboxProvider`, `environment`, `size`, `lifecycle`; additive).
-`sandbox` is where its machine is made: `provider`, its profile's `sandbox.provider`, else the run's, else the
-daemon's; `environment`, its profile's `sandbox.environment`, else null (the sandbox's current build). Patch
+`sandbox` is where its machine is made: `provider`, the run's when the run asked for one, else its profile's
+`sandbox.provider`, else the run's, else the daemon's (§7.1); `environment`, its profile's `sandbox.environment`, else null (the sandbox's current build). Patch
 `{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after the profile's own (never replaces); `skills` are added (pinned by hash, `src/agents/skills.ts`); `env` adds variables whose names match `^[A-Z][A-Z0-9_]*$`
 and are not already set, and whose values match no secret pattern (`src/agents/redact.ts`); `egress` may only remove
 hosts. **The only place a plugin adds prompt text**: the orchestration skill (`src/subagents/skill.ts`) and ADR-024's
@@ -982,7 +1009,7 @@ Selection, per use:
 
 | Seam | Selected by | Today |
 |---|---|---|
-| sandbox | for an agent's machine, its profile's `sandbox.provider` (ADR-024; pinned at spawn as `PinnedSpec.sandboxProvider`, recorded on its worker; one whose `caps.isolation` is `host` is refused at spawn, `config` reason `sandbox_isolation`, unless the run's is `host` too); else, and for a run's checks, the run's `sandbox` (`POST /v1/runs`, `capcomd run --sandbox`, kv `RUN_SANDBOX_KV`), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForAgent`, `providerForRun` |
+| sandbox | for an agent's machine, the run's `sandbox` when the run asked for it (`POST /v1/runs` `sandbox`, `capcomd run [new] --sandbox`, `capcomd_run_new`'s, a `run.creating` patch: kv `RUN_SANDBOX_KV` `explicit: true`), which beats every profile's (ADR-024 §9 decision 5, the owner's, 2026-11-08: the agent is pinned without its profile's `sandboxProvider`); else its profile's `sandbox.provider` (ADR-024; pinned at spawn as `PinnedSpec.sandboxProvider`, recorded on its worker; one whose `caps.isolation` is `host` is refused at spawn, `config` reason `sandbox_isolation`, unless the run's is `host` too; one a project-layer profile file sets, or sets the `environment` or `size` of, only once the operator trusts that file as it is, else the spawn is refused, `config` reason `untrusted`, decision 6: trust kind `profile`, per file sha256, `capcomd profiles trust`); else, and for a run's checks, the run's `sandbox` (from the request or the settings: `CAPCOMD_SANDBOX`, the project's or the user's config), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForAgent`, `providerForRun` |
 | agent | the resolved profile's `provider` (`PinnedSpec.provider`; ADR-024 `harness.provider`) | `src/agents/adapters.ts` `adapterFor` on the closed union `claude \| codex` |
 | forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`); creating a repository asks the first active forge whose `describe().publish` | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request, a run's base (`listBranches`), the logins the app shows (`login`); `publishForge` for `POST /v1/projects/publish` |
 
@@ -1253,7 +1280,17 @@ The host spawns `entry.command` with cwd = the plugin's root, `${PLUGIN_ROOT}` a
 `CAPCOMD_PLUGIN_SESSION`, `CAPCOMD_PLUGIN_TOKEN`, `CAPCOMD_PLUGIN_PROTOCOL=1`. No `CAPCOMD_*` of the daemon's, no
 `BOXD_*`, no `GITHUB_TOKEN`. stdout and stderr are captured: a line that parses as JSON with a `level` field is a
 structured log (§13.3), any other line is logged at `info`, both under the plugin's name, redacted (its own token and
-its secrets' values among what is redacted). A runtime on the user's machine is the plugin's concern (the launcher pattern in
+its secrets' values among what is redacted). No `NODE_PATH` but one `entry.env` names inside the directory (§4.9).
+The **runtime guard** (`src/plugins/guard.ts`) is a preload the daemon writes under `<state>/plugins/.guard/` and puts
+ahead of the manifest's own options: `BUN_OPTIONS=--preload <guard>.mjs` (a Bun plugin whose `onLoad` matches every
+path outside the allowed directories and throws) and `NODE_OPTIONS=--require <guard>.cjs` (a resolve hook,
+`module.registerHooks`; on an older Node the CommonJS resolver and a `module.register` hook). Allowed: the plugin's
+directory, and capcomd's own copy of `@capcomd/plugin` (§4.9) with its dependencies; any other module, another copy of
+the client library outside the directory among them, fails to load with `capcomd: <path> is outside the plugin's
+folder`. A worker the process starts is guarded too: Bun doesn't carry a preload's plugins into a worker, so the Bun
+guard makes itself the preload of each `Worker` (global, or `node:worker_threads`); Node applies `--require` to its
+workers itself. Each guard takes
+both options back out of its environment, so a program the plugin starts runs without them. A runtime on the user's machine is the plugin's concern (the launcher pattern in
 `plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
 
 The kernel's launcher is `src/plugins/process.ts`. The process leads a process group of its own (the daemon's terminal
@@ -1568,6 +1605,19 @@ environment (§9.2), a scoped token (§9.3), secrets once over a 0600 socket (§
 authorised and audited by the gateway like any client's (`client.action` events carry the plugin's client id). As with
 drivers (ADR-018 §4), a process running as the same OS user is a guardrail against mistakes, not a containment boundary.
 
+A third-party plugin is **self-contained** (§4.9): its trust hash (§4.8) and its `LOCK` cover its directory, so the
+kernel refuses one that would run code from elsewhere. What is enforced: before anything runs, at `install`, `update`,
+`trust` and `validate`, and by the host when it validates the plugin and before every start of its process, the static
+read of §4.9 (the command, `entry.env`, `bunfig.toml`, every module reached, links made real); while it runs, for Bun
+and Node, the runtime guard of §9.2. What isn't: what a shell script, a binary or another runtime (Python, Deno) loads
+beyond its own file; an old Bun that doesn't read `BUN_OPTIONS`, or a guard path holding whitespace (`BUN_OPTIONS` can't
+carry one: the Bun guard is left out); a process that removes the hooks it was given; files outside the directory read
+as data rather than loaded as modules; programs the plugin starts (the guard leaves them, so a tool on the `PATH` runs);
+and capcomd's own copy of `@capcomd/plugin`, allowed from outside the directory (capcomd's integrity covers it, not the
+plugin's hash; any other copy outside is refused). Decided fail-closed while open: whether the kernel should hand each
+plugin process its own copy of the client instead (an install from the single executable has none to allow, so there a
+plugin bundles the client or installs it in its directory).
+
 ### 11.7 Git credentials and agent-editable checkouts
 
 An agent can write anything in its sandbox: its checkout's `.git/config`, hooks and remotes, its `HOME`'s `.gitconfig`,
@@ -1667,6 +1717,7 @@ is removed from `HOOKS` and a manifest declaring it fails validation (which is t
 | `requires` satisfiable | resolve | `unresolved` |
 | `SessionOpen.protocol ∈ host.protocols` | handshake | 422 → `handshake_timeout` |
 | `manifestHash` matches | handshake | 409 → `crashed` |
+| self-contained: nothing the entry reaches lies outside the plugin's directory (§4.9), a third-party plugin only | validate (and `install`, `update`, `trust`), each start | `untrusted` (a start: not started, §9.5) |
 
 ## 13. Observability
 
@@ -2490,7 +2541,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.61 | 2026-11-08 | Trigger continuations (the steps §16.3.1, §16.3.2 step 2, §16.3.6 left to later): a goal branch's run follows its pull request's thread once it is opened, the forge naming it (`PullRequestRef.thread`, additive; forge-github `owner/name#N`), and the `github` source reads the threads runs follow on its timer whatever its settings (in a repository `sourceRepos` doesn't name, only those threads); on an ended run's thread a person's trigger is asked steps 3 to 5, and when they would act its planner starts again (a new planner continuing the last, with the message in its inbox: `continued {restarted}`, additive), `observe` records `wouldHave: "continue"`, and a refusal leaves it in the inbox only; replies (§16.3.7, new): `ctx.triggers.onReply(source, reply)` (in process only), `TriggerReply`, `triggers.sources.<source>.reply` (off by default), one short answer per request when the run ends completed or failed, posted by the sweep with a claim and at most three tries, forge-github's a marked comment the source drops (a reply waits for its source's reply path, and an engine that doesn't answer loses none); a restart's planner is the run's `_planner` once started, one restart of a run at a time, under 1.0.57's engine timeout (the same trigger sent again finds the planner it started and is still its restart), and a restart refused for good still leaves the message in the ended planner's inbox; forge-github posts a reply's `@name` as code (no one is paged); `trigger.replied` on the daemon stream and `trigger.received.restarted` (both additive). Owner questions taken conservatively: replies are opt-in, and a restart needs what a start needs (the gate), not just a person. |
 | 1.0.62 | 2026-11-08 | Brains in the environment image, and only a brain's bundle in a sandbox (ADR-025 step 4's follow-up, §6.6.7): `ContextBundle` gains an optional `path`, the directory of the repository that is placed (at the same path under the bundle's directory; additive, absent is the whole tree as before); groundray names its bundle's (`knowledge`), so brain.yaml and every other file of the brain's repository stay out of sandboxes, and every file under the bundle, Markdown or not, is checked for a restricted marking (a file that isn't Markdown is read whole, at any depth, and also matched as text: `sensitivity` then `restricted` with a `:` or `=` between, anywhere; one over 4 MiB, or more than 2000 files, is refused as unchecked). The marker names the commit and the path. Text too long (over 64 KiB) or nested too deep (flow collections past 32 levels) for the YAML parser is matched without it, more broadly (`sensitivity` then `restricted` with a `:` or `=` between, anywhere). The runner first removes the bundles under `<workdir>/context/` the brief doesn't cite, and an agent whose sandbox can't be cleaned doesn't start; a checks VM removes them all before the tree under test runs. `capcomd env build` (and `--project`) places the project's mapped brains, checked, in the image (EnvManifest `bundles`, part of its name), so the runner keeps them and sends nothing at start. |
 | 1.0.63 | 2026-11-08 | Brain proposals (ADR-025 step 5, §6.6.8): a consolidator's change for the brain its profile names is refused `no_brain` when it is staged if the run's project doesn't map that brain (kv `_context`, as `run new` recorded it; the engine not answering fails the staging rather than refusing), so it is never kept to fail when sent; the result's `context.brain` then has the brain's `name`, no proposals and an `error` (additive). groundray's write path looks for the proposal's marker on the brain's branch first: a replay after the pull request was merged (its branch perhaps deleted) finds the item there and drafts, pushes and opens nothing (receipt `where` names the brain's branch). `GET /v1/runs/{runId}/brain-proposals` (read) and `POST /v1/runs/{runId}/brain-proposals/send` (configure scope, Idempotency-Key, body `{agentId?}`; a plugin's token `forbidden`; 503 `unavailable` with each outcome when one couldn't be sent, not kept for the key) send a run's pending proposals as the caller (`human:<client id>`), mirroring `capcomd context brain propose --run <runId> --yes` (capability `context.brain_proposals`, additive). `plugin.context.brain_proposed` for a person's send is recorded by the `context` plugin's listener in the sending process (its `by` the person); the kernel's lint sends stay recorded from the consolidator's result (`by: capcomd`). |
-| 1.0.64 | 2026-11-08 | `capcomd plugins validate --strict` and a plugin's MCP tools in its listing (§4.9, §13.2, §16.5): `--strict` adds the attention-budget warning, a notifier-shaped manifest (`run.changed` and `agent.changed` observers) whose config has no top-level `quiet` property, at `config.properties.quiet`; warnings never change the exit code. `PluginSummary` gains `tools` (additive), the MCP tools by the names `capcomd mcp` serves them, registered while active and declared otherwise, in `GET /v1/plugins`, `GET /v1/plugins/{name}` and `capcomd plugins list --json`/`show`; the text of `list` counts a plugin's commands and tools and `show` names them. The §4.7 declared-but-never-registered warning stays with `--conformance`. |
+| 1.0.64 | 2026-11-08 | Where an agent's machine goes, decided by the owner (ADR-024 §9 decisions 5 and 6, 2026-11-08; §7.1, §6.6.3, §6.6.7): a run's sandbox it asked for (`POST /v1/runs` `sandbox`, `capcomd run [new] --sandbox`, `capcomd_run_new`'s, a `run.creating` patch) beats every agent profile's `sandbox.provider` for every agent of the run (the agent is pinned without `sandboxProvider`; its `environment` and `size` apply on the run's sandbox); the run's `RUN_SANDBOX_KV` record gains `explicit: true` for such a place (additive; a record without it, or a place from the settings, isn't explicit, and a profile's provider still wins over it). Otherwise a project-layer profile file that sets the resolved `sandbox.provider`, `sandbox.environment` or `sandbox.size` of a profile naming a provider is honoured only once the operator trusts that file as it is (trust kind `profile`, per file sha256 at its real path, `capcomd profiles trust`); before that, or after it changes, the spawn is refused (`config`, reason `untrusted`), as is a planner's `capcomd run`, and GET /v1/run-options says the planner isn't ready. A user-layer profile needs no trust. `GET /v1/profiles` rows (and `capcomd_profiles`, `capcomd profiles list --json`) gain `untrustedSandbox` (capability `profiles.facts`; optional in the contract, always sent; additive): the project's files a spawn of the profile on a run without its own sandbox waits on the operator's trust for, else empty; `capcomd profiles show` gains `machine` (additive). |
+| 1.0.65 | 2026-11-08 | A third-party plugin is **self-contained** (§4.9, the owner's decision of 2026-11-08, ADR-023 §9 decision 7; the critic's C12: the trust hash covers the plugin's directory only, not code it loads from elsewhere): `src/plugins/contained.ts` reads, without running anything, the paths `entry.command` names, `entry.env`'s `NODE_PATH`, `NODE_OPTIONS` and `BUN_OPTIONS`, `bunfig.toml`'s `preload` and every module they reach (imports, `require()`, `import()` of a literal, resolved as Bun does and made real: a link that points out is outside; the directory's own `node_modules` is inside; an entry named as a directory or without its extension is followed to its module; `node:`, Node and Bun built-ins are allowed, and `@capcomd/plugin` from outside the directory only as capcomd's own copy); `install`, `update` and `trust` refuse a plugin with any reference outside (`config`, code `not_self_contained`, naming each path), `validate` lists each as an issue `{path: <file>, message}` (`--json` adds `outside`), and the host fails it `untrusted` when it validates it and doesn't start its process when one has appeared since (`HostOptions.contained`, §12.5). The process gets the runtime guard (§9.2, `src/plugins/guard.ts`): `BUN_OPTIONS=--preload` and `NODE_OPTIONS=--require` of a preload that refuses a module outside the directory as it loads, in each worker it starts too; §11.6 says what is and isn't enforced. `ProjectPlugin.outside` (the `trust --json` listing) and `Validated.outside` are additive. Built-ins are exempt. |
+| 1.0.66 | 2026-11-08 | `capcomd plugins validate --strict` and a plugin's MCP tools in its listing (§4.9, §13.2, §16.5): `--strict` adds the attention-budget warning, a notifier-shaped manifest (`run.changed` and `agent.changed` observers) whose config has no top-level `quiet` property, at `config.properties.quiet`; warnings never change the exit code. `PluginSummary` gains `tools` (additive), the MCP tools by the names `capcomd mcp` serves them, registered while active and declared otherwise, in `GET /v1/plugins`, `GET /v1/plugins/{name}` and `capcomd plugins list --json`/`show`; the text of `list` counts a plugin's commands and tools and `show` names them. The §4.7 declared-but-never-registered warning stays with `--conformance`. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

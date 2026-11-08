@@ -136,10 +136,21 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   (`mcp__semgrep`, or `mcp__semgrep__<tool>`), Codex asks its own approval rules (which refuse what needs asking). An
   orchestrate profile can't have servers: it runs nothing, so give them to the profiles it spawns (an override that
   makes one orchestrate is refused: `reason: "orchestrate_mcp"`).
-- `sandbox.provider` runs the profile's agents on that sandbox (`docker`, `boxd`), whatever the run's is (`capcomd run
-  --sandbox`) or the daemon's; it must be an active sandbox plugin, and it can't take them out of isolation (a sandbox
-  that runs agents on your machine, as the test ones do, is refused unless the run's is one too: `reason:
-  "sandbox_isolation"`). `sandbox.environment` is what their machines boot
+- `sandbox.provider` runs the profile's agents on that sandbox (`docker`, `boxd`) instead of the one the run got from
+  your settings (the project's or your config, `CAPCOMD_SANDBOX`) or the daemon's; it must be an active sandbox
+  plugin, and it can't take them out of isolation (a sandbox that runs agents on your machine, as the test ones do, is
+  refused unless the run's is one too: `reason: "sandbox_isolation"`). **A run you start with a sandbox of its own
+  wins**: `capcomd run --sandbox docker` (or `run new --sandbox`, the API's `sandbox`, `capcomd_run_new`'s) keeps every
+  agent of that run on Docker, whatever their profiles name, so a profile can't spend your boxd credit on a run you put
+  on Docker. **A project's profile that moves its agents needs your trust**: a file in the project's
+  `.capcomd/profiles/` that sets `sandbox.provider` (or the `environment` or `size` of a profile that names one) is
+  honoured only once you have looked at it with `capcomd profiles trust <name>`, which shows the file, the values and
+  its sha256 and asks, as for a project's skills. Until then, and again after the file changes, a spawn of it on a run
+  without a sandbox of its own is refused (`reason: "untrusted"`); `capcomd profiles show` says where its agents go and
+  whether the file is trusted, `validate` warns, and `untrustedSandbox` in `capcomd profiles list --json`,
+  `capcomd_profiles` and `GET /v1/profiles` names the files. Your own profiles (`~/.capcomd/profiles/`) need no trust.
+  With a run's own sandbox, the profile's `environment` and `size` still apply, on the run's sandbox.
+  `sandbox.environment` is what their machines boot
   from there: `default` (the current `capcomd env build`, as for every agent), `image` (the provider's plain image: the
   agent CLI is installed at start) or a build's name from `capcomd env status --sandbox <name>`. With a plan login kept
   in an image (`capcomd auth login`), that image is the one used, so the environment must be `default` or the one it
@@ -289,8 +300,8 @@ capcomd profiles export lead --flat --out ./shared
   one `profile.yaml` with its ancestors and overrides laid in, its prompts as files, and each skill it is pinned with
   from a package in `skills/`. `default` is never exported, nor the `LOCK`, nor anything of capcomd's state (a profile
   holds no credential: `auth` is a mode).
-- `rm <name>` of an installed package deletes its directory and the trust given to its skills (refused while it holds
-  your `override.yaml`, or another profile extends it).
+- `rm <name>` of an installed package deletes its directory and the trust given to its skills, persona and profile
+  file (refused while it holds your `override.yaml`, or another profile extends it).
 
 ## Project memory: the `context` block
 

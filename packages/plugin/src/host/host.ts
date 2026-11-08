@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PluginError, type PluginFailureCause } from "../errors";
 import { HOOKS, type HookCall, type HookName } from "../hooks";
-import { loadManifest, readManifest, type LoadedManifest } from "../load";
+import { loadManifest, readManifest, type LoadedManifest, type ManifestIssue } from "../load";
 import { PLUGIN_NAME_PATTERN, type PluginManifest } from "../manifest";
 import type { PluginModule } from "../context";
 import { createContext, ContributionStore, mcpToolName, type ContextOptions, type PluginRuntime } from "./context";
@@ -90,6 +90,13 @@ export interface HostOptions {
    * plugin runs.
    */
   trusted?(name: string, dir: string): boolean;
+  /**
+   * What a plugin from a directory that isn't a built-in runs from outside its folder (§4.9, §11.6: a plugin is
+   * self-contained), one issue per reference; empty when nothing. Asked when it is validated (a plugin with any fails
+   * `untrusted`) and before each start of its process (one that has some since is not started). Without it the host
+   * doesn't check (the kernel's always does: src/plugins/contained.ts).
+   */
+  contained?(manifest: PluginManifest, dir: string): ManifestIssue[];
   /** Called after every state change, with the new listing. */
   onChange?(plugins: PluginSummary[]): void;
   activateTimeoutMs?: number;
@@ -339,6 +346,9 @@ export class PluginHost {
     for (const w of loaded.warnings) this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `manifest: ${w.path}: ${w.message}`, fields: {} });
     if (loaded.manifest.entry.runtime === "in-process" && r.source !== "builtin")
       return this.fail(r, "untrusted", "only built-in plugins run in process (§5.2)");
+    // §4.9, §11.6: what it would run from outside its folder isn't covered by its LOCK or its trust.
+    const outside = this.outsideOf(r, loaded.manifest);
+    if (outside) return this.fail(r, "untrusted", outside);
     // §10.4: invalid config fails the plugin rather than run it with defaults (a disabled one isn't run either way).
     const errors = r.enabled ? c.configErrors ?? [] : [];
     if (errors.length) {
@@ -487,15 +497,27 @@ export class PluginHost {
    */
   private trustedLauncher(r: Rec): ProcessLauncher {
     const launcher = this.o.launcher!;
-    if (r.source !== "project") return launcher;
+    if (r.source === "builtin") return launcher;
+    const refuse = (message: string) => {
+      this.o.sinks?.log?.({ plugin: r.name, level: "error", message: `not started: ${message}`, fields: {} });
+      return { clientId: "", pid: null, exited: Promise.resolve({ code: null, signal: null }), kill() {}, revoke() {} };
+    };
     return {
       ...launcher,
       start: (o) => {
-        if (r.dir && this.o.trusted?.(r.name, r.dir)) return launcher.start(o);
-        this.o.sinks?.log?.({ plugin: r.name, level: "error", message: "not started: its files changed since you trusted them (capcomd plugins trust)", fields: {} });
-        return { clientId: "", pid: null, exited: Promise.resolve({ code: null, signal: null }), kill() {}, revoke() {} };
+        const outside = this.outsideOf(r, o.manifest);
+        if (outside) return refuse(outside);
+        if (r.source === "project" && !(r.dir && this.o.trusted?.(r.name, r.dir))) return refuse("its files changed since you trusted them (capcomd plugins trust)");
+        return launcher.start(o);
       },
     };
+  }
+
+  /** A plugin from a directory that isn't a built-in, running code from outside its folder: why it can't run; else null. */
+  private outsideOf(r: Rec, m: PluginManifest): string | null {
+    if (r.source === "builtin" || !r.dir || !this.o.contained) return null;
+    const issues = this.o.contained(m, r.dir);
+    return issues.length ? `it runs code from outside its folder, which its hash doesn't cover (a plugin must be self-contained): ${issues.map((i) => `${i.path}: ${i.message}`).join("; ")}` : null;
   }
 
   /**

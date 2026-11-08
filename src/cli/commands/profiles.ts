@@ -11,7 +11,7 @@
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
 import { existsSync } from "node:fs";
-import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfile, untrustedPersona, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
+import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfile, untrustedPersona, untrustedSandbox, projectMachineTrust, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -176,7 +176,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       const f = guard(() => readProfiles(path));
       const rows = profileRows(f).map((r) => {
         const skills = skillRows(f.profiles[r.name]!.skills);
-        return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name), untrustedPersona: untrustedPersona(f.profiles[r.name]!.persona) };
+        return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name), untrustedPersona: untrustedPersona(f.profiles[r.name]!.persona), untrustedSandbox: untrustedSandbox(f.profiles[r.name]!.machineFiles, f.profiles[r.name]!.runtime.sandboxProvider) };
       });
       const warned = f.warnings.length ? `\n(${f.warnings.length} warning${f.warnings.length === 1 ? "" : "s"}: \`${cmd} validate\` lists ${f.warnings.length === 1 ? "it" : "them"})` : "";
       out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${visible(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title && visible(r.title), r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
@@ -201,6 +201,14 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       // Its persona as an agent of it is pinned with it, and a project's trust (the same rule).
       const pt = projectPersonaTrust(r.persona);
       const persona = r.persona ? { file: r.persona.file, source: r.persona.source, hash: `sha256:${r.persona.hash}`, path: r.persona.path, ...(pt ? { trust: pt.trust } : {}) } : null;
+      // Where its agents' machines go (ADR-024 sandbox.provider): its sandbox, unless the run was started with one of its
+      // own, which wins; a project's file that sets it moves them only once you trust it (the owner's decision, 2026-11-08).
+      const mt = new Map(projectMachineTrust(r.machineFiles).map((t) => [t.path, t]));
+      const machine = r.runtime.sandboxProvider || r.machineFiles.length ? {
+        provider: r.runtime.sandboxProvider ?? null, runSandboxWins: true,
+        files: r.machineFiles.map((f) => ({ path: f.path, layer: f.layer, keys: f.keys, hash: `sha256:${f.hash}`, ...(mt.has(f.path) ? { trust: mt.get(f.path)!.trust } : {}) })),
+      } : null;
+      const unmoved = r.runtime.sandboxProvider ? [...mt.values()].filter((t) => t.trust !== "trusted") : [];
       // Where an installed package came from (its LOCK), and whether its files changed since.
       const installed = (await import("../../profiles/install")).installedFacts(r);
       const text = [
@@ -214,11 +222,13 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
         ...vals.map((v) => `  ${v.path.padEnd(30)} ${shown(v.value).padEnd(48)} ${v.from ? r.applied.indexOf(v.from) + 1 : "-"}`),
         ...(pins.length ? ["Skills (an agent of it is pinned with these SKILL.md files):", ...pins.map((s) => `  ${s.name.padEnd(24)} ${s.source.padEnd(7)} ${s.hash.slice(0, 19)}…  ${s.path ?? "~/.claude/skills"}${s.trust && s.trust !== "trusted" ? `  NOT TRUSTED${s.trust === "changed" ? " (changed since you trusted it)" : ""}: ${cmd} trust ${n}` : ""}`)] : []),
         ...(persona ? [`Persona (an agent of it reads this first): ${visible(persona.path)}  ${persona.source}  ${persona.hash.slice(0, 19)}…${persona.trust && persona.trust !== "trusted" ? `  NOT TRUSTED${persona.trust === "changed" ? " (changed since you trusted it)" : ""}: ${cmd} trust ${n}` : ""}`] : []),
+        ...(machine?.provider ? [`Sandbox: its agents' machines go to ${machine.provider} (sandbox.provider), unless the run was started with its own sandbox (--sandbox), which wins`,
+          ...unmoved.map((t) => `  NOT TRUSTED${t.trust === "changed" ? " (changed since you trusted it)" : ""}: the project's ${visible(t.file)} sets ${t.keys.join(", ")}; a run without --sandbox refuses its agents until ${cmd} trust ${n}`)] : []),
         ...(unused.length ? [`Read but not used yet by this capcomd: ${unused.join(", ")}`] : []),
         error ? `Effective config: ${error}` : `Effective config (with capcomd's defaults): ${JSON.stringify(effective)}`,
         `${ready.ready ? "Ready" : "NOT READY"}: ${ready.detail}`,
       ].join("\n");
-      out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, ...(pins.length ? { skills: pins } : {}), ...(persona ? { persona } : {}), ...(installed ? { installed } : {}), effective, error, ...ready }, text);
+      out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, ...(pins.length ? { skills: pins } : {}), ...(persona ? { persona } : {}), ...(machine ? { machine } : {}), ...(installed ? { installed } : {}), effective, error, ...ready }, text);
       return error ? 1 : 0;
     }
     case "add": {
@@ -322,9 +332,11 @@ function trustWarnings(set: ProfileSet): string[] {
   return Object.entries(set.profiles).flatMap(([n, r]) => {
     const bad = projectSkillTrust(r.skills).filter((t) => t.trust !== "trusted");
     const p = projectPersonaTrust(r.persona), persona = p && p.trust !== "trusted" ? p : null;
+    const files = untrustedSandbox(r.machineFiles, r.runtime.sandboxProvider);
     return [
       ...(bad.length ? [`profiles.${n}: its project skill${bad.length > 1 ? "s" : ""} ${bad.map((t) => t.name).join(", ")} ${bad.length > 1 ? "aren't" : "isn't"} trusted${bad.some((t) => t.trust === "changed") ? " as it is now" : ""}: capcomd profiles trust ${n} (a spawn of it is refused until then)`] : []),
       ...(persona ? [`profiles.${n}: its project persona ${persona.file} isn't trusted${persona.trust === "changed" ? " as it is now" : ""}: capcomd profiles trust ${n} (a spawn of it is refused until then)`] : []),
+      ...(files.length ? [`profiles.${n}: the project's ${files.join(", ")}, which send${files.length > 1 ? "" : "s"} its agents to the ${r.runtime.sandboxProvider} sandbox, ${files.length > 1 ? "aren't" : "isn't"} trusted: capcomd profiles trust ${n} (a spawn of it on a run without --sandbox is refused until then)`] : []),
     ];
   });
 }
@@ -377,21 +389,26 @@ async function exportCommand(args: string[], values: Record<string, any>, cmd: s
 
 /**
  * `capcomd profiles trust [<name>] [--yes]` (ADR-024 decision 4): the trust prompt for a project profile's skills and
- * persona. It shows each one that isn't trusted as it is (its name, description or first line, file, size and sha256)
- * and asks; --yes trusts without asking. With no name, every profile with project skills or a project persona and
- * whether each is trusted.
+ * persona, and for the project's profile files that send its agents to another sandbox (ADR-024 §9, 2026-11-08). It
+ * shows each one that isn't trusted as it is (its name, description or first line, file, size and sha256; a sandbox
+ * file's values) and asks; --yes trusts without asking. With no name, every profile with project skills, a project
+ * persona or a project file that sets its sandbox, and whether each is trusted.
  */
 async function trustCommand(args: string[], values: Record<string, any>, cmd: string, path: string): Promise<number> {
   let set: ProfileSet;
   try { set = readProfiles(path); } catch (e) { if (e instanceof AgentConfigError) throw new RelayError("config", e.message, `${cmd} validate says what is wrong.`); throw e; }
+  // A project's files that set a profile's sandbox wait on trust only while it names a sandbox.provider (an environment
+  // or size alone stays on the run's sandbox).
+  const machineOf = (r: ResolvedProfile) => (r.runtime.sandboxProvider ? projectMachineTrust(r.machineFiles) : []);
   if (!args.length) {
-    const rows = Object.entries(set.profiles).map(([n, r]) => ({ name: n, skills: projectSkillTrust(r.skills), persona: projectPersonaTrust(r.persona) })).filter((x) => x.skills.length || x.persona)
-      .map(({ persona, ...x }) => ({ ...x, ...(persona ? { persona } : {}) }));
+    const rows = Object.entries(set.profiles).map(([n, r]) => ({ name: n, skills: projectSkillTrust(r.skills), persona: projectPersonaTrust(r.persona), sandbox: machineOf(r) })).filter((x) => x.skills.length || x.persona || x.sandbox.length)
+      .map(({ persona, sandbox, ...x }) => ({ ...x, ...(persona ? { persona } : {}), ...(sandbox.length ? { sandbox } : {}) }));
     if (values.json) { ok({ profiles: rows }); return 0; }
-    if (!rows.length) { console.log("No profile here has skills or a persona from the project's profiles (.capcomd/profiles/<name>/)."); return 0; }
+    if (!rows.length) { console.log("No profile here has skills, a persona or a sandbox from the project's profiles (.capcomd/profiles/)."); return 0; }
     for (const row of rows) {
       for (const s of row.skills) console.log(`  ${row.name.padEnd(16)} ${s.name.padEnd(24)} ${s.trust.padEnd(9)} ${s.hash.slice(0, 19)}…  ${s.path}`);
       if (row.persona) console.log(`  ${row.name.padEnd(16)} ${`persona ${row.persona.file}`.padEnd(24)} ${row.persona.trust.padEnd(9)} ${row.persona.hash.slice(0, 19)}…  ${row.persona.path}`);
+      for (const m of row.sandbox ?? []) console.log(`  ${row.name.padEnd(16)} ${`sandbox ${visible(m.file)}`.padEnd(24)} ${m.trust.padEnd(9)} ${m.hash.slice(0, 19)}…  ${visible(m.path)}`);
     }
     return 0;
   }
@@ -401,9 +418,11 @@ async function trustCommand(args: string[], values: Record<string, any>, cmd: st
   if (!r) throw new RelayError("not_found", `profile "${name}" not found`, `${cmd} list`);
   const all = projectSkillTrust(r.skills), todo = all.filter((s) => s.trust !== "trusted");
   const persona = projectPersonaTrust(r.persona), personaTodo = persona && persona.trust !== "trusted" ? persona : null;
-  if (!todo.length && !personaTodo) {
-    if (values.json) ok({ trusted: { name, skills: all, ...(persona ? { persona } : {}), already: true } });
-    else console.log(all.length || persona ? `${name}'s project ${[all.length ? `skills (${all.map((s) => s.name).join(", ")})` : null, persona ? `persona (${persona.file})` : null].filter(Boolean).join(" and ")} ${all.length + (persona ? 1 : 0) > 1 ? "are" : "is"} trusted as ${all.length + (persona ? 1 : 0) > 1 ? "they are" : "it is"}.` : `${name} has no skills or persona from the project's profiles: nothing to trust.`);
+  const machine = machineOf(r), machineTodo = machine.filter((m) => m.trust !== "trusted");
+  const count = all.length + (persona ? 1 : 0) + machine.length;
+  if (!todo.length && !personaTodo && !machineTodo.length) {
+    if (values.json) ok({ trusted: { name, skills: all, ...(persona ? { persona } : {}), ...(machine.length ? { sandbox: machine } : {}), already: true } });
+    else console.log(count ? `${name}'s project ${[all.length ? `skills (${all.map((s) => s.name).join(", ")})` : null, persona ? `persona (${persona.file})` : null, machine.length ? `sandbox (${machine.map((m) => visible(m.file)).join(", ")})` : null].filter(Boolean).join(" and ")} ${count > 1 ? "are" : "is"} trusted as ${count > 1 ? "they are" : "it is"}.` : `${name} has no skills, persona or sandbox from the project's profiles: nothing to trust.`);
     return 0;
   }
   if (!values.json) {
@@ -423,15 +442,26 @@ async function trustCommand(args: string[], values: Record<string, any>, cmd: st
       console.log(`    file  ${visible(s.path)} (${Buffer.byteLength(text)} bytes)`);
       console.log(`    hash  ${s.hash}${s.trust === "changed" ? `  (you trusted ${s.trustedHash} before: it changed since)` : ""}`);
     }
+    if (machineTodo.length) {
+      // Where its agents' machines would be made, and from what: values its file set (the resolved ones).
+      const sb = (r.manifest.sandbox ?? {}) as Record<string, unknown>;
+      console.log(`${name}: the project's profile file${machineTodo.length > 1 ? "s" : ""} that would send its agents to the ${visible(r.runtime.sandboxProvider!)} sandbox (machines there may spend your credit; a run started with --sandbox stays on its own):`);
+      for (const m of machineTodo) {
+        console.log(`  ${visible(m.file)}: ${m.keys.map((k) => `${k} ${visible(JSON.stringify(sb[k.slice("sandbox.".length)]))}`).join(", ")}`);
+        console.log(`    file  ${visible(m.path)}`);
+        console.log(`    hash  ${m.hash}${m.trust === "changed" ? `  (you trusted ${m.trustedHash} before: it changed since)` : ""}`);
+      }
+    }
   }
-  const what = [personaTodo ? "persona" : null, todo.length ? "skills" : null].filter(Boolean).join(" and ");
+  const parts = [personaTodo ? "persona" : null, todo.length ? "skills" : null, machineTodo.length ? "sandbox" : null].filter(Boolean);
+  const what = parts.join(" and "), one = parts.length === 1 && !todo.length && machineTodo.length <= 1;
   if (!values.yes) {
     const ask = (await import("../prompt")).prompter();
-    if (!ask.interactive) throw new RelayError("usage", `trusting ${name}'s ${what} needs your confirmation`, `Read ${personaTodo && !todo.length ? "it" : "them"}, then run it in a terminal, or pass --yes to trust ${personaTodo && !todo.length ? "it as it is" : "them as they are"}.`);
-    if (!(await ask.confirm(`Give ${name}'s agents ${personaTodo && !todo.length ? "this persona as it is" : `these ${what} as they are`}?`, false))) { console.log("Not trusted."); return 1; }
+    if (!ask.interactive) throw new RelayError("usage", `trusting ${name}'s ${what} needs your confirmation`, `Read ${one ? "it" : "them"}, then run it in a terminal, or pass --yes to trust ${one ? "it as it is" : "them as they are"}.`);
+    if (!(await ask.confirm(`Give ${name}'s agents ${one && personaTodo ? "this persona as it is" : one && machineTodo.length ? "this sandbox as its file sets it" : `these ${what} as they are`}?`, false))) { console.log("Not trusted."); return 1; }
   }
-  const trusted = trustProfile(r.skills, r.persona);
-  if (values.json) { ok({ trusted: { name, skills: trusted.skills, ...(trusted.persona ? { persona: trusted.persona } : {}), already: false } }); return 0; }
-  console.log(`Trusted ${[...(personaTodo ? [`the persona ${personaTodo.file}`] : []), ...todo.map((s) => s.name)].join(", ")} for ${name}. A changed SKILL.md or persona needs trusting again.`);
+  const trusted = trustProfile(r.skills, r.persona, { machine: machine.length ? r.machineFiles : [] });
+  if (values.json) { ok({ trusted: { name, skills: trusted.skills, ...(trusted.persona ? { persona: trusted.persona } : {}), ...(trusted.machine.length ? { sandbox: trusted.machine } : {}), already: false } }); return 0; }
+  console.log(`Trusted ${[...(personaTodo ? [`the persona ${personaTodo.file}`] : []), ...todo.map((s) => s.name), ...machineTodo.map((m) => `the sandbox in ${visible(m.file)}`)].join(", ")} for ${name}. A changed SKILL.md, persona or profile file needs trusting again.`);
   return 0;
 }

@@ -23,7 +23,7 @@ import type { ScopeAgent } from "../actors/scope";
 import { skillBlock, type AttachedSkill } from "../agents/skills";
 import { ORCHESTRATION_SKILL_NAME, pinnedSkills } from "../profiles/skills";
 import { pinnedPersona, type PersonaPin } from "../profiles/persona";
-import { untrustedProfileHint, untrustedProfileProblem } from "../profiles/trust";
+import { untrustedProfileHint, untrustedProfileProblem, untrustedSandboxHint, untrustedSandboxProblem } from "../profiles/trust";
 import { CLI_VERSION_HINT, cliVersionProblem } from "../env/cli-version";
 import { attachmentId } from "../api/inline-cap";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
@@ -357,7 +357,9 @@ export async function runNew(o: RunNewOpts) {
     let place: string = name ?? "fake";
     if (!name) { try { place = (await import("../providers/registry")).sandboxName(); } catch { /* unknown CAPCOMD_SANDBOX: the default lifetime */ } }
     const settings = had?.settings.idleLifetime !== undefined ? { idleLifetime: had.settings.idleLifetime } : (await import("../providers/settings")).settingsForRun(place);
-    const value = RS.runSandboxValue(name, settings);
+    // Asked for (here, or by the first call of a retry), not the project's or the user's config: it beats every
+    // agent's profile sandbox.provider (ADR-024 §9, 2026-11-08).
+    const value = RS.runSandboxValue(name, settings, !!o.sandbox || !!had?.explicit);
     // Unchanged on a retry: not written again. A run on the engine's own place still starts if this write fails
     // (its machines then get the place's setting when they start); a run with a place of its own doesn't.
     if (!prior || prior.deleted || JSON.stringify(prior.value) !== JSON.stringify(value)) {
@@ -438,9 +440,10 @@ export interface SpawnOpts {
  * What spawning `ref` (a profile, or an encoded ref with overrides) checks before anything is recorded: the profile
  * resolves, its CLI has an env snapshot on `source`'s sandbox, and the sandbox can enforce its egress. `capcomd run`
  * asks the same of its planner before it starts the run, so a run that can't start is refused, not left started.
+ * `runChose`: the run's sandbox was asked for (`--sandbox`), so it beats the profile's `sandbox.provider`.
  */
-export function spawnChecks(ref: string | null, source: Record<string, string | undefined> = process.env) {
-  return checkResolved(resolveProfile(ref), source);
+export function spawnChecks(ref: string | null, source: Record<string, string | undefined> = process.env, o: { runChose?: boolean } = {}) {
+  return checkResolved(resolveProfile(ref), source, o);
 }
 function resolveProfile(ref: string | null): ResolvedAgent {
   try { return resolveAgent(ref); } catch (e) {
@@ -448,13 +451,24 @@ function resolveProfile(ref: string | null): ResolvedAgent {
     throw e;
   }
 }
-function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string | undefined>) {
+function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string | undefined>, o: { runChose?: boolean } = {}) {
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
   // A project's profile skills and persona reach an agent only once the operator has trusted each (ADR-024 decision 4).
   const untrusted = resolved.name ? untrustedProfileProblem(resolved.name, resolved.skills ?? [], resolved.persona) : null;
   if (untrusted) throw new RelayError("config", untrusted, untrustedProfileHint(resolved.name!), { code: "untrusted" });
-  // Its machine's sandbox: its profile's (ADR-024 `sandbox.provider`), else the run's, else this process's.
+  // Its machine's sandbox: the run's when the run was started on one it asked for (`--sandbox`: it beats every
+  // profile's, ADR-024 §9, the owner's decision of 2026-11-08), else its profile's (`sandbox.provider`), else the run's,
+  // else this process's. The profile's is dropped here, so the agent is pinned without it and its machine is made on
+  // the run's; its environment and size stay (an environment of the run's sandbox, then).
+  if (o.runChose && resolved.runtime?.sandboxProvider) {
+    const { sandboxProvider: _, ...kept } = resolved.runtime;
+    resolved = { ...resolved, runtime: kept };
+  }
   const rt = resolved.runtime ?? {};
+  // A project's profile file that moves its agents to another sandbox (and the environment and size it sets there) is
+  // honoured only once the operator has trusted it as it is, as its skills (ADR-024 §9, 2026-11-08); the user's need none.
+  const unmoved = resolved.name ? untrustedSandboxProblem(resolved.name, rt.sandboxProvider, resolved.machineFiles) : null;
+  if (unmoved) throw new RelayError("config", unmoved, untrustedSandboxHint(resolved.name!), { code: "untrusted" });
   // What its profile was checked for, again on the spec as overridden: an override or a profile.resolved patch that
   // makes it orchestrate (narrowing) leaves an agent that runs nothing with MCP servers to run (src/profiles/runtime.ts).
   const rp = resolved.spec ? runtimeProblems(resolved.name ?? resolved.kind, rt, resolved.spec) : [];
@@ -537,9 +551,19 @@ export async function spawnAgent(o: SpawnOpts) {
   const ref = o.profile ? encodeAgentRef(o.profile, o.overrides) : null;
   const scope = o.parent ?? "operator";
   const agentId = stableId("agt", `${o.runId}\0${scope}`, o.key);
-  // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
-  const runEnv = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
-  const { resolved, spec } = hooks.listening("profile.resolved") ? checkResolved(await profileResolved(o, ref, resolveProfile(ref)), runEnv) : spawnChecks(ref, runEnv);
+  // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's; whether it was asked
+  // for, which beats the profile's sandbox.provider (checkResolved).
+  const RS = await import("../providers/run-sandbox");
+  const placed = await RS.runSandboxRecord(o.runId);
+  const runEnv = RS.withSandbox(process.env, placed?.name);
+  const runChose = !!placed?.explicit;
+  const { resolved, spec } = await (async () => {
+    const r = hooks.listening("profile.resolved") ? await profileResolved(o, ref, resolveProfile(ref)) : resolveProfile(ref);
+    // A run whose place the engine didn't say (no answer within its wait) may have been started on one it asked for:
+    // a profile that would move its agent elsewhere isn't spawned on a guess (retry), one that wouldn't is.
+    if (placed === undefined && r.runtime?.sandboxProvider) throw new RelayError("engine_unreachable", `the engine didn't say where run ${o.runId} runs, and profile ${r.name} names its own sandbox (${r.runtime.sandboxProvider}), which the run's own would beat`, "Retry the spawn.", { retryable: true });
+    return checkResolved(r, runEnv, { runChose });
+  })();
   reportAllowed(resolved, o.contract);
   // ADR-024 `lifecycle.onStart|onEnd`: the plugins its profile names must be there to hear it.
   const unheard = await lifecycleProblem(lifecyclePlugins(resolved.runtime?.lifecycle));

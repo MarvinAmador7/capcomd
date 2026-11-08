@@ -4,7 +4,7 @@
 // §7 step 6): one profile as the rows a client edits, and a change to them in the profile's own file (./write.ts).
 // Local files only.
 import type { z } from "zod";
-import { AgentConfigError, agentsFilePath, editOf, editProfile, PROFILE_FIELDS, profileFacts, profileFields, profileLayers, profileRev, profileRow, profileRows, ProfileWriteError, readProfiles, skillRows, untrustedPersona, type ProfileChange, type ProfileSet, type ResolvedProfile } from "../profiles";
+import { AgentConfigError, agentsFilePath, editOf, editProfile, PROFILE_FIELDS, profileFacts, profileFields, profileLayers, profileRev, profileRow, profileRows, ProfileWriteError, readProfiles, skillRows, untrustedPersona, untrustedSandbox, type ProfileChange, type ProfileSet, type ResolvedProfile } from "../profiles";
 import { readiness } from "../cli/commands/profiles";
 import type { ProfileDetail, Profiles, ProfileSummary, ProfileWritten } from "./contract";
 
@@ -20,7 +20,7 @@ function summaryOf(set: ProfileSet, p: ResolvedProfile, source: Env): z.infer<ty
 		provider: r.provider, auth: r.auth, model: r.model, effort: r.effort, toolMode: r.toolMode, canSpawn: r.canSpawn, canLead: r.canLead, does: r.does,
 		ready: ready.ready, readiness: ready.detail, applied: r.applied,
 		title: facts.title, fit: facts.fit, cost: facts.cost, canReport: facts.canReport, skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name),
-		untrustedPersona: untrustedPersona(p.persona, source),
+		untrustedPersona: untrustedPersona(p.persona, source), untrustedSandbox: untrustedSandbox(p.machineFiles, p.runtime.sandboxProvider, source),
 	};
 }
 

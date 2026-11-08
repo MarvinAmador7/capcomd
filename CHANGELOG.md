@@ -5,6 +5,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- **Breaking:** a run you start on a sandbox stays there. `capcomd run --sandbox docker` (and `run new --sandbox`, the
+  API's `sandbox`, `capcomd_run_new`'s) now keeps every agent of the run on Docker, even when a profile's
+  `sandbox.provider` names boxd, so a profile can no longer spend your boxd credit on a run you put on Docker. A
+  profile's `sandbox.provider` still wins over a sandbox the run took from your settings (`CAPCOMD_SANDBOX`, the
+  project's or your config). To use a profile's sandbox, start the run without `--sandbox`.
+- **Breaking:** a project's profile that moves its agents to another sandbox needs your trust first. A file in the
+  project's `.capcomd/profiles/` that sets `sandbox.provider` (or the `environment` or `size` of a profile that names
+  one) is honoured only after `capcomd profiles trust <name>`, which shows the file and asks, as for the project's
+  skills; until then, and again after the file changes, a spawn of it on a run without its own sandbox is refused
+  (`untrusted`). `capcomd profiles show` says where the profile's agents go and whether the file is trusted,
+  `validate` warns, and the profile lists (`capcomd profiles list --json`, `capcomd_profiles`, `GET /v1/profiles`)
+  name the untrusted files in `untrustedSandbox`. Your own profiles (`~/.capcomd/profiles/`) need no trust. If you
+  use such a project profile, run `capcomd profiles trust <name>` once, or start the run with `--sandbox`.
 - New: `capcomd plugins validate --strict` also warns when a plugin could take more of your attention than it needs:
   a notifier (one that listens to every run and agent change) whose config has no `quiet` option, so people can't turn
   it down short of disabling it. Warnings never fail the check.
@@ -54,6 +67,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   lessons are cut before facts. The brief's header no longer says that a brain's files are "in your checkout": it
   says they are in the read-only copy of the bundle in the agent's sandbox, at the path each line gives, and so does
   the `capcomd-context-doctrine` skill agents get with the brief.
+- **Breaking:** a plugin must be self-contained. Everything it runs has to be inside its own directory, because that
+  is what its LOCK records and what you trust; code it loaded from elsewhere could change without anyone being asked
+  again. `capcomd plugins install`, `update` and `trust` now refuse a plugin whose command or any module it imports
+  lies outside its directory (`../lib`, a `node_modules` above it, a link that points out, its data directory), and
+  name each path; the daemon fails such a plugin (`untrusted`) and won't start its process if one appears while it
+  runs. `capcomd plugins validate <dir>` lists each import that reaches out, with the file that makes it and where it
+  leads (`--json`: `outside`). Its own `node_modules` (`@capcomd/plugin` installed there, or bundled) and `node:` and
+  Bun built-ins are fine; a copy of `@capcomd/plugin` above the plugin's directory is refused like anything else. A
+  plugin running on Bun or Node, and each worker it starts, is also stopped from loading a module outside its directory
+  while it runs. To fix a
+  plugin that is refused: bundle it into one file (`bun build index.ts --target=node --outfile dist/index.js`), or move
+  the code and dependencies it needs into its directory, and name its runtime by name (`bun`, not `/usr/bin/env bun`).
 - New: an app can send a run's proposals to a company's brain. `GET /v1/runs/{runId}/brain-proposals` lists what the
   run's consolidators proposed and whether each was sent; `POST /v1/runs/{runId}/brain-proposals/send` (a token with
   the `configure` scope and an `Idempotency-Key`) sends those waiting as you, like `capcomd context brain propose

@@ -102,7 +102,7 @@ From a git repository, `capcomd plugins install` does the copying for you (see [
 | `description` | One sentence, shown by `capcomd plugins list` and the app. |
 | `apiVersion` | `1`. |
 | `engines.capcomd` | The capcomd versions you tested with (`>=0.9.0 <1.0.0`; `*` is refused). A daemon outside the range doesn't run the plugin; `capcomd plugins allow-version <name>@<version> --accept-risk` lets one version through. |
-| `entry` | `{ "runtime": "process", "command": [...], "env": {...} }`. `${PLUGIN_ROOT}` is the plugin's directory, `${PLUGIN_DATA}` a directory of its own for data. A path in `command[0]` starting with `./` must stay inside the directory. |
+| `entry` | `{ "runtime": "process", "command": [...], "env": {...} }`. `${PLUGIN_ROOT}` is the plugin's directory, `${PLUGIN_DATA}` a directory of its own for data. A path in `command[0]` starting with `./` must stay inside the directory, and so must every path the command and `entry.env`'s `NODE_PATH`, `NODE_OPTIONS` and `BUN_OPTIONS` name ([self-contained](#shipping-a-plugin)). |
 | `scopes` | What the plugin's own token may do (§11.1): `read` (runs, agents, events, profiles), `steer` (start, pause, cancel runs, send messages, emit events), `configure`. `approve` is never grantable: approvals stay human. Default: none, which is enough to answer hooks. |
 | `order`, `after` | Where your listeners run among other plugins' (`pre`, `normal`, `post`; §6.3). |
 | `contributes.hooks` | The hooks you answer: `{ "merge.landing": { "timeoutMs": 5000 } }` (a lower deadline than the default is allowed, a higher one than the maximum is refused). On `job.changed`, `changes` names the change kinds you want: `{ "job.changed": { "changes": ["fired"] } }` for a plugin that only keeps a timer, so capcomd doesn't read every running job's output for you (`started`, `output`, `fired`, `ended`; default all). |
@@ -275,6 +275,26 @@ bun build index.ts --target=node --outfile dist/index.js     # or esbuild, tsup,
 with `"command": ["node", "${PLUGIN_ROOT}/dist/index.js"]` (or `bun`). `@capcomd/plugin` runs on Node ≥ 20 and Bun.
 The plugin lands in `~/.capcomd/plugins/<name>/` with a `LOCK` file (where it came from, the commit, every file's
 hash); the daemon starts it at its next start.
+
+**Keep it self-contained.** Everything your plugin runs must be inside its own directory: the `LOCK` and a project's
+trust cover that directory, so code from anywhere else could change without anyone being asked again (§4.9). capcomd
+refuses, at `install`, `update`, `trust` and `validate`, and again before every start, a plugin whose entry or any
+module it imports lies outside its directory: `../lib`, a `node_modules` above it, a link that points out, its data
+directory. What is fine: its own files and its own `node_modules` (`@capcomd/plugin` installed there, or bundled),
+`node:` and Bun's built-ins. A copy of `@capcomd/plugin` above the directory is outside like anything else (only
+capcomd's own copy, when it runs from a checkout, is allowed from outside). Name the runtime by its name (`bun`,
+`node`), not its path.
+`capcomd plugins validate <dir>` lists each import that reaches out, with the file that makes it and where it leads:
+
+```text
+✗ my-gate 1.0.0 (./my-gate)
+    ✗ index.ts: ../shared/format resolves outside the plugin's folder: /Users/me/acme/shared/format.ts
+```
+
+Bundling (above) is the easy way to be self-contained. While it runs, a Bun or Node process also has a guard that
+refuses a module from outside the directory as it loads, in its workers too (so an import whose path is computed at run
+time is held too);
+what a shell script or another runtime loads isn't checked, so keep those inside as well.
 
 **Project plugins.** A repository can bring its own plugins (`.capcomd/plugins/<name>/`, or `plugins.use` in its
 `.capcomd/config.json`, fetched with `capcomd plugins install --project`). Opening a repository must never run code on
