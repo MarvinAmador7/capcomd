@@ -74,7 +74,8 @@ export async function envCommand(command: string, pos: string[], values: Record<
     const { sandboxCaps } = await import("../../providers/registry");
     const warm = sandboxCaps().isolation === "container";
     const place = platform();
-    const res = await envBuild(place, { repoUrl: repo?.remote, ...(repo ? { hostGit: { workdir: repo.workdir } } : {}), cfg: toolCfg(), force: !!values.force, log, forbidden: activeAdapters().map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}) });
+    const bundles = await mappedBrains(toolCfg().workdir, log);
+    const res = await envBuild(place, { repoUrl: repo?.remote, ...(repo ? { hostGit: { workdir: repo.workdir } } : {}), cfg: toolCfg(), force: !!values.force, log, forbidden: activeAdapters().map((a) => process.env[a.secretName]).filter(Boolean) as string[], ...(warm ? { warm, target: repo?.target } : {}), ...(bundles.length ? { bundles } : {}) });
     const v = Object.entries(res.record.versions).map(([k, x]) => `${k}=${x.version}(${x.source})`).join(" ");
     // Docker: plan logins saved on an older env image move onto this one (only their credential files; src/auth/carry.ts),
     // so their agents get its CLIs and warm template. One that can't be moved keeps working from its old image.
@@ -96,6 +97,19 @@ export async function envCommand(command: string, pos: string[], values: Record<
     return 0;
   }
   throw new RelayError("usage", "usage: capcomd env build [--force] [--project [--repo URL]] | env status | env templates [rm --repo URL] | env rm [name|all]", "");
+}
+
+/** The brains this checkout's project maps (`capcomd context brain add`), checked at their pinned commits, as the
+ *  bundles its env image carries (ADR-025 step 4); one left out is said, and its agents' runners place it at start. */
+async function mappedBrains(workdir: string, log: (l: string) => void): Promise<import("../../agents/config").ContextBundleSpec[]> {
+  const { projectContext } = await import("../../context/project");
+  const settings = projectContext();
+  if (!Object.keys(settings.brains ?? {}).length) return [];
+  const { mappedBundles } = await import("../../context/groundray");
+  const { bundles, skipped } = await mappedBundles(settings, workdir);
+  for (const s of skipped) log(`context: brain ${s.name} isn't baked into the image: ${s.why}`);
+  for (const b of bundles) log(`context: brain ${b.name} at ${b.commit.slice(0, 12)} goes into the image (${b.path}/)`);
+  return bundles;
 }
 
 /** The project `--repo` names, else this checkout's (CAPCOMD_REPO), with its host repos and setup step. */
@@ -122,7 +136,9 @@ async function templateBuild(values: Record<string, any>, log: (l: string) => vo
   const cfg = projectOf(values);
   const setup = process.env.CAPCOMD_SETUP_COMMAND?.trim() || undefined;
   const egress = (process.env.CAPCOMD_SETUP_EGRESS ?? "").split(",").map((d) => d.trim()).filter(Boolean);
-  const res = await T.buildProjectTemplate({ provider: platform(), repo: cfg.remote, cfg: toolCfg(), hostGit: { workdir: cfg.workdir }, ...(setup ? { setup } : {}), egress, force: !!values.force, log });
+  // The checkout's own mapped brains, only for its own template (--repo names another project).
+  const bundles = values.repo ? [] : await mappedBrains(toolCfg().workdir, log);
+  const res = await T.buildProjectTemplate({ provider: platform(), repo: cfg.remote, cfg: toolCfg(), hostGit: { workdir: cfg.workdir }, ...(setup ? { setup } : {}), egress, force: !!values.force, log, ...(bundles.length ? { bundles } : {}) });
   const t = (await import("../../env/resolve")).readTemplates().templates[(await import("../../env/resolve")).projectKey(cfg.remote)];
   emit(json, { name: res.name, cached: res.cached, template: t ?? null }, `${res.cached ? "up to date" : "built"}: ${res.name}  ${cfg.remote}${t ? ` at ${t.commit.slice(0, 12)} (${t.target})${t.sizeBytes ? `, ${fmtBytes(t.sizeBytes)}` : ""}` : ""}${res.record.buildMs ? `  ${(res.record.buildMs / 1000).toFixed(0)}s` : ""}`);
   return 0;

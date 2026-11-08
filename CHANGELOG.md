@@ -14,6 +14,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Changed: an agent's background job is now stopped once it has run `afterTurnMs` (30 minutes by default) past the
   agent's last step, not 30 minutes after the job started, so a long build keeps running while its agent is still
   working. A job started with `--timeout-ms` still stops at that timeout (at most the profile's `afterTurnMs`).
+- Faster: `capcomd env build` (and `env build --project`) now puts the brains your project maps (`capcomd context
+  brain add`) into the environment image, each at the commit it is pinned to, so agents start with them instead of
+  copying the brain in at every start. Map a brain at a newer commit and the next `capcomd env build` builds a new image.
+  The build says which brains it baked in, and leaves out one that is restricted, can't be read, or has
+  credential-shaped text in it (agents then get it at start as before).
+- Fixed: only a brain's knowledge folder (`knowledge/`, or the one you named with `--bundle`) reaches an agent's
+  sandbox now. Before, the whole brain repository was copied in, while only the folder's Markdown files were checked
+  for `sensitivity: restricted`, so a restricted file elsewhere in the repository reached agents. Every file in the
+  folder is now checked, Markdown or not (a YAML, JSON, TOML or text file marked `sensitivity: restricted` or
+  `sensitivity = restricted` refuses the brain, as does any file over 4 MiB or a folder of more than 2000 files: keep
+  big attachments outside the knowledge folder). An agent's sandbox also keeps only the brains its own brief cites:
+  brains another project's image carries are removed before the agent starts (an agent whose sandbox can't be cleaned
+  doesn't start), and checks that `capcomd verify` runs in a VM never see any brain.
 - New: once you open a pull request from a goal branch (`capcomd pr open`, the app, or `capcomd_pr_open`), the run
   follows its conversation on GitHub. When someone you allow (`triggers.sources.github.allowed` in
   `~/.capcomd/config.json`) writes there with `/capcomd …` (or, in `mode: "auto"`, without it), the run's planner starts

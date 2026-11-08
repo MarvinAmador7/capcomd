@@ -394,11 +394,13 @@ export async function sendTree(h: HostRemote, s: SandboxGit, dir: string, branch
 /**
  * Remote → a plain directory in the sandbox at one commit, as sendTree does a branch's tip: a context bundle (a brain,
  * ADR-025 §6.2) at the commit its brief cites. The host's mirror fetches the commit by name when it hasn't got it; a
- * remote that won't serve a commit by name is fetched at `branch`, which must have it.
+ * remote that won't serve a commit by name is fetched at `branch`, which must have it. `path`: only that directory of the
+ * tree is sent (at the same path under `dir`); one the commit hasn't got fails.
  */
-export async function sendTreeAt(h: HostRemote, s: SandboxGit, dir: string, commit: string, o: { branch?: string | null } = {}): Promise<string> {
+export async function sendTreeAt(h: HostRemote, s: SandboxGit, dir: string, commit: string, o: { branch?: string | null; path?: string } = {}): Promise<string> {
   if (!HEX.test(commit)) throw new TransferError(`not a commit: ${JSON.stringify(commit).slice(0, 200)}`, "refused");
   if (o.branch != null && !isBranchName(o.branch)) throw new TransferError(`not a branch name: ${JSON.stringify(o.branch).slice(0, 200)}`, "refused");
+  if (o.path !== undefined && !TREE_PATH.test(o.path)) throw new TransferError(`not a directory name: ${JSON.stringify(o.path).slice(0, 200)}`, "refused");
   const id = uniq();
   const tmpRef = `refs/capcomd/xfer/${id}`;
   let got: Awaited<ReturnType<typeof fetchedMirror>>;
@@ -408,20 +410,24 @@ export async function sendTreeAt(h: HostRemote, s: SandboxGit, dir: string, comm
   }
   try {
     if (got.ref !== commit) throw new TransferError(`the host's copy of ${h.remote} has ${String(got.ref).slice(0, 12)}, not ${commit.slice(0, 12)}`, "refused");
-    await unpackTree(got.m, s, dir, commit, id, commit.slice(0, 12));
+    await unpackTree(got.m, s, dir, commit, id, o.path !== undefined ? `${o.path}/ at ${commit.slice(0, 12)}` : commit.slice(0, 12), o.path);
     return commit;
   } finally {
     await got.m.run(["update-ref", "--stdin"], { input: got.pins.map((p) => `delete ${p}`).join("\n") + "\n" }).catch(() => {});
   }
 }
 
-/** `sha`'s tree from the mirror `m`, as a tar (`git archive` into a file), uploaded from disk and unpacked into `dir` in
- *  the sandbox (made anew). */
-async function unpackTree(m: Git, s: SandboxGit, dir: string, sha: string, id: string, what: string): Promise<void> {
+/** A directory in a tree that sendTreeAt sends alone: plain names separated by `/`, no `.` or `..`, nothing a pathspec
+ *  reads as a pattern (src/agents/config.ts BUNDLE_PATH, checked again here at the git boundary). */
+const TREE_PATH = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
+/** `sha`'s tree (only `path` in it, when given) from the mirror `m`, as a tar (`git archive` into a file), uploaded from
+ *  disk and unpacked into `dir` in the sandbox (made anew). The path is matched literally: no pattern, no other case. */
+async function unpackTree(m: Git, s: SandboxGit, dir: string, sha: string, id: string, what: string, path?: string): Promise<void> {
   mkdirSync(join(m.cwd, "xfer"), { recursive: true });
   const file = join(m.cwd, "xfer", `tree-${id}.tar`);
   try {
-    const a = await m.run(["archive", "--format=tar", "-o", file, sha]);
+    const a = await m.run(path !== undefined ? ["--literal-pathspecs", "archive", "--format=tar", "-o", file, sha, "--", `${path}/`] : ["archive", "--format=tar", "-o", file, sha]);
     if (a.code !== 0) throw new TransferError(`git archive ${what} failed: ${tail(a)}`);
     const at = `/tmp/capcomd-tree-${id}.tar`;
     await uploadFile(s, file, at, () => {});

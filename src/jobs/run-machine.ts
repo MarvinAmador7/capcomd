@@ -1,8 +1,8 @@
 // A run's own job machine (docs/spec/plugin-api.md §16.2): where a run-owned `exec` job (`owner: {run: true}`) runs, so
 // it outlives the agent that started it (a server kept for review). It is made the way a run's checks machine is
 // (src/merge/verify.ts runInVm): on the run's sandbox, through `sandbox.ensuring` (purpose `job`: labels
-// `{purpose: "job", run}`), from the run's environment image (never an auth snapshot: no credential reaches it), with
-// only the package registries as egress. It is recorded in the machines ledger as the run's (kind `job`), so the
+// `{purpose: "job", run}`), from the run's environment image (never an auth snapshot: no credential reaches it; the
+// context bundles an image may carry are removed first), with only the package registries as egress. It is recorded in the machines ledger as the run's (kind `job`), so the
 // place's Machines list shows it as the run's background jobs, and it holds a machine slot of its place while it lives
 // (src/providers/capacity.ts), as a check's machine does: it counts with the run's machines. The jobs service
 // (service.ts) destroys it when its run ends, or once no job of the run runs in it any more; its jobs' records keep
@@ -43,16 +43,16 @@ async function placeOf(sandbox: string | null, source: Env): Promise<string | nu
 }
 
 /** The machine's paths and the env its commands get: a VM's agent home and PATH; the host test sandbox's own folder. */
-async function layout(place: string | null, runId: string, idemKey: string, source: Env): Promise<{ dir: string; cwd: string; env: Record<string, string> | undefined }> {
+async function layout(place: string | null, runId: string, idemKey: string, source: Env): Promise<{ dir: string; cwd: string; env: Record<string, string> | undefined; context: string | null }> {
   // The test sandbox that runs "VMs" on this host shares one /tmp: each run's job machine gets its own folder there.
   if (place === "fake-host") {
     const root = join(tmpdir(), "capcomd-jobvm", runId, idemKey.slice(-12));
-    return { dir: join(root, "jobs"), cwd: join(root, "work"), env: undefined };
+    return { dir: join(root, "jobs"), cwd: join(root, "work"), env: undefined, context: null };
   }
   const { agentWorkdir } = await import("../agents/config");
   const { agentPath } = await import("../agents/runner");
   const workdir = agentWorkdir(source), home = `${workdir}/home`;
-  return { dir: "/tmp/capcomd-jobs", cwd: `${workdir}/jobs`, env: { PATH: agentPath(home), HOME: home } };
+  return { dir: "/tmp/capcomd-jobs", cwd: `${workdir}/jobs`, env: { PATH: agentPath(home), HOME: home }, context: `${workdir}/context` };
 }
 
 /**
@@ -84,7 +84,9 @@ export async function ensureRunMachine(runId: string, o: { lifetimeMs: number })
     await provider.waitReady(id, READY_MS);
     const ref: RunMachineRef = { sandbox, vmId: id, idemKey, dir: where.dir, cwd: where.cwd, ttlSeconds };
     const held = holding(runId, ref, where.env, () => { forget(); slot.release(); });
-    const mk = await held.m.exec(["mkdir", "-p", ref.dir, ref.cwd], { timeoutMs: 30_000 });
+    // The env image may carry the context bundles of the project it was built for (its mapped brains, ADR-025 step 4):
+    // they go before any job runs, as the checks machine's do (src/merge/verify.ts): a job is agent-written code.
+    const mk = await held.m.exec(["sh", "-c", `${where.context ? 'rm -rf "$3" && ' : ""}mkdir -p "$1" "$2"`, "sh", ref.dir, ref.cwd, where.context ?? ""], { timeoutMs: 30_000 });
     if (mk.code !== 0) throw new Error(`making its folders failed: ${(mk.stderr || mk.stdout).trim().slice(-300)}`);
     return held;
   } catch (e) {

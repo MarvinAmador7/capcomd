@@ -21,6 +21,12 @@ import { hooks, useHooks } from "../../src/plugins/hooks";
 import { useSandboxHost } from "../../src/plugins/sandboxes";
 import { sandboxDocker, SWEEP_EVERY_MS } from "../../src/plugins/builtin/sandbox-docker";
 import { stateDir } from "../../src/utils/home";
+import { ensureRunMachine } from "../../src/jobs/run-machine";
+import { FakeProvider } from "../../src/providers/fake";
+import type { VmSpec } from "../../src/providers/sandbox";
+import { initDependencies, resetDependencies } from "../../src/dependencies";
+import { BASE_EGRESS } from "../../src/agents/config";
+import { liveJobMachines, machineNameFor } from "../../src/providers/machines";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 afterEach(() => { resetJobs(); useHooks(null); useSandboxHost(null); useDaemonEvents(null); });
@@ -123,6 +129,42 @@ describe("limits and messages", () => {
     expect(text).toContain("1 failing");
     expect(text.length).toBeLessThan(5000);
     expect(text).toEndWith("All of its output: capcomd job output job-k1");
+  });
+});
+
+describe("the run's job machine (src/jobs/run-machine.ts)", () => {
+  test("made like the checks machine: purpose job, the run's, registries only, the image's context bundles gone; recorded while it lives", async () => {
+    const specs: VmSpec[] = [];
+    const log: NonNullable<ConstructorParameters<typeof FakeProvider>[0]>["log"] = [];
+    class Seen extends FakeProvider { override async ensure(spec: VmSpec) { specs.push(spec); return super.ensure(spec); } }
+    const p = new Seen({ log });
+    const ledger = mkdtempSync(join(tmpdir(), "capcomd-jobs-ledger-"));
+    const saved = { ...process.env };
+    // No engine (the run's sandbox record isn't asked for long): the daemon's sandbox, the fake, with no env image.
+    Object.assign(process.env, { CAPCOMD_MACHINES_LEDGER: ledger, CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_ENV: "image" });
+    delete process.env.CAPCOMD_SANDBOX;
+    initDependencies({ provider: p });
+    try {
+      const held = await ensureRunMachine("run-jm1", { lifetimeMs: 7_200_000 });
+      expect(specs).toHaveLength(1);
+      expect(specs[0]).toMatchObject({ isolated: true, labels: { purpose: "job", run: "run-jm1" }, egressAllow: BASE_EGRESS });
+      expect(specs[0]!.fromSnapshot).toBeUndefined();
+      // Its idle lifetime covers the job it is made for.
+      expect(specs[0]!.ttlSeconds).toBeGreaterThanOrEqual(7_200);
+      expect(held.ref).toMatchObject({ sandbox: null, dir: "/tmp/capcomd-jobs", cwd: "/w/jobs", idemKey: specs[0]!.idemKey });
+      expect(held.m).toMatchObject({ runId: "run-jm1", agentId: "run", dir: "/tmp/capcomd-jobs", cwd: "/w/jobs" });
+      const setup = log.find((l) => l.cmd[0] === "sh")!;
+      expect(setup.cmd).toEqual(["sh", "-c", 'rm -rf "$3" && mkdir -p "$1" "$2"', "sh", "/tmp/capcomd-jobs", "/w/jobs", "/w/context"]);
+      expect(setup.env).toEqual({ PATH: expect.stringContaining("/w/home/node/bin"), HOME: "/w/home" });
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toMatchObject([{ kind: "job", purpose: "job", runId: "run-jm1", name: machineNameFor(held.ref.idemKey) }]);
+      await held.release();
+      await expect(p.exec(held.ref.vmId, ["true"])).rejects.toThrow(/not found|not ready/);
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toEqual([]);
+    } finally {
+      resetDependencies();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
   });
 });
 

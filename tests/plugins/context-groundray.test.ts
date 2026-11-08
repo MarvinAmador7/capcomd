@@ -6,7 +6,7 @@
 // keeps; the bundle the brief cites, checked again in the attempt's spec and placed in a sandbox by the runner. The end
 // to end run is tests/subagents/context-groundray.test.ts.
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, relative } from "path";
 import type { ContextProvider, ContextScope } from "../../packages/plugin/src/context-layer";
@@ -19,7 +19,7 @@ import { CONTEXT_DIR, MEMORY_MAX_BYTES, memoryProvider, mirrorReader, type TreeR
 import type { ActiveProvider } from "../../src/context/providers";
 import type { ContextSettings } from "../../src/context/project";
 import { loadAgentConfig } from "../../src/agents/config";
-import { BUNDLE_MARKER, placeBundle } from "../../src/agents/runner";
+import { BUNDLE_MARKER, dropUncitedBundles, placeBundle } from "../../src/agents/runner";
 import { Redactor } from "../../src/agents/redact";
 import { RelayError } from "../../src/core/errors";
 import { inlineCredential } from "../../src/merge/host-git";
@@ -142,6 +142,28 @@ describe("the context-groundray built-in (ADR-025 §11.2)", () => {
     expect(await restrictedOf({ "knowledge/a.md": "---\ntype: concept\ntitle: &r restricted\nsensitivity: *r\n---\nx\n" })).toEqual(marked);
     expect(await restrictedOf({ "knowledge/a.md": "---\ntype: concept\nSensitivity:\n  restricted\n---\nx\n" })).toEqual(marked);
     expect(await restrictedOf({ "knowledge/.core-kb.yaml": "level: &l restricted\ndefault_sensitivity: *l\n" })).toEqual({ restricted: "its bundle's default sensitivity is restricted", unchecked: null });
+    // A file under the bundle that isn't Markdown is placed too, so it is checked whole: a YAML sidecar, JSON, plain text.
+    expect(await restrictedOf({ "knowledge/references/contract.yaml": "title: Contract\nsensitivity: restricted\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/contract.json": "{\n  \"title\": \"Contract\",\n  \"sensitivity\": \"restricted\"\n}\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/contract.json": "{\"meta\": {\"sensitivity\": \"restricted\"}}" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/notes.txt": "Payroll export\nSensitivity: Restricted\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/notes.txt": "the word restricted, and sensitivity: confidential\n" })).toEqual({ restricted: null, unchecked: null });
+    expect(await restrictedOf({ "knowledge/references/scan.pdf": `%PDF-1.7\n${"x".repeat(4 * 1024 * 1024)}` })).toEqual({ restricted: null, unchecked: "1 of its files is over 4 MiB" });
+    // One too long or nested too deep to parse quickly is matched without the parser, more broadly (TOML, a next line).
+    const nested = `${"{\"a\": ".repeat(20_000)}1${"}".repeat(20_000)}`;
+    const t0 = Date.now();
+    expect(await restrictedOf({ "knowledge/references/deep.json": nested })).toEqual({ restricted: null, unchecked: null });
+    expect(await restrictedOf({ "knowledge/references/deep.json": `{"meta": {"sensitivity": "restricted", "x": ${nested}}}` })).toEqual(marked);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(await restrictedOf({ "knowledge/references/data.json": `{"rows": [${"[1, 2, 3], ".repeat(10_000)}[]], "meta": {"sensitivity": "restricted"}}` })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/big.toml": `${"# pad\n".repeat(20_000)}[meta]\nsensitivity = "restricted"\n` })).toEqual(marked);
+    // The same marking counts in a small file: what refuses a big one refuses a small one.
+    expect(await restrictedOf({ "knowledge/references/meta.toml": `[meta]\nsensitivity = "restricted"\n` })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/export.env": "SENSITIVITY=restricted\n" })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/big.yaml": `${"pad: x\n".repeat(20_000)}meta:\n  sensitivity:\n    restricted\n` })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/big.txt": `${"the word restricted, and sensitivity: confidential\n".repeat(2_000)}` })).toEqual({ restricted: null, unchecked: null });
+    // A file outside the bundle is never placed, so it isn't the brain's to say (brain.yaml, another directory).
+    expect(await restrictedOf({ "private/salaries.md": fm({ type: "concept", id: "pay", sensitivity: "restricted" }, "x"), "private/keys.yaml": "sensitivity: restricted\n" })).toEqual({ restricted: null, unchecked: null });
     // A body that talks about sensitivity isn't a marking; confidential is allowed.
     expect(await restrictedOf({ "knowledge/a.md": fm({ type: "concept", id: "a", sensitivity: "confidential" }, "sensitivity: restricted") })).toEqual({ restricted: null, unchecked: null });
     // A file too big to parse is read again for the check; one too big for that, or a tree read in part, isn't known.
@@ -174,7 +196,8 @@ describe("the context-groundray built-in (ADR-025 §11.2)", () => {
       `- [concept] Contribution margin is fees minus direct costs over fees → ${ROOT}/groundray/acme/knowledge/wiki/margin.md (draft; 2026-10-12)`,
     ]);
     expect(b.text).not.toContain("THE-BODY-OF-THE-POLICY");
-    expect(b.bundles).toEqual([{ provider: "groundray", remote: "/srv/acme.git", branch: "main", commit: A, name: "acme", dir: `${ROOT}/groundray/acme` }]);
+    // Only the bundle's directory is placed (brain.yaml and anything else in the repository stay out).
+    expect(b.bundles).toEqual([{ provider: "groundray", remote: "/srv/acme.git", branch: "main", commit: A, name: "acme", path: "knowledge", dir: `${ROOT}/groundray/acme` }]);
     // A reviewer gets facts (D11).
     expect((await buildBrief(input({ role: "review" }))).loaded).toBe(2);
     // The item, cited at the commit; a brain is no project's.
@@ -351,16 +374,94 @@ describe("mapping a brain (capcomd context brain add) from a real repository", (
   }, 60_000);
 });
 
+/** A sandbox that is this host (fake-host's shape): commands run here, uploads are files. */
+const localBox = () => ({
+  exec: async (cmd: string[]) => { const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" }); const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]); return { code, stdout, stderr }; },
+  upload: async (path: string, data: Uint8Array) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, data); },
+});
+
 describe("the bundle in the attempt's spec and in the sandbox (ADR-025 §6.2)", () => {
   const dirs: string[] = [];
   afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
-  test("the attempt's spec keeps a bundle only under <workdir>/context/<provider>/<name>, at a full commit", () => {
+  test("the attempt's spec keeps a bundle only under <workdir>/context/<provider>/<name>, at a full commit, of a plain directory", () => {
     const ok = { provider: "groundray", name: "acme", remote: "/srv/acme.git", branch: "main", commit: A, dir: "/w/context/groundray/acme" };
+    const sub = { ...ok, name: "sub", dir: "/w/context/groundray/sub", path: "kb/sales" };
     const cfg = loadAgentConfig({ ANTHROPIC_API_KEY: "k", CAPCOMD_AGENT_WORKDIR: "/w" }, null, {
-      provider: "claude", auth: "apikey", kind: "claude-code", contextBundles: [ok, { ...ok, name: "elsewhere", dir: "/etc/elsewhere" }, { ...ok, name: "short", commit: "abc" }, { ...ok, provider: "../x", dir: "/w/context/../x/acme" }],
+      provider: "claude", auth: "apikey", kind: "claude-code", contextBundles: [ok, sub, { ...ok, name: "elsewhere", dir: "/etc/elsewhere" }, { ...ok, name: "short", commit: "abc" }, { ...ok, provider: "../x", dir: "/w/context/../x/acme" },
+        ...["../secret", "knowledge/..", ".", "", "/etc", "k*", ":(icase)knowledge", 7].map((path, i) => ({ ...ok, name: `bad${i}`, dir: `/w/context/groundray/bad${i}`, path }))],
     });
-    expect(cfg.contextBundles).toEqual([ok]);
+    expect(cfg.contextBundles).toEqual([ok, sub]);
+  });
+
+  test("only the bundle's directory is placed: the repository's other files, a restricted one among them, never reach the sandbox", async () => {
+    const r = await bareRepo();
+    dirs.push(r.root);
+    const files = { ...brain("acme", ACME_ID), "private/salaries.md": fm({ type: "concept", id: "pay", sensitivity: "restricted" }, "SALARY-TABLE"), "knowledge-old/a.md": "near the bundle's name\n" };
+    for (const [p, text] of Object.entries(files)) { mkdirSync(join(r.root, "seed", p, ".."), { recursive: true }); writeFileSync(join(r.root, "seed", p), text); }
+    await r.seed.ok(["add", "."]);
+    await r.seed.ok(["commit", "-q", "-m", "brain"]);
+    await r.seed.ok(["push", "-q", "origin", "main"]);
+    const commit = (await r.sha("main"))!;
+    // The brain reads as not restricted (the restricted file isn't the bundle's), and resolve names its directory.
+    const read = mirrorReader;
+    const p = groundrayProvider({ read, settings: async () => ({ brains: { acme: mapping(r.bare, commit, "acme", ACME_ID) } }) });
+    const brief = await buildBrief(input({}, p));
+    expect(brief.bundles).toEqual([{ provider: "groundray", remote: r.bare, branch: "main", commit, name: "acme", path: "knowledge", dir: `${ROOT}/groundray/acme` }]);
+    // Through the attempt's spec to the runner, as an agent's sandbox gets it.
+    const sandbox = join(r.root, "sandbox");
+    const cfg = loadAgentConfig({ ANTHROPIC_API_KEY: "k", CAPCOMD_AGENT_WORKDIR: sandbox }, null, { provider: "claude", auth: "apikey", kind: "claude-code", contextBundles: brief.bundles.map((b) => ({ ...b, dir: join(sandbox, "context", "groundray", b.name) })) });
+    const b = cfg.contextBundles![0]!;
+    expect(b.path).toBe("knowledge");
+    expect(await placeBundle(b, { remote: r.bare, workdir: join(r.root, "work") }, localBox(), null, new Redactor([]))).toBe(true);
+    const placed = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? placed(join(dir, e.name)).map((x) => `${e.name}/${x}`) : [e.name]).sort();
+    expect(placed(b.dir)).toEqual([BUNDLE_MARKER, ...Object.keys(files).filter((f) => f.startsWith("knowledge/"))].sort());
+    expect(readFileSync(join(b.dir, BUNDLE_MARKER), "utf8")).toBe(`${commit} knowledge`);
+    expect(placed(b.dir).join("\n")).not.toContain("salaries");
+    // A sandbox with the whole tree at that commit (an older capcomd's placement, its marker the commit alone) isn't
+    // this bundle: it is placed again, and the rest goes.
+    rmSync(b.dir, { recursive: true, force: true });
+    expect(await placeBundle({ ...b, path: undefined }, { remote: r.bare, workdir: join(r.root, "work") }, localBox(), null, new Redactor([]))).toBe(true);
+    expect(existsSync(join(b.dir, "private", "salaries.md"))).toBe(true);
+    const logs: string[] = [];
+    expect(await placeBundle(b, { remote: r.bare, workdir: join(r.root, "work") }, localBox(), null, new Redactor([]), (l) => logs.push(...l))).toBe(true);
+    expect(logs[0]).toContain("placed groundray acme (knowledge/)");
+    expect(existsSync(join(b.dir, "private"))).toBe(false);
+    expect(existsSync(join(b.dir, "brain.yaml"))).toBe(false);
+    // A directory the commit hasn't got places nothing.
+    expect(await placeBundle({ ...b, name: "none", dir: join(sandbox, "context", "groundray", "none"), path: "nowhere" }, { remote: r.bare, workdir: join(r.root, "work") }, localBox(), null, new Redactor([]), (l) => logs.push(...l))).toBe(false);
+    expect(logs.at(-1)).toContain("couldn't place groundray none (nowhere/)");
+  }, 60_000);
+
+  test("a sandbox keeps only the bundles the brief cites: an env image's others are removed before the agent starts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "capcomd-ctx-drop-"));
+    dirs.push(root);
+    const ctx = join(root, "context");
+    for (const d of ["groundray/acme/knowledge", "groundray/globex/knowledge", "groundray/.hidden", "other/x", ".odd/y"]) mkdirSync(join(ctx, d), { recursive: true });
+    writeFileSync(join(ctx, "groundray/globex/knowledge/a.md"), "GLOBEX-ONLY\n");
+    chmodSync(join(ctx, "groundray/globex/knowledge/a.md"), 0o444);
+    writeFileSync(join(ctx, "stray.txt"), "x\n");
+    const cited = [{ provider: "groundray", name: "acme", remote: "/srv/acme.git", branch: "main", commit: A, dir: join(ctx, "groundray/acme"), path: "knowledge" }];
+    const logs: string[] = [];
+    await dropUncitedBundles(root, cited, localBox(), (l) => logs.push(...l));
+    expect(readdirSync(ctx)).toEqual(["groundray"]);
+    expect(readdirSync(join(ctx, "groundray"))).toEqual(["acme"]);
+    expect(logs[0]).toMatch(/^\[capcomd\] context: removed 5 bundles this agent's brief doesn't cite/);
+    // None cited: nothing stays. No directory at all: nothing to do.
+    await dropUncitedBundles(root, [], localBox());
+    expect(readdirSync(ctx)).toEqual([]);
+    const quiet: string[] = [];
+    await dropUncitedBundles(join(root, "nowhere"), [], localBox(), (l) => quiet.push(...l));
+    expect(quiet).toEqual([]);
+    // One that can't be removed: the agent doesn't start beside it.
+    mkdirSync(join(ctx, "groundray/initech/knowledge"), { recursive: true });
+    writeFileSync(join(ctx, "groundray/initech/knowledge/a.md"), "INITECH-ONLY\n");
+    chmodSync(join(ctx, "groundray/initech/knowledge"), 0o555);
+    try {
+      await expect(dropUncitedBundles(root, cited, localBox())).rejects.toThrow("so it doesn't start");
+      const dead = { exec: async (): Promise<{ code: number; stdout: string; stderr: string }> => { throw new Error("the machine went away"); }, upload: async () => {} };
+      await expect(dropUncitedBundles(root, cited, dead)).rejects.toThrow("the machine went away");
+    } finally { chmodSync(join(ctx, "groundray/initech/knowledge"), 0o755); }
   });
 
   test("placed from the host's mirror at its commit: its files read-only, a marker; one already there is kept; one that can't be fetched leaves the agent without it", async () => {
