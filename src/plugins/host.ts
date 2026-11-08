@@ -86,11 +86,11 @@ export const pluginDataDir = (name: string, env: Record<string, string | undefin
 /** The running daemon's listing (src/plugins/snapshot.ts): where it is, reading it. */
 export { pluginsSnapshotPath, readSnapshot, type PluginsSnapshot } from "./snapshot";
 
-function writeSnapshot(path: string, plugins: PluginSummary[]) {
+function writeSnapshot(path: string, plugins: PluginSummary[], socket: string | undefined) {
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins } satisfies PluginsSnapshot), { mode: 0o600 });
+    writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins, ...(socket ? { socket } : {}) } satisfies PluginsSnapshot), { mode: 0o600 });
     renameSync(tmp, path);
   } catch { /* the listing is a convenience; the daemon runs without it */ }
 }
@@ -137,9 +137,10 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
  * (§8.4, src/plugins/services.ts): a CLI's local host has none of them, `unsupported`. Every host's plugins get
  * `ctx.sandboxes` and `ctx.auth`, this process's places and logins. `triggers`: they get `ctx.triggers` too (§16.3; the
  * daemon's only). `process`: the plugin socket out-of-process plugins connect to (§9.2); without it they stay
- * `validated` (a CLI's local host).
+ * `validated` (a CLI's local host). `snapshot`: where the listing goes, with `socket`, the harness socket the daemon
+ * serves (where `capcomd plugins enable|disable` reach it, src/cli/daemon.ts).
  */
-export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: EventReads["daemon"]; run?: EventReads["run"]; pollMs?: number }; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
+export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: EventReads["daemon"]; run?: EventReads["run"]; pollMs?: number }; snapshot?: string | null; socket?: string; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
   const redactor = new Redactor();
   const record = (e: { type: string; stream: string; entity: string; text: string; data: Record<string, unknown> }) => {
     if (e.stream !== "daemon") throw new PluginError("unsupported", `the host writes its own events on the daemon stream only (${e.type})`);
@@ -182,7 +183,7 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
     },
     sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent, subscribe: streams.subscribe, replay: streams.replay },
     ...(o.process ? { launcher: processLauncher({ socket: o.process.socket, log }), ...(o.process.timings ? { processTimings: o.process.timings } : {}) } : {}),
-    ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins) } : {}),
+    ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins, o.socket) } : {}),
   });
   // The host whose plugins have ctx.triggers holds their sources' reply paths: the intake posts replies through them.
   if (o.triggers) useTriggerReplies(host.contributions);

@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APP_SCOPES, addClient, authenticate, loadClients, pairClient } from "../../src/api/clients";
+import { APP_SCOPES, addClient, authenticate, loadClients, oneCallClient, pairClient } from "../../src/api/clients";
 import { capcomd } from "../helpers/engine";
 import pkg from "../../package.json" with { type: "json" };
 
@@ -81,5 +81,18 @@ describe("capcomd clients pair", () => {
 		expect(bad.code).toBe(2);
 		expect(bad.stdout).toBe("");
 		expect(loadClients(join(home, "harness-clients.json"))).toEqual([]);
+	});
+});
+
+describe("oneCallClient", () => {
+	test("a token for one call of the CLI: it authenticates with its scope, and once removed its record is gone, the others kept", () => {
+		const path = join(dir, "one-call.json");
+		const kept = addClient("script", ["read"], path);
+		const call = oneCallClient("capcomd CLI (one call)", ["configure"], path);
+		expect(authenticate(`Bearer ${call.token}`, loadClients(path))).toMatchObject({ clientId: call.client.id, scopes: ["configure"] });
+		call.remove();
+		expect(authenticate(`Bearer ${call.token}`, loadClients(path))).toBeNull();
+		expect(loadClients(path).map((c) => c.id)).toEqual([kept.client.id]);
+		expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
 });
