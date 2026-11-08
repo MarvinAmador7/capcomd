@@ -272,6 +272,26 @@ describe("the context-memory plugin's gates (verify.judging, merge.landing)", ()
     await fake.dispose();
   });
 
+  test("an agent that handed off is judged as its successor, whose branch and commit its result is", async () => {
+    // A consolidator (review: lint) that handed its task to a worker: its result is the worker's, written by the worker.
+    const run = samplePayload("merge.landing").merge.runId;
+    const records: Record<string, { profile: string | null; spec: unknown; result: unknown }> = {
+      "agt-test1": { profile: CONSOLIDATOR_PROFILE, spec: { context: { review: "lint" } }, result: { branch: `capcomd/${run}/agt-w9`, commit: COMMIT, handoffTo: "agt-w9" } },
+      "agt-w9": { profile: "worker", spec: {}, result: { branch: `capcomd/${run}/agt-w9`, commit: COMMIT } },
+      "agt-cons2": { profile: CONSOLIDATOR_PROFILE, spec: { context: { review: "lint" } }, result: { branch: `capcomd/${run}/agt-cons2`, commit: COMMIT } },
+    };
+    kernel(null);
+    memoryPlugin.promotionKernel.agent = saved.agent;
+    memoryPlugin.promotionKernel.record = async (_runId, id) => records[id]!;
+    expect(await memoryPlugin.promotionKernel.agent(run, "agt-test1")).toEqual({ id: "agt-w9", profile: "worker", review: "human", commit: COMMIT, branch: `capcomd/${run}/agt-w9` });
+    const fake = await load();
+    const m = await fake.fire("merge.landing", samplePayload("merge.landing"));
+    expect(m.result).toMatchObject({ decision: "deny", reason: expect.stringContaining(`${NOT_A_CONSOLIDATOR}: agt-w9 (profile worker)`) });
+    // An agent that didn't hand off is judged as itself.
+    expect(await memoryPlugin.promotionKernel.agent(run, "agt-cons2")).toMatchObject({ id: "agt-cons2", profile: CONSOLIDATOR_PROFILE, review: "lint" });
+    await fake.dispose();
+  });
+
   test("fail-closed: a branch the gate can't read doesn't land (the call fails; the host denies it)", async () => {
     kernel(cons());
     memoryPlugin.promotionKernel.branch = async () => { throw new Error("the remote is away"); };

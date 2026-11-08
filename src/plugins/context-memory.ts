@@ -47,17 +47,25 @@ export function nameStatus(z: string): Array<{ path: string; oldPath: string | n
 /** What a branch's agent and commit are, as the gates need them. */
 export interface BranchAgent { id: string; profile: string | null; review: Review; commit: string | null; branch: string }
 
+/** The agent whose branch `capcomd/<run>/<agt>` is, in run `runId`; null for any other name. */
+const branchAgent = (runId: string, branch: string) => new RegExp(`^capcomd/${runId.replace(/[^A-Za-z0-9_-]/g, "")}/(agt-[A-Za-z0-9_-]+)$`).exec(branch)?.[1] ?? null;
+
 /** What the gates read besides the payload (a test replaces it). */
 export const promotionKernel = {
+  /** An agent's record: its profile, pinned spec and result. */
+  record: async (runId: string, id: string): Promise<{ profile: string | null; spec: unknown; result: unknown }> => (await import("../primitives/ops")).getAgentOrThrow(runId, id),
   /** The agent a verify's or a merge's ref names (its id, or its branch `capcomd/<run>/<agt>`), with its commit; null
-   *  for a ref that is no agent's (a person's branch). */
+   *  for a ref that is no agent's (a person's branch). The work is judged as the agent whose branch it is: one that
+   *  handed off has its successor's branch and commit as its result, so its successor's profile is what's judged. */
   agent: async (runId: string, ref: string): Promise<BranchAgent | null> => {
-    const id = /^agt-[A-Za-z0-9_-]+$/.test(ref) ? ref : new RegExp(`^capcomd/${runId.replace(/[^A-Za-z0-9_-]/g, "")}/(agt-[A-Za-z0-9_-]+)$`).exec(ref)?.[1];
-    if (!id) return null;
-    const a = await (await import("../primitives/ops")).getAgentOrThrow(runId, id);
-    const review = (a.spec as { context?: { review?: string } } | null)?.context?.review === "lint" ? "lint" : "human";
-    const r = (a.result ?? {}) as { commit?: unknown };
-    return { id, profile: a.profile, review, commit: typeof r.commit === "string" && r.commit ? r.commit : null, branch: `capcomd/${runId}/${id}` };
+    const named = /^agt-[A-Za-z0-9_-]+$/.test(ref) ? ref : branchAgent(runId, ref);
+    if (!named) return null;
+    const a = await promotionKernel.record(runId, named);
+    const r = (a.result ?? {}) as { commit?: unknown; branch?: unknown };
+    const id = (typeof r.branch === "string" && branchAgent(runId, r.branch)) || named;
+    const owner = id === named ? a : await promotionKernel.record(runId, id);
+    const review = (owner.spec as { context?: { review?: string } } | null)?.context?.review === "lint" ? "lint" : "human";
+    return { id, profile: owner.profile, review, commit: typeof r.commit === "string" && r.commit ? r.commit : null, branch: `capcomd/${runId}/${id}` };
   },
   /** What `commit` changes from where it left the run's target (its merge base with `targetSha` when known, else with
    *  the target's tip), and `.capcomd/context/` there and at `commit`: read in a bare host repo the gates keep per
