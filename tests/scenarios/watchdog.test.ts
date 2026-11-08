@@ -92,7 +92,7 @@ capcomd result --summary "watched" >/dev/null`), { task: "watch two workers" });
   // Only the stuck worker: the busy one kept changing files, the reader's work never shows as files changing, and the
   // planner had children running. (Once its last child ended the planner is judged like any agent: on a loaded machine
   // its await, result and exit can take longer than the 3 s window, so a notice on it then is allowed, never sooner.)
-  const ends = evs.filter((e) => ["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED"].includes(e.type) && [busyId, stuckId, readerId].includes(e.agentId));
+  const ends = evs.filter((e) => ["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED"].includes(e.type) && [busyId, stuckId, readerId].includes(e.agentId ?? ""));
   expect(ends).toHaveLength(3);
   const lastChildEnd = Math.max(...ends.map((e: any) => e.at));
   for (const n of notices.filter((e) => e.agentId === planner)) expect((n as any).data.at - lastChildEnd).toBeGreaterThanOrEqual(STALLED_MS - 600);
