@@ -116,7 +116,8 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   spawned (a later edit reaches only agents spawned after it). A profile that extends one has its persona. A project's
   persona (`.capcomd/profiles/<name>/`) is used only once you trust it, as a project's skills are: `capcomd profiles
   trust <name>` shows it and asks, a spawn before that is refused (`reason: "untrusted"`), and a changed file needs
-  trusting again. Your own profiles' personas need no trust.
+  trusting again; until then `untrustedPersona` in `capcomd profiles list --json`, `capcomd_profiles` and
+  `GET /v1/profiles` names its file. Your own profiles' personas need no trust.
 - `harness.cliVersion: ">=2.1"` is a semver range the agent's CLI must satisfy: the version the environment its
   agents boot from recorded when it was built (`capcomd env build`; its `sandbox.environment`, else the current
   build). A spawn is refused (`reason: "environment"`) when that version is outside the range, or when the environment

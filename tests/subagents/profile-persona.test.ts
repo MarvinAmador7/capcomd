@@ -108,9 +108,13 @@ test("a project's persona waits for the operator's trust: a spawn before it is r
   // validate says so too, and `trust` with no name lists it.
   expect((await cj(["profiles", "validate"])).j?.warnings).toContain("profiles.critic: its project persona SOUL.md isn't trusted: capcomd profiles trust critic (a spawn of it is refused until then)");
   expect((await cj(["profiles", "trust"])).j?.profiles?.find((p: { name: string }) => p.name === "critic")?.persona).toMatchObject({ file: "SOUL.md", trust: "untrusted", path: join(dir, "profiles", "critic", "SOUL.md") });
+  // The rows a planner picks by name it too (capcomd_profiles and GET /v1/profiles carry the same field).
+  const row = () => cj(["profiles", "list"]).then((x) => x.j?.profiles?.find((p: { name: string }) => p.name === "critic"));
+  expect(await row()).toMatchObject({ untrustedSkills: ["tdd"], untrustedPersona: "SOUL.md" });
   const trusted = (await cj(["profiles", "trust", "critic", "--yes"])).j?.trusted;
   expect(trusted?.persona).toMatchObject({ file: "SOUL.md", trust: "trusted", hash: `sha256:${new Bun.CryptoHasher("sha256").update(SOUL).digest("hex")}` });
   expect(trusted?.skills?.map((s: { trust: string }) => s.trust)).toEqual(["trusted"]);
+  expect(await row()).toMatchObject({ untrustedSkills: [], untrustedPersona: null });
 }, 60_000);
 
 test("the persona is the first text of the agent's instructions, once, pinned by hash and never in an event", async () => {
@@ -126,7 +130,9 @@ test("the persona is the first text of the agent's instructions, once, pinned by
   const { client } = await import("../../src/core/relay");
   const a = await client().scope.getOrCreate([run]).getAgent({ agentId: id });
   expect((a!.spec as any).persona).toEqual({ source: "project", hash: new Bun.CryptoHasher("sha256").update(SOUL).digest("hex") });
-  const ev = (await cj(["events", run, "--from-start", "--until", "agent.spawned", "--timeout-ms", "5000"])).stdout;
+  // Every event of the run, its attempt's and its end's too, not only its spawn's.
+  const ev = (await capcomd(["events", run, "--json", "--limit", "500"], env)).stdout;
+  expect(ev).toContain('"AGENT_DONE"');
   expect(ev).not.toContain("A careful security critic");
 
   // A profile that extends it has its persona, read from the critic's directory: the same file, trusted already.

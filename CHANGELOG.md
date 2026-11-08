@@ -10,7 +10,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   agent keeps the text it was spawned with; a later edit reaches only agents spawned after it. A persona from the
   project's profiles is used only once you trust it, as the project's skills are: `capcomd profiles trust <name>`
   shows it and asks, a spawn before that is refused (`untrusted`), and a changed file needs trusting again.
-  `capcomd profiles show` and `validate` say whether it is trusted. Your own profiles' personas need no trust.
+  `capcomd profiles show` and `validate` say whether it is trusted, and the profile lists (`capcomd profiles list
+  --json`, `capcomd_profiles`, `GET /v1/profiles`) name an untrusted one in `untrustedPersona`, so a planner can pick
+  another profile instead of having its spawn refused. Your own profiles' personas need no trust.
 - New: `harness.cliVersion` in a profile is enforced. It is a semver range (`">=2.1"`, `"^2.1.0"`) that the agent CLI
   in the environment its agents boot from must satisfy, as recorded by `capcomd env build`. A spawn is refused
   (`environment`) when the recorded version is outside the range, or when the environment recorded none (the

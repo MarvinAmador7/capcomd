@@ -765,9 +765,12 @@ Made while giving `identity.persona` and `harness.cliVersion` their runtime (202
   CLI pins).
 - **Nothing is left "read but not used"**: `notApplied` is empty, and `validate` and `show` say nothing of it until a
   block is added before its runtime.
-- **Not in this step**: `GET /v1/profiles` rows and `capcomd_profiles` don't list the persona or its trust (the run
-  options' planner readiness does), and `capcomd profiles update` lists a changed persona among the changed files, not
-  on a line of its own as a changed skill is.
+- **A planner sees an untrusted persona before it spawns**: `GET /v1/profiles` rows, `capcomd_profiles` and
+  `capcomd profiles list --json` carry `untrustedPersona` (capability `profiles.facts`, additive), the persona's file
+  name while a spawn of the profile waits on its trust, else null; never its text. Without it `untrustedSkills: []`
+  would have told a planner that nothing holds such a profile back.
+- **Not in this step**: `capcomd profiles update` lists a changed persona among the changed files, not on a line of
+  its own as a changed skill is.
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 

@@ -42,6 +42,8 @@ describe("capcomd profiles", () => {
     expect(j.warnings).toBeUndefined();
     expect(j.agents).toBeUndefined();
     expect(j.profiles.map((p: any) => [p.name, p.source, p.format, p.version, p.toolMode, p.ready])).toEqual([["worker", "project", "v1", 1, "execute", false], ["lead", "project", "v2", 2, "orchestrate", false]]);
+    // No persona holds either back (a project persona not trusted yet is named here, as untrustedSkills names skills).
+    expect(j.profiles.map((p: any) => p.untrustedPersona)).toEqual([null, null]);
     expect(j.profiles[1].applied.map((a: any) => [a.as, a.name, a.path])).toEqual([["extends", "worker", w.agentsFile], ["profile", "lead", w.at("P/lead/profile.yaml")], ["override", "lead", w.at("P/lead/override.yaml")]]);
   }, 30_000);
 

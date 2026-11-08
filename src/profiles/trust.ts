@@ -67,6 +67,13 @@ export function untrustedProfileProblem(name: string, skills: readonly ProfileSk
   return `profile ${name} can't be spawned: ${said.join(" and ")} ${bad.length + (badPersona ? 1 : 0) > 1 ? "aren't" : "isn't"} trusted`;
 }
 
+/** A profile row's `untrustedPersona` (GET /v1/profiles, capcomd_profiles, `capcomd profiles list --json`): the file of
+ *  its project persona when the operator hasn't trusted it as it is, which a spawn of it waits on; null otherwise. */
+export function untrustedPersona(persona: ProfilePersona | null | undefined, env: Env = process.env): string | null {
+  const p = projectPersonaTrust(persona, env);
+  return p && p.trust !== "trusted" ? p.file : null;
+}
+
 export const untrustedProfileHint = (name: string) => `A project's profile skills and persona go into its agents' instructions only once you have looked at them: capcomd profiles trust ${name} shows each and asks.`;
 
 /** Trust each of the project's skills of a profile, and its persona, as they are now (`capcomd profiles trust <name>`). */
