@@ -3,6 +3,9 @@
 // the engine side (the worker's VMs, verify's checks VM, env snapshots and plan logins) reads it per run. A run
 // without one uses the daemon's sandbox, as before. ADR-021 §2: the same record carries the provider's settings as they
 // were when the run started (`settings.idleLifetime`), so the worker uses the run's own idle machine lifetime.
+// `explicit` says the run's place was asked for when it started (`capcomd run --sandbox`, POST /v1/runs `sandbox`,
+// `capcomd_run_new`'s, a plugin's `runs.new` or `run.creating`), not taken from the project's or the user's config: an
+// explicit place beats every agent's profile `sandbox.provider` (ADR-024 §9, the owner's decision of 2026-11-08).
 import { isProviderName, sandboxName, type ProviderName } from "./registry";
 import { currentIdleLifetime, validLifetime } from "./settings";
 
@@ -21,14 +24,14 @@ export function withSandbox(base: Env, name: string | null | undefined): Env {
 
 /** What `run new` records under `_sandbox`: the run's own place (when it has one) and its provider's settings as they
  *  were when the run started (ADR-021 §2: a run keeps the policy it started with). Old readers only look at `.name`. */
-export interface RunSandboxRecord { name: ProviderName | null; settings: { idleLifetime?: number } }
+export interface RunSandboxRecord { name: ProviderName | null; settings: { idleLifetime?: number }; explicit: boolean }
 
 // A run's sandbox never changes once recorded (before its first agent), so a read is cached; a failed read isn't.
 const known = new Map<string, RunSandboxRecord | null>();
 
-/** The `_sandbox` value `run new` writes: `{name?, settings: {idleLifetime}}`. */
-export function runSandboxValue(name: string | null | undefined, settings: { idleLifetime: number }): Record<string, unknown> {
-  return { ...(name ? { name } : {}), settings: { ...settings } };
+/** The `_sandbox` value `run new` writes: `{name?, explicit?, settings: {idleLifetime}}` (`explicit` only with a name). */
+export function runSandboxValue(name: string | null | undefined, settings: { idleLifetime: number }, explicit = false): Record<string, unknown> {
+  return { ...(name ? { name, ...(explicit ? { explicit: true } : {}) } : {}), settings: { ...settings } };
 }
 
 /** A recorded `_sandbox` value as capcomd reads it (anything it doesn't know is dropped). */
@@ -38,7 +41,7 @@ export function parseRunSandbox(value: unknown): RunSandboxRecord | null {
   const name = typeof v.name === "string" && isProviderName(v.name) ? v.name : null;
   const s = v.settings && typeof v.settings === "object" ? (v.settings as Record<string, unknown>) : {};
   const life = validLifetime(s.idleLifetime);
-  return { name, settings: life !== null ? { idleLifetime: life } : {} };
+  return { name, settings: life !== null ? { idleLifetime: life } : {}, explicit: name !== null && v.explicit === true };
 }
 
 /** The run's `_sandbox` record; null when it has none, undefined when the engine didn't answer (not cached). */

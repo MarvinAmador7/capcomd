@@ -12,7 +12,7 @@ import { parse as parseYaml } from "yaml";
 import { Git } from "../../src/merge/git";
 import { RelayError } from "../../src/core/errors";
 import { exportProfile, installedFacts, installProfile, packageWarnings, removeInstalledProfile, updateProfile } from "../../src/profiles/install";
-import { projectSkillTrust, readProfiles, resolveAgent, trustProfile, untrustedProfileProblem } from "../../src/profiles";
+import { projectSkillTrust, readProfiles, resolveAgent, trustProfile, untrustedProfileProblem, untrustedSandboxProblem } from "../../src/profiles";
 import { hashTree, readLock } from "../../src/install/lock";
 import { TRUST_LOCK, TrustLockedError, trustState } from "../../src/install/trust";
 
@@ -448,6 +448,19 @@ describe("export and remove", () => {
     expect(untrustedProfileProblem("voice", p.skills, p.persona, w.env)).toBe("profile voice can't be spawned: its project persona SOUL.md (changed since you trusted it) isn't trusted");
     removeInstalledProfile("voice", w.o);
     expect(trustState("profile", file, `sha256:${sha(soul)}`, w.env).state).toBe("untrusted");
+    expect(JSON.parse(readFileSync(join(w.env.CAPCOMD_HOME!, "trust.json"), "utf8")).entries).toEqual([]);
+  });
+
+  test("a project package that sets its sandbox waits for trust of its profile.yaml, and rm takes that trust (ADR-024 §9 decision 6)", async () => {
+    const w = world(), manifest = yaml(["name: far", harness, "sandbox: { provider: boxd }"]);
+    const repo = await profileRepo({ "profiles/far/profile.yaml": manifest });
+    await installProfile(`${repo.bare}#far`, { ...w.o, project: true });
+    const file = join(w.projectProfiles, "far", "profile.yaml");
+    const p = w.load().profiles.far!;
+    expect(untrustedSandboxProblem("far", p.runtime.sandboxProvider, p.machineFiles, w.env)).toBe("profile far can't be spawned: it sends its agents to the boxd sandbox, and the project's profile file that sets that, far/profile.yaml (sandbox.provider), isn't trusted");
+    expect(trustProfile([], null, { env: w.env, machine: p.machineFiles }).machine).toEqual([{ file: "far/profile.yaml", path: file, keys: ["sandbox.provider"], hash: `sha256:${sha(manifest)}`, trust: "trusted", trustedHash: `sha256:${sha(manifest)}` }]);
+    expect(untrustedSandboxProblem("far", p.runtime.sandboxProvider, p.machineFiles, w.env)).toBeNull();
+    removeInstalledProfile("far", w.o);
     expect(JSON.parse(readFileSync(join(w.env.CAPCOMD_HOME!, "trust.json"), "utf8")).entries).toEqual([]);
   });
 
