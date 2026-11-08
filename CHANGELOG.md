@@ -9,9 +9,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   project-memory items that `.capcomd/context/NOTES.md` links to (Markdown links, or the `→ path` lines that
   `capcomd context lint --fix` writes, so `files: [index.md]` works too). Before, the setting was ignored and every
   item was shown. If the file isn't there, the brief's header says `memory: skipped (not found)` instead of showing
-  every item. The file must sit directly in `.capcomd/context/`: a profile that names one in a subdirectory
-  (`files: [docs/MEMORY.md]`) is now refused with a message saying so. `capcomd context lint` accepts the file next
-  to `index.md` and checks it for secrets.
+  every item. `capcomd context lint` accepts the file next to `index.md` and checks it for secrets.
+- **Breaking:** a profile whose `memory.files` names a file in a subdirectory (`files: [docs/MEMORY.md]`) no longer
+  loads: move the file into `.capcomd/context/` and name it alone (`files: [MEMORY.md]`). A profile whose
+  `memory.files` names a file the repository doesn't have now briefs its agents with no project memory (the header
+  says `memory: skipped (not found)`) instead of every item: add the file, or remove `files` to read every item.
 - Fixed: when a profile reads both the project's memory and a groundray brain, every fact now comes before any
   lesson in the context brief, whichever provider the profile lists first. So when the brief is over its size budget,
   lessons are cut before facts. The brief's header no longer says that a brain's files are "in your checkout": it

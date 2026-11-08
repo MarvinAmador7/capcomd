@@ -61,7 +61,9 @@ const BLOCKS: Record<string, Record<string, object>> = {
     review: { enum: ["human", "lint"] },
   },
   memory: {
-    scope: { enum: ["none", "profile", "project", "user"] }, files: { ...strings, maxItems: 1 }, retain: { type: "string", pattern: DAYS.source },
+    scope: { enum: ["none", "profile", "project", "user"] },
+    files: { type: "array", items: { type: "string", pattern: INDEX_NAME.source }, maxItems: 1, description: "One index file directly under .capcomd/context/ (MEMORY.md): agents read only the items it links to" },
+    retain: { type: "string", pattern: DAYS.source },
   },
   sandbox: {
     provider: { ...name, description: "A sandbox plugin's name (capcomd plugins list): this profile's agents run there, whatever the run's sandbox" },

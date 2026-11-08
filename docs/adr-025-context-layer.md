@@ -857,7 +857,7 @@ it) when its other skills leave no room.
   every item, as before. The index is a file directly under `.capcomd/context/` (a `.md` or `.txt` name, no
   directory): there, a change to it is a change to the memory, which only a consolidator's branch or a person makes
   and lint checks, so what an agent's brief holds still changes only through a reviewed change. The profile check
-  refuses another name, and the provider refuses one from a spec (`not configured` in the header). An index that isn't
+  (and its JSON Schema) refuses another name, and the provider refuses one from a spec (`not configured` in the header). An index that isn't
   at the revision is `memory: skipped (not found)`, never every item: that would show agents what the profile left
   out. `search` and `get` read the same items as the index. Lint accepts such a file beside `index.md` (it doesn't
   know which name a profile uses) and holds it to an item's rules for text and secrets; anything else at that level is

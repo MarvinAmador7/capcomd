@@ -14,7 +14,7 @@ import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { buildBrief, roleOf, type BriefInput } from "../../src/context/brief";
 import { limitsFor } from "../../src/context/limits";
 import { CONTEXT_DIR, frontmatter, indexedPaths, memoryProvider, parseItems, type TreeReader } from "../../src/context/memory";
-import { checkManifest, withContext } from "../../src/profiles/v2";
+import { PROFILE_JSON_SCHEMA, checkManifest, withContext } from "../../src/profiles/v2";
 import type { ActiveProvider } from "../../src/context/providers";
 import { fence } from "../../src/subagents/results";
 import * as contextPlugin from "../../src/plugins/context";
@@ -189,6 +189,12 @@ describe("the memory provider's index: a profile's memory.files (ADR-025 §10)",
       expect(b.providers).toEqual([{ name: "memory", state: "skipped", reason: "not configured" }]);
     }
     expect(checkManifest({ name: "w", memory: { files: ["docs/MEMORY.md"] } }, "profile", "w").join()).toContain("memory.files: must name one index file directly under .capcomd/context/");
+    // The JSON Schema an editor checks a profile with says the same as the profile check.
+    type Or<T> = { anyOf: [T, { type: "null" }] };
+    const files = (PROFILE_JSON_SCHEMA.properties.memory as Or<{ properties: Record<string, Or<{ items?: { pattern?: string } }>> }>).anyOf[0].properties.files!.anyOf[0];
+    const pattern = new RegExp(files.items!.pattern!);
+    expect(["NOTES.md", "index.md", "MEMORY.txt"].filter((f) => pattern.test(f))).toEqual(["NOTES.md", "index.md", "MEMORY.txt"]);
+    expect(["docs/MEMORY.md", "../NOTES.md", ".hidden.md", "NOTES.json"].filter((f) => pattern.test(f))).toEqual([]);
   });
 
   test("indexedPaths: link targets and lint's arrows, relative to .capcomd/context/ or from the root; nothing that leaves it", () => {
