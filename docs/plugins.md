@@ -129,7 +129,7 @@ What to know when you answer:
 
 - **Gates fail closed.** A gate call you don't answer in time, answer wrongly, or that is in flight when your process
   dies is a **deny**. Three failed calls in a row suspend your listeners, and a suspended gate keeps denying until
-  someone looks (`POST /v1/plugins/<name>/enable`, or a daemon restart). Other hooks fail open: your listener is
+  someone looks (`capcomd plugins enable <name>`, or a daemon restart). Other hooks fail open: your listener is
   skipped. Answer at least a second before the deadline.
 - **Calls come one at a time** for gates and modifies (the next after you answered the previous); observe calls arrive
   as they happen. If you can't keep up with observe calls, the oldest are dropped and a `hook.dropped` frame says how
@@ -205,7 +205,8 @@ Users set them in `~/.capcomd/config.json`:
 or in the environment, one variable per setting: `CAPCOMD_PLUGIN_SLACK_NOTIFIER_CHANNEL=#builds` (a value that reads as
 JSON is that value, else a string; a secret's is its reference, `'{"$secret": "env:SLACK_WEBHOOK"}'`). A
 project's `.capcomd/config.json` may adjust settings, but can neither turn a plugin on nor point a secret elsewhere
-(§10.2). `enabled: false` keeps a plugin from running.
+(§10.2). `enabled: false` keeps a plugin from running: `capcomd plugins disable <name>` sets it in your config and
+stops the plugin in the running daemon, `capcomd plugins enable <name>` turns it back on (and resets a suspended gate).
 
 ## Testing
 

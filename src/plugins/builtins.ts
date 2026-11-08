@@ -67,6 +67,10 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
 /** The kernel's own front doors, by name: the dispatcher prints their output as theirs (src/cli/front-doors.ts). */
 export const KERNEL_SURFACE: ReadonlySet<string> = new Set(BUILTINS.filter((b) => b.kernelSurface).map((b) => (b.manifest as { name: string }).name));
 
+/** The built-ins a person turns on (`off`), and so may turn off again (`capcomd plugins disable`, POST
+ *  /v1/plugins/{name}/disable): the kernel doesn't run on them, unlike every other built-in. */
+export const OPT_IN: ReadonlySet<string> = new Set(BUILTINS.filter((b) => b.off).map((b) => (b.manifest as { name: string }).name));
+
 /** A built-in as the host discovers it (§4.8): on unless it is one a person turns on (`off`); its settings are
  *  src/plugins/host.ts `configured`'s. */
 export const candidateOf = (b: Builtin): Candidate => ({

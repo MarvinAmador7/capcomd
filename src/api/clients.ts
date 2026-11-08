@@ -65,6 +65,17 @@ export function pairClient(app: string, scopes: ClientScope[] = APP_SCOPES, path
 	return { ...made, revoked };
 }
 
+/**
+ * A token for one call of the CLI to the daemon (src/cli/daemon.ts): the CLI holds none, so it makes one with the scopes
+ * the call needs, as `pairClient` does (writing the clients file is what lets it), and `remove()` deletes the record once
+ * the call is answered, so it neither works nor stays listed after.
+ */
+export function oneCallClient(name: string, scopes: ClientScope[], path = clientsPath()): { client: ClientRecord; token: string; remove(): void } {
+	const made = mint(name, scopes);
+	save(path, [...loadClients(path), made.client]);
+	return { ...made, remove: () => save(path, loadClients(path).filter((c) => c.id !== made.client.id)) };
+}
+
 export function revokeClient(id: string, path = clientsPath()): boolean {
 	const all = loadClients(path);
 	const c = all.find((x) => x.id === id && !x.revokedAt);

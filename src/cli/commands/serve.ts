@@ -27,7 +27,7 @@ function descendants(pid: number): number[] {
 }
 
 /** The harness socket path: --harness-socket > CAPCOMD_HARNESS_SOCKET > config harness.socket (unless CAPCOMD_NO_CONFIG) > ~/.capcomd/harness.sock. */
-async function harnessSocket(flag?: string): Promise<string> {
+export async function harnessSocket(flag?: string): Promise<string> {
   const { harnessSocketPath } = await import("../../api/socket");
   const { readConfig, userConfigPath, projectConfigPath } = await import("../../config/store");
   const config = process.env.CAPCOMD_NO_CONFIG ? {} : { ...readConfig(userConfigPath()), ...readConfig(projectConfigPath()) };
@@ -286,7 +286,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // (§5.5 step 4), before the harness socket opens to clients. It serves the same API, to their tokens only.
   const { pluginSocketPath } = await import("../../api/socket");
   const pluginSock = pluginSocketPath(sock);
-  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), events: { daemon: (after) => harnessStore.daemonEvents(after) }, snapshot: P.pluginsSnapshotPath(), jobs: true, triggers: true, process: { socket: pluginSock } });
+  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), events: { daemon: (after) => harnessStore.daemonEvents(after) }, snapshot: P.pluginsSnapshotPath(), socket: sock, jobs: true, triggers: true, process: { socket: pluginSock } });
   process.on("exit", () => P.releaseSnapshot());
   const { harnessApp, pluginsOnly } = await import("../../api/server");
   const { rivetSource } = await import("../../api/rivet-source");
