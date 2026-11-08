@@ -14,6 +14,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   start) now names the plugin and why it isn't running, with the next step (`capcomd plugins enable <name>`, or the
   `CAPCOMD_PLUGIN_<NAME>_ENABLED` variable that turns it off), instead of "unknown command". `GET /v1/plugins` lists
   the CLI commands each plugin declares (`commands`).
+- New: plugins built into the daemon can serve their own API routes at `/v1/x/<plugin>/…` on the harness API, called
+  with your client token. A route needs the scope it declares (`read`, `steer` or `configure`), takes and answers JSON,
+  and runs as you; a plugin's own failure answers 500 "plugin error" with the details only in the daemon log.
+  `GET /v1/plugins/{name}` now lists a plugin's `routes` and the feature flags it adds to `GET /v1/health`
+  (`x.<plugin>.<flag>`) while it is active; `capcomd plugins show --json` lists the routes its manifest declares.
+  Clients can check for the `plugins.routes` capability.
+- Fixed: the project's memory gate now refuses an agent's branch that writes into `.capcomd/context/` under another
+  spelling of the path, such as `.Capcomd/Context/memory/x.md`. Git treats that as a different folder, but a checkout
+  on macOS or Windows puts those files next to the real memory, and before this fix they got past the check. The gate
+  also judges the agent whose work actually lands: when an agent handed its task off, the gate judges its successor.
+  A `capcomd/<run>/<agent>` branch from another run is now judged as that run's agent, not let through as if a person
+  had written it.
 - Fix: the watchdog no longer flags an agent that is working. It used to see an agent's files change only at its
   checkpoints (every 10 minutes), so with a shorter `stalledAfterMs` it flagged agents in the middle of editing, and it
   flagged agents waiting on a long command. Now an agent's files changing counts within about 30 seconds, and the time
