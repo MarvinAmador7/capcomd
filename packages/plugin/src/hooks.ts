@@ -94,8 +94,9 @@ export interface SpawnRequest {
   operator: boolean;
 }
 export interface AgentSpawning { spawn: SpawnRequest; spec: PinnedSpec; parent: Agent | null }
-/** `budget` and `grant` narrow-only (policy.ts applyGrant); `contract` may add keys, never change one, and never `from`;
- *  an added `report` is `true`, an added `check` a check's name (§6.6.6). */
+/** `budget` and `grant` narrow-only (policy.ts applyGrant); `contract` may add keys, never change one, and never the
+ *  host's own (`from`, `review`, `checks`, `orphansPolicyOverride`); an added `report` is `true`, an added `check` one of
+ *  the run's check names (§6.6.6). */
 export type SpawnPatch = { budget?: Budget; grant?: Grant; contract?: Record<string, unknown> };
 
 export interface AgentPreparing {

@@ -510,6 +510,7 @@ export async function spawnAgent(o: SpawnOpts) {
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
   const runEnv = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
   const { resolved, spec } = hooks.listening("profile.resolved") ? checkResolved(await profileResolved(o, ref, resolveProfile(ref)), runEnv) : spawnChecks(ref, runEnv);
+  reportAllowed(resolved, o.contract);
   // ADR-024 `lifecycle.onStart|onEnd`: the plugins its profile names must be there to hear it.
   const unheard = await lifecycleProblem(lifecyclePlugins(resolved.runtime?.lifecycle));
   if (unheard) throw new RelayError("config", `profile ${resolved.name} can't be spawned: its ${unheard}`, LIFECYCLE_HINT, { code: "lifecycle_inactive" });
@@ -522,12 +523,13 @@ export async function spawnAgent(o: SpawnOpts) {
     const s = await agentSpawning(o, agentId, resolved, spec, requested, grant);
     requested = s.budget ?? {};
     grant = s.grant ?? {};
-    if (s.contract) o = { ...o, contract: s.contract as Record<string, unknown> };
+    if (s.contract) {
+      o = { ...o, contract: s.contract as Record<string, unknown> };
+      // What a plugin added to the contract is checked as the spawner's own was (applySpawnPatch checks its shape).
+      reportAllowed(resolved, o.contract);
+      if (pin === undefined && typeof o.contract?.check === "string") await namedCheck(o.runId, o.contract.check);
+    }
   }
-  // ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be). Checked on
-  // the contract agent.spawning left, as a plugin may add `report` to it.
-  if (o.contract?.report === true && resolved.permissions?.report === false)
-    throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
   const hasGrant = Object.keys(grant).length > 0;
   // Fan-out for a profile that can't spawn (a worker) would have no effect: refuse it by name, with what to do instead.
   const asksFanOut = grant.allowSpawn === true || (grant.maxChildren ?? 0) > 0 || (grant.maxDepth ?? 0) > 0 || (grant.maxTotalDescendants ?? 0) > 0 || !!grant.allowedChildProfiles?.length;
@@ -559,6 +561,13 @@ export async function spawnAgent(o: SpawnOpts) {
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
+}
+
+/** ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be). Checked on
+ *  the spawner's contract and again on the one agent.spawning leaves, as a plugin may add `report` to it. */
+function reportAllowed(resolved: ResolvedAgent, contract: Record<string, unknown> | undefined) {
+  if (contract?.report === true && resolved.permissions?.report === false)
+    throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
 }
 
 /** Who asked for a spawn (§3.2): the parent agent from its VM, else the operator or driver on the host. */

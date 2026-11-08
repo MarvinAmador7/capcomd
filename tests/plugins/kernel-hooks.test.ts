@@ -105,7 +105,14 @@ describe("the kernel's patch rules (§6.6)", () => {
     expect(widens(() => applySpawnPatch(s, { contract: { from: { agentId: "agt-x", ref: "refs/heads/capcomd/run-2/agt-x", stopped: "done" } } }))).toBe("widening");
     const continued: AgentSpawning = { ...s, spawn: { ...s.spawn, contract: { from: { agentId: "agt-x", ref: "refs/heads/b", stopped: "done" } } } };
     expect(applySpawnPatch(continued, { contract: { from: { agentId: "agt-x", ref: "refs/heads/b", stopped: "done" }, team: "a" } }).spawn.contract).toMatchObject({ team: "a" });
-    // `check` names one of the run's checks (its verify looks the name up).
+    // The other keys an agent's own spawn may not send are the host's too: check commands (the operator's), review mode
+    // (verify's), the orphans policy. The spawner (the gate-reviewer's spawn of a reviewer) may still send them.
+    expect(widens(() => applySpawnPatch(s, { contract: { checks: "true" } }))).toBe("widening");
+    expect(widens(() => applySpawnPatch(s, { contract: { review: { vfyId: "vfy-1", of: "agt-x" } } }))).toBe("widening");
+    expect(widens(() => applySpawnPatch(s, { contract: { orphansPolicyOverride: "keep" } }))).toBe("widening");
+    const reviewer: AgentSpawning = { ...s, spawn: { ...s.spawn, review: true, contract: { review: { vfyId: "vfy-1", of: "agt-x" } } } };
+    expect(applySpawnPatch(reviewer, { contract: { review: { vfyId: "vfy-1", of: "agt-x" }, team: "a" } }).spawn.contract).toMatchObject({ review: { vfyId: "vfy-1" }, team: "a" });
+    // `check` names one of the run's checks (spawnAgent looks an added name up).
     expect(applySpawnPatch(s, { contract: { check: "unit" } }).spawn.contract).toMatchObject({ check: "unit" });
     expect(widens(() => applySpawnPatch(s, { contract: { check: ["unit"] } }))).toBe("invalid");
   });

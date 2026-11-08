@@ -180,6 +180,15 @@ export function applyProfilePatch(p: ProfileResolved, patch: ProfilePatch, narro
   }
 }
 
+/** Contract keys only the host sets: a spawn from an agent's VM has them stripped (src/subagents/rpc.ts), and an
+ *  agent.spawning patch may not add them (§6.6.6). */
+export const HOST_CONTRACT_KEYS: Readonly<Record<string, string>> = {
+  checks: "check commands come only from the operator",
+  orphansPolicyOverride: "set only by the operator",
+  review: "review mode is verify's alone",
+  from: "set by --continue",
+};
+
 /** §6.6.6: `budget` lowers; `grant` narrows what was asked (the scope still checks it against the parent's ceiling);
  *  `contract` adds keys, never changes one. */
 export function applySpawnPatch(p: AgentSpawning, patch: SpawnPatch): AgentSpawning {
@@ -212,10 +221,10 @@ export function applySpawnPatch(p: AgentSpawning, patch: SpawnPatch): AgentSpawn
     const changed = Object.keys(patch.contract).filter((k) => k in was && JSON.stringify(was[k]) !== JSON.stringify(patch.contract![k]));
     if (changed.length) throw widening(`contract keys are the spawner's: ${changed.join(", ")}`);
     // The keys spawnAgent checks when the spawner sends them, checked the same way when a plugin adds one (they are
-    // checked before this hook): `from` is --continue's alone, `report` is `true`, `check` is a check's name (which the
-    // agent's verify looks up, refusing one the run doesn't have).
+    // checked before this hook): the host's own keys no agent may send (`from` is --continue's, `review` verify's,
+    // `checks` the operator's), `report` is `true`, `check` is a check's name (spawnAgent looks an added one up).
     const added = patch.contract as Record<string, unknown>;
-    if (Object.hasOwn(added, "from") && !Object.hasOwn(was, "from")) throw widening("contract.from is set by --continue");
+    for (const [k, why] of Object.entries(HOST_CONTRACT_KEYS)) if (Object.hasOwn(added, k) && !Object.hasOwn(was, k)) throw widening(`contract.${k}: ${why}`);
     if (Object.hasOwn(added, "report") && added.report !== true) throw invalid("contract.report must be true");
     if (Object.hasOwn(added, "check") && typeof added.check !== "string") throw invalid("contract.check must be a check name");
     spawn.contract = { ...patch.contract, ...was };
