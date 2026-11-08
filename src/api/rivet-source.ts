@@ -11,7 +11,7 @@ import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
 import { agentActivity, describeEvent } from "./describe";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
+import { approvalIdFor, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
 import { applyRunPatch, hooks, principalOf, untrusted } from "../plugins/hooks";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { Principal } from "../../packages/plugin/src/shapes";
@@ -455,8 +455,27 @@ export function rivetSource(): HarnessSource {
 		},
 		openPullRequest: (runId, by, o) => goalAction(async () => (await import("../primitives/goal")).openGoalPullRequest(runId, { by, stopped: o?.stopped === true })),
 		keepBranch: (runId, by) => goalAction(async () => (await import("../primitives/goal")).keepGoalBranch(runId, { by }) as Promise<{ runId: string; branch: string; base: string; kept: true; changed: boolean }>),
+		brainProposals: async (runId) => {
+			if (!(await existingScope(runId))) return null;
+			const P = await import("../context/brain-proposals");
+			return { runId, proposals: (await P.brainProposals(runId)).map((x) => P.proposalView(x.value)) };
+		},
+		// One send per run at a time in this daemon: two clients' sends (or a retry with another key) never draft the
+		// same proposal twice (groundray-write finds a draft the branch holds anyway).
+		sendBrainProposals: async (runId, by, o) => {
+			if (!(await existingScope(runId))) return { ok: false, status: 404, code: "not_found", message: `run ${runId} not found` };
+			const P = await import("../context/brain-proposals");
+			const { actorOf } = await import("../context/groundray-write");
+			const prior = brainSends.get(runId) ?? Promise.resolve();
+			const mine = prior.catch(() => {}).then(() => P.sendBrainProposals(runId, { by, ...(o?.agentId ? { agentId: o.agentId } : {}) }));
+			brainSends.set(runId, mine);
+			try { return brainSendOutcome(runId, actorOf(by), await mine); } finally { if (brainSends.get(runId) === mine) brainSends.delete(runId); }
+		},
 	};
 }
+
+/** POST …/brain-proposals/send in flight, by run. */
+const brainSends = new Map<string, Promise<unknown>>();
 
 /** A goal-branch action's RelayError as the API's refusal: not_found 404, conflict 409, usage 422; anything else throws (500). */
 async function goalAction<T>(f: () => Promise<T>): Promise<GoalOutcome<T>> {

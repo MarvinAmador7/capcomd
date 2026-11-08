@@ -5,10 +5,13 @@
 // request there, ./groundray-write.ts). Each is sent once: the record keeps what came back.
 //
 // Who sends them follows the consolidator's profile's `context.review`, as for the project's memory (ADR-025 §5.3):
-//  - `human` (the default): a person, with `capcomd context brain propose --run <runId> --yes`, who is then the
-//    proposal's actor in the brain (`human:<id>`, ADR-025 §7: the approver forwarded, never an agent's claim);
+//  - `human` (the default): a person, with `capcomd context brain propose --run <runId> --yes` or a client's
+//    `POST /v1/runs/{runId}/brain-proposals/send` (capability context.brain_proposals), who is then the proposal's actor
+//    in the brain (`human:<id>`, ADR-025 §7: the approver forwarded, never an agent's claim);
 //  - `lint`: the kernel, as the consolidator's staging ends (src/primitives/ops.ts), as `capcomd/<version>`.
-// Either way a brain's owners review the pull request; a draft never raises authority there.
+// Either way a brain's owners review the pull request; a draft never raises authority there. Each one a person sent is
+// told to the listener in this process (`onBrainProposed`: the context plugin, which records
+// `plugin.context.brain_proposed`).
 import type { ContextProvider, Provenance } from "../../packages/plugin/src/context-layer";
 import type { Principal } from "../../packages/plugin/src/shapes";
 import { RelayError } from "../core/errors";
@@ -32,6 +35,25 @@ export interface BrainProposal extends BrainDelta {
 }
 
 const kv = () => import("../primitives/state");
+
+/** One proposal as the CLI and the API show it: never its text (an agent's, which a client renders as nothing more). */
+export const proposalView = (p: BrainProposal) => ({
+  id: p.id, agentId: p.origin.agentId, brain: p.brain, type: p.type, title: p.title, from: p.from, at: p.at, sent: p.sent, ...(p.error ? { error: p.error } : {}),
+});
+
+/** One proposal a person just sent to its brain, as the listener hears it: the run, what came back and as whom
+ *  (groundray's actor, `human:<id>`). */
+export type BrainProposed = (runId: string, p: { id: string; agentId: string; brain: string; item: string; where: string }, actor: string) => unknown;
+let listener: BrainProposed | null = null;
+/**
+ * Hear each proposal a person sends from this process (the context plugin, which records its event); the returned
+ * function stops it. One listener: the latest (a process with two hosts records each send once). The kernel's own sends
+ * (`review: lint`) aren't told: the consolidator's result records them (src/plugins/context.ts `staged`).
+ */
+export function onBrainProposed(f: BrainProposed): () => void {
+  listener = f;
+  return () => { if (listener === f) listener = null; };
+}
 
 /** Keep a consolidator's proposals, each once (a replayed staging keeps what the first wrote). */
 export async function keepBrainProposals(runId: string, list: ReadonlyArray<BrainProposal>): Promise<void> {
@@ -99,6 +121,8 @@ export async function sendBrainProposals(runId: string, o: { by: Principal; agen
     try { await kvWrite(runId, { k: `${BRAIN_KV}${p.id}`, value: next, expect: version, writer: "capcomd" }); } catch (e) {
       if (!(e instanceof RelayError && e.code === "conflict")) throw e;
     }
+    const told = listener, s = next.sent;
+    if (told && s?.actor.startsWith("human:")) await Promise.resolve().then(() => told(runId, { id: p.id, agentId: p.origin.agentId, brain: p.brain, item: s.item, where: s.where }, s.actor)).catch(() => {});
     out.push(next.sent ? { ...said, ok: true, already: false, item: next.sent.item, where: next.sent.where } : { ...said, ok: false, already: false, error: next.error! });
   }
   return out;

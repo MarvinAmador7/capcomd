@@ -193,6 +193,40 @@ describe("a proposal to a brain (ADR-025 step 5)", () => {
     expect(create).toContain(`--actor=capcomd/${VERSION}`);
   }, 120_000);
 
+  test("idempotent after a merge: a replay once the pull request was merged and its branch deleted finds the item on the brain's branch, and opens nothing", async () => {
+    const { r, settings } = await brainRepo();
+    fake.claims = [r.bare];
+    process.env.CAPCOMD_GROUNDRAY = cli();
+    const p = provider(settings);
+    const { handle } = await p.resolve(scope(), conformanceCall());
+    const a = proposal("Shipping cutoff", "Orders placed before 2 pm ship the same day.");
+    const first = await p.propose(handle, a, operator, conformanceCall(120_000));
+    expect(first.where).toBe("fake://pull/1");
+    // The brain's owners merge the pull request and delete its branch.
+    const branch = proposalBranch({ runId: RUN, agentId: AGENT });
+    await r.seed.ok(["fetch", "-q", "origin"]);
+    await r.seed.ok(["push", "-q", "origin", `refs/remotes/origin/${branch}:refs/heads/main`]);
+    await r.seed.ok(["push", "-q", "origin", `:refs/heads/${branch}`]);
+    fake.pulls[0]!.state = "merged";
+    const merged = await r.sha("main");
+    expect(await r.sha(branch)).toBeNull();
+    // A replay (a person sends it again, a retried call): found on main, so no draft, no branch and no pull request
+    // (the forge isn't even asked).
+    const asked = fake.calls.length;
+    const again = await p.propose(handle, a, { kind: "operator", clientId: "cli-abc123" }, conformanceCall(120_000));
+    expect(again).toEqual({ id: first.id, staged: true, where: `${r.bare}, branch main` });
+    expect(await r.sha(branch)).toBeNull();
+    expect(await r.sha("main")).toBe(merged);
+    expect(fake.calls.slice(asked)).toEqual([]);
+    expect(fake.pulls).toEqual([expect.objectContaining({ number: 1, state: "merged" })]);
+    expect(calls().filter((c) => c.argv[0] === "knowledge")).toHaveLength(2);
+    // Another proposal of the same agent still goes: a new proposal branch cut from the brain's tip.
+    const other = await p.propose(handle, proposal("Weekend shipping", "Nothing ships on weekends."), operator, conformanceCall(120_000));
+    expect(other.id).not.toBe(first.id);
+    expect(calls().filter((c) => c.argv[0] === "knowledge")).toHaveLength(4);
+    expect(await r.seed.ok(["fetch", "-q", "origin"]).then(() => r.seed.ok(["rev-parse", `origin/${branch}^`]))).toBe(merged!);
+  }, 120_000);
+
   test("refused: a commit outside the bundle is never pushed; no groundray; a forge without pull requests leaves the branch", async () => {
     const { r, commit, settings } = await brainRepo();
     fake.claims = [r.bare];
@@ -310,6 +344,14 @@ describe("a consolidator's deltas for a brain (src/context/consolidate.ts)", () 
     expect(r.refused.find((x) => x.n === 6)!.reason).not.toBe("invalid");
     // A profile that names no brain: every delta for one is refused, none kept.
     expect(brainDeltas({ ...base, brain: null, raw: [fact()] }).refused).toEqual([{ n: 1, reason: "no_brain", what: expect.stringContaining("its profile names none") }]);
+    // A brain the run's project doesn't map: refused as it is staged, by its name, not kept to fail when it is sent.
+    const unmapped = brainDeltas({ ...base, mapped: false, raw: [fact(), fact({ brain: "globex" })] });
+    expect(unmapped.accepted).toEqual([]);
+    expect(unmapped.refused).toEqual([
+      { n: 1, reason: "no_brain", what: "is for brain acme, which the run's project doesn't map (capcomd context brain add acme <repository>)" },
+      { n: 2, reason: "no_brain", what: expect.stringContaining("other than acme") },
+    ]);
+    expect(brainDeltas({ ...base, mapped: true, raw: [fact()] }).accepted).toHaveLength(1);
     // The room is the run's: shared with the memory's changes (which get what is left).
     expect(brainDeltas({ ...base, room: 1, raw: [fact(), fact({ title: "Bee", text: "Other." })] }).refused).toEqual([{ n: 2, reason: "over_cap", what: expect.any(String) }]);
     // A title groundray's schema wouldn't take is refused here, when it is staged, not when it is sent.
