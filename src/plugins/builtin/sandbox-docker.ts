@@ -10,6 +10,7 @@ import type { ErrorClass, SandboxDescriptor } from "../../../packages/plugin/src
 import { builtinSandbox, classifySandboxError, type NativeSandbox } from "../../providers/seam";
 import type { DockerProvider } from "../../providers/docker";
 import { VERSION } from "../../utils/self";
+import { contributeRows, rowContributions } from "./sandbox-rows";
 
 export const DESCRIPTOR = {
   name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
@@ -24,7 +25,8 @@ export const manifest = {
   description: "Containers on this machine's Docker (Docker Desktop, OrbStack, Colima, Podman's docker). Snapshots are images; idle containers are swept by capcomd.",
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./sandbox-docker.ts" },
   provides: ["seam:sandbox/docker"], scopes: ["steer"],
-  contributes: { seams: [{ kind: "sandbox", name: "docker" }], hooks: { "job.changed": { changes: ["fired"] } } },
+  // Its details screen's settings and info rows (§4.7.5), served by GET /v1/sandboxes/docker.
+  contributes: { seams: [{ kind: "sandbox", name: "docker" }], hooks: { "job.changed": { changes: ["fired"] } }, ui: rowContributions(DESCRIPTOR) },
   config: { type: "object", additionalProperties: false, properties: {} },
 } as const;
 
@@ -75,6 +77,7 @@ export const plugin = definePlugin({
         return sweepIdle(p as DockerProvider);
       },
     }));
+    contributeRows(ctx, DESCRIPTOR);
     // Its timer fires every 5 minutes; a sweep may take longer than an observe call's deadline, so it runs on its own.
     ctx.hooks.on("job.changed", (call) => {
       const { job, change } = call.payload;

@@ -122,9 +122,15 @@ export interface ApiService {
   capability(name: string, doc: string): Disposable;
 }
 
+/** What a `settings` or `info` row's `read` answers (§4.7.5): its value and, optionally, the rest of the `SandboxField`
+ *  shape of GET /v1/sandboxes/{name} (`help` replaces the descriptor's when it depends on the value). */
+export interface UiRowValue {
+  value: string | null; display: string; source: string; editable: boolean; state?: "ok" | "warn" | "bad" | "none";
+  help?: string | null; default?: string | null; appliesTo?: "new_runs" | "new_agents" | null; needsRestart?: boolean;
+}
 /** Descriptor kinds the app renders generically (§4.7.5). `profile-field` is how ADR-024 `x-` blocks show up. */
 export type UiDescriptor =
-  | { kind: "settings" | "info"; id: string; label: string; help: string | null; type: "choice" | "toggle" | "info" | "status"; choices?: Array<{ value: string; label: string }>; read(): Promise<{ value: string | null; display: string; source: string; editable: boolean; state?: "ok" | "warn" | "bad" | "none" }>; write?(value: string): Promise<void> }
+  | { kind: "settings" | "info"; id: string; label: string; help: string | null; type: "choice" | "toggle" | "info" | "status"; choices?: Array<{ value: string; label: string }>; read(): Promise<UiRowValue>; write?(value: string): Promise<void> }
   | { kind: "action"; id: string; label: string; destructive: boolean; confirm: string | null; run(input: { resourceId: string; principal: Principal }): Promise<void> }
   | { kind: "card"; id: string; title: string; read(): Promise<{ lines: string[]; state: "ok" | "warn" | "bad" | "none" }> }
   | { kind: "profile-field"; id: string; label: string; path: string; type: "text" | "number" | "toggle" | "choice"; choices?: Array<{ value: string; label: string }> };
