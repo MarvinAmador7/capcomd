@@ -94,13 +94,15 @@ export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceC
 }
 
 /** forge-github's `activate`: the source's timer, and a poll when it fires (one at a time; a slow one isn't doubled).
- *  With no repositories configured it doesn't listen to job.changed: a listener there makes the daemon read every
- *  background job's output (§6.6.19). */
+ *  Its job.changed listener is registered whatever the settings, as the manifest declares it (a declaration the code
+ *  never registers is a warning at every start, §4.7). With no repositories configured it never polls (a timer left from
+ *  other settings is being cancelled), and it returns at once for any other job; the built-in sandboxes listen there
+ *  already, so the daemon reads background jobs' output either way (§6.6.19). */
 export function startGitHubSource(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig): void {
   let polling = false;
-  if (cfg.sourceRepos.length) ctx.hooks.on("job.changed", (call) => {
+  ctx.hooks.on("job.changed", (call) => {
     const { job, change } = call.payload;
-    if (job.plugin !== ctx.plugin.name || change.kind !== "fired" || job.spec.label !== SOURCE_TIMER || polling) return;
+    if (job.plugin !== ctx.plugin.name || change.kind !== "fired" || job.spec.label !== SOURCE_TIMER || polling || !cfg.sourceRepos.length) return;
     polling = true;
     void pollGitHub(ctx, cfg).catch((e) => ctx.log.warn("github source: a poll failed", { error: String((e as Error)?.message ?? e) })).finally(() => { polling = false; });
   });

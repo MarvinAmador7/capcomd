@@ -564,6 +564,16 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
   `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
   warning when no daemon runs.
+- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.49, 2026-11-07;
+  `src/plugins/snapshot.ts` `seamPresence`): a seam only the daemon loads made every resolution in the CLI fail,
+  `capcomd profiles list` included, so outside the daemon a name is a built-in or one the running daemon lists from an
+  active, enabled plugin; any other is an error while a daemon runs and a warning (from every reader of profiles, not
+  only `validate`) when none does, and the daemon checks it when it resolves the profile. A candidate checked before
+  it is written and an override, which have nowhere to put a warning, still need one this process or the daemon has;
+  so does a write (`profiles add|set|rm`, `src/profiles/write.ts` `checked`) that leaves a profile naming one it didn't
+  name before (a typo is caught where it is made), while one a profile already names doesn't stop a change to
+  something else. `validate` looks for a `sandbox.environment` only in a sandbox this process has: one only the
+  daemon's plugins provide keeps its environments there, and a spawn checks it.
 
 Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`, `src/profiles/fields.ts`,
 `src/api/profiles.ts`):
@@ -602,7 +612,7 @@ Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`,
   a secret with none of these shapes still shows, as the file's other free text does. Files are written through a
   temporary file with an unguessable name, created exclusively (spec 1.0.45): a project's profiles directory is its
   repository's, and a link planted at a predictable name would be written through. A file keeps its mode (spec
-  1.0.49); a link in its place is replaced by a file with the umask's mode, never its target's.
+  1.0.51); a link in its place is replaced by a file with the umask's mode, never its target's.
 - **`PUT` takes an `Idempotency-Key` and the `rev`**: the key makes a retry after a lost response replay its first
   answer (the write-route rules), the `rev` refuses a change made from a read that is out of date (409 with the current
   one), as `PATCH /v1/sandboxes/{name}/settings` does. The `configure` scope, as project setup. Writes in the daemon

@@ -10,6 +10,22 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   in other read-only rows (an `x-` field, `sharing.source`), hides token-shaped text, a value under a key such as
   `password`, `apiKey` or `token`, and a URL's password. `PUT` refuses a number too large to store exactly instead
   of writing it as `1e+23`.
+- Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
+  as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
+  agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
+  With several named checks, verify still picks none of them: pin one when you spawn the agent (`--check NAME`) or
+  name it on the verify, or it passes without running any, as before.
+- Fixed: the daemon's log no longer says "declared but never registered: hook job.changed" for forge-github at every
+  start when no GitHub repositories are trigger sources (nor for source-schedule without schedules, or sandbox-boxd
+  with `CAPCOMD_TEMPLATE_REFRESH_HOURS=0`).
+- Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
+- Fixed: a profile whose `sandbox.provider` or `harness.provider` names a plugin the daemon has loaded no longer
+  breaks `capcomd profiles list`, `validate` and every other profile command outside the daemon. They now ask the
+  running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
+  with no daemon running a name that isn't built in is a warning (`capcomd profiles validate` lists it) instead of an
+  error; the daemon checks it again when an agent uses the profile. `capcomd profiles add`, `set` and `rm` still refuse
+  a change that names such a provider (a typo like `harness.provider: claudee`) unless the running daemon has it, and
+  a profile that already names one no longer stops a change to another (in `agents.json` too).
 - New: an in-process plugin running in the daemon can use `ctx.runs` (start, read, title, pause, resume and end runs),
   `ctx.messages` (message an agent, read its inbox), `ctx.kv` and `ctx.board` (the run's notes and task board),
   `ctx.gates.pending` and `ctx.profiles` (resolve and list agent profiles); before, they answered `unsupported`. In any

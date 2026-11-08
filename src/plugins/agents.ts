@@ -9,6 +9,7 @@ import type { AgentConfig } from "../agents/config";
 import type { AgentAdapter } from "../agents/types";
 import { claude } from "./agent-claude";
 import { codex } from "./agent-codex";
+import { daemonSeamNames } from "./snapshot";
 
 /** The built-in agent seams, in the order capcomd lists them. */
 export const BUILTIN_AGENTS: readonly AgentProvider[] = [claude, codex];
@@ -32,9 +33,10 @@ export function agentSeam(name: string): AgentProvider | null {
 /** The active providers' names: what a profile's `provider` may be. */
 export const agentProviderNames = (): string[] => agentSeams().map((p) => p.describe().name);
 
-/** "provider must be one of …" for a name that isn't an active provider. */
-export function unknownProviderText(name: unknown): string {
-  const names = agentProviderNames();
+/** "provider must be one of …" for a name that isn't an active provider: this process's, and outside the daemon the
+ *  running daemon's too (src/plugins/snapshot.ts). */
+export function unknownProviderText(name: unknown, env: Record<string, string | undefined> = process.env): string {
+  const names = [...new Set([...agentProviderNames(), ...(daemonSeamNames("agent", env) ?? [])])];
   return `provider ${JSON.stringify(name)} isn't an active agent provider (${names.length ? `one of ${names.join(", ")}` : "none is active"}; see \`capcomd plugins list\`)`;
 }
 
