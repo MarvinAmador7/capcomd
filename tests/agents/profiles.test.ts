@@ -182,7 +182,7 @@ describe("children policy + narrowing overrides", () => {
 
 import { mkdirSync, symlinkSync } from "fs";
 import { dirname } from "path";
-import { abilityText, readProfiles, flatOverrides, PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, checkManifest, costTier, fitText, profileFacts, profileValues, setByOver, type ProfileDoc } from "../../src/profiles";
+import { abilityText, readProfiles, flatOverrides, PERSONA_MAX_BYTES, PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, checkManifest, costTier, fitText, profileFacts, profileValues, setByOver, type ProfileDoc } from "../../src/profiles";
 import { defaultAgentsFile } from "../../src/utils/home";
 
 // ADR-024 §7 step 1: v2 profiles (YAML/JSON), `extends`, overrides, layers, resolution to the v1 flat pin.
@@ -230,11 +230,46 @@ describe("profiles v2: loader and resolution", () => {
     const path = w.at("P/security-critic/profile.yaml");
     expect(p).toMatchObject({ name: "security-critic", version: 3, source: "project", path, format: "v2", applied: [{ as: "profile", name: "security-critic", layer: "project", path }] });
     expect(p.manifest).toMatchObject({ tags: ["review", "security", "read-only"], identity: { title: "Security critic", persona: "SOUL.md" }, "x-perfloop": { gestures: ["scroll"] } });
-    // Read, not applied yet (ADR-024 step 5): said, not silently dropped.
-    expect(set.warnings).toEqual(["profiles.security-critic: identity.persona is read but not used yet by this capcomd"]);
-    // The pin is what an agent spawns with: resolveAgent gives it, with the profile's version and layer, and its
-    // permissions (checked at spawn, not pinned).
-    expect(resolveAgent("security-critic", w.source)).toEqual({ name: "security-critic", kind: "claude-code", spec: set.agents["security-critic"]!, profile: { name: "security-critic", version: 3, source: "project" }, permissions: { report: true } });
+    // Its persona is read and hashed with it (pinned at spawn, ./persona.ts): nothing is left read but not applied.
+    expect(set.warnings).toEqual([]);
+    const persona = { source: "project", hash: new Bun.CryptoHasher("sha256").update("You are careful.\n").digest("hex"), file: "SOUL.md", path: w.at("P/security-critic/SOUL.md"), text: "You are careful.\n" };
+    expect(p.persona).toEqual(persona as typeof p.persona);
+    // The pin is what an agent spawns with: resolveAgent gives it, with the profile's version and layer, its persona,
+    // and its permissions (checked at spawn, not pinned).
+    expect(resolveAgent("security-critic", w.source)).toEqual({ name: "security-critic", kind: "claude-code", spec: set.agents["security-critic"]!, profile: { name: "security-critic", version: 3, source: "project" }, permissions: { report: true }, persona: persona as typeof p.persona & {} });
+  });
+
+  test("identity.persona: read from the directory of the file that named it, inherited, removable, checked", () => {
+    const w = world({
+      "P/critic/profile.yaml": yaml(["name: critic", "harness: { provider: claude, auth: apikey }", "identity: { persona: SOUL.md, title: Critic }"]),
+      "P/critic/SOUL.md": "You are Vera.\n",
+      // A child has its ancestor's persona, from the ancestor's directory (ADR-024: persona is inherited, title isn't).
+      "P/junior/profile.yaml": yaml(["name: junior", "extends: critic"]),
+      "P/quiet/profile.yaml": yaml(["name: quiet", "extends: critic", "identity: { persona: null }"]),
+      "U/mine/profile.yaml": yaml(["name: mine", "harness: { provider: codex, auth: apikey }", "identity: { persona: voice/me.md }"]),
+      "U/mine/voice/me.md": "You are Ada.\n",
+    });
+    const set = w.load();
+    expect(set.profiles.junior!.persona).toEqual({ source: "project", hash: new Bun.CryptoHasher("sha256").update("You are Vera.\n").digest("hex"), file: "SOUL.md", path: w.at("P/critic/SOUL.md"), text: "You are Vera.\n" });
+    expect(set.profiles.quiet!.persona).toBeNull();
+    expect(set.profiles.mine!.persona).toMatchObject({ source: "user", file: "voice/me.md", path: w.at("U/mine/voice/me.md"), text: "You are Ada.\n" });
+    expect(resolveAgent("junior", w.source).persona?.path).toBe(w.at("P/critic/SOUL.md"));
+    // Empty, or over PERSONA_MAX_BYTES: refused when the profiles are read, as a skill's SKILL.md is.
+    const bad = errorOf(() => world({
+      "P/a/profile.yaml": yaml(["name: a", "harness: { provider: claude, auth: apikey }", "identity: { persona: SOUL.md }"]), "P/a/SOUL.md": " \n",
+      "P/b/profile.yaml": yaml(["name: b", "harness: { provider: claude, auth: apikey }", "identity: { persona: SOUL.md }"]), "P/b/SOUL.md": "x".repeat(PERSONA_MAX_BYTES + 1),
+    }).load());
+    expect(bad).toContain("profiles.a: identity.persona (SOUL.md) is empty");
+    expect(bad).toContain(`profiles.b: identity.persona (SOUL.md) is ${PERSONA_MAX_BYTES + 1} bytes, over the ${PERSONA_MAX_BYTES} a persona may have`);
+  });
+
+  test("harness.cliVersion: a semver range, checked when the profile is read, and pinned beside the spec", () => {
+    const m = (cliVersion: unknown) => checkManifest({ name: "z", harness: { provider: "claude", auth: "apikey", cliVersion } }, "profile", "z");
+    for (const ok of [">=2.1", "^2.1.0", "2.x", ">=2.1 <3", "1.2 - 1.4", "^1 || >=2.1.3-beta.1", "~2.1"]) expect({ ok, e: m(ok) }).toEqual({ ok, e: [] });
+    // Bun.semver.satisfies says yes to some text it can't read ("garbage"), so the range is checked here.
+    for (const bad of ["garbage", "", ">=", "2.1; rm -rf /", 2, `>=${"1".repeat(70)}`]) expect(m(bad)).toEqual(["harness.cliVersion: must be a semver range of at most 64 characters (>=2.1, ^2.1.0, >=2.1 <3)"]);
+    const w = world({ "P/z.yaml": yaml(["name: z", "harness: { provider: claude, auth: apikey, cliVersion: \">=2.1\" }"]) });
+    expect(w.load().profiles.z!.runtime).toEqual({ cliVersion: ">=2.1" });
   });
 
   test("the jobs block (spec §16.2) is pinned as is, from a v2 profile and an agents.json entry, and checked once", () => {
@@ -612,7 +647,7 @@ describe("profiles v2: loader and resolution", () => {
     expect(show.spec).toEqual({ provider: "claude", auth: "apikey", description: "Reviews.", allowedTools: ["Read", "Grep"] });
     const tdd = readFileSync(w.at("P/critic/skills/tdd/SKILL.md"), "utf8");
     expect(show.skills).toEqual([{ name: "tdd", source: "project", hash: `sha256:${new Bun.CryptoHasher("sha256").update(tdd).digest("hex")}`, path: w.at("P/critic/skills/tdd/SKILL.md"), trust: "untrusted" }]);
-    expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: harness.cliVersion is read but not used yet by this capcomd", "profiles.critic: its project skill tdd isn't trusted: capcomd profiles trust critic (a spawn of it is refused until then)"] });
+    expect(JSON.parse(cli(["agents", "validate", "--json"], env).out)).toMatchObject({ ok: true, errors: [], warnings: ["profiles.critic: harness.cliVersion >=2.1 can't be checked: the agent's environment (the sandbox's plain image: no capcomd env build is used) has no recorded claude version (a spawn of it is refused until then)", "profiles.critic: its project skill tdd isn't trusted: capcomd profiles trust critic (a spawn of it is refused until then)"] });
     const set = cli(["agents", "set", "critic", "--model", "opus", "--json"], env);
     expect(set.code).toBe(0);
     expect(JSON.parse(set.out)).toMatchObject({ path: w.at("P/critic/profile.yaml"), version: 2, spec: { model: "opus" } });

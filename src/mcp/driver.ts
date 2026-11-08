@@ -524,21 +524,22 @@ export async function setup() {
 }
 
 export async function profiles() {
-  const { agentsFilePath, readProfiles, leadText, abilityText, profileFacts, skillRows } = await import("../profiles");
+  const { agentsFilePath, readProfiles, leadText, abilityText, profileFacts, skillRows, untrustedPersona } = await import("../profiles");
   const { readiness } = await import("../cli/commands/profiles");
   const { profileCapacity } = await import("../providers/capacity");
   const { loginOf, quotaUntil } = await import("../primitives/quota");
   const f = readProfiles(agentsFilePath());
   // The sandbox this project's runs use, as capcomd_setup reports it: its slots are every profile's capacity.
   const place = await runCapacity(null, (await import("../config/sandbox")).configuredSandbox(process.cwd()).name ?? undefined);
-  // Its skills (names and hashes, never their text) and the project ones not trusted yet, which a spawn of it waits on.
+  // Its skills (names and hashes, never their text) and the project ones not trusted yet, which a spawn of it waits on,
+  // as it does on a project persona not trusted yet (its file's name, never its text).
   const skillsOf = (sk: Parameters<typeof skillRows>[0]) => { const rows = skillRows(sk); return { skills: rows, untrustedSkills: rows.filter((r) => !r.trusted).map((r) => r.name) }; };
   const profiles = Object.entries(f.agents).map(([name, s]) => {
     const login = loginOf(s);
     return {
       name, provider: s.provider, auth: s.auth, model: s.model ?? null, canSpawn: !!(s as any).children?.allowSpawn, canLead: leadText(s), toolMode: s.toolMode ?? "execute",
       ...(s.description ? { description: s.description } : {}), does: abilityText(s), ...profileFacts(f.profiles[name]!),
-      capacity: profileCapacity(place, login, login ? quotaUntil(login) : 0), ...readiness(name, s), ...skillsOf(f.profiles[name]!.skills),
+      capacity: profileCapacity(place, login, login ? quotaUntil(login) : 0), ...readiness(name, s), ...skillsOf(f.profiles[name]!.skills), untrustedPersona: untrustedPersona(f.profiles[name]!.persona),
     };
   });
   const leads = profiles.filter((p) => p.canLead).map((p) => p.name);

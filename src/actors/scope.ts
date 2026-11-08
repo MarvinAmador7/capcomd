@@ -586,6 +586,8 @@ export const scopeActor = actor({
         /** Its profile's skills' SKILL.md texts (ADR-024 §7 step 5), pinned by hash in `spec.skills`: kept as attachments
          *  (content-addressed), so whoever prepares the agent gives it exactly what was resolved at spawn. */
         skillTexts?: string[];
+        /** Its profile's persona text (ADR-024 `identity.persona`), pinned by hash in `spec.persona`: kept the same way. */
+        personaText?: string;
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -657,7 +659,7 @@ export const scopeActor = actor({
         if (titled) await tx.execute("UPDATE agents_v2 SET title = ? WHERE agent_id = ?", JSON.stringify(titled.next), params.agentId);
         const shown = titled ?? shownTitle(null, redacted);
         if (taskInl.attachment) await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", taskInl.attachment.id, taskInl.attachment.sha256, taskInl.attachment.bytes, taskInl.attachment.mediaType, taskInl.body, now);
-        for (const text of params.skillTexts ?? []) {
+        for (const text of [...(params.skillTexts ?? []), ...(params.personaText !== undefined ? [params.personaText] : [])]) {
           const a = attach(String(text), "text/markdown; charset=utf-8");
           await tx.execute("INSERT OR IGNORE INTO attachments (id, sha256, bytes, media_type, body, at) VALUES (?, ?, ?, ?, ?, ?)", a.id, a.sha256, a.bytes, a.mediaType, String(text), now);
         }

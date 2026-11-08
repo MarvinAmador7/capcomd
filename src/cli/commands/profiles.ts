@@ -11,7 +11,7 @@
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
 import { existsSync } from "node:fs";
-import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
+import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfile, untrustedPersona, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -104,6 +104,7 @@ async function hostChecks(set: ProfileSet): Promise<{ errors: string[]; warnings
   const { bootSnapshot, EnvironmentProblem } = await import("../../env/resolve");
   const { withSandbox } = await import("../../providers/run-sandbox");
   const { sandboxSeam } = await import("../../plugins/sandboxes");
+  const { cliVersionProblem } = await import("../../env/cli-version");
   for (const [n, r] of Object.entries(set.profiles)) {
     const names = lifecyclePlugins(r.runtime.lifecycle);
     if (names.length) {
@@ -118,6 +119,11 @@ async function hostChecks(set: ProfileSet): Promise<{ errors: string[]; warnings
         if (!(e instanceof EnvironmentProblem)) throw e;
         warnings.push(`profiles.${n}: ${e.message}`);
       }
+    }
+    // ADR-024 `harness.cliVersion`: the CLI its environment recorded, on the same sandboxes (a spawn refuses it).
+    if (r.runtime.cliVersion && (!r.runtime.sandboxProvider || sandboxSeam(r.runtime.sandboxProvider))) {
+      const cli = cliVersionProblem({ name: n, provider: r.spec.provider, auth: r.spec.auth, range: r.runtime.cliVersion, environment: r.runtime.environment }, withSandbox(process.env, r.runtime.sandboxProvider));
+      if (cli) warnings.push(`profiles.${n}: ${cli.replace(`profile ${n}: `, "")} (a spawn of it is refused until then)`);
     }
   }
   return { errors, warnings };
@@ -170,7 +176,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       const f = guard(() => readProfiles(path));
       const rows = profileRows(f).map((r) => {
         const skills = skillRows(f.profiles[r.name]!.skills);
-        return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name) };
+        return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name), untrustedPersona: untrustedPersona(f.profiles[r.name]!.persona) };
       });
       const warned = f.warnings.length ? `\n(${f.warnings.length} warning${f.warnings.length === 1 ? "" : "s"}: \`${cmd} validate\` lists ${f.warnings.length === 1 ? "it" : "them"})` : "";
       out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${visible(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title && visible(r.title), r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
@@ -192,6 +198,9 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       // project's, whether you trust it (ADR-024 decision 4).
       const trust = new Map(projectSkillTrust(r.skills).map((t) => [t.name, t.trust]));
       const pins = r.skills.map((s) => ({ name: s.name, source: s.source, hash: `sha256:${s.hash}`, path: s.path, ...(trust.has(s.name) ? { trust: trust.get(s.name)! } : {}) }));
+      // Its persona as an agent of it is pinned with it, and a project's trust (the same rule).
+      const pt = projectPersonaTrust(r.persona);
+      const persona = r.persona ? { file: r.persona.file, source: r.persona.source, hash: `sha256:${r.persona.hash}`, path: r.persona.path, ...(pt ? { trust: pt.trust } : {}) } : null;
       // Where an installed package came from (its LOCK), and whether its files changed since.
       const installed = (await import("../../profiles/install")).installedFacts(r);
       const text = [
@@ -204,11 +213,12 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
         "Values (the number is the file that set it):",
         ...vals.map((v) => `  ${v.path.padEnd(30)} ${shown(v.value).padEnd(48)} ${v.from ? r.applied.indexOf(v.from) + 1 : "-"}`),
         ...(pins.length ? ["Skills (an agent of it is pinned with these SKILL.md files):", ...pins.map((s) => `  ${s.name.padEnd(24)} ${s.source.padEnd(7)} ${s.hash.slice(0, 19)}…  ${s.path ?? "~/.claude/skills"}${s.trust && s.trust !== "trusted" ? `  NOT TRUSTED${s.trust === "changed" ? " (changed since you trusted it)" : ""}: ${cmd} trust ${n}` : ""}`)] : []),
+        ...(persona ? [`Persona (an agent of it reads this first): ${visible(persona.path)}  ${persona.source}  ${persona.hash.slice(0, 19)}…${persona.trust && persona.trust !== "trusted" ? `  NOT TRUSTED${persona.trust === "changed" ? " (changed since you trusted it)" : ""}: ${cmd} trust ${n}` : ""}`] : []),
         ...(unused.length ? [`Read but not used yet by this capcomd: ${unused.join(", ")}`] : []),
         error ? `Effective config: ${error}` : `Effective config (with capcomd's defaults): ${JSON.stringify(effective)}`,
         `${ready.ready ? "Ready" : "NOT READY"}: ${ready.detail}`,
       ].join("\n");
-      out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, ...(pins.length ? { skills: pins } : {}), ...(installed ? { installed } : {}), effective, error, ...ready }, text);
+      out({ name: n, default: isDefault, version: r.version, source: r.source, format: r.format, path: r.path, applied: r.applied, values: vals, notApplied: unused, ...facts, spec, ...(pins.length ? { skills: pins } : {}), ...(persona ? { persona } : {}), ...(installed ? { installed } : {}), effective, error, ...ready }, text);
       return error ? 1 : 0;
     }
     case "add": {
@@ -307,11 +317,15 @@ const ok = (body: Record<string, unknown>) => console.log(JSON.stringify({ schem
  *  `capcomd plugins trust` does), so a skill can't redraw or hide what the operator is asked about. */
 const visible = (s: string) => s.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
 
-/** `trust` warnings for `validate`: each profile with skills from the project that aren't trusted as they are. */
+/** `trust` warnings for `validate`: each profile with skills, or a persona, from the project that aren't trusted as they are. */
 function trustWarnings(set: ProfileSet): string[] {
   return Object.entries(set.profiles).flatMap(([n, r]) => {
     const bad = projectSkillTrust(r.skills).filter((t) => t.trust !== "trusted");
-    return bad.length ? [`profiles.${n}: its project skill${bad.length > 1 ? "s" : ""} ${bad.map((t) => t.name).join(", ")} ${bad.length > 1 ? "aren't" : "isn't"} trusted${bad.some((t) => t.trust === "changed") ? " as it is now" : ""}: capcomd profiles trust ${n} (a spawn of it is refused until then)`] : [];
+    const p = projectPersonaTrust(r.persona), persona = p && p.trust !== "trusted" ? p : null;
+    return [
+      ...(bad.length ? [`profiles.${n}: its project skill${bad.length > 1 ? "s" : ""} ${bad.map((t) => t.name).join(", ")} ${bad.length > 1 ? "aren't" : "isn't"} trusted${bad.some((t) => t.trust === "changed") ? " as it is now" : ""}: capcomd profiles trust ${n} (a spawn of it is refused until then)`] : []),
+      ...(persona ? [`profiles.${n}: its project persona ${persona.file} isn't trusted${persona.trust === "changed" ? " as it is now" : ""}: capcomd profiles trust ${n} (a spawn of it is refused until then)`] : []),
+    ];
   });
 }
 
@@ -362,18 +376,23 @@ async function exportCommand(args: string[], values: Record<string, any>, cmd: s
 }
 
 /**
- * `capcomd profiles trust [<name>] [--yes]` (ADR-024 decision 4): the trust prompt for a project profile's skills. It
- * shows each one that isn't trusted as it is (its name, description, file, size and sha256) and asks; --yes trusts
- * without asking. With no name, every profile with project skills and whether each is trusted.
+ * `capcomd profiles trust [<name>] [--yes]` (ADR-024 decision 4): the trust prompt for a project profile's skills and
+ * persona. It shows each one that isn't trusted as it is (its name, description or first line, file, size and sha256)
+ * and asks; --yes trusts without asking. With no name, every profile with project skills or a project persona and
+ * whether each is trusted.
  */
 async function trustCommand(args: string[], values: Record<string, any>, cmd: string, path: string): Promise<number> {
   let set: ProfileSet;
   try { set = readProfiles(path); } catch (e) { if (e instanceof AgentConfigError) throw new RelayError("config", e.message, `${cmd} validate says what is wrong.`); throw e; }
   if (!args.length) {
-    const rows = Object.entries(set.profiles).map(([n, r]) => ({ name: n, skills: projectSkillTrust(r.skills) })).filter((x) => x.skills.length);
+    const rows = Object.entries(set.profiles).map(([n, r]) => ({ name: n, skills: projectSkillTrust(r.skills), persona: projectPersonaTrust(r.persona) })).filter((x) => x.skills.length || x.persona)
+      .map(({ persona, ...x }) => ({ ...x, ...(persona ? { persona } : {}) }));
     if (values.json) { ok({ profiles: rows }); return 0; }
-    if (!rows.length) { console.log("No profile here has skills from the project's profiles (.capcomd/profiles/<name>/skills/)."); return 0; }
-    for (const row of rows) for (const s of row.skills) console.log(`  ${row.name.padEnd(16)} ${s.name.padEnd(24)} ${s.trust.padEnd(9)} ${s.hash.slice(0, 19)}…  ${s.path}`);
+    if (!rows.length) { console.log("No profile here has skills or a persona from the project's profiles (.capcomd/profiles/<name>/)."); return 0; }
+    for (const row of rows) {
+      for (const s of row.skills) console.log(`  ${row.name.padEnd(16)} ${s.name.padEnd(24)} ${s.trust.padEnd(9)} ${s.hash.slice(0, 19)}…  ${s.path}`);
+      if (row.persona) console.log(`  ${row.name.padEnd(16)} ${`persona ${row.persona.file}`.padEnd(24)} ${row.persona.trust.padEnd(9)} ${row.persona.hash.slice(0, 19)}…  ${row.persona.path}`);
+    }
     return 0;
   }
   const name = args[0]!;
@@ -381,13 +400,22 @@ async function trustCommand(args: string[], values: Record<string, any>, cmd: st
   const r = Object.hasOwn(set.profiles, name) ? set.profiles[name]! : undefined;
   if (!r) throw new RelayError("not_found", `profile "${name}" not found`, `${cmd} list`);
   const all = projectSkillTrust(r.skills), todo = all.filter((s) => s.trust !== "trusted");
-  if (!todo.length) {
-    if (values.json) ok({ trusted: { name, skills: all, already: true } });
-    else console.log(all.length ? `${name}'s project skills are trusted as they are (${all.map((s) => s.name).join(", ")}).` : `${name} has no skills from the project's profiles: nothing to trust.`);
+  const persona = projectPersonaTrust(r.persona), personaTodo = persona && persona.trust !== "trusted" ? persona : null;
+  if (!todo.length && !personaTodo) {
+    if (values.json) ok({ trusted: { name, skills: all, ...(persona ? { persona } : {}), already: true } });
+    else console.log(all.length || persona ? `${name}'s project ${[all.length ? `skills (${all.map((s) => s.name).join(", ")})` : null, persona ? `persona (${persona.file})` : null].filter(Boolean).join(" and ")} ${all.length + (persona ? 1 : 0) > 1 ? "are" : "is"} trusted as ${all.length + (persona ? 1 : 0) > 1 ? "they are" : "it is"}.` : `${name} has no skills or persona from the project's profiles: nothing to trust.`);
     return 0;
   }
   if (!values.json) {
-    console.log(`${name}: ${todo.length} project skill${todo.length > 1 ? "s" : ""} its agents would read as instructions:`);
+    if (personaTodo) {
+      // Who its agents are told they are: the first text they read.
+      const text = r.persona!.text, first = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+      console.log(`${name}: its project persona, which its agents would read first as who they are:`);
+      console.log(`  ${personaTodo.file}: ${visible(first).slice(0, 200)}`);
+      console.log(`    file  ${visible(personaTodo.path)} (${Buffer.byteLength(text)} bytes)`);
+      console.log(`    hash  ${personaTodo.hash}${personaTodo.trust === "changed" ? `  (you trusted ${personaTodo.trustedHash} before: it changed since)` : ""}`);
+    }
+    if (todo.length) console.log(`${name}: ${todo.length} project skill${todo.length > 1 ? "s" : ""} its agents would read as instructions:`);
     for (const s of todo) {
       const text = r.skills.find((x) => x.name === s.name)!.text;
       const description = /^description:\s*(.+)$/m.exec(text.split(/^---\s*$/m)[1] ?? "")?.[1]?.trim();
@@ -396,13 +424,14 @@ async function trustCommand(args: string[], values: Record<string, any>, cmd: st
       console.log(`    hash  ${s.hash}${s.trust === "changed" ? `  (you trusted ${s.trustedHash} before: it changed since)` : ""}`);
     }
   }
+  const what = [personaTodo ? "persona" : null, todo.length ? "skills" : null].filter(Boolean).join(" and ");
   if (!values.yes) {
     const ask = (await import("../prompt")).prompter();
-    if (!ask.interactive) throw new RelayError("usage", `trusting ${name}'s skills needs your confirmation`, `Read them, then run it in a terminal, or pass --yes to trust them as they are.`);
-    if (!(await ask.confirm(`Give ${name}'s agents these skills as they are?`, false))) { console.log("Not trusted."); return 1; }
+    if (!ask.interactive) throw new RelayError("usage", `trusting ${name}'s ${what} needs your confirmation`, `Read ${personaTodo && !todo.length ? "it" : "them"}, then run it in a terminal, or pass --yes to trust ${personaTodo && !todo.length ? "it as it is" : "them as they are"}.`);
+    if (!(await ask.confirm(`Give ${name}'s agents ${personaTodo && !todo.length ? "this persona as it is" : `these ${what} as they are`}?`, false))) { console.log("Not trusted."); return 1; }
   }
-  const trusted = trustProfileSkills(r.skills);
-  if (values.json) { ok({ trusted: { name, skills: trusted, already: false } }); return 0; }
-  console.log(`Trusted ${todo.map((s) => s.name).join(", ")} for ${name}. A changed SKILL.md needs trusting again.`);
+  const trusted = trustProfile(r.skills, r.persona);
+  if (values.json) { ok({ trusted: { name, skills: trusted.skills, ...(trusted.persona ? { persona: trusted.persona } : {}), already: false } }); return 0; }
+  console.log(`Trusted ${[...(personaTodo ? [`the persona ${personaTodo.file}`] : []), ...todo.map((s) => s.name)].join(", ")} for ${name}. A changed SKILL.md or persona needs trusting again.`);
   return 0;
 }
