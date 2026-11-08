@@ -62,7 +62,7 @@ test("a plugin's hold parks the merge, shown to the approver; approving that hol
   const run = await newRun("hold");
   const m = await heldMerge(run, "a");
   // Parked for a person, with the plugin and its reason on the record; nothing landed; the verifier's record waits.
-  expect(m).toMatchObject({ state: "awaiting_approval", heldBy: { plugin: "test-holder", reason: HOLD } });
+  expect(m).toMatchObject({ state: "awaiting_approval", heldBy: { plugin: "test-holder", reason: HOLD }, approvedHolds: [] });
   expect(await filesOn("trunk")).not.toContain("src/a.txt");
   expect(await verifierState(run, m.id)).toBe("verifying");
   // The approval the person decides on says which plugin held it and why.
@@ -81,6 +81,9 @@ test("a plugin's hold parks the merge, shown to the approver; approving that hol
   // Approved: merge.landing is asked again, a new attempt with its own key; the same hold now lets it land.
   const ok = (await w.cj(["approve", run, m.id])).j;
   expect(ok).toMatchObject({ state: "merged", result: { merged: true } });
+  // The record says which hold the person approved (and still which plugin held it).
+  expect(ok.approvedHolds).toEqual([{ plugin: "test-holder", reason: HOLD }]);
+  expect(ok.heldBy).toEqual({ plugin: "test-holder", reason: HOLD });
   expect(await filesOn("trunk")).toContain("src/a.txt");
   expect(await verifierState(run, m.id)).toBe("passed");
   expect(landingKeys(m.id)).toEqual([`merge.landing:${m.id}:1`, `merge.landing:${m.id}:2`]);
@@ -123,7 +126,7 @@ capcomd result --summary done >/dev/null`);
 
   // The person approves the protected target; the plugin then holds it: it waits again, now for that hold.
   const again = (await w.cj(["approve", run, mrg!])).j;
-  expect(again).toMatchObject({ state: "awaiting_approval", heldBy: { plugin: "test-holder", reason: HOLD } });
+  expect(again).toMatchObject({ state: "awaiting_approval", heldBy: { plugin: "test-holder", reason: HOLD }, approvedHolds: [] });
   expect(await filesOn("main")).not.toContain("src/c.txt");
   const [second] = await approvals(run);
   expect(second!.question).toBe(`Merge this agent's work into main? The test-holder plugin held it: ${HOLD}`);
@@ -138,7 +141,7 @@ capcomd result --summary done >/dev/null`);
 
   // Approving the plugin's hold lands it: the second landing is a new attempt.
   const ok = (await w.cj(["approve", run, mrg!])).j;
-  expect(ok).toMatchObject({ state: "merged", result: { merged: true } });
+  expect(ok).toMatchObject({ state: "merged", result: { merged: true }, approvedHolds: [{ plugin: "test-holder", reason: HOLD }] });
   expect(await filesOn("main")).toContain("src/c.txt");
   expect(landingKeys(mrg!)).toEqual([`merge.landing:${mrg}:1`, `merge.landing:${mrg}:2`]);
   evs = await trajectory(w, run);
@@ -156,6 +159,7 @@ test("a hold the plugin names is satisfied by one approval, though its reason ch
   // Asked again, the plugin gives another reason but the same holdId: the person's approval lands it.
   const ok = (await w.cj(["approve", run, m.id])).j;
   expect(ok).toMatchObject({ state: "merged", result: { merged: true } });
+  expect(ok.approvedHolds).toEqual([m.heldBy]);
   expect(await filesOn("hold-varies-named")).toContain("src/d.txt");
   expect(landingKeys(m.id)).toEqual([`merge.landing:${m.id}:1`, `merge.landing:${m.id}:2`]);
   expect(await approvals(run)).toEqual([]);
@@ -170,10 +174,13 @@ test("an unnamed hold whose reason changes asks the person again: without a hold
   const again = (await w.cj(["approve", run, m.id])).j;
   expect(again).toMatchObject({ state: "awaiting_approval", heldBy: { plugin: "test-holder" } });
   expect(again.heldBy.reason).not.toBe(m.heldBy.reason);
+  expect(again.approvedHolds).toEqual([m.heldBy]);
   // Still waiting, with the files read at the first park, and nothing landed.
   const [ap] = await approvals(run);
   expect(ap!.subject).toMatchObject({ heldBy: again.heldBy, files: [expect.objectContaining({ path: "src/e.txt" })] });
   expect(await filesOn("hold-varies")).not.toContain("src/e.txt");
   const no = (await w.cj(["approve", run, m.id, "--deny", "--reason", "enough"])).j;
   expect(no).toMatchObject({ state: "failed", result: { status: "denied" } });
+  // A denied hold isn't an approved one.
+  expect(no.approvedHolds).toEqual([m.heldBy]);
 }, 180_000);

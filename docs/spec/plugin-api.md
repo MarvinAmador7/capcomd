@@ -192,7 +192,9 @@ at `ctx.context.register`, so the later one in load order fails activation).
 app and the MCP server can describe a plugin without loading it (VS Code's `contributes`, research §4). The code MAY
 register only what the manifest declares; a registration not declared is `conflict` and fails activation (§5.4). A
 declaration the code never registers is a warning in `capcomd plugins validate --strict` and an error in the conformance
-suite (§14.1).
+suite (§14.1), and the host logs it at each activation (`declared but never registered`): a listener that matters only
+under some settings is registered anyway and does nothing without them, as the built-ins' `job.changed` listeners do
+(forge-github with no `sourceRepos`, source-schedule with no schedules, sandbox-boxd with the template refresh off).
 
 | Key | Item | Registered through |
 |---|---|---|
@@ -804,7 +806,8 @@ When `operator` is true the decisions are recorded and bypassed (§6.5). Once pe
 `merge.requested` + `merge.gating` pair (decision: one gate under the lock; a cheap policy denial a few hundred ms
 later costs nothing that matters). It fires before the forge's path is chosen: `fastPath` says the merge has a verified
 commit to try the fast path with, and `sha` and `target.sha` are that commit and the target it was verified on (empty
-without one). A held merge carries the hold (`heldBy {plugin, reason, holdId?}`) on its record and its approval (the
+without one). A held merge carries the hold (`heldBy {plugin, reason, holdId?}`) on its record, with the holds a person
+approved for it (`approvedHolds`, each added when the person approves it; `heldBy` stays the last one), and its approval (the
 question and `subject.heldBy`, the park event, the elicitation prompt), so the person sees the plugin's reason, and the
 files the merge changes (`subject.files`, `filesTotal`, `added`, `removed`), read as a protected target's park reads
 them. A person's approval of that hold satisfies **only that hold**: the same plugin and, when the hold carries a
@@ -1843,7 +1846,10 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    combined code without executing anything itself (in-VM `verify` takes only a child, and a host verify of the goal
    branch onto itself runs no checks). Rules: the commit is the branch's tip when asked (`result.commit`); the command is
    an operator-named check (`--check`), else the one pinned to the agent checked, else the run's (the repository's command; with none,
-   the run's one named check, and with several the caller must name one; an in-VM call can't pass `--checks`); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
+   the run's one named check, and with several the caller must name one; an in-VM call can't pass `--checks`; a verify
+   takes its command the same way, the run's one named check recorded as its `check` and re-run by its merge, so a run
+   whose project names one check in `run.checks` never verifies on "no test command configured", but with several it
+   keeps the repository's command, as an unpinned child's in-VM verify can't name one); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
    run once and a later one gets the record (`--key` checks a commit again); a tree that already passed the same
    command in the run isn't run again (`checks.where: "reused"`); the check's sandbox takes a machine slot where the
    run's place has a cap (§16.2 rule 3; `src/providers/capacity.ts` `holdSlot`), waiting with the agents, and gives up
@@ -2009,9 +2015,10 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
   position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
   keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
-  `deduped` decision a minute). The source listens to `job.changed` only when `sourceRepos`
-  names a repository (as `source-schedule` only with a schedule): a listener there makes the daemon read every
-  background job's output (§6.6.19).
+  `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
+  manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
+  nothing without a schedule); the built-in sandboxes listen there already, so the daemon reads background jobs'
+  output (§6.6.19) either way.
 
 #### 16.3.2 The intake
 
@@ -2270,6 +2277,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.47 | 2026-11-07 | With ADR-024 §4, §5 and §8 shown over the API (additive; capabilities `profiles.facts` and `runs.options.planners`): `GET /v1/profiles` rows (what `profiles.list`, §9.6, maps to) gain optional `title` (untrusted text), `fit` (daemon-written, from structured fields only), `cost`, `canReport`, `skills` (name, source, `sha256:` hash and trust; never a skill's text) and `untrustedSkills`, the project skills a spawn waits on the operator's trust for (decision 4); `GET /v1/run-options` gains optional `planners`, every profile that may spawn, each with `available` and a daemon-written `reason` for what its spawn would refuse: login, untrusted skills, a `sandbox.environment` its sandbox has no build of, a `lifecycle` plugin not active on the daemon (with no daemon to ask, not held against it: the spawn asks again), no agent environment, an egress limit its sandbox can't enforce (its hosts named only when each is shaped like one, else counted, so a project's file can't word the reason; the spawn's refusal says the same), a `sandbox.provider` outside the run's isolation (the spawn's own checks). `drivers[]` are unchanged. No hook, seam or service changes. |
 | 1.0.48 | 2026-11-08 | The in-process primitives the context promised (§8.1, §8.4): `runs`, `messages`, `kv`, `board`, `gates.pending` and `profiles` in the daemon's host (beside `jobs`, `storage`, `triggers` and the `agents` reads, cancel and notice), and `sandboxes` and `auth` in every process's, with the plugin as the caller (its writes `plugin:<name>`'s, its keys its own) and an unknown run `not_found` everywhere; `runs.new` names the plugin's principal to `run.creating` and checks its goal as `POST /v1/runs` does, `profiles.resolve` names it to `profile.resolved`; a key over 200 characters is refused, a refusal keeps its reason as the hint, a sandbox call keeps its deadline without its signal; §8.4 says which process has which, what each writes, and the board's states. `RunsService` declares `new` as a method (`"new"(…)`: bare, it declared a constructor). No hook, seam, route or contract shape changes. |
 | 1.0.49 | 2026-11-07 | A profile's `harness.provider` and `sandbox.provider` outside the daemon (§7.1): a built-in or a seam the running daemon's listing has from an active, enabled plugin; any other name is refused while a daemon runs and a warning when none does (the daemon checks it at resolution), as `lifecycle` already was (§6.6.8). Reading profiles in the CLI no longer fails for a seam only the daemon loads. A candidate before a write, a write that brings in such a name (`profiles add|set|rm`) and an override still need one. No hook, seam, route or contract shape changes. |
+| 1.0.50 | 2026-11-08 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7, §16.3.1); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

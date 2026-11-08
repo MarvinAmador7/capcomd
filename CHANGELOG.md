@@ -5,6 +5,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
+  as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
+  agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
+  With several named checks, verify still picks none of them: pin one when you spawn the agent (`--check NAME`) or
+  name it on the verify, or it passes without running any, as before.
+- Fixed: the daemon's log no longer says "declared but never registered: hook job.changed" for forge-github at every
+  start when no GitHub repositories are trigger sources (nor for source-schedule without schedules, or sandbox-boxd
+  with `CAPCOMD_TEMPLATE_REFRESH_HOURS=0`).
+- Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
 - Fixed: a profile whose `sandbox.provider` or `harness.provider` names a plugin the daemon has loaded no longer
   breaks `capcomd profiles list`, `validate` and every other profile command outside the daemon. They now ask the
   running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
