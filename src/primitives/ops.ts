@@ -31,6 +31,7 @@ import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
 import { parseVerdict } from "./review";
 import type { AgentPreparing, PreparePatch, ReviewReport } from "../../packages/plugin/src/hooks";
+import type { Principal } from "../../packages/plugin/src/shapes";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
@@ -255,7 +256,9 @@ export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key
   goalBranch?: string; base?: string;
   /** The run's plugin config (plugin API §10.2 layer 5, `--plugin-config`): only per-run settings, checked here and kept
    *  in each plugin's run storage (src/plugins/run-config.ts). */
-  pluginConfig?: Record<string, Record<string, unknown>> }
+  pluginConfig?: Record<string, Record<string, unknown>>;
+  /** Who asked, as run.creating says it (§6.6.3): a plugin's `ctx.runs.new` names itself; else the operator. */
+  principal?: Principal }
 /** What a run's key is scoped by: the project's repository (its clone URL), else the project's directory (the nearest
  *  .capcomd/config.json, else the working directory). */
 export function projectIdentity(source: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
@@ -388,9 +391,10 @@ export async function runNew(o: RunNewOpts) {
  *  The checks, the reviewer, the target and the goal branch are the operator's and read-only. */
 async function runCreating(runId: string, o: RunNewOpts): Promise<RunNewOpts> {
   const { isListedProvider } = await import("../providers/registry");
-  const options = { runId, label: o.label ?? null, goal: o.goal ? untrusted(o.goal, "operator") : null, budget: o.budget, checks: o.checks ?? {}, reviewer: o.reviewer ?? null,
+  const principal = o.principal ?? principalOf(null);
+  const options = { runId, label: o.label ?? null, goal: o.goal ? untrusted(o.goal, principal.kind === "plugin" ? `plugin:${principal.name}` : "operator") : null, budget: o.budget, checks: o.checks ?? {}, reviewer: o.reviewer ?? null,
     target: o.target ?? null, goalBranch: o.goalBranch && o.base ? { branch: o.goalBranch, base: o.base } : null, sandbox: o.sandbox ?? null, profile: null, driver: null, repo: env("REPO") ?? null };
-  const out = await hooks.fire("run.creating", "modify", { options }, { principal: principalOf(null), entity: runId, runId,
+  const out = await hooks.fire("run.creating", "modify", { options }, { principal, entity: runId, runId,
     apply: (p, patch) => applyRunPatch(p, patch, isListedProvider) });
   if (out.decision === "deny") throw refusedError("run.creating", out);
   const n = out.payload.options;
@@ -596,13 +600,16 @@ const spawnPrincipal = (o: SpawnOpts) => (o.parent && !o.operator ? principalOf(
 
 /** profile.resolved (plugin API §6.6.5): a plugin may narrow the resolved spec as a user override does; a widening is
  *  refused (`widening`). Fires on every resolution of a spawn, before the spawn checks run on the result. */
-async function profileResolved(o: SpawnOpts, ref: string | null, resolved: ResolvedAgent): Promise<ResolvedAgent> {
+function profileResolved(o: SpawnOpts, ref: string | null, resolved: ResolvedAgent): Promise<ResolvedAgent> {
+  return resolvedProfile(resolved, ref ? decodeAgentRef(ref).overrides?.set ?? null : null,
+    { principal: spawnPrincipal(o), entity: `${o.runId}/${o.parent ?? "operator"}/${o.key ?? resolved.name}`, runId: o.runId, agentId: o.parent ?? null });
+}
+/** profile.resolved for one resolution, a spawn's or a plugin's `ctx.profiles.resolve` (§8.4): `at` says who asked. */
+export async function resolvedProfile(resolved: ResolvedAgent, overrides: Record<string, unknown> | null, at: { principal: Principal; entity: string; runId?: string | null; agentId?: string | null }): Promise<ResolvedAgent> {
   if (!resolved.spec || !resolved.name) return resolved;
   const name = resolved.name;
-  const overrides = ref ? decodeAgentRef(ref).overrides?.set ?? null : null;
   const out = await hooks.fire("profile.resolved", "modify", { profile: resolved.profile ?? { name, version: 1, source: "user" }, spec: resolved.spec as unknown as import("../../packages/plugin/src/shapes").PinnedSpec, overrides },
-    { principal: spawnPrincipal(o), entity: `${o.runId}/${o.parent ?? "operator"}/${o.key ?? name}`, runId: o.runId, agentId: o.parent ?? null,
-      apply: (p, patch) => applyProfilePatch(p, patch, (spec, set) => applyOverrides(name, spec as unknown as AgentSpec, { set }) as unknown as Record<string, unknown>) });
+    { ...at, apply: (p, patch) => applyProfilePatch(p, patch, (spec, set) => applyOverrides(name, spec as unknown as AgentSpec, { set }) as unknown as Record<string, unknown>) });
   if (out.decision === "deny") throw refusedError("profile.resolved", out);
   return out.patches.length ? { ...resolved, spec: out.payload.spec as unknown as AgentSpec, overridden: true } : resolved;
 }

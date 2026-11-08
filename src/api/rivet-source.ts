@@ -236,18 +236,22 @@ function withTrigger(runId: string): { trigger?: NonNullable<ReturnType<typeof t
 	return t ? { trigger: t } : {};
 }
 
+/** A run as harness.v1 shows it (GET /v1/runs), from its row of the runs index (`recentRuns`); also `ctx.runs`
+ *  (src/plugins/services.ts). */
+export async function runOfRow(r: ReturnType<typeof recentRuns>[number]) {
+	const s = await existingScope(r.runId).catch(() => null);
+	const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null; agentTitle?: { title: string } | null } | null;
+	const agents = s && meta ? await s.listAgents({}).catch(() => []) : [];
+	const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
+	// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
+	const goal = meta?.goal ?? null;
+	return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agentTitle: meta?.agentTitle?.title ?? null, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
+		goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended), ...withTrigger(r.runId) };
+}
+
 export function rivetSource(): HarnessSource {
 	const runsIndex = () => recentRuns(500);
-	const runs = async () => Promise.all(runsIndex().map(async (r) => {
-		const s = await existingScope(r.runId).catch(() => null);
-		const meta = (s ? await s.getScope({}).catch(() => null) : null) as { goal?: string | null; ended?: { state: string } | null; goalBranch?: import("../actors/scope").GoalState | null; agentTitle?: { title: string } | null } | null;
-		const agents = s && meta ? await s.listAgents({}).catch(() => []) : [];
-		const live = (agents as Array<{ status: string }>).some((a) => a.status === "running" || a.status === "pending" || a.status === "paused");
-		// A run that ended by itself (it couldn't start its planner, or was stopped before any agent ran): failed / cancelled.
-		const goal = meta?.goal ?? null;
-		return { id: r.runId, projectId: projectIdOf(r.repo), label: r.label, state: !meta ? "unknown" : live ? "running" : meta.ended ? meta.ended.state : agents.length ? "idle" : "new", goal, ...runTitle({ label: r.label, goal, agentTitle: meta?.agentTitle?.title ?? null, agents: (agents as TitleAgent[]).map((a) => ({ ...a, task: a.task ? redactShapes(String(a.task)) : null })) }), repo: r.repo, createdAt: isoTs(r.createdAt),
-			goalBranch: goalSummary(meta?.goalBranch, agents as any[], !!meta?.ended), ...withTrigger(r.runId) };
-	}));
+	const runs = async () => Promise.all(runsIndex().map(runOfRow));
 	const surface = sandboxSurface({
 		// The user config (~/.capcomd/config.json `sandboxes`); off with CAPCOMD_NO_CONFIG.
 		settings: fileSettingsStore(settingsPath()),
