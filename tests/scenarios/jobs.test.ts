@@ -3,7 +3,8 @@
 // message; a quick command answers with its result in the foreground. The run's stream has job.started / job.ended, the
 // run's kv the record, and a plugin listening to job.changed hears started and ended. A daemon that crashes while a
 // job runs settles it when it comes back (the agent's machine kept running it). An agent's own kill stops its job; its
-// jobs end when it does; an orchestrate agent starts none.
+// jobs end when it does, and when it fails (its jobs never stay running on record); an orchestrate agent starts none. A
+// big job's record fits the kv's 64 KB.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -193,4 +194,71 @@ capcomd result --summary "ticked" >/dev/null`), { task: "[plugin-jobs] tick" });
   await sleep(2500);
   expect(fires()).toBe(n);
   expect(got().filter((x) => x.what === "changed" && x.jobId === timer.jobId).at(-1)?.change).toEqual({ kind: "ended", state: "killed" });
+}, 180_000);
+
+test("an agent that fails leaves no running jobs on record: killed in its machine, or lost once its attempt let go of it", async () => {
+  const run = await newRun(w);
+  runs.push(run);
+  const { client } = await import("../../src/core/relay");
+  const s = client().scope.getOrCreate([run]);
+  const pidFile = join(dir, `failed-${Date.now()}`);
+  // A scripted agent fails with two background jobs running: they end with it, killed, their processes gone. Its
+  // profile's afterTurnMs is a limit: a start asking for longer gets that (§16.2 rule 2).
+  const agent = await spawnRoot(w, run, "worker", w.script("fail-with-jobs", `
+a=$(capcomd job start --label server --foreground-ms 300 --timeout-ms 3600000 -- 'echo $$ > ${pidFile}; exec sleep 600')
+b=$(capcomd job start --label watcher --foreground-ms 300 -- 'sleep 600')
+echo "started: $(printf "%s" "$a" | $S/jget state) $(printf "%s" "$b" | $S/jget state)"
+exit 3`), { args: ["--set", "jobs.afterTurnMs=600000"] });
+  const done = (await waitAll(w, run, [agent], 120_000)).agents[0];
+  expect(done.status).toBe("failed");
+  expect(await logsOf(run, agent)).toContain("started: running running");
+  const jobs = ((await s.kvList({ prefix: "_jobs/" })) as Array<{ value: any }>).map((r) => r.value);
+  expect(jobs).toHaveLength(2);
+  for (const j of jobs) expect(j).toMatchObject({ state: "killed", reason: "its agent ended", timeoutMs: 600_000, spec: { owner: { agentId: agent } } });
+  const pid = Number(readFileSync(pidFile, "utf8").trim());
+  let alive = true;
+  for (let i = 0; i < 50 && alive; i++) { try { process.kill(pid, 0); await sleep(100); } catch { alive = false; } }
+  expect(alive).toBe(false);
+
+  // A real agent's failed attempt lets go of its machine (it may run again there), leaving its job running on record;
+  // when it fails for good the job settles at once (its machine goes with it), not when someone next reads it.
+  const left = (await w.cj(["spawn", run, "--profile", "worker", "--task", "fails for good", "--no-start", "--contract", JSON.stringify({ script: w.script("never", "exit 0") })])).j.agentId as string;
+  const jobId = `job-left${Date.now()}`;
+  const rec = { jobId, plugin: null, spec: { kind: "exec", runId: run, owner: { agentId: left }, cmd: ["sleep 600"], label: "left by its attempt" }, state: "running", startedAt: new Date().toISOString(), endedAt: null, result: null, reason: null, by: left, timeoutMs: 1_800_000, paramsHash: "h" };
+  await s.jobWrite({ job: rec, event: "JOB_STARTED", agentId: left, data: { jobId, kind: "exec", owner: left, label: rec.spec.label, plugin: null } });
+  const { finishFailed } = await import("../../src/primitives/ops");
+  const a = await s.getAgent({ agentId: left });
+  expect((await finishFailed(run, left, a!.epoch, { message: "its attempts ran out" })).status).toBe("failed");
+  expect((await s.kvGet({ k: `_jobs/${jobId}` }))!.value).toMatchObject({ state: "lost", reason: "its agent failed" });
+  const ended = await trajectory(w, run, (e) => e.type === "JOB_ENDED" && e.data.jobId === jobId);
+  expect(ended.map((e) => e.data.state)).toEqual(["lost"]);
+  expect(((await s.kvList({ prefix: "_jobs/" })) as Array<{ value: any }>).filter((r) => ["running", "stopping"].includes(r.value.state))).toEqual([]);
+}, 180_000);
+
+test("a job with 48 KB of output and a 16 KB command keeps a record within the kv's 64 KB", async () => {
+  const run = await newRun(w);
+  runs.push(run);
+  // Its stdout is lines of quotes (each two bytes in JSON), so its 48 KB tail alone is over 64 KB as stored.
+  const cmd = `yes '"quoted" line' | head -c 49140; echo last-line; yes e | head -c 16384 >&2; : ${"p".repeat(16_100)}`;
+  expect(Buffer.byteLength(JSON.stringify([cmd]))).toBeGreaterThan(16_000);
+  const cmdFile = join(dir, `big-cmd-${Date.now()}`);
+  writeFileSync(cmdFile, cmd);
+  // Its answer (with all of the output) goes to a file: node's stdout into a pipe on macOS can end before all of it is out.
+  const agent = await spawnRoot(w, run, "worker", w.script("big-job", `c=$(cat ${JSON.stringify(cmdFile)})
+capcomd job start --label big -- "$c" > big.json
+echo "job: $($S/jget jobId < big.json) $($S/jget state < big.json)"
+capcomd result --summary "big" >/dev/null`));
+  const done = (await waitAll(w, run, [agent], 120_000)).agents[0];
+  const logs = await logsOf(run, agent);
+  if (done.status !== "done") console.log(logs);
+  expect(done.status).toBe("done");
+  const [, job, state] = /job: (job-\S+) (\S+)/.exec(logs)!;
+  expect(state).toBe("done");
+  const { client } = await import("../../src/core/relay");
+  const v = (await client().scope.getOrCreate([run]).kvGet({ k: `_jobs/${job}` }))!.value as any;
+  expect(Buffer.byteLength(JSON.stringify(v))).toBeLessThanOrEqual(64 * 1024);
+  expect(v).toMatchObject({ state: "done", spec: { cmd: [cmd] }, result: { code: 0, truncated: true } });
+  // The oldest output went; its end, and all of stderr, stayed.
+  expect(v.result.stdout).toEndWith('"quoted" line\nlast-line\n');
+  expect(v.result.stderr).toBe("e\n".repeat(8192));
 }, 180_000);

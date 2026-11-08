@@ -185,7 +185,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       const installed = (await import("../../profiles/install")).installedFacts(r);
       const text = [
         `${n}: version ${r.version}, found in ${{ project: "the project's profiles", user: "your profiles", bundled: "capcomd's bundled profiles" }[r.source]}${isDefault ? ", the default" : ""}`,
-        ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces them)` : ""}`] : []),
+        ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces your edits and keeps files you added)` : ""}`] : []),
         ...(facts.title || facts.tags.length ? [[facts.title, facts.tags.length ? `tags: ${facts.tags.join(", ")}` : null].filter(Boolean).join(" · ")] : []),
         `Fit: ${facts.fit}`,
         "Files, first to last (a later one wins):",
@@ -319,15 +319,19 @@ async function updateCommand(args: string[], values: Record<string, any>, cmd: s
   if (!name || args.length > 1) throw new RelayError("usage", "update takes a profile's name", `${cmd} update <name> [--project] [--dry-run]`);
   const u = await (await import("../../profiles/install")).updateProfile(name, { project: !!values.project, path, dryRun: !!values["dry-run"] });
   if (values.json) { ok({ update: u }); return 0; }
-  if (u.from.hash === u.to.hash && !u.modified) {
+  const kept = u.kept.length ? `  added by you, kept: ${u.kept.join(", ")}` : null;
+  if (u.from.hash === u.to.hash && !u.modified?.changed.length && !u.modified?.removed.length) {
     console.log(`${name} is up to date (${u.to.hash})${u.updated ? `; its LOCK now names commit ${short(u.to.commit)}` : ""}.`);
+    if (kept) console.log(kept);
     return 0;
   }
   console.log(`${name}: version ${u.from.version ?? "?"} → ${u.to.version ?? "?"}, commit ${short(u.from.commit)} → ${short(u.to.commit)}`);
   console.log(`  hash ${u.from.hash}\n    → ${u.to.hash}`);
   for (const s of u.skills) console.log(`  skill ${s.name}: ${s.from ?? "(new)"} → ${s.to ?? "(removed)"}`);
   for (const [k, list] of [["changed", u.changed], ["added", u.added], ["removed", u.removed]] as const) if (list.length) console.log(`  ${k}: ${list.join(", ")}`);
-  if (u.modified) console.log(`  edited since it was installed (replaced by the update): ${[...u.modified.changed, ...u.modified.added, ...u.modified.removed].join(", ")}`);
+  const edited = u.modified ? [...u.modified.changed, ...u.modified.removed] : [];
+  if (edited.length) console.log(`  edited since it was installed (replaced by the update): ${edited.join(", ")}`);
+  if (kept) console.log(kept);
   if (!u.updated) { console.log("Nothing was changed (--dry-run)."); return 0; }
   console.log(`Updated ${u.dir}.${u.layer === "project" && u.skills.length ? ` Its changed skills reach its agents once you trust them: ${cmd} trust ${name}` : ""}`);
   return 0;

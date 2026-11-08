@@ -261,12 +261,27 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
       subscribe(stream, filter, handler) {
         live();
         if (!scopes.includes("read")) throw new PluginError("forbidden", "events.subscribe needs the read scope (§11.1)");
-        const sub = o.subscribe?.(stream, filter, handler);
-        return register({ kind: "subscription", stream }, () => { void sub?.dispose(); });
+        const f = filter ?? {};
+        if (f.types !== undefined && (!Array.isArray(f.types) || f.types.some((t) => typeof t !== "string"))) throw new PluginError("invalid", "events.subscribe: filter.types is a list of event types");
+        if (f.after !== undefined && !(Number.isSafeInteger(f.after) && f.after >= 0)) throw new PluginError("invalid", "events.subscribe: filter.after is a seq (an integer ≥ 0)");
+        if (typeof handler !== "function") throw new PluginError("invalid", "events.subscribe takes a handler function");
+        if (!o.subscribe) throw new PluginError("unsupported", "events.subscribe is not available to plugins yet");
+        // §8.4: the host calls `deliver` in order, one at a time; a handler that throws is logged and the event skipped,
+        // and nothing reaches it once the subscription (or the plugin) is disposed.
+        let on = true;
+        const deliver = async (e: HarnessEventEnvelope) => {
+          if (!on) return;
+          try { await handler(e); } catch (err) {
+            log("warn", "an events.subscribe handler threw; the event was skipped", { stream, type: e.type, seq: e.seq, error: err instanceof Error ? err.message : String(err) });
+          }
+        };
+        const sub = o.subscribe(stream, { ...(f.types ? { types: [...f.types] } : {}), ...(f.after !== undefined ? { after: f.after } : {}) }, deliver);
+        return register({ kind: "subscription", stream }, () => { on = false; void sub.dispose(); });
       },
       async replay(stream, after) {
         live();
         if (!scopes.includes("read")) throw new PluginError("forbidden", "events.replay needs the read scope (§11.1)");
+        if (!(Number.isSafeInteger(after) && after >= 0)) throw new PluginError("invalid", "events.replay: after is a seq (an integer ≥ 0)");
         if (!o.replay) throw new PluginError("unsupported", "events.replay is not available to plugins yet");
         return o.replay(stream, after);
       },
