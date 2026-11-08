@@ -436,11 +436,6 @@ function resolveProfile(ref: string | null): ResolvedAgent {
     throw e;
   }
 }
-/** ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be). */
-function reportAllowed(o: SpawnOpts, resolved: ResolvedAgent) {
-  if (o.contract?.report === true && resolved.permissions?.report === false)
-    throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
-}
 function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string | undefined>) {
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
   // A project's profile skills reach an agent only once the operator has trusted each (ADR-024 decision 4).
@@ -453,20 +448,35 @@ function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string
   const rp = resolved.spec ? runtimeProblems(resolved.name ?? resolved.kind, rt, resolved.spec) : [];
   if (rp.length) throw new RelayError("config", rp.join("; "), "Spawn it without making it orchestrate (tools.mode), or give the MCP servers to the profiles it spawns.", { code: "orchestrate_mcp" });
   const source = rt.sandboxProvider ? withSandbox(runSource, rt.sandboxProvider) : runSource;
-  // A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
-  // commands run in a sandbox, never on the host): a sandbox that runs them on this host (the test fakes) only when the
-  // run's own does too.
-  if (rt.sandboxProvider && !realSandbox(source) && realSandbox(runSource))
-    throw new RelayError("config", `profile ${resolved.name}: sandbox.provider ${rt.sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
+  const outside = isolationProblem(resolved.name, rt.sandboxProvider, runSource);
+  if (outside) throw new RelayError("config", outside, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
   const envProblem = envSnapshotProblem(spec?.provider, source, rt.environment);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
   if (rt.environment) environmentCheck(resolved, source);
-  // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
-  const egress = spec?.egress as string[] | undefined;
-  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox(source) && !sandboxCaps(source).egressAllowlist)
-    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
+  const unkept = egressProblem(resolved.name, spec?.egress as string[] | undefined, source);
+  if (unkept) throw new RelayError("config", unkept, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   return { resolved, spec };
 }
+
+/** A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
+ *  commands run in a sandbox, never on the host): its `sandbox.provider` may run them on this host (the test fakes) only
+ *  when the run's own sandbox (`runSource`'s) does too. Why not, or null. Also asked by GET /v1/run-options `planners`. */
+export function isolationProblem(name: string | null | undefined, sandboxProvider: string | undefined, runSource: Record<string, string | undefined>): string | null {
+  if (!sandboxProvider || realSandbox(withSandbox(runSource, sandboxProvider)) || !realSandbox(runSource)) return null;
+  return `profile ${name}: sandbox.provider ${sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`;
+}
+
+/** A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist): why its
+ *  agents can't on `source`'s sandbox (their own), or null. Also asked by GET /v1/run-options `planners`, whose reason
+ *  is the daemon's own text: a profile file's egress is shown only when every entry is shaped like a host (the
+ *  schema's pattern), else counted, so a project's file can't word it. */
+export function egressProblem(name: string | null | undefined, egress: readonly string[] | undefined, source: Record<string, string | undefined>): string | null {
+  if (!egress?.length || egress.includes(OPEN_EGRESS) || !realSandbox(source) || sandboxCaps(source).egressAllowlist) return null;
+  const hosts = egress.every((h) => EGRESS_HOST.test(h)) ? egress.join(", ") : `${egress.length} host${egress.length === 1 ? "" : "s"}`;
+  return `profile ${name} limits egress (${hosts}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`;
+}
+/** An egress entry as the profile schema's pattern allows one (src/profiles/v1.ts `egress`), at most a DNS name long. */
+const EGRESS_HOST = /^[A-Za-z0-9.*-]{1,253}$/;
 
 /** ADR-024 `sandbox.environment`: the sandbox has it, and a plan login kept in an image is one made from it (the agent
  *  boots from one image: src/env/resolve.ts `bootSnapshot`, which the worker asks again when it makes the machine). */
@@ -515,7 +525,7 @@ export async function spawnAgent(o: SpawnOpts) {
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
   const runEnv = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
   const { resolved, spec } = hooks.listening("profile.resolved") ? checkResolved(await profileResolved(o, ref, resolveProfile(ref)), runEnv) : spawnChecks(ref, runEnv);
-  reportAllowed(o, resolved);
+  reportAllowed(resolved, o.contract);
   // ADR-024 `lifecycle.onStart|onEnd`: the plugins its profile names must be there to hear it.
   const unheard = await lifecycleProblem(lifecyclePlugins(resolved.runtime?.lifecycle));
   if (unheard) throw new RelayError("config", `profile ${resolved.name} can't be spawned: its ${unheard}`, LIFECYCLE_HINT, { code: "lifecycle_inactive" });
@@ -528,9 +538,12 @@ export async function spawnAgent(o: SpawnOpts) {
     const s = await agentSpawning(o, agentId, resolved, spec, requested, grant);
     requested = s.budget ?? {};
     grant = s.grant ?? {};
-    if (s.contract) o = { ...o, contract: s.contract as Record<string, unknown> };
-    // A plugin may add contract keys: report among them, which this profile may refuse too.
-    reportAllowed(o, resolved);
+    if (s.contract) {
+      o = { ...o, contract: s.contract as Record<string, unknown> };
+      // What a plugin added to the contract is checked as the spawner's own was (applySpawnPatch checks its shape).
+      reportAllowed(resolved, o.contract);
+      if (pin === undefined && typeof o.contract?.check === "string") await namedCheck(o.runId, o.contract.check);
+    }
   }
   const hasGrant = Object.keys(grant).length > 0;
   // Fan-out for a profile that can't spawn (a worker) would have no effect: refuse it by name, with what to do instead.
@@ -563,6 +576,13 @@ export async function spawnAgent(o: SpawnOpts) {
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
+}
+
+/** ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be). Checked on
+ *  the spawner's contract and again on the one agent.spawning leaves, as a plugin may add `report` to it. */
+function reportAllowed(resolved: ResolvedAgent, contract: Record<string, unknown> | undefined) {
+  if (contract?.report === true && resolved.permissions?.report === false)
+    throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
 }
 
 /** Who asked for a spawn (§3.2): the parent agent from its VM, else the operator or driver on the host. */
@@ -857,7 +877,8 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
     }
     const res = await resultOf(runId, agentId);
     const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
-    // A failed agent's machine goes too (its worker retries a destroy the provider didn't answer).
+    // A failed agent's jobs settle and its machine goes too (its worker retries a destroy the provider didn't answer).
+    await endJobs(runId, agentId, "its agent failed");
     await workerOf(runId, agentId, fin.agent.epoch).drainWorker({ workerId: agentId }).catch(() => {});
     stampSpent(span, fin.agent);
     return fin.agent;
@@ -1269,8 +1290,19 @@ export async function settleAttempt(runId: string, agentId: string, epoch: numbe
 /** Ended without a push (cancelled, or a handoff finished it): release its VM when it was cancelled. */
 export async function settleEnded(runId: string, agentId: string, epoch: number): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
-  if (a.status === "cancelled") await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  if (a.status === "cancelled") {
+    await endJobs(runId, agentId, "its agent was cancelled");
+    await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  }
   return getAgentOrThrow(runId, agentId);
+}
+
+/**
+ * Plugin API §16.2 rule 4: an agent that ended for good (failed or cancelled) has its background jobs settled now, before
+ * its machine goes: killed while its machine is attached here, else `lost`; never left `running` until someone reads them.
+ */
+async function endJobs(runId: string, agentId: string, reason: string): Promise<void> {
+  await (await import("../jobs/service")).endAgentJobs(runId, agentId, reason).catch((e) => console.error(`[jobs] ${agentId}: ending its jobs: ${(e as Error)?.message ?? e}`));
 }
 
 /** Record one failed attempt (DRIVE_FAILED) and say whether to try again: the driver's rules (3 attempts, N identical
@@ -1311,8 +1343,9 @@ export async function recordAgentRunSpan(runId: string, agentId: string, started
 export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string }): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
   if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
-  // Its machine goes once it has failed (here too when an earlier settle recorded the failure but stopped before this).
-  const drain = () => workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  // Its jobs settle and its machine goes once it has failed (here too when an earlier settle recorded the failure but
+  // stopped before this).
+  const drain = async () => { await endJobs(runId, agentId, "its agent failed"); await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {}); };
   if (TERMINAL_AGENT.has(a.status)) { if (a.status === "failed") await drain(); return a; }
   const res = await resultOf(runId, agentId);
   const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });

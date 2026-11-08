@@ -342,6 +342,12 @@ export function widenings(base: AgentSpec, next: AgentSpec): string[] {
   const w: string[] = [];
   const le = (k: "maxTurns" | "maxBudgetUsd" | "timeoutMs" | "idleAfterMs" | "stuckRepeats" | "noChangeAfterMs") => { if (next[k] !== undefined && base[k] !== undefined && next[k]! > base[k]!) w.push(`${k} ${next[k]} > ${base[k]}`); if (base[k] !== undefined && next[k] === undefined) w.push(`${k} unset (would lift ${base[k]})`); };
   le("maxTurns"); le("maxBudgetUsd"); le("timeoutMs"); le("idleAfterMs"); le("stuckRepeats"); le("noChangeAfterMs");
+  // Plugin API §16.2 rule 2: the jobs block is limits too, checked as the ones above (unset in base: not checked).
+  const bj = base.jobs ?? {}, nj = next.jobs ?? {};
+  for (const k of ["max", "foregroundMs", "afterTurnMs"] as const) {
+    if (nj[k] !== undefined && bj[k] !== undefined && nj[k]! > bj[k]!) w.push(`jobs.${k} ${nj[k]} > ${bj[k]}`);
+    if (bj[k] !== undefined && nj[k] === undefined) w.push(`jobs.${k} unset (would lift ${bj[k]})`);
+  }
   if (next.provider !== base.provider) w.push(`provider ${base.provider} → ${next.provider}`);
   // §16.1: the mode is a limit; an orchestrate agent's override or patch can't give it back its tools.
   if (base.toolMode === "orchestrate" && next.toolMode !== "orchestrate") w.push(`toolMode orchestrate → ${next.toolMode ?? "execute"}`);
@@ -405,9 +411,11 @@ export function childNarrowing(agents: Record<string, AgentSpec>, label = (n: st
       if (!child) { e.push(`${label(n)}.children.allowedChildProfiles: "${c}" is not a defined agent`); continue; }
       if (c === n && s.children?.allowSpawn) continue; // self-similar children are narrowing by definition
       // Children inherit from the parent and may only narrow (provider/auth may differ: each child has its own credential;
-      // so may the tool mode: an orchestrator's children do the work; and its context: each profile is briefed with its own,
-      // ADR-025 D12).
-      const w = widenings({ ...s, provider: child.provider, auth: child.auth, toolMode: child.toolMode, context: child.context }, child).filter((x) => !x.startsWith("children."));
+      // so may the tool mode: an orchestrator's children do the work, and with it how long a job start waits, which is the
+      // agent's own shell (jobs.foregroundMs, 5 s for an orchestrator); and its context: each profile is briefed with its
+      // own, ADR-025 D12).
+      const jobs = s.jobs && { ...s.jobs, foregroundMs: child.jobs?.foregroundMs };
+      const w = widenings({ ...s, provider: child.provider, auth: child.auth, toolMode: child.toolMode, jobs, context: child.context }, child).filter((x) => !x.startsWith("children."));
       if (w.length) e.push(`${label(n)}.children: child profile "${c}" is wider than its parent (${w.join("; ")})`);
     }
   }
