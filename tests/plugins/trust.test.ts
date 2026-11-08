@@ -172,8 +172,8 @@ describe("a project's plugin", () => {
 });
 
 describe("capcomd plugins trust (the prompt)", () => {
-  const cli = async (args: string[], cwd: string) => {
-    const proc = Bun.spawn(["bun", CLI, ...args], { cwd, env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const cli = async (args: string[], cwd: string, extra: Record<string, string> = {}) => {
+    const proc = Bun.spawn(["bun", CLI, ...args], { cwd, env: { ...process.env, ...extra }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     let j: any = null;
     try { j = JSON.parse(stdout.trim().split("\n").pop()!); } catch { /* text */ }
@@ -212,8 +212,19 @@ describe("capcomd plugins trust (the prompt)", () => {
     expect(asked.stdout).toContain("harmless\\u{1b}[1A\\u{1b}[2K\\u{d}  runs");
     // What it gets of yours at its start: a secret's reference, the one you set. The manifest's own default
     // (env:GITHUB_TOKEN) is never followed: the repository doesn't choose which of your variables it gets (§10.3).
-    expect(asked.stdout).toContain("secrets  token (none set)");
-    expect(asked.stdout).not.toContain("GITHUB_TOKEN");
+    // One that names the kernel's own variable is flagged: the daemon fails the plugin config_invalid.
+    expect(asked.stdout).toContain("secrets  token (none set; its default env:GITHUB_TOKEN is refused: one of capcomd's own");
+    expect(asked.stdout).not.toContain("token ← env:GITHUB_TOKEN");
     expect(asked.stdout).toContain(`runs     ./run.sh "x\\u001b[1A\\u001b[2K\\r" --flag=1 "a\\u{202e}b"  (on this machine`);
+  });
+
+  test("the prompt shows a default of the plugin's own as unset, and flags your reference to one of the kernel's variables", async () => {
+    const p = project();
+    writeFileSync(join(p.plugin, "plugin.json"), JSON.stringify({ ...manifest("pp"),
+      config: { type: "object", properties: { token: { type: "object", "x-secret": true, default: { $secret: "env:PP_TOKEN" } }, hook: { type: "object", "x-secret": true } } } }));
+    const asked = await cli(["plugins", "trust", "pp"], p.dir, { CAPCOMD_PLUGIN_PP_HOOK: '{"$secret":"env:RELAY_RPC_KEY"}' });
+    expect(asked.code).toBe(2);
+    expect(asked.stdout).toContain("secrets  token (none set), hook ← env:RELAY_RPC_KEY (refused: one of capcomd's own");
+    expect(asked.stdout).not.toContain("PP_TOKEN");
   });
 });

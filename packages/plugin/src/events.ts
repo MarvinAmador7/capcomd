@@ -14,7 +14,7 @@ export interface PluginEventData {
   /** Two manifests of the same name; the later source is refused (§4.8). */
   "plugin.duplicate_refused": { plugin: string; kept: "builtin" | "user" | "project"; refused: "builtin" | "user" | "project"; path: string };
   /** A plugin's config failed its schema: it is failed with cause config_invalid (§10.4). */
-  "plugin.config_refused": { plugin: string; errors: Array<{ path: string; message: string }>; layer: "user" | "project" | "env" | "run" };
+  "plugin.config_refused": { plugin: string; errors: Array<{ path: string; message: string }>; layer: "user" | "project" | "env" | "run" | "default" };
   /** One listener call that produced no usable result (§6.5). `effect` says what the host did. */
   "plugin.hook_failed": { plugin: string; hook: HookName; callId: string; kind: HookFailureKind; message: string; effect: "denied" | "skipped" };
   /** The breaker tripped: the plugin's listeners are suspended until `capcomd plugins enable` or a restart (§6.5). */
