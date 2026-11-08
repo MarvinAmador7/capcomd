@@ -218,7 +218,7 @@ treats a distribution-owned `SOUL.md` that way).
 - `capcomd profiles update <name>` re-fetches at the locked source and replaces only the **package-owned** files
   (`profile.yaml`, `SOUL.md`, `prompt.md`, `skills/`); a project's `override.yaml` and the profile's memory (§2.2
   `memory`) are user-owned and never touched. So is any file the user added in the package's directory (one its `LOCK`
-  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.42; before, the
+  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.45; before, the
   update replaced the whole directory but the override). A changed hash on a pinned skill or persona is shown before
   it is applied.
   **From the research:** Hermes's `distribution_owned` list is exactly this split; adopted as is.
@@ -459,8 +459,9 @@ Made while pinning the version (§7 step 3, 2026-11-05; `src/actors/scope.ts`, `
 Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src/profiles/describe.ts`):
 
 - **`permissions.report: false` refuses a spawn with `report`** (`reason: report_not_allowed`), checked on the host
-  where every spawn is (`ops.spawnAgent`, after `profile.resolved`), not pinned. Unset means allowed, as before any
-  profile could say: `true` changes nothing at spawn and says, in `fit`, that the profile answers with a report.
+  where every spawn is (`ops.spawnAgent`, after `profile.resolved`, and again after `agent.spawning` so a `report` a
+  plugin adds is refused too), not pinned. Unset means allowed, as before any profile could say: `true` changes nothing
+  at spawn and says, in `fit`, that the profile answers with a report.
 - **`identity.title` and `identity.avatar` are not inherited**, like `name`: a `lead` that extends `worker` would
   otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
   a reviewer until it says otherwise).

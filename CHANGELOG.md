@@ -16,6 +16,28 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   make (a directory or a link), the command says so at once: remove it.
 - Fixed: writing a profile file, `agents.json` or `trust.json` never writes through a link a repository placed next
   to it under the name of the temporary file capcomd used.
+- Fix: an in-process plugin's `ctx.events.subscribe` now delivers events, and `ctx.events.replay` works. In the daemon
+  a subscription to `daemon` or a run id gets that stream's events (the ones `GET /v1/events` lists) in order, one at a
+  time, filtered by `types` if you give them, from `after` or else from now; a handler that throws is logged and that
+  event skipped. Outside the daemon both now fail with `unsupported` instead of `subscribe` quietly never calling your
+  handler. In the test kit, `fakeContext(...).publish(event)` puts an event on the fake's streams: your subscriptions
+  hear it by the same rules and `replay` returns it.
+- Fix: a profile with `permissions: {report: false}` is now never spawned to report, even when a plugin's
+  `agent.spawning` listener adds `report: true` to the spawn's contract. Such a spawn is refused with reason
+  `report_not_allowed`, the same as when the spawner asks for `--report` itself. For plugin authors: an
+  `agent.spawning` patch may no longer add `from`, `review`, `checks` or `orphansPolicyOverride` to the contract (only
+  `--continue`, verify and the operator set them), and a `report` it adds must be `true` and a `check` one of the run's
+  check names; such a patch is refused like any other widening or invalid patch, and a check the run doesn't have
+  refuses the spawn.
+- Fix: a plugin you install, or a project's, can no longer read capcomd's own keys through a secret reference. A
+  reference that names one of capcomd's variables (`BOXD_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, any `CAPCOMD_*` or its
+  old `RELAY_*` spelling, `GIT_*` or `RIVET*`, and the agents' `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*` and `CODEX_*`, in
+  any case) or its keychain items (`keychain:capcomd…`) is refused, whether it is the plugin's own default, in your
+  `~/.capcomd/config.json` or in `CAPCOMD_PLUGIN_<NAME>_<KEY>`: the plugin doesn't start (`capcomd plugins list` shows
+  it failed, `config_invalid`, naming the setting) and the variable is never read. Give the plugin a variable of its
+  own instead: `export GH_NOTIFY_TOKEN=…` and `"plugins": {"<name>": {"token": {"$secret": "env:GH_NOTIFY_TOKEN"}}}`.
+  `capcomd plugins validate <dir>` flags such a default and `capcomd plugins trust` marks the reference as refused.
+  capcomd's built-in plugins keep theirs (`sandbox-boxd` still reads `BOXD_API_KEY`).
 - Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
   check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
   two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
