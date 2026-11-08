@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- **Breaking:** a plugin must be self-contained. Everything it runs has to be inside its own directory, because that
+  is what its LOCK records and what you trust; code it loaded from elsewhere could change without anyone being asked
+  again. `capcomd plugins install`, `update` and `trust` now refuse a plugin whose command or any module it imports
+  lies outside its directory (`../lib`, a `node_modules` above it, a link that points out, its data directory), and
+  name each path; the daemon fails such a plugin (`untrusted`) and won't start its process if one appears while it
+  runs. `capcomd plugins validate <dir>` lists each import that reaches out, with the file that makes it and where it
+  leads (`--json`: `outside`). Its own `node_modules`, `node:` and Bun built-ins and `@capcomd/plugin` are fine. A
+  plugin running on Bun or Node is also stopped from loading a module outside its directory while it runs. To fix a
+  plugin that is refused: bundle it into one file (`bun build index.ts --target=node --outfile dist/index.js`), or move
+  the code and dependencies it needs into its directory, and name its runtime by name (`bun`, not `/usr/bin/env bun`).
 - New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at
   most 32 KiB) is now the first thing each of its agents reads, once, before the profile's prompt and its skills. The
   agent keeps the text it was spawned with; a later edit reaches only agents spawned after it. A persona from the

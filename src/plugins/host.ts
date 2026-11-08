@@ -25,6 +25,7 @@ import { pluginStore, storageService } from "./storage";
 import { pluginsSnapshotPath, type PluginsSnapshot } from "./snapshot";
 import { eventSinks, noEventSinks, scopeEvents, type EventReads } from "./events";
 import { processLauncher } from "./process";
+import { containedRefusals } from "./contained";
 import type { ProcessTimings } from "../../packages/plugin/src/host/process";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
@@ -181,6 +182,8 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
       }
       return t.trusted;
     },
+    // A third-party plugin is self-contained (§4.9, §11.6): checked when validated and before each start of its process.
+    contained: (m, dir) => containedRefusals(dir, m, { dataDir: dataDir(m.name) }),
     sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent, subscribe: streams.subscribe, replay: streams.replay },
     ...(o.process ? { launcher: processLauncher({ socket: o.process.socket, log }), ...(o.process.timings ? { processTimings: o.process.timings } : {}) } : {}),
     ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins, o.socket) } : {}),

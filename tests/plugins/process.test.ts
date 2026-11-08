@@ -4,7 +4,7 @@
 // handshake's checks, hook calls and answers, a deadline, a crash in flight, restarts and their limit, a handshake that
 // never comes, a stream that goes away, events and storage over the wire, and dispose.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -21,7 +21,7 @@ import { addClient, loadClients, mintPluginClient, pluginClients } from "../../s
 import type { ProcessTimings } from "../../packages/plugin/src/host/process";
 import type { PluginHost } from "../../packages/plugin/src/host/host";
 
-const MAIN = join(import.meta.dir, "fixtures", "proc-gate", "main.ts");
+import { PROC_GATE_COMMAND, putProcGate } from "./fixtures/proc-gate";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const OPERATOR = { principal: { kind: "operator" as const, clientId: null }, entity: "mrg-1" };
 const merge = { merge: { mrgId: "mrg-1", runId: "run-1", ref: "agt-1", target: "trunk" } } as never;
@@ -37,9 +37,10 @@ async function boot(o: { name?: string; hooks?: Record<string, object>; control?
   mkdirSync(plugin);
   writeFileSync(join(plugin, "plugin.json"), JSON.stringify({
     schema: "capcomd.plugin/v1", name, version: "1.0.0", description: "proc-gate, from a test", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
-    entry: { runtime: "process", command: ["bun", MAIN], env: { PROC_GATE_MARK: "from the manifest" } }, scopes: ["read", "steer"],
+    entry: { runtime: "process", command: PROC_GATE_COMMAND, env: { PROC_GATE_MARK: "from the manifest" } }, scopes: ["read", "steer"],
     contributes: { hooks: o.hooks ?? { "merge.landing": {}, "run.changed": {} }, events: ["answered"] }, ...(o.manifest ?? {}),
   }));
+  await putProcGate(plugin);
   const data = pluginDataDir(name);
   mkdirSync(data, { recursive: true });
   if (o.control) writeFileSync(join(data, "control.json"), JSON.stringify(o.control));
@@ -217,6 +218,28 @@ describe("the out-of-process runtime", () => {
     expect(await b.host.enable(nameOf(b))).toMatchObject({ state: "validated", cause: "untrusted" });
   }, 30_000);
 
+  test("a user's plugin is checked to be self-contained before every start: one that reaches outside its folder since is never started (§4.9, §11.6)", async () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => { lines.push(a.map(String).join(" ")); };
+    try {
+      const b = await boot({ log: true, control: { "merge.landing": "crash" }, timings: { backoffMs: () => 100, restartLimit: 3 } });
+      expect(b.host.list()[0]).toMatchObject({ source: "user", state: "active" });
+      const first = JSON.parse(readFileSync(join(b.data, "opened.json"), "utf8")).session as string;
+      // Its code now loads a module beside its folder; then it crashes with a gate call in flight.
+      writeFileSync(join(b.dir, "shared.js"), "export const x = 1;\n");
+      writeFileSync(join(b.dir, "p", "main.js"), `import "../shared.js";\n${readFileSync(join(b.dir, "p", "main.js"), "utf8")}`);
+      expect(await b.host.hooks.fire("merge.landing", "veto", merge, OPERATOR)).toMatchObject({ decision: "deny", failure: "crashed" });
+      await until(() => b.host.list()[0]!.state === "failed");
+      expect(b.host.list()[0]).toMatchObject({ state: "failed", cause: "restart_limit" });
+      expect(JSON.parse(readFileSync(join(b.data, "opened.json"), "utf8")).session).toBe(first);
+      expect(b.events.filter((e) => e.type === "plugin.process_changed" && e.data.event === "started" && e.data.pid !== null)).toHaveLength(1);
+      expect(lines.some((l) => l.includes(`not started: it runs code from outside its folder`) && l.includes(`main.js: ../shared.js resolves outside the plugin's folder: ${join(realpathSync(b.dir), "shared.js")}`))).toBe(true);
+      // Enabling it reads it again and fails it: untrusted, with the path.
+      expect(await b.host.enable(nameOf(b))).toMatchObject({ state: "failed", cause: "untrusted" });
+    } finally { console.log = log; }
+  }, 30_000);
+
   test("a plugin failed by restart_limit and then disabled is no longer asked: the operator's call", async () => {
     const b = await boot({ control: { "merge.landing": "crash", atStart: "exit" }, timings: { backoffMs: () => 100, restartLimit: 2 } });
     writeFileSync(join(b.data, "control.json"), JSON.stringify({ "merge.landing": "crash" }));
@@ -305,7 +328,7 @@ describe("the out-of-process runtime", () => {
         const b = await boot({ name });
         expect(b.host.list()[0]).toMatchObject({ state: "active" });
         // This start's record replaced it.
-        expect(JSON.parse(readFileSync(join(b.data, "process.json"), "utf8"))).toMatchObject({ daemon: process.pid, command: `bun ${MAIN}` });
+        expect(JSON.parse(readFileSync(join(b.data, "process.json"), "utf8"))).toMatchObject({ daemon: process.pid, command: `bun ${join(b.dir, "p", "main.js")}` });
       }
       await until(() => !alive(leftover.pid!));
       // A pid that runs something else now (a recycled pid) is left alone.
@@ -332,7 +355,7 @@ describe("what the runtime stands on", () => {
     const home = mkdtempSync(join(tmpdir(), "cpp-h-"));
     for (const n of ["zeta", "alpha"]) {
       mkdirSync(join(home, "plugins", n), { recursive: true });
-      writeFileSync(join(home, "plugins", n, "plugin.json"), JSON.stringify({ schema: "capcomd.plugin/v1", name: n, version: "1.0.0", description: n, apiVersion: 1, engines: { capcomd: ">=0.0.0" }, entry: { runtime: "process", command: ["bun", MAIN] }, contributes: { hooks: { "run.changed": {} } } }));
+      writeFileSync(join(home, "plugins", n, "plugin.json"), JSON.stringify({ schema: "capcomd.plugin/v1", name: n, version: "1.0.0", description: n, apiVersion: 1, engines: { capcomd: ">=0.0.0" }, entry: { runtime: "process", command: PROC_GATE_COMMAND }, contributes: { hooks: { "run.changed": {} } } }));
     }
     mkdirSync(join(home, "plugins", "not-a-plugin"));
     const found = userPlugins({ CAPCOMD_HOME: home });
