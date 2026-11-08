@@ -295,7 +295,10 @@ model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it 
   title, provider mark, tags and readiness (login present, environment built, sandbox up), with the resolved values
   and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
   setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
-  profile that can plan, not only the one named `planner`.
+  profile that can plan, not only the one named `planner` (`planners`, each with its readiness; done 2026-11-07, spec
+  1.0.47). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
+  skills each is pinned with and their trust (`untrustedSkills`), so the app and a planner see that a spawn would wait
+  on the operator's trust before it is refused.
 - **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
   across runs of the same profile (bot-avatar memory: "agent id + role + size → SVG"; the seed becomes the profile's
   when it sets one).
@@ -367,7 +370,8 @@ Each step ships alone, with tests, and leaves every existing test green.
   where every value came from.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
   environment is warned about by `capcomd profiles validate` and refused at spawn (`reason: environment`, §9), not left
-  to the provider's boot error; showing it as readiness before the run (`GET /v1/run-options`) is still to do.
+  to the provider's boot error; and shown before the run: `GET /v1/run-options` `planners` says a planner whose
+  environment isn't built (or whose `lifecycle` plugin isn't active) isn't ready, and why (2026-11-07, spec 1.0.47).
 - **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
   per hash (decision 4 below).
 - A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam
@@ -560,7 +564,7 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
   `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
   warning when no daemon runs.
-- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.47, 2026-11-07;
+- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.48, 2026-11-07;
   `src/plugins/snapshot.ts` `seamPresence`): a seam only the daemon loads made every resolution in the CLI fail,
   `capcomd profiles list` included, so outside the daemon a name is a built-in or one the running daemon lists from an
   active, enabled plugin; any other is an error while a daemon runs and a warning (from every reader of profiles, not
