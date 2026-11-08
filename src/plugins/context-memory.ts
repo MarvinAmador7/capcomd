@@ -47,17 +47,43 @@ export function nameStatus(z: string): Array<{ path: string; oldPath: string | n
 /** What a branch's agent and commit are, as the gates need them. */
 export interface BranchAgent { id: string; profile: string | null; review: Review; commit: string | null; branch: string }
 
+/** The run and agent whose branch `capcomd/<run>/<agt>` is (of any run: an agent's branch is never a person's); null for
+ *  any other name. */
+export function branchOwner(branch: unknown): { runId: string; id: string } | null {
+  const m = typeof branch === "string" ? /^capcomd\/([A-Za-z0-9_-]+)\/(agt-[A-Za-z0-9_-]+)$/.exec(branch) : null;
+  return m ? { runId: m[1]!, id: m[2]! } : null;
+}
+
+/** An agent's record as the gates read it. */
+interface AgentRecord { profile: string | null; spec: unknown; result: unknown }
+const commitOf = (a: AgentRecord) => { const c = (a.result as { commit?: unknown } | null)?.commit; return typeof c === "string" && c ? c : null; };
+const reviewOf = (a: AgentRecord): Review => ((a.spec as { context?: { review?: string } } | null)?.context?.review === "lint" ? "lint" : "human");
+
 /** What the gates read besides the payload (a test replaces it). */
 export const promotionKernel = {
-  /** The agent a verify's or a merge's ref names (its id, or its branch `capcomd/<run>/<agt>`), with its commit; null
-   *  for a ref that is no agent's (a person's branch). */
+  /** An agent's record in its run: its profile, pinned spec and result. An agent (or a run) the engine doesn't have
+   *  throws, so the gate fails closed; a run that isn't there is never made by asking. */
+  record: async (runId: string, id: string): Promise<AgentRecord> => {
+    const s = await (await import("../core/relay")).existingActor("scope", [runId]);
+    const a = s ? ((await s.getAgent({ agentId: id })) as AgentRecord | null) : null;
+    if (!a) throw new Error(`agent ${id} isn't one of run ${runId} here, so the gate can't say whose work ${id}'s branch is`);
+    return a;
+  },
+  /** The agent whose work a verify's or a merge's ref lands, with its commit; null for a ref that is no agent's (a
+   *  person's branch). A branch `capcomd/<run>/<agt>` is that agent's, in whichever run it is (one of another run is
+   *  no person's either). An agent id lands its result's branch, as the merge does (resolveRef): an agent that handed
+   *  off has its successor's branch and commit as its result, so the successor is the one judged. */
   agent: async (runId: string, ref: string): Promise<BranchAgent | null> => {
-    const id = /^agt-[A-Za-z0-9_-]+$/.test(ref) ? ref : new RegExp(`^capcomd/${runId.replace(/[^A-Za-z0-9_-]/g, "")}/(agt-[A-Za-z0-9_-]+)$`).exec(ref)?.[1];
-    if (!id) return null;
-    const a = await (await import("../primitives/ops")).getAgentOrThrow(runId, id);
-    const review = (a.spec as { context?: { review?: string } } | null)?.context?.review === "lint" ? "lint" : "human";
-    const r = (a.result ?? {}) as { commit?: unknown };
-    return { id, profile: a.profile, review, commit: typeof r.commit === "string" && r.commit ? r.commit : null, branch: `capcomd/${runId}/${id}` };
+    if (!/^agt-[A-Za-z0-9_-]+$/.test(ref)) {
+      const owner = branchOwner(ref);
+      if (!owner) return null;
+      const a = await promotionKernel.record(owner.runId, owner.id);
+      return { id: owner.id, profile: a.profile, review: reviewOf(a), commit: commitOf(a), branch: ref };
+    }
+    const a = await promotionKernel.record(runId, ref);
+    const owner = branchOwner((a.result as { branch?: unknown } | null)?.branch) ?? { runId, id: ref };
+    const o = owner.runId === runId && owner.id === ref ? a : await promotionKernel.record(owner.runId, owner.id);
+    return { id: owner.id, profile: o.profile, review: reviewOf(o), commit: commitOf(a), branch: `capcomd/${owner.runId}/${owner.id}` };
   },
   /** What `commit` changes from where it left the run's target (its merge base with `targetSha` when known, else with
    *  the target's tip), and `.capcomd/context/` there and at `commit`: read in a bare host repo the gates keep per

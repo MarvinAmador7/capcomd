@@ -789,10 +789,14 @@ without a review (no reviewer gate active) fails closed. Review-mode agents a ju
 
 The built-in `context-memory` is a judge too (ADR-025 §5.3, "lint as a check"): for an agent's branch whose
 `tested.commit` changes `.capcomd/context/` (against its merge base with `tested.targetSha`; a file under it, or the
-directory or `.capcomd` made a file or a link), it denies when the agent isn't a consolidator (`memory lands only from a
-consolidator or a person`), when a consolidator's branch changes a file outside that directory or makes it a file or a
-link, and when `capcomd context lint` fails on the directory at `tested.commit` against the merge
-base (`src/context/promotion.ts`); a branch that touches nothing there, or isn't an agent's, is allowed unread. It is
+directory or `.capcomd` made a file or a link, by any name a checkout on a case-insensitive file system reads as one of
+those, such as `.Capcomd/Context/…`), it denies when the agent isn't a consolidator (`memory lands only from a
+consolidator or a person`), when a consolidator's branch changes a file outside that directory, makes it a file or a
+link or uses such another name, and when `capcomd context lint` fails on the directory at `tested.commit` against the
+merge base (`src/context/promotion.ts`); a branch that touches nothing there, or isn't an agent's, is allowed unread.
+The agent judged is the one whose work the ref lands: for an agent id, the agent whose branch its result names (an agent
+that handed off has its successor's); for a branch `capcomd/<run>/<agt>`, that agent, in that run, whichever run it
+is (another run's agent is no person); one the engine has no record of fails the judge (fail-closed). It is
 built in and loaded in every process (§6.1), and it judges before the reviewer gate (§6.3, by name), so a memory change
 that can't land costs no review. It reads the branch in a clone of the run's repository it keeps (a host repo,
 §11.7).
@@ -826,7 +830,8 @@ no `merge.landing`.
 
 Promotion is a merge (ADR-025 §5.3): the built-in `context-memory` listens here, fail-closed, judging the agent's commit
 (its result's `commit`, from its merge base with `target.sha` when the payload has one, else with the target's tip) as
-its `verify.judging` judge does (§6.6.13), and denies what that judge would. A consolidator's
+its `verify.judging` judge does (§6.6.13; the same agent, the one whose work the ref lands), and denies what that judge
+would. A consolidator's
 branch that passes is held for a person under its profile's `context.review: human` (the default), with what changes
 and what lint flags for a reader (an item that reads like an instruction, a stale or large one) in the reason and
 `holdId` `memory@<commit, 12 characters>`, so an approval holds for that commit only; under `review: lint` it is allowed
@@ -2306,6 +2311,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.50 | 2026-11-08 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7, §16.3.1); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
 | 1.0.51 | 2026-11-08 | From the review of ADR-024's writes (its §7 step 6; ADR-024 §9, "Made while building the writes"): `GET /v1/profiles/{name}` shows `context.providers` by name only, as `tools.mcp`, and, in other rows outside the catalog, redacts token shapes, a value under a key named like a secret (the redactor's key rule, `SECRET_KEY`) and a URL's password (the route's "Never contains a credential"); a profile file a write replaces keeps its mode (the unguessable, exclusively created temporary file is 1.0.45's); `PUT` refuses a number past 2^53. No contract change. |
 | 1.0.52 | 2026-11-08 | The watchdog's progress from real activity (§16.4, the live run's L3; supersedes 1.0.38's windows from the checkpoint interval, since files changing no longer wait for a checkpoint): `agent.changed` `worked {files, command, at}` (additive; no event in the run's log, never replayed, §6.6.8) from the agent's runner at most once a supervisor heartbeat: its checkout's files changed (the supervisor fingerprints the working tree from `git status` and each changed path's size and time at each heartbeat for an agent whose work is checkpointed, writing nothing to the repository, less often in a slow checkout), a foreground shell command running since when (`AgentEvent.commands`, additive, §7.3); the built-in counts `worked {files}` as progress, holds its clock while a foreground command runs (at most `stalledAfterMs` of commands between two signs of progress, so a hung or repeated command is still judged; a turn's end ends its commands) and while a job runs (overlapping waits count once), and no longer counts a job's end as progress (the time it ran doesn't count instead; the open question decided); its notice and stop say what it saw (`no file change seen`, the tool steps it heard of, a command it waits on); a `stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`) is warned about by `capcomd setup` and in its log, not refused. |
+| 1.0.53 | 2026-11-08 | `context-memory`'s judge and gate, after a second review of ADR-025 step 3 (§6.6.13, §6.6.15): a path a checkout on a case-insensitive file system reads as the memory (`.Capcomd/Context/…`, with HFS+-ignored characters or Windows' trailing dots and spaces) is a change to it, so an agent's branch can't put files in a macOS checkout's `.capcomd/context/` unjudged, and a consolidator's branch changes items by their exact names only; the agent judged is the one whose work the ref lands (an agent id's result branch, so a handed-off agent's successor), and a branch `capcomd/<run>/<agt>` of another run is judged as that run's agent instead of let through as a person's (an agent the engine has no record of fails it closed). No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
