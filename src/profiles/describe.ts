@@ -7,7 +7,7 @@
 // present?) is the caller's, which knows the environment it asks for. Read by capcomd_profiles (src/mcp/driver.ts),
 // `capcomd profiles` and GET /v1/profiles.
 import { agentSeam } from "../plugins/agents";
-import { abilityText, leadText, readOnlyTools, type AgentSpec, type AuthMode } from "./v1";
+import { abilityText, leadText, readOnlySpec, type AgentSpec, type AuthMode } from "./v1";
 import { PROFILE_JSON_SCHEMA, type ProfileDoc } from "./v2";
 import type { AppliedFile, ProfileLayer, ProfileSet, ResolvedProfile } from "./load";
 
@@ -110,10 +110,10 @@ export function costTier(model: string | undefined | null): CostTier | null {
   return null;
 }
 
-/** Whether the profile edits code, from its tools: what fit says first. */
+/** Whether the profile edits code, from what its provider applies (v1.ts readOnlySpec): what fit says first. */
 function works(s: AgentSpec): string {
   if (s.toolMode === "orchestrate") return "orchestrates: sees everything, runs nothing";
-  if (readOnlyTools(s.allowedTools) || s.sandbox === "read-only") return "read-only";
+  if (readOnlySpec(s)) return "read-only";
   return "edits and runs code";
 }
 
