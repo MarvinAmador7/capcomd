@@ -535,7 +535,8 @@ export async function placeBundle(b: ContextBundleSpec, h: HostRemote, box: Sand
  * Every bundle under `<workdir>/context/` but `cited` removed from the sandbox before the agent starts: an env image
  * carries the brains of the project it was built for (`capcomd env build`), and a brain is given only to the agents whose
  * brief cites it (a mapping per project keeps one company's brain out of another's agents, ADR-025 step 4). A sandbox
- * without that directory costs one exec; one that can't be cleaned says so in the agent's log.
+ * without that directory costs one exec. One that can't be cleaned throws: the agent doesn't start beside a brain it
+ * wasn't given.
  */
 export async function dropUncitedBundles(workdir: string, cited: ContextBundleSpec[], box: SandboxGit, onLog?: (lines: string[]) => void): Promise<void> {
   // Plain names (the attempt's spec checks them), so they are safe in the script.
@@ -552,7 +553,7 @@ done
 exit $rc`]).catch((e) => ({ code: 1, stdout: "", stderr: String((e as Error)?.message ?? e) }));
   const gone = res.stdout.split("\n").filter(Boolean);
   if (gone.length) onLog?.([`[capcomd] context: removed ${gone.length} bundle${gone.length === 1 ? "" : "s"} this agent's brief doesn't cite (${gone.slice(0, 5).join(", ")})`]);
-  if (res.code !== 0) onLog?.([`[capcomd] context: couldn't clear the bundles this agent's brief doesn't cite: ${(res.stderr || res.stdout).trim().slice(-300)}`]);
+  if (res.code !== 0) throw new AgentError("failed", `couldn't remove the context bundles this agent's brief doesn't cite from ${workdir}/context, so it doesn't start: ${(res.stderr || res.stdout).trim().slice(-300)}`);
 }
 
 export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider, vmId: VmId, task: AgentTask, cfg: AgentConfig, opts: AgentRunOptions): Promise<AgentResult> {

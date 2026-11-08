@@ -149,6 +149,16 @@ describe("the context-groundray built-in (ADR-025 §11.2)", () => {
     expect(await restrictedOf({ "knowledge/references/notes.txt": "Payroll export\nSensitivity: Restricted\n" })).toEqual(marked);
     expect(await restrictedOf({ "knowledge/references/notes.txt": "the word restricted, and sensitivity: confidential\n" })).toEqual({ restricted: null, unchecked: null });
     expect(await restrictedOf({ "knowledge/references/scan.pdf": `%PDF-1.7\n${"x".repeat(4 * 1024 * 1024)}` })).toEqual({ restricted: null, unchecked: "1 of its files is over 4 MiB" });
+    // One too long or nested too deep to parse quickly is matched without the parser, more broadly (TOML, a next line).
+    const nested = `${"{\"a\": ".repeat(20_000)}1${"}".repeat(20_000)}`;
+    const t0 = Date.now();
+    expect(await restrictedOf({ "knowledge/references/deep.json": nested })).toEqual({ restricted: null, unchecked: null });
+    expect(await restrictedOf({ "knowledge/references/deep.json": `{"meta": {"sensitivity": "restricted", "x": ${nested}}}` })).toEqual(marked);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(await restrictedOf({ "knowledge/references/data.json": `{"rows": [${"[1, 2, 3], ".repeat(10_000)}[]], "meta": {"sensitivity": "restricted"}}` })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/big.toml": `${"# pad\n".repeat(20_000)}[meta]\nsensitivity = "restricted"\n` })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/big.yaml": `${"pad: x\n".repeat(20_000)}meta:\n  sensitivity:\n    restricted\n` })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/big.txt": `${"the word restricted, and sensitivity: confidential\n".repeat(2_000)}` })).toEqual({ restricted: null, unchecked: null });
     // A file outside the bundle is never placed, so it isn't the brain's to say (brain.yaml, another directory).
     expect(await restrictedOf({ "private/salaries.md": fm({ type: "concept", id: "pay", sensitivity: "restricted" }, "x"), "private/keys.yaml": "sensitivity: restricted\n" })).toEqual({ restricted: null, unchecked: null });
     // A body that talks about sensitivity isn't a marking; confidential is allowed.
@@ -405,6 +415,15 @@ describe("the bundle in the attempt's spec and in the sandbox (ADR-025 §6.2)", 
     const quiet: string[] = [];
     await dropUncitedBundles(join(root, "nowhere"), [], localBox(), (l) => quiet.push(...l));
     expect(quiet).toEqual([]);
+    // One that can't be removed: the agent doesn't start beside it.
+    mkdirSync(join(ctx, "groundray/initech/knowledge"), { recursive: true });
+    writeFileSync(join(ctx, "groundray/initech/knowledge/a.md"), "INITECH-ONLY\n");
+    chmodSync(join(ctx, "groundray/initech/knowledge"), 0o555);
+    try {
+      await expect(dropUncitedBundles(root, cited, localBox())).rejects.toThrow("so it doesn't start");
+      const dead = { exec: async (): Promise<{ code: number; stdout: string; stderr: string }> => { throw new Error("the machine went away"); }, upload: async () => {} };
+      await expect(dropUncitedBundles(root, cited, dead)).rejects.toThrow("the machine went away");
+    } finally { chmodSync(join(ctx, "groundray/initech/knowledge"), 0o755); }
   });
 
   test("placed from the host's mirror at its commit: its files read-only, a marker; one already there is kept; one that can't be fetched leaves the agent without it", async () => {

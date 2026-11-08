@@ -31,7 +31,7 @@ import { RelayError } from "../core/errors";
 import { assertRemoteUrl, inlineCredential } from "../merge/host-git";
 import type { Principal } from "../../packages/plugin/src/shapes";
 import { actorOf, BRAIN_NAME_RE, draftProblem, groundrayBin, writeToBrain, type BrainDraft, type BrainTarget, type BrainWritten, type WriteDeps } from "./groundray-write";
-import { aborted, classifyContextError, contextItem, MEMORY_MAX_FILES, mirrorReader, parseBundle, searchItems, type Parsed, type TreeReader } from "./memory";
+import { aborted, classifyContextError, contextItem, MEMORY_MAX_BYTES, MEMORY_MAX_FILES, mirrorReader, parseBundle, searchItems, type Parsed, type TreeReader } from "./memory";
 import { contextSettings, type ContextSettings } from "./project";
 
 export const GROUNDRAY = "groundray";
@@ -164,7 +164,24 @@ function marksRestricted(text: string): boolean {
  *  at a frontmatter's top level, or at any depth of a file under the bundle that isn't Markdown (a sidecar of metadata, a
  *  JSON or plain text file, which have no frontmatter to say it in, are read whole). */
 function saysRestricted(text: string, deep = true): boolean {
+  // The YAML parser's cost grows faster than the text (a 64 KiB file of nested `{a: ` takes seconds), and a brain is
+  // read on the daemon's thread: text too long or nested too deep for it is matched without parsing, more broadly.
+  if (text.length > MEMORY_MAX_BYTES || flowDepth(text) > YAML_MAX_FLOW_DEPTH) return SAYS_RESTRICTED_ANYWHERE.test(text);
   return valuesOf(text, "sensitivity", deep).some((v) => v.toLowerCase() === "restricted") || /^[ \t]*(["']?)sensitivity\1[ \t]*:[ \t]*(["']?)restricted\2[ \t]*(?:[,}#].*)?$/im.test(text);
+}
+/** `sensitivity` then `restricted` with a `:` or `=` between, anywhere: a key quoted or not, at any depth, its value on
+ *  the next line or a block scalar's, YAML, JSON, TOML or prose. */
+const SAYS_RESTRICTED_ANYWHERE = /(?:^|[^A-Za-z0-9_-])(["']?)sensitivity\1\s*[:=]\s*(?:[|>][-+0-9]*\s*)?(["']?)restricted\2(?![A-Za-z0-9_-])/i;
+/** How deep flow collections (`[`, `{`) may nest in text the YAML parser is given. */
+const YAML_MAX_FLOW_DEPTH = 32;
+/** The deepest flow collections nest in `text`, roughly (a bracket in a string counts too). */
+function flowDepth(text: string): number {
+  let depth = 0, max = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 91 || c === 123) { if (++depth > max) max = depth; } else if ((c === 93 || c === 125) && depth > 0) depth--;
+  }
+  return max;
 }
 
 /** A project's mapping, as `run new` recorded it (or the file has it): checked, since the file is hand-editable. */

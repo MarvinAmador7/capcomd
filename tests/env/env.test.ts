@@ -284,6 +284,16 @@ describe("the project's brains in the env image (ADR-025 step 4)", () => {
     expect(uploads.filter((p) => p.includes("capcomd-tree-"))).toEqual([]);
     expect(existsSync(join(f.workdir, "context/groundray/globex"))).toBe(false);
     expect(listed(dir)).toContain("knowledge/policies/refunds.md");
+
+    // A bundle that can't be removed: the agent doesn't start beside another project's brain.
+    mkdirSync(join(f.workdir, "context/groundray/initech/knowledge"), { recursive: true });
+    writeFileSync(join(f.workdir, "context/groundray/initech/knowledge/a.md"), "INITECH-ONLY\n");
+    chmodSync(join(f.workdir, "context/groundray/initech/knowledge"), 0o555);
+    try {
+      const { id: id2 } = await f.provider.ensure({ idemKey: "w-brain-2", isolated: true, ttlSeconds: 60, egressAllow: ["github.com"], labels: {}, fromSnapshot: res.name });
+      await f.provider.waitReady(id2, 1000);
+      await expect(runAgent(codexAdapter, f.provider, id2, { runId: "r1", taskId: "task-c", epoch: 1, branch: taskBranch("r1", "task-c"), target: "main", repoUrl: f.r.bare, goal: "fix" }, cfg, { apiKey: "sk-proj-x-0123456789abcdef", hostGit })).rejects.toThrow("so it doesn't start");
+    } finally { chmodSync(join(f.workdir, "context/groundray/initech/knowledge"), 0o755); }
   }, 90_000);
 
   test("a brain that is restricted, or isn't the brain it was mapped as, stays out of the image; one with credential-shaped text in it is left out", async () => {

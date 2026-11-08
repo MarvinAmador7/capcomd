@@ -16,7 +16,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   folder is now checked, Markdown or not (a YAML, JSON or text file marked `sensitivity: restricted` refuses the brain,
   as does any file over 4 MiB or a folder of more than 2000 files: keep big attachments outside the knowledge folder).
   An agent's sandbox also keeps only the brains its own brief cites: brains another
-  project's image carries are removed before the agent starts.
+  project's image carries are removed before the agent starts (an agent whose sandbox can't be cleaned doesn't start),
+  and checks that `capcomd verify` runs in a VM never see any brain.
 - New: `capcomd plugins disable <name>` and `capcomd plugins enable <name>` turn a plugin off and on. The choice is
   saved in your config (`plugins.<name>.enabled` in `~/.capcomd/config.json`), so it survives a daemon restart, and a
   running daemon applies it at once (`enable` also resets a plugin whose hooks were suspended after failing). With no

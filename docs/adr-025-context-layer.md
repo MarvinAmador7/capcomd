@@ -756,6 +756,10 @@ this list says why):
   it at start: it is the brain's, not the build's). Because an image built in one project can be used by another's agents
   (the env ledger's current image is everyone's), the runner removes every bundle under `<workdir>/context/` the brief
   doesn't cite before the agent starts: a mapping per project still keeps one company's brain out of another's agents.
+  A sandbox that can't be cleaned doesn't start its agent (fail closed), and a checks VM, which boots from the same
+  image to run agent-written code, removes `<workdir>/context/` before the tree under test runs. Text too long or nested
+  too deep for the YAML parser to read quickly (over 64 KiB; flow collections past 32 levels: its cost grows faster than
+  the text, and a brain is read on the daemon's thread) is matched without it, more broadly.
   A project template rebuilt in the background (its delta grew too big) carries no brains: the daemon doesn't know the
   project's mappings, so those agents get the bundle at start as before.
 - A line's path may be 320 characters (200 before): a bundle's file is under the kernel's root.
