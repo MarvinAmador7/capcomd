@@ -11,6 +11,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `GET /v1/plugins/{name}` now lists a plugin's `routes` and the feature flags it adds to `GET /v1/health`
   (`x.<plugin>.<flag>`) while it is active; `capcomd plugins show --json` lists the routes its manifest declares.
   Clients can check for the `plugins.routes` capability.
+- Fixed: the project's memory gate now refuses an agent's branch that writes into `.capcomd/context/` under another
+  spelling of the path, such as `.Capcomd/Context/memory/x.md`. Git treats that as a different folder, but a checkout
+  on macOS or Windows puts those files next to the real memory, and before this fix they got past the check. The gate
+  also judges the agent whose work actually lands: when an agent handed its task off, the gate judges its successor.
+  A `capcomd/<run>/<agent>` branch from another run is now judged as that run's agent, not let through as if a person
+  had written it.
+- Fix: the watchdog no longer flags an agent that is working. It used to see an agent's files change only at its
+  checkpoints (every 10 minutes), so with a shorter `stalledAfterMs` it flagged agents in the middle of editing, and it
+  flagged agents waiting on a long command. Now an agent's files changing counts within about 30 seconds, and the time
+  an agent spends waiting on a foreground command (a test run, a build) doesn't count against it, up to `stalledAfterMs`
+  between two signs of progress, so a command that hangs, or one run again and again, is still caught. A job ending no
+  longer counts as progress by itself, but the time it ran doesn't count either. The stalled notice and the stop now say
+  what the watchdog saw: `no file change seen`, how many tool steps it saw meanwhile, and a command it has
+  been waiting on. `capcomd setup` (and `setup check`) warns when `plugins.watchdog.stalledAfterMs` is under a minute,
+  since progress can take that long to show. This holds whatever an agent's checkpoint interval: an agent whose profile
+  saves its work hourly (`checkpointEveryMs`, `--checkpoint-every-ms`, `CAPCOMD_AGENT_CHECKPOINT_MS`) is no longer
+  flagged between its checkpoints or stopped at 45 minutes while it works, and gets the same 15 and 45 minutes as any
+  other.
 - Fixed: `capcomd plugins install` and `capcomd profiles install` refuse a package with a link that leaves it only by
   going through another of its links (each target looked inside on its own), and a project plugin holding one can't
   be trusted. Before, such a link was installed, and what it pointed to outside the package wasn't part of the hash
@@ -141,13 +159,6 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   2,000 characters), so a parent, the driver and the apps always have something to read; a reviewer's verdict is
   never used as one. `capcomd result` with nothing in it (no summary, artifacts or data) is refused instead of
   recording an empty result over the one the agent declared.
-- Fixed: the watchdog no longer stops agents that save their work less often than every 10 minutes. It sees an
-  agent's files change only when the agent saves a checkpoint, so with a profile's "Saves its work every"
-  (`checkpointEveryMs`, `--checkpoint-every-ms`) or `CAPCOMD_AGENT_CHECKPOINT_MS` set to an hour, a busy agent got
-  "stalled" between checkpoints and was stopped at 45 minutes. Now such an agent gets "stalled" only after one and a
-  half of its interval without progress, and is stopped that much later too (saving hourly: 90 and 120 minutes). At
-  the default interval the watchdog's 15 and 45 minutes are unchanged; a `stalledAfterMs` you set below 15 minutes
-  now waits that long too, since a change can't show sooner.
 - Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
   (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
   `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its

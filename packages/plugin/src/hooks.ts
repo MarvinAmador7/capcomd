@@ -121,6 +121,11 @@ export type AgentChange =
   | { kind: "step"; step: AgentStep }
   /** A checkpoint the in-VM supervisor took (ADR-019 §3): the progress signal a watchdog reads (§16.4). */
   | { kind: "checkpointed"; files: number; commit: string | null; at: Timestamp }
+  /** What the agent's runner saw it doing (§16.4), at most once per supervisor heartbeat (about every 30 s) and only
+   *  when there is something to say: `files`, its checkout's files changed since the last report (the supervisor's
+   *  fingerprint of its working tree differs); `command`, a foreground shell command of its CLI is running, since `since`
+   *  (null: none). Told when it is seen, with no event in the run's log, so never replayed (§6.6.8). */
+  | { kind: "worked"; files: boolean; command: { since: Timestamp } | null; at: Timestamp }
   | { kind: "notice"; notice: AgentNotice | null }
   | { kind: "paused"; by: string } | { kind: "resumed"; by: string } | { kind: "titled" }
   | { kind: "ended"; status: "done" | "failed" | "cancelled" | "handed-off"; result: AgentResult | null };

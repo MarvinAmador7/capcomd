@@ -43,9 +43,19 @@ export interface Judgement {
   changed: string[];
 }
 
+/** A path as a checkout on a case-insensitive file system reads it (macOS's and Windows' default): `.Capcomd/Context/x.md`
+ *  lands in `.capcomd/context/` there. Also without what HFS+ ignores in a name (git's own list for `.git`), nor the dots
+ *  and spaces Windows drops from a name's end. */
+const asCheckedOut = (p: string) => p.normalize("NFC").replace(/[\u200C-\u200F\u202A-\u202E\u206A-\u206F\uFEFF]/g, "").split("/").map((s) => s.replace(/[. ]+$/, "")).join("/").toLowerCase();
+
 /** Whether a changed path is the project's memory: a file under `.capcomd/context/`, or the directory itself or
- *  `.capcomd` made a file (a link: what an agent's checkout then reads as memory is wherever it points). */
-export const touchesContext = (p: string | null | undefined): boolean => !!p && (p.startsWith(CONTEXT_DIR) || CONTEXT_DIR.startsWith(`${p}/`));
+ *  `.capcomd` made a file (a link: what an agent's checkout then reads as memory is wherever it points), by any name a
+ *  checkout may read as one of those (`.Capcomd/Context/…`). */
+export const touchesContext = (p: string | null | undefined): boolean => {
+  if (!p) return false;
+  const q = asCheckedOut(p);
+  return q.startsWith(CONTEXT_DIR) || CONTEXT_DIR.startsWith(`${q}/`);
+};
 const under = touchesContext;
 const said = (ps: LintProblem[]) => ps.map((p) => `${p.file}: ${p.message}`);
 const listed = (xs: string[], max = 5) => `${xs.slice(0, max).join(", ")}${xs.length > max ? ` and ${xs.length - max} more` : ""}`;
@@ -64,7 +74,7 @@ export function judgeBranch(f: BranchFacts, o: { scan: (t: string) => ScanHit | 
   const outside = [...new Set(f.files.flatMap((x) => [x.path, x.oldPath ?? null]).filter((p): p is string => !!p && !under(p)))];
   if (outside.length) out.problems.push(`a consolidator's branch changes only ${CONTEXT_DIR}: ${f.agent.id} also changed ${listed(outside)}`);
   const replaced = changed.filter((p) => !p.startsWith(CONTEXT_DIR));
-  if (replaced.length) out.problems.push(`a consolidator's branch changes the items in ${CONTEXT_DIR}, never the directory itself: ${f.agent.id} changed ${listed(replaced)}`);
+  if (replaced.length) out.problems.push(`a consolidator's branch changes the items in ${CONTEXT_DIR} by that exact name, never the directory itself or a name a checkout reads as it: ${f.agent.id} changed ${listed(replaced)}`);
   const r =lintContext({ files: f.after, base: f.before, scan: o.scan, outcome: o.outcome, itemBytes: o.itemBytes, descriptionChars: o.descriptionChars, ...(o.now !== undefined ? { now: o.now } : {}) });
   out.problems.push(...said(r.errors).map((x) => `context lint: ${x}`));
   out.warnings.push(...said(r.warnings));

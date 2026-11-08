@@ -114,6 +114,9 @@ export const codex: AgentProvider = {
         ev.calls = [call];
         ev.results = [{ call, ...(failed ? { error } : {}) }];
       }
+      // A command it runs is waited on from its start to its completion (plugin API §16.4).
+      if (item.id && type === "item.started" && item.type === "command_execution") ev.commands = { started: [String(item.id)] };
+      else if (item.id && type === "item.completed") ev.commands = { ended: [String(item.id)] };
       if (item.type === "agent_message" && typeof item.text === "string") { ev.text = item.text.slice(0, 500); if (type === "item.completed") state.resultText = item.text; }
     }
     const s = state as CodexRunState;
