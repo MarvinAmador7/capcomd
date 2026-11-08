@@ -354,6 +354,12 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
 - ADR-024's `memory:` block is read as `context:` (`memory: {scope: project}` is `context: {providers: [{name:
   memory}]}`). One change from what ADR-024 described: the directory is read from the repository and is never
   written back by the agent; changes to it are reviewed commits (a run's consolidator's, below, or a person's).
+- `memory: {files: [NOTES.md]}` (the memory entry's `index: NOTES.md` in a `context` block) narrows the memory to
+  an index you keep: agents of that profile get only the items `.capcomd/context/NOTES.md` links to
+  (`[Rounding](memory/money-rounding.md)`, or the `→ memory/money-rounding.md` lines `capcomd context lint --fix` writes
+  in `index.md`, so `files: [index.md]` works too). The file sits directly in `.capcomd/context/`, so it changes
+  through the same review as the items. Without `files`, every item is read; with it and no such file at the branch's
+  tip, the header says `memory: skipped (not found)`.
 
 ### Lessons agents propose
 
@@ -387,7 +393,8 @@ capcomd context lint --base main     # also: no id changed and no item deleted s
 capcomd context lint --run <runId>   # also: every outcome an item names is a passed verify or landed merge of the run
 ```
 
-It checks that `.capcomd/context/` holds items only (`memory/<slug>.md`, `facts/…`, `index.md`, `log.md`); that each
+It checks that `.capcomd/context/` holds items only (`memory/<slug>.md`, `facts/…`, `index.md`, `log.md`, and a
+profile's own index file beside them, such as `NOTES.md`, which must hold no secret either); that each
 item has frontmatter with an `id` and a `type`, and well-formed `status`, dates, `supersedes`/`superseded_by`,
 `paths`, `outcomes`, `helpful`/`harmful`; that ids are unique; that supersession is reciprocal (A `supersedes: [B]`
 and B `superseded_by: [A]`) and has no cycle; that no file holds a secret (the same check as a proposed lesson's); and
@@ -475,6 +482,9 @@ Context: loaded 2 of 2 lines (…); groundray at 9f8e7d6c5b4a, modified 2026-10-
   own git access (your forge login or git's credential helpers), as it does the project's repository; no credential
   enters the sandbox, and a URL with one in it is refused.
 - One brain per agent: a profile names one, and a provider is never asked twice for one brief.
+- With the project's memory too, every fact line (the brain's and the project's `facts/`) comes before any lesson,
+  whichever provider the profile lists first, so a brief over its budget loses lessons first. The header then says a
+  line's file is in your checkout or, for the brain's, in its read-only copy at the path the line gives.
 - A restricted brain (its bundle's `default_sensitivity: restricted`, or any Markdown file under it marked
   `sensitivity: restricted`) is refused by `brain add`, and an agent is never briefed from one: keep restricted knowledge
   outside capcomd. So is a brain capcomd can't check whole (a Markdown file over 4 MiB, more than 2000 of them).
