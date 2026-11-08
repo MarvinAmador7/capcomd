@@ -529,9 +529,10 @@ export const CAPABILITIES = {
 	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed, trigger.unsubscribed and trigger.replied on the daemon stream audit what the intake decided about each external event and what a run answered; Run.trigger names the trigger a run started from",
 	"profiles.edit": "GET /v1/profiles/{name}: one profile as typed rows a client renders and edits (each with the file that sets it, `source` and `editable`) and its `rev`; PUT /v1/profiles/{name} (the `configure` scope, an Idempotency-Key): change them in the profile's own file, its version bumped; each write is a profile.changed event on the daemon stream",
 	"plugins.config": "Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.trusted on the daemon stream audits a trust",
-	"profiles.facts": "GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for, and `untrustedPersona`, its project persona when a spawn of it waits on the same",
-	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
+	"profiles.facts": "GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for, `untrustedPersona`, its project persona when a spawn of it waits on the same, and `untrustedSandbox`, the project's profile files that set its `sandbox.provider` when a spawn of it on a run without a sandbox of its own waits on the same",
+	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, an untrusted project file that sets its sandbox.provider (a run started with a `sandbox` of its own doesn't wait on it), a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
 	"plugins.routes": "Plugin API routes (plugin API §4.7.3): METHOD /v1/x/{plugin}/… serves a plugin's own routes, JSON in and out, with the caller's token, which needs the scope the route declares (403 `forbidden` otherwise; 404 `not_found` for a route no active plugin serves; a plugin's failure is 500 `internal` with the message \"plugin error\"). GET /v1/plugins/{name} lists its `routes` and the `capabilities` it adds here, named x.<plugin>.<flag>",
+	"context.brain_proposals": "A run's proposals to a company's brain (ADR-025 step 5): GET /v1/runs/{runId}/brain-proposals lists them and whether each was sent; POST /v1/runs/{runId}/brain-proposals/send (the `configure` scope, an Idempotency-Key) sends those waiting for a person as the caller (groundray's actor human:<client id>), as `capcomd context brain propose --run <runId> --yes` does",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -561,7 +562,7 @@ export const CreateRunBody = z.object({
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
 	model: z.string().min(1).max(100).regex(/^[A-Za-z0-9._:\/-]+$/, "model must be a model id").optional().describe("Capability runs.options.models. The model the run's planner (the driver) runs on (`capcomd run --planner-model`): one of that driver's `models[].id` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Passed to the agent CLI as a profile's model is (Claude Code `--model`, Codex `-m`). Omitted: the driver's `model` there (the planner profile's, else the CLI's default)."),
 	plugins: z.record(z.string(), z.record(z.string(), z.unknown())).optional().describe("Capability plugins.config. The run's own plugin settings (`capcomd run --plugin-config <plugin>.<key>=<value>`), by plugin name: only the settings a plugin's config schema marks per-run (`x-per-run`), each valid against its schema; anything else is 422 with `field` plugins.<name>.<key>. Kept for the run in the plugin's run storage (plugin API §10.2); the plugins' own config is unchanged"),
-	sandbox: SandboxName.optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): a listed place's name (GET /v1/run-options `sandboxes`), today docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't one, or isn't available (Docker not running, no boxd API key). Omitted: the daemon's sandbox."),
+	sandbox: SandboxName.optional().describe("Capability runs.options. Where this run's agents and checks run (`capcomd run --sandbox`): a listed place's name (GET /v1/run-options `sandboxes`), today docker (containers on the daemon's machine) or boxd (cloud VMs), for this run only; the daemon's own CAPCOMD_SANDBOX is unchanged. 422 when it isn't one, or isn't available (Docker not running, no boxd API key). Given, it beats every agent profile's `sandbox.provider` for every agent of the run (and a project profile's sandbox then waits on no trust). Omitted: the daemon's sandbox, where a profile that names its own `sandbox.provider` puts its agents there (a project's profile only once its file is trusted, `untrustedSandbox` in GET /v1/profiles)."),
 });
 export const CREATE_RUN_DOC = "Start a run on a goal, always detached (`capcomd run --detach <goal>` in the project's directory): returns at once with the new run, `state: \"starting\"`; " +
 	"the `daemon` and `prj-…` streams then announce it with `run.created` like a run started from the CLI. Needs the `steer` scope. " +
@@ -797,6 +798,7 @@ export const ProfileSummary = z.object({
 	})).optional().describe("Capability profiles.facts. The skills its agents are pinned with, in its order: names and hashes, never their text (`capcomd profiles show <name>` names each file). Empty when it has none"),
 	untrustedSkills: z.array(z.string()).optional().describe("Capability profiles.facts. The names of its project skills that aren't trusted as they are (`skills[].trusted` false): a spawn of it is refused until `capcomd profiles trust <name>`. Empty when none: no skill holds a spawn of it back (`untrustedPersona` may)"),
 	untrustedPersona: z.string().nullable().optional().describe("Capability profiles.facts. The file of its project persona (`identity.persona`, e.g. SOUL.md) when the operator hasn't trusted it as it is now: a spawn of it is refused until `capcomd profiles trust <name>`. null when it has no persona, the persona is the user's own, or it is trusted. Never the persona's text"),
+	untrustedSandbox: z.array(z.string()).optional().describe("Capability profiles.facts. The project's profile files (`<name>.yaml`, `<name>/profile.yaml`, `<name>/override.yaml`) that set its `sandbox.provider`, `sandbox.environment` or `sandbox.size` and that the operator hasn't trusted as they are now, while it names a `sandbox.provider`: a spawn of it on a run started without a sandbox of its own is refused (`untrusted`) until `capcomd profiles trust <name>`. A run started with one (`POST /v1/runs` `sandbox`, `capcomd run --sandbox`) puts every agent there instead, whatever the profile names, and doesn't wait on this. Empty when none: your own profiles need no trust"),
 });
 export const Profiles = z.object({
 	file: z.string().describe("The agents.json the profiles are read with, on the daemon's machine (it may not exist); the profiles/ folder beside it is the project's layer"),
@@ -1169,6 +1171,42 @@ export const PULL_REQUEST_DOC = "Capability runs.goal_branch. Open a GitHub pull
 	"Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. " + WRITE_DOC;
 export const KEEP_BRANCH_DOC = "Capability runs.goal_branch. Keep the goal branch without a pull request (no body): recorded so clients stop asking (Run.goalBranch.state kept; run.branch_kept on the run stream). Opening a pull request later is still allowed. 409 `conflict` while the planner works, or once a pull request was opened. Needs the steer scope. " + WRITE_DOC;
 
+/** A run's proposals to a company's brain (capability context.brain_proposals; ADR-025 step 5). */
+const BrainProposalSentTo = z.object({
+	actor: z.string().describe("groundray's actor the draft was written as: human:<client id> (a person sent it), else capcomd/<version> (the kernel, under a consolidator's `review: lint`)"),
+	at: z.string(), item: z.string().describe("The draft item's id in the brain (urn:uuid:…)"),
+	where: z.string().describe("The pull request on the brain's repository (its URL), else the repository and the branch that holds the draft"),
+});
+export const BrainProposal = z.object({
+	id: z.string().describe("<agentId>.<n>: the consolidator that proposed it and its place in its answer"),
+	agentId: z.string(), brain: z.string().describe("The brain's name, as the project maps it"),
+	type: z.string().describe("One of groundray's item types (concept, decision, procedure, policy, system, source-summary, question)"),
+	title: z.string().describe("The agent's title for it: untrusted text, render it as plain text"),
+	from: z.array(z.string()).describe("The run's lesson candidates it was made from"), at: z.string(),
+	sent: BrainProposalSentTo.nullable().describe("null: not sent yet"),
+	error: z.string().optional().describe("Why the last send failed, while it isn't sent"),
+});
+export const BrainProposals = z.object({ runId: z.string(), proposals: z.array(BrainProposal).describe("In the order they were proposed") });
+export const BrainProposalsSendBody = z.object({
+	agentId: z.string().regex(/^agt-[A-Za-z0-9_-]{1,64}$/).optional().describe("Only this consolidator's proposals (default: every consolidator of the run)"),
+});
+export const BrainProposalOutcome = z.object({
+	id: z.string(), brain: z.string(), title: z.string(),
+	ok: z.boolean(), already: z.boolean().describe("It was sent before (this call didn't send it again)"),
+	item: z.string().optional(), where: z.string().optional(), error: z.string().optional().describe("Why it couldn't be sent (ok false)"),
+});
+export const BrainProposalsSent = z.object({
+	runId: z.string(), actor: z.string().describe("Whom the drafts were written as: human:<your client id>"),
+	sent: z.array(BrainProposalOutcome).describe("Every proposal of the run (or of `agentId`), in order: sent now, or sent already. Empty: it proposed nothing to a brain"),
+});
+export const BRAIN_PROPOSALS_DOC = "Capability context.brain_proposals. A run's proposals to a company's brain (ADR-025 step 5): the new facts its consolidators proposed for the brain their profile names, with whether each was sent. " +
+	"A proposal waits for a person (its consolidator's `review: human`, the default) until one sends it with POST …/brain-proposals/send or `capcomd context brain propose --run <runId> --yes`; under `review: lint` the kernel sends it as capcomd. Needs the `read` scope. 404 `not_found` for an unknown run. " +
+	"Refetch on plugin.context.brain_staged and plugin.context.brain_proposed.";
+export const BRAIN_PROPOSALS_SEND_DOC = "Capability context.brain_proposals. Send the run's proposals not sent yet to their brains as you (body optional: `{\"agentId\": \"agt-…\"}`), as `capcomd context brain propose --run <runId> --yes` does: each becomes a draft on the run's proposal branch of the brain's repository (written by groundray with the actor human:<your client id>) and a pull request there for the brain's owners; what agents read doesn't change. " +
+	"Those sent already stay as they were (`already`), whoever sent them; a proposal the brain already holds (its pull request merged) isn't drafted again. Each one sent is a plugin.context.brain_proposed event on the run stream. " +
+	"200 once every proposal is sent (`sent` empty: the run proposed nothing). 503 `unavailable` when one or more couldn't be sent (the brain or groundray didn't answer, or refused): the body adds `sent`, each with its `error`; those sent stay sent, so send again (with the same Idempotency-Key or a new one) for the rest. " +
+	"Needs the `configure` scope: the drafts are written in your name in another repository. A plugin's token is 403 `forbidden`: a plugin never sends a proposal in a person's name. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: the same key and body answer the first 200 again without sending; the same key with another run or body is 409 `idempotency_conflict`. 404 `not_found` for an unknown run.";
+
 /** PUT /v1/runs/{runId}/agents/{agentId}/title (capability agents.title). */
 export const AgentTitleBody = z.object({
 	title: z.string().max(200).describe(`The user's title for the agent: 1 to ${TITLE_WORDS_MAX} words, at most ${TITLE_MAX_CHARS} characters. Trimmed, whitespace collapsed, lowercased, control and format characters dropped; refused (422 \`invalid\`, field title) when that leaves no words, or more words or characters than that`),
@@ -1223,6 +1261,9 @@ export const contract = {
 			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders, body: PullRequestBody.optional() })).output(GoalPullRequestResult),
 		keepBranch: oc.route({ method: "POST", path: "/v1/runs/{runId}/keep-branch", inputStructure: "detailed", description: KEEP_BRANCH_DOC })
 			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(z.object({ runId: z.string(), branch: z.string(), base: z.string(), kept: z.literal(true), changed: z.boolean().describe("This call recorded it (false: it was kept already)") })),
+		brainProposals: oc.route({ method: "GET", path: "/v1/runs/{runId}/brain-proposals", description: BRAIN_PROPOSALS_DOC }).input(z.object({ runId: z.string() })).output(BrainProposals),
+		sendBrainProposals: oc.route({ method: "POST", path: "/v1/runs/{runId}/brain-proposals/send", inputStructure: "detailed", description: BRAIN_PROPOSALS_SEND_DOC })
+			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders, body: BrainProposalsSendBody.optional() })).output(BrainProposalsSent),
 		pause: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/pause", inputStructure: "detailed",
 			description: `Pause every pending or running agent of the run (no body). An agent that hasn't started is paused now (\`changed\`); a running one is asked to stop (\`pending\`): ` +

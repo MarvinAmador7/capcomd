@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { credentialReady, plannerDriver } from "../../src/agents/run-driver";
-import { decodeAgentRef, resolveAgent } from "../../src/profiles";
+import { decodeAgentRef, readProfiles, resolveAgent, trustProfile } from "../../src/profiles";
 import { addClient, loadClients } from "../../src/api/clients";
 import { CAPABILITY_NAMES, CreateRunBody, RunOptions } from "../../src/api/contract";
 import { launchContext, startDetachedRun } from "../../src/api/create-run";
@@ -706,7 +706,11 @@ describe("GET /v1/run-options planners (capability runs.options.planners; ADR-02
 			"talked/profile.yaml": "name: talked\nharness: { provider: claude, auth: subscription }\nsandbox: { egress: [github.com] }\n",
 		};
 		// On boxd (an egress allowlist, isolated VMs): the egress limit is enforced; fake-host runs on this host, outside it.
-		const boxd = Object.fromEntries((await runOptions(place(files), dockerUp)).planners!.map((p) => [p.name, p]));
+		const boxdEnv = place(files);
+		// The project's file that moves loose's agents waits on trust first (ADR-024 §9, 2026-11-08), then isolation says no.
+		expect((await runOptions(boxdEnv, dockerUp)).planners!.find((p) => p.name === "loose")).toMatchObject({ available: false, reason: "profile loose can't be spawned: it sends its agents to the fake-host sandbox, and the project's profile file that sets that, loose/profile.yaml (sandbox.provider), isn't trusted (run `capcomd profiles trust loose`, or start the run with its own sandbox)" });
+		trustProfile([], null, { env: boxdEnv, machine: readProfiles(boxdEnv.CAPCOMD_AGENTS_FILE, boxdEnv).profiles.loose!.machineFiles });
+		const boxd = Object.fromEntries((await runOptions(boxdEnv, dockerUp)).planners!.map((p) => [p.name, p]));
 		expect(boxd.fence).toMatchObject({ available: true, reason: null });
 		expect(boxd.loose).toMatchObject({ available: false, reason: "profile loose: sandbox.provider fake-host runs its agents on this host, outside any sandbox, and this run's agents are isolated (boxd) (name an isolated sandbox in its sandbox.provider, or remove it)" });
 		// On Docker (no allowlist), with its agent environment and login: the limit couldn't be kept, so its spawn is refused.

@@ -10,6 +10,9 @@
 //    checkout). Neither runs until the operator trusts its content hash (`capcomd plugins trust <name>`,
 //    src/install/trust.ts): opening a repository runs no code on the host. A changed file is a changed hash, and the
 //    plugin waits for trust again.
+//  - A plugin is self-contained (src/plugins/contained.ts): `install`, `update` and `trust` refuse one that would run
+//    code from outside its folder (../lib, a parent node_modules, a link that points out), which neither its LOCK nor its
+//    trust covers, and name each path.
 //  - `update` fetches again from the LOCK's source and reports what changed (files, hash, commit) before replacing it.
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -25,6 +28,7 @@ import { diffTrees, hashTree, inside, lockState, readLock, writeLock, LOCK_SCHEM
 import { parseSource, SourceError, type PackageSource } from "../install/source";
 import { recordTrust, revokeTrust, trustState } from "../install/trust";
 import { BUILTINS } from "./builtins";
+import { containedIssues, outsideText, selfContained, type OutsideRef } from "./contained";
 
 type Env = Record<string, string | undefined>;
 const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
@@ -109,8 +113,15 @@ function checkPlugin(dir: string, want: string | null, env: Env): PluginManifest
   if (want && m.name !== want) throw new RelayError("config", `the plugin in that directory is ${m.name}, not ${want}`, "Name it by the name in its plugin.json.");
   if (m.entry.runtime !== "process") throw new RelayError("config", `${m.name} runs in process: only capcomd's built-in plugins do (plugin API §5.2)`, "A third-party plugin runs as its own process (entry.runtime: process).", { code: "untrusted" });
   if (BUILTINS.some((b) => (b.manifest as { name: string }).name === m.name)) throw new RelayError("conflict", `${m.name} is one of capcomd's built-in plugins`, "A plugin can't take a built-in's name.");
+  refuseOutside(m.name, selfContained(dir, m).outside);
   return m;
 }
+
+/** §4.9, §11.6: a plugin that would run code from outside its folder, which neither its LOCK nor a trust covers. */
+export function refuseOutside(name: string, outside: OutsideRef[]) {
+  if (outside.length) throw new RelayError("config", `${name} runs code from outside its folder, which its hash doesn't cover: ${outsideText(outside)}`, SELF_CONTAINED_HINT, { code: "not_self_contained" });
+}
+const SELF_CONTAINED_HINT = "A plugin must be self-contained: bundle it into one file, or keep its code and dependencies (its own node_modules) in its folder. capcomd plugins validate <dir> lists each path.";
 
 const lockOf = (m: PluginManifest, src: PackageSource, fetched: { commit: string; path: string }, tree: ReturnType<typeof hashTree>): Lock => ({
   schema: LOCK_SCHEMA, kind: "plugin", name: m.name, version: m.version, source: src.spec, remote: src.remote, ref: src.ref,
@@ -272,6 +283,8 @@ export interface ProjectPlugin {
   hash: string | null;
   trust: "trusted" | "changed" | "untrusted";
   trustedHash: string | null;
+  /** What it would run from outside its folder (§4.9, §11.6): a plugin with any can't be trusted. */
+  outside: OutsideRef[];
 }
 
 /** The directories of `project`'s plugins: its own `.capcomd/plugins/<name>/` in name order, then (with `uses`) its
@@ -309,8 +322,14 @@ export function projectPluginList(project: string, env: Env = process.env, uses 
     let hash: string | null = null;
     const issues = loaded.ok ? [] : loaded.issues.map((i) => `${i.path}: ${i.message}`);
     try { hash = trustHash(dir, env); } catch (e) { issues.push((e as Error).message); }
+    let outside: OutsideRef[] = [];
+    if (manifest) {
+      const r = selfContained(dir, manifest);
+      outside = r.outside;
+      issues.push(...containedIssues(r, dir).issues.map((i) => `${i.path}: ${i.message}`));
+    }
     const t = hash ? trustState("plugin", dir, hash, env) : { state: "untrusted" as const, entry: null };
-    return { name: manifest?.name ?? dir.split("/").pop()!, dir, from, manifest, issues, hash, trust: t.state, trustedHash: t.entry?.hash ?? null };
+    return { name: manifest?.name ?? dir.split("/").pop()!, dir, from, manifest, issues, hash, trust: t.state, trustedHash: t.entry?.hash ?? null, outside };
   });
 }
 
@@ -333,6 +352,7 @@ export function trustPlugin(name: string, o: { project: string; env?: Env; by?: 
   const p = projectPluginList(o.project, env).find((x) => x.name === name);
   if (!p) throw new RelayError("not_found", `this project has no plugin ${name}`, "Its plugins are .capcomd/plugins/<name>/ and the `plugins.use` entries fetched with capcomd plugins install --project.");
   if (!p.hash) throw new RelayError("config", `${name} can't be trusted: ${p.issues.join("; ")}`, "Fix the plugin's files first.");
+  refuseOutside(name, p.outside);
   if (o.hash && o.hash !== p.hash) throw new RelayError("conflict", `${name} changed since it was shown (now ${p.hash})`, "Look at it again and trust what is there now.");
   recordTrust({ kind: "plugin", name, dir: p.dir, hash: p.hash, by: o.by ?? "operator" }, env);
   return { ...p, trust: "trusted", trustedHash: p.hash };

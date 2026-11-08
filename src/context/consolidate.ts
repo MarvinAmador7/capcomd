@@ -298,6 +298,9 @@ export interface BrainStageInput {
   raw: unknown;
   /** The brain the consolidator's profile names (`brainOf`), or null: it may propose to none. */
   brain: string | null;
+  /** Whether the run's project maps that brain (as `run new` recorded it); false refuses every delta for it, so a
+   *  proposal that could never be sent isn't kept. Omitted: mapped. */
+  mapped?: boolean;
   candidates: ReadonlyArray<Candidate>;
   agentId: string;
   scan: (text: string) => ScanHit | null;
@@ -309,9 +312,10 @@ export interface BrainStageInput {
 /**
  * The deltas of a consolidator's answer that name a brain (`brain: <name>`), checked as a memory delta is (a proposal,
  * its `from` the run's candidates, every string scanned and a secret or the redactor's placeholder refused, within
- * `itemBytes` and the run's room) and as groundray needs (the brain its profile names, one of groundray's types, a
- * one-line title, a body without frontmatter, a new draft only: a brain's items are superseded and deprecated by its
- * owners). Deterministic for one input. Numbered as `stage` numbers its own, by their place in the answer.
+ * `itemBytes` and the run's room) and as groundray needs (the brain its profile names, which the run's project maps,
+ * one of groundray's types, a one-line title, a body without frontmatter, a new draft only: a brain's items are
+ * superseded and deprecated by its owners). Deterministic for one input. Numbered as `stage` numbers its own, by their
+ * place in the answer.
  */
 export function brainDeltas(i: BrainStageInput): { accepted: BrainDelta[]; refused: StageRefusal[] } {
   const accepted: BrainDelta[] = [], refused: StageRefusal[] = [];
@@ -323,6 +327,7 @@ export function brainDeltas(i: BrainStageInput): { accepted: BrainDelta[]; refus
     if (typeof d.brain !== "string" || !BRAIN_NAME_RE.test(d.brain) || d.brain !== i.brain) {
       return refuse("no_brain", i.brain ? `is for a brain other than ${i.brain}, the one its profile names` : "is for a brain, and its profile names none (context.providers: [{name: groundray, brain: <name>}])");
     }
+    if (i.mapped === false) return refuse("no_brain", `is for brain ${i.brain}, which the run's project doesn't map (capcomd context brain add ${i.brain} <repository>)`);
     const p = proposalOf(v, i.agentId);
     if (!p) return refuse("invalid", "isn't a proposal: give it a text, a title and one of groundray's types");
     if ((p.op ?? "add") !== "add" || p.target) return refuse("invalid", "isn't a new draft: a brain's items are superseded and deprecated by its owners, so a proposal to it only adds");

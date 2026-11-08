@@ -10,7 +10,7 @@ import { profileFor } from "../auth/profiles";
 import { bootSnapshot, EnvironmentProblem } from "../env/resolve";
 import { lifecycleCheck } from "../plugins/lifecycle";
 import { agentsFilePath, lifecyclePlugins, profileFacts, providerDefaultEffort, providerEfforts, providerKind, readProfiles, type ProfileSet, type ResolvedProfile } from "../profiles";
-import { untrustedProfileProblem } from "../profiles/trust";
+import { untrustedProfileProblem, untrustedSandboxProblem } from "../profiles/trust";
 import { cliVersionProblem } from "../env/cli-version";
 import { readConfig, userConfigPath } from "../config/store";
 import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } from "../providers/registry";
@@ -102,7 +102,8 @@ export function driverFit(provider: "claude" | "codex", name: RunSandbox, source
 
 /**
  * Can a run start with planner profile `p` now (GET /v1/run-options `planners`)? What its spawn would refuse, asked
- * before the run instead of at it (ADR-024 §8): its login, its project skills' and persona's trust, a `sandbox.provider`
+ * before the run instead of at it (ADR-024 §8): its login, its project skills' and persona's trust, the trust of a
+ * project's file that sets its `sandbox.provider` (a run started without a sandbox of its own), a `sandbox.provider`
  * outside the run's isolation, its `sandbox.environment` on its sandbox (its profile's `sandbox.provider`, else the
  * run's), an agent environment there, the CLI it recorded against `harness.cliVersion`, an egress limit that sandbox can't enforce, and the plugins its `lifecycle` names (the spawn's own
  * checks, src/primitives/ops.ts). Local files, and the daemon's plugin host (or, outside the daemon, its listing; with no daemon to
@@ -116,6 +117,8 @@ export async function plannerReadiness(p: ResolvedProfile, source: Env = process
 	if (!login.ready) return { available: false, reason: login.reason };
 	const untrusted = untrustedProfileProblem(p.name, p.skills, p.persona, source);
 	if (untrusted) return { available: false, reason: `${untrusted} (run \`capcomd profiles trust ${p.name}\`)` };
+	const unmoved = untrustedSandboxProblem(p.name, rt.sandboxProvider, p.machineFiles, source);
+	if (unmoved) return { available: false, reason: `${unmoved} (run \`capcomd profiles trust ${p.name}\`, or start the run with its own sandbox)` };
 	const outside = isolationProblem(p.name, rt.sandboxProvider, source);
 	if (outside) return { available: false, reason: `${outside} (name an isolated sandbox in its sandbox.provider, or remove it)` };
 	if (rt.environment) {

@@ -55,7 +55,7 @@ describe("GET /v1/profiles (capability profiles)", () => {
 				{ as: "profile", name: "lead", layer: "project", path: w.at("P/lead/profile.yaml") },
 				{ as: "override", name: "lead", layer: "project", path: w.at("P/lead/override.yaml") },
 			],
-			title: null, fit: "orchestrates: sees everything, runs nothing; Claude Code, sonnet, medium cost; up to 30 turns; leads up to 3 worker helpers, one level", cost: "medium", canReport: true, skills: [], untrustedSkills: [], untrustedPersona: null,
+			title: null, fit: "orchestrates: sees everything, runs nothing; Claude Code, sonnet, medium cost; up to 30 turns; leads up to 3 worker helpers, one level", cost: "medium", canReport: true, skills: [], untrustedSkills: [], untrustedPersona: null, untrustedSandbox: [],
 		});
 		expect(o.profiles[2]).toMatchObject({ provider: "codex", path: w.at("U/critic.yaml"), description: null, tags: [], ready: false, readiness: "not logged in: capcomd auth login codex" });
 		// What it is never carries: a prompt or a credential.
@@ -132,6 +132,31 @@ describe("GET /v1/profiles (capability profiles)", () => {
 		expect(rows().voice).toMatchObject({ untrustedPersona: null });
 		writeFileSync(w.at("P/voice/SOUL.md"), SOUL + "And merges without review.\n");
 		expect(rows().voice).toMatchObject({ untrustedPersona: "SOUL.md" });
+	});
+
+	test("a project file that sends its agents to another sandbox: in untrustedSandbox until trusted as it is, and again once it changes; the user's need none", () => {
+		const SANDBOXED = "name: far\nharness: { provider: claude, auth: subscription }\nsandbox: { provider: boxd, size: { vcpu: 8 } }\n";
+		const w = world({
+			"P/far/profile.yaml": SANDBOXED,
+			// An override that sets only the size of a user profile's sandbox: the project's file waits, the user's doesn't.
+			"U/mine/profile.yaml": "name: mine\nharness: { provider: claude, auth: subscription }\nsandbox: { provider: boxd }\n",
+			"P/mine/override.yaml": "sandbox: { size: { vcpu: 4 } }\n",
+			"U/own.yaml": "name: own\nharness: { provider: claude, auth: subscription }\nsandbox: { provider: boxd }\n",
+			// An environment alone keeps its agents on the run's sandbox: nothing to wait on.
+			"P/env.yaml": "name: env\nharness: { provider: claude, auth: subscription }\nsandbox: { environment: image }\n",
+		});
+		const rows = () => Object.fromEntries(profilesOf(w.project).profiles.map((p) => [p.name, p]));
+		expect(rows().far).toMatchObject({ untrustedSkills: [], untrustedPersona: null, untrustedSandbox: ["far/profile.yaml"] });
+		expect(rows().mine).toMatchObject({ untrustedSandbox: ["mine/override.yaml"] });
+		expect(rows().own).toMatchObject({ untrustedSandbox: [] });
+		expect(rows().env).toMatchObject({ untrustedSandbox: [] });
+		const set = readProfiles(w.agentsFile, w.project);
+		trustProfile([], null, { env: w.project, machine: set.profiles.far!.machineFiles });
+		expect(rows().far).toMatchObject({ untrustedSandbox: [] });
+		expect(rows().mine).toMatchObject({ untrustedSandbox: ["mine/override.yaml"] }); // trust is per file
+		// The file changed since: trusted no more.
+		writeFileSync(w.at("P/far/profile.yaml"), SANDBOXED.replace("vcpu: 8", "vcpu: 4"));
+		expect(rows().far).toMatchObject({ untrustedSandbox: ["far/profile.yaml"] });
 	});
 
 	test("profiles that can't be read: a 200 with `error`, naming the file, and no profiles", () => {

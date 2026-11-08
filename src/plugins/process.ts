@@ -3,34 +3,38 @@
 // manifest's command run in the plugin's directory in a process group of its own (killed when the process exits, so
 // nothing it started outlives it), with ONLY the base variables (PATH, HOME, USER, LANG, TERM, TMPDIR), the manifest's
 // `entry.env` and the CAPCOMD_PLUGIN_* ones: no other CAPCOMD_* of the daemon's, no BOXD_*, no GITHUB_TOKEN, no
-// provider key, never a secret (those go once in the handshake's answer, §10.3).
+// provider key, never a secret (those go once in the handshake's answer, §10.3). No NODE_PATH but one the manifest names
+// (inside the folder, src/plugins/contained.ts), and the runtime guard's preload in BUN_OPTIONS and NODE_OPTIONS
+// (src/plugins/guard.ts): a module from outside the plugin's folder is refused as it loads.
 // stdin stays open while the daemon lives (a process should exit when it closes); stdout and stderr lines are the
 // plugin's log (§13.3), redacted, its own token and secrets among what is redacted. Chaos (CAPCOMD_KILLPOINT): `plugin.hook.mid`
 // kills the daemon, `plugin.process.crash` the plugin's process, right after a gate or modify call went out to it.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ProcessLauncher, ProcessStart } from "../../packages/plugin/src/host/process";
 import { PLUGIN_PROTOCOL_VERSION } from "../../packages/plugin/src/protocol";
 import { mintPluginClient } from "../api/clients";
 import { Redactor } from "../agents/redact";
 import { killpoint, killpointOf } from "../utils/killpoint";
+import { guardEnv, guardFiles, type GuardFiles } from "./guard";
 
 /** The daemon's variables a plugin's process gets (§9.2); everything else of the daemon's stays out. */
 export const PLUGIN_BASE_ENV = ["PATH", "HOME", "USER", "LANG", "TERM", "TMPDIR"] as const;
 
 type Line = { plugin: string; level: "debug" | "info" | "warn" | "error"; message: string; fields: Record<string, unknown> };
 
-/** The environment for one start (§9.2): the base, then `entry.env`, then capcomd's own variables, which win. */
-export function pluginEnv(o: { name: string; root: string; dataDir: string; socket: string; session: string; token: string; entryEnv?: Record<string, string>; from?: Record<string, string | undefined> }): Record<string, string> {
+/** The environment for one start (§9.2): the base, then `entry.env`, then capcomd's own variables, which win (the
+ *  runtime guard's options ahead of the manifest's own, when `guard` is given). */
+export function pluginEnv(o: { name: string; root: string; dataDir: string; socket: string; session: string; token: string; entryEnv?: Record<string, string>; from?: Record<string, string | undefined>; guard?: GuardFiles | null }): Record<string, string> {
   const from = o.from ?? process.env;
   const sub = (s: string) => s.replaceAll("${PLUGIN_ROOT}", o.root).replaceAll("${PLUGIN_DATA}", o.dataDir);
   const env: Record<string, string> = {};
   for (const k of PLUGIN_BASE_ENV) if (from[k] !== undefined) env[k] = from[k]!;
   for (const [k, v] of Object.entries(o.entryEnv ?? {})) env[k] = sub(v);
   return {
-    ...env,
+    ...(o.guard ? guardEnv(env, o.guard) : env),
     CAPCOMD_PLUGIN_NAME: o.name, CAPCOMD_PLUGIN_ROOT: o.root, CAPCOMD_PLUGIN_DATA: o.dataDir, CAPCOMD_PLUGIN_SOCKET: o.socket,
     CAPCOMD_PLUGIN_SESSION: o.session, CAPCOMD_PLUGIN_TOKEN: o.token, CAPCOMD_PLUGIN_PROTOCOL: String(PLUGIN_PROTOCOL_VERSION),
   };
@@ -81,7 +85,8 @@ export function processLauncher(o: { socket: string; log(line: Line): void }): P
       const sub = (s: string) => s.replaceAll("${PLUGIN_ROOT}", root).replaceAll("${PLUGIN_DATA}", dataDir);
       const [first, ...args] = manifest.entry.command.map(sub);
       const cmd = first!.startsWith("./") ? join(root, first!) : first!;
-      const env = pluginEnv({ name: manifest.name, root, dataDir, socket: o.socket, session, token: minted.token, ...(manifest.entry.env ? { entryEnv: manifest.entry.env } : {}) });
+      // The guard lives beside the plugins' data directories (<state>/plugins/.guard), written once per content.
+      const env = pluginEnv({ name: manifest.name, root, dataDir, socket: o.socket, session, token: minted.token, guard: guardFiles(dirname(dataDir)), ...(manifest.entry.env ? { entryEnv: manifest.entry.env } : {}) });
       reapStale(dataDir);
       let done!: (x: { code: number | null; signal: string | null }) => void;
       const exited = new Promise<{ code: number | null; signal: string | null }>((r) => { done = r; });
