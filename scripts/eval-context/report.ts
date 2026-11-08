@@ -53,9 +53,9 @@ export interface Row {
   /** Why the step has no real verdict (the agent never ran, the check couldn't run): not the agent's failure. */
   harnessError?: string;
   /** What the arm delivered beyond the brief (./deliver.ts): the files inlined, the files pushed; and, on the fake
-   *  sandbox (where the agent's machine is a folder), what its delivered prompt carried: the brief's lines and the names
-   *  of its skill blocks. */
-  delivered?: { inlined?: string[]; pushed?: string[]; briefLines?: number; skills?: string[] };
+   *  sandbox (where the agent's machine is a folder), what its delivered prompt carried: the files its brief's lines
+   *  point at, in order, and the names of its skill blocks. */
+  delivered?: { inlined?: string[]; pushed?: string[]; brief?: string[]; skills?: string[] };
 }
 
 const frac = (k: number, n: number) => `${k}/${n}`;

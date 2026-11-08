@@ -212,15 +212,16 @@ async function runStep(env: Record<string, string>, runId: string, step: Step, p
   return { ...res, delivered };
 }
 
-/** What the agent's appended system prompt carried (the brief's lines, the names of its skill blocks), read on the fake
- *  sandbox, where its machine is a folder and the runner uploaded the prompt to the attempt's own; null on a live one. */
-function deliveredPrompt(agentId: string): { briefLines: number; skills: string[] } | null {
+/** What the agent's appended system prompt carried (the files its brief's lines point at, in order; the names of its
+ *  skill blocks), read on the fake sandbox, where its machine is a folder and the runner uploaded the prompt to the
+ *  attempt's own; null on a live one. */
+function deliveredPrompt(agentId: string): { brief: string[]; skills: string[] } | null {
   if (LIVE) return null;
   const vm = common.CAPCOMD_AGENT_WORKDIR!, attempt = (d: string) => Number(d.slice(agentId.length + 2));
   const last = (existsSync(vm) ? readdirSync(vm) : []).filter((d) => d.startsWith(`${agentId}-e`)).sort((x, y) => attempt(x) - attempt(y)).pop();
   const f = last ? join(vm, last, "append-system.txt") : null;
   const s = f && existsSync(f) ? readFileSync(f, "utf8") : "";
-  return { briefLines: briefItems(s).length, skills: skillBlocks(s) };
+  return { brief: briefItems(s).map((i) => i.file), skills: skillBlocks(s) };
 }
 
 async function scoreStep(env: Record<string, string>, runId: string, step: Step, tag: string, agentId: string, agent: any, t0: number): Promise<StepResult> {
@@ -368,12 +369,19 @@ if (a.expect) {
     if (r.arm === "index-triggered" && r.step === "business-fee" && !pushedFor(world.shipping.current.id)) bad.push(`index-triggered business-fee: pushed ${JSON.stringify(r.delivered?.pushed)}`);
     if (r.arm === "index-triggered" && r.step === "stale-tier" && !pushedFor(world.tiers.current.id)) bad.push(`index-triggered stale-tier: pushed ${JSON.stringify(r.delivered?.pushed)}`);
     // The delivered prompt: the brief in every arm with a context block, with the skills the router attaches (the
-    // doctrine, and the routing paragraph for a working agent) in each but index-noskills, which has neither.
+    // doctrine, and the routing paragraph for a working agent) in each but index-noskills, which has neither and has
+    // the very brief the index arm's agent of that step had (a report agent's is a reviewer's): the skills are all it lacks.
     const arm = armNamed(r.arm), step = chains.flatMap((c) => c.steps).find((s) => s.id === r.step);
     if (arm?.context && step && r.agentId) {
       const skills = arm.noSkills ? [] : contextSkills({ role: step.report ? "review" : "work", capcomd: true }).map((s) => s.name);
-      if (!r.delivered?.briefLines) bad.push(`${r.arm} ${r.step}: no brief in the delivered prompt`);
+      if (!r.delivered?.brief?.length) bad.push(`${r.arm} ${r.step}: no brief in the delivered prompt`);
       if (JSON.stringify(r.delivered?.skills) !== JSON.stringify(skills)) bad.push(`${r.arm} ${r.step}: the delivered prompt has the skills ${JSON.stringify(r.delivered?.skills)}, not ${JSON.stringify(skills)}`);
+      const twin = arm.noSkills ? results.get("fake")!.find((x) => x.arm === arm.against && x.rep === r.rep && x.step === r.step && x.delivered?.brief) : undefined;
+      const [mine, theirs] = [r.delivered?.brief ?? [], twin?.delivered?.brief ?? []];
+      if (twin && JSON.stringify(mine) !== JSON.stringify(theirs)) {
+        const only = (x: string[], y: string[]) => JSON.stringify(x.filter((f) => !y.includes(f)));
+        bad.push(`${r.arm} ${r.step}: the delivered brief isn't ${arm.against}'s (${mine.length} lines against ${theirs.length}; only here ${only(mine, theirs)}, only there ${only(theirs, mine)})`);
+      }
     }
   }
   const ran = new Set(results.get("fake")!.map((r) => `${r.arm} ${r.step}`));

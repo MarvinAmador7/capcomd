@@ -291,7 +291,8 @@ the first time the agent touches a path it applies to; Claude Code only, a Codex
 runs), and `index-noskills` (§12's "each doctrine skill present vs absent": the router's brief, where the router
 puts it, without `capcomd-context-doctrine` and `capcomd-context-routing`; the harness appends the brief itself and
 removes the profile's context block for that agent, so the router attaches nothing). On the fake sandbox `--expect`
-also reads each agent's delivered prompt: the brief in every index arm, the skills in each but `index-noskills`.
+also reads each agent's delivered prompt: the brief in every index arm, the skills in each but `index-noskills`,
+whose brief must point at the same files as `index`'s for that step.
 `report.ts` `admission` answers each against `index` by fixed rules (an ablation, `index-paths` and
 `index-noskills`, decides nothing: it reports success, work, cost, the probe and the citations), and a run on a
 project's memory writes the answers into the model's `limits.json` (`inlineItems`, `triggeredInjection`, `decisions`); `--memory small` (only

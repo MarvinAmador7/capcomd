@@ -9,7 +9,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   same context brief as the `index` arm, in the same place, without the `capcomd-context-doctrine` and
   `capcomd-context-routing` skills, so a run shows what those skills change (success, work, cost, the planted-instruction
   probe, citations). CI runs it on the fake sandbox, where `--expect` now also checks each agent's delivered prompt:
-  the brief in every index arm, the skills in each but this one.
+  the brief in every index arm, the skills in each but this one, and this one's brief the same as `index`'s.
 - Fixed: a profile's `memory: { files: [NOTES.md] }` now does what it says. Agents of that profile get only the
   project-memory items that `.capcomd/context/NOTES.md` links to (Markdown links, or the `→ path` lines that
   `capcomd context lint --fix` writes, so `files: [index.md]` works too). Before, the setting was ignored and every
