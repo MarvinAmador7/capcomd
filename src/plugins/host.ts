@@ -17,7 +17,7 @@ import { inBackground, recordGateEvent } from "./hooks";
 import { resolveSecret } from "./secrets";
 import { pluginJobs } from "../jobs/service";
 import { mergePatch, pluginConfigFiles, pluginSettings } from "./config";
-import { pluginAgents } from "./services";
+import { daemonServices, localServices } from "./services";
 import { pluginTriggers } from "../triggers/intake";
 import { announce } from "../install/trust";
 import { isExempt, projectOf, projectPluginDirs, projectPluginTrusted } from "./install";
@@ -132,10 +132,12 @@ export function pluginEventWriter(o: { daemon?: DaemonEventSink; run?: RunEventS
  * `events`: where the daemon's host reads streams for `ctx.events.subscribe` and `replay` (§8.4, src/plugins/events.ts):
  * the daemon's own events, and a run's through the engine unless given. A host without it (a CLI's, the MCP server's)
  * refuses both, `unsupported`: the streams are the daemon's.
- * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2), `ctx.agents` (§8.4, src/plugins/services.ts) and
- * `ctx.storage` (§8.4; one process writes a plugin's storage): a CLI's local host has none of them, `unsupported`.
- * `triggers`: they get `ctx.triggers` too (§16.3; the daemon's only). `process`: the plugin socket out-of-process
- * plugins connect to (§9.2); without it they stay `validated` (a CLI's local host).
+ * `jobs`: the daemon's host, whose plugins get `ctx.jobs` (§16.2), `ctx.storage` (§8.4; one process writes a plugin's
+ * storage) and the engine's primitives, `ctx.runs`, `agents`, `messages`, `kv`, `board`, `gates.pending` and `profiles`
+ * (§8.4, src/plugins/services.ts): a CLI's local host has none of them, `unsupported`. Every host's plugins get
+ * `ctx.sandboxes` and `ctx.auth`, this process's places and logins. `triggers`: they get `ctx.triggers` too (§16.3; the
+ * daemon's only). `process`: the plugin socket out-of-process plugins connect to (§9.2); without it they stay
+ * `validated` (a CLI's local host).
  */
 export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: EventReads["daemon"]; run?: EventReads["run"]; pollMs?: number }; snapshot?: string | null; log?: boolean; run?: RunEventSink; jobs?: boolean; triggers?: boolean; process?: { socket: string; timings?: ProcessTimings } } = {}): PluginHost {
   const redactor = new Redactor();
@@ -160,10 +162,11 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
       try { record(e); } catch { /* not a daemon-stream event */ }
     },
     dataDir,
-    ...(o.jobs || o.triggers ? { services: (m) => ({
-      ...(o.jobs ? { jobs: pluginJobs(m.name), agents: pluginAgents(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
+    services: (m) => ({
+      ...localServices(),
+      ...(o.jobs ? { jobs: pluginJobs(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))), ...daemonServices(m) } : {}),
       ...(o.triggers ? { triggers: pluginTriggers(m.name, m.scopes ?? []) } : {}),
-    }) } : {}),
+    }),
     // Only a shipped built-in (no directory) may name the kernel's own variables (§10.3): resolveSecret checks both.
     secret: async (m, key, dir, source) => resolveSecret(m, key, process.env, dir, { builtin: source === "builtin" }),
     exempt: (name, version) => isExempt(name, version),
