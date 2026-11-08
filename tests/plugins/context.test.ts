@@ -13,7 +13,8 @@ import type { ContextProvider, ContextScope, IndexLine } from "../../packages/pl
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { buildBrief, roleOf, type BriefInput } from "../../src/context/brief";
 import { limitsFor } from "../../src/context/limits";
-import { CONTEXT_DIR, frontmatter, memoryProvider, parseItems, type TreeReader } from "../../src/context/memory";
+import { CONTEXT_DIR, frontmatter, indexedPaths, memoryProvider, parseItems, type TreeReader } from "../../src/context/memory";
+import { PROFILE_JSON_SCHEMA, checkManifest, withContext } from "../../src/profiles/v2";
 import type { ActiveProvider } from "../../src/context/providers";
 import { fence } from "../../src/subagents/results";
 import * as contextPlugin from "../../src/plugins/context";
@@ -128,6 +129,88 @@ describe("the memory provider: items under .capcomd/context/ (ADR-025 §3.3, §1
     expect(by.bare!).toMatchObject({ kind: "memory", type: "lesson", authority: { status: "draft" }, description: { text: "bare", untrusted: true } });
     expect(by["FEE-2"]!).toMatchObject({ kind: "fact", type: "policy", description: { text: "Shipping fee" }, path: `${CONTEXT_DIR}facts/fee.md` });
     expect(frontmatter("---\n: : not yaml\n---\nbody").meta).toEqual({});
+  });
+});
+
+describe("the memory provider's index: a profile's memory.files (ADR-025 §10)", () => {
+  /** The context a profile with `memory: <memory>` is pinned with (src/profiles/v2.ts withContext). */
+  const contextOf = (memory: Record<string, unknown>) => {
+    expect(checkManifest({ name: "w", memory }, "profile", "w")).toEqual([]);
+    return withContext({ name: "w", memory } as never).context as BriefInput["context"];
+  };
+  const NOTES = [
+    "# Notes", "",
+    "- [How money is rounded](memory/money-rounding.md)",
+    "- [The shipping fee](./facts/fee.md \"a title\")",
+    "- [A link that leaves](../../README.md), [a URL](https://example.invalid/memory/stale.md), [an anchor](#memory/retired.md)",
+    "- [ref]",
+    "",
+    "[ref]: memory/rounding-v2.md",
+  ].join("\n");
+
+  test("a profile with memory.files: [NOTES.md] reads that index: the items it links to, and no other", async () => {
+    const context = contextOf({ scope: "project", files: ["NOTES.md"] });
+    expect(context.providers).toEqual([{ name: "memory", layers: ["project", "run"], index: "NOTES.md" }]);
+    const b = await buildBrief(input({ context }, { ...FILES, "NOTES.md": NOTES }));
+    expect(b.text.split("\n").slice(1)).toEqual([
+      "- [policy] Shipping fee → .capcomd/context/facts/fee.md (stable; 2026-08-01)",
+      "- [lesson] Money is rounded half-even (src/money.js), never with Math.round → .capcomd/context/memory/money-rounding.md (paths: src/**; stable; 2026-10-30)",
+      "- [lesson] The rounding helper moved to src/money.js → .capcomd/context/memory/rounding-v2.md (stable; 2026-10-01)",
+    ]);
+    expect(b).toMatchObject({ loaded: 3, total: 3 });
+    // Without the setting, every item (as before).
+    expect((await buildBrief(input({}, { ...FILES, "NOTES.md": NOTES }))).loaded).toBe(5);
+    // search and get read the same items as the index.
+    const p = memoryProvider({ read: tree({ ...FILES, "NOTES.md": NOTES }) });
+    const call = { signal: new AbortController().signal, deadline: new Date(Date.now() + 10_000).toISOString(), trace: { traceId: "0".repeat(32), spanId: "0".repeat(16) } };
+    const s: ContextScope = { ...scope(), layers: ["project"], settings: { index: "NOTES.md" } };
+    const h = (await p.resolve(s, call)).handle;
+    expect((await p.search(h, { text: "", limit: 50 }, call)).map((x) => x.ref.id).sort()).toEqual(["FEE-2", "money-rounding", "rounding-v2"]);
+    await expect(p.get(h, { provider: "memory", id: "flaky-scenarios", version: SHA }, call)).rejects.toThrow(/no item flaky-scenarios/);
+    // The same tree, read without the index by another profile, isn't the indexed one's cached parse.
+    const all = (await p.resolve({ ...s, settings: {} }, call)).handle;
+    expect((await p.index(all, call)).lines.length).toBe(8);
+    expect((await p.index(h, call)).lines.length).toBe(3);
+  });
+
+  test("an index narrows what is shown, never what is current: an item the tree supersedes stays out though the index names it", async () => {
+    // rounding-v2 supersedes old-rounding (old-rounding doesn't say so); an index that names old-rounding alone
+    // doesn't bring back what the memory corrected.
+    const stale = "- [Rounding](memory/old-rounding.md)\n- [Fee](facts/fee.md)\n";
+    const b = await buildBrief(input({ context: contextOf({ files: ["NOTES.md"] }) }, { ...FILES, "NOTES.md": stale }));
+    expect(b.text.split("\n").slice(1)).toEqual(["- [policy] Shipping fee → .capcomd/context/facts/fee.md (stable; 2026-08-01)"]);
+    expect(b).toMatchObject({ loaded: 1, total: 1 });
+    // The header's date is of the items shown, not of the one that superseded them.
+    expect(b.text.split("\n")[0]).toContain("modified 2026-08-01");
+  });
+
+  test("index.md as lint writes it is an index too: its → lines name the items", async () => {
+    const lintIndex = "# Context index\n\n## Memory\n\n- [lesson] Flaky → memory/flaky-scenarios.md (id flaky-scenarios; draft; 2026-11-02)\n";
+    const b = await buildBrief(input({ context: contextOf({ files: ["index.md"] }) }, { ...FILES, "index.md": lintIndex }));
+    expect(b.text.split("\n").slice(1)).toEqual(["- [lesson] tests/scenarios/run-cancel is flaky under load: re-run it alone → .capcomd/context/memory/flaky-scenarios.md (paths: tests/scenarios/**; draft; 2026-11-02)"]);
+  });
+
+  test("an index that isn't there is named (not found), never read as every item; one a profile can't name is refused", async () => {
+    const missing = await buildBrief(input({ context: contextOf({ files: ["NOTES.md"] }) }));
+    expect(missing.providers).toEqual([{ name: "memory", state: "skipped", reason: "not found" }]);
+    expect(missing.loaded).toBe(0);
+    // A spec is data: a path, a climb or a non-string from one is refused by the provider as well as the profile check.
+    for (const index of ["memory/NOTES.md", "../NOTES.md", ".hidden.md", 7]) {
+      const b = await buildBrief(input({ context: { providers: [{ name: "memory", index }] } }, { ...FILES, "NOTES.md": NOTES, "memory/NOTES.md": NOTES }));
+      expect(b.providers).toEqual([{ name: "memory", state: "skipped", reason: "not configured" }]);
+    }
+    expect(checkManifest({ name: "w", memory: { files: ["docs/MEMORY.md"] } }, "profile", "w").join()).toContain("memory.files: must name one index file directly under .capcomd/context/");
+    // The JSON Schema an editor checks a profile with says the same as the profile check.
+    type Or<T> = { anyOf: [T, { type: "null" }] };
+    const files = (PROFILE_JSON_SCHEMA.properties.memory as Or<{ properties: Record<string, Or<{ items?: { pattern?: string } }>> }>).anyOf[0].properties.files!.anyOf[0];
+    const pattern = new RegExp(files.items!.pattern!);
+    expect(["NOTES.md", "index.md", "MEMORY.txt"].filter((f) => pattern.test(f))).toEqual(["NOTES.md", "index.md", "MEMORY.txt"]);
+    expect(["docs/MEMORY.md", "../NOTES.md", ".hidden.md", "NOTES.json"].filter((f) => pattern.test(f))).toEqual([]);
+  });
+
+  test("indexedPaths: link targets and lint's arrows, relative to .capcomd/context/ or from the root; nothing that leaves it", () => {
+    expect([...indexedPaths(`[a](memory/a.md) [b](<facts/b c.md>) [c](memory/c%20d.md#top) → memory/e.md (x) [f](${CONTEXT_DIR}memory/f.md) [g](/etc/passwd) [h](memory//h.md) [i](file:memory/i.md)`)].sort()).toEqual(
+      ["memory/a.md", "facts/b c.md", "memory/c d.md", "memory/e.md", "memory/f.md"].map((p) => `${CONTEXT_DIR}${p}`).sort());
   });
 });
 
@@ -354,9 +437,11 @@ describe("the router at agent.preparing (ADR-025 §6.1; spec §6.6.7, §14.4)", 
 describe("the context skills (ADR-025 §5.1, §6.1, step 6)", () => {
   test("pinned: their text is fixed, so a change is a new hash this test makes you write down", () => {
     expect(CONTEXT_SKILLS.map((s) => [s.name, s.hash])).toEqual([
-      ["capcomd-context-doctrine", "3ac446432e4b0cc9c96b8d717c46d2f3d9a589dde200db3b717e9281bfab115b"],
+      ["capcomd-context-doctrine", "ec49b0af0a7373e83c444ced94bf7147b17e318bc994b7585e2b103271dd69e8"],
       ["capcomd-context-routing", "de52814243fe090128e13df4faab316efa4c961874e895f9d4b64d20414114ca"],
     ]);
+    // A brain's file isn't in the checkout: the doctrine says where a line's file is as the brief's header does.
+    expect(DOCTRINE_SKILL.text.replace(/\s+/g, " ")).toContain("the file that holds it (in your checkout, or in a bundle placed read-only in your sandbox at the path the line gives)");
   });
 
   test("each is a SKILL.md with its name, carries no marker and no line the brief's own lines could be confused with", () => {

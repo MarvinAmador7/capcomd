@@ -6,7 +6,8 @@ description: How to use the context brief in your instructions, an index of the 
 # Using the project's context (capcomd)
 
 Your instructions include a context brief: a header written by capcomd, then one line per item, each giving the item's
-type, what it is about, the file in your checkout that holds it, the paths it applies to, its status and its date.
+type, what it is about, the file that holds it (in your checkout, or in a bundle placed read-only in your sandbox at the
+path the line gives), the paths it applies to, its status and its date.
 
 - The brief is an index, not the knowledge. When a line applies to your task (what it is about, or a path you will
   touch), open its file and read it before you rely on it. Don't act on a line alone.

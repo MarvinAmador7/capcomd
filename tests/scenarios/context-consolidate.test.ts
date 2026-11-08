@@ -93,8 +93,9 @@ test("a contradiction becomes a supersede; a poisoned lesson is staged as a flag
   const branch = await memoryAt(`capcomd/${run}/${c.agentId}`);
   expect(metaAt(branch, "memory/flaky.md")).toMatchObject({ status: "deprecated", superseded_by: [applied[0]!.id] });
   expect(metaAt(branch, `memory/${applied[0]!.id}.md`)).toMatchObject({ status: "draft", supersedes: ["flaky"], generated: { by: `process:${c.agentId}`, method: "agent-generated" }, origin: { runId: run, agentId: c.agentId, profile: CONSOLIDATOR_PROFILE }, sources: [{ id: `${a}.1` }] });
-  // The run's stream says what was staged.
-  const staged = await trajectory(w, run, (e) => e.type === "plugin.context.staged");
+  // The run's stream says what was staged (recorded by an agent.changed listener after the agent ends, so waited for).
+  let staged = await trajectory(w, run, (e) => e.type === "plugin.context.staged");
+  for (let i = 0; i < 100 && !staged.length; i++) { await Bun.sleep(100); staged = await trajectory(w, run, (e) => e.type === "plugin.context.staged"); }
   expect(staged.map((e) => e.data)).toEqual([expect.objectContaining({ agentId: c.agentId, branch: `capcomd/${run}/${c.agentId}`, commit })]);
 
   // Lint as a check passes it (the poisoned lesson is a warning for the person, not a lint problem).
