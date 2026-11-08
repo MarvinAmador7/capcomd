@@ -13,11 +13,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fixed: only a brain's knowledge folder (`knowledge/`, or the one you named with `--bundle`) reaches an agent's
   sandbox now. Before, the whole brain repository was copied in, while only the folder's Markdown files were checked
   for `sensitivity: restricted`, so a restricted file elsewhere in the repository reached agents. Every file in the
-  folder is now checked, Markdown or not (a YAML, JSON or text file marked `sensitivity: restricted` refuses the brain,
-  as does any file over 4 MiB or a folder of more than 2000 files: keep big attachments outside the knowledge folder).
-  An agent's sandbox also keeps only the brains its own brief cites: brains another
-  project's image carries are removed before the agent starts (an agent whose sandbox can't be cleaned doesn't start),
-  and checks that `capcomd verify` runs in a VM never see any brain.
+  folder is now checked, Markdown or not (a YAML, JSON, TOML or text file marked `sensitivity: restricted` or
+  `sensitivity = restricted` refuses the brain, as does any file over 4 MiB or a folder of more than 2000 files: keep
+  big attachments outside the knowledge folder). An agent's sandbox also keeps only the brains its own brief cites:
+  brains another project's image carries are removed before the agent starts (an agent whose sandbox can't be cleaned
+  doesn't start), and checks that `capcomd verify` runs in a VM never see any brain.
 - New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at
   most 32 KiB) is now the first thing each of its agents reads, once, before the profile's prompt and its skills. The
   agent keeps the text it was spawned with; a later edit reaches only agents spawned after it. A persona from the

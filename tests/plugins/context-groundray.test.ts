@@ -157,6 +157,9 @@ describe("the context-groundray built-in (ADR-025 §11.2)", () => {
     expect(Date.now() - t0).toBeLessThan(5_000);
     expect(await restrictedOf({ "knowledge/references/data.json": `{"rows": [${"[1, 2, 3], ".repeat(10_000)}[]], "meta": {"sensitivity": "restricted"}}` })).toEqual(marked);
     expect(await restrictedOf({ "knowledge/references/big.toml": `${"# pad\n".repeat(20_000)}[meta]\nsensitivity = "restricted"\n` })).toEqual(marked);
+    // The same marking counts in a small file: what refuses a big one refuses a small one.
+    expect(await restrictedOf({ "knowledge/references/meta.toml": `[meta]\nsensitivity = "restricted"\n` })).toEqual(marked);
+    expect(await restrictedOf({ "knowledge/references/export.env": "SENSITIVITY=restricted\n" })).toEqual(marked);
     expect(await restrictedOf({ "knowledge/references/big.yaml": `${"pad: x\n".repeat(20_000)}meta:\n  sensitivity:\n    restricted\n` })).toEqual(marked);
     expect(await restrictedOf({ "knowledge/references/big.txt": `${"the word restricted, and sensitivity: confidential\n".repeat(2_000)}` })).toEqual({ restricted: null, unchecked: null });
     // A file outside the bundle is never placed, so it isn't the brain's to say (brain.yaml, another directory).

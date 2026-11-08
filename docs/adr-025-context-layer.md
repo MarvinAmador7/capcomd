@@ -747,7 +747,8 @@ this list says why):
   non-Markdown file in the bundle) reached every sandbox. `ContextBundle` now names a `path`, the directory placed (at
   the same path under the bundle's directory, so lines' paths don't change); groundray names its bundle's, so brain.yaml
   and the rest of the repository never leave the host, and every file under the bundle is read and checked: Markdown by
-  its frontmatter, any other file whole (a `sensitivity: restricted` at any depth of it as YAML or JSON, or as a line);
+  its frontmatter, any other file whole (a `sensitivity: restricted` at any depth of it as YAML or JSON, or `sensitivity`
+  then `restricted` with a `:` or `=` between anywhere in it, TOML's and an env file's spelling too);
   one capcomd can't read whole (over 4 MiB, more than 2000 files) refuses the brain as before. We chose checking over
   refusing non-Markdown files: groundray's bundles carry attachments and captures, and refusing them would refuse
   ordinary brains. The marker names the commit and the path (a whole tree an older capcomd placed isn't kept). `capcomd

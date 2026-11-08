@@ -289,7 +289,8 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
       const box = { exec: (cmd: string[], x?: { cwd?: string; timeoutMs?: number }) => p.exec(id, cmd, { env: baseEnv, ...(x?.timeoutMs ? { timeoutMs: x.timeoutMs } : {}), ...(x?.cwd ? { cwd: x.cwd } : {}) }), upload: (path: string, d: Uint8Array) => p.upload(id, path, d) };
       const workdir = o.hostGit?.workdir ?? join(stateDir(), "host-git");
       for (const b of bundles) {
-        if (!(await placeBundle(b, { remote: b.remote, workdir }, box, null, r, (lines) => lines.forEach((l) => log(l.replace(/^\[capcomd\] /, "")))))) continue;
+        // One that failed part way (unpacked, not marked) goes too: what wasn't scanned below isn't snapshotted.
+        if (!(await placeBundle(b, { remote: b.remote, workdir }, box, null, r, (lines) => lines.forEach((l) => log(l.replace(/^\[capcomd\] /, "")))))) { await sh(`rm -rf ${sq(b.dir)}; true`); continue; }
         const scan = await sh(`grep -rIlE '${SECRET_SHAPES}' ${sq(b.dir)} 2>/dev/null | head -1; true`);
         let leaked = scan.stdout.trim() !== "";
         for (const v of o.forbidden ?? []) {

@@ -320,5 +320,21 @@ describe("the project's brains in the env image (ADR-025 step 4)", () => {
     expect(existsSync(join(f.workdir, "context/groundray/leaky"))).toBe(false);
     expect(f.provider.snapshots.get(res.name)!.status).toBe("ready");
   }, 90_000);
+
+  test("a brain whose placing fails after its tree was unpacked (not marked, not scanned) is left out of the image whole", async () => {
+    const f = await fixture({ lock: false });
+    const { mappedBundles } = await import("../../src/context/groundray");
+    const leaky = await brainRepo({ "knowledge/references/setup.txt": "token ghp_abcdefghijklmnopqrstuvwxyz0123\n" });
+    const { bundles } = await mappedBundles({ brains: { acme: { repo: leaky.b.bare, branch: "main", commit: leaky.commit, slug: "acme", id: ACME_ID } } }, f.cfg.workdir);
+    expect(bundles.map((x) => x.name)).toEqual(["acme"]);
+    // Marking it read-only fails: the tree is there, the marker isn't.
+    const exec = f.provider.exec.bind(f.provider);
+    f.provider.exec = async (vm, cmd, o) => (cmd.join(" ").includes("chmod a-w") ? { code: 1, stdout: "", stderr: "read-only file system" } : exec(vm, cmd, o));
+    const logs: string[] = [];
+    const res = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1, hostGit: { workdir: join(f.workdir, "host-git") }, bundles, log: (l) => logs.push(l) });
+    expect(logs.join("\n")).toContain("couldn't place groundray acme (knowledge/)");
+    expect(existsSync(join(f.workdir, "context/groundray/acme"))).toBe(false);
+    expect(f.provider.snapshots.get(res.name)!.status).toBe("ready");
+  }, 90_000);
 });
 

@@ -166,6 +166,9 @@ function marksRestricted(text: string): boolean {
 function saysRestricted(text: string, deep = true): boolean {
   // The YAML parser's cost grows faster than the text (a 64 KiB file of nested `{a: ` takes seconds), and a brain is
   // read on the daemon's thread: text too long or nested too deep for it is matched without parsing, more broadly.
+  // A file that isn't Markdown is matched that way at any size too, so its marking counts whatever its length (a TOML
+  // `sensitivity = "restricted"` in a small file as in a big one).
+  if (deep && SAYS_RESTRICTED_ANYWHERE.test(text)) return true;
   if (text.length > MEMORY_MAX_BYTES || flowDepth(text) > YAML_MAX_FLOW_DEPTH) return SAYS_RESTRICTED_ANYWHERE.test(text);
   return valuesOf(text, "sensitivity", deep).some((v) => v.toLowerCase() === "restricted") || /^[ \t]*(["']?)sensitivity\1[ \t]*:[ \t]*(["']?)restricted\2[ \t]*(?:[,}#].*)?$/im.test(text);
 }
