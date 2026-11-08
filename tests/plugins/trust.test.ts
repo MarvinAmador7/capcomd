@@ -3,7 +3,7 @@
 // file is a changed hash and resets the trust; the daemon audits a trust once (plugin.trusted); `capcomd plugins trust`
 // is the prompt.
 import { beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost } from "../../packages/plugin/src/host/host";
@@ -295,6 +295,32 @@ describe("trust.json, changed by the CLI and the daemon at once", () => {
         expect(out.record).toEqual(["TrustLockedError", expect.stringContaining("isn't a lock capcomd made"), `Remove ${lock}, then run it again.`]);
       } finally { rmSync(lock, { recursive: true, force: true }); }
     }
+    expect(trustState("plugin", join(home, "places", "v"), "sha256:2").state).toBe("untrusted");
+    expect(trustState("plugin", dir, "sha256:1").entry?.announced).toBe(false);
+  }, 40_000);
+
+  test("a left-over lock that can't be moved aside is refused at once, not tried forever; announce skips it", () => {
+    // Root may move it anyway: the directory's mode is what stops the move here.
+    if (process.getuid?.() === 0) return;
+    const lock = join(home, "trust.json.lock"), dir = join(home, "places", "u");
+    mkdirSync(home, { recursive: true });
+    recordTrust({ kind: "plugin", name: "u", dir, hash: "sha256:1", by: "operator" });
+    writeFileSync(lock, JSON.stringify({ pid: Bun.spawnSync(["true"]).pid, token: "old" }));
+    const mode = statSync(home).mode & 0o777;
+    chmodSync(home, 0o500);
+    try {
+      // In a child with a deadline: before, both tried the move again and again with no wait and no end.
+      const p = Bun.spawnSync(["bun", "-e", `
+        const { announce, recordTrust } = await import(${JSON.stringify(new URL("../../src/install/trust.ts", import.meta.url).pathname)});
+        const out = { announce: announce("plugin", ${JSON.stringify(dir)}, "sha256:1") };
+        try { recordTrust({ kind: "plugin", name: "v", dir: ${JSON.stringify(join(home, "places", "v"))}, hash: "sha256:2", by: "operator" }); } catch (e) { out.record = [e.constructor.name, e.message, e.hint]; }
+        console.log(JSON.stringify(out));
+      `], { env: { ...process.env, CAPCOMD_HOME: home }, timeout: 15_000 });
+      expect(p.signalCode ?? null).toBeNull();
+      const out = JSON.parse(p.stdout.toString().trim());
+      expect(out.announce).toBeNull();
+      expect(out.record).toEqual(["TrustLockedError", expect.stringContaining("can't be moved aside"), `Remove ${lock}, then run it again.`]);
+    } finally { chmodSync(home, mode); rmSync(lock, { force: true }); }
     expect(trustState("plugin", join(home, "places", "v"), "sha256:2").state).toBe("untrusted");
     expect(trustState("plugin", dir, "sha256:1").entry?.announced).toBe(false);
   }, 40_000);

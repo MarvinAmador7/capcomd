@@ -99,7 +99,12 @@ function locked<T>(env: Env, change: () => T): T {
     try { pid = (JSON.parse(text) as { pid?: unknown }).pid; } catch { /* still being written */ }
     if (gone(pid) || age > TRUST_LOCK.staleMs) {
       const aside = `${p}.${process.pid}-${randomBytes(6).toString("hex")}.stale`;
-      try { renameSync(p, aside); } catch { continue; }
+      try { renameSync(p, aside); } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") continue; // taken over or released meanwhile
+        // One that can't be moved (a directory no one may write, a file marked immutable) would be tried forever.
+        throw new TrustLockedError(`${p} is left over but can't be moved aside (${code ?? (e as Error).message}), so nothing was changed`, `Remove ${p}, then run it again.`);
+      }
       let moved = "";
       try { moved = readFileSync(aside, "utf8"); } catch { /* removed meanwhile */ }
       if (moved !== text) try { linkSync(aside, p); } catch { /* another lock is there now */ }
