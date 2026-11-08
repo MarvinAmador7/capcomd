@@ -9,7 +9,7 @@ import { chmodSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from "nod
 import { isAbsolute, join, posix } from "node:path";
 import { Git } from "../merge/git";
 import { hostRepoDir, hostRepoProblems, initHostRepo, isHostRepo, remoteGit } from "../merge/host-git";
-import { TREE_LIMITS, inside } from "./lock";
+import { TREE_LIMITS, inside, linkInside } from "./lock";
 import type { PackageSource } from "./source";
 
 /** A file of the fetched commit's tree. */
@@ -105,6 +105,8 @@ export async function fetchPackage(source: PackageSource, o: {
       chmodSync(to, e.mode === "100755" ? 0o755 : 0o644);
     }
   }
+  // Read as the filesystem reads them, once all are written: a link may go through another the package holds.
+  for (const e of mine) if (e.mode === "120000" && !linkInside(o.into, e.path.slice(prefix.length))) throw new FetchError(`${e.path} links outside the package (${data.get(e.sha)!.toString("utf8")}, through another of its links)`);
   return { commit, path: dir };
 }
 
