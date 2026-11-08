@@ -86,12 +86,13 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 				case "denied": return `${from} was denied.`;
 				case "recorded": return `${from} was recorded; nothing ran (observe mode).`;
 				case "started": return `${from} started ${d.runId ?? "a run"}.`;
-				case "continued": return `${from} went to ${d.runId ?? "a run"}, which follows its thread.`;
+				case "continued": return d.restarted ? `${from} started ${d.runId ?? "a run"}'s planner again; the run follows its thread.` : `${from} went to ${d.runId ?? "a run"}, which follows its thread.`;
 				case "failed": return `${from} could not start a run.`;
 				default: return `${from} was received.`;
 			}
 		}
 		case "trigger.subscribed": return `${d.runId ?? "A run"} follows a thread from ${d.source ?? "a source"}.`;
+		case "trigger.replied": return `${d.runId ?? "A run"} answered on its thread at ${d.source ?? "a source"}.`;
 		case "trigger.unsubscribed": return `${d.runId ?? "A run"} no longer follows a thread from ${d.source ?? "a source"}${d.cause === "stopped" ? " (the run was stopped)" : d.cause === "expired" ? " (its time ran out)" : ""}.`;
 		case "plugin.loaded": return "A plugin was loaded.";
 		case "plugin.failed": return "A plugin failed to load.";

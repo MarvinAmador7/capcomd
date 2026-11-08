@@ -470,7 +470,7 @@ function triggerOutcome(d: import("../../triggers/intake").LoggedDecision): stri
     case "denied": return `denied by ${d.by}: ${d.reason}`;
     case "recorded": return `recorded: would have ${d.wouldHave === "start" ? "started a run" : `continued ${d.runId ?? "a run"}`} (observe mode)`;
     case "started": return `started ${d.runId}`;
-    case "continued": return `continued ${d.runId} (message ${d.seq})`;
+    case "continued": return `continued ${d.runId} (message ${d.seq}${d.restarted ? `; its planner started again: ${d.restarted}` : ""})`;
     case "failed": return `failed: ${d.reason}`;
   }
 }

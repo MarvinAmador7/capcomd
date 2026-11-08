@@ -759,7 +759,7 @@ says why):
   authorizes promotion") and belong to the brain's owners. It is never staged on the consolidator's branch: the kernel
   keeps it in kv `_context/brain/<agentId>.<n>` (reserved) and the consolidator's result says so (`context.brain`).
   A brain the run's project doesn't map (the mapping `run new` recorded) is refused there and then, by its name
-  (`no_brain`, `context.brain.error`), not kept to fail when a person sends it (spec 1.0.61).
+  (`no_brain`, `context.brain.error`), not kept to fail when a person sends it (spec 1.0.62).
   The prompt tells a consolidator whose profile names a brain how to propose to it.
 - **The approver as actor, without a hold.** §7 forwards "the approver of the hold"; a brain proposal has no branch in
   the project's repository, so no merge and no hold of its own, and tying it to the memory branch's hold would drop it
