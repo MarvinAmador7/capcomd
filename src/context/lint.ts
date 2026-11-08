@@ -1,5 +1,6 @@
 // `capcomd context lint` (ADR-025 §5.3, §11.1, step 2): what makes a repository's `.capcomd/context/` fit to land. It
-// holds items only (`memory/**.md`, `facts/**.md`, and OKF's reserved `index.md` and `log.md`); each item has
+// holds items only (`memory/**.md`, `facts/**.md`, OKF's reserved `index.md` and `log.md`, and an index file a profile
+// names beside them, `memory.files`, held to an item's rules for text and secrets); each item has
 // frontmatter that parses, with an `id` and a `type` and well-formed lifecycle fields; ids are unique, and against a
 // base (`--base`) never change and never disappear (an item is deprecated, not deleted); supersession is reciprocal
 // and acyclic; no file holds a secret (the seeded scan, ./scan.ts, the one capture uses); every `outcomes[]` id of an
@@ -11,7 +12,7 @@ import { lstatSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import type { Outcome } from "../../packages/plugin/src/context-layer";
 import { unmark } from "../subagents/results";
-import { CONTEXT_DIR, MEMORY_MAX_BYTES, MEMORY_MAX_FILES, METHODS, STATUS, frontmatter, instant } from "./memory";
+import { CONTEXT_DIR, INDEX_NAME, MEMORY_MAX_BYTES, MEMORY_MAX_FILES, METHODS, STATUS, frontmatter, instant } from "./memory";
 import type { ScanHit } from "./scan";
 
 export const INDEX_FILE = `${CONTEXT_DIR}index.md`;
@@ -185,7 +186,15 @@ export function lintContext(i: LintInput): LintResult {
     if (f.link) { err(f.path, "unreadable", "a link: .capcomd/context/ holds files, so every agent reads the same thing"); continue; }
     const kind = kindOf(f.path);
     if (!kind) {
-      if (!(f.path.startsWith(CONTEXT_DIR) && reserved(f.path))) err(f.path, "not-an-item", ".capcomd/context/ holds items only: memory/<slug>.md, facts/<slug>.md, index.md and log.md");
+      if (f.path.startsWith(CONTEXT_DIR) && reserved(f.path)) continue;
+      // An index a profile names (`memory.files`, ADR-025 §10), beside index.md: the memory provider reads the items it
+      // links to, so it is held to what an item is (text, no secret), though it isn't one.
+      if (f.path.startsWith(CONTEXT_DIR) && INDEX_NAME.test(rel(f.path))) {
+        if (f.text === null) err(f.path, "unreadable", `not text, or over ${MEMORY_MAX_BYTES / 1024} KB: the memory provider can't read it as an index`);
+        else { const hit = i.scan(f.text) ?? ((h) => (h?.reason === "path" ? null : h))(i.scan(rel(f.path))); if (hit) err(f.path, "secret", `holds ${hit.what}: take it out`); }
+        continue;
+      }
+      err(f.path, "not-an-item", ".capcomd/context/ holds items only: memory/<slug>.md, facts/<slug>.md, index.md and log.md, and the index file a profile names beside them (MEMORY.md)");
       continue;
     }
     if (f.text === null) { err(f.path, "unreadable", `not text, or over ${MEMORY_MAX_BYTES / 1024} KB: the memory provider leaves it out`); continue; }
