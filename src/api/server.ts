@@ -11,6 +11,9 @@ import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, pluginClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
 import type { PluginDetail as HostPluginDetail, PluginProtocol, PluginSummary as HostPluginSummary } from "../../packages/plugin/src/host/host";
+import type { ContributionStore } from "../../packages/plugin/src/host/context";
+import type { Principal } from "../../packages/plugin/src/shapes";
+import { Redactor } from "../agents/redact";
 import { ProtocolError, type FrameSink } from "../../packages/plugin/src/host/process";
 import { PluginError, type PluginErrorCode } from "../../packages/plugin/src/errors";
 import type { PluginStore } from "../plugins/storage";
@@ -52,6 +55,8 @@ export type GatewayHost = {
 	enable(name: string, by?: string): Promise<HostPluginSummary>;
 	disable(name: string): Promise<HostPluginSummary>;
 	protocol: PluginProtocol;
+	/** What the plugins registered: their API routes (/v1/x/<name>/…) and feature flags (plugin API §4.7.3). */
+	contributions: Pick<ContributionStore, "list">;
 };
 export type ServerOptions = {
 	source: HarnessSource; clients?: () => ClientRecord[]; plugins?: () => z.infer<typeof Plugins>["plugins"]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState;
@@ -65,6 +70,29 @@ export type ServerOptions = {
 const PROTOCOL_ROUTE = /^\/v1\/plugins\/[^/]+\/(sessions|hooks|storage)(\/|$)/;
 const PLUGIN_CONTROL = /^\/v1\/plugins\/[^/]+\/(enable|disable)$/;
 const PLUGIN_STATUS: Record<PluginErrorCode, 403 | 404 | 409 | 422 | 503> = { forbidden: 403, not_found: 404, conflict: 409, invalid: 422, widening: 422, unsupported: 422, disposed: 409, timeout: 503, unavailable: 503 };
+/** A plugin route's thrown PluginError (plugin API §4.7.3); any other code, or any other throw, is 500 "plugin error". */
+const ROUTE_STATUS: Partial<Record<PluginErrorCode, 403 | 404 | 409 | 422 | 503>> = { forbidden: 403, not_found: 404, conflict: 409, invalid: 422, unavailable: 503 };
+const PLUGIN_ROUTES = "/v1/x/";
+
+/** A plugin route's params when `path` matches its `pattern`: a `{name}` segment takes one path segment; null otherwise. */
+export function routeParams(pattern: string, path: string): Record<string, string> | null {
+	const want = pattern.split("/"), got = path.split("/");
+	if (want.length !== got.length) return null;
+	const params: Record<string, string> = {};
+	for (const [i, w] of want.entries()) {
+		const name = /^\{([^{}]+)\}$/.exec(w)?.[1];
+		if (name === undefined) { if (w !== got[i]) return null; continue; }
+		if (!got[i]) return null;
+		try { params[name] = decodeURIComponent(got[i]!); } catch { return null; }
+	}
+	return params;
+}
+
+/** Whom a plugin route runs as (plugin API §11.2): the caller, never the plugin. A read-only client is a viewer. */
+function callerPrincipal(cl: AuthedClient): Principal {
+	if (cl.plugin) return { kind: "plugin", name: cl.plugin, scopes: cl.scopes.filter((s): s is "read" | "steer" | "configure" => s !== "approve") };
+	return cl.scopes.every((s) => s === "read") ? { kind: "viewer", clientId: cl.clientId } : { kind: "operator", clientId: cl.clientId };
+}
 
 /** The plugin socket's door (plugin API §5.5 step 4, §9.2): only a token the daemon minted for a plugin's process gets
  *  through, so nothing else sees the daemon there before its plugins have loaded and the harness socket opens. */
@@ -96,7 +124,8 @@ export function harnessApp(o: ServerOptions) {
 	const os = implement(contract).$context<{ client: AuthedClient }>();
 	const nf = (what: string) => new ORPCError("NOT_FOUND", { message: `${what} not found` });
 	const router = {
-		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version, capabilities: [...CAPABILITY_NAMES] })),
+		// The kernel's features, then the flags active plugins added (x.<plugin>.<flag>, plugin API §4.7.3).
+		health: os.health.handler(() => ({ ok: true as const, api: "harness.v1" as const, version: src.version, capabilities: [...CAPABILITY_NAMES, ...(o.pluginHost?.contributions.list("capability").map((e) => e.key) ?? [])] })),
 		projects: {
 			list: os.projects.list.handler(() => src.projects()),
 			inspect: os.projects.inspect.handler(({ input }) => src.inspectProject(input.path)),
@@ -257,8 +286,9 @@ export function harnessApp(o: ServerOptions) {
 		const cl = authenticate(c.req.header("authorization"), [...clients(), ...pluginClients()]);
 		if (!cl) return err(c, 401, "unauthorized", "missing or unknown bearer token (create one with `capcomd clients add`)");
 		c.set("client", cl);
-		// A plugin's protocol routes need its own token, any scope (the route checks it, plugin API §9.3).
-		if (PROTOCOL_ROUTE.test(c.req.path)) return next();
+		// A plugin's protocol routes need its own token, any scope (the route checks it, plugin API §9.3); a plugin's API
+		// route needs the scope it declares, which the gateway checks once it found the route (§4.7.3).
+		if (PROTOCOL_ROUTE.test(c.req.path) || c.req.path.startsWith(PLUGIN_ROUTES)) return next();
 		// PATCH changes settings (capability sandboxes.settings), POST /v1/projects sets a folder up (projects.setup) and
 		// …/git-init and …/publish start and publish its repository (projects.git), a plugin's enable and disable
 		// (plugins), and PUT /v1/profiles/{name} changes a profile (profiles.edit): the configure scope, which steering a
@@ -689,8 +719,9 @@ export function harnessApp(o: ServerOptions) {
 		return idempotent(c, [`plugins.${action}`, name], async (client) => {
 			const d = host.detail(name);
 			if (!d) return gone(`plugin ${name.slice(0, 64)}`);
-			// The kernel's own plugins hold the places, agents, forges and front doors the daemon runs on: they stay up.
-			if (action === "disable" && d.source === "builtin") return { status: 409, body: { code: "conflict", message: `${name} is built into capcomd: it can't be disabled while the daemon runs` } };
+			// The kernel's own plugins hold the places, agents, forges and front doors the daemon runs on: they stay up. One
+			// a person turns on (the watchdog) they may turn off.
+			if (action === "disable" && d.source === "builtin" && !(await import("../plugins/builtins")).OPT_IN.has(name)) return { status: 409, body: { code: "conflict", message: `${name} is built into capcomd: it can't be disabled` } };
 			try { return { status: 200, body: action === "enable" ? await host.enable(name, `client:${client.clientId}`) : await host.disable(name) }; } catch (e) {
 				if (e instanceof PluginError) return { status: PLUGIN_STATUS[e.code], body: { code: e.code, message: e.message } };
 				throw e;
@@ -967,6 +998,50 @@ export function harnessApp(o: ServerOptions) {
 		});
 		c.req.raw.signal?.addEventListener?.("abort", () => { closed = true; clearInterval(timer); clearInterval(hb); clearInterval(threadTimer); });
 		return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
+	});
+
+	// Plugin API routes (capability plugins.routes; plugin API §4.7.3): METHOD /v1/x/<name>/<path>, served by the route an
+	// active plugin registered with ctx.api.route (gone from the store once it is disposed). The caller's token needs the
+	// route's declared scope; the handler runs as the caller, JSON in and out. A PluginError it throws keeps its code where
+	// the spec maps one; anything else is 500 "plugin error", its message only in the daemon log. Never a stream: the
+	// streams are the kernel's, a plugin publishes events instead.
+	const redactor = new Redactor();
+	app.all(`${PLUGIN_ROUTES}*`, async (c) => {
+		const path = new URL(c.req.url).pathname;
+		const name = path.slice(PLUGIN_ROUTES.length).split("/")[0]!;
+		const method = c.req.method;
+		const found = (host?.contributions.list("api") ?? [])
+			.filter((e) => e.plugin === name && e.value.spec.method === method)
+			.map((e) => ({ spec: e.value.spec, params: routeParams(`${PLUGIN_ROUTES}${name}${e.value.spec.path}`, path) }))
+			.filter((r): r is { spec: typeof r.spec; params: Record<string, string> } => r.params !== null)
+			// A literal segment wins over a parameter: the route with the fewest parameters.
+			.sort((a, b) => Object.keys(a.params).length - Object.keys(b.params).length)[0];
+		if (!found) return err(c, 404, "not_found", `${method} ${path.slice(0, 200)}: no active plugin serves it`);
+		const client = c.get("client");
+		if (!client.scopes.includes(found.spec.scope)) return err(c, 403, "forbidden", `token lacks the ${found.spec.scope} scope`);
+		let body: unknown;
+		const text = method === "GET" || method === "DELETE" ? "" : await c.req.text();
+		if (text.trim()) try { body = JSON.parse(text); } catch { return err(c, 422, "invalid", "the body must be JSON"); }
+		const failed = (message: string) => {
+			console.log(JSON.stringify({ plugin: name, level: "error", message: redactor.text(`${method} ${path}: ${message}`), fields: {} }));
+			return c.json({ code: "internal", message: "plugin error" }, 500);
+		};
+		let out: unknown;
+		try {
+			out = await found.spec.handler({ params: found.params, query: c.req.query(), body, principal: callerPrincipal(client), signal: c.req.raw.signal });
+		} catch (e) {
+			const status = e instanceof PluginError ? ROUTE_STATUS[e.code] : undefined;
+			if (e instanceof PluginError && status) return err(c, status, e.code, e.message, e.hint ? { hint: e.hint } : {});
+			return failed(e instanceof PluginError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
+		}
+		if (out === undefined) return c.body(null, 204);
+		if (out instanceof Response || out instanceof ReadableStream || typeof out === "function")
+			return failed("a route answers with a JSON value, never a Response or a stream (plugin API §4.7.3)");
+		let json: string | undefined;
+		try { json = JSON.stringify(out); } catch (e) { return failed(`its answer isn't JSON: ${(e as Error).message}`); }
+		// A symbol is refused too: JSON.stringify answers undefined rather than throwing.
+		if (json === undefined) return failed(`its answer isn't JSON: a ${typeof out}`);
+		return c.body(json, 200, { "content-type": "application/json" });
 	});
 
 	// A thrown error (engine down, an actor's not_found/conflict) is still an ApiError body.

@@ -32,6 +32,26 @@ export async function frontDoor(name: string): Promise<FrontDoor | null> {
   return c ? { plugin: c.plugin, spec: c.value.spec, kernel: KERNEL_SURFACE.has(c.plugin) } : null;
 }
 
+/**
+ * Why `capcomd <name>` has no command here: the plugin that declares it (its listing's `commands`, as GET /v1/plugins has
+ * it) isn't active in this process, named with its state and cause; else no plugin adds it, an unknown command.
+ */
+export async function noCommand(name: string): Promise<RelayError> {
+  const { localHost } = await import("../plugins/host");
+  const host = await localHost();
+  const p = host.list().find((x) => x.commands?.includes(name));
+  if (!p) return new RelayError("usage", `unknown command: ${name}`, "Run `capcomd --help` for usage.");
+  const why = host.message(p.name);
+  const off = !p.enabled && (p.cause === "disabled" || p.state === "validated");
+  // The environment's `enabled` wins over the config `capcomd plugins enable` writes (§10.2): name the variable instead.
+  const { envName } = await import("../plugins/config");
+  const variable = envName(p.name, "enabled");
+  const byEnv = off && (() => { try { return JSON.parse(process.env[variable] ?? "") === false; } catch { return false; } })();
+  return new RelayError("config", `capcomd ${name} is the ${p.name} plugin's command, and ${p.name} isn't running: ${p.state}${p.cause ? ` (${p.cause})` : ""}${why ? `: ${why}` : ""}`,
+    byEnv ? `${variable}=${process.env[variable]} in the environment turns it off, over your config: unset it to turn ${p.name} on.`
+      : off ? `Turn it on: capcomd plugins enable ${p.name}` : `capcomd plugins show ${p.name} says more.`, { code: `plugin:${p.name}` });
+}
+
 /** `--help` for a plugin's command (its usage lines), or with null a list of every plugin's command; "" when none. */
 export async function pluginHelp(name: string | null): Promise<string> {
   const { localHost } = await import("../plugins/host");

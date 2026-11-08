@@ -9,7 +9,7 @@ import { parseArgs } from "util";
 import { RelayError, SCHEMA, EXIT, toRelayError } from "../core/errors";
 import { FLAGS } from "./flags";
 import { commandHelp, HELP } from "./help";
-import { DISPATCHER_COMMANDS, frontDoor, OPERATOR, parseLoose, pluginHelp, printAnswer, runPluginCommand } from "./front-doors";
+import { DISPATCHER_COMMANDS, frontDoor, noCommand, OPERATOR, parseLoose, pluginHelp, printAnswer, runPluginCommand } from "./front-doors";
 
 async function main(argv: string[]): Promise<number> {
   // `capcomd tui …`: the terminal debugger takes its own flags (apps/tui/src/run.tsx).
@@ -26,7 +26,9 @@ async function main(argv: string[]): Promise<number> {
     const word = parseLoose(argv).positionals[0];
     const door = word && !(DISPATCHER_COMMANDS as readonly string[]).includes(word) ? await frontDoor(word).catch(() => null) : null;
     if (door && !door.kernel) return runPluginCommand(door, argv);
-    const err = new RelayError("usage", error instanceof Error ? error.message : String(error), "Run `capcomd --help` for usage.");
+    // Its plugin isn't running: that, rather than a flag it would have taken.
+    const missing = word && !door && !(DISPATCHER_COMMANDS as readonly string[]).includes(word) ? await noCommand(word).catch(() => null) : null;
+    const err = missing?.reason ? missing : new RelayError("usage", error instanceof Error ? error.message : String(error), "Run `capcomd --help` for usage.");
     const wantsJson = argv.includes("--json");
     if (wantsJson) console.log(JSON.stringify(err.toJSON()));
     else console.error(`Error: ${err.message}\n${err.hint}`);
@@ -56,7 +58,8 @@ async function main(argv: string[]): Promise<number> {
       return await pluginsCommand(positionals, { json, conformance: !!values.conformance, project: !!values.project, yes: !!values.yes, acceptRisk: !!values["accept-risk"], dryRun: !!values["dry-run"] });
     }
     const door = await frontDoor(command);
-    if (!door) throw new RelayError("usage", `unknown command: ${command}`, "Run `capcomd --help` for usage.");
+    // A command whose plugin isn't running names that plugin and why, not "unknown command" (src/cli/front-doors.ts).
+    if (!door) throw await noCommand(command);
     if (!door.kernel) return runPluginCommand(door, argv);
     // A kernel command: the kernel's flag table parsed it; it prints its own output (`{exit}`) or answers an envelope.
     return printAnswer(door, await door.spec.run({ args: positionals.slice(1), flags: values as Record<string, string | boolean | string[]>, json, principal: OPERATOR, signal: new AbortController().signal }), json);

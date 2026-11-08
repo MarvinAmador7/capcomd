@@ -15,6 +15,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   daemon's stream and log. The GitHub source no longer lets one comment that keeps failing for now hold back newer
   comments: it tries that comment again after 1, 2, 4… poll intervals (at most an hour apart) while it reads the rest,
   and gives up on it after 8 tries, with a warning in the daemon's log.
+- New: `capcomd plugins disable <name>` and `capcomd plugins enable <name>` turn a plugin off and on. The choice is
+  saved in your config (`plugins.<name>.enabled` in `~/.capcomd/config.json`), so it survives a daemon restart, and a
+  running daemon applies it at once (`enable` also resets a plugin whose hooks were suspended after failing). With no
+  daemon running, only the config changes and the command says so. Built-in plugins can't be disabled, except the
+  watchdog, which you turn on yourself. Before, only the API could do this, and only until the daemon restarted.
+- Changed: a command whose plugin isn't running (`capcomd <command>` from a plugin that is disabled or failed to
+  start) now names the plugin and why it isn't running, with the next step (`capcomd plugins enable <name>`, or the
+  `CAPCOMD_PLUGIN_<NAME>_ENABLED` variable that turns it off), instead of "unknown command". `GET /v1/plugins` lists
+  the CLI commands each plugin declares (`commands`).
+- New: plugins built into the daemon can serve their own API routes at `/v1/x/<plugin>/…` on the harness API, called
+  with your client token. A route needs the scope it declares (`read`, `steer` or `configure`), takes and answers JSON,
+  and runs as you; a plugin's own failure answers 500 "plugin error" with the details only in the daemon log.
+  `GET /v1/plugins/{name}` now lists a plugin's `routes` and the feature flags it adds to `GET /v1/health`
+  (`x.<plugin>.<flag>`) while it is active; `capcomd plugins show --json` lists the routes its manifest declares.
+  Clients can check for the `plugins.routes` capability.
 - Fixed: the project's memory gate now refuses an agent's branch that writes into `.capcomd/context/` under another
   spelling of the path, such as `.Capcomd/Context/memory/x.md`. Git treats that as a different folder, but a checkout
   on macOS or Windows puts those files next to the real memory, and before this fix they got past the check. The gate
