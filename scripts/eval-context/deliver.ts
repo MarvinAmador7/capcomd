@@ -10,6 +10,10 @@
 //   fenced, as a message (`capcomd send`: the inbox a `context` message kind would use, read by a Claude agent at its
 //   next step; a Codex agent can't read one while it runs). The kernel would render it as recalled context; `send`
 //   renders it as from the operator, so the push here carries at least the authority the real one would.
+// - Without the skills (§12 "each doctrine skill present vs absent"): the router's brief (`capcomd context brief --run`,
+//   with `--review` for a report agent, as the router briefs one) as the agent's appended system prompt, where the router
+//   appends it, and the arm's profile with its context block removed for that agent (spawn overrides: an override may
+//   remove a context block, never add or change one), so the router attaches neither a brief nor its skills.
 // Pure functions, so tests pin them without an engine.
 import { fence } from "../../src/subagents/results";
 
@@ -72,4 +76,16 @@ export function triggered(lines: readonly string[], items: readonly BriefItem[],
     }
   }
   return out;
+}
+
+/** The spawn overrides (`capcomd spawn --overrides`) that deliver the router's `brief` without the context layer's
+ *  skills: no context block for this agent, so the router does nothing, and the brief as the appended system prompt the
+ *  router would have appended it to (the eval's profiles have none of their own). */
+export function briefWithoutSkills(brief: string): { context: null; appendSystemPrompt: string } {
+  return { context: null, appendSystemPrompt: brief.trim() };
+}
+
+/** The skills in a delivered prompt: the names of its `<skill name="…">` blocks (src/agents/skills.ts `skillBlock`). */
+export function skillBlocks(prompt: string): string[] {
+  return [...prompt.matchAll(/^<skill name="([^"]+)">\n[\s\S]*?\n<\/skill>$/gm)].map((m) => m[1]!);
 }

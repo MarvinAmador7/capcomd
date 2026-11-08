@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- For contributors: the context eval has an `index-noskills` arm (`--arms index,index-noskills`): agents get the
+  same context brief as the `index` arm, in the same place, without the `capcomd-context-doctrine` and
+  `capcomd-context-routing` skills, so a run shows what those skills change (success, work, cost, the planted-instruction
+  probe, citations). CI runs it on the fake sandbox, where `--expect` now also checks each agent's delivered prompt:
+  the brief in every index arm, the skills in each but this one.
 - Lessons now reach the project's memory in a default team without your help. Fixed: the planner `capcomd setup
   project` writes couldn't spawn the consolidator it writes (refused as "context changed"); a child is briefed by its
   own profile. The planner's brief and skill now say when and how: put its own lessons in its result, read

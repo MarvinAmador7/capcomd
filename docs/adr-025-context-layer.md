@@ -836,6 +836,12 @@ says why):
   have admitted k = 1 and k = 3 for one model (sonnet), which is the point.
 - §12's "a `paths` column vs none" ablation is an arm (`index-paths`, the items without `paths`) run on the fake
   sandbox in CI; "each doctrine skill present vs absent" is not an arm yet (the index arms all get the skills).
+  *(Since: `index-noskills`, the brief without either skill, run on the fake sandbox in CI. The router attaches the
+  skills to every agent whose profile has a context block and a profile can't name them, so the harness delivers the
+  router's own brief itself (`deliver.ts` `briefWithoutSkills`: the arm's profile with its context block removed for
+  that agent, as an override may, and the brief as its appended system prompt, `--review` for a report agent);
+  `--expect` reads each agent's delivered prompt for the brief and the skill blocks. One arm withholds both skills,
+  not each alone: a skill can't be attached without the router, and no live run has measured it yet.)*
 
 **Changed since: every working agent has the in-VM capcomd** (spec 1.0.39). A live run showed that with the profiles
 `capcomd setup project` writes no agent could propose a lesson (the workers can't spawn, so they had no `capcomd

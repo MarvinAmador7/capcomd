@@ -6,6 +6,12 @@
 // the harness delivers itself, the way the kernel would (`inline`: the brief's first k items, whole and fenced, in the
 // agent's first message; `triggered`: an item pushed, fenced, as a message the first time the agent touches a path it
 // applies to), and each ships only if report.ts `admission` admits it on a current model.
+//
+// §12's "each doctrine skill present vs absent" is `index-noskills`: the brief the router gives the index arm, where it
+// gives it, without the context layer's skills (capcomd-context-doctrine, capcomd-context-routing). The router attaches
+// them to every agent whose profile has a context block, so the harness delivers the brief itself (./deliver.ts
+// `briefWithoutSkills`): the arm's profile with its context block removed for that agent, as an override may, and the
+// router's own brief as its appended system prompt.
 import type { ContextSpec } from "../../packages/plugin/src/context-layer";
 import { agentsMd, contextFiles, type MemorySize, type World } from "./world";
 
@@ -21,6 +27,8 @@ export interface Arm {
   inline?: number;
   /** Triggered injection (§6.3): an item pushed as a fenced message the first time the agent touches one of its paths. */
   triggered?: boolean;
+  /** The router's brief without the context layer's skills (§12 "each doctrine skill present vs absent"). */
+  noSkills?: boolean;
   /** The agent providers the arm can be delivered to (all when absent): a Codex agent can't read a message while it runs. */
   providers?: ReadonlyArray<"claude" | "codex">;
   /** The arm it is judged against (report.ts `admission`). */
@@ -45,6 +53,7 @@ export const ARMS: readonly Arm[] = [
   { name: "index-k1", what: "the brief plus its first item in full, fenced, in the agent's first message (inline k = 1)", files: (w, m) => contextFiles(w, m), context: INDEX, inline: 1, against: "index" },
   { name: "index-k3", what: "the brief plus its first three items in full (inline k = 3)", files: (w, m) => contextFiles(w, m), context: INDEX, inline: 3, against: "index" },
   { name: "index-triggered", what: "the brief, and each item pushed as a fenced message the first time the agent touches a path it applies to (triggered injection)", files: (w, m) => contextFiles(w, m), context: INDEX, triggered: true, providers: ["claude"], against: "index" },
+  { name: "index-noskills", what: "the brief without the context layer's skills (capcomd-context-doctrine, capcomd-context-routing), against index", files: (w, m) => contextFiles(w, m), context: INDEX, noSkills: true, against: "index" },
   { name: "memory", what: "context-memory with capture and consolidation", needs: "ADR-025 steps 2-3" },
   { name: "memory-groundray", what: "context-memory plus the company brain through context-groundray", needs: "ADR-025 step 4" },
 ];
