@@ -15,8 +15,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - The run list (`state/runs.jsonl`) and each run's trace directory are now recorded by capcomd's daemon, as two
   built-in plugins you can see in `capcomd plugins list` (`observe-runs-index`, `observe-traces`). The rows are the
   same as before. If you point `capcomd run new` at another index with `CAPCOMD_RUNS_INDEX`, set it for the daemon
-  too: the daemon's setting decides where runs are listed now. A run whose start failed partway (after it was
-  created) is now listed, and so is one retried with the same `--key` after such a failure; before, neither was.
+  too: the daemon's setting decides where runs are listed now.
+- Plugins that listen to `run.changed` are now told `created` once `capcomd run new` has finished setting the run up,
+  not when its record is first made. A run whose `run new` failed partway is never told as created.
 - The settings and info rows of a place's details screen (`GET /v1/sandboxes/{name}`) now come from that place's
   sandbox plugin. They read exactly as before.
 

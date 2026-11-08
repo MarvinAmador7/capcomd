@@ -19,7 +19,7 @@ import { killpoint } from "../utils/killpoint";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { startDriver } from "../primitives/drivers";
 import { agentWorkflowOn } from "../utils/agent-workflow-flag";
-import { changedHooks, tellWorked } from "../plugins/changes";
+import { changedHooks, tellCreated, tellWorked } from "../plugins/changes";
 import { hooks, principalOf } from "../plugins/hooks";
 
 /**
@@ -405,7 +405,7 @@ export const scopeActor = actor({
   // Plugins hear what each action changed (the `*.changed` hooks, src/plugins/changes.ts) only while one listens.
   actions: changedHooks({
   ...traceActions("scope", {
-    async init(c, params: { runId: string; budget: Budget; label?: string; goal?: string; paramsHash: string; origin?: RunOrigin }) {
+    async init(c, params: { runId: string; budget: Budget; label?: string; goal?: string; paramsHash: string }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (have.length) {
         const prev = JSON.parse(have[0]!.v as string);
@@ -413,18 +413,37 @@ export const scopeActor = actor({
         return { runId: params.runId, created: false, budget: prev.budget as Budget };
       }
       await c.db.transaction(async (tx: RawAccess) => {
-        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal } : {}), paramsHash: params.paramsHash, createdAt: Date.now(), ...(params.origin ? { origin: params.origin } : {}) }));
+        await tx.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('init', ?)", JSON.stringify({ budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal } : {}), paramsHash: params.paramsHash, createdAt: Date.now() }));
         await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal.slice(0, 65536) } : {}) }, `run-new`);
       }, { name: "scopeInit" });
       return { runId: params.runId, created: true, budget: params.budget };
     },
 
-    /** Where and how the run was created (`run new`'s process: its folder, repository, trace directory, goal branch),
-     *  with its label and creation time; null for a run recorded before capcomd kept it, or one that doesn't exist. */
-    async getOrigin(c, _p: Record<string, never>): Promise<(RunOrigin & { label: string | null; createdAt: number }) | null> {
+    /**
+     * `run new` finished creating the run (src/primitives/ops.ts runNew, its last step): what its process knew of where
+     * it ran is kept, once, and the daemon's plugins are told the run was created (`run.changed` `created`, plugin API
+     * §6.6.4). A run whose `run new` failed partway never gets here, so it is never told as created (nor listed).
+     */
+    async setOrigin(c, params: { origin: RunOrigin }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
-      const meta = have.length ? JSON.parse(have[0]!.v as string) : null;
-      return meta?.origin ? { ...(meta.origin as RunOrigin), label: (meta.label as string | null) ?? null, createdAt: meta.createdAt as number } : null;
+      if (!have.length) fail("not_found", `run ${runIdOf(c)} has no scope`);
+      const prior = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'origin'");
+      if (prior.length) return { recorded: false };
+      await c.db.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('origin', ?)", JSON.stringify(params.origin));
+      const meta = JSON.parse(have[0]!.v as string);
+      tellCreated(runIdOf(c), { label: meta.label ?? null, goal: meta.goal ?? null, createdAt: meta.createdAt ?? null });
+      return { recorded: true };
+    },
+
+    /** Where and how the run was created (`run new`'s process: its folder, repository, trace directory, goal branch),
+     *  with its label and creation time; null until `run new` finished it (setOrigin), and for a run from before
+     *  capcomd kept it. */
+    async getOrigin(c, _p: Record<string, never>): Promise<(RunOrigin & { label: string | null; createdAt: number }) | null> {
+      const rows = (await c.db.execute("SELECT k, v FROM scope_meta WHERE k IN ('init', 'origin')")) as Array<{ k: string; v: string }>;
+      const init = rows.find((r) => r.k === "init"), origin = rows.find((r) => r.k === "origin");
+      if (!init || !origin) return null;
+      const meta = JSON.parse(init.v);
+      return { ...(JSON.parse(origin.v) as RunOrigin), label: (meta.label as string | null) ?? null, createdAt: meta.createdAt as number };
     },
 
     async getScope(c, _p: Record<string, never>) {

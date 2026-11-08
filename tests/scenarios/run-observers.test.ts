@@ -51,6 +51,25 @@ test("a created run's row is the one run new wrote: its creator's folder, reposi
   expect(rows().filter((l) => JSON.parse(l).runId === runId)).toHaveLength(1);
 }, 120_000);
 
+test("a run whose run new failed partway is never created as far as plugins know: no row, so it holds no goal branch", async () => {
+  await w.repo.seed.ok(["push", "-q", "origin", "main:dev"]);
+  const G = `capcomd/obs-${Date.now().toString(36)}`;
+  const args = (key: string) => ["--key", key, "--goal", "obs", "--goal-branch", G, "--base", "dev"];
+  const first = await runNew(work, args(`obs-g1-${G}`));
+  expect(JSON.parse((await rowOf(first))!)).toMatchObject({ runId: first, goalBranch: G });
+  // Its scope is made, then the goal branch is refused (the first run holds it): the run isn't created.
+  const failed = `run-obs-failed-${Date.now()}`;
+  await expect(runNew(work, [...args(`obs-g2-${G}`), "--run-id", failed])).rejects.toThrow(/uses it/);
+  const { client } = await import("../../src/core/relay");
+  expect(await client().scope.getOrCreate([failed]).getScope({})).not.toBeNull();
+  await Bun.sleep(1000);
+  expect(rows().some((l) => JSON.parse(l).runId === failed)).toBe(false);
+  // Once the first is cancelled, the branch is free again: the failed one doesn't hold it.
+  expect((await w.cj(["cancel", first, "--reason", "start over"])).code).toBe(0);
+  const third = await runNew(work, args(`obs-g3-${G}`));
+  expect(await rowOf(third)).not.toBeNull();
+}, 120_000);
+
 test("a run the index doesn't have is recorded the next time it changes (a run made while the daemon's plugins started)", async () => {
   const runId = await runNew(work, ["--key", `obs-late-${Date.now()}`]);
   expect(await rowOf(runId)).not.toBeNull();

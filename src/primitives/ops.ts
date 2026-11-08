@@ -334,13 +334,10 @@ export async function runNew(o: RunNewOpts) {
   const pluginConfig = o.pluginConfig && Object.keys(o.pluginConfig).length ? await RC.checkRunPluginConfig(o.pluginConfig) : null;
   if (hooks.listening("run.creating")) o = await runCreating(runId, o);
   const ph = paramsHash({ budget: o.budget, label: o.label ?? null, ...(hasChecks ? { checks: o.checks } : {}), ...(o.reviewer ? { reviewer: o.reviewer } : {}), ...(o.target ? { target: o.target } : {}), ...(o.sandbox ? { sandbox: o.sandbox } : {}), ...(o.base ? { base: o.base } : {}) });
+  const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph }).catch(asRelay);
+  // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
   const { repoEnvOf, RUN_REPO_KV } = await import("../merge/run-config");
   const repoEnv = repoEnvOf(process.env);
-  // Where this process created it, kept with the run: the daemon's observers record it in the runs index and as the
-  // run's trace directory once the run is created (run.changed, src/plugins/observe.ts).
-  const origin = { cwd: process.cwd(), repo: repoEnv.CAPCOMD_REPO ?? null, traceDir: (await import("../utils/tracing-simple")).traceDir(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) };
-  const res = await c.scope.getOrCreate([runId]).init({ runId, budget: o.budget, label: o.label, ...(o.goal ? { goal: o.goal } : {}), paramsHash: ph, origin }).catch(asRelay);
-  // The run carries its repository settings, so the engine (e.g. a background service) needn't have them.
   if (Object.keys(repoEnv).length) await (await import("./state")).kvWrite(runId, { k: RUN_REPO_KV, value: repoEnv, writer: "operator" }).catch(() => {});
   if (pluginConfig) await RC.writeRunPluginConfig(runId, pluginConfig);
   // The run's place and that provider's settings as they are now (ADR-021 §2): a run keeps the idle machine lifetime
@@ -385,6 +382,13 @@ export async function runNew(o: RunNewOpts) {
     if (o.goalBranch) await (await import("./state")).kvWrite(runId, { k: GOAL_KV, value: { branch: o.goalBranch, base: o.base }, writer: "operator" });
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
+  // Created: what this process knew of where it ran is kept with the run, and the daemon's observers record it (the runs
+  // index, the run's trace directory: run.changed `created`, src/plugins/observe.ts). Not on a retry: a run is recorded
+  // once, by the call that created it.
+  if (res.created) {
+    const origin = { cwd: process.cwd(), repo: repoEnv.CAPCOMD_REPO ?? null, traceDir: (await import("../utils/tracing-simple")).traceDir(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) };
+    await c.scope.getOrCreate([runId]).setOrigin({ origin }).catch(() => {});
+  }
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget, sandbox, ...(branchSetup ? { branchSetup } : {}), ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
@@ -413,7 +417,8 @@ export const runsIndexPath = () => env("RUNS_INDEX") || join(stateDir(), "runs.j
 /** A row of the runs index. */
 export type RunRow = { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string };
 
-/** What the run's creator kept with it (scope `getOrigin`); null for a run from before capcomd kept it, or none. */
+/** What the run's creator kept with it (scope `getOrigin`); null until its `run new` finished, for a run from before
+ *  capcomd kept it, or for none. */
 export async function runOrigin(runId: string) {
   const s = await (await import("../core/relay")).existingActor("scope", [runId]);
   return s ? s.getOrigin({}) : null;

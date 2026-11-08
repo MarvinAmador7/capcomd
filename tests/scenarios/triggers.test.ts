@@ -22,7 +22,8 @@ beforeAll(async () => {
   tlog = join(dir, "source.ndjson");
   const settings = join(dir, "triggers.json");
   writeFileSync(settings, JSON.stringify({ sources: { fixture: { allowed: ["alice"], mode: "observe" } } }));
-  w = await world("triggers", { CAPCOMD_TEST_PLUGINS: FIXTURE, CAPCOMD_TEST_TRIGGER_INBOX: inbox, CAPCOMD_TEST_TRIGGER_LOG: tlog, CAPCOMD_TRIGGERS_FILE: settings, CAPCOMD_TRIGGERS_SWEEP_MS: "300", NODE_ENV: "test" });
+  // The run a trigger starts has no planner agent on the fake sandbox: the recipe-hierarchical plugin's, off unless on.
+  w = await world("triggers", { CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true", CAPCOMD_TEST_PLUGINS: FIXTURE, CAPCOMD_TEST_TRIGGER_INBOX: inbox, CAPCOMD_TEST_TRIGGER_LOG: tlog, CAPCOMD_TRIGGERS_FILE: settings, CAPCOMD_TRIGGERS_SWEEP_MS: "300", NODE_ENV: "test" });
 }, 120_000);
 afterAll(async () => {
   // The run the trigger started: let it finish (fake agents: seconds), else cancel it, before the engine goes.
