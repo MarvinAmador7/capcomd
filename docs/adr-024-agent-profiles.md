@@ -456,8 +456,9 @@ Made while pinning the version (§7 step 3, 2026-11-05; `src/actors/scope.ts`, `
 Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src/profiles/describe.ts`):
 
 - **`permissions.report: false` refuses a spawn with `report`** (`reason: report_not_allowed`), checked on the host
-  where every spawn is (`ops.spawnAgent`, after `profile.resolved`), not pinned. Unset means allowed, as before any
-  profile could say: `true` changes nothing at spawn and says, in `fit`, that the profile answers with a report.
+  where every spawn is (`ops.spawnAgent`, after `profile.resolved`, and again after `agent.spawning` so a `report` a
+  plugin adds is refused too), not pinned. Unset means allowed, as before any profile could say: `true` changes nothing
+  at spawn and says, in `fit`, that the profile answers with a report.
 - **`identity.title` and `identity.avatar` are not inherited**, like `name`: a `lead` that extends `worker` would
   otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
   a reviewer until it says otherwise).
@@ -551,7 +552,7 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
   `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
   warning when no daemon runs.
-- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.42, 2026-11-07;
+- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.44, 2026-11-07;
   `src/plugins/snapshot.ts` `seamPresence`): a seam only the daemon loads made every resolution in the CLI fail,
   `capcomd profiles list` included, so outside the daemon a name is a built-in or one the running daemon lists from an
   active, enabled plugin; any other is an error while a daemon runs and a warning (from every reader of profiles, not

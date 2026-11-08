@@ -12,6 +12,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   error; the daemon checks it again when an agent uses the profile. `capcomd profiles add`, `set` and `rm` still refuse
   a change that names such a provider (a typo like `harness.provider: claudee`) unless the running daemon has it, and
   a profile that already names one no longer stops a change to another (in `agents.json` too).
+- Fix: an in-process plugin's `ctx.events.subscribe` now delivers events, and `ctx.events.replay` works. In the daemon
+  a subscription to `daemon` or a run id gets that stream's events (the ones `GET /v1/events` lists) in order, one at a
+  time, filtered by `types` if you give them, from `after` or else from now; a handler that throws is logged and that
+  event skipped. Outside the daemon both now fail with `unsupported` instead of `subscribe` quietly never calling your
+  handler. In the test kit, `fakeContext(...).publish(event)` puts an event on the fake's streams: your subscriptions
+  hear it by the same rules and `replay` returns it.
+- Fix: a profile with `permissions: {report: false}` is now never spawned to report, even when a plugin's
+  `agent.spawning` listener adds `report: true` to the spawn's contract. Such a spawn is refused with reason
+  `report_not_allowed`, the same as when the spawner asks for `--report` itself. For plugin authors: an
+  `agent.spawning` patch may no longer add `from`, `review`, `checks` or `orphansPolicyOverride` to the contract (only
+  `--continue`, verify and the operator set them), and a `report` it adds must be `true` and a `check` one of the run's
+  check names; such a patch is refused like any other widening or invalid patch, and a check the run doesn't have
+  refuses the spawn.
 - Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
   check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
   two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
