@@ -3,7 +3,8 @@
 // user's or the environment's, never a project's; `config.sources` per layer; a run may set only x-per-run settings
 // (layer 5), kept in the plugin's run storage under `config`.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { allowVersion, compatibilityPath } from "../../src/plugins/install";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost, type Candidate } from "../../packages/plugin/src/host/host";
@@ -12,7 +13,7 @@ import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { configured } from "../../src/plugins/host";
 import { resolveSecret } from "../../src/plugins/secrets";
 import { checkRunPluginConfig, parsePluginConfigFlags, pluginConfigFlags, runConfigIssues, RunConfigError } from "../../src/plugins/run-config";
-import { pluginConfigFiles, pluginSettings } from "../../src/plugins/config";
+import { checkSchema, pluginConfigFiles, pluginSettings } from "../../src/plugins/config";
 import { pluginStore } from "../../src/plugins/storage";
 import { addClient, loadClients } from "../../src/api/clients";
 import { harnessApp } from "../../src/api/server";
@@ -74,6 +75,27 @@ describe("layers 1-4 (§10.2)", () => {
     expect(host.get("notify")).toMatchObject({ state: "failed", cause: "config_invalid" });
   });
 
+  test("a key named like Object's own (toString, constructor) or __proto__ is no setting: refused, never in the config", () => {
+    // As the config file reads them: JSON.parse makes `__proto__` an own key.
+    const project = JSON.parse('{"notify": {"toString": 1, "constructor": {"x": 1}, "hasOwnProperty": "no"}}') as Record<string, unknown>;
+    const s = pluginSettings(M, { env: {}, files: files({ notify: { channel: "#ops" } }, project), source: "user" });
+    expect(s.errors.map((e) => [e.path, e.layer, e.setAside])).toEqual([["toString", "project", true], ["constructor", "project", true], ["hasOwnProperty", "project", true]]);
+    expect(Object.keys(s.config)).toEqual(["channel"]);
+    expect(configured({ source: "user", manifest: M }, {}, files({}, project)).config).toBeUndefined();
+    // `__proto__` would swap the config's prototype: a secret reference (or any value) the checks of its own keys never saw.
+    const user = JSON.parse('{"notify": {"__proto__": {"webhook": {"$secret": "env:BOXD_API_KEY"}, "channel": 7}}}') as Record<string, unknown>;
+    const u = pluginSettings(M, { env: {}, files: files(user) });
+    expect(u.errors).toEqual([{ path: "__proto__", layer: "user", message: "is not a setting of any plugin" }]);
+    expect(Object.getPrototypeOf(u.config)).toBe(Object.prototype);
+    expect((u.config as Record<string, unknown>).webhook).toBeUndefined();
+    // Even with no schema to check it against, a merge never takes it.
+    const free = pluginSettings({ name: "free" }, { env: {}, files: files(JSON.parse('{"free": {"__proto__": {"a": 1}}}') as Record<string, unknown>) });
+    expect(Object.getPrototypeOf(free.config)).toBe(Object.prototype);
+    expect((free.config as Record<string, unknown>).a).toBeUndefined();
+    // A `required: ["constructor"]` isn't met by Object's.
+    expect(checkSchema({ type: "object", required: ["constructor"] }, { a: 1 })).toEqual([{ path: "constructor", message: "is required" }]);
+  });
+
   test("the kernel reads the user's and the project's config files; a plugin from a directory is configured too", () => {
     const home = mkdtempSync(join(tmpdir(), "capcomd-layers-home-"));
     const proj = realpathSync(mkdtempSync(join(tmpdir(), "capcomd-layers-proj-")));
@@ -124,7 +146,8 @@ describe("layer 5: a run's plugin config (§10.2)", () => {
     const cfg = parsePluginConfigFlags(["notify.channel=#ops", "notify.quiet=true", "other.a.b=[1,2]"]);
     expect(cfg).toEqual({ notify: { channel: "#ops", quiet: true }, other: { a: { b: [1, 2] } } });
     expect(parsePluginConfigFlags(pluginConfigFlags(cfg).map((f) => f.slice("--plugin-config=".length)))).toEqual(cfg);
-    for (const bad of ["notify", "notify.=x", ".x=1", "notify.channel"]) expect(() => parsePluginConfigFlags([bad])).toThrow(/not <plugin>\.<key>=<value>/);
+    for (const bad of ["notify", "notify.=x", ".x=1", "notify.channel", "__proto__.polluted=1", "notify.__proto__.polluted=1", "notify.constructor.prototype.polluted=1"]) expect(() => parsePluginConfigFlags([bad])).toThrow(/not <plugin>\.<key>=<value>/);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   test("checked against the plugins the daemon would load: unknown plugins and other settings are refused with their field", async () => {
@@ -140,6 +163,19 @@ describe("layer 5: a run's plugin config (§10.2)", () => {
     expect(await field([])).toBe("plugins");
     // A built-in without per-run settings refuses any.
     expect(await field({ "forge-github": { pollMs: 50 } })).toBe("plugins.forge-github.pollMs");
+    // A version outside its engines range is known once the operator allowed that version (§4.4), as the host loads it.
+    const old = join(process.env.CAPCOMD_HOME!, "plugins", "oldie");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "plugin.json"), JSON.stringify({ ...M, name: "oldie", engines: { capcomd: "<0.0.1" }, entry: { runtime: "process", command: ["./run.sh"] }, contributes: { hooks: { "run.changed": {} } } }));
+    writeFileSync(join(old, "run.sh"), "#!/bin/sh\n");
+    try {
+      expect(await field({ oldie: { channel: "#run" } })).toBe("plugins.oldie");
+      allowVersion("oldie@1.0.0", { acceptRisk: true });
+      expect(await checkRunPluginConfig({ oldie: { channel: "#run" } })).toEqual({ oldie: { channel: "#run" } });
+    } finally {
+      rmSync(old, { recursive: true, force: true });
+      rmSync(compatibilityPath(), { force: true });
+    }
   });
 
   test("the run's `config` in a plugin's run storage is the kernel's: the plugin can't write or delete it", async () => {
