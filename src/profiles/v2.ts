@@ -3,6 +3,7 @@
 // and the flat v1 spec it resolves to, which is what an agent is pinned with (./v1.ts AgentSpec). Pure: reading the
 // files and the layers is ./load.ts.
 import { AGENTS_JSON_SCHEMA, CONTEXT_LIMITS, NAME, validateContext, type AgentSpec } from "./v1";
+import { INDEX_NAME } from "../context/memory";
 
 export const PROFILE_SCHEMA = "capcomd.profile/v2";
 
@@ -68,7 +69,9 @@ const BLOCKS: Record<string, Record<string, object>> = {
     review: { enum: ["human", "lint"] },
   },
   memory: {
-    scope: { enum: ["none", "profile", "project", "user"] }, files: { ...strings, maxItems: 1 }, retain: { type: "string", pattern: DAYS.source },
+    scope: { enum: ["none", "profile", "project", "user"] },
+    files: { type: "array", items: { type: "string", pattern: INDEX_NAME.source }, maxItems: 1, description: "One index file directly under .capcomd/context/ (MEMORY.md): agents read only the items it links to" },
+    retain: { type: "string", pattern: DAYS.source },
   },
   sandbox: {
     provider: { ...name, description: "A sandbox plugin's name (capcomd plugins list): this profile's agents run there, whatever the run's sandbox" },
@@ -227,8 +230,8 @@ function checkMemory(m: Record<string, unknown>): string[] {
   const e: string[] = [];
   if (m.scope != null && !["none", "profile", "project", "user"].includes(m.scope as string)) e.push(`memory.scope: must be none, project, profile or user`);
   else if (m.scope === "profile" || m.scope === "user") e.push(`memory.scope: ${m.scope} memory isn't built (only a project's is: context.providers: [{name: memory}]); use project or none`);
-  if (m.files != null && (!isStrings(m.files) || (m.files as string[]).length !== 1 || !FILE_REF.test((m.files as string[])[0]!)))
-    e.push("memory.files: must name one index file (MEMORY.md); a memory is the files under .capcomd/context/ it indexes");
+  if (m.files != null && (!isStrings(m.files) || (m.files as string[]).length !== 1 || !INDEX_NAME.test((m.files as string[])[0]!)))
+    e.push("memory.files: must name one index file directly under .capcomd/context/ (MEMORY.md); a memory is the files under .capcomd/context/ it indexes");
   if (m.retain != null && !(typeof m.retain === "string" && DAYS.test(m.retain))) e.push("memory.retain: must be a number of days (30d)");
   return e;
 }
