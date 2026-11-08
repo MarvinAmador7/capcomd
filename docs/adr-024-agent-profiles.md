@@ -122,6 +122,7 @@ memory:                           # superseded by ADR-025's `context` block (its
 
 sandbox:
   provider: docker                # a sandbox plugin's name (ADR-020/021 descriptor); absent: the run's, else the daemon's
+                                  # (a run started with its own sandbox keeps it, and a project's file waits on trust: §9)
   environment: default            # the env snapshot / image to boot from (capcomd env build --name)
   egress: [github.com, api.anthropic.com]   # as v1; absent: open (ADR-019 §7)
   codex: workspace-write          # v1 `sandbox` (codex --sandbox)
@@ -389,6 +390,46 @@ Decided by the owner on 2026-11-04:
    and personas get a one-time trust prompt per content hash** (`capcomd profiles trust`, the same mechanism as a
    project plugin's, spec §4.8).
 
+Decided by the owner on 2026-11-08 (a profile's `sandbox.provider`, step 8, could send the agents of a run started on
+Docker to boxd and spend the user's boxd credit there):
+
+5. **An explicit run-level sandbox beats a profile's `sandbox.provider`**, for every agent of that run: `capcomd run
+   --sandbox`, `capcomd run new --sandbox`, `POST /v1/runs` `sandbox` and `capcomd_run_new`'s `sandbox`. A sandbox the
+   run took from its settings (`CAPCOMD_SANDBOX` in the environment, the project's or the user's config, the daemon's)
+   isn't explicit, and a profile's `sandbox.provider` still wins over it.
+6. **A project's profile that moves its agents is honoured only once the operator trusts it**, exactly as the
+   project's skills and persona (decision 4): trust kind `profile`, per file hash, refusal reason `untrusted`,
+   `capcomd profiles trust`. A user-layer profile needs no trust.
+
+How it is built (spec 1.0.64; `src/providers/run-sandbox.ts`, `src/profiles/trust.ts`, `src/primitives/ops.ts`
+`checkResolved`):
+
+- **"Explicit" is recorded with the run**: `run new` writes `explicit: true` in the run's `_sandbox` record (reserved
+  for the orchestrator, so an agent can't set it) when the run's place was asked for, by its caller or by a plugin's
+  `run.creating` (which may pick the run's sandbox, §6.6.3; plugins are the operator's). A retry keeps it. A run made
+  before this has no `explicit`, and its agents' profiles win as before.
+- **The run's sandbox wins by dropping the profile's at spawn**: the agent is pinned without `sandboxProvider`, so its
+  machine, slot, idle lifetime and drain are the run's, as for a profile that names none. Its `environment` and `size`
+  stay and apply on the run's sandbox (an environment the run's sandbox hasn't built is refused, `reason:
+  environment`, as for any profile that names one): environment names are content hashes, so the same build can be in
+  both sandboxes. `capcomd run` asks the same before the run is created, so its planner's check matches its spawn. A
+  spawn that can't learn the run's record (the engine didn't answer in time) of a profile that names a sandbox is
+  refused as retryable (`engine_unreachable`) rather than placed on a guess.
+- **What waits on trust**: the project-layer files among those that set the resolved `sandbox.provider`,
+  `sandbox.environment` or `sandbox.size` (`ResolvedProfile.machineFiles`, each with the sha256 of the text it was
+  parsed from), and only while the resolved profile names a `sandbox.provider`: an environment or size alone keeps its
+  agents on the run's sandbox. So a project's `override.yaml` that raises the size of a user profile's boxd machine
+  waits on trust; a project profile that extends a user profile naming boxd, and sets no sandbox key itself, doesn't
+  (the user chose boxd). Trust is per file (`<name>.yaml`, `<name>/profile.yaml`, `<name>/override.yaml`) at its real
+  path: any edit to the file, not only to its sandbox keys, needs trusting again, as a changed `SKILL.md` does.
+- **Shown before a spawn**: `untrustedSandbox` on `GET /v1/profiles` rows, `capcomd_profiles` and `capcomd profiles
+  list --json` (capability `profiles.facts`, additive) names the untrusted files; `capcomd profiles show` has a
+  `machine` block (`provider`, `runSandboxWins: true`, each file with its layer, keys, hash and, for a project's,
+  `trust`) and says it in its text; `validate` warns; `capcomd profiles trust` lists and trusts the files beside the
+  skills and persona; `GET /v1/run-options` `planners` says such a planner isn't ready, naming the trust command or a
+  run's own sandbox (it can't know the sandbox a `POST /v1/runs` will pass, so it says what a run without one would
+  meet).
+
 Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, `src/profiles/v2.ts`):
 
 - **The project's layer is the `profiles/` directory next to the agents file** (`.capcomd/agents.json` →
@@ -543,7 +584,8 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   program the sandbox doesn't have is the CLI's to report; the runner logs it first. Nothing is installed for a server:
   its environment must have it.
 - **`sandbox.provider` wins over the run's sandbox** for that profile's agents (§2.2 "absent: the run's, else the
-  daemon's"): the machine is made, run, pushed from and destroyed there (`providerForAgent`, recorded on the worker as
+  daemon's"; since decisions 5 and 6 of 2026-11-08, above, only over a run sandbox taken from the settings, and a
+  project's file that sets it only once trusted): the machine is made, run, pushed from and destroyed there (`providerForAgent`, recorded on the worker as
   its `sandbox`, which `capcomd sandbox shell` and the drain read), its idle lifetime is that place's current setting (a
   run records its own place's), and its slot is that place's. A run's checks stay on the run's sandbox. **It never
   takes an agent out of isolation**: a sandbox that runs its agents on this host (`isolation: host`, the test fakes) is

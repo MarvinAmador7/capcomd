@@ -23,7 +23,7 @@ test("each run's workers get the idle lifetime recorded when it started; a run w
 	process.env.CAPCOMD_SANDBOX_IDLE_SECONDS = "14400";
 	let own: string;
 	try { own = (await runNew({ budget: {}, label: "own place", sandbox: "fake-host", key: `life-own-${Date.now()}` })).runId as string; } finally { process.env.CAPCOMD_SANDBOX_IDLE_SECONDS = "1800"; }
-	expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", settings: { idleLifetime: 14400 } });
+	expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", explicit: true, settings: { idleLifetime: 14400 } });
 	// A run on the daemon's place, started from the CLI while the setting was 15 minutes: only settings, no name.
 	const r = await capcomd(["run", "new", "--budget", "usd=10,turns=400", "--key", `life-plain-${Date.now()}`, "--json"], { ...w.env, PWD: w.dir, CAPCOMD_SANDBOX_IDLE_SECONDS: "900" });
 	expect(r.code).toBe(0);
