@@ -1,7 +1,8 @@
 // observe-runs-index and observe-traces (docs/spec/plugin-api.md §6.6.4, §17.1): the daemon's observers of
-// `run.changed`, where `run new` wrote both itself before. A run carries what its creator knew of where it ran (scope
-// `getOrigin`: its folder, repository, trace directory and goal branch, src/primitives/ops.ts runNew); once the run is
-// created the daemon is told (`created`, from the scope's event log, src/plugins/changes.ts), and:
+// `run.changed`, where `run new` wrote both itself before. `run new`'s last step keeps with the run what its process
+// knew of where it ran (scope `setOrigin`, read back with `getOrigin`: its folder, repository, trace directory and goal
+// branch, src/primitives/ops.ts runNew) and tells the daemon's plugins the run was created (`created`,
+// src/plugins/changes.ts tellCreated); a run whose `run new` failed partway is never told so. Then:
 //  - observe-runs-index appends the run's row to the runs index (src/primitives/ops.ts runsIndexPath; read by
 //    `capcomd_runs`, GET /v1/runs, `ctx.runs`), exactly as `run new` wrote it. A run it hasn't recorded yet is recorded
 //    the first time it hears of it, so a run created while the daemon's plugins were starting is listed once its run
