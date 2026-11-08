@@ -20,9 +20,10 @@ import { VERSION } from "./self";
 
 /** The in-VM supervisor (ADR-019 §1), uploaded into each agent's VM. */
 export const SUPERVISOR_SOURCE: string = supervisor;
-/** The in-VM `capcomd` (ADR-017), uploaded into the VMs of agents that may spawn. */
+/** The in-VM `capcomd` (ADR-017), uploaded into the VMs of agents that have it (src/subagents/skill.ts `hasVmCapcomd`). */
 export const VM_CLI_SOURCE: string = vmCli;
-/** The `capcomd` of agents that may not spawn: it only names their tab (capability agents.title), with the daemon's rules. */
+/** The `capcomd` of agents without it (a reviewer, a report agent, the consolidator): it only names their tab (capability
+ *  agents.title), with the daemon's rules. */
 export const TITLE_SHIM_SOURCE: string = TITLE_SHIM;
 /** The orchestration skill, installed for Claude Code when there's no plugin host. */
 export const ORCHESTRATION_SKILL: string = orchestrationSkill;

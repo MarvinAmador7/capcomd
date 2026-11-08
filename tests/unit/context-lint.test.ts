@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync,
 import { tmpdir } from "os";
 import { join } from "path";
 import { INDEX_FILE, lintContext, readContextAt, readContextDir, renderIndex, type LintFile, type LintInput } from "../../src/context/lint";
-import { CONTEXT_DIR } from "../../src/context/memory";
+import { CONTEXT_DIR, MEMORY_MAX_FILES } from "../../src/context/memory";
 import { secretScan } from "../../src/context/scan";
 import { capcomd } from "../helpers/engine";
 
@@ -209,6 +209,26 @@ describe("capcomd context lint, on a checkout", () => {
       expect(bad.code).toBe(2);
       const none = await capcomd(["context", "lint", "--dir", join(dir, "nowhere"), "--json"]);
       expect(json(none.stdout)).toMatchObject({ ok: true, items: 0 });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 60_000);
+
+  test("a directory with more files than lint reads is a problem, never a pass; a --base that is an option is refused", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-context-lint-"));
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      mkdirSync(join(dir, CONTEXT_DIR, "memory"), { recursive: true });
+      // MEMORY_MAX_FILES files (one content, so git reads one blob), then one past the cap that holds the run's secret.
+      for (let n = 0; n < MEMORY_MAX_FILES; n++) writeFileSync(join(dir, CONTEXT_DIR, "memory", `a${String(n).padStart(4, "0")}.md`), "notes\n");
+      writeFileSync(join(dir, CONTEXT_DIR, "memory", "zz.md"), item({ id: "zz", type: "lesson" }, `The staging login is ${RUN_SECRET}.`));
+      git(dir, "add", ".");
+      git(dir, "commit", "-q", "-m", "context");
+      for (const read of [readContextDir(dir), readContextAt(dir, "HEAD")]) {
+        expect(read.length).toBe(MEMORY_MAX_FILES + 1);
+        expect(read.at(-1)).toEqual({ path: ".capcomd/context", text: null, more: true });
+        const r = lintContext({ files: read, scan: secretScan([RUN_SECRET]), fix: true, now: NOW });
+        expect(r.errors).toContainEqual({ file: ".capcomd/context", rule: "unreadable", message: `more than ${MEMORY_MAX_FILES} files: lint reads that many, so it can't check the rest` });
+      }
+      expect(() => readContextAt(dir, "--output=/tmp/x")).toThrow("isn't a branch or a commit");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, 60_000);
 

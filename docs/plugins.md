@@ -140,6 +140,11 @@ What to know when you answer:
   plain text; never let it become markup, a link, a mention or a command.
 - An operator can merge past your veto (`capcomd merge --operator`): the merge is recorded with your plugin's reason as
   bypassed (§6.5).
+- **You hear what the daemon runs** (§6.1). Merges, the `*.changed` hooks, sandboxes, triggers and everything an agent
+  asks for from its sandbox run in the daemon. An operation `capcomd` or its MCP server runs in its own process
+  (`capcomd verify`, `spawn`, `approve`, `run new` from your shell, or the driver's MCP tools) fires its gates there,
+  where your plugin doesn't run: `verify.judging`, `verify.starting`, `approval.deciding`, `run.creating`,
+  `agent.spawning` and the other spawn hooks don't reach you for those yet. `merge.landing` always does.
 
 Deadlines (§6.4): observe 30 s (`agent.item`, `job.changed` 5 s), gates and modifies 10 s (at most 60 s),
 `verify.judging` 30 min (at most 60: a reviewer agent runs inside it).
@@ -163,8 +168,9 @@ The process gets only this environment (§9.2): `PATH`, `HOME`, `USER`, `LANG`, 
 `GITHUB_TOKEN`, no sandbox keys. Its token is new at every start, lives only in the daemon's memory, and is revoked when
 the process is gone.
 
-**Lifecycle.** The process runs in its own process group. It should exit when the hooks stream ends, and when its
-stdin closes (the daemon is gone; `connect()` ends the stream then). A process that exits is started again after 1 s,
+**Lifecycle.** The process runs in its own process group: when it exits, whatever it started that still runs there is
+killed. It should exit when the hooks stream ends, and when its stdin closes (the daemon is gone; `connect()` ends the
+stream then). A process that exits is started again after 1 s,
 2 s, 4 s … 60 s, with a new session and token; five exits within 10 minutes stop that (`failed (restart_limit)`), and
 its gates deny until it is enabled again. When the daemon stops it, it sends `session.closing`, then SIGTERM 5 s later,
 then SIGKILL.
@@ -180,7 +186,9 @@ your secrets' values are redacted from it.
 
 - `"x-secret": true`: the value is a **reference**, never the secret itself: `{"$secret": "env:SLACK_WEBHOOK"}` (an
   environment variable of the daemon). Your process gets the resolved value once, in the handshake's `secrets`, never
-  in its environment or arguments.
+  in its environment or arguments. The user sets the reference (below): a `default` reference in your schema is not
+  followed, since a plugin doesn't choose which of the user's variables it receives. Until it is set, the secret is
+  missing from `secrets`; say what to set.
 - `"x-per-run": true`: a run may set it (`capcomd run --plugin-config my-gate.strict=true`, or `plugins` in
   `POST /v1/runs`).
 

@@ -72,6 +72,11 @@ branch) on demand, merging nothing: that is how a lead or planner knows the comb
 code beyond the checks (a smoke test of the whole, an end-to-end run) is a worker's task: spawn one, or pin a check.
 An orchestrate agent that writes a file or commits anyway fails, and its change is discarded.
 
+Every agent that does work has `capcomd` in its sandbox, a `worker` too: it runs long commands (the whole test suite,
+a build) as background jobs (`capcomd job start`, the result comes back to it as a message), keeps notes, proposes
+lessons for the project's memory in its result, and ends with a `result.summary` of what it changed and checked. So a
+worker's task can say "run the whole suite and say what passed". It can't spawn, verify or merge.
+
 Shapes combine: contract first, then wide with a lead on each big part, is the usual shape for "build me X".
 
 Each `capcomd_profiles` entry says what the profile is `fit` for (one line capcomd writes from its settings), its

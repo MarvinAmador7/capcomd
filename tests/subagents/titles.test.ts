@@ -1,8 +1,10 @@
-// Agent titles (capability agents.title) against a real engine and a real runner: a worker that may not spawn names
-// its tab with the local `capcomd` shim (src/primitives/title-rules.mjs), which talks to nobody: the daemon reads the
-// `capcomd title …` Bash call from the agent's own tool calls (the fake claude, tests/agents/fake-claude.sh [title:…],
-// in a host-exec FakeProvider). No RPC: no spool, no MCP server, no token. A call that does anything else is ignored;
-// a refused title is said by the shim, and nothing is recorded. The thread and the steps leave the call out.
+// Agent titles (capability agents.title) against a real engine and a real runner: an agent without the in-VM capcomd
+// (a report agent here; a reviewer and the consolidator too) names its tab with the local `capcomd` shim
+// (src/primitives/title-rules.mjs), which talks to nobody: the daemon reads the `capcomd title …` Bash call from the
+// agent's own tool calls (the fake claude, tests/agents/fake-claude.sh [title:…], in a host-exec FakeProvider). No RPC:
+// no spool, no MCP server, no token. A call that does anything else is ignored; a refused title is said by the shim, and
+// nothing is recorded. The thread and the steps leave the call out. A worker that may not spawn has the in-VM capcomd,
+// so its `capcomd title` is an RPC like a spawner's.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -71,8 +73,8 @@ const cj = async (args: string[]) => {
 const get = async (p: string) => (await (await app.request(p, { headers: { authorization: `Bearer ${token}` } })).json()) as any;
 
 const workDir = (id: string) => join(dir, "vm", readdirSync(join(dir, "vm")).find((d) => d.includes(id))!);
-async function finished(run: string, task: string, key: string) {
-	const sp = await cj(["spawn", run, "--profile", "worker", "--task", task, "--key", key]);
+async function finished(run: string, task: string, key: string, o: { report?: boolean } = { report: true }) {
+	const sp = await cj(["spawn", run, "--profile", "worker", "--task", task, "--key", key, ...(o.report ? ["--report"] : [])]);
 	const id = sp.j?.agentId;
 	if (!id) console.log(sp.stdout, sp.stderr);
 	expect(id).toMatch(/^agt-/);
@@ -80,7 +82,7 @@ async function finished(run: string, task: string, key: string) {
 	return { id, spawned: sp.j };
 }
 
-test("a worker names its own tab with the local shim: no RPC, the daemon reads the call; the thread leaves it out", async () => {
+test("a report agent names its own tab with the local shim: no RPC, the daemon reads the call; the thread leaves it out", async () => {
 	const run = (await cj(["run", "new"])).j?.runId;
 	expect(run).toMatch(/^run-/);
 	const { id, spawned } = await finished(run, "Fix the sum helper [title:Login Redirect]", "w");
@@ -131,4 +133,22 @@ test("a call that does something else too is no rename; a refused title is said 
 	// The daemon's own refusal is in the log (the shim had already said it).
 	const logs = (await cj(["logs", run, refused.id])).j.lines.map((l: any) => String(l.line));
 	expect(logs.some((l: string) => l.startsWith("[capcomd] title not recorded: a title is 1 to 4 words, not 5"))).toBe(true);
+}, 180_000);
+
+test("a worker that may not spawn names its tab through its in-VM capcomd: an RPC its token allows, not the shim", async () => {
+	const run = (await cj(["run", "new"])).j?.runId;
+	const { id } = await finished(run, "Fix the sum helper [title:Login Redirect]", "w", { report: false });
+	// Its capcomd answered (JSON, from the orchestrator), not the shim.
+	expect(JSON.parse(readFileSync(join(workDir(id), "title-out.txt"), "utf8").split("\n")[0]!)).toMatchObject({ ok: true });
+	expect(existsSync(join(tmpdir(), "capcomd-rpc", run, id, "bin", "capcomd"))).toBe(true);
+	expect(existsSync(join(workDir(id), "capcomd-mcp.json"))).toBe(true);
+	expect(existsSync(join(workDir(id), "bin", "capcomd-title.mjs"))).toBe(false);
+	const system = readFileSync(join(workDir(id), "append-system.txt"), "utf8");
+	expect(system).toContain("# Name your tab (capcomd)");
+	expect(system).toContain("# Your capcomd");
+	expect(system).not.toContain("Orchestrating child agents");
+	const a = ((await get(`/v1/runs/${run}/agents`)) as any[]).find((x) => x.id === id);
+	expect(a).toMatchObject({ title: "login redirect", titleSource: "self" });
+	const logs = (await cj(["logs", run, id])).j.lines.map((l: any) => String(l.line));
+	expect(logs.some((l: string) => l.startsWith("[capcomd] title → ok"))).toBe(true);
 }, 180_000);
