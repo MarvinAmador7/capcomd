@@ -96,7 +96,8 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   /v1/profiles/{name}` changes them (a token with the `configure` scope, an `Idempotency-Key` and the `rev` it read).
   Every change made through the API is a `profile.changed` event on the daemon stream; a change made with `capcomd
   profiles set` or by editing the file isn't (capability `profiles.edit`).
-- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`): `identity.title` (the
+- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`, and the
+  app in `GET /v1/profiles`): `identity.title` (the
   name to show; not passed to a profile that `extends` it, nor is `identity.avatar`), `tags` (lowercase words, what
   the profile is for: `[review, security]`), `sharing` (`source`, `license`: where the profile is published; an
   installed one's `LOCK` says where it was installed from) and
@@ -112,7 +113,10 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `identity.persona` is checked but doesn't change what an agent does yet; `capcomd profiles validate` lists it when a
   profile sets it. `context` (with `memory` read as its old name) does: see "Project memory" below. `jobs`
   (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
-  field does in `agents.json`.
+  field does in `agents.json`. They are limits like `limits`: an override (`--set jobs.max=2`, which keeps the
+  block's other values) may lower one but not raise or unset one the profile sets (without `--operator`), and a
+  profile in `children.allowedChildProfiles` may not either. A job started with a longer `--timeout-ms` than the
+  profile's `afterTurnMs` gets `afterTurnMs`.
 - `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
   untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
   (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says
@@ -231,7 +235,9 @@ system prompt, Codex's prompt), after the profile's `prompt.append`, each in a `
   else may have written, so its agents get it only once you have looked at it: `capcomd profiles trust <name>` shows
   each of the profile's project skills that you haven't trusted as it is (its description, file, size and sha256) and
   asks (`--yes` for scripts; without a terminal it is required). Until then a spawn of the profile is refused
-  (`reason: "untrusted"`), and `capcomd profiles validate` and `show` say so. Trust is kept per `SKILL.md` content and
+  (`reason: "untrusted"`), and `capcomd profiles validate` and `show` say so, as do `untrustedSkills` in `capcomd
+  profiles list --json`, `capcomd_profiles` and `GET /v1/profiles`, and a planner's `reason` in `GET /v1/run-options`
+  `planners`. Trust is kept per `SKILL.md` content and
   place in `~/.capcomd/trust.json`: an edited skill, or the same one in another checkout, needs trusting again. Your
   own profiles' skills (`~/.capcomd/profiles/`) and your `~/.claude/skills` need no trust. `capcomd profiles trust`
   with no name lists the project's skills and whether each is trusted.

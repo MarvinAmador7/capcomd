@@ -182,7 +182,12 @@ treats a distribution-owned `SOUL.md` that way).
   `allowedChildProfiles` entry is no wider than its parent (`widenings`). That stays, on resolved specs. A profile
   that `extends` another may widen it (a lead is a worker that can also spawn) because `extends` is authoring, not
   delegation; only the parent → child spawn relation is narrow-only. This distinction is the main thing to get right
-  in review.
+  in review. The `jobs` block is limits like `limits` (spec §16.2 rule 2): an override or a `profile.resolved` patch
+  may lower `max`, `foregroundMs` or `afterTurnMs` (`--set jobs.max=2` keeps the block's other values), never raise
+  one the profile sets or unset it; a spawned profile is held to its spawner's `max` and `afterTurnMs`, while its
+  `foregroundMs` is its own, as its tool mode is (an orchestrate planner waits 5 s, its workers 60 s). A job's own
+  `timeoutMs` (`capcomd job start --timeout-ms`) is at most an `afterTurnMs` the profile sets, so a start can't lift
+  that limit either.
 - **Per-run and per-spawn overrides** keep today's mechanism: `--set k=v` and `--overrides` produce an `Overrides`
   that `applyOverrides` merges and checks (`profiles.ts`); the ref encoding `name;ov=…[;op=1]` is unchanged, so the
   planner → worker carry (`encodeAgentRef`/`decodeAgentRef`) needs no change. Keys use the v2 paths
@@ -290,7 +295,10 @@ model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it 
   title, provider mark, tags and readiness (login present, environment built, sandbox up), with the resolved values
   and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
   setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
-  profile that can plan, not only the one named `planner`.
+  profile that can plan, not only the one named `planner` (`planners`, each with its readiness; done 2026-11-07, spec
+  1.0.47). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
+  skills each is pinned with and their trust (`untrustedSkills`), so the app and a planner see that a spawn would wait
+  on the operator's trust before it is refused.
 - **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
   across runs of the same profile (bot-avatar memory: "agent id + role + size → SVG"; the seed becomes the profile's
   when it sets one).
@@ -362,7 +370,8 @@ Each step ships alone, with tests, and leaves every existing test green.
   where every value came from.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
   environment is warned about by `capcomd profiles validate` and refused at spawn (`reason: environment`, §9), not left
-  to the provider's boot error; showing it as readiness before the run (`GET /v1/run-options`) is still to do.
+  to the provider's boot error; and shown before the run: `GET /v1/run-options` `planners` says a planner whose
+  environment isn't built (or whose `lifecycle` plugin isn't active) isn't ready, and why (2026-11-07, spec 1.0.47).
 - **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
   per hash (decision 4 below).
 - A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam

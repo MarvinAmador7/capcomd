@@ -13,6 +13,30 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   plugins still get `unsupported` for these.
 - Fixed: in `@capcomd/plugin`, `ctx.runs.new(...)` is typed as the method it is; the type declared a constructor, so a
   call to it didn't typecheck.
+- New: `GET /v1/profiles` (and `GET /v1/profiles/{name}`) rows say what a planner chooses a profile by: its `title`,
+  `fit` (one sentence capcomd writes from its settings, never from its description), `cost` (low, medium or high),
+  `canReport`, the `skills` its agents get (names and hashes, never their text), and `untrustedSkills`, the project
+  skills you haven't trusted yet, so the app and a planner see that a spawn of it would be refused before trying
+  (`capcomd profiles trust <name>` trusts them). `capcomd_profiles` and `capcomd profiles list --json` carry `skills`
+  and `untrustedSkills` too. Capability `profiles.facts`.
+- New: `GET /v1/run-options` lists `planners`: every profile that can plan, each with whether a run can start with it
+  now and why not: no login, a project skill not trusted yet, a `sandbox.environment` its sandbox has no build of, a
+  `lifecycle` plugin that isn't active on the daemon, no agent environment built, an egress limit its sandbox can't
+  enforce (Docker), or a `sandbox.provider` that would run it outside the run's isolation. Before, these only showed
+  when the planner's spawn was refused. Capability `runs.options.planners`.
+- Fixed: an agent that fails now has its background jobs (`capcomd job start`) stopped and recorded as ended when it
+  fails, as a cancelled one's are, instead of showing as running until something reads them. A job with a lot of
+  output keeps a record within the run's 64 KB limit (the oldest output is cut first), and `capcomd job output` on a
+  finished job says when it was cut.
+- **Breaking:** a profile's `jobs` block (`max`, `foregroundMs`, `afterTurnMs`) is a limit like `limits`. An override
+  (`--set jobs.max=2`, which now keeps the block's other values) may lower one, but raising or unsetting one the
+  profile sets is refused unless you pass `--operator`. A profile in another's `children.allowedChildProfiles` may not
+  allow more jobs at once (`max`) or longer ones (`afterTurnMs`) than the profile that spawns it (its `foregroundMs`
+  is its own); `capcomd profiles validate` names one that does. Lower the child's values, or raise the spawner's.
+  A job started with `--timeout-ms` longer than the profile's `afterTurnMs` now stops at `afterTurnMs` (a profile
+  that doesn't set it is unchanged), and a job's `cwd` over 4 KB or `env` over 16 KB is refused.
+- Changed: plugins only reach their own jobs and the jobs of a run's agents: `ctx.jobs.get`, `wait` and `cancel` on
+  another plugin's job answer `not_found`, and `ctx.jobs.list` leaves those out.
 - Fixed: `capcomd profiles update <name>` no longer deletes files you added to an installed profile's directory (a
   `notes.md`, an extra file in a skill's folder). It keeps every file the package didn't install, as it keeps your
   `override.yaml`, and lists them as "added by you, kept" (`kept` in `--json`). If the new version of the package
@@ -89,7 +113,6 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `capcomd env templates rm --repo URL --sandbox boxd`. The team-shape eval no longer kills itself (exit 137) at the end
   when given `--work`, and refuses a `--work` folder that isn't empty (it deletes the folder at the end), as the context
   eval does. Neither eval's end-of-run cleanup kills the shell or command that started it any more.
-
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
