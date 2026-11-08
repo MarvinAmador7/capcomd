@@ -741,7 +741,29 @@ this list says why):
   second checkout: an agent cites `(id, commit)` and never pushes to a brain. A bundle that can't be placed leaves the
   agent to start without it (its log says so). The environment image doesn't bake brains yet: the runner keeps a bundle
   the sandbox already has at the commit (the marker), so `capcomd env build` placing them is the follow-up; until then
-  every agent's sandbox gets the tree at start.
+  every agent's sandbox gets the tree at start. (Built since, spec 1.0.62: see the follow-up below.)
+- **Follow-up: brains in the image, only the bundle in the sandbox** (spec 1.0.62). The whole repository was placed, but
+  only the bundle's Markdown was checked for `restricted`: a restricted file elsewhere in the brain's repository (or a
+  non-Markdown file in the bundle) reached every sandbox. `ContextBundle` now names a `path`, the directory placed (at
+  the same path under the bundle's directory, so lines' paths don't change); groundray names its bundle's, so brain.yaml
+  and the rest of the repository never leave the host, and every file under the bundle is read and checked: Markdown by
+  its frontmatter, any other file whole (a `sensitivity: restricted` at any depth of it as YAML or JSON, or `sensitivity`
+  then `restricted` with a `:` or `=` between anywhere in it, TOML's and an env file's spelling too);
+  one capcomd can't read whole (over 4 MiB, more than 2000 files) refuses the brain as before. We chose checking over
+  refusing non-Markdown files: groundray's bundles carry attachments and captures, and refusing them would refuse
+  ordinary brains. The marker names the commit and the path (a whole tree an older capcomd placed isn't kept). `capcomd
+  env build` (and `env build --project`) places the brains the checkout's project maps, each checked as `resolve` checks
+  it, in the image as the runner would, so the runner keeps them and sends nothing at start; they are part of the image's
+  name, and one with credential-shaped text or a local key value in it is left out of the image (the runner still places
+  it at start: it is the brain's, not the build's). Because an image built in one project can be used by another's agents
+  (the env ledger's current image is everyone's), the runner removes every bundle under `<workdir>/context/` the brief
+  doesn't cite before the agent starts: a mapping per project still keeps one company's brain out of another's agents.
+  A sandbox that can't be cleaned doesn't start its agent (fail closed), and a checks VM, which boots from the same
+  image to run agent-written code, removes `<workdir>/context/` before the tree under test runs. Text too long or nested
+  too deep for the YAML parser to read quickly (over 64 KiB; flow collections past 32 levels: its cost grows faster than
+  the text, and a brain is read on the daemon's thread) is matched without it, more broadly.
+  A project template rebuilt in the background (its delta grew too big) carries no brains: the daemon doesn't know the
+  project's mappings, so those agents get the bundle at start as before.
 - A line's path may be 320 characters (200 before): a bundle's file is under the kernel's root.
 - `allowStale` (§10's example) isn't read: stale lines leave the brief as for any provider.
 
@@ -759,7 +781,7 @@ says why):
   authorizes promotion") and belong to the brain's owners. It is never staged on the consolidator's branch: the kernel
   keeps it in kv `_context/brain/<agentId>.<n>` (reserved) and the consolidator's result says so (`context.brain`).
   A brain the run's project doesn't map (the mapping `run new` recorded) is refused there and then, by its name
-  (`no_brain`, `context.brain.error`), not kept to fail when a person sends it (spec 1.0.62).
+  (`no_brain`, `context.brain.error`), not kept to fail when a person sends it (spec 1.0.63).
   The prompt tells a consolidator whose profile names a brain how to propose to it.
 - **The approver as actor, without a hold.** §7 forwards "the approver of the hold"; a brain proposal has no branch in
   the project's repository, so no merge and no hold of its own, and tying it to the memory branch's hold would drop it

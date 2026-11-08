@@ -26,11 +26,12 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import type { SeamCall } from "../../packages/plugin/src/seams";
 import { bundleDir, type ContextDescriptor, type ContextHit, type ContextItem, type ContextProposal, type ContextProvider, type ContextRef, type ContextScope, type ContextSearch, type ProposalReceipt } from "../../packages/plugin/src/context-layer";
 import type { ContextBrain } from "../config/store";
+import type { ContextBundleSpec } from "../agents/config";
 import { RelayError } from "../core/errors";
 import { assertRemoteUrl, inlineCredential } from "../merge/host-git";
 import type { Principal } from "../../packages/plugin/src/shapes";
 import { actorOf, BRAIN_NAME_RE, draftProblem, groundrayBin, writeToBrain, type BrainDraft, type BrainTarget, type BrainWritten, type WriteDeps } from "./groundray-write";
-import { aborted, classifyContextError, contextItem, MEMORY_MAX_FILES, mirrorReader, parseBundle, searchItems, type Parsed, type TreeReader } from "./memory";
+import { aborted, classifyContextError, contextItem, MEMORY_MAX_BYTES, MEMORY_MAX_FILES, mirrorReader, parseBundle, searchItems, type Parsed, type TreeReader } from "./memory";
 import { contextSettings, type ContextSettings } from "./project";
 
 export const GROUNDRAY = "groundray";
@@ -98,13 +99,15 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
   const bundle = manifest?.bundle ?? o.bundle ?? "knowledge";
   if (!BUNDLE.test(bundle)) return { error: `${JSON.stringify(bundle).slice(0, 80)} isn't a directory in the repository` };
   const config = `${bundle}/.core-kb.yaml`;
-  const t = await read({ remote, at: { sha: head.sha }, runId, prefix: `${bundle}/`, only: (p) => MARKDOWN.test(p) || p === config });
+  // Every file under the bundle: the bundle's directory is what is placed in agents' sandboxes (resolve's `bundle.path`,
+  // nothing else of the repository), so each of its files is checked, Markdown or not.
+  const t = await read({ remote, at: { sha: head.sha }, runId, prefix: `${bundle}/` });
   if ("error" in t) return t;
   const parsed = parseBundle(t.files, { revision: head.sha, date: head.date }, { provider: GROUNDRAY, root: `${bundle}/`, kindOf: () => "fact", shown: (p) => p, defaultType: () => "fact", requireType: true });
   if (!yaml && !parsed.items.length) return { error: `no brain.yaml, and no OKF items under ${bundle}/` };
-  // The whole tree is placed in agents' sandboxes, so every file read is checked, an item or not (no `type`, an id seen
-  // already, index.md), as text (a frontmatter whose YAML won't parse still says it); one too big to parse is read again
-  // for the check alone. A tree capcomd couldn't read whole isn't known not to be restricted.
+  // Every file read is checked, an item or not (no `type`, an id seen already, index.md), as text (a frontmatter whose
+  // YAML won't parse still says it; a file that isn't Markdown says it anywhere in it); one too big to parse is read
+  // again for the check alone. A bundle capcomd couldn't read whole isn't known not to be restricted.
   let checked = t.files;
   const big = new Set(t.files.filter((f) => f.text === null).map((f) => f.path));
   if (big.size) {
@@ -119,7 +122,7 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
     sensitivity = said.find((v) => v.toLowerCase() === "restricted") ?? said[0] ?? null;
     if (sensitivity?.toLowerCase() !== "restricted" && /^default_sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(cfg.text)) sensitivity = "restricted";
   }
-  const marked = checked.filter((f) => f.text !== null && f.path !== config && marksRestricted(f.text)).length;
+  const marked = checked.filter((f) => f.text !== null && f.path !== config && (MARKDOWN.test(f.path) ? marksRestricted(f.text) : saysRestricted(f.text))).length;
   const restricted = sensitivity?.toLowerCase() === "restricted" ? "its bundle's default sensitivity is restricted"
     : marked ? `${marked} of its files ${marked === 1 ? "is" : "are"} marked restricted` : null;
   const unread = checked.filter((f) => f.text === null).length;
@@ -130,29 +133,58 @@ export async function readBrain(read: TreeReader, remote: string, at: { branch: 
 
 /** The most capcomd reads of one file of a brain to check its sensitivity (an item is parsed up to MEMORY_MAX_BYTES). */
 const BRAIN_CHECK_MAX_BYTES = 4 * 1024 * 1024;
-/** A Markdown file, whatever the case of its extension: `git archive` places every one. */
+/** A Markdown file, whatever the case of its extension: its frontmatter is what says its sensitivity. */
 const MARKDOWN = /\.(?:md|markdown)$/i;
 /** Every value a YAML mapping gives `key` (in any case) at its top level, as text: a key quoted or not, a value on the
  *  next line, a block scalar, an alias to an anchored value, a flow mapping, and each of a key given twice (which a
- *  strict parse refuses). */
-function valuesOf(text: string, key: string): string[] {
+ *  strict parse refuses). `deep`: at any depth (in any mapping of the document, a sequence's too). */
+function valuesOf(text: string, key: string, deep = false): string[] {
   const Y = require("yaml") as typeof import("yaml");
   let doc: ReturnType<typeof Y.parseDocument>;
   try { doc = Y.parseDocument(text, { uniqueKeys: false, prettyErrors: false }); } catch { return []; }
-  if (!Y.isMap(doc.contents)) return [];
-  return doc.contents.items.flatMap((p) => {
+  const valueOf = (p: { key: unknown; value: unknown }): string[] => {
     if (!Y.isScalar(p.key) || String(p.key.value).toLowerCase() !== key) return [];
     let v: unknown = p.value;
     try { if (Y.isAlias(v)) v = v.resolve(doc); } catch { return []; }
     return Y.isScalar(v) && v.value != null ? [String(v.value).trim()] : [];
-  });
+  };
+  if (!deep) return Y.isMap(doc.contents) ? doc.contents.items.flatMap(valueOf) : [];
+  const out: string[] = [];
+  try { Y.visit(doc, { Pair: (_k, p) => { out.push(...valueOf(p)); } }); } catch { /* what was read so far */ }
+  return out;
 }
 /** Whether a file's frontmatter says `sensitivity: restricted` (OKF's handling hint), in any case and any YAML spelling
  *  (its line too, when the YAML around it doesn't parse). */
 function marksRestricted(text: string): boolean {
   const m = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
   if (!m) return false;
-  return valuesOf(m[1]!, "sensitivity").some((v) => v.toLowerCase() === "restricted") || /^sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(m[1]!);
+  return saysRestricted(m[1]!, false);
+}
+/** Whether YAML-ish text says `sensitivity: restricted`, in any case and any YAML spelling, or as a line anywhere in it:
+ *  at a frontmatter's top level, or at any depth of a file under the bundle that isn't Markdown (a sidecar of metadata, a
+ *  JSON or plain text file, which have no frontmatter to say it in, are read whole). */
+function saysRestricted(text: string, deep = true): boolean {
+  // The YAML parser's cost grows faster than the text (a 64 KiB file of nested `{a: ` takes seconds), and a brain is
+  // read on the daemon's thread: text too long or nested too deep for it is matched without parsing, more broadly.
+  // A file that isn't Markdown is matched that way at any size too, so its marking counts whatever its length (a TOML
+  // `sensitivity = "restricted"` in a small file as in a big one).
+  if (deep && SAYS_RESTRICTED_ANYWHERE.test(text)) return true;
+  if (text.length > MEMORY_MAX_BYTES || flowDepth(text) > YAML_MAX_FLOW_DEPTH) return SAYS_RESTRICTED_ANYWHERE.test(text);
+  return valuesOf(text, "sensitivity", deep).some((v) => v.toLowerCase() === "restricted") || /^[ \t]*(["']?)sensitivity\1[ \t]*:[ \t]*(["']?)restricted\2[ \t]*(?:[,}#].*)?$/im.test(text);
+}
+/** `sensitivity` then `restricted` with a `:` or `=` between, anywhere: a key quoted or not, at any depth, its value on
+ *  the next line or a block scalar's, YAML, JSON, TOML or prose. */
+const SAYS_RESTRICTED_ANYWHERE = /(?:^|[^A-Za-z0-9_-])(["']?)sensitivity\1\s*[:=]\s*(?:[|>][-+0-9]*\s*)?(["']?)restricted\2(?![A-Za-z0-9_-])/i;
+/** How deep flow collections (`[`, `{`) may nest in text the YAML parser is given. */
+const YAML_MAX_FLOW_DEPTH = 32;
+/** The deepest flow collections nest in `text`, roughly (a bracket in a string counts too). */
+function flowDepth(text: string): number {
+  let depth = 0, max = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 91 || c === 123) { if (++depth > max) max = depth; } else if ((c === 93 || c === 125) && depth > 0) depth--;
+  }
+  return max;
 }
 
 /** A project's mapping, as `run new` recorded it (or the file has it): checked, since the file is hand-editable. A
@@ -196,6 +228,47 @@ export const hostWriter: BrainWriter = async (brain, draft, actor, c) => {
   return writeToBrain(brain, draft, actor, { bin, workdir: join(cfg.workdir, "brain-proposals"), pullRequest: forgePullRequest }, c);
 };
 
+/** The brain a mapping pins, at its commit. A remote that won't serve a commit by name is fetched at the mapped branch,
+ *  which has it. */
+async function readPinned(read: TreeReader, m: { repo: string; commit: string; branch: string; bundle?: string }, runId: string | null): Promise<BrainTree | { error: string }> {
+  const first = await readBrain(read, m.repo, { sha: m.commit }, { runId, ...(m.bundle ? { bundle: m.bundle } : {}) });
+  if (!("error" in first)) return first;
+  const tip = await read({ remote: m.repo, at: { branch: m.branch }, runId, prefix: "brain.yaml" });
+  return "error" in tip ? first : readBrain(read, m.repo, { sha: m.commit }, { runId, ...(m.bundle ? { bundle: m.bundle } : {}) });
+}
+
+/** Why the brain mapped as `name` isn't given to agents at the pinned commit, or null: the repository there must still be
+ *  the brain that was mapped, and still not restricted (nor one capcomd can't check). */
+function refusal(name: string, m: ContextBrain, t: BrainTree): string | null {
+  if (t.manifest ? t.manifest.id !== m.id || t.manifest.slug !== m.slug : !!m.id) return `the repository mapped as brain ${name} isn't the brain it was at ${m.commit.slice(0, 12)}`;
+  if (t.restricted) return `brain ${name} is restricted at ${m.commit.slice(0, 12)}: ${t.restricted}`;
+  if (t.unchecked) return `brain ${name} can't be checked at ${m.commit.slice(0, 12)}: ${t.unchecked}`;
+  return null;
+}
+
+/**
+ * The bundles of the brains a project maps, as an environment image carries them (ADR-025 step 4: `capcomd env build`
+ * places each at its pinned commit, so the runner keeps the copy already there and sends nothing at start): each
+ * brain's bundle directory, checked as resolve checks it, at `<workdir>/context/groundray/<name>`, where an agent's
+ * brief points. A brain that can't be read, isn't the brain it was mapped as, or is restricted (or can't be checked) is
+ * left out, with why: the image never carries what an agent couldn't be given.
+ */
+export async function mappedBundles(settings: ContextSettings, workdir: string, o: { read?: TreeReader } = {}): Promise<{ bundles: ContextBundleSpec[]; skipped: Array<{ name: string; why: string }> }> {
+  const read = o.read ?? mirrorReader;
+  const bundles: ContextBundleSpec[] = [], skipped: Array<{ name: string; why: string }> = [];
+  for (const name of Object.keys(settings.brains ?? {}).sort()) {
+    const m = BRAIN_NAME.test(name) ? mappingOf(settings, name) : null;
+    try { if (m) assertRemoteUrl(m.repo); } catch { skipped.push({ name, why: "its repository isn't a URL or path capcomd fetches" }); continue; }
+    if (!m) { skipped.push({ name, why: "its mapping isn't one capcomd reads" }); continue; }
+    const t = await readPinned(read, m, null).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+    if ("error" in t) { skipped.push({ name, why: `can't read it at ${m.commit.slice(0, 12)}: ${t.error}` }); continue; }
+    const refused = refusal(name, m, t);
+    if (refused) { skipped.push({ name, why: refused }); continue; }
+    bundles.push({ provider: GROUNDRAY, name, remote: m.repo, branch: m.branch, commit: t.commit, path: t.bundle, dir: bundleDir(`${workdir}/context`, GROUNDRAY, name) });
+  }
+  return { bundles, skipped };
+}
+
 /** `context:groundray` (ADR-025 §11.2). `read`: how a tree is read (the files mirror; a test's fixture). `settings`: the
  *  project settings a run was started with (src/context/project.ts; a test's own). `write`: how a proposal is written. */
 export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: string | null) => Promise<ContextSettings>; write?: BrainWriter } = {}): ContextProvider {
@@ -209,20 +282,14 @@ export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: str
     try { const v = JSON.parse(h) as Handle; if (typeof v.remote === "string" && typeof v.commit === "string" && typeof v.name === "string") return v; } catch { /* below */ }
     throw new PluginError("invalid", "not a handle this provider made");
   };
-  /** The brain at the mapping's commit: from memory, else read once however many agents ask at once. A remote that won't
-   *  serve a commit by name is fetched at the mapped branch, which has it. */
+  /** The brain at the mapping's commit (readPinned): from memory, else read once however many agents ask at once. */
   const brainAt = async (m: { repo: string; commit: string; branch: string; bundle?: string }, runId: string | null): Promise<BrainTree> => {
     const key = `${m.repo}\0${m.commit}\0${m.bundle || "knowledge"}`;
     const had = cache.get(key);
     if (had) return had;
     let p = reading.get(key);
     if (!p) {
-      p = (async () => {
-        const first = await readBrain(read, m.repo, { sha: m.commit }, { runId, ...(m.bundle ? { bundle: m.bundle } : {}) });
-        if (!("error" in first)) return first;
-        const tip = await read({ remote: m.repo, at: { branch: m.branch }, runId, prefix: "brain.yaml" });
-        return "error" in tip ? first : readBrain(read, m.repo, { sha: m.commit }, { runId, ...(m.bundle ? { bundle: m.bundle } : {}) });
-      })();
+      p = readPinned(read, m, runId);
       reading.set(key, p);
       const done = () => { if (reading.get(key) === p) reading.delete(key); };
       p.then(done, done);
@@ -253,13 +320,11 @@ export function groundrayProvider(o: { read?: TreeReader; settings?: (runId: str
       if (!m) throw new PluginError("invalid", `the project maps no brain ${brain}`, `Map it: capcomd context brain add ${brain} <repository>`);
       const t = await brainAt(m, scope.runId);
       aborted(c);
-      // The repository at the pinned commit must still be the brain that was mapped, and still not restricted.
-      if (t.manifest ? t.manifest.id !== m.id || t.manifest.slug !== m.slug : !!m.id) throw new PluginError("invalid", `the repository mapped as brain ${brain} isn't the brain it was at ${m.commit.slice(0, 12)}`);
-      if (t.restricted) throw new PluginError("invalid", `brain ${brain} is restricted at ${m.commit.slice(0, 12)}: ${t.restricted}`);
-      if (t.unchecked) throw new PluginError("invalid", `brain ${brain} can't be checked at ${m.commit.slice(0, 12)}: ${t.unchecked}`);
+      const refused = refusal(brain, m, t);
+      if (refused) throw new PluginError("invalid", refused);
       const dir = scope.bundleRoot ? bundleDir(scope.bundleRoot, GROUNDRAY, brain) : null;
       const h: Handle = { name: brain, remote: m.repo, commit: t.commit, branch: m.branch, bundle: t.bundle, dir, slug: m.slug, id: m.id, runId: scope.runId, agentId: scope.agentId };
-      return { handle: JSON.stringify(h), revision: t.commit, ...(dir ? { bundle: { remote: m.repo, branch: m.branch, commit: t.commit, name: brain } } : {}) };
+      return { handle: JSON.stringify(h), revision: t.commit, ...(dir ? { bundle: { remote: m.repo, branch: m.branch, commit: t.commit, name: brain, path: t.bundle } } : {}) };
     },
     async index(handle: string, c: SeamCall) {
       aborted(c);
@@ -351,7 +416,7 @@ export async function addBrain(o: { name: string; repo: string; branch?: string;
   const t = await readBrain(o.read ?? mirrorReader, repo, { branch }, o.bundle ? { bundle: o.bundle } : {});
   if ("error" in t) throw new RelayError("config", `can't read brain ${o.name} from ${repo} (${branch}): ${t.error}`, "Check the repository and branch: it needs groundray's brain.yaml, or an OKF bundle (--bundle <dir>).");
   if (t.restricted) throw new RelayError("config", `brain ${o.name} is restricted (${t.restricted}), so capcomd won't add it: its files would be copied into agents' sandboxes`, "Keep restricted knowledge in its own controlled repository, outside capcomd; map a brain that isn't restricted.", { code: "restricted" });
-  if (t.unchecked) throw new RelayError("config", `capcomd can't check that brain ${o.name} isn't restricted (${t.unchecked}), so it won't add it: its files would be copied into agents' sandboxes`, "Keep a brain to at most 2000 Markdown files of at most 4 MiB each (split a bigger one).", { code: "unchecked" });
+  if (t.unchecked) throw new RelayError("config", `capcomd can't check that brain ${o.name} isn't restricted (${t.unchecked}), so it won't add it: its files would be copied into agents' sandboxes`, "Keep a brain's bundle to at most 2000 files of at most 4 MiB each (split a bigger one).", { code: "unchecked" });
   if (previous && t.manifest && (previous.id !== t.manifest.id || previous.slug !== t.manifest.slug)) throw new RelayError("conflict", `the repository mapped as brain ${o.name} now holds another brain (${t.manifest.slug})`, `Remove it first: capcomd context brain remove ${o.name}`);
   const brain: ContextBrain = {
     repo, branch, commit: t.commit, slug: t.manifest?.slug ?? o.name, id: t.manifest?.id ?? "", ...(t.manifest ? { title: t.manifest.name } : {}),
