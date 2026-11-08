@@ -578,7 +578,8 @@ export async function spawnAgent(o: SpawnOpts) {
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
     profile: resolved.name, ref: ref ?? resolved.name,
-    // Its runtime blocks (ADR-024 §7 step 8: MCP servers, sandbox, environment, size, lifecycle, CLI range) beside the flat spec.
+    // Its runtime blocks (ADR-024 §7 step 8: MCP servers, sandbox, environment, size, lifecycle; its CLI range) beside
+    // the flat spec.
     spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(skills.length ? { skills: skills.map(({ name, source, hash }) => ({ name, source, hash })) } : {}),
       ...(persona ? { persona: { source: persona.source, hash: persona.hash } satisfies PersonaPin } : {}), ...(resolved.runtime ?? {}) },
     ...(skills.length ? { skillTexts: skills.map((s) => s.text) } : {}),
@@ -1207,10 +1208,10 @@ export async function ensureMachine(runId: string, agentId: string, epoch: numbe
 }
 
 /**
- * Whether agent `a` is prepared here: its profile pinned skills or a persona, or a plugin prepares agents. The built-in orchestration
- * skill does in every process (src/plugins/skill-orchestration.ts): an attempt prepared here waits for this process's
- * plugins (the daemon's host, else a local one, src/plugins/hooks.ts `gates`), so an agent that may spawn always gets
- * it, even one resumed before they loaded.
+ * Whether agent `a` is prepared here: its profile pinned skills or a persona, or a plugin prepares agents. The built-in
+ * orchestration skill does in every process (src/plugins/skill-orchestration.ts): an attempt prepared here waits for
+ * this process's plugins (the daemon's host, else a local one, src/plugins/hooks.ts `gates`), so an agent that may
+ * spawn always gets it, even one resumed before they loaded.
  */
 async function preparing(a: ScopeAgent): Promise<boolean> {
   await gates();

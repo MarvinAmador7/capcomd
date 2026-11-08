@@ -173,3 +173,19 @@ test("harness.cliVersion: a CLI its environment recorded outside the range, or n
   expect(warnings.some((w) => w.startsWith("profiles.no-cli: harness.cliVersion >=2.1 can't be checked"))).toBe(true);
   expect(warnings.some((w) => w.startsWith("profiles.new-cli:"))).toBe(false);
 }, 180_000);
+
+test("an agent whose pinned persona isn't in the run's records fails for good (config), never runs without it", async () => {
+  const run = await newRun("persona-gone");
+  const { client } = await import("../../src/core/relay");
+  const s = client().scope.getOrCreate([run]);
+  const model = (await s.getAgent({ agentId: await spawn(run, "mine", "model", ["--no-start"]) }))!;
+  // The same spawn, pinned to a persona whose text the run never kept (an edited record, a lost attachment).
+  const gone = new Bun.CryptoHasher("sha256").update("# not kept").digest("hex");
+  const agentId = `agt-pgone${Date.now().toString(36)}`;
+  const spec = { ...(model.spec as Record<string, unknown>), persona: { source: "user", hash: gone } };
+  await s.spawn({ runId: run, agentId, paramsHash: `pgone-${agentId}`, parent: null, profile: "mine", ref: "mine", spec, task: "Review the login handler" });
+  const done = (await cj(["await", run, agentId, "--timeout-ms", "90000"])).j?.agents?.[0];
+  expect(done?.status).toBe("failed");
+  expect(JSON.stringify(done)).toContain(`profile persona (sha256 ${gone.slice(0, 12)}…) isn't in run ${run}'s records as it was pinned at spawn`);
+  expect(readdirSync(join(dir, "vm")).some((d) => d.includes(agentId))).toBe(false); // it never ran
+}, 180_000);
