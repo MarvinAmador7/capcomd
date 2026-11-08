@@ -155,8 +155,12 @@ export interface AgentConfig {
   persona?: string;
 }
 
-/** A context bundle as the attempt's spec records it. */
-export interface ContextBundleSpec { provider: string; name: string; remote: string; branch: string | null; commit: string; dir: string }
+/** A context bundle as the attempt's spec records it: `path`, the directory in the repository that is placed (else the
+ *  whole tree). */
+export interface ContextBundleSpec { provider: string; name: string; remote: string; branch: string | null; commit: string; dir: string; path?: string }
+/** A bundle's directory in its repository (ContextBundle.path): plain names separated by `/`, no `.` or `..`, nothing
+ *  git reads as a pattern. */
+export const BUNDLE_PATH = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 
 /** The agent work directory in the sandbox (CAPCOMD_AGENT_WORKDIR, default /var/tmp/capcomd): checkouts, the warm
  *  template, context bundles. */
@@ -164,14 +168,14 @@ export const agentWorkdir = (source: Record<string, string | undefined> = proces
 
 const BUNDLE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 /** The context bundles of the attempt's spec, each checked again here (a spec is data): a plain provider and name, a full
- *  commit, its directory exactly `<workdir>/context/<provider>/<name>`. */
+ *  commit, its directory exactly `<workdir>/context/<provider>/<name>`, a plain path in the repository when it names one. */
 function contextBundlesOf(spec: unknown, workdir: string): ContextBundleSpec[] | null {
   const raw = (spec as { contextBundles?: unknown } | null | undefined)?.contextBundles;
   if (!Array.isArray(raw)) return null;
   const ok = raw.filter((b): b is ContextBundleSpec => !!b && typeof b === "object" && typeof b.provider === "string" && BUNDLE_NAME.test(b.provider) && typeof b.name === "string" && BUNDLE_NAME.test(b.name)
     && typeof b.remote === "string" && !!b.remote && typeof b.commit === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(b.commit) && (b.branch === null || typeof b.branch === "string")
-    && b.dir === `${workdir}/context/${b.provider}/${b.name}`);
-  return ok.length ? ok.map(({ provider, name, remote, branch, commit, dir }) => ({ provider, name, remote, branch, commit, dir })) : null;
+    && b.dir === `${workdir}/context/${b.provider}/${b.name}` && (b.path === undefined || (typeof b.path === "string" && BUNDLE_PATH.test(b.path))));
+  return ok.length ? ok.map(({ provider, name, remote, branch, commit, dir, path }) => ({ provider, name, remote, branch, commit, dir, ...(path !== undefined ? { path } : {}) })) : null;
 }
 
 /** The variables agent.preparing's plugins added, from the attempt's spec (src/primitives/ops.ts `agentPreparing`). */
