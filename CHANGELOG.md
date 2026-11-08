@@ -18,6 +18,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   that doesn't set it is unchanged), and a job's `cwd` over 4 KB or `env` over 16 KB is refused.
 - Changed: plugins only reach their own jobs and the jobs of a run's agents: `ctx.jobs.get`, `wait` and `cancel` on
   another plugin's job answer `not_found`, and `ctx.jobs.list` leaves those out.
+- Fix: a profile with `permissions: {report: false}` is now never spawned to report, even when a plugin's
+  `agent.spawning` listener adds `report: true` to the spawn's contract. Such a spawn is refused with reason
+  `report_not_allowed`, the same as when the spawner asks for `--report` itself. For plugin authors: an
+  `agent.spawning` patch may no longer add `from`, `review`, `checks` or `orphansPolicyOverride` to the contract (only
+  `--continue`, verify and the operator set them), and a `report` it adds must be `true` and a `check` one of the run's
+  check names; such a patch is refused like any other widening or invalid patch, and a check the run doesn't have
+  refuses the spawn.
 - Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
   check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
   two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
