@@ -137,6 +137,31 @@ describe("children policy + narrowing overrides", () => {
     expect(parseAgentDirective(`[agent:${ref}] go`)).toEqual({ agent: ref, goal: "go" });
   });
 
+  test("the jobs block is limits (spec §16.2 rule 2): a child or an override raising or lifting one is a widening", () => {
+    const lead = { ...parent, jobs: { max: 4, foregroundMs: 5000, afterTurnMs: 600000 } };
+    // An override may lower one and keeps the others; raising, or unsetting, one the profile sets is refused.
+    expect(applyOverrides("parent", lead as any, { set: parseSetPairs(["jobs.max=2"]) }).jobs).toEqual({ max: 2, foregroundMs: 5000, afterTurnMs: 600000 });
+    for (const [set, msg] of [
+      [{ jobs: { max: 20 } }, "jobs.max 20 > 4"],
+      [{ jobs: { foregroundMs: 60000 } }, "jobs.foregroundMs 60000 > 5000"],
+      [{ jobs: { afterTurnMs: 1800000 } }, "jobs.afterTurnMs 1800000 > 600000"],
+      [{ jobs: { max: null } }, "jobs.max unset (would lift 4)"],
+      [{ jobs: null }, "jobs.afterTurnMs unset (would lift 600000)"],
+    ] as const) expect(() => applyOverrides("parent", lead as any, { set: set as any })).toThrow(msg);
+    expect(applyOverrides("parent", lead as any, { set: { jobs: { max: 20 } }, operator: true }).jobs?.max).toBe(20);
+    // A profile it spawns may not run more jobs at once, or for longer, than it may; nor lift a limit it sets.
+    expect(validateFile({ schema: AGENTS_SCHEMA, agents: { parent: lead, worker: { ...worker, jobs: { max: 2, foregroundMs: 1000, afterTurnMs: 60000 } } } })).toEqual([]);
+    const wide = validateFile({ schema: AGENTS_SCHEMA, agents: { parent: lead, worker: { ...worker, jobs: { max: 8, foregroundMs: 1000 } } } }).join();
+    expect(wide).toContain('child profile "worker" is wider than its parent');
+    expect(wide).toContain("jobs.max 8 > 4");
+    expect(wide).toContain("jobs.afterTurnMs unset (would lift 600000)");
+    // How long a start waits is the child's own shell's, as its tool mode is (an orchestrator waits 5 s, its workers 60).
+    expect(validateFile({ schema: AGENTS_SCHEMA, agents: { parent: lead, worker: { ...worker, jobs: { max: 4, afterTurnMs: 600000 } } } })).toEqual([]);
+    expect(validateFile({ schema: AGENTS_SCHEMA, agents: { parent: lead, worker: { ...worker, jobs: { max: 4, foregroundMs: 60000, afterTurnMs: 600000 } } } })).toEqual([]);
+    // Unset in the parent: the daemon's defaults, which a child may set as it likes.
+    expect(widenings(parent as any, { ...parent, jobs: { max: 50 } } as any)).toEqual([]);
+  });
+
   test("effective record + CLI run rejects widening before touching the engine", () => {
     const path = file({ parent, worker }, "parent");
     const dir = mkdtempSync(join(tmpdir(), "capcomd-eff-"));

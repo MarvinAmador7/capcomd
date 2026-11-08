@@ -182,7 +182,12 @@ treats a distribution-owned `SOUL.md` that way).
   `allowedChildProfiles` entry is no wider than its parent (`widenings`). That stays, on resolved specs. A profile
   that `extends` another may widen it (a lead is a worker that can also spawn) because `extends` is authoring, not
   delegation; only the parent → child spawn relation is narrow-only. This distinction is the main thing to get right
-  in review.
+  in review. The `jobs` block is limits like `limits` (spec §16.2 rule 2): an override or a `profile.resolved` patch
+  may lower `max`, `foregroundMs` or `afterTurnMs` (`--set jobs.max=2` keeps the block's other values), never raise
+  one the profile sets or unset it; a spawned profile is held to its spawner's `max` and `afterTurnMs`, while its
+  `foregroundMs` is its own, as its tool mode is (an orchestrate planner waits 5 s, its workers 60 s). A job's own
+  `timeoutMs` (`capcomd job start --timeout-ms`) is at most an `afterTurnMs` the profile sets, so a start can't lift
+  that limit either.
 - **Per-run and per-spawn overrides** keep today's mechanism: `--set k=v` and `--overrides` produce an `Overrides`
   that `applyOverrides` merges and checks (`profiles.ts`); the ref encoding `name;ov=…[;op=1]` is unchanged, so the
   planner → worker carry (`encodeAgentRef`/`decodeAgentRef`) needs no change. Keys use the v2 paths
@@ -555,7 +560,7 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
   `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
   warning when no daemon runs.
-- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.46, 2026-11-07;
+- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.47, 2026-11-07;
   `src/plugins/snapshot.ts` `seamPresence`): a seam only the daemon loads made every resolution in the CLI fail,
   `capcomd profiles list` included, so outside the daemon a name is a built-in or one the running daemon lists from an
   active, enabled plugin; any other is an error while a daemon runs and a warning (from every reader of profiles, not
