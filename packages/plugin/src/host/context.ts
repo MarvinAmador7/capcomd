@@ -60,6 +60,11 @@ export type ServiceName = keyof typeof PRIMITIVES;
 /** Primitives that answer synchronously: refused with a throw, not a rejection. */
 const SYNC = new Set(["sandboxes.provider", "sandboxes.descriptors", "auth.credentialMode", "auth.redact"]);
 
+/** The name the `capcomd mcp` server lists a plugin's MCP tool by (§4.7.2): `capcomd_<plugin>_<tool>`, a kernel front
+ *  door's `capcomd_<tool>`. */
+export const mcpToolName = (plugin: string, tool: string, kernelSurface: boolean): string =>
+  kernelSurface ? `capcomd_${tool}` : `capcomd_${plugin.replace(/-/g, "_")}_${tool}`;
+
 /** The kernel's implementations of the primitives (absent ones are `unsupported`), plus the sinks the context writes to. */
 export interface ContextOptions<C> {
   manifest: PluginManifest;
@@ -231,7 +236,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         const schema = spec.inputSchema as { type?: unknown } | null;
         if (!schema || typeof schema !== "object" || Array.isArray(schema) || schema.type !== "object") throw new PluginError("invalid", `MCP tool ${spec.name}: inputSchema is a JSON Schema of an object (type: "object", §4.7.2)`);
         if (typeof spec.run !== "function") throw new PluginError("invalid", `MCP tool ${spec.name} has no run function`);
-        const full = o.kernelSurface ? `capcomd_${spec.name}` : `capcomd_${name.replace(/-/g, "_")}_${spec.name}`;
+        const full = mcpToolName(name, spec.name, !!o.kernelSurface);
         return contribute({ kind: "mcp", name: full }, full, { kind: "mcp", spec });
       },
       instructions(text) {

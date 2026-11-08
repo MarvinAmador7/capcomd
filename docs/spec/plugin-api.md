@@ -362,7 +362,10 @@ project's `plugins.use` and config are not read with `CAPCOMD_NO_CONFIG`; its ow
 plugin's directory), the `engines` check, the kernel-command collision check, the out-of-process rule (a `process`
 plugin contributes hooks and events only: `seams`, `sources`, `context`, `cli`, `mcp`, `api` and `ui` are refused, as protocol 1
 carries none of them, §9.6) and, with `--conformance`, the seam suites (§14.2). Output is a list of `{path, message}`;
-the exit code is 1 on any error.
+the exit code is 1 on any error. `--strict` adds review guidance as warnings (`warnings`, printed `!`), never errors,
+so the exit code stays what it was: today the attention-budget check (`attentionWarnings` in
+`packages/plugin/src/load.ts`, §16.5). A plugin's config schema the CLI can't read (a built-in's `$ref`) isn't held
+against it.
 
 ## 5. Plugin lifecycle
 
@@ -1685,7 +1688,9 @@ process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin'
 
 Every discovered plugin with `state`, `enabled`, `cause`, `hooks`, `seams`, `hooksSuspended` and `stats {calls, failures,
 dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2), and `commands`, the CLI
-commands its manifest declares, whatever its state (absent when none; §4.7.1); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
+commands its manifest declares, whatever its state (absent when none; §4.7.1), and `tools`, its MCP tools by the names
+the `capcomd mcp` server lists them (`capcomd_<plugin>_<tool>`, a kernel front door's `capcomd_<tool>`, §4.7.2): the
+ones it registered while active, its manifest's otherwise (absent when none; additive); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
 secrets, and its API routes and feature flags (§4.7.3, capability `plugins.routes`). `capcomd plugins list|show` print the
 same. `/v1/health` gains the feature flag `plugins`.
 
@@ -2359,6 +2364,13 @@ The kernel enforces the structural parts (approvals are the only questions; noti
 state, not prose); the rest is review guidance for built-ins and `capcomd plugins validate --strict` warnings where a
 manifest declares a notifier-shaped plugin (`run.changed` + `agent.changed` observers) without a quiet option.
 
+As built (§4.9): notifier-shaped is a manifest whose `contributes.hooks` has both `run.changed` and `agent.changed`
+(both observe hooks, whatever else it listens to); a quiet option is a top-level `quiet` property of its config schema
+(inline or through `$ref`), of any type. One without it, or without a config, gets one warning at
+`config.properties.quiet` saying so; the exit code is unchanged. No built-in is notifier-shaped. The other `--strict`
+warning §4.7 names (a declaration the code never registers) isn't checked by the CLI: an in-process plugin's
+conformance (`--conformance`, §14.1) already fails it, and a process plugin's code isn't loaded by `validate`.
+
 ## 17. Migration
 
 ### 17.1 Mapping
@@ -2478,6 +2490,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.61 | 2026-11-08 | Trigger continuations (the steps §16.3.1, §16.3.2 step 2, §16.3.6 left to later): a goal branch's run follows its pull request's thread once it is opened, the forge naming it (`PullRequestRef.thread`, additive; forge-github `owner/name#N`), and the `github` source reads the threads runs follow on its timer whatever its settings (in a repository `sourceRepos` doesn't name, only those threads); on an ended run's thread a person's trigger is asked steps 3 to 5, and when they would act its planner starts again (a new planner continuing the last, with the message in its inbox: `continued {restarted}`, additive), `observe` records `wouldHave: "continue"`, and a refusal leaves it in the inbox only; replies (§16.3.7, new): `ctx.triggers.onReply(source, reply)` (in process only), `TriggerReply`, `triggers.sources.<source>.reply` (off by default), one short answer per request when the run ends completed or failed, posted by the sweep with a claim and at most three tries, forge-github's a marked comment the source drops (a reply waits for its source's reply path, and an engine that doesn't answer loses none); a restart's planner is the run's `_planner` once started, one restart of a run at a time, under 1.0.57's engine timeout (the same trigger sent again finds the planner it started and is still its restart), and a restart refused for good still leaves the message in the ended planner's inbox; forge-github posts a reply's `@name` as code (no one is paged); `trigger.replied` on the daemon stream and `trigger.received.restarted` (both additive). Owner questions taken conservatively: replies are opt-in, and a restart needs what a start needs (the gate), not just a person. |
 | 1.0.62 | 2026-11-08 | Brains in the environment image, and only a brain's bundle in a sandbox (ADR-025 step 4's follow-up, §6.6.7): `ContextBundle` gains an optional `path`, the directory of the repository that is placed (at the same path under the bundle's directory; additive, absent is the whole tree as before); groundray names its bundle's (`knowledge`), so brain.yaml and every other file of the brain's repository stay out of sandboxes, and every file under the bundle, Markdown or not, is checked for a restricted marking (a file that isn't Markdown is read whole, at any depth, and also matched as text: `sensitivity` then `restricted` with a `:` or `=` between, anywhere; one over 4 MiB, or more than 2000 files, is refused as unchecked). The marker names the commit and the path. Text too long (over 64 KiB) or nested too deep (flow collections past 32 levels) for the YAML parser is matched without it, more broadly (`sensitivity` then `restricted` with a `:` or `=` between, anywhere). The runner first removes the bundles under `<workdir>/context/` the brief doesn't cite, and an agent whose sandbox can't be cleaned doesn't start; a checks VM removes them all before the tree under test runs. `capcomd env build` (and `--project`) places the project's mapped brains, checked, in the image (EnvManifest `bundles`, part of its name), so the runner keeps them and sends nothing at start. |
 | 1.0.63 | 2026-11-08 | Brain proposals (ADR-025 step 5, §6.6.8): a consolidator's change for the brain its profile names is refused `no_brain` when it is staged if the run's project doesn't map that brain (kv `_context`, as `run new` recorded it; the engine not answering fails the staging rather than refusing), so it is never kept to fail when sent; the result's `context.brain` then has the brain's `name`, no proposals and an `error` (additive). groundray's write path looks for the proposal's marker on the brain's branch first: a replay after the pull request was merged (its branch perhaps deleted) finds the item there and drafts, pushes and opens nothing (receipt `where` names the brain's branch). `GET /v1/runs/{runId}/brain-proposals` (read) and `POST /v1/runs/{runId}/brain-proposals/send` (configure scope, Idempotency-Key, body `{agentId?}`; a plugin's token `forbidden`; 503 `unavailable` with each outcome when one couldn't be sent, not kept for the key) send a run's pending proposals as the caller (`human:<client id>`), mirroring `capcomd context brain propose --run <runId> --yes` (capability `context.brain_proposals`, additive). `plugin.context.brain_proposed` for a person's send is recorded by the `context` plugin's listener in the sending process (its `by` the person); the kernel's lint sends stay recorded from the consolidator's result (`by: capcomd`). |
+| 1.0.64 | 2026-11-08 | `capcomd plugins validate --strict` and a plugin's MCP tools in its listing (§4.9, §13.2, §16.5): `--strict` adds the attention-budget warning, a notifier-shaped manifest (`run.changed` and `agent.changed` observers) whose config has no top-level `quiet` property, at `config.properties.quiet`; warnings never change the exit code. `PluginSummary` gains `tools` (additive), the MCP tools by the names `capcomd mcp` serves them, registered while active and declared otherwise, in `GET /v1/plugins`, `GET /v1/plugins/{name}` and `capcomd plugins list --json`/`show`; the text of `list` counts a plugin's commands and tools and `show` names them. The §4.7 declared-but-never-registered warning stays with `--conformance`. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

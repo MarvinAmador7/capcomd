@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: `capcomd plugins validate --strict` also warns when a plugin could take more of your attention than it needs:
+  a notifier (one that listens to every run and agent change) whose config has no `quiet` option, so people can't turn
+  it down short of disabling it. Warnings never fail the check.
+- `capcomd plugins show <name>` now names the commands and MCP tools a plugin adds (by the names `capcomd mcp` serves
+  them, e.g. `capcomd_spawn`), `capcomd plugins list` counts them, and both `--json` outputs (and `GET /v1/plugins`)
+  carry a `tools` list.
 - Faster: `capcomd env build` (and `env build --project`) now puts the brains your project maps (`capcomd context
   brain add`) into the environment image, each at the commit it is pinned to, so agents start with them instead of
   copying the brain in at every start. Map a brain at a newer commit and the next `capcomd env build` builds a new image.
