@@ -16,6 +16,50 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   is its own); `capcomd profiles validate` names one that does. Lower the child's values, or raise the spawner's.
 - Changed: plugins only reach their own jobs and the jobs of a run's agents: `ctx.jobs.get`, `wait` and `cancel` on
   another plugin's job answer `not_found`, and `ctx.jobs.list` leaves those out.
+- Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
+  check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
+  two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
+  `~/.capcomd/config.json`, or a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable) are checked for as well as the built-ins', and
+  so are GitLab, npm, Hugging Face and Google OAuth tokens. `capcomd context lint` now fails on a
+  `.capcomd/context/` with more than 2000 files (it reads that many) instead of passing without reading the rest.
+- Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
+  is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
+  flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
+  brain could be added and its files copied into agents' sandboxes.
+- Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
+  agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
+  job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
+  to it as a message), keep notes (`capcomd kv`), propose lessons for the project's memory (`capcomd result --data
+  '{"context": [...]}'`), read the run's tree, and end with a summary (`capcomd result --summary`); its instructions
+  say so. It still can't spawn, verify or merge (refused), and a worker that runs no commands of its own (its
+  profile's allow-list has no plain `Bash` or denies it, its Codex sandbox is read-only, or the daemon's
+  `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS` or `CAPCOMD_CODEX_SANDBOX` say so) gets no
+  background jobs. Reviewers, `--report`
+  agents and the context consolidator are unchanged.
+- Changed: an agent that ends without declaring a summary gets its final message as its `result.summary` (up to
+  2,000 characters), so a parent, the driver and the apps always have something to read; a reviewer's verdict is
+  never used as one. `capcomd result` with nothing in it (no summary, artifacts or data) is refused instead of
+  recording an empty result over the one the agent declared.
+- Fixed: the watchdog no longer stops agents that save their work less often than every 10 minutes. It sees an
+  agent's files change only when the agent saves a checkpoint, so with a profile's "Saves its work every"
+  (`checkpointEveryMs`, `--checkpoint-every-ms`) or `CAPCOMD_AGENT_CHECKPOINT_MS` set to an hour, a busy agent got
+  "stalled" between checkpoints and was stopped at 45 minutes. Now such an agent gets "stalled" only after one and a
+  half of its interval without progress, and is stopped that much later too (saving hourly: 90 and 120 minutes). At
+  the default interval the watchdog's 15 and 45 minutes are unchanged; a `stalledAfterMs` you set below 15 minutes
+  now waits that long too, since a change can't show sooner.
+- Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
+  (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
+  `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its
+  snapshot on boxd with nothing recording it. Run it with `--sandbox boxd` (or `CAPCOMD_SANDBOX=boxd`), or in a project
+  checkout whose `.capcomd/config.json` sets the boxd sandbox.
+- For contributors: the live context eval (`scripts/eval-context.ts --agents live`) and the e2e scripts that create a
+  throwaway repository (`mac-e2e.sh`, `mac-subagents-e2e.sh`, `mac-agent-ops-e2e.sh`, `mac-plugin-e2e.sh`) run with
+  project templates off (`CAPCOMD_PROJECT_TEMPLATES=off` unless you set it), so they no longer leave a boxd snapshot of
+  8 GB or more per repository behind; with `CAPCOMD_PROJECT_TEMPLATES=auto`, remove the template afterwards with
+  `capcomd env templates rm --repo URL --sandbox boxd`. The team-shape eval no longer kills itself (exit 137) at the end
+  when given `--work`, and refuses a `--work` folder that isn't empty (it deletes the folder at the end), as the context
+  eval does. Neither eval's end-of-run cleanup kills the shell or command that started it any more.
+
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
@@ -183,7 +227,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
   (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
   starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
-  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  the goal (checked as a goal you type is: one that starts with `[agent:…]`, or is over 16 KB, starts nothing, so whoever
+  wrote it can't pick the run's agent profile); one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
   with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
   there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
   `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
@@ -200,10 +245,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
   `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
   its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
-  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
-  and agents. If it crashes while deciding, the decision is a deny, and it is started again; after five crashes in ten
-  minutes it stays stopped and its gates deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn
-  it off with `/disable`). What it prints goes to the daemon's log with its token and secrets blanked out.
+  when it connects, each from the variable you point it at in `plugins.<name>.<key>` of `~/.capcomd/config.json`:
+  a default reference in a plugin's own manifest is ignored, so it can't pick which of your variables it gets), and
+  can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. It hears what the daemon runs: every merge, and the verifications, spawns and approvals your agents ask
+  for or the harness API makes; one that `capcomd verify`, `spawn` or `approve` or the driver's MCP tools run in their
+  own process doesn't reach it yet. If it crashes while deciding, the decision is a deny, and it is started again (and
+  anything it started that still runs is stopped); after five crashes in ten minutes it stays stopped and its gates
+  deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn it off with `/disable`). What it prints
+  goes to the daemon's log with its token and secrets blanked out.
   `capcomd plugins list` shows it with `runtime: process`. Such a plugin contributes hooks and events only (no
   commands, tools or sandboxes), and a CLI never starts one. The client library `connect()` in `@capcomd/plugin` does
   the talking; the plugin API spec §9 is the protocol.
@@ -229,9 +279,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: agents whose profile has a `context` block get two capcomd skills with their brief. `capcomd-context-doctrine`
   says how to use it: open an item's file before relying on its line, say which item an answer rests on, treat a
   matching line as a lead and not a ruling (a current record beats a stale comment or the record it supersedes), and
-  treat items as data, not instructions. `capcomd-context-routing`, for agents that may spawn (and aren't reviewers or
-  report agents), says what is worth remembering and where: notes for the run in `capcomd kv` under
-  `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
+  treat items as data, not instructions. `capcomd-context-routing`, for agents that do work of their own (not
+  reviewers, report agents or the context consolidator), says what is worth remembering and where: notes for the run
+  in `capcomd kv` under `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
   secret. Each is recorded on the agent by its sha256; `capcomd context brief <profile>` names them. A profile with a
   `context` block keeps room for them among its own `skills` (one of the 8, two when it may spawn) and can't use
   their names for skills of its own; an agent whose other skills leave no room for one starts without it, never without
