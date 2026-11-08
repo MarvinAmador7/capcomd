@@ -1019,7 +1019,7 @@ rules the signatures cannot.
 | `mcp` | `tool`, `instructions` | | §4.7.2 |
 | `api` | `route`, `capability` | | §4.7.3 |
 | `ui` | `descriptor` | | §4.7.5 |
-| `events` | `emit`, `subscribe`, `replay` | `emit`: steer; others: read | scope `appendEvent`, the SSE source (`src/api/source.ts`) |
+| `events` | `emit`, `subscribe`, `replay` | `emit`: steer; others: read | scope `recordPluginEvent`, the daemon's events; `subscribe`, `replay`: `src/plugins/events.ts` (the daemon only, §8.4) |
 | `storage` | `get`, `put`, `cas`, `delete`, `list` | | kv with the `plugin/<name>/` prefix; `state/plugins/<name>/` |
 | `runs` | `new`, `get`, `list`, `end`, `pause`, `resume`, `title` | steer (`get`, `list`: read) | `ops.runNew`, `endRun`, `pauseAgents`, `recentRuns`, `setRunTitle` |
 | `agents` | `spawn`, `get`, `tree`, `await`, `cancel`, `grant`, `title`, `notice` | steer (`get`, `tree`, `await`: read) | `spawnAgent`, `treeOf`, `awaitAgents`, `cancelAgents`, `grantBudget`, `setAgentTitle`, `notice` |
@@ -1054,6 +1054,21 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 
 - `events.emit`: only `plugin.<name>.<type>` with a declared `type`; `data` redacted and ≤ 64 KB; `text` ≤ 500 chars.
   `subscribe` delivers in order and never concurrently to one handler; a handler that throws is logged and skipped.
+- `events.subscribe` and `events.replay` are the daemon's host's (`src/plugins/events.ts`). A stream is `daemon` or a
+  run id; anything else is `invalid`. Both give the durable envelopes `GET /v1/events` gives, with its `seq` and
+  `entitySeq`: on `daemon` the daemon's own events (not the `run.created` frames the SSE stream makes from the run
+  list), on a run its scope events, read through the engine; never an ephemeral frame. `replay(stream, after)` is every
+  such event after `after`; a run that doesn't exist is `not_found`. `subscribe` delivers what comes after
+  `filter.after`, or without it after the stream's head (the daemon's when it is called, a run's when it first reads
+  it); `filter.types` names exact types, none: every type. The host polls each subscription (500 ms), one read at a
+  time, and awaits each handler before calling it again; a read that fails is retried from the same cursor, and a run
+  that doesn't exist delivers nothing (logged) and isn't polled again. Disposing the subscription, or the plugin, stops
+  delivery: a handler already running finishes, and none is called after. A host that isn't the daemon's (a CLI's, the
+  MCP server's) has no stream to read and refuses both `unsupported`; so does any other host with no sink for them,
+  rather than register a subscription that never delivers. The test kit's fake context (§14.5) has streams of its own:
+  `publish(event)` puts an event on `event.scope`, delivered to the plugin's matching subscriptions by the same rules
+  (stream, `types`, `after`, one at a time, a throw logged and skipped, nothing after dispose) and replayed afterwards
+  (a run nothing was published on is `not_found`), so a plugin that subscribes at activate loads in the kit.
 - `storage`: private to the plugin. Keys `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$`, values JSON ≤ 64 KB. Run scope is
   deleted with the run; daemon scope lives in `dataDir` and survives updates and reinstalls.
 - `kv`: the run's shared blackboard; reserved prefixes (`_`, `approval/`, `recipe/`, `handoff/`, `plugin/`) are
@@ -1638,7 +1653,8 @@ checks the mode against `HOOKS` (ADR-023 step 1).
 
 ### 14.5 The test kit
 
-`@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext`, `load`,
+`@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext` (with `publish`
+for its event streams, §8.4), `load`,
 `loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge, context}`, `call`, and `samplePayload`.
 Implemented with ADR-023 step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what
 `test:fast` runs on `packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` is §14.3. `conformance.forge`
@@ -2203,7 +2219,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.40 | 2026-11-07 | Triggers, after review: §16.3.2 step 6, a trigger's text is checked as `POST /v1/runs` checks a goal before a run starts (a leading `[agent:NAME]` from a source no longer picks the run's agent profile; over 16 KB, empty or with a NUL: `invalid`, logged `failed`); §16.3.1, a trigger's `id`, `thread` and actor id carry no control characters (the display name loses them), and the `github` source keeps the comments it read at its position's second (GitHub's `since` includes it) so a poll with nothing new emits nothing. |
 | 1.0.41 | 2026-11-07 | Review of capture and lint (ADR-025 step 2), §11.5: the seeded scan drops every default-ignorable character and combining marks (not only format characters) and finds a run's secret with spaces or line breaks put into it; it is seeded with every secret reference the user sets for a plugin that isn't built in (`plugins` in the user's config, a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable; such a plugin's own default isn't followed, per 1.0.37) as well as the built-ins'; GitLab, npm, Hugging Face and Google OAuth token shapes. Lint fails, never passes, on a directory with more files than it reads (2000), and `--base` takes a ref, never an option. No hook, seam, route or contract shape changes. |
 | 1.0.42 | 2026-11-07 | `agent.spawning` (§6.6.6): ADR-024's `permissions.report` check (`report_not_allowed`) runs on the contract the hook leaves, beside `cannot_spawn`, so a `report: true` a plugin adds to a profile that may not report refuses the spawn as the spawner's own would (before, it was checked before the hook and a plugin's could slip past it). The spawner's own `report` is still refused before the hook (no plugin is asked about a spawn that is refused anyway). The contract keys the kernel checks when the spawner sends them are checked in the patch too (`applySpawnPatch`): adding a key a spawn from an agent's VM never carries (`from`, `review`, `checks`, `orphansPolicyOverride`) is `widening`, a `report` other than `true` or a `check` that isn't a string is `invalid`, and an added `check` the run doesn't have refuses the spawn (`usage`). No hook, seam, route or contract shape changes. |
-| 1.0.43 | 2026-11-08 | The in-process primitives the context promised (§8.1, §8.4): `runs`, `messages`, `kv`, `board`, `gates.pending` and `profiles` in the daemon's host (beside `jobs`, `storage`, `triggers` and the `agents` reads, cancel and notice), and `sandboxes` and `auth` in every process's, with the plugin as the caller (its writes `plugin:<name>`'s, its keys its own) and an unknown run `not_found` everywhere; `runs.new` names the plugin's principal to `run.creating` and checks its goal as `POST /v1/runs` does, `profiles.resolve` names it to `profile.resolved`; a key over 200 characters is refused, a refusal keeps its reason as the hint, a sandbox call keeps its deadline without its signal; §8.4 says which process has which, what each writes, and the board's states. `RunsService` declares `new` as a method (`"new"(…)`: bare, it declared a constructor). No hook, seam, route or contract shape changes. |
+| 1.0.43 | 2026-11-07 | `ctx.events.subscribe` delivers and `ctx.events.replay` answers, in the daemon's host (§8.4, `src/plugins/events.ts`): the envelopes `GET /v1/events` gives, on `daemon` (its own events, not the SSE stream's `run.created` frames) or a run's stream (through the engine); a stream that is neither is `invalid`, a run that doesn't exist `not_found` on replay; `subscribe` from `filter.after` or else the head, `filter.types` exact, polled, one handler call at a time; a host that isn't the daemon's, or has no sink for them, refuses both `unsupported` instead of registering a subscription that never delivers; the test kit's fake context has streams of its own, `FakeContext.publish(event)` delivering and replaying by the same rules, so a plugin that subscribes at activate still loads there (additive). No contract shape changes. |
+| 1.0.44 | 2026-11-08 | The in-process primitives the context promised (§8.1, §8.4): `runs`, `messages`, `kv`, `board`, `gates.pending` and `profiles` in the daemon's host (beside `jobs`, `storage`, `triggers` and the `agents` reads, cancel and notice), and `sandboxes` and `auth` in every process's, with the plugin as the caller (its writes `plugin:<name>`'s, its keys its own) and an unknown run `not_found` everywhere; `runs.new` names the plugin's principal to `run.creating` and checks its goal as `POST /v1/runs` does, `profiles.resolve` names it to `profile.resolved`; a key over 200 characters is refused, a refusal keeps its reason as the hint, a sandbox call keeps its deadline without its signal; §8.4 says which process has which, what each writes, and the board's states. `RunsService` declares `new` as a method (`"new"(…)`: bare, it declared a constructor). No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
