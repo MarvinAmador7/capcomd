@@ -20,6 +20,7 @@ import * as contextMemory from "./context-memory";
 import * as contextGroundray from "./context-groundray";
 import * as sourceSchedule from "./sources/schedule";
 import * as watchdog from "./watchdog";
+import * as recipeHierarchical from "./recipe-hierarchical";
 
 export type Builtin = Required<Pick<Candidate, "manifest" | "module">> & {
   /** A plugin the kernel needs in every process, not only the daemon: a gate wherever a verify runs (src/plugins/hooks.ts
@@ -62,6 +63,9 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   { manifest: sourceSchedule.manifest, module: sourceSchedule.plugin as Builtin["module"] },
   // The watchdog (§16.4, step 11): the daemon's, off until `capcomd setup` (or plugins.watchdog.enabled) turns it on.
   { manifest: watchdog.manifest, module: watchdog.plugin as Builtin["module"], off: true },
+  // `capcomd run` without a planner agent (§17.1, ADR-023 decision 5): kept for the parity eval, off until turned on,
+  // and loaded wherever `capcomd run` runs.
+  { manifest: recipeHierarchical.manifest, module: recipeHierarchical.plugin as Builtin["module"], everyProcess: true, off: true },
 ];
 
 /** The kernel's own front doors, by name: the dispatcher prints their output as theirs (src/cli/front-doors.ts). */

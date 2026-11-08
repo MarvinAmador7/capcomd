@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import { existsSync, mkdirSync, openSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { RelayError, SCHEMA, EXIT } from "../../core/errors";
-import { approveTask, assertEngine, executeRun, generateRunId, getStatus, listEvents, paginate } from "../../core/relay";
+import { approveTask, assertEngine, generateRunId, getStatus, listEvents, paginate } from "../../core/relay";
 import { initDependencies } from "../../dependencies";
 import { loadTrace, renderTrace } from "../commands/trace";
 
@@ -93,6 +93,9 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   // made before the run is created or detached: a run whose planner can't start is refused with the reason here,
   // instead of starting and then sitting with no agent.
   if (plannerRef) (await import("../../primitives/ops")).spawnChecks(plannerRef);
+  // Without a planner agent the run is recipe-hierarchical's (--recipe, --legacy, CAPCOMD_RUN_PATH): refused now, before
+  // the run is created or detached, while that plugin is off.
+  const recipe = planner ? null : await (await import("../../plugins/recipe-hierarchical")).hierarchicalRecipe();
   // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
   if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
   // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
@@ -176,8 +179,8 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   const result = planner
     ? await PA.runWithPlanner({ goal, runId, targetBranch, emit, profile: plannerRef!, ...(driver ? { driver } : {}), ...(runSandbox ? { sandbox: runSandbox } : {}), ...(goalBranch ? { goalBranch } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
     : runPath === "recipe"
-    ? await (await import("../../recipes/hierarchical")).runHierarchicalRecipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
-    : await executeRun({ goal, runId, targetBranch, emit });
+    ? await recipe!.recipe({ goal, runId, targetBranch, emit, ...(runSandbox ? { sandbox: runSandbox } : {}), ...(pluginConfig ? { pluginConfig } : {}) })
+    : await recipe!.legacy({ goal, runId, targetBranch, emit });
   if (json) { const now = Date.now(); console.log(JSON.stringify({ schema: SCHEMA, type: "run.result", runId, seq: ++lineSeq, ts: new Date(now).toISOString(), epochMs: now, agentId: null, ok: result.ok, state: result.state })); }
   return result.ok ? EXIT.ok : EXIT.run_failed;
 }

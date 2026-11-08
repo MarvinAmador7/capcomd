@@ -38,16 +38,27 @@ export async function frontDoor(name: string): Promise<FrontDoor | null> {
  */
 export async function noCommand(name: string): Promise<RelayError> {
   const { localHost } = await import("../plugins/host");
-  const host = await localHost();
-  const p = host.list().find((x) => x.commands?.includes(name));
+  const p = (await localHost()).list().find((x) => x.commands?.includes(name));
   if (!p) return new RelayError("usage", `unknown command: ${name}`, "Run `capcomd --help` for usage.");
+  return notRunning(p.name, `capcomd ${name} is the ${p.name} plugin's command`);
+}
+
+/**
+ * Why `what` (a sentence naming the plugin `plugin` as its owner) can't run here: that plugin isn't active in this
+ * process, named with its state and cause, and how to turn it on (`config`, reason `plugin:<name>`, §4.7.1).
+ */
+export async function notRunning(plugin: string, what: string): Promise<RelayError> {
+  const { localHost } = await import("../plugins/host");
+  const host = await localHost();
+  const p = host.list().find((x) => x.name === plugin);
+  if (!p) return new RelayError("config", `${what}, and ${plugin} isn't loaded here`, `capcomd plugins show ${plugin} says more.`, { code: `plugin:${plugin}` });
   const why = host.message(p.name);
   const off = !p.enabled && (p.cause === "disabled" || p.state === "validated");
   // The environment's `enabled` wins over the config `capcomd plugins enable` writes (§10.2): name the variable instead.
   const { envName } = await import("../plugins/config");
   const variable = envName(p.name, "enabled");
   const byEnv = off && (() => { try { return JSON.parse(process.env[variable] ?? "") === false; } catch { return false; } })();
-  return new RelayError("config", `capcomd ${name} is the ${p.name} plugin's command, and ${p.name} isn't running: ${p.state}${p.cause ? ` (${p.cause})` : ""}${why ? `: ${why}` : ""}`,
+  return new RelayError("config", `${what}, and ${p.name} isn't running: ${p.state}${p.cause ? ` (${p.cause})` : ""}${why ? `: ${why}` : ""}`,
     byEnv ? `${variable}=${process.env[variable]} in the environment turns it off, over your config: unset it to turn ${p.name} on.`
       : off ? `Turn it on: capcomd plugins enable ${p.name}` : `capcomd plugins show ${p.name} says more.`, { code: `plugin:${p.name}` });
 }
