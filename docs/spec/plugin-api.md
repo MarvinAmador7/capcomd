@@ -2044,9 +2044,12 @@ messages and events outside what it listens to before emitting, keep its own rea
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
 structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
-ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
-log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
-before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+ISO time, `actor {id, display, bot}`, no control characters, format characters (Unicode `Cf`: bidi overrides,
+zero-width spaces) or line and paragraph separators in `id`, `thread` or the actor's id (`capcomd triggers log` and
+the planner's message show them; the display name loses its: control characters and line breaks become spaces, format
+characters go, but a zero-width joiner inside an emoji), text and data ≤ 64 KB each) and refuses a malformed trigger
+`invalid` before recording anything; `ctx.triggers.subscribe` checks its `thread` the same way. `capcomd triggers log`
+and `subscriptions` print any such character they find in the records as `\u{…}`. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -2065,10 +2068,14 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   the user, not capcomd, and their comments are theirs, not the bot's: what the source drops as its own is what
   capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
-  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
-  position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
-  keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
-  `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
+  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2) waits for another
+  try, after one poll interval, then twice the wait before each time (at most an hour), and is given up after 8 tries
+  (a warning in the plugin's log; each try is a `failed` line of the intake's log). A waiting comment holds the
+  position before it, so later reads return it, but never holds back newer comments: they are emitted as they come,
+  and the position keeps the ids of the comments handled at or after it, which the next poll skips. GitHub's `since`
+  includes its own second, so this also covers the comments read at that second (else each poll would emit them
+  again, a `deduped` decision a minute). A read returns at most 100 comments: past that many handled after a
+  waiting comment, newer ones wait until it is handled or given up. The source's `job.changed` listener is registered whatever its settings, as its
   manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
   nothing without a schedule); it declares `changes: ["fired"]`, so its listening never makes the daemon read a
   running job's output (§6.6.19).
@@ -2088,7 +2095,12 @@ with the `TriggerDecision`:
    `planner`; a run with neither (a run driven from outside, or the built-in recipe's) has no one to read it, and the
    trigger goes on to the gate. The message is `from: trigger:<source>`, its body who wrote on which thread and what
    (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. A person's trigger
-   on an ended run's thread lands in its planner's inbox; starting the planner again on it is a later step's.
+   on an ended run's thread lands in its planner's inbox; starting the planner again on it is a later step's. When the
+   engine doesn't say where a run subscribed to the thread stands (an error, or no answer within
+   `CAPCOMD_TRIGGERS_ENGINE_MS`, 15 s), and no other subscribed run took the message, the trigger doesn't go on to the
+   gate (a new request there could start a second run on the thread): it is a start that fails, `unavailable`
+   (retryable), and the subscription holds. A delivery the engine doesn't confirm in time is the same; sent again, it is
+   idempotent by its key.
 3. **Gate**: config `triggers.sources.<source>` (kernel-owned, operator-written: `allowed: [actor ids]`,
    `opened: [thread patterns]`, `mode: off|observe|auto`, `project`). The trigger is **allowed** when its actor's id is
    in `allowed` or its thread matches an `opened` pattern (exact, `*` matching any run of characters). Strength is
@@ -2110,7 +2122,13 @@ with the `TriggerDecision`:
    this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
    §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
-   trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`.
+   trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`. A run that
+   started is never undone: when its records can't be written after it (the log's line, `Run.trigger`'s record, its
+   subscription, the event), the decision stands, the dedupe mark stays (the same trigger again is `deduped`, never a
+   second run), and what is missing is recorded wherever it can be: the log line's `unrecorded` (additive), the
+   `trigger.received` event's `unrecorded` (additive) and the daemon's log. A decision that started nothing and whose
+   log line can't be written drops the mark and `emit` rejects `unavailable` (retryable), so it is decided and recorded
+   when the trigger comes again (a `continued` message is sent again idempotently, by its key).
 
 What the intake does **not** do: judge content. The model-side assessment the prototype's "Eval" performs is the
 planner's job once a run exists (it reads the trigger as its goal and may decide there is nothing to do, ending with a
@@ -2357,7 +2375,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.54 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route, from a sender that holds a capcomd client token: every route needs one, so a signed webhook that can't send one (GitHub's, Slack's) isn't served yet. |
 | 1.0.55 | 2026-11-08 | `capcomd plugins enable\|disable <name>` (§5.4, §6.5, §9.9): they record `plugins.<name>.enabled` in the user's config and call `POST /v1/plugins/{name}/enable\|disable` on the running daemon (at the harness socket it now records in `state/plugins.json`, with a token made for the call and deleted after), so a toggle lasts past a restart; with no daemon only the config changes. A built-in is still refused (409, the CLI's `conflict`), except the watchdog, which a person turns on and may turn off. `GET /v1/plugins` lists each plugin's declared CLI `commands` (§13.2, additive), and a command whose plugin isn't running is refused naming the plugin and its cause instead of as an unknown command (§4.7.1), with the next step: `capcomd plugins enable`, or the environment variable that turns it off. |
 | 1.0.56 | 2026-11-08 | A `job.changed` listener may declare `changes` (§4.7, §6.6.19): the change kinds it is called for (`started`, `output`, `fired`, `ended`; default all, so an existing manifest is unchanged); the registry doesn't call it for another, and the jobs service reads a running job's new output (one exec in its machine a second) only while a listener wants `output`. The built-ins declare what they use (sandbox-docker, sandbox-boxd, forge-github and source-schedule `fired`; the watchdog `started`, `fired`, `ended`), so with no other plugin a running job costs one look a second, not two. `changes` on another hook is `invalid`. The test kit holds a plugin to it as the host does (§14.5): `fire` of a change kind its listener didn't declare is refused `not_found`, and `hookContract` calls a listener with a kind it declared. Manifest schema additive; no hook payload, seam, route or contract shape changes. |
-| 1.0.57 | 2026-11-08 | Brains in the environment image, and only a brain's bundle in a sandbox (ADR-025 step 4's follow-up, §6.6.7): `ContextBundle` gains an optional `path`, the directory of the repository that is placed (at the same path under the bundle's directory; additive, absent is the whole tree as before); groundray names its bundle's (`knowledge`), so brain.yaml and every other file of the brain's repository stay out of sandboxes, and every file under the bundle, Markdown or not, is checked for a restricted marking (a file that isn't Markdown is read whole, at any depth; one over 4 MiB, or more than 2000 files, is refused as unchecked). The marker names the commit and the path. Text too long (over 64 KiB) or nested too deep (flow collections past 32 levels) for the YAML parser is matched without it, more broadly (`sensitivity` then `restricted` with a `:` or `=` between, anywhere). The runner first removes the bundles under `<workdir>/context/` the brief doesn't cite, and an agent whose sandbox can't be cleaned doesn't start; a checks VM removes them all before the tree under test runs. `capcomd env build` (and `--project`) places the project's mapped brains, checked, in the image (EnvManifest `bundles`, part of its name), so the runner keeps them and sends nothing at start. |
+| 1.0.57 | 2026-11-08 | Triggers hardened (§16.3.1, §16.3.2): `checkTrigger` and `ctx.triggers.subscribe` also refuse format characters (`Cf`: bidi overrides, zero-width spaces) and line and paragraph separators in a trigger's `id`, `thread` and actor id, and a display name loses them (control characters still become spaces); `capcomd triggers log` and `subscriptions` print any such character in the records as `\u{…}`. Step 2: a subscribed run whose standing the engine doesn't give (an error, or none within `CAPCOMD_TRIGGERS_ENGINE_MS`, 15 s) makes the trigger a start that fails, `unavailable` (retryable), instead of passing it on to the gate where it could start a second run on the thread; the same for a delivery the engine doesn't confirm in time (idempotent by its key). Step 6: once a run started, nothing undoes the decision: records that fail after it (the log line, `Run.trigger`'s record, the subscription, the event) leave the dedupe mark in place and are named in the log line's and `trigger.received`'s `unrecorded` (additive) and the daemon's log; a decision that started nothing and whose log line can't be written drops the mark and rejects `unavailable`. The `github` source: a comment refused retryably waits for another try (one poll interval, then doubling, at most an hour; given up after 8 tries) without holding back newer comments, its read position keeping the ids handled at or after it. The kernel's own lookup of a run's standing passes an engine error on (a run the engine can't say about is not a run that doesn't exist, which would end its subscription after the starting grace), and `ctx.triggers.subscribe` on such a run rejects `unavailable` (retryable), not `not_found`. The contract's `trigger.received` gains the optional `unrecorded` (additive); no hook, seam or route changes. |
+| 1.0.58 | 2026-11-08 | Brains in the environment image, and only a brain's bundle in a sandbox (ADR-025 step 4's follow-up, §6.6.7): `ContextBundle` gains an optional `path`, the directory of the repository that is placed (at the same path under the bundle's directory; additive, absent is the whole tree as before); groundray names its bundle's (`knowledge`), so brain.yaml and every other file of the brain's repository stay out of sandboxes, and every file under the bundle, Markdown or not, is checked for a restricted marking (a file that isn't Markdown is read whole, at any depth; one over 4 MiB, or more than 2000 files, is refused as unchecked). The marker names the commit and the path. Text too long (over 64 KiB) or nested too deep (flow collections past 32 levels) for the YAML parser is matched without it, more broadly (`sensitivity` then `restricted` with a `:` or `=` between, anywhere). The runner first removes the bundles under `<workdir>/context/` the brief doesn't cite, and an agent whose sandbox can't be cleaned doesn't start; a checks VM removes them all before the tree under test runs. `capcomd env build` (and `--project`) places the project's mapped brains, checked, in the image (EnvManifest `bundles`, part of its name), so the runner keeps them and sends nothing at start. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
