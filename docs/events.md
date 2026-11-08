@@ -3326,6 +3326,13 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "unrecorded": {
+      "description": "What capcomd couldn't record about this decision (its line in the trigger log, the trigger a run started from, the run's subscription to the thread), each with why; absent when everything was recorded. A run that started stands either way",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [
