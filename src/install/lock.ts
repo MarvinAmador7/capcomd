@@ -44,6 +44,34 @@ export const inside = (root: string, path: string): boolean => {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 };
 
+/**
+ * The link `rel` (relative to `root`, `/`-separated, its directories real ones) leads to something inside `root`, read
+ * as the filesystem reads it: through the package's other links too. Its target taken literally isn't enough: with
+ * `a/b/l -> ../../x` (inside), `p -> a/b/l/../..` reads `a` literally, but `l` is `x`, so it is the package's parent.
+ * A part that doesn't exist is read literally from there on (the filesystem would stop there).
+ */
+export function linkInside(root: string, rel: string): boolean {
+  const first = readlinkSync(join(root, rel));
+  if (isAbsolute(first)) return false;
+  const at = rel.split("/").slice(0, -1), todo = first.split("/");
+  let hops = 0;
+  while (todo.length) {
+    const part = todo.shift()!;
+    if (part === "" || part === ".") continue;
+    if (part === "..") { if (!at.length) return false; at.pop(); continue; }
+    at.push(part);
+    const p = join(root, ...at);
+    let link = false;
+    try { link = lstatSync(p).isSymbolicLink(); } catch { continue; }
+    if (!link) continue;
+    const target = readlinkSync(p);
+    if (isAbsolute(target) || ++hops > 40) return false;
+    at.pop();
+    todo.unshift(...target.split("/"));
+  }
+  return at.length > 0;
+}
+
 /** The content hash of a file list: sha256 over its entries sorted by path. */
 export function treeHash(files: Record<string, TreeFile>): string {
   const h = createHash("sha256");
@@ -71,7 +99,7 @@ export function hashTree(dir: string, o: { withLock?: boolean } = {}): Tree {
       if (st.isDirectory()) { walk(r); continue; }
       if (st.isSymbolicLink()) {
         const target = readlinkSync(p);
-        if (isAbsolute(target) || !inside(root, join(dirname(r), target))) throw new TreeError(`${r} links outside the package (${target})`);
+        if (isAbsolute(target) || !inside(root, join(dirname(r), target)) || !linkInside(root, r)) throw new TreeError(`${r} links outside the package (${target})`);
         files[r] = { sha256: createHash("sha256").update(target).digest("hex"), mode: "120000" };
         continue;
       }

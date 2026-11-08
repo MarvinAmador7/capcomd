@@ -13,6 +13,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Changed: a command whose plugin isn't running (`capcomd <command>` from a plugin that is disabled or failed to
   start) now names the plugin and why it isn't running, with the next step (`capcomd plugins enable <name>`), instead
   of "unknown command". `GET /v1/plugins` lists the CLI commands each plugin declares (`commands`).
+- Fixed: `capcomd plugins install` and `capcomd profiles install` refuse a package with a link that leaves it only by
+  going through another of its links (each target looked inside on its own), and a project plugin holding one can't
+  be trusted. Before, such a link was installed, and what it pointed to outside the package wasn't part of the hash
+  that `update` and `plugins trust` check.
+- Fixed: `capcomd run --plugin-config` and `POST /v1/runs` `plugins` accept settings for a plugin version you allowed
+  with `capcomd plugins allow-version`; before, they answered "no plugin … here" although the daemon ran it.
+  `--plugin-config` also refuses `__proto__`, `constructor` and `prototype` in a setting's path.
+- Fixed: a plugin's settings named like a built-in JavaScript property (`toString`, `constructor`, `hasOwnProperty`)
+  or `__proto__` are refused like any other setting its schema doesn't have. Before, a project's
+  `.capcomd/config.json` could hand any of your plugins such a setting although its schema allowed none, and a
+  `__proto__` key carried values past the checks (a secret reference among them). A project's are set aside with a
+  warning, as its other refused settings for your plugins are.
 - Fixed: `capcomd profiles set` and `PUT /v1/profiles/{name}` keep an edited profile file's permissions (a file
   you made readable only by you stays so). `GET /v1/profiles/{name}` shows a context provider by its name only and,
   in other read-only rows (an `x-` field, `sharing.source`), hides token-shaped text, a value under a key such as

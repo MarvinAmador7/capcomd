@@ -52,7 +52,8 @@ export function parsePluginConfigFlags(flags: string[]): RunPluginConfig {
   for (const f of flags) {
     const eq = f.indexOf("=");
     const path = eq > 0 ? f.slice(0, eq).split(".") : [];
-    if (path.length < 2 || path.some((p) => !p)) throw new RelayError("usage", `--plugin-config ${JSON.stringify(f).slice(0, 120)}: not <plugin>.<key>=<value>`, "e.g. --plugin-config slack-notifier.channel=#ops");
+    // `__proto__.x=1` would set x on every object of the process, not a setting.
+    if (path.length < 2 || path.some((p) => !p || p === "__proto__" || p === "constructor" || p === "prototype")) throw new RelayError("usage", `--plugin-config ${JSON.stringify(f).slice(0, 120)}: not <plugin>.<key>=<value>`, "e.g. --plugin-config slack-notifier.channel=#ops");
     const raw = f.slice(eq + 1);
     let value: unknown;
     try { value = JSON.parse(raw); } catch { value = raw; }
@@ -70,9 +71,13 @@ export const pluginConfigFlags = (cfg: RunPluginConfig): string[] =>
 /** The manifests of the plugins the daemon would load (src/plugins/host.ts builtinCandidates), by name. */
 async function manifests(env: Env, cwd: string): Promise<Map<string, { manifest: PluginManifest; dir: string | null }>> {
   const { builtinCandidates } = await import("./host");
+  const { isExempt } = await import("./install");
   const out = new Map<string, { manifest: PluginManifest; dir: string | null }>();
   for (const c of builtinCandidates(env, cwd)) {
-    const l = c.dir ? readManifest(c.dir, { capcomd: VERSION }) : loadManifest(c.manifest, { capcomd: VERSION });
+    const read = (exempt: boolean) => c.dir ? readManifest(c.dir, { capcomd: VERSION, exempt }) : loadManifest(c.manifest, { capcomd: VERSION, exempt });
+    let l = read(false);
+    // A version the operator allowed (allow-version, §4.4) loads as the host loads it.
+    if (!l.ok && l.cause === "incompatible" && l.manifest && isExempt(l.manifest.name, l.manifest.version, env)) l = read(true);
     if (l.ok && !out.has(l.manifest.name)) out.set(l.manifest.name, { manifest: l.manifest, dir: c.dir ?? null });
   }
   return out;
