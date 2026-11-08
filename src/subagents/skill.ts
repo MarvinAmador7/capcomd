@@ -1,10 +1,73 @@
 // ADR-017: the orchestration skill appended to the system prompt of agents whose effective
-// limits allow spawning. Agents without children.allowSpawn get only the naming lines (capability agents.title) and a
-// local `capcomd` that can do just that (src/primitives/title-rules.mjs).
+// limits allow spawning. Any other agent that does work of its own has the in-VM capcomd too, with a token for what it
+// may do (src/subagents/token.ts LEAF_OPS), and gets the worker's lines instead (`workerSkill`: its tab, background
+// jobs, notes and lessons, its result). A reviewer, a report agent and the consolidator get only the naming lines
+// (capability agents.title) and a local `capcomd` that can do just that (src/primitives/title-rules.mjs).
 import type { Limits, Budget } from "../primitives/policy";
 import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
 
 export const VM_RPC_DIR = "/tmp/capcomd-rpc";
+
+/**
+ * Whether a real agent runs with the in-VM capcomd (CLI, MCP server, token): every agent that may spawn, and every other
+ * that does work of its own. Not verify's reviewer, a report agent or the consolidator: each answers with its final
+ * message (a verdict, a report, memory changes), so a result, notes or lessons from it would be read as nothing or as
+ * the wrong thing (a consolidator's `result.data.context` is its answer, not candidates).
+ */
+export function hasVmCapcomd(a: { limits: { allowSpawn: boolean }; contract?: unknown; profile?: string | null }): boolean {
+  if (a.limits.allowSpawn) return true;
+  const c = (a.contract ?? null) as { review?: unknown; report?: unknown } | null;
+  return !(c?.review && typeof c.review === "object") && c?.report !== true && a.profile !== CONSOLIDATOR_PROFILE;
+}
+
+/** Working notes in kv and lessons in the result (ADR-025 §5.1): the same lines for every agent with the in-VM capcomd. */
+function notesAndLessons(agentId: string): string {
+  return `- Keep your working notes (your plan, what you found, what is left) in kv under notes/${agentId}:
+  \`capcomd kv put notes/${agentId} '{"plan": "…"}'\`. They outlast a compacted context. Every agent of the run can
+  read them, so nothing in them is private.
+- A lesson this project should remember (something true about the repository that a later agent would otherwise
+  find out the hard way: what went wrong, and what avoids it) goes in your result:
+  \`capcomd result --summary "…" --data '{"context": [{"title": "…", "text": "…"}]}'\`. Say what is true, not what to
+  do; leave out what the repository or AGENTS.md already says, and anything out of date within a week (that is a
+  note). A lesson is a candidate: it reaches the project's memory only through a reviewed change, and one holding a
+  secret, a credential or a path to one is refused.`;
+}
+
+/**
+ * What an agent that may not spawn is told about its in-VM capcomd (appended to its instructions by the runner, as the
+ * naming lines were): its tab, long commands as background jobs when its token has them (`jobs`), working notes and
+ * lessons for the project's memory (ADR-025 §5.1), and the summary its parent reads. Nothing in it is the agent's own
+ * (not even its id), so every agent of a profile starts with the same instructions and shares one cached prefix
+ * (ADR-025 §6.1's byte-identity): `capcomd status` tells it its id.
+ */
+export function workerSkill(o: { mcp: boolean; jobs: boolean }): string {
+  const tool = (name: string) => (o.mcp ? ` (capcomd_${name})` : "");
+  return `${namingSkill({ mcp: o.mcp })}
+
+# Your capcomd
+
+The \`capcomd\` command${o.mcp ? " (or the equivalent capcomd_* MCP tools)" : ""} talks to the orchestrator that runs you; all output is JSON
+and \`capcomd help\` lists the commands (\`capcomd status\` shows your own record, with your agent id). You work alone:
+spawning, verifying and merging are your parent's (they are refused for you). Messages to you (your parent's, your
+jobs' results) are in \`capcomd inbox\`${tool("inbox")}: read it when one may have come and none reached you.
+${o.jobs ? `
+## Long commands run as background jobs
+A command that may take more than a minute (a whole test suite, a build, a benchmark) runs as a job, not in your shell
+tool (which cuts a long command off): \`capcomd job start -- <command>\`${tool("job_start")}, e.g.
+\`capcomd job start -- npm test\`. It answers with the result
+when the command ends within a minute; otherwise with state "running" and a job id, and you keep working: the result
+comes to you as a message from the job when it ends. \`capcomd job output <job>\` shows its output so far (and its
+result once it ended, if no message reached you), \`capcomd job list\` your jobs, \`capcomd job kill <job>\` stops one.
+Your jobs end when you do: wait for the results you need before you finish.
+` : ""}
+## Notes and lessons
+${notesAndLessons("<your agent id>")}
+- Never change .capcomd/context/ yourself.
+
+## Before you finish
+Declare your result: \`capcomd result --summary "<what you changed, what you checked and how, what is left>"\`${tool("result")}.
+Your parent reads it (and only it) to decide what to do with your work.`;
+}
 
 /** Every agent names its tab, Rex-style: injected into every real agent's instructions, so it stays short. */
 export function namingSkill(o: { mcp: boolean; planner?: boolean }): string {
@@ -102,7 +165,9 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
 - Split your task into parts that can run at once, and spawn them together (wait-any, verify each as it finishes):
   parts that share an interface get a tiny contract child first, then everything else starts against it.
 - A child whose profile can't spawn is a leaf (--children.maxChildren=0 is harmless; more is refused, since it
-  would do nothing). Grant fan-out only to a child of a profile that can spawn whose task is
+  would do nothing). A leaf has capcomd too: it runs long commands (the whole test suite, a build) as background
+  jobs when its profile lets it run commands, keeps notes, proposes lessons and ends with \`capcomd result
+  --summary\`, so a task may ask it to run the suite and report what passed. Grant fan-out only to a child of a profile that can spawn whose task is
   itself two or more independent parts, and only as much as it needs:
   --children.maxChildren=N --children.maxDepth=1 [--children.maxTotalDescendants=M --children.allowedChildProfiles=a,b --children.budgetShare=0.5]
 - A grant above your own limits is refused (not clamped). Split by independent files/modules so siblings
@@ -154,15 +219,7 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
 - \`capcomd help\` lists every command.
 
 ## Notes and lessons
-- Keep your working notes (your plan, what you found, what is left) in kv under notes/${o.agentId}:
-  \`capcomd kv put notes/${o.agentId} '{"plan": "…"}'\`. They outlast a compacted context. Every agent of the run can
-  read them, so nothing in them is private.
-- A lesson this project should remember (something true about the repository that a later agent would otherwise
-  find out the hard way: what went wrong, and what avoids it) goes in your result:
-  \`capcomd result --summary "…" --data '{"context": [{"title": "…", "text": "…"}]}'\`. Say what is true, not what to
-  do; leave out what the repository or AGENTS.md already says, and anything out of date within a week (that is a
-  note). A lesson is a candidate: it reaches the project's memory only through a reviewed change, and one holding a
-  secret, a credential or a path to one is refused.
+${notesAndLessons(o.agentId)}
 - Never change .capcomd/context/ in a child's work: a merge of any branch but a consolidator's that changes it is refused.
 ${L.allowedChildProfiles.includes(CONSOLIDATOR_PROFILE) ? consolidatorRule(o.mcp) : ""}${o.orchestrate ? orchestrateSkill({ mcp: o.mcp }) : ""}${goal}`;
 }
