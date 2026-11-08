@@ -589,7 +589,8 @@ const runMachinesComing = new Map<string, Promise<Attached>>();
  */
 async function runMachineFor(runId: string, lifetimeMs: number): Promise<Attached> {
   let at = runMachines.get(runId);
-  if (!at) {
+  // One found again after a restart with no job left in it was released as it came: another is made.
+  while (!at) {
     let coming = runMachinesComing.get(runId);
     if (!coming) {
       coming = (async () => {
@@ -601,9 +602,15 @@ async function runMachineFor(runId: string, lifetimeMs: number): Promise<Attache
       })().finally(() => runMachinesComing.delete(runId));
       runMachinesComing.set(runId, coming);
     }
-    at = await coming;
+    const got = await coming;
+    if (runMachines.get(runId) === got) at = got;
   }
   at.run!.starting++;
+  // A machine made for an earlier job lives as long as this one may run, too, and never less than the jobs in it may
+  // (a machine found again after a restart doesn't know its deadline).
+  const now = Date.now();
+  const need = Math.max(lifetimeMs, ...[...at.watches.values()].map((w) => (w.rec.timeoutMs != null ? msOf(w.rec) + w.rec.timeoutMs - now : 0)));
+  await at.run!.held.cover(need).catch(() => {});
   return at;
 }
 
@@ -654,6 +661,9 @@ export async function startJob(spec: JobSpec, o: StartOptions): Promise<Job> {
   if (owner && (!a || TERMINAL_AGENT.has(a.status))) throw new RelayError("conflict", `agent ${owner} ${a ? `is ${a.status}` : "isn't in this run"}: its jobs would end at once`, "Start jobs for an agent that is running.", { code: "not_running" });
   // A run-owned job an agent starts is held to that agent's limits: a job is never a way around them.
   const starter = ofRun && runId && o.by.startsWith("agt-") ? await client().scope.getOrCreate([runId]).getAgent({ agentId: o.by }) : null;
+  // A run that is over makes no job machine (its jobs would be killed at once): refused before one is made.
+  const over = ofRun ? await runEnded(runId!) : null;
+  if (over) throw new RelayError("conflict", `run ${runId} ${over === RUN_ENDED ? "has ended" : "is gone"}: its jobs would end at once`, "Start run jobs while the run goes on.", { code: "not_running" });
   const limiting = (a ?? starter)?.spec as Parameters<typeof jobLimits>[0];
   const limits = jobLimits(limiting);
   // §16.2 rule 2: at most `max` running jobs per owner (the run's exec jobs count together).

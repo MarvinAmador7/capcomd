@@ -103,6 +103,21 @@ describe("coalescing and throttling", () => {
 		r.event(claude(["Bash", { command: "bun test" }]));
 		expect(writes.at(-1)).toMatchObject({ kind: "test", n: 1 });
 	});
+	test("onSeen: every step the agent is seen taking (in a streak too, a repeated target too), unthrottled; thinking isn't one", () => {
+		// What a background job's afterTurnMs counts from (src/jobs/service.ts noteStep, plugin API §16.2 rule 2).
+		let t = 1000;
+		const seen: number[] = [];
+		const r = activityReporter(() => {}, { minMs: 60_000, now: () => t, onSeen: (at) => { seen.push(at); } });
+		r.event(claude(["Read", { file_path: "/a" }]));
+		t = 2000; r.event(claude(["Read", { file_path: "/a" }]));
+		t = 3000; r.event({ type: "assistant", raw: { message: { content: [{ type: "text", text: "thinking it over" }] } } });
+		t = 4000; r.op("task");
+		t = 5000; r.op("title"); // naming its tab is no step
+		expect(seen).toEqual([1000, 2000, 4000]);
+		r.stop();
+		t = 6000; r.event(claude(["Edit", { file_path: "/b" }]));
+		expect(seen).toEqual([1000, 2000, 4000]);
+	});
 	test("at most one write per minMs: the first goes out, the latest of a burst follows when the window ends", async () => {
 		const writes: StoredActivity[] = [];
 		const r = activityReporter((a) => { writes.push(a); }, { minMs: 120 });

@@ -28,8 +28,12 @@ export interface RunMachineRef {
   ttlSeconds: number;
 }
 
-/** A run's job machine while this daemon holds it: `release` destroys it and gives back its record and its slot. */
-export interface HeldRunMachine { m: JobMachine; ref: RunMachineRef; release(): Promise<void> }
+/**
+ * A run's job machine while this daemon holds it: `release` destroys it and gives back its record and its slot. `cover`
+ * moves its delete deadline (where the provider can) so a job that may run `lifetimeMs` from now fits: the run's later
+ * jobs run in a machine made for an earlier one.
+ */
+export interface HeldRunMachine { m: JobMachine; ref: RunMachineRef; release(): Promise<void>; cover(lifetimeMs: number): Promise<void> }
 
 /** How long a job start waits for a machine slot on a place with a cap before it is refused (it is an in-VM call). */
 const SLOT_WAIT_MS = () => Number(process.env.CAPCOMD_JOBS_SLOT_WAIT_MS ?? 30_000);
@@ -71,19 +75,21 @@ export async function ensureRunMachine(runId: string, o: { lifetimeMs: number })
   const place = await placeOf(sandbox, source);
   const idemKey = `capcomd-job-${runId}-${Date.now().toString(36)}${randomBytes(3).toString("hex")}`;
   // Its idle lifetime is the run's, and never shorter than the job it is made for may run.
-  const ttlSeconds = Math.max(await runIdleLifetime(runId, sandbox, source), Math.ceil(o.lifetimeMs / 1000) + 600);
-  const slot = await holdSlot(place, `capcomd-jobs-${runId}`, { waitMs: SLOT_WAIT_MS() }).catch((e) => {
+  const ttlSeconds = Math.max(await runIdleLifetime(runId, sandbox, source), lifetimeSeconds(o.lifetimeMs));
+  // Its own slot (by its key, not its run's): the slot of a machine of the run being destroyed is never this one's.
+  const slot = await holdSlot(place, slotName(idemKey), { waitMs: SLOT_WAIT_MS() }).catch((e) => {
     throw new RelayError("engine_unreachable", `${(e as Error).message}, so the run's job machine wasn't made`, "Start it again once an agent of this place has finished.", { code: "unavailable", retryable: true });
   });
   const forget = recordJobMachine({ idemKey, sandbox: place, kind: "job", purpose: "job", runId, ttlSeconds });
   const snap = resolveEnvSnapshot(source);
   const where = await layout(place, runId, idemKey, source);
+  const madeAt = Date.now();
   let id: string | null = null;
   try {
     ({ id } = await provider.ensure({ idemKey, isolated: true, ttlSeconds, egressAllow: [...BASE_EGRESS], labels: { purpose: "job", run: runId }, ...(snap ? { fromSnapshot: snap } : {}) }));
     await provider.waitReady(id, READY_MS);
     const ref: RunMachineRef = { sandbox, vmId: id, idemKey, dir: where.dir, cwd: where.cwd, ttlSeconds };
-    const held = holding(runId, ref, where.env, () => { forget(); slot.release(); });
+    const held = holding(runId, ref, where.env, { place, deleteAt: madeAt + ttlSeconds * 1000 }, () => { forget(); slot.release(); });
     // The env image may carry the context bundles of the project it was built for (its mapped brains, ADR-025 step 4):
     // they go before any job runs, as the checks machine's do (src/merge/verify.ts): a job is agent-written code.
     const mk = await held.m.exec(["sh", "-c", `${where.context ? 'rm -rf "$3" && ' : ""}mkdir -p "$1" "$2"`, "sh", ref.dir, ref.cwd, where.context ?? ""], { timeoutMs: 30_000 });
@@ -106,12 +112,18 @@ export async function reattachRunMachine(runId: string, ref: RunMachineRef): Pro
   const { withSandbox } = await import("../providers/run-sandbox");
   const source = ref.sandbox ? withSandbox(process.env, ref.sandbox) : await runSandboxEnv(runId);
   const place = await placeOf(ref.sandbox, source);
-  const slot = await holdSlot(place, `capcomd-jobs-${runId}`, { waitMs: 0 }).catch(() => null);
+  const slot = await holdSlot(place, slotName(ref.idemKey), { waitMs: 0 }).catch(() => null);
   const forget = recordJobMachine({ idemKey: ref.idemKey, sandbox: place, kind: "job", purpose: "job", runId, ttlSeconds: ref.ttlSeconds });
-  return holding(runId, ref, (await layout(place, runId, ref.idemKey, source)).env, () => { forget(); slot?.release(); });
+  // Its deadline isn't known here (a later job may have moved it): the next start covers its jobs and the new one.
+  return holding(runId, ref, (await layout(place, runId, ref.idemKey, source)).env, { place, deleteAt: 0 }, () => { forget(); slot?.release(); });
 }
 
-function holding(runId: string, ref: RunMachineRef, env: Record<string, string> | undefined, done: () => void): HeldRunMachine {
+/** A machine slot's name: one per job machine. */
+const slotName = (idemKey: string) => `capcomd-jobs-${idemKey.slice("capcomd-job-".length)}`;
+/** How long a machine must live for a job that may run `lifetimeMs`: that, and 10 minutes to settle it. */
+const lifetimeSeconds = (lifetimeMs: number) => Math.ceil(lifetimeMs / 1000) + 600;
+
+function holding(runId: string, ref: RunMachineRef, env: Record<string, string> | undefined, at: { place: string | null; deleteAt: number }, done: () => void): HeldRunMachine {
   let provider: Promise<import("../providers/sandbox").SandboxProvider> | null = null;
   const p = () => (provider ??= import("../dependencies").then((d) => d.providerNamed(ref.sandbox)));
   // Its commands go to the provider as it is (as an agent's spool pump does): a call during an outage fails and is
@@ -121,8 +133,21 @@ function holding(runId: string, ref: RunMachineRef, env: Record<string, string> 
     exec: async (cmd, o) => (await import("../providers/resilient")).rawProvider(await p()).exec(ref.vmId, cmd, { ...(env ? { env } : {}), ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) }),
   };
   let released: Promise<void> | null = null;
+  let deleteAt = at.deleteAt;
   return {
     m, ref,
+    cover: async (lifetimeMs) => {
+      const seconds = lifetimeSeconds(lifetimeMs);
+      if (released || Date.now() + seconds * 1000 <= deleteAt) return;
+      const provider = await p();
+      if (!provider.extendTtl) return;
+      // A deadline the provider didn't move is no reason to refuse the start: the job may be cut short at the old one.
+      try { await provider.extendTtl(ref.vmId, seconds); } catch (e) { console.error(`[jobs] ${runId}: extending its job machine ${ref.vmId}: ${(e as Error)?.message ?? e}`); return; }
+      deleteAt = Date.now() + seconds * 1000;
+      ref.ttlSeconds = seconds;
+      // Its ledger record lives as long (the same file: its release still removes it).
+      (await import("../providers/machines")).recordJobMachine({ idemKey: ref.idemKey, sandbox: at.place, kind: "job", purpose: "job", runId, ttlSeconds: seconds });
+    },
     release: () => (released ??= (async () => {
       try { await (await p()).destroy(ref.vmId); } catch (e) { console.error(`[jobs] ${runId}: destroying its job machine ${ref.vmId}: ${(e as Error)?.message ?? e}`); }
       done();

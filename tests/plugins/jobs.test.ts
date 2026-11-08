@@ -166,6 +166,66 @@ describe("the run's job machine (src/jobs/run-machine.ts)", () => {
       Object.assign(process.env, saved);
     }
   });
+
+  /** A run's job machines on the fake place, with `env` set (and its ledger in a temp folder) while `body` runs. */
+  async function onFake(env: Record<string, string>, body: (p: FakeProvider & { extended: Array<[string, number]> }, ledger: string) => Promise<void>) {
+    class Seen extends FakeProvider {
+      extended: Array<[string, number]> = [];
+      override async extendTtl(id: string, seconds: number) { this.extended.push([id, seconds]); return super.extendTtl(id, seconds); }
+    }
+    const p = new Seen();
+    const ledger = mkdtempSync(join(tmpdir(), "capcomd-jobs-ledger-"));
+    const saved = { ...process.env };
+    Object.assign(process.env, { CAPCOMD_MACHINES_LEDGER: ledger, CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_ENV: "image", CAPCOMD_SANDBOX: "fake", ...env });
+    initDependencies({ provider: p });
+    try { await body(p, ledger); } finally {
+      resetDependencies();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  }
+
+  test("each job machine holds a slot of its own: one of the run's being destroyed never frees the next one's", async () => {
+    // One slot on the place (1 GB of memory, 1 GB per agent).
+    await onFake({ CAPCOMD_FAKE_MEMORY_MB: "1024", CAPCOMD_JOBS_SLOT_WAIT_MS: "15000" }, async () => {
+      const { slotsFor } = await import("../../src/providers/capacity");
+      const first = await ensureRunMachine("run-slot1", { lifetimeMs: 60_000 });
+      // The run's next machine (the first being destroyed, its last job gone) waits for the slot the first holds...
+      let second: Awaited<ReturnType<typeof ensureRunMachine>> | null = null;
+      const coming = ensureRunMachine("run-slot1", { lifetimeMs: 60_000 }).then((h) => (second = h));
+      await sleep(300);
+      expect(second).toBeNull();
+      // ...and holds it once the first gave it back: nothing else gets it while the second lives.
+      await first.release();
+      await coming;
+      expect((await slotsFor("fake")!.request("capcomd-check-other", Date.now())).admitted).toBe(false);
+      await second!.release();
+      expect((await slotsFor("fake")!.request("capcomd-check-other", Date.now())).admitted).toBe(true);
+      slotsFor("fake")!.release("capcomd-check-other");
+    });
+  }, 30_000);
+
+  test("cover: a later job that may run past the machine's deadline moves it (and its ledger record); one within it doesn't", async () => {
+    await onFake({}, async (p, ledger) => {
+      // Made for a job of an hour: it lives an hour and 10 minutes (the default idle lifetime is shorter).
+      const held = await ensureRunMachine("run-cover1", { lifetimeMs: 3_600_000 });
+      expect(held.ref.ttlSeconds).toBe(4_200);
+      await held.cover(60_000);
+      expect(p.extended).toEqual([]);
+      // A job of 5 hours joins it: its deadline is now 5 hours and 10 minutes away.
+      await held.cover(5 * 3_600_000);
+      expect(p.extended).toEqual([[held.ref.vmId, 18_600]]);
+      expect(held.ref.ttlSeconds).toBe(18_600);
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toMatchObject([{ kind: "job", runId: "run-cover1", ttlSeconds: 18_600 }]);
+      await held.cover(3_600_000);
+      expect(p.extended).toHaveLength(1);
+      await held.release();
+      // Released: nothing to move any more.
+      await held.cover(10 * 3_600_000);
+      expect(p.extended).toHaveLength(1);
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toEqual([]);
+    });
+  });
 });
 
 /** A test plugin that listens to job.changed and hands its context out. */

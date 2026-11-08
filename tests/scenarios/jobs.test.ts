@@ -23,6 +23,7 @@ let log: string;
 let jobLog: string;
 /** This file's runs: their scripted agents' and jobs' processes are named by them. */
 const runs: string[] = [];
+const pidFiles: string[] = [];
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-scn-jobs-"));
   log = join(dir, "hooks.ndjson");
@@ -30,12 +31,14 @@ beforeAll(async () => {
   const agents = join(dir, "agents.json");
   writeFileSync(agents, JSON.stringify({ ...PROFILES, agents: { ...PROFILES.agents, router: { ...PROFILES.agents.planner, toolMode: "orchestrate" } } }));
   // The run's job machine is a "VM" of the host test sandbox (scripted agents don't use the sandbox).
-  w = await world("jobs", { CAPCOMD_AGENTS_FILE: agents, CAPCOMD_JOBS_POLL_MS: "200", CAPCOMD_SANDBOX: "fake-host", CAPCOMD_TEST_PLUGINS: `${RECORDER}:${STARTER}`, CAPCOMD_TEST_HOOK_LOG: log, CAPCOMD_TEST_JOB_LOG: jobLog, NODE_ENV: "test" });
+  w = await world("jobs", { CAPCOMD_AGENTS_FILE: agents, CAPCOMD_JOBS_POLL_MS: "200", CAPCOMD_SANDBOX: "fake-host", CAPCOMD_MACHINES_LEDGER: join(dir, "machines"), CAPCOMD_TEST_PLUGINS: `${RECORDER}:${STARTER}`, CAPCOMD_TEST_HOOK_LOG: log, CAPCOMD_TEST_JOB_LOG: jobLog, NODE_ENV: "test" });
 }, 120_000);
 afterAll(async () => {
   // A scenario that failed may leave a scripted agent (its "VM" outlives a crashed daemon) or a job behind: stop them.
   const mine = Bun.spawnSync(["ps", "-A", "-o", "pid=,command="]).stdout.toString().split("\n").filter((l) => w && (l.includes(w.dir) || runs.some((r) => l.includes(`/${r}/`)))).map((l) => Number(l.trim().split(/\s+/)[0]));
   for (const pid of mine) if (pid > 1 && pid !== process.pid) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+  // A run job's process on the host test sandbox names no run: it wrote its pid.
+  for (const f of pidFiles) { const pid = existsSync(f) ? Number(readFileSync(f, "utf8").trim()) : 0; if (pid > 1) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
   try { await w?.stop(); } finally { if (dir) rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -273,6 +276,7 @@ test("a run-owned job outlives the agent that started it, in the run's job machi
   const run = await newRun(w);
   runs.push(run);
   const pidFile = join(dir, `run-job-${Date.now()}`);
+  pidFiles.push(pidFile, `${pidFile}-2`);
   const release = join(dir, `release-${Date.now()}`);
   // Another agent keeps the run going until the test lets it end.
   const keeper = await spawnRoot(w, run, "worker", w.script("keeper", `i=0; while [ ! -f ${JSON.stringify(release)} ] && [ $i -lt 900 ]; do sleep 0.2; i=$((i+1)); done
@@ -284,6 +288,8 @@ echo "job: $j $(printf "%s" "$r" | $S/jget state) $(printf "%s" "$r" | $S/jget r
 echo "listed: $(capcomd job list | $S/jget jobs.0.jobId)"
 i=0; while [ "$(capcomd job output $j | $S/jget stdout)" != serving ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
 echo "output: $(capcomd job output $j | $S/jget stdout)"
+r2=$(capcomd job start --run --label watcher --foreground-ms 300 --timeout-ms 18000000 -- 'echo $$ > ${pidFile}-2; exec sleep 600')
+echo "second: $(printf "%s" "$r2" | $S/jget jobId) $(printf "%s" "$r2" | $S/jget state)"
 capcomd result --summary "started the server" >/dev/null`), { task: "start a server" });
   const done = (await waitAll(w, run, [starter], 120_000)).agents[0];
   const logs = await logsOf(run, starter);
@@ -309,6 +315,14 @@ capcomd result --summary "started the server" >/dev/null`), { task: "start a ser
   expect(rec.machine.vmId).toBeTruthy();
   const pid = Number(readFileSync(pidFile, "utf8").trim());
   expect(() => process.kill(pid, 0)).not.toThrow();
+  // A second run job shares the machine, which now lives as long as it may run (5 hours, and 10 minutes to settle it):
+  // the machine made for the first lived 1 hour (the run's idle lifetime; the first's own 30 minutes are less).
+  const [, second] = /second: (job-\S+) running/.exec(logs) ?? [];
+  expect(second).toBeDefined();
+  const rec2 = (await s.kvGet({ k: `_jobs/${second}` }))!.value as any;
+  expect(rec2).toMatchObject({ state: "running", timeoutMs: 18_000_000, machine: { vmId: rec.machine.vmId } });
+  const { liveJobMachines } = await import("../../src/providers/machines");
+  expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: join(dir, "machines") })).toMatchObject([{ kind: "job", runId: run, ttlSeconds: 18_600 }]);
   const started = await trajectory(w, run, (e) => e.type === "JOB_STARTED" && e.data.jobId === job);
   expect(started[0]).toMatchObject({ agentId: null, data: { owner: "run", label: "server" } });
 
@@ -318,6 +332,8 @@ capcomd result --summary "started the server" >/dev/null`), { task: "start a ser
   let ended: any = null;
   for (let i = 0; i < 150; i++) { ended = (await s.kvGet({ k: `_jobs/${job}` }))!.value; if (ended.state !== "running" && ended.state !== "stopping") break; await sleep(100); }
   expect(ended).toMatchObject({ state: "killed", reason: "its run ended" });
+  for (let i = 0; i < 100; i++) { if (!["running", "stopping"].includes(((await s.kvGet({ k: `_jobs/${second}` }))!.value as any).state)) break; await sleep(100); }
+  expect((await s.kvGet({ k: `_jobs/${second}` }))!.value).toMatchObject({ state: "killed", reason: "its run ended" });
   let alive = true;
   for (let i = 0; i < 50 && alive; i++) { try { process.kill(pid, 0); await sleep(100); } catch { alive = false; } }
   expect(alive).toBe(false);
@@ -325,8 +341,13 @@ capcomd result --summary "started the server" >/dev/null`), { task: "start a ser
   const destroyed = () => calls().some((c) => c.hook === "sandbox.changed" && c.change === "destroyed" && c.subject === rec.machine.vmId);
   for (let i = 0; i < 50 && !destroyed(); i++) await sleep(100);
   expect(destroyed()).toBe(true);
+  expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: join(dir, "machines") })).toEqual([]);
   // Nobody was told: its starter had ended, and the run's end isn't news to anyone.
   expect((await trajectory(w, run, (e) => e.type === "MESSAGE_SENT")).length).toBe(0);
+  // The run is over: a run job started now is refused before any machine is made for it.
+  const { startJob } = await import("../../src/jobs/service");
+  await expect(startJob({ kind: "exec", runId: run, owner: { run: true }, cmd: ["sleep 60"], label: "late" }, { by: "operator" })).rejects.toMatchObject({ code: "conflict", reason: "not_running" });
+  expect(calls().filter((c) => c.hook === "sandbox.ensuring" && c.runId === run && c.machine?.purpose === "job")).toHaveLength(1);
 }, 240_000);
 
 test("an agent's job is stopped afterTurnMs after its agent's last step, not after its own start", async () => {
