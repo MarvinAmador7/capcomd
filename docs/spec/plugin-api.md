@@ -2003,9 +2003,12 @@ messages and events outside what it listens to before emitting, keep its own rea
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
 structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
-ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
-log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
-before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+ISO time, `actor {id, display, bot}`, no control characters, format characters (Unicode `Cf`: bidi overrides,
+zero-width spaces) or line and paragraph separators in `id`, `thread` or the actor's id (`capcomd triggers log` and
+the planner's message show them; the display name loses its: control characters and line breaks become spaces, format
+characters go, but a zero-width joiner inside an emoji), text and data ≤ 64 KB each) and refuses a malformed trigger
+`invalid` before recording anything; `ctx.triggers.subscribe` checks its `thread` the same way. `capcomd triggers log`
+and `subscriptions` print any such character they find in the records as `\u{…}`. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -2024,10 +2027,14 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   the user, not capcomd, and their comments are theirs, not the bot's: what the source drops as its own is what
   capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
-  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
-  position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
-  keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
-  `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
+  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2) waits for another
+  try, after one poll interval, then twice the wait before each time (at most an hour), and is given up after 8 tries
+  (a warning in the plugin's log; each try is a `failed` line of the intake's log). A waiting comment holds the
+  position before it, so later reads return it, but never holds back newer comments: they are emitted as they come,
+  and the position keeps the ids of the comments handled at or after it, which the next poll skips. GitHub's `since`
+  includes its own second, so this also covers the comments read at that second (else each poll would emit them
+  again, a `deduped` decision a minute). A read returns at most 100 comments: past that many handled after a
+  waiting comment, newer ones wait until it is handled or given up. The source's `job.changed` listener is registered whatever its settings, as its
   manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
   nothing without a schedule); the built-in sandboxes listen there already, so the daemon reads background jobs'
   output (§6.6.19) either way.
@@ -2047,7 +2054,12 @@ with the `TriggerDecision`:
    `planner`; a run with neither (a run driven from outside, or the built-in recipe's) has no one to read it, and the
    trigger goes on to the gate. The message is `from: trigger:<source>`, its body who wrote on which thread and what
    (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. A person's trigger
-   on an ended run's thread lands in its planner's inbox; starting the planner again on it is a later step's.
+   on an ended run's thread lands in its planner's inbox; starting the planner again on it is a later step's. When the
+   engine doesn't say where a run subscribed to the thread stands (an error, or no answer within
+   `CAPCOMD_TRIGGERS_ENGINE_MS`, 15 s), and no other subscribed run took the message, the trigger doesn't go on to the
+   gate (a new request there could start a second run on the thread): it is a start that fails, `unavailable`
+   (retryable), and the subscription holds. A delivery the engine doesn't confirm in time is the same; sent again, it is
+   idempotent by its key.
 3. **Gate**: config `triggers.sources.<source>` (kernel-owned, operator-written: `allowed: [actor ids]`,
    `opened: [thread patterns]`, `mode: off|observe|auto`, `project`). The trigger is **allowed** when its actor's id is
    in `allowed` or its thread matches an `opened` pattern (exact, `*` matching any run of characters). Strength is
@@ -2069,7 +2081,13 @@ with the `TriggerDecision`:
    this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
    §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
-   trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`.
+   trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`. A run that
+   started is never undone: when its records can't be written after it (the log's line, `Run.trigger`'s record, its
+   subscription, the event), the decision stands, the dedupe mark stays (the same trigger again is `deduped`, never a
+   second run), and what is missing is recorded wherever it can be: the log line's `unrecorded` (additive), the
+   `trigger.received` event's `unrecorded` (additive) and the daemon's log. A decision that started nothing and whose
+   log line can't be written drops the mark and `emit` rejects `unavailable` (retryable), so it is decided and recorded
+   when the trigger comes again (a `continued` message is sent again idempotently, by its key).
 
 What the intake does **not** do: judge content. The model-side assessment the prototype's "Eval" performs is the
 planner's job once a run exists (it reads the trigger as its goal and may decide there is nothing to do, ending with a
@@ -2312,6 +2330,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.51 | 2026-11-08 | From the review of ADR-024's writes (its §7 step 6; ADR-024 §9, "Made while building the writes"): `GET /v1/profiles/{name}` shows `context.providers` by name only, as `tools.mcp`, and, in other rows outside the catalog, redacts token shapes, a value under a key named like a secret (the redactor's key rule, `SECRET_KEY`) and a URL's password (the route's "Never contains a credential"); a profile file a write replaces keeps its mode (the unguessable, exclusively created temporary file is 1.0.45's); `PUT` refuses a number past 2^53. No contract change. |
 | 1.0.52 | 2026-11-08 | The watchdog's progress from real activity (§16.4, the live run's L3; supersedes 1.0.38's windows from the checkpoint interval, since files changing no longer wait for a checkpoint): `agent.changed` `worked {files, command, at}` (additive; no event in the run's log, never replayed, §6.6.8) from the agent's runner at most once a supervisor heartbeat: its checkout's files changed (the supervisor fingerprints the working tree from `git status` and each changed path's size and time at each heartbeat for an agent whose work is checkpointed, writing nothing to the repository, less often in a slow checkout), a foreground shell command running since when (`AgentEvent.commands`, additive, §7.3); the built-in counts `worked {files}` as progress, holds its clock while a foreground command runs (at most `stalledAfterMs` of commands between two signs of progress, so a hung or repeated command is still judged; a turn's end ends its commands) and while a job runs (overlapping waits count once), and no longer counts a job's end as progress (the time it ran doesn't count instead; the open question decided); its notice and stop say what it saw (`no file change seen`, the tool steps it heard of, a command it waits on); a `stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`) is warned about by `capcomd setup` and in its log, not refused. |
 | 1.0.53 | 2026-11-08 | `context-memory`'s judge and gate, after a second review of ADR-025 step 3 (§6.6.13, §6.6.15): a path a checkout on a case-insensitive file system reads as the memory (`.Capcomd/Context/…`, with HFS+-ignored characters or Windows' trailing dots and spaces) is a change to it, so an agent's branch can't put files in a macOS checkout's `.capcomd/context/` unjudged, and a consolidator's branch changes items by their exact names only; the agent judged is the one whose work the ref lands (an agent id's result branch, so a handed-off agent's successor), and a branch `capcomd/<run>/<agt>` of another run is judged as that run's agent instead of let through as a person's (an agent the engine has no record of fails it closed). No hook, seam, route or contract shape changes. |
+| 1.0.54 | 2026-11-08 | Triggers hardened (§16.3.1, §16.3.2): `checkTrigger` and `ctx.triggers.subscribe` also refuse format characters (`Cf`: bidi overrides, zero-width spaces) and line and paragraph separators in a trigger's `id`, `thread` and actor id, and a display name loses them (control characters still become spaces); `capcomd triggers log` and `subscriptions` print any such character in the records as `\u{…}`. Step 2: a subscribed run whose standing the engine doesn't give (an error, or none within `CAPCOMD_TRIGGERS_ENGINE_MS`, 15 s) makes the trigger a start that fails, `unavailable` (retryable), instead of passing it on to the gate where it could start a second run on the thread; the same for a delivery the engine doesn't confirm in time (idempotent by its key). Step 6: once a run started, nothing undoes the decision: records that fail after it (the log line, `Run.trigger`'s record, the subscription, the event) leave the dedupe mark in place and are named in the log line's and `trigger.received`'s `unrecorded` (additive) and the daemon's log; a decision that started nothing and whose log line can't be written drops the mark and rejects `unavailable`. The `github` source: a comment refused retryably waits for another try (one poll interval, then doubling, at most an hour; given up after 8 tries) without holding back newer comments, its read position keeping the ids handled at or after it. No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: triggers (GitHub comments, schedules and other sources) are sturdier. A trigger whose thread or sender carries
+  invisible characters (bidi overrides, zero-width spaces, line separators), as well as terminal escapes, is refused,
+  and a sender's display name loses them; `capcomd triggers log` and `capcomd triggers subscriptions` print any such
+  character as `\u{…}` instead of sending it to your terminal. When the engine doesn't say in time (15 s,
+  `CAPCOMD_TRIGGERS_ENGINE_MS`) whether a run follows a comment's thread, the trigger fails for now and the source sends
+  it again, instead of possibly starting a second run on that thread. When a run started but its line in the trigger
+  log couldn't be written, the trigger stays handled (no second run), and what couldn't be recorded is reported on the
+  daemon's stream and log. The GitHub source no longer lets one comment that keeps failing for now hold back newer
+  comments: it tries that comment again after 1, 2, 4… poll intervals (at most an hour apart) while it reads the rest,
+  and gives up on it after 8 tries, with a warning in the daemon's log.
 - Fixed: the project's memory gate now refuses an agent's branch that writes into `.capcomd/context/` under another
   spelling of the path, such as `.Capcomd/Context/memory/x.md`. Git treats that as a different folder, but a checkout
   on macOS or Windows puts those files next to the real memory, and before this fix they got past the check. The gate

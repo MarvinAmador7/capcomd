@@ -448,7 +448,7 @@ async function triggersCommand({ positionals, values, json }: Cmd): Promise<numb
     const subs = T.listSubscriptionRecords().filter((s) => (!values.source || s.source === values.source) && (!positionals[2] || s.runId === positionals[2]));
     if (json) { out({ subscriptions: subs }); return EXIT.ok; }
     if (!subs.length) console.log("No run follows a thread.");
-    for (const s of subs) console.log(`${s.runId}  ${s.source}  ${s.thread}  ${s.until ? `until ${s.until}` : "while the run works, and 14 days after"}`);
+    for (const s of subs) console.log(`${visible(s.runId)}  ${visible(s.source)}  ${visible(s.thread)}  ${s.until ? `until ${visible(s.until)}` : "while the run works, and 14 days after"}`);
     return EXIT.ok;
   }
   if (sub !== "log") usage("usage: capcomd triggers log [--source S] [--limit N] | capcomd triggers subscriptions [runId] [--source S]");
@@ -457,9 +457,13 @@ async function triggersCommand({ positionals, values, json }: Cmd): Promise<numb
   const entries = T.readTriggerLog({ ...(values.source ? { source: String(values.source) } : {}), limit });
   if (json) { out({ triggers: entries }); return EXIT.ok; }
   if (!entries.length) console.log(values.source ? `No trigger from ${values.source} yet.` : "No trigger yet. Sources (a schedule, GitHub comments) send them once configured; see docs/spec/plugin-api.md §16.3.");
-  for (const e of entries) console.log(`${e.at}  ${e.source}  ${e.actor.id}${e.actor.bot ? " (bot)" : ""}  ${e.thread}  ${triggerOutcome(e.decision)}`);
+  for (const e of entries) console.log(visible(`${e.at}  ${e.source}  ${e.actor.id}${e.actor.bot ? " (bot)" : ""}  ${e.thread}  ${triggerOutcome(e.decision)}${e.unrecorded?.length ? ` (not recorded: ${e.unrecorded.join("; ")})` : ""}`));
   return EXIT.ok;
 }
+/** A record's text as `capcomd triggers` prints it: control and format characters (a terminal's escapes, line breaks, bidi
+ *  overrides) shown as `\u{…}`. The intake refuses them in what a source names, but the log on disk is printed as it
+ *  is, whatever wrote it (a line from before that check, a reason quoting a source's words). */
+const visible = (s: string) => s.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
 function triggerOutcome(d: import("../../triggers/intake").LoggedDecision): string {
   switch (d.kind) {
     case "deduped": return `deduped (first seen ${d.first})`;

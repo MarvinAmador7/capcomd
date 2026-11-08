@@ -7,7 +7,8 @@
 // and fills the actor and `addressed` from GitHub's facts: the comment's author, whether GitHub says it is a bot, and
 // whether it addresses capcomd: a line starting with the command word (`sourceCommand`, `/capcomd`), or, with
 // `sourceMentions` (a login that is capcomd's own account, not the user's), an @-mention of the login by someone else.
-// A comment whose emit failed for now (the intake's `unavailable`) is read again at the next poll. What a comment asks
+// A comment whose emit failed for now (the intake's `unavailable`) is tried again later, each wait twice the one before,
+// and given up after RETRY_TRIES; it never holds back the comments after it. What a comment asks
 // for is never judged here: the kernel's intake decides (src/triggers/intake.ts). Daemon only (`ctx.jobs`,
 // `ctx.triggers`).
 import type { PluginContext } from "../../../packages/plugin/src/context";
@@ -53,6 +54,17 @@ async function reposToPoll(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig)
   return [...new Set([...cfg.sourceRepos.filter((r) => REPO.test(r)), ...followed])];
 }
 
+/** How many times a comment the intake couldn't act on for now (`unavailable`) is tried before the source gives up on it,
+ *  and the longest wait between two tries (they double from the poll interval). */
+export const RETRY_TRIES = 8;
+const RETRY_WAIT_MAX_MS = 3_600_000;
+/** A repository's read position in `ctx.storage`. `since`: GitHub's `since` for the next read. `read`: the comments
+ *  updated at or after `since` that were handled (GitHub's `since` includes its own second, and a comment waiting for
+ *  another try holds `since` before it, so these come back at every poll, and without it each poll would hand them to the
+ *  intake again: a `deduped` line each minute). `waiting`: the comments the intake couldn't act on for now, by id, with
+ *  how many tries they had and when the next one is due (epoch ms). `retry`: an older position's one waiting comment. */
+interface Position { since?: string; read?: number[]; waiting?: Record<string, { tries: number; next: number }>; retry?: number }
+
 /** One round over every repository: each new comment is emitted, oldest first. Returns how many were. */
 export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig, api?: GitHubApi): Promise<number> {
   const gh = api ?? (await githubAt(cfg.api));
@@ -62,33 +74,47 @@ export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceC
   let n = 0;
   for (const repo of await reposToPoll(ctx, cfg)) {
     const key = `github/${repo}`;
-    // `retry`: a comment whose emit failed for now, read again from `since` and not taken for an old one's edit.
-    // `read`: the comments updated at `since` itself that were read: GitHub's `since` includes that second, so they come
-    // back at every poll, and without it each poll would hand them to the intake again (a `deduped` line each minute).
-    const pos = (await ctx.storage.get("daemon", key)) as { since?: string; read?: number[]; retry?: number } | undefined;
+    const pos = (await ctx.storage.get("daemon", key)) as Position | undefined;
     // The first look at a repository: comments from now on, not its history.
     if (!pos?.since) { await ctx.storage.put("daemon", key, { since: new Date().toISOString() }); continue; }
     let comments: IssueComment[];
     try { comments = await gh.listIssueComments(repo, pos.since); } catch (e) { ctx.log.warn(`github source: reading ${repo}'s comments failed`, { error: String((e as Error)?.message ?? e) }); continue; }
-    const before = new Set(pos.read ?? []);
-    let since = pos.since, read = new Set(before), retry: number | undefined;
+    const handled = new Set(pos.read ?? []);
+    const before = pos.waiting ?? (pos.retry !== undefined ? { [pos.retry]: { tries: 1, next: 0 } } : {});
+    const waiting: NonNullable<Position["waiting"]> = {};
+    // `since` moves past each comment handled, and stops before the first one waiting for another try: from there,
+    // the comments handled after it are kept in `read`, so a comment that keeps failing never holds back newer ones.
+    let since = pos.since, held = false;
+    const now = Date.now();
     for (const c of comments) {
-      if (before.has(c.id) && Date.parse(c.updated_at) === Date.parse(pos.since)) continue;
-      // An edit of a comment from before the position isn't a new request.
-      const t = Date.parse(c.created_at) < Date.parse(pos.since) && c.id !== pos.retry ? null : commentTrigger(repo, c, me, cfg.sourceCommand);
-      if (t) {
-        const again = await ctx.triggers.emit(t).then(() => { n++; return false; }, (e) => {
+      const was = before[c.id];
+      if (!handled.has(c.id)) {
+        if (was && was.next > now) { waiting[c.id] = was; held = true; continue; }
+        // An edit of a comment from before the position isn't a new request (one waiting for another try is no edit).
+        const t = Date.parse(c.created_at) < Date.parse(pos.since) && !was ? null : commentTrigger(repo, c, me, cfg.sourceCommand);
+        const again = t && await ctx.triggers.emit(t).then(() => { n++; return false; }, (e) => {
           ctx.log.warn(`github source: ${repo} comment ${c.id} was not taken`, { error: String((e as Error)?.message ?? e) });
           return e instanceof PluginError && e.retryable;
         });
-        // The intake couldn't act now (the trigger may come again): the position stays before it, for the next poll.
-        if (again) { retry = c.id; break; }
+        if (again) {
+          // The intake couldn't act now (the trigger may come again): tried again later, each wait twice the one before.
+          const tries = (was?.tries ?? 0) + 1;
+          if (tries < RETRY_TRIES) {
+            waiting[c.id] = { tries, next: now + Math.min(RETRY_WAIT_MAX_MS, Math.max(10_000, cfg.sourceEveryMs) * 2 ** (tries - 1)) };
+            held = true;
+            continue;
+          }
+          ctx.log.warn(`github source: gave up on ${repo} comment ${c.id} after ${tries} tries`, { url: c.html_url ?? null });
+        }
+        handled.add(c.id);
       }
-      if (Date.parse(c.updated_at) > Date.parse(since)) { since = c.updated_at; read = new Set(); }
-      if (Date.parse(c.updated_at) === Date.parse(since)) read.add(c.id);
+      if (!held && Date.parse(c.updated_at) > Date.parse(since)) since = c.updated_at;
     }
-    const same = since === pos.since && read.size === before.size && [...read].every((id) => before.has(id));
-    if (!same || retry !== pos.retry) await ctx.storage.put("daemon", key, { since, ...(read.size ? { read: [...read] } : {}), ...(retry !== undefined ? { retry } : {}) });
+    // What a later read from `since` returns again and was handled. A comment no longer in the read (deleted, or past
+    // its 100) is forgotten: one that comes back is read again.
+    const read = comments.filter((c) => handled.has(c.id) && Date.parse(c.updated_at) >= Date.parse(since)).map((c) => c.id);
+    const next: Position = { since, ...(read.length ? { read } : {}), ...(Object.keys(waiting).length ? { waiting } : {}) };
+    if (JSON.stringify(next) !== JSON.stringify({ since: pos.since, ...(pos.read?.length ? { read: pos.read } : {}), ...(pos.waiting && Object.keys(pos.waiting).length ? { waiting: pos.waiting } : {}), ...(pos.retry !== undefined ? { retry: pos.retry } : {}) })) await ctx.storage.put("daemon", key, next);
   }
   return n;
 }
