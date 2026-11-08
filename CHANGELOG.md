@@ -5,6 +5,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- **Breaking:** `capcomd run` without a planner agent (the built-in placeholder recipe: `capcomd run <goal>` on a place
+  without real machines, `--recipe`, `--legacy`, `CAPCOMD_RUN_PATH`) is off by default. It plans the same generic
+  tasks for any goal and judges nothing, so it's kept for comparisons and tests only. Such a run is now refused before
+  it starts, with a config error that says so. Use a planner agent instead (`--planner <profile>`; `capcomd setup`
+  writes one named `planner`), or turn the placeholder back on with `capcomd plugins enable recipe-hierarchical` (or
+  `CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED=true`). The same goes for `POST /v1/runs` without a driver on such a
+  place: it answers 422 with that reason. `capcomd plugins list` shows it as `recipe-hierarchical`.
+- The run list (`state/runs.jsonl`) and each run's trace directory are now recorded by capcomd's daemon, as two
+  built-in plugins you can see in `capcomd plugins list` (`observe-runs-index`, `observe-traces`). The rows are the
+  same as before. If you point `capcomd run new` at another index with `CAPCOMD_RUNS_INDEX`, set it for the daemon
+  too: the daemon's setting decides where runs are listed now. A run whose start failed partway (after it was
+  created) is now listed, and so is one retried with the same `--key` after such a failure; before, neither was.
+- The settings and info rows of a place's details screen (`GET /v1/sandboxes/{name}`) now come from that place's
+  sandbox plugin. They read exactly as before.
+
 - Fixed: a profile's `memory: { files: [NOTES.md] }` now does what it says. Agents of that profile get only the
   project-memory items that `.capcomd/context/NOTES.md` links to (Markdown links, or the `→ path` lines that
   `capcomd context lint --fix` writes, so `files: [index.md]` works too). Before, the setting was ignored and every

@@ -294,6 +294,18 @@ Descriptors the app renders generically, so a plugin never ships Swift (ADR-021 
 `confirm`), `card` (a few lines with a state dot on the run or settings screen) and `profile-field` (how an ADR-024
 `x-<plugin>` block is shown and edited). Every string a descriptor shows is the plugin's and is rendered as plain text.
 
+A `settings` or `info` descriptor carries the row's fixed parts (`label`, `help`, `type`, `choices`); its `read()`
+answers its value (`value`, `display`, `source`, `editable`, `state`) and MAY answer the rest of the `SandboxField`
+shape (`UiRowValue`: `help`, which replaces the descriptor's when it depends on the value, `default`, `appliesTo`,
+`needsRestart`; absent, they are `null`, `null`, `null`, `false`). `GET /v1/sandboxes/{name}` serves the rows of the
+plugin that provides that sandbox's seam: for each id its descriptor's `settings` and `info` list, in that order, the
+field built from that plugin's descriptor of that kind and id and what its `read()` answered (`src/api/sandboxes.ts`
+`sandboxDetail`); an id the plugin registered no descriptor for isn't served. A built-in sandbox plugin's rows
+(`src/plugins/builtin/sandbox-rows.ts`) are read with the facts the daemon gathered for the request (the logins, the
+stored settings, Docker's memory: `RowFacts`), passed to `read`; no other plugin's `read` is given anything. `PATCH
+/v1/sandboxes/{name}/settings` reads them the same way, one change at a time, so two requests with the same `rev` can't
+both pass. Nothing else reads `ui` contributions yet.
+
 ### 4.8 Discovery
 
 In this order; a later manifest with a name already seen is refused with `plugin.duplicate_refused` (no shadowing):
@@ -310,7 +322,9 @@ In this order; a later manifest with a name already seen is refused with `plugin
 
 `plugins.<name>.enabled: false` in config (§10) keeps a discovered plugin at `validated`. A built-in is enabled by
 default except one a person turns on: the watchdog (§16.4) is listed but held at `validated` (`disabled`) until
-`plugins.watchdog.enabled: true`, which `capcomd setup` writes (`src/plugins/builtins.ts` `off`).
+`plugins.watchdog.enabled: true`, which `capcomd setup` writes (`src/plugins/builtins.ts` `off`), and
+`recipe-hierarchical` (§17.1) until `plugins.recipe-hierarchical.enabled: true` (`capcomd plugins enable
+recipe-hierarchical`, or `CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED=true`).
 
 **Installing** (§17.2 step 12, `src/plugins/install.ts`, `src/install/`). The source is `owner/repo` (GitHub), a git URL
 or a local repository path, with `#<name>` choosing one plugin among several (else the repository's root `plugin.json`,
@@ -591,7 +605,13 @@ is `invalid_result`.
 
 #### 6.6.4 `run.changed` · observe · after the run's event is committed
 `RunChanged {run, change: created|started|paused|resumed|titled|ended{state, reason}}`. Notifiers, the runs index,
-cost observers.
+cost observers. The runs index and each run's trace directory are the built-in observers' (§17.1, `src/plugins/
+observe.ts`), in the daemon: `ops.runNew` keeps with the run what its process knew of where it ran (scope `init`'s
+`origin`: its folder, `CAPCOMD_REPO`, trace directory and goal branch; scope `getOrigin`), and on `created`
+`observe-runs-index` appends the run's row to the runs index (`src/primitives/ops.ts` `runsIndexPath`, the daemon's)
+and `observe-traces` writes the run's `_trace` key. A run the index doesn't have yet (one created while the daemon's
+plugins were starting, before anything listened) gets its row the first time `run.changed` tells of it; one created by
+a capcomd that kept no origin is left alone (its `run new` wrote its own row).
 
 #### 6.6.5 `profile.resolved` · modify · `ctx.profiles.resolve` (ADR-024 §3), before `spawnChecks`
 `ProfileResolved {profile: {name, version, source}, spec, overrides}`: `profile` is the resolved profile's (its
@@ -2306,11 +2326,11 @@ manifest declares a notifier-shaped plugin (`run.changed` + `agent.changed` obse
 | `src/mcp/server.ts` tool list, `driver.ts` | `front-mcp` (25 tools as `ctx.mcp.tool`, `src/mcp/tools.ts`; `src/mcp/server.ts` serves the registrations) | front door | §4.7.2 |
 | `src/cli/index.ts` `switch` groups | one `front-<group>` per group (`front-run`, `front-primitives`, `front-profiles`, `front-env`, `front-setup`; `mcp` is front-mcp's), their commands in `src/cli/groups/`; `index.ts` becomes the dispatcher (`serve`, `plugins`, `help`, `version`, `tui` stay its own) | front door | §4.7.1 |
 | `src/cli/commands/hermes.ts` | `front-hermes` (`src/plugins/front/hermes-config.ts`; `capcomd hermes`, `capcomd hermes add`) | front door | §4.7.1 |
-| `src/utils/tracing-simple.ts` sinks, `runsIndexPath` writer | `observe-traces`, `observe-runs-index` | observers | §6.6.4 |
+| `src/utils/tracing-simple.ts` sinks, `runsIndexPath` writer | `observe-traces` (the run's `_trace` key; the span sink stays where a span ends), `observe-runs-index` (`src/plugins/observe.ts`, the daemon's) | observers | §6.6.4 |
 | `src/subagents/skill.ts` prompt injection | `agent.preparing` patch from `front-mcp`'s sibling `skill-orchestration` (`src/plugins/skill-orchestration.ts`) | hook | §6.6.7 |
-| `src/recipes/hierarchical.ts` | `recipe-hierarchical`, **disabled by default**, kept for the parity eval (decision 5) | front door | |
+| `src/recipes/hierarchical.ts` | `recipe-hierarchical` (`src/plugins/recipe-hierarchical.ts`): `capcomd run` without a planner agent (the recipe, `--recipe`, and the loop it replaced, `--legacy`), **disabled by default**, kept for the parity eval (decision 5); while it's off such a run is refused naming it (`config`, `plugin:recipe-hierarchical`) | front door | §4.8 |
 | `plugins/capcomd/` (Claude Code / Codex plugin) | unchanged: a plugin *for* the agent (ADR-018) | | |
-| `src/api/sandboxes.ts` settings/info rows | each sandbox plugin's `ui` descriptors | UI | §4.7.5 |
+| `src/api/sandboxes.ts` settings/info rows | each sandbox plugin's `ui` descriptors (`src/plugins/builtin/sandbox-rows.ts`), which `GET /v1/sandboxes/{name}` serves | UI | §4.7.5 |
 | ADR-024 profiles: `harness.provider`, `sandbox.provider`, `skills`, `identity.persona`, `lifecycle.onStart/onEnd`, `tools.mcp`, `sandbox.environment/size`, `harness.cliVersion` | seam names (`sandbox.provider` selects the agent's machine's sandbox); `agent.preparing` (`skills`, `identity.persona`); `harness.cliVersion` → the spawn checks, against the CLI version the agent's environment recorded (`src/env/cli-version.ts`); `onStart/onEnd` → plugins listening to `agent.changed` filtered by profile (the `lifecycle` block names plugins that must be active; the change carries them); `tools.mcp` → the agent provider's `AgentCommandCtx.mcp`; `environment`/`size` → the machine's `VmSpec` | | §7, §6.6.7, §6.6.8 |
 | `plannerBrief`'s "don't change files" | `tools.mode: orchestrate` on `planner` and `lead` | profile | §16.1 |
 
@@ -2405,6 +2425,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.58 | 2026-11-08 | Consolidation reachable in a default team (ADR-025 D6, its proposed amendment D6a; the live run's L2): a spawn's check of a child against its parent leaves out the child's `context` block (the planner `capcomd setup project` writes was refused its consolidator, "context changed"); the `context` plugin collects, as a consolidator starts (`agent.preparing`), the lessons the run's agents declared that capture hasn't (the planner's own); in-VM `status` of an agent that may spawn the consolidator carries `lessons` (additive); the built-in `context-memory` listens to `agent.changed` `ended` (scope `steer`, events `consolidator_started`, `merge_requested`, `consolidator_skipped`, config `autoConsolidate`, default true, `x-per-run`) and, once every agent that may spawn the consolidator has ended, starts one for a run with lessons and none, or verifies and asks to merge a consolidator's branch nobody merged (held by its own gate); a consolidator reads the run's goal first, fenced, and keeps what it asks the project to remember (§6.6.8). `capcomd merge --request-approval` parks a merge into a protected target for `capcomd approve`, every plugin's gate still asked (additive). |
 | 1.0.59 | 2026-11-08 | ADR-024 `identity.persona` and `harness.cliVersion` get their runtime (they were read but not applied): `AgentPreparing.prompt.persona` (`{hash, source, text}` or null) and `PinnedSpec.persona` (`{hash, source}`), `PinnedSpec.cliVersion` (all additive); the persona is pinned at spawn like the profile's skills (content-addressed with the run), checked against its pin per attempt, made the first text of the agent's instructions once, and a project's persona is gated on trust per file hash (reason `untrusted`), §6.6.7. A `harness.cliVersion` the CLI version recorded by the agent's environment (its build in the sandbox's ledger, or the one its plan login's image was made from) doesn't satisfy, or that no version was recorded for, refuses the spawn (`config`, reason `environment`), a planner's run, and makes GET /v1/run-options say the planner isn't ready; `capcomd profiles validate` warns. The range is checked as a semver range when the profile is read (§17.1). `GET /v1/profiles` rows (and `capcomd_profiles`) gain `untrustedPersona` (capability `profiles.facts`; optional in the contract, always sent; additive): the file of a project persona a spawn of the profile waits on the operator's trust for, else null. |
 | 1.0.60 | 2026-11-08 | The context router and the memory provider (§6.6.7; ADR-025 §6.1, §10): the built-in memory provider honours its entry's `index` setting (a profile's `memory.files: [NOTES.md]`): its items are the ones that file, directly under `.capcomd/context/`, links to (Markdown links and the `→ path` lines lint writes), less any another item of the tree supersedes; an index that isn't at the revision skips the provider (`not found`), a name with a directory or of another shape is refused (`not configured`), and the profile check (and the profile JSON Schema's pattern) refuses such a `memory.files` too. `capcomd context lint` accepts such a file beside `index.md`, held to an item's rules for text and secrets. The brief orders every provider's lines together, facts first (by authority, then newest; memory newest first; ties by the provider's place in the profile, then id), not each provider's in turn, so a budget cuts memory before any fact; a provider's `shown` in `plugin.context.loaded` counts its own lines that made it. The header says where the lines' files are: the checkout (unchanged words, for memory alone), a read-only bundle in the sandbox, or either; the `capcomd-context-doctrine` skill says the same (a new pinned hash). No hook, seam, route or contract shape changes. |
+| 1.0.61 | 2026-11-08 | §17.1's last rows built. `observe-runs-index` and `observe-traces` (§6.6.4): the daemon's `run.changed` observers write the runs index and each run's `_trace` key, from what `ops.runNew` keeps with the run (scope `init` `origin`, `getOrigin`); `run new` no longer writes either; a run the index lacks is recorded the next time it changes. `recipe-hierarchical` (§4.8, §17.1): `capcomd run` without a planner agent (`--recipe`, `--legacy`, `CAPCOMD_RUN_PATH`) goes through it, off by default and refused while off (`config`, `plugin:recipe-hierarchical`, before the run is created or detached); it contributes a `card`. Sandbox `ui` descriptors (§4.7.5): `UiRowValue` adds `help`, `default`, `appliesTo`, `needsRestart` (optional) to a `settings`/`info` row's `read`; each built-in sandbox plugin registers its rows and `GET /v1/sandboxes/{name}` serves them, byte for byte as before; `PATCH …/settings` changes one at a time. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
