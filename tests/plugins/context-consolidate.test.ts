@@ -200,7 +200,7 @@ describe("what the gates judge of a branch (ADR-025 §5.3)", () => {
     // On macOS's (and Windows') default file system `.Capcomd/Context/memory/evil.md` is checked out into
     // .capcomd/context/memory/, beside the items, though git, the brief and a plain prefix see another directory.
     const worker = { id: "agt-w1", profile: "worker", review: "human" as const };
-    for (const path of [".Capcomd/Context/memory/evil.md", ".CAPCOMD/context/index.md", ".capcomd/CONTEXT", ".CAPCOMD", ".capcomd/conte‌xt/memory/evil.md", ".capcomd./context./memory/evil.md", ".capcomd /context/memory/evil.md"]) {
+    for (const path of [".Capcomd/Context/memory/evil.md", ".CAPCOMD/context/index.md", ".capcomd/CONTEXT", ".CAPCOMD", ".capcomd/conte\u200Cxt/memory/evil.md", ".cap\u202Ecomd\uFEFF/con\u206Atext/memory/evil.md", ".capcomd./context./memory/evil.md", ".capcomd /context/memory/evil.md"]) {
       expect(judgeBranch(facts({ agent: worker, files: [{ path }] }), o)).toMatchObject({ touches: true, problems: [expect.stringContaining(NOT_A_CONSOLIDATOR)] });
       // A consolidator's branch changes the items by their exact name only.
       expect(judgeBranch(facts({ files: [...facts().files, { path }] }), o).problems).toContain(`a consolidator's branch changes the items in ${CONTEXT_DIR} by that exact name, never the directory itself or a name a checkout reads as it: agt-cons1 changed ${path}`);

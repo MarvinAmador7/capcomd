@@ -46,7 +46,7 @@ export interface Judgement {
 /** A path as a checkout on a case-insensitive file system reads it (macOS's and Windows' default): `.Capcomd/Context/x.md`
  *  lands in `.capcomd/context/` there. Also without what HFS+ ignores in a name (git's own list for `.git`), nor the dots
  *  and spaces Windows drops from a name's end. */
-const asCheckedOut = (p: string) => p.normalize("NFC").replace(/[‌-‏‪-‮⁪-⁯﻿]/g, "").split("/").map((s) => s.replace(/[. ]+$/, "")).join("/").toLowerCase();
+const asCheckedOut = (p: string) => p.normalize("NFC").replace(/[\u200C-\u200F\u202A-\u202E\u206A-\u206F\uFEFF]/g, "").split("/").map((s) => s.replace(/[. ]+$/, "")).join("/").toLowerCase();
 
 /** Whether a changed path is the project's memory: a file under `.capcomd/context/`, or the directory itself or
  *  `.capcomd` made a file (a link: what an agent's checkout then reads as memory is wherever it points), by any name a
