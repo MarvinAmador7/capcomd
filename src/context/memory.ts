@@ -44,7 +44,8 @@ export interface Item {
   sensitivity?: string;
 }
 export interface Parsed { revision: string; modified: string | null; items: Item[] }
-interface Handle { remote: string; sha: string; project: boolean; projectId: string | null }
+/** `index`: the index file the profile names (`memory.files`, ADR-025 §10), whose items alone are read; null: every item. */
+interface Handle { remote: string; sha: string; project: boolean; projectId: string | null; index?: string | null }
 
 /** Whose items a tree holds and where (parseBundle): the provider's name (each line's `ref`), the directory the items
  *  are under, the kind a path under it holds (null: not an item), the path the agent sees a file at, and the type of
@@ -101,6 +102,43 @@ export function frontmatter(text: string): { meta: Record<string, unknown>; body
  *  once (the first by path), supersession made reciprocal so the router can follow `supersededBy` to the head. */
 export function parseItems(files: Array<{ path: string; text: string | null }>, o: { revision: string; date: string }): Parsed {
   return parseBundle(files, o, MEMORY_SHAPE);
+}
+
+/** An index a profile may name (`memory.files: [MEMORY.md]`, ADR-025 §10): one Markdown or text file directly under
+ *  `.capcomd/context/`, beside OKF's `index.md` (which it may be): in the directory lint and the merge gate guard, so
+ *  what an agent's brief holds changes only through a reviewed change. */
+export const INDEX_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]*\.(?:md|txt)$/;
+
+/** The paths an index file names, from the repository's root: the targets of its Markdown links (`[t](memory/a.md)`,
+ *  `[t]: memory/a.md`) and of the lines lint writes (`→ memory/a.md`), each relative to `.capcomd/context/` (where the
+ *  index is) or already from the root. A URL, an absolute path or one that climbs (`..`) names nothing. */
+export function indexedPaths(text: string): Set<string> {
+  const out = new Set<string>();
+  const targets = [
+    ...[...text.matchAll(/\]\(\s*(?:<([^<>\n]+)>|([^()\s<>]+))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g)].map((m) => (m[1] ?? m[2])!),
+    ...[...text.matchAll(/^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(?:<([^<>\n]+)>|(\S+))/gm)].map((m) => (m[1] ?? m[2])!),
+    ...[...text.matchAll(/→[ \t]*(\S+)/g)].map((m) => m[1]!),
+  ];
+  for (const raw of targets) {
+    let t = raw.replace(/[?#].*$/, "");
+    try { t = decodeURIComponent(t); } catch { /* as written */ }
+    t = t.replace(/^(?:\.\/)+/, "");
+    if (!t || t.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(t) || t.split("/").some((s) => s === ".." || s === "." || s === "")) continue;
+    out.add(t.startsWith(CONTEXT_DIR) ? t : `${CONTEXT_DIR}${t}`);
+  }
+  return out;
+}
+
+/** The memory provider's items of a tree: every item, or with `index` the items that index file names (indexedPaths).
+ *  An index that isn't there is `not_found`, one too large to read `invalid`: never every item instead, which would
+ *  show an agent what its profile left out. */
+export function parseMemory(files: Array<{ path: string; text: string | null }>, o: { revision: string; date: string }, index: string | null): Parsed {
+  if (index === null) return parseItems(files, o);
+  const f = files.find((x) => x.path === `${CONTEXT_DIR}${index}`);
+  if (!f) throw new PluginError("not_found", `no index ${CONTEXT_DIR}${index} at ${o.revision.slice(0, 12)}`);
+  if (f.text === null) throw new PluginError("invalid", `the index ${CONTEXT_DIR}${index} is over ${MEMORY_MAX_BYTES / 1024} KB`);
+  const named = indexedPaths(f.text);
+  return parseItems(files.filter((x) => x.path !== f.path && named.has(x.path)), o);
 }
 
 /** The items of one OKF bundle's tree (parseItems' rules for any shape): the Markdown files under `shape.root` whose
@@ -211,13 +249,15 @@ export function memoryProvider(o: { read?: TreeReader } = {}): ContextProvider {
     try { const v = JSON.parse(h) as Handle; if (typeof v.remote === "string" && typeof v.sha === "string") return v; } catch { /* below */ }
     throw new PluginError("invalid", "not a handle this provider made");
   };
+  /** A tree's items are parsed once per (repository, commit, index). */
+  const keyOf = (h: Handle) => `${h.remote}\0${h.sha}\0${h.index ?? ""}`;
   const parsed = async (h: Handle, runId: string | null): Promise<Parsed> => {
-    const key = `${h.remote}\0${h.sha}`;
+    const key = keyOf(h);
     const had = cache.get(key);
     if (had) return had;
     const t = await read({ remote: h.remote, at: { sha: h.sha }, runId });
     if ("error" in t) throw new PluginError("unavailable", t.error);
-    const p = parseItems(t.files, { revision: t.sha, date: t.date });
+    const p = parseMemory(t.files, { revision: t.sha, date: t.date }, h.index ?? null);
     if (cache.size >= 32) cache.delete(cache.keys().next().value!);
     cache.set(key, p);
     return p;
@@ -234,6 +274,11 @@ export function memoryProvider(o: { read?: TreeReader } = {}): ContextProvider {
     async resolve(scope: ContextScope, c: SeamCall) {
       aborted(c);
       if (!scope.repo || !scope.ref) throw new PluginError("not_found", "the run has no repository, so no project memory");
+      // The profile's index (`memory.files`, this entry's `index`): a file directly under .capcomd/context/.
+      const named = scope.settings?.index;
+      if (named != null && (typeof named !== "string" || !INDEX_NAME.test(named)))
+        throw new PluginError("invalid", "memory.files names the index: one .md or .txt file directly under .capcomd/context/ (MEMORY.md)");
+      const index = typeof named === "string" ? named : null;
       // Agents a planner starts together are prepared together: one fetch of the tip serves them all (the mirror runs one
       // git operation at a time, so a fetch each would queue them past the router's deadline).
       const tipKey = `${scope.repo}\0${scope.ref}\0${scope.runId ?? ""}`;
@@ -247,9 +292,9 @@ export function memoryProvider(o: { read?: TreeReader } = {}): ContextProvider {
       const t = await reading;
       aborted(c);
       if ("error" in t) throw new PluginError("unavailable", t.error);
-      const h: Handle = { remote: scope.repo, sha: t.sha, project: scope.layers.includes("project"), projectId: scope.projectId };
-      const key = `${h.remote}\0${h.sha}`;
-      if (!cache.has(key)) { if (cache.size >= 32) cache.delete(cache.keys().next().value!); cache.set(key, parseItems(t.files, { revision: t.sha, date: t.date })); }
+      const h: Handle = { remote: scope.repo, sha: t.sha, project: scope.layers.includes("project"), projectId: scope.projectId, index };
+      const key = keyOf(h);
+      if (!cache.has(key)) { const p = parseMemory(t.files, { revision: t.sha, date: t.date }, index); if (cache.size >= 32) cache.delete(cache.keys().next().value!); cache.set(key, p); }
       return { handle: JSON.stringify(h), revision: t.sha };
     },
     async index(handle: string, c: SeamCall) {

@@ -847,6 +847,31 @@ as the orchestration skill does. Still not to a reviewer, a report agent or the 
 spawn, as before: a worker's profile that resolved before still does, and the router leaves the paragraph out (and logs
 it) when its other skills leave no room.
 
+**Made while closing the live gaps: the memory index and the brief's order** (spec 1.0.58; where the code and §6.1 or
+§10 differ, the code is right and this list says why):
+
+- §10's "`files:` is honoured as the index path" is now read: `memory.files: [NOTES.md]` becomes the memory entry's
+  `index: NOTES.md`, and the provider's items are the ones that file links to (Markdown links, inline or by reference,
+  and the `→ path` of the lines lint writes, so `files: [index.md]` reads lint's own index), each relative to
+  `.capcomd/context/` or from the root; a URL, an absolute path or one that climbs names nothing. With no `index`,
+  every item, as before. The index is a file directly under `.capcomd/context/` (a `.md` or `.txt` name, no
+  directory): there, a change to it is a change to the memory, which only a consolidator's branch or a person makes
+  and lint checks, so what an agent's brief holds still changes only through a reviewed change. The profile check
+  refuses another name, and the provider refuses one from a spec (`not configured` in the header). An index that isn't
+  at the revision is `memory: skipped (not found)`, never every item: that would show agents what the profile left
+  out. `search` and `get` read the same items as the index. Lint accepts such a file beside `index.md` (it doesn't
+  know which name a profile uses) and holds it to an item's rules for text and secrets; anything else at that level is
+  still not an item.
+- §6.1's "memory newest-first, facts by authority" holds across providers, not within each: the router orders every
+  provider's lines together, facts first (by authority, then newest; memory newest first; ties by the provider's place
+  in the profile, then id), so a budget cuts memory before any fact whichever provider a profile lists first. The
+  brief stays a pure function of the indexes, the profile and the day; each provider's `shown` counts its own lines
+  that made it.
+- The header said every line's file is "in your checkout", which a brain's file isn't (it is in the bundle the kernel
+  places, §6.2). It now says where: the checkout (memory only: the words are unchanged), a read-only bundle in the
+  sandbox at the path the line gives (a bundle provider only), or either (both). `capcomd-context-doctrine` still
+  says "the file in your checkout": changing a pinned skill's text is left to its own change.
+
 ## 14. What the review changed
 
 | Lens | Blocking point | Resolution |

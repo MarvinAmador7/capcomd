@@ -5,6 +5,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: a profile's `memory: { files: [NOTES.md] }` now does what it says. Agents of that profile get only the
+  project-memory items that `.capcomd/context/NOTES.md` links to (Markdown links, or the `→ path` lines that
+  `capcomd context lint --fix` writes, so `files: [index.md]` works too). Before, the setting was ignored and every
+  item was shown. If the file isn't there, the brief's header says `memory: skipped (not found)` instead of showing
+  every item. The file must sit directly in `.capcomd/context/`: a profile that names one in a subdirectory
+  (`files: [docs/MEMORY.md]`) is now refused with a message saying so. `capcomd context lint` accepts the file next
+  to `index.md` and checks it for secrets.
+- Fixed: when a profile reads both the project's memory and a groundray brain, every fact now comes before any
+  lesson in the context brief, whichever provider the profile lists first. So when the brief is over its size budget,
+  lessons are cut before facts. The brief's header no longer says that a brain's files are "in your checkout": it
+  says they are in the read-only copy of the bundle in the agent's sandbox, at the path each line gives.
 - Fixed: triggers (GitHub comments, schedules and other sources) are sturdier. A trigger whose thread or sender carries
   invisible characters (bidi overrides, zero-width spaces, line separators), as well as terminal escapes, is refused,
   and a sender's display name loses them; `capcomd triggers log` and `capcomd triggers subscriptions` print any such
