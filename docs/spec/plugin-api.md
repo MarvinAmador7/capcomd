@@ -1080,7 +1080,9 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 - `storage`: private to the plugin. Keys `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$`, values JSON ≤ 64 KB. Run scope is
   deleted with the run; daemon scope lives in `dataDir` and survives updates and reinstalls.
 - `kv`: the run's shared blackboard; reserved prefixes (`_`, `approval/`, `recipe/`, `handoff/`, `plugin/`) are
-  read-only (`forbidden`). Values ≤ 64 KB.
+  read-only (`forbidden`). Values ≤ 64 KB. A write's writer is `plugin:<name>`; `cas` compares the JSON of the current
+  value (`expect` undefined: the key must not exist) and answers `false` on a mismatch; `list` leaves out the run's `_`
+  settings unless the prefix starts with `_`, as `capcomd kv list` does.
 - `agents.spawn`: subject to `spawnChecks`, `checkSpawn` and the plugin's budget share as any caller; a plugin cannot
   pass `operator`. `agents.notice`: a plugin may raise kinds the kernel does not (`stalled`) and clear only notices it
   raised: raising a kernel kind is `forbidden`; a clear (`null`) takes away only a plugin kind, and the kernel's own
@@ -1088,14 +1090,42 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
   until progress or the plugin clears it. A notice needs a running agent (a later one replaces an earlier one of another
   kind, as the kernel's do). `agents.cancel` cancels the agent and its descendants as `capcomd cancel` does, the reason
   recorded as `by the <plugin> plugin: <reason>`. A call never creates a run (an unknown run is `not_found`).
-- In the daemon since §17.2 step 11, beside `jobs` and `storage`: `agents.get`, `agents.tree`, `agents.cancel`,
-  `agents.notice` (`src/plugins/services.ts`). The rest of `agents` answers `unsupported` until a later step; a CLI's
-  local host has none of them.
+- Which process has which (`src/plugins/services.ts`). The daemon's host only, beside `jobs`, `storage` and `triggers`:
+  `runs`, `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice`, `messages`, `kv`, `board`, `gates.pending` and
+  `profiles` (they act on the engine, or resolve as the daemon's spawns do, through its `profile.resolved` listeners).
+  Every process's host, as the gates are: `sandboxes` and `auth` (facts about that process's places and logins). A CLI's
+  local host answers `unsupported` for the daemon's; the rest of `agents` and `gates.verify`, `gates.merge` answer
+  `unsupported` everywhere until a later step.
+- A primitive's caller is the plugin (§11.2): what it writes is `plugin:<name>`'s (a message's sender, a kv writer, a
+  board holder, a run's or title's `setBy`), and a mutating call's `key` (§8.2) is the plugin's own, kept apart from the
+  CLI's and every other plugin's; a key over 200 characters is `invalid` (never cut short). A call never creates a run:
+  an unknown run is `not_found` for every service. A refusal (a hook's `deny`) reaches the plugin with the refusing
+  plugin's reason as the error's `hint`.
+- `runs.new`: `ops.runNew`, with `run.creating` (§6.6.3) naming the plugin's principal; the answer is the run as
+  `GET /v1/runs/{id}` shows it. Its `goal` is checked as `POST /v1/runs` checks one (≤ 16 KB, no NUL, no leading
+  `[agent:…]`; `invalid` otherwise). `runs.end` records the run's end (`by the <plugin> plugin: <reason>`) and cancels its
+  agents, as `capcomd cancel <run>` does. `runs.pause`, `resume` and `title` are `capcomd pause`, `resume` and
+  `title --run` on the whole run.
+- `messages.send`: to an agent of the run, from `plugin:<name>`, a body ≤ 64 KB, `skills` pinned by the sha256 of their
+  text; a replayed key answers its first message's `seq`. `messages.inbox`: the agent's messages after `seq`, each body
+  `Untrusted`.
+- `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task is `pending`, `leased`
+  while held, `released` once open again after a lease, or `done`; `running` is unused today. The plugin holds what it
+  claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds (`conflict` otherwise).
 - `gates.merge`: no `operator`; a plugin that wants to bypass vetoes cannot (§11.3).
 - `sandboxes.provider(name)`: the kernel's wrapped object (§7.1), never a raw plugin object; a provider plugin asking
-  for itself gets the wrapper too.
+  for itself gets the wrapper too. It is the seam's shape over the kernel's provider for the place
+  (`src/dependencies.ts` `providerNamed`: traced, riding out outages, `sandbox.ensuring` and `sandbox.changed` fired),
+  frozen, and a call waits until its `SeamCall`'s deadline at most (`timeout`, even when its `signal` never fires; a
+  deadline that isn't an ISO 8601 time is `invalid`). An unknown or inactive place is
+  `not_found`. `forRun` is the place the run was started on, else the process's own.
 - `auth`: facts, never values. The only way a plugin gets a secret is `config.secret` for its own declared secrets (§10.3).
+  `credentialMode` is how an agent of that provider with that `auth` gets its credential in this process (`none` when
+  it has none it could use); `loginPresent` is whether `GET /v1/logins` shows a login there. An unknown provider or
+  place is `not_found`.
 - `profiles.resolve`: fires `profile.resolved` (§6.6.5); the result is the same pinned shape the kernel spawns with.
+  `overrides` only narrow (`widening` otherwise), as a spawn's do; `project` reads that project's profiles, as
+  `GET /v1/profiles?repo=` does. An unknown profile is `not_found`.
 
 ### 8.5 What a plugin never gets
 
@@ -2231,6 +2261,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.45 | 2026-11-07 | A profile package's `update` keeps every file in its directory that its `LOCK` doesn't list (the user's, as an `override.yaml` is), reports them as `kept` (additive) and refuses (`conflict`) when the new package needs the place of one (an `override.yaml` too), as the file system holding them compares names (on macOS's, case and Unicode form folded; on a case-sensitive one, `Readme.md` beside `README.md` is no conflict); before, it replaced the whole directory but the override (§4.8; ADR-024 §2.5). `trust.json` is changed under `trust.json.lock` by the CLI and the daemon alike, so two changes at once both persist; a lock that isn't a plain file, or a left-over one that can't be moved aside, is refused at once, and `capcomd profiles rm` refused that way puts the package back (§4.8). The temporary files beside `trust.json` and a profile file are created exclusively under a name no one can guess, so a link a checkout put there is never written through. No hook, seam, route or contract shape changes. |
 | 1.0.46 | 2026-11-08 | Jobs, after review of step 7 (§16.2): rule 8, one owner: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach its own jobs and a run's jobs no other plugin started; another plugin's job is `not_found` and `list` leaves it out. Rule 2: the `jobs` block is limits in `widenings()` (an override, a patch or a spawned profile may lower `max` and `afterTurnMs`, never raise or unset one; `foregroundMs` the same for an override and a patch, and a spawned profile's own); a job's `timeoutMs` is at most an `afterTurnMs` its owner's profile sets, so a start can't lift that limit; a settled record is stored within a kv value's 64 KB, its tails cut oldest first, with `cwd` (≤ 4 KB) and `env` (≤ 16 KB) bounded as `cmd` is. Rule 4: an agent that ends failed or cancelled has its jobs settled at once (killed, else `lost`). Rule 6: a settled job's pointer is pruned a day after it settled. No hook, seam, route or contract shape changes. |
 | 1.0.47 | 2026-11-07 | With ADR-024 §4, §5 and §8 shown over the API (additive; capabilities `profiles.facts` and `runs.options.planners`): `GET /v1/profiles` rows (what `profiles.list`, §9.6, maps to) gain optional `title` (untrusted text), `fit` (daemon-written, from structured fields only), `cost`, `canReport`, `skills` (name, source, `sha256:` hash and trust; never a skill's text) and `untrustedSkills`, the project skills a spawn waits on the operator's trust for (decision 4); `GET /v1/run-options` gains optional `planners`, every profile that may spawn, each with `available` and a daemon-written `reason` for what its spawn would refuse: login, untrusted skills, a `sandbox.environment` its sandbox has no build of, a `lifecycle` plugin not active on the daemon (with no daemon to ask, not held against it: the spawn asks again), no agent environment, an egress limit its sandbox can't enforce (its hosts named only when each is shaped like one, else counted, so a project's file can't word the reason; the spawn's refusal says the same), a `sandbox.provider` outside the run's isolation (the spawn's own checks). `drivers[]` are unchanged. No hook, seam or service changes. |
+| 1.0.48 | 2026-11-08 | The in-process primitives the context promised (§8.1, §8.4): `runs`, `messages`, `kv`, `board`, `gates.pending` and `profiles` in the daemon's host (beside `jobs`, `storage`, `triggers` and the `agents` reads, cancel and notice), and `sandboxes` and `auth` in every process's, with the plugin as the caller (its writes `plugin:<name>`'s, its keys its own) and an unknown run `not_found` everywhere; `runs.new` names the plugin's principal to `run.creating` and checks its goal as `POST /v1/runs` does, `profiles.resolve` names it to `profile.resolved`; a key over 200 characters is refused, a refusal keeps its reason as the hint, a sandbox call keeps its deadline without its signal; §8.4 says which process has which, what each writes, and the board's states. `RunsService` declares `new` as a method (`"new"(…)`: bare, it declared a constructor). No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
