@@ -3,7 +3,8 @@
 import { HARNESS_MODELS } from "../config/models";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Agent, AgentStatus, Attachment, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Profiles, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Agent, AgentStatus, Attachment, BrainProposal, BrainProposalOutcome, BrainProposals, BrainProposalsSent, Decision, Environment, GoalPullRequestResult, GoalView, Login, Message, Profiles, Project, Run, RunOptions, ServiceStatus, Skill, Span, ThreadItem, TranscriptItem } from "./contract";
+import type { Principal } from "../../packages/plugin/src/shapes";
 import type { WorkspaceFile } from "./run-files";
 import type { ProfileLookup, ProfileUpdate } from "./profiles";
 import { dottedType, isoTs, type HarnessEvent } from "./envelope";
@@ -43,6 +44,15 @@ export class CreateRunError extends Error {
 export type TitleOutcome = { ok: true; title: string | null; titleSource: O<typeof Agent>["titleSource"] | null; changed: boolean } | { ok: false; message: string };
 /** A goal-branch action's outcome (POST …/pull-request, …/keep-branch): the body, or a refusal with its status. */
 export type GoalOutcome<T> = { ok: true; body: T } | { ok: false; status: 404 | 409 | 422; code: "not_found" | "conflict" | "stopped" | "invalid"; message: string };
+/** POST …/brain-proposals/send (capability context.brain_proposals): every proposal sent, or a refusal with its status
+ *  (503 with each proposal's outcome when one or more couldn't be sent). */
+export type BrainSendOutcome = { ok: true; body: O<typeof BrainProposalsSent> } | { ok: false; status: 404 | 503; code: "not_found" | "unavailable"; message: string; sent?: O<typeof BrainProposalOutcome>[] };
+/** What a send of a run's brain proposals answers (src/context/brain-proposals.ts `sendBrainProposals`'s list). */
+export function brainSendOutcome(runId: string, actor: string, sent: O<typeof BrainProposalOutcome>[]): BrainSendOutcome {
+	const failed = sent.filter((x) => !x.ok);
+	if (!failed.length) return { ok: true, body: { runId, actor, sent } };
+	return { ok: false, status: 503, code: "unavailable", message: `${failed.length} of ${sent.length} proposals to a brain couldn't be sent: ${failed.map((x) => `${x.id}: ${x.error ?? "failed"}`).join("; ").slice(0, 1000)}. Those sent stay sent: send again for the rest.`, sent };
+}
 
 /** A project groups runs on one repository: its id is derived from the run's repository (CAPCOMD_REPO). */
 export const projectIdOf = (repo: string | null) => (repo ? `prj-${createHash("sha256").update(repo).digest("hex").slice(0, 12)}` : null);
@@ -138,6 +148,11 @@ export interface HarnessSource {
 	openPullRequest(runId: string, by: string, o?: { stopped?: boolean }): Promise<GoalOutcome<O<typeof GoalPullRequestResult>>>;
 	/** POST /v1/runs/{runId}/keep-branch (`by`: client:<id>). */
 	keepBranch(runId: string, by: string): Promise<GoalOutcome<{ runId: string; branch: string; base: string; kept: true; changed: boolean }>>;
+	/** GET /v1/runs/{runId}/brain-proposals (capability context.brain_proposals): null for an unknown run (404). */
+	brainProposals(runId: string): Promise<O<typeof BrainProposals> | null>;
+	/** POST …/brain-proposals/send: those not sent yet (one consolidator's with `agentId`), as `by` (the caller: groundray's
+	 *  actor human:<client id>). Those sent already stay as they were. */
+	sendBrainProposals(runId: string, by: Principal, o?: { agentId?: string }): Promise<BrainSendOutcome>;
 	/** PUT …/agents/{agentId}/title (capability agents.title): the user's title; null clears it (DELETE). `key` makes a
 	 *  retry safe across restarts. null for an unknown run or agent (404). */
 	setAgentTitle(runId: string, agentId: string, title: string | null, key: string): Promise<TitleOutcome | null>;
@@ -237,12 +252,18 @@ export function memorySource(seed: Partial<{
 	/** Goal branches by run (GET /v1/runs/{runId}/goal). POST …/pull-request opens #1 (then returns it) when
 	 *  `openPullRequest.available` and the state isn't working, and pushes run.pr_opened; …/keep-branch pushes run.branch_kept. */
 	goals: Record<string, O<typeof GoalView>>;
+	/** Brain proposals by run (GET …/brain-proposals). POST …/brain-proposals/send marks those not sent yet as sent by the
+	 *  caller (groundray's actor) with fake://pull/1, except the ids in `brainFails`, which fail with their message. */
+	brainProposals: Record<string, O<typeof BrainProposal>[]>;
+	brainFails: Record<string, string>;
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
 	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }>;
 	/** Machines deleted at a provider (an orphan's Delete), in order. */
 	destroyed: Array<{ sandbox: string; vmId: string }>;
+	/** Brain proposals sent (POST …/brain-proposals/send), in order: each a draft in the brain as `actor`. */
+	brainSent: Array<{ runId: string; id: string; actor: string }>;
 } {
 	const events = seed.events ?? {};
 	const approvals = seed.approvals ?? {};
@@ -271,6 +292,7 @@ export function memorySource(seed: Partial<{
 		sandboxes: [{ name: "docker", label: "Local", available: false, reason: "Docker isn't running", default: false }, { name: "boxd", label: "Cloud", available: false, reason: "No boxd API key (run capcomd setup)", default: false }],
 	};
 	const destroyed: Array<{ sandbox: string; vmId: string }> = [];
+	const brainSent: Array<{ runId: string; id: string; actor: string }> = [];
 	// Set below: Delete on an agent's machine cancels it through this source's own control (agent.cancelled).
 	let controlOf: HarnessSource["control"] | null = null;
 	const surface = sandboxSurface({
@@ -340,7 +362,25 @@ export function memorySource(seed: Partial<{
 		push,
 		delivered,
 		destroyed,
+		brainSent,
 		control,
+		brainProposals: async (runId) => (runs.some((r) => r.id === runId) ? { runId, proposals: structuredClone(seed.brainProposals?.[runId] ?? []) } : null),
+		sendBrainProposals: async (runId, by, o) => {
+			if (!runs.some((r) => r.id === runId)) return { ok: false, status: 404, code: "not_found", message: `run ${runId} not found` };
+			const { actorOf } = await import("../context/groundray-write");
+			const actor = actorOf(by);
+			const out = (seed.brainProposals?.[runId] ?? []).filter((p) => !o?.agentId || p.agentId === o.agentId).map((p) => {
+				const said = { id: p.id, brain: p.brain, title: p.title };
+				if (p.sent) return { ...said, ok: true, already: true, item: p.sent.item, where: p.sent.where };
+				const fails = seed.brainFails?.[p.id];
+				if (fails) { p.error = fails; return { ...said, ok: false, already: false, error: fails }; }
+				p.sent = { actor, at: isoTs(Date.now()), item: `urn:uuid:00000000-0000-4000-8000-${String(brainSent.length + 1).padStart(12, "0")}`, where: "fake://pull/1" };
+				delete p.error;
+				brainSent.push({ runId, id: p.id, actor });
+				return { ...said, ok: true, already: false, item: p.sent.item, where: p.sent.where };
+			});
+			return brainSendOutcome(runId, actor, out);
+		},
 		send: async (runId, to, body, key, skills = []) => {
 			const prior = sent.get(key);
 			if (prior !== undefined) return { seq: prior, note: null };

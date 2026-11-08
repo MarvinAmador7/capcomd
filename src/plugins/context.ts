@@ -32,6 +32,7 @@ import type { ScopeAgent } from "../actors/scope";
 import type { Brief } from "../context/brief";
 import type { CaptureRecord } from "../context/capture";
 import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
+import { onBrainProposed } from "../context/brain-proposals";
 import { preparingAgent, SKILL_BYTES_MAX, SKILLS_MAX } from "./hooks";
 
 const SUMMARY = "The project's context (ADR-025): the brief a profile's agents start with, and lint for .capcomd/context/; brain mappings";
@@ -255,8 +256,8 @@ const sha = (r: string) => r.slice(0, 12);
 const usage = () => new RelayError("usage", `usage: ${USAGE.join("\n       ")}`, "Name a profile (`capcomd context brief worker`), check .capcomd/context/ (`capcomd context lint`), or map a brain (`capcomd context brain add acme <repo>`).");
 
 /** `capcomd context brain …`: the brains the project maps (src/context/groundray.ts), and a run's proposals to them. */
-async function brainCommand(args: string[], flags: Record<string, unknown>, emit: (runId: string, entity: string) => Emit): Promise<Envelope> {
-  if (args[1] === "propose" && args.length === 2) return proposeCommand(flags, emit);
+async function brainCommand(args: string[], flags: Record<string, unknown>): Promise<Envelope> {
+  if (args[1] === "propose" && args.length === 2) return proposeCommand(flags);
   const G = await import("../context/groundray");
   const verb = args[1];
   if (verb === "list" && args.length === 2) {
@@ -290,7 +291,7 @@ async function brainCommand(args: string[], flags: Record<string, unknown>, emit
  * brains as you (groundray's actor `human:operator`): a draft each on the run's proposal branch and a pull request on
  * the brain's repository. Those already sent stay as they were; one that fails can be sent again.
  */
-async function proposeCommand(flags: Record<string, unknown>, emit: (runId: string, entity: string) => Emit): Promise<Envelope> {
+async function proposeCommand(flags: Record<string, unknown>): Promise<Envelope> {
   const runId = typeof flags.run === "string" ? flags.run : "";
   const agentId = typeof flags.agent === "string" ? flags.agent : undefined;
   if (!/^run-[A-Za-z0-9_-]+$/.test(runId)) throw new RelayError("usage", "name the run: capcomd context brain propose --run <runId>", "See your runs with `capcomd runs`.");
@@ -299,7 +300,7 @@ async function proposeCommand(flags: Record<string, unknown>, emit: (runId: stri
   if (!(await existingActor("scope", [runId]))) throw new RelayError("not_found", `no run ${runId}`, "See your runs with `capcomd runs`.");
   const P = await import("../context/brain-proposals");
   const all = await P.brainProposals(runId, agentId ? { agentId } : {});
-  const view = ({ value: p }: { value: import("../context/brain-proposals").BrainProposal }) => ({ id: p.id, brain: p.brain, type: p.type, title: p.title, from: p.from, sent: p.sent, ...(p.error ? { error: p.error } : {}) });
+  const view = ({ value: p }: { value: import("../context/brain-proposals").BrainProposal }) => P.proposalView(p);
   const line = (p: ReturnType<typeof view>) => `  ${p.id}  ${p.brain}  [${p.type}] ${p.title}${p.sent ? `  sent: ${p.sent.where}` : p.error ? `  failed: ${p.error}` : ""}`;
   if (!all.length) return { schema: SCHEMA, ok: true, runId, proposals: [], text: `Run ${runId} proposed nothing to a brain.` };
   const pending = all.filter((x) => !x.value.sent).length;
@@ -310,10 +311,8 @@ async function proposeCommand(flags: Record<string, unknown>, emit: (runId: stri
         (pending ? `\nEach goes as a draft on the run's proposal branch of the brain's repository, with a pull request for its owners. Send them as you: capcomd context brain propose --run ${runId} --yes` : ""),
     };
   }
+  // Each one sent is recorded (plugin.context.brain_proposed) by this plugin's listener (`activate`).
   const sent = await P.sendBrainProposals(runId, { by: { kind: "operator", clientId: null }, ...(agentId ? { agentId } : {}) });
-  for (const x of sent.filter((y) => y.ok && !y.already)) {
-    await emit(runId, x.id.split(".")[0]!)("brain_proposed", `Proposal ${x.id} went to brain ${x.brain} as a draft for its owners to review: ${x.where}.`, { agentId: x.id.split(".")[0], proposal: x.id, brain: x.brain, item: x.item, where: x.where, by: "human:operator" }, `brain-proposed:${x.id}`);
-  }
   const failed = sent.filter((x) => !x.ok);
   const text = sent.map((x) => `  ${x.id}  ${x.brain}  ${x.title}: ${x.ok ? `${x.already ? "sent already" : "sent"}, ${x.where}` : `failed, ${x.error}`}`).join("\n");
   if (failed.length) throw new RelayError("run_failed", `${failed.length} of ${sent.length} proposals to a brain couldn't be sent:\n${text}`, "Fix what the failures say and run it again: the ones sent stay sent.");
@@ -418,11 +417,18 @@ export const plugin = definePlugin({
       await collect(agent, emitter(ctx, agent.runId, agent.id)).catch((e: unknown) => ctx.log.warn("could not collect an agent's lessons", { agentId: agent.id, error: (e as Error)?.message ?? String(e) }));
     });
 
+    // A proposal a person sent from this process to a company's brain (src/context/brain-proposals.ts): with `capcomd
+    // context brain propose --yes`, or a client's POST …/brain-proposals/send in the daemon. The kernel's own sends
+    // (`review: lint`) are recorded from the consolidator's result (`staged`).
+    ctx.onDispose(onBrainProposed((runId, x, actor) => emitter(ctx, runId, x.agentId)("brain_proposed",
+      `Proposal ${x.id} went to brain ${x.brain} as a draft for its owners to review: ${x.where}.`,
+      { agentId: x.agentId, proposal: x.id, brain: x.brain, item: x.item, where: x.where, by: actor }, `brain-proposed:${x.id}`)));
+
     ctx.cli.command({
       name: "context", summary: SUMMARY, usage: USAGE,
       async run({ args, flags }) {
         if (args[0] === "lint" && args.length === 1) return lint(flags);
-        if (args[0] === "brain") return brainCommand(args, flags, (runId, entity) => emitter(ctx, runId, entity));
+        if (args[0] === "brain") return brainCommand(args, flags);
         if (args[0] !== "brief" || args.length !== 2) throw usage();
         const name = args[1]!;
         const runId = typeof flags.run === "string" ? flags.run : null;
