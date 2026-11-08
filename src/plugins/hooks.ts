@@ -211,6 +211,13 @@ export function applySpawnPatch(p: AgentSpawning, patch: SpawnPatch): AgentSpawn
     const was = spawn.contract ?? {};
     const changed = Object.keys(patch.contract).filter((k) => k in was && JSON.stringify(was[k]) !== JSON.stringify(patch.contract![k]));
     if (changed.length) throw widening(`contract keys are the spawner's: ${changed.join(", ")}`);
+    // The keys spawnAgent checks when the spawner sends them, checked the same way when a plugin adds one (they are
+    // checked before this hook): `from` is --continue's alone, `report` is `true`, `check` is a check's name (which the
+    // agent's verify looks up, refusing one the run doesn't have).
+    const added = patch.contract as Record<string, unknown>;
+    if (Object.hasOwn(added, "from") && !Object.hasOwn(was, "from")) throw widening("contract.from is set by --continue");
+    if (Object.hasOwn(added, "report") && added.report !== true) throw invalid("contract.report must be true");
+    if (Object.hasOwn(added, "check") && typeof added.check !== "string") throw invalid("contract.check must be a check name");
     spawn.contract = { ...patch.contract, ...was };
   }
   return { ...p, spawn };

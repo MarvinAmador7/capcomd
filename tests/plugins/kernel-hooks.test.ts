@@ -95,6 +95,21 @@ describe("the kernel's patch rules (§6.6)", () => {
     expect(widens(() => applySpawnPatch(s, { budget: { usd: -1 } }))).toBe("invalid");
   });
 
+  test("agent.spawning: a contract key spawnAgent checks before the hook is checked the same way when a plugin adds it", () => {
+    const s: AgentSpawning = { spawn: { runId: "run-1", parent: "agt-p", profile: "worker", task: { text: "t", untrusted: true, by: "agt-p" }, contract: { script: "x" }, budget: null, grant: null, review: false, operator: false }, spec: {} as never, parent: null };
+    // `report` is `true` or absent (every consumer reads `=== true`; `capcomd results` shows any truthy one as a report).
+    expect(applySpawnPatch(s, { contract: { report: true } }).spawn.contract).toEqual({ script: "x", report: true });
+    expect(widens(() => applySpawnPatch(s, { contract: { report: "yes" } }))).toBe("invalid");
+    expect(widens(() => applySpawnPatch(s, { contract: { report: false } }))).toBe("invalid");
+    // `from` (where the agent starts: another agent's branch) is --continue's alone, as when the spawner sends it.
+    expect(widens(() => applySpawnPatch(s, { contract: { from: { agentId: "agt-x", ref: "refs/heads/capcomd/run-2/agt-x", stopped: "done" } } }))).toBe("widening");
+    const continued: AgentSpawning = { ...s, spawn: { ...s.spawn, contract: { from: { agentId: "agt-x", ref: "refs/heads/b", stopped: "done" } } } };
+    expect(applySpawnPatch(continued, { contract: { from: { agentId: "agt-x", ref: "refs/heads/b", stopped: "done" }, team: "a" } }).spawn.contract).toMatchObject({ team: "a" });
+    // `check` names one of the run's checks (its verify looks the name up).
+    expect(applySpawnPatch(s, { contract: { check: "unit" } }).spawn.contract).toMatchObject({ check: "unit" });
+    expect(widens(() => applySpawnPatch(s, { contract: { check: ["unit"] } }))).toBe("invalid");
+  });
+
   test("agent.preparing: text is appended after the profile's, egress only shrinks", () => {
     const p: AgentPreparing = { agent: {} as never, spec: {} as never, prompt: { system: null, append: "Be brief.", skills: [] }, env: [], egress: ["github.com", "npmjs.org"], credentialMode: "subscription", sandbox: { provider: "fake", environment: null } };
     expect(applyPreparePatch(p, { prompt: { append: "Cite files." }, egress: ["github.com"] })).toMatchObject({ prompt: { append: "Be brief.\n\nCite files." }, egress: ["github.com"] });
