@@ -3632,7 +3632,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "layer": {
       "type": "string",
-      "description": "Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), or run (more may come)"
+      "description": "Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), run, or default (the manifest's own default, e.g. a secret reference naming one of capcomd's own variables; more may come)"
     }
   },
   "required": [

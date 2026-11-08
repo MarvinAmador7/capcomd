@@ -363,7 +363,7 @@ Each step ships alone, with tests, and leaves every existing test green.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
   environment is warned about by `capcomd profiles validate` and refused at spawn (`reason: environment`, §9), not left
   to the provider's boot error; and shown before the run: `GET /v1/run-options` `planners` says a planner whose
-  environment isn't built (or whose `lifecycle` plugin isn't active) isn't ready, and why (2026-11-07, spec 1.0.44).
+  environment isn't built (or whose `lifecycle` plugin isn't active) isn't ready, and why (2026-11-07, spec 1.0.45).
 - **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
   per hash (decision 4 below).
 - A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam
