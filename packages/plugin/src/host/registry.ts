@@ -54,7 +54,15 @@ export interface RegistryOptions {
   observeQueue?: number;
 }
 
-type Listener = { plugin: string; hook: HookName; fn: HookListener<HookName>; timeoutMs: number; failure: "closed" | "open"; live: boolean };
+/** `changes`: the change kinds it is called for (its manifest's `changes`, job.changed only, §4.7); null for every one. */
+type Listener = { plugin: string; hook: HookName; fn: HookListener<HookName>; timeoutMs: number; failure: "closed" | "open"; changes: ReadonlySet<string> | null; live: boolean };
+/** The kind of a `*.changed` call's change, when its payload has one. */
+const changeKind = (payload: unknown): string | undefined => {
+  const k = (payload as { change?: { kind?: unknown } } | null)?.change?.kind;
+  return typeof k === "string" ? k : undefined;
+};
+/** A listener that declared the change kinds it wants isn't called for another, nor counted as listening for one. */
+const wants = (l: Listener, kind: string | undefined): boolean => !l.changes || kind === undefined || l.changes.has(kind);
 type PluginHooks = {
   signal: AbortSignal;
   consecutive: number;
@@ -122,9 +130,9 @@ export class HookRegistry {
   }
 
   /** Register `fn` for `hook`. The context checks the manifest (§4.7); this is the registry's half. */
-  on<N extends HookName>(plugin: string, hook: N, fn: HookListener<N>, decl: { timeoutMs?: number; failure?: "closed" | "open" } = {}): Disposable {
+  on<N extends HookName>(plugin: string, hook: N, fn: HookListener<N>, decl: { timeoutMs?: number; failure?: "closed" | "open"; changes?: readonly string[] } = {}): Disposable {
     const meta = HOOKS[hook];
-    const l: Listener = { plugin, hook, fn: fn as unknown as HookListener<HookName>, timeoutMs: Math.min(decl.timeoutMs ?? meta.timeoutMs.default, meta.timeoutMs.max), failure: failurePolicy(hook, decl.failure), live: true };
+    const l: Listener = { plugin, hook, fn: fn as unknown as HookListener<HookName>, timeoutMs: Math.min(decl.timeoutMs ?? meta.timeoutMs.default, meta.timeoutMs.max), failure: failurePolicy(hook, decl.failure), changes: decl.changes ? new Set(decl.changes) : null, live: true };
     const ls = this.listeners.get(hook) ?? [];
     ls.push(l);
     this.listeners.set(hook, ls);
@@ -137,9 +145,11 @@ export class HookRegistry {
   }
 
   /** Whether any listener would be called for `hook` (a suspended plugin's gate listener counts: it denies). Synchronous,
-   *  so a kernel site that nothing listens to builds no payload and awaits nothing (§17.2 step 2). */
-  listening(hook: HookName): boolean {
-    return (this.listeners.get(hook) ?? []).some((l) => l.live);
+   *  so a kernel site that nothing listens to builds no payload and awaits nothing (§17.2 step 2). With `kind`: for a
+   *  change of that kind (a listener that declared `changes` without it isn't), so the jobs service reads a running
+   *  job's output only while a plugin wants `output` (§6.6.19). */
+  listening(hook: HookName, kind?: string): boolean {
+    return (this.listeners.get(hook) ?? []).some((l) => l.live && wants(l, kind));
   }
 
   /** Listening plugins for `hook`, in the order their listeners run (§6.3). */
@@ -221,10 +231,10 @@ export class HookRegistry {
 
   private observe(hook: HookName, payload: unknown, o: FireOptions): void {
     if (this.stopping) return;
-    const at = this.now();
+    const at = this.now(), kind = changeKind(payload);
     for (const l of this.ordered(hook)) {
       const p = this.plugins.get(l.plugin);
-      if (!p || p.suspended) continue;
+      if (!p || p.suspended || !wants(l, kind)) continue;
       const value = structuredClone(payload);
       if (p.queue.length >= this.observeQueue) { p.queue.shift(); p.dropped++; }
       p.queue.push(async () => {

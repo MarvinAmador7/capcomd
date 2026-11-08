@@ -105,7 +105,7 @@ From a git repository, `capcomd plugins install` does the copying for you (see [
 | `entry` | `{ "runtime": "process", "command": [...], "env": {...} }`. `${PLUGIN_ROOT}` is the plugin's directory, `${PLUGIN_DATA}` a directory of its own for data. A path in `command[0]` starting with `./` must stay inside the directory. |
 | `scopes` | What the plugin's own token may do (§11.1): `read` (runs, agents, events, profiles), `steer` (start, pause, cancel runs, send messages, emit events), `configure`. `approve` is never grantable: approvals stay human. Default: none, which is enough to answer hooks. |
 | `order`, `after` | Where your listeners run among other plugins' (`pre`, `normal`, `post`; §6.3). |
-| `contributes.hooks` | The hooks you answer: `{ "merge.landing": { "timeoutMs": 5000 } }` (a lower deadline than the default is allowed, a higher one than the maximum is refused). |
+| `contributes.hooks` | The hooks you answer: `{ "merge.landing": { "timeoutMs": 5000 } }` (a lower deadline than the default is allowed, a higher one than the maximum is refused). On `job.changed`, `changes` names the change kinds you want: `{ "job.changed": { "changes": ["fired"] } }` for a plugin that only keeps a timer, so capcomd doesn't read every running job's output for you (`started`, `output`, `fired`, `ended`; default all). |
 | `contributes.events` | Names of your own events (`posted` → `plugin.my-gate.posted`). |
 | `config` | A JSON Schema for your settings (below). |
 | `homepage`, `license` | Shown, not checked. |

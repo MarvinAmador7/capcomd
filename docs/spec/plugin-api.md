@@ -198,7 +198,7 @@ under some settings is registered anyway and does nothing without them, as the b
 
 | Key | Item | Registered through |
 |---|---|---|
-| `hooks` | `{ [hook]: { timeoutMs?, failure? } }` (§6) | `ctx.hooks.on` |
+| `hooks` | `{ [hook]: { timeoutMs?, failure?, changes? } }` (§6); `changes`, for `job.changed` only, lists the change kinds the listener is called for (§6.6.19) | `ctx.hooks.on` |
 | `seams` | `{ kind, name }`, at most one per kind (§7) | `ctx.seams.sandbox/agent/forge` |
 | `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source) |
 | `context` | `{ name, kinds: ("fact" \| "memory")[] }`, each also in `provides` as `context:<name>` (ADR-025 §3.1) | `ctx.context.register(impl)`: `impl.describe().name` is the declared name; in process only in protocol v1, like the seams |
@@ -841,8 +841,12 @@ on the lint alone. `merge --operator` lands a branch it denied, recorded as bypa
 #### 6.6.19 `job.changed` · observe · the jobs service (§16.2)
 `JobChanged {job, change: started|output{stdout, stderr}|fired{n}|ended{state}}`. Results of background work arrive
 here; timers tick here. 5 s deadline. Fired by `src/jobs/service.ts` in the process that watches the job (the daemon,
-where agents' spools are pumped and timers armed); `output` frames are read only while a plugin listens. `trigger.*`'s
-sites are the intake's (§16.3.2, `src/triggers/intake.ts`).
+where agents' spools are pumped and timers armed). A listener may declare `changes` in its manifest (§4.7): the change
+kinds it is called for (`started`, `output`, `fired`, `ended`; default all), and it isn't called for another. A running
+job's new output is read (one more exec in its machine, at most once a second) only while a listener wants `output`,
+so a plugin that only keeps a timer declares `changes: ["fired"]` and its listening costs a running job nothing; the
+built-ins declare what they use (`fired`; the watchdog `started`, `fired`, `ended`). `trigger.*`'s sites are the
+intake's (§16.3.2, `src/triggers/intake.ts`).
 
 #### 6.6.20 `trigger.admitting` · veto · gate · the intake (§16.3), after the kernel's gate, before any action
 `TriggerAdmitting {trigger, gate: {allowed, strength, mode, subscribed}}`. A listener may only **deny**; it cannot
@@ -2017,8 +2021,8 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
   `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
   manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
-  nothing without a schedule); the built-in sandboxes listen there already, so the daemon reads background jobs'
-  output (§6.6.19) either way.
+  nothing without a schedule); it declares `changes: ["fired"]`, so its listening never makes the daemon read a
+  running job's output (§6.6.19).
 
 #### 16.3.2 The intake
 
@@ -2279,6 +2283,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.49 | 2026-11-07 | A profile's `harness.provider` and `sandbox.provider` outside the daemon (§7.1): a built-in or a seam the running daemon's listing has from an active, enabled plugin; any other name is refused while a daemon runs and a warning when none does (the daemon checks it at resolution), as `lifecycle` already was (§6.6.8). Reading profiles in the CLI no longer fails for a seam only the daemon loads. A candidate before a write, a write that brings in such a name (`profiles add|set|rm`) and an override still need one. No hook, seam, route or contract shape changes. |
 | 1.0.50 | 2026-11-08 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7, §16.3.1); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
 | 1.0.51 | 2026-11-08 | From the review of ADR-024's writes (its §7 step 6; ADR-024 §9, "Made while building the writes"): `GET /v1/profiles/{name}` shows `context.providers` by name only, as `tools.mcp`, and, in other rows outside the catalog, redacts token shapes, a value under a key named like a secret (the redactor's key rule, `SECRET_KEY`) and a URL's password (the route's "Never contains a credential"); a profile file a write replaces keeps its mode (the unguessable, exclusively created temporary file is 1.0.45's); `PUT` refuses a number past 2^53. No contract change. |
+| 1.0.52 | 2026-11-08 | A `job.changed` listener may declare `changes` (§4.7, §6.6.19): the change kinds it is called for (`started`, `output`, `fired`, `ended`; default all, so an existing manifest is unchanged); the registry doesn't call it for another, and the jobs service reads a running job's new output (one exec in its machine a second) only while a listener wants `output`. The built-ins declare what they use (sandbox-docker, sandbox-boxd, forge-github and source-schedule `fired`; the watchdog `started`, `fired`, `ended`), so with no other plugin a running job costs one look a second, not two. `changes` on another hook is `invalid`. Manifest schema additive; no hook payload, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

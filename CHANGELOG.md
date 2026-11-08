@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Faster: an agent's background job (`capcomd job start`) no longer costs a second command in its machine every
+  second while it prints output, besides the one that checks on it: capcomd now reads a running job's output only when
+  a plugin wants it, which no built-in does. Plugin authors: a `job.changed` listener may declare the changes it wants in `plugin.json`,
+  `"job.changed": { "changes": ["fired"] }` for a plugin that only keeps a timer (`started`, `output`, `fired`,
+  `ended`; default all, so existing plugins still get every change).
 - Fixed: `capcomd plugins install` and `capcomd profiles install` refuse a package with a link that leaves it only by
   going through another of its links (each target looked inside on its own), and a project plugin holding one can't
   be trusted. Before, such a link was installed, and what it pointed to outside the package wasn't part of the hash
