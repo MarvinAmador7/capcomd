@@ -4,7 +4,7 @@
 // §7 step 6): one profile as the rows a client edits, and a change to them in the profile's own file (./write.ts).
 // Local files only.
 import type { z } from "zod";
-import { AgentConfigError, agentsFilePath, editOf, editProfile, PROFILE_FIELDS, profileFields, profileLayers, profileRev, profileRow, profileRows, ProfileWriteError, readProfiles, type ProfileChange, type ProfileSet, type ResolvedProfile } from "../profiles";
+import { AgentConfigError, agentsFilePath, editOf, editProfile, PROFILE_FIELDS, profileFacts, profileFields, profileLayers, profileRev, profileRow, profileRows, ProfileWriteError, readProfiles, skillRows, type ProfileChange, type ProfileSet, type ResolvedProfile } from "../profiles";
 import { readiness } from "../cli/commands/profiles";
 import type { ProfileDetail, Profiles, ProfileSummary, ProfileWritten } from "./contract";
 
@@ -13,10 +13,13 @@ type Env = Record<string, string | undefined>;
 function summaryOf(set: ProfileSet, p: ResolvedProfile, source: Env): z.infer<typeof ProfileSummary> {
 	const r = profileRow(p, set.default === p.name);
 	const ready = readiness(r.name, p.spec, source);
+	// What a planner chooses by (capability profiles.facts): capcomd_profiles' facts, and its skills with their trust.
+	const facts = profileFacts(p), skills = skillRows(p.skills, source);
 	return {
 		name: r.name, version: r.version, source: r.source, format: r.format, path: r.path, default: r.default, description: r.description ?? null, tags: r.tags,
 		provider: r.provider, auth: r.auth, model: r.model, effort: r.effort, toolMode: r.toolMode, canSpawn: r.canSpawn, canLead: r.canLead, does: r.does,
 		ready: ready.ready, readiness: ready.detail, applied: r.applied,
+		title: facts.title, fit: facts.fit, cost: facts.cost, canReport: facts.canReport, skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name),
 	};
 }
 
