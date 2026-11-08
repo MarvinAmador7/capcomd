@@ -116,6 +116,30 @@ describe("the build", () => {
     expect(existsSync(join(state, "envs.json"))).toBe(false);
   }, 60_000);
 
+  test("the project's mapped brains go into its template (`env build --project`): each bundle at its commit with the marker, part of the build's name", async () => {
+    const r = await bareRepo();
+    const brain = await bareRepo();
+    await brain.pushToMain("knowledge.md", "a file beside the bundle, not in it\n");
+    const b = await buildBox();
+    const plain = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } });
+    // A bundle of the brain's root files: a directory of it (bareRepo seeds README.md and shared.txt at the root).
+    mkdirSync(join(brain.root, "seed", "kb"), { recursive: true });
+    await brain.pushToMain("kb/fact.md", "---\ntype: concept\n---\nA fact.\n");
+    const commit = (await brain.sha("main"))!;
+    const dir = join(b.workdir, "context", "groundray", "acme");
+    const bundles = [{ provider: "groundray", name: "acme", remote: brain.bare, branch: "main", commit, path: "kb", dir }];
+    const lines: string[] = [];
+    const res = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, bundles, log: (l) => lines.push(l) });
+    expect(res.cached).toBe(false);
+    expect(res.name).not.toBe(plain.name);
+    expect(res.record.manifest.bundles).toEqual([{ provider: "groundray", name: "acme", commit, path: "kb" }]);
+    expect(readFileSync(join(dir, ".capcomd-bundle"), "utf8")).toBe(`${commit} kb`);
+    expect(readFileSync(join(dir, "kb", "fact.md"), "utf8")).toContain("A fact.");
+    expect(existsSync(join(dir, "knowledge.md"))).toBe(false);
+    expect(existsSync(join(dir, "README.md"))).toBe(false);
+    expect(lines.some((l) => l.includes("context: placed groundray acme (kb/)"))).toBe(true);
+  }, 60_000);
+
   test("a rebuild keeps the one before as `previous` and deletes the one before that, never a snapshot it didn't make", async () => {
     const r = await bareRepo();
     const b = await buildBox();

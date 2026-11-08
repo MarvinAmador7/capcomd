@@ -3,10 +3,10 @@
 // warm template: a full checkout of the project's target that each agent's container uses in place.
 import type { SandboxProvider } from "../providers/sandbox";
 import type { SnapshotPlatform, SnapshotInfo } from "./platform";
-import type { AgentConfig } from "../agents/config";
+import type { AgentConfig, ContextBundleSpec } from "../agents/config";
 import { BASE_EGRESS } from "../agents/config";
 import { activeAdapters } from "../agents/adapters";
-import { agentHome, agentPath, detectScript, installScript, parseDetect, sq, templateDir } from "../agents/runner";
+import { agentHome, agentPath, detectScript, installScript, parseDetect, placeBundle, sq, templateDir } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -59,6 +59,13 @@ export interface BuildOptions {
    * ledger (`ledger`; the env ledger's current build is left alone), its build marker at `marker`.
    */
   project?: { setup: string | null; egress: string[]; maxBytes: number; marker: string; ledger: string };
+  /**
+   * Context bundles the image carries (ADR-025 step 4: the project's mapped brains, checked, src/context/groundray.ts
+   * `mappedBundles`), each placed at its pinned commit as the runner places it (its marker included), so an agent's
+   * runner keeps it and sends nothing at start. Part of the image's name. One that can't be placed, or has
+   * credential-shaped text or a local key value in it, is left out of the image (the runner places it at start).
+   */
+  bundles?: ContextBundleSpec[];
 }
 
 export interface BuildResult { name: string; cached: boolean; record: EnvRecord; snapshot: SnapshotInfo }
@@ -96,9 +103,11 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
   const home = agentHome(o.cfg);
   const T = templateDir(o.cfg);
   const baseEnv = { PATH: agentPath(home), HOME: home };
+  const bundles = o.bundles ?? [];
+  const bundlesManifest = bundles.length ? { bundles: bundles.map((b) => ({ provider: b.provider, name: b.name, commit: b.commit, ...(b.path !== undefined ? { path: b.path } : {}) })) } : {};
   // No repo → the name is known up front (pins + no lockfile): skip the VM when it is already built.
   if (!o.repoUrl && !o.force) {
-    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash: "none", lockFile: "none", repo: "" };
+    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash: "none", lockFile: "none", repo: "", ...bundlesManifest };
     const name = envName(manifest);
     const existing = await p.snapshotGet(name);
     if (existing?.status === "ready") {
@@ -175,7 +184,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
         else log("warm template: couldn't read the clone's commit; workers will clone");
       }
     } else log("no repo given: baking CLIs + git config only (set CAPCOMD_REPO to bake deps)");
-    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl ?? "", ...(template ? { template } : {}) };
+    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl ?? "", ...(template ? { template } : {}), ...bundlesManifest };
     // A project template: every branch's tip as built (an agent's delta is counted from them), and a name per project,
     // base env and build.
     let heads: Record<string, string> = {};
@@ -184,7 +193,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
       const refs = (await must("branches", `cd ${sq(T)} && git for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/`)).stdout;
       for (const line of refs.split("\n")) { const [sha, ref] = line.trim().split(" "); if (sha && ref && ref !== "refs/remotes/origin/HEAD") heads[ref.slice("refs/remotes/origin/".length)] = sha; }
     }
-    const build = createHash("sha256").update(JSON.stringify({ commit: template?.commit, heads, lockHash, setup: o.project?.setup ?? null, ...(o.force ? { at: t0 } : {}) })).digest("hex").slice(0, 8);
+    const build = createHash("sha256").update(JSON.stringify({ commit: template?.commit, heads, lockHash, setup: o.project?.setup ?? null, ...bundlesManifest, ...(o.force ? { at: t0 } : {}) })).digest("hex").slice(0, 8);
     const name = o.project ? templateName(manifest.pins, o.repoUrl!, build) : envName(manifest);
     log(`content hash → ${name} (lockfile ${lockFile})`);
 
@@ -270,6 +279,28 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
         const marker: TemplateMarker = { schema: 1, repo: o.repoUrl!, target: template.target, commit: template.commit, lockFile, lockHash, depsInstalled };
         await p.upload(id, `${T}/${TEMPLATE_MARKER}`, new TextEncoder().encode(JSON.stringify(marker) + "\n"));
         log(`warm template: ${template.target} at ${template.commit.slice(0, 12)}${depsInstalled ? ", dependencies installed" : ""}`);
+      }
+    }
+
+    // 4c. The context bundles (the project's mapped brains), each where and as the runner places it, from the host's
+    //     mirror (no credential enters the VM). One with credential-shaped text or a local key value in it is left out
+    //     (it is the brain's, not the build's: the runner places it at start), as is one that can't be placed.
+    if (bundles.length) {
+      const box = { exec: (cmd: string[], x?: { cwd?: string; timeoutMs?: number }) => p.exec(id, cmd, { env: baseEnv, ...(x?.timeoutMs ? { timeoutMs: x.timeoutMs } : {}), ...(x?.cwd ? { cwd: x.cwd } : {}) }), upload: (path: string, d: Uint8Array) => p.upload(id, path, d) };
+      const workdir = o.hostGit?.workdir ?? join(stateDir(), "host-git");
+      for (const b of bundles) {
+        if (!(await placeBundle(b, { remote: b.remote, workdir }, box, null, r, (lines) => lines.forEach((l) => log(l.replace(/^\[capcomd\] /, "")))))) continue;
+        const scan = await sh(`grep -rIlE '${SECRET_SHAPES}' ${sq(b.dir)} 2>/dev/null | head -1; true`);
+        let leaked = scan.stdout.trim() !== "";
+        for (const v of o.forbidden ?? []) {
+          if (leaked || !v || v.length < 8) continue;
+          const f = await p.exec(id, ["sh", "-c", `grep -rlF "$CAPCOMD_PROBE" ${sq(b.dir)} 2>/dev/null | head -1; true`], { env: { ...baseEnv, CAPCOMD_PROBE: v } });
+          leaked = f.stdout.trim() !== "";
+        }
+        if (leaked) {
+          await sh(`rm -rf ${sq(b.dir)}; true`);
+          log(`context: left ${b.provider} ${b.name} out of the image: credential-shaped text or a local key value is in it (agents' runners place it at start)`);
+        }
       }
     }
 

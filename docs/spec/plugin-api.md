@@ -686,14 +686,21 @@ the kernel's: a profile can't name them, and a profile with a context block keep
 two when it may spawn, and their bytes), as one that may spawn does for the orchestration skill. Each provider is asked once per brief, for the profile's first entry naming it (a second is
 `skipped (named twice)`: two brains are never in one brief), with that entry's own settings as `ContextScope.settings`
 (groundray's `brain`). A provider that declares `caps.bundle` may name, from `resolve`, the one repository at a commit its
-lines point into (`ContextBundle {remote, branch, commit, name}`, ADR-025 §6.2); the router keeps it only when the
-provider loaded, the remote is a URL or path without a credential in it and the commit is full, and leaves it in the
-kernel's record of the call (`preparingAgent`, not the patch, so no plugin can place files), from which the attempt's spec
-records it (`contextBundles`, with its directory `<workdir>/context/<provider>/<name>`, `ContextScope.bundleRoot`). The
-attempt's runner places each before the agent starts: the tree at that commit from the host's mirror of the repository
-(§11.7, `sendTreeAt`), its files read-only, a `.capcomd-bundle` marker naming the commit (one the sandbox already has at
-that commit, an earlier attempt's or an environment image's, is kept). A bundle that can't be placed leaves the agent
-to start without it and its log says so.
+lines point into (`ContextBundle {remote, branch, commit, name, path?}`, ADR-025 §6.2); the router keeps it only when the
+provider loaded, the remote is a URL or path without a credential in it, the commit is full and `path`, when given, is a
+plain directory (names separated by `/`, no `.` or `..`), and leaves it in the kernel's record of the call
+(`preparingAgent`, not the patch, so no plugin can place files), from which the attempt's spec records it
+(`contextBundles`, with its directory `<workdir>/context/<provider>/<name>`, `ContextScope.bundleRoot`). The attempt's
+runner places each before the agent starts: the tree at that commit from the host's mirror of the repository (§11.7,
+`sendTreeAt`), only the directory `path` of it when the bundle names one (at the same path under its directory; groundray
+names its bundle's, so nothing else of a brain's repository reaches the sandbox), its files read-only, a `.capcomd-bundle`
+marker naming the commit and the path (one the sandbox already has as that bundle, an earlier attempt's or an environment
+image's, is kept). It first removes every other bundle under `<workdir>/context/`: an agent's sandbox holds only the
+bundles its brief cites. A bundle that can't be placed leaves the agent to start without it and its log says so.
+`capcomd env build` (and `env build --project`) places the brains the checkout's project maps, each checked as `resolve`
+checks it, in the image the same way, so an agent's runner keeps them and sends nothing at start; they are part of the
+image's name (EnvManifest `bundles`), and one with credential-shaped text or a local key value in it is left out of the
+image.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|worked{files, command, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
@@ -2348,6 +2355,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.54 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route, from a sender that holds a capcomd client token: every route needs one, so a signed webhook that can't send one (GitHub's, Slack's) isn't served yet. |
 | 1.0.55 | 2026-11-08 | `capcomd plugins enable\|disable <name>` (§5.4, §6.5, §9.9): they record `plugins.<name>.enabled` in the user's config and call `POST /v1/plugins/{name}/enable\|disable` on the running daemon (at the harness socket it now records in `state/plugins.json`, with a token made for the call and deleted after), so a toggle lasts past a restart; with no daemon only the config changes. A built-in is still refused (409, the CLI's `conflict`), except the watchdog, which a person turns on and may turn off. `GET /v1/plugins` lists each plugin's declared CLI `commands` (§13.2, additive), and a command whose plugin isn't running is refused naming the plugin and its cause instead of as an unknown command (§4.7.1), with the next step: `capcomd plugins enable`, or the environment variable that turns it off. |
 | 1.0.56 | 2026-11-08 | A `job.changed` listener may declare `changes` (§4.7, §6.6.19): the change kinds it is called for (`started`, `output`, `fired`, `ended`; default all, so an existing manifest is unchanged); the registry doesn't call it for another, and the jobs service reads a running job's new output (one exec in its machine a second) only while a listener wants `output`. The built-ins declare what they use (sandbox-docker, sandbox-boxd, forge-github and source-schedule `fired`; the watchdog `started`, `fired`, `ended`), so with no other plugin a running job costs one look a second, not two. `changes` on another hook is `invalid`. The test kit holds a plugin to it as the host does (§14.5): `fire` of a change kind its listener didn't declare is refused `not_found`, and `hookContract` calls a listener with a kind it declared. Manifest schema additive; no hook payload, seam, route or contract shape changes. |
+| 1.0.57 | 2026-11-08 | Brains in the environment image, and only a brain's bundle in a sandbox (ADR-025 step 4's follow-up, §6.6.7): `ContextBundle` gains an optional `path`, the directory of the repository that is placed (at the same path under the bundle's directory; additive, absent is the whole tree as before); groundray names its bundle's (`knowledge`), so brain.yaml and every other file of the brain's repository stay out of sandboxes, and every file under the bundle, Markdown or not, is checked for a restricted marking (a file that isn't Markdown is read whole, at any depth; one over 4 MiB, or more than 2000 files, is refused as unchecked). The marker names the commit and the path. The runner first removes the bundles under `<workdir>/context/` the brief doesn't cite. `capcomd env build` (and `--project`) places the project's mapped brains, checked, in the image (EnvManifest `bundles`, part of its name), so the runner keeps them and sends nothing at start. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

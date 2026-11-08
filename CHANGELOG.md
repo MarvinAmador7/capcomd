@@ -5,6 +5,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Faster: `capcomd env build` (and `env build --project`) now puts the brains your project maps (`capcomd context
+  brain add`) into the environment image, each at the commit it is pinned to, so agents start with them instead of
+  copying the brain in at every start. Map a brain at a newer commit and the next `capcomd env build` builds a new image.
+  The build says which brains it baked in, and leaves out one that is restricted, can't be read, or has
+  credential-shaped text in it (agents then get it at start as before).
+- Fixed: only a brain's knowledge folder (`knowledge/`, or the one you named with `--bundle`) reaches an agent's
+  sandbox now. Before, the whole brain repository was copied in, while only the folder's Markdown files were checked
+  for `sensitivity: restricted`, so a restricted file elsewhere in the repository reached agents. Every file in the
+  folder is now checked, Markdown or not (a YAML, JSON or text file marked `sensitivity: restricted` refuses the brain,
+  as does any file over 4 MiB or a folder of more than 2000 files: keep big attachments outside the knowledge folder).
+  An agent's sandbox also keeps only the brains its own brief cites: brains another
+  project's image carries are removed before the agent starts.
 - New: `capcomd plugins disable <name>` and `capcomd plugins enable <name>` turn a plugin off and on. The choice is
   saved in your config (`plugins.<name>.enabled` in `~/.capcomd/config.json`), so it survives a daemon restart, and a
   running daemon applies it at once (`enable` also resets a plugin whose hooks were suspended after failing). With no
