@@ -258,6 +258,23 @@ else 500 with the message replaced by "plugin error" (the message goes to the da
 `openapi/capcomd.json`; `GET /v1/plugins/{name}` lists them. A route MUST NOT serve SSE (streams are the kernel's; a
 plugin publishes events instead).
 
+As served (capability `plugins.routes`): a `{param}` segment of a route's path takes one non-empty path segment,
+percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters). Only an active
+plugin's registrations are served: a disposed or disabled plugin's routes are 404 `not_found`, as is a path or method no
+route of an active plugin matches; the token's scope is checked after the route is found (the route's declared scope,
+whatever the method: a `GET` that declares `steer` needs `steer`), so an unknown route is 404 to any token and a missing
+token is 401 first. The scopes are not ranked (a `configure` route needs a token with `configure`). The principal is
+the caller's (§11.2): a plugin's token is that `plugin`, a token with only `read` is a `viewer`, any other client an
+`operator` with its client id. A body is parsed as JSON for `POST`, `PUT` and `PATCH` (an empty one is `undefined`; one
+that isn't JSON is 422 `invalid`), never for `GET` or `DELETE`; `query` has the first value of each name. A
+`PluginError` with a mapped code answers `{code, message}` with its `hint` when it has one; the 500 is `{code:
+"internal", message: "plugin error"}` and the daemon log gets one JSON line `{plugin, level: "error", message, fields}`
+with the method, path and real message, redacted. A handler that answers `undefined` is 204 with no body; one that answers a
+`Response`, a stream or anything `JSON.stringify` refuses is that 500 (so no route can stream). `ctx.api.capability`'s
+flag `x.<name>.<flag>` is in `GET /v1/health` `capabilities` while the plugin is active; `GET /v1/plugins/{name}` has
+`routes` (`{method, path, scope}`, full paths: the registered ones while active, the manifest's otherwise) and
+`capabilities` (`{name, doc}`, while active), both additive. Routes are in process only (§9.6).
+
 #### 4.7.4 Events
 
 `plugin.<name>.<type>` on the `daemon` stream or a run's. Durable, so they are replayed by `GET /v1/events` and the
@@ -1603,7 +1620,8 @@ process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin'
 
 Every discovered plugin with `state`, `enabled`, `cause`, `hooks`, `seams`, `hooksSuspended` and `stats {calls, failures,
 dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
-secrets. `capcomd plugins list|show` print the same. `/v1/health` gains the feature flag `plugins`.
+secrets, and its API routes and feature flags (§4.7.3, capability `plugins.routes`). `capcomd plugins list|show` print the
+same. `/v1/health` gains the feature flag `plugins`.
 
 ### 13.3 Logs
 
@@ -2312,6 +2330,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.51 | 2026-11-08 | From the review of ADR-024's writes (its §7 step 6; ADR-024 §9, "Made while building the writes"): `GET /v1/profiles/{name}` shows `context.providers` by name only, as `tools.mcp`, and, in other rows outside the catalog, redacts token shapes, a value under a key named like a secret (the redactor's key rule, `SECRET_KEY`) and a URL's password (the route's "Never contains a credential"); a profile file a write replaces keeps its mode (the unguessable, exclusively created temporary file is 1.0.45's); `PUT` refuses a number past 2^53. No contract change. |
 | 1.0.52 | 2026-11-08 | The watchdog's progress from real activity (§16.4, the live run's L3; supersedes 1.0.38's windows from the checkpoint interval, since files changing no longer wait for a checkpoint): `agent.changed` `worked {files, command, at}` (additive; no event in the run's log, never replayed, §6.6.8) from the agent's runner at most once a supervisor heartbeat: its checkout's files changed (the supervisor fingerprints the working tree from `git status` and each changed path's size and time at each heartbeat for an agent whose work is checkpointed, writing nothing to the repository, less often in a slow checkout), a foreground shell command running since when (`AgentEvent.commands`, additive, §7.3); the built-in counts `worked {files}` as progress, holds its clock while a foreground command runs (at most `stalledAfterMs` of commands between two signs of progress, so a hung or repeated command is still judged; a turn's end ends its commands) and while a job runs (overlapping waits count once), and no longer counts a job's end as progress (the time it ran doesn't count instead; the open question decided); its notice and stop say what it saw (`no file change seen`, the tool steps it heard of, a command it waits on); a `stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`) is warned about by `capcomd setup` and in its log, not refused. |
 | 1.0.53 | 2026-11-08 | `context-memory`'s judge and gate, after a second review of ADR-025 step 3 (§6.6.13, §6.6.15): a path a checkout on a case-insensitive file system reads as the memory (`.Capcomd/Context/…`, with HFS+-ignored characters or Windows' trailing dots and spaces) is a change to it, so an agent's branch can't put files in a macOS checkout's `.capcomd/context/` unjudged, and a consolidator's branch changes items by their exact names only; the agent judged is the one whose work the ref lands (an agent id's result branch, so a handed-off agent's successor), and a branch `capcomd/<run>/<agt>` of another run is judged as that run's agent instead of let through as a person's (an agent the engine has no record of fails it closed). No hook, seam, route or contract shape changes. |
+| 1.0.54 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route, from a sender that holds a capcomd client token: every route needs one, so a signed webhook that can't send one (GitHub's, Slack's) isn't served yet. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

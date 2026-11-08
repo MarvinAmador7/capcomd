@@ -524,6 +524,7 @@ export const CAPABILITIES = {
 	"plugins.config": "Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.trusted on the daemon stream audits a trust",
 	"profiles.facts": "GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) and `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for",
 	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
+	"plugins.routes": "Plugin API routes (plugin API §4.7.3): METHOD /v1/x/{plugin}/… serves a plugin's own routes, JSON in and out, with the caller's token, which needs the scope the route declares (403 `forbidden` otherwise; 404 `not_found` for a route no active plugin serves; a plugin's failure is 500 `internal` with the message \"plugin error\"). GET /v1/plugins/{name} lists its `routes` and the `capabilities` it adds here, named x.<plugin>.<flag>",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -678,8 +679,17 @@ export const PluginDetail = PluginSummary.extend({
 		values: z.record(z.string(), z.unknown()).describe("The plugin's config, every `x-secret` property left out"),
 		sources: z.record(z.string(), z.enum(["default", "user", "project", "env"])).describe("Where each value came from"),
 	}),
+	routes: z.array(z.object({
+		method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+		path: z.string().describe("The full path, /v1/x/<name>/…; a `{param}` segment stands for one path segment"),
+		scope: z.enum(["read", "steer", "configure"]).describe("The scope the caller's token needs"),
+	})).optional().describe("Capability plugins.routes. Its API routes (spec §4.7.3), JSON in and out, with the caller's own token: those it registered while active, those its manifest declares otherwise. They aren't in this document: a route's body and answer are the plugin's. This daemon always sends it; optional because daemons from before plugins.routes don't"),
+	capabilities: z.array(z.object({
+		name: z.string().describe("`x.<name>.<flag>`, as GET /v1/health `capabilities` lists it while the plugin is active"),
+		doc: z.string().describe("What it means, in the plugin's words: render it as plain text"),
+	})).optional().describe("Capability plugins.routes. The feature flags it added to GET /v1/health (while active). This daemon always sends it; optional because daemons from before plugins.routes don't"),
 });
-export const PLUGIN_DETAIL_DOC = "Capability plugins. One plugin as GET /v1/plugins lists it, with its validated manifest and its config without any secret. Needs the `read` scope. 404 `not_found` for a name the daemon didn't discover.";
+export const PLUGIN_DETAIL_DOC = "Capability plugins. One plugin as GET /v1/plugins lists it, with its validated manifest, its config without any secret, and (capability plugins.routes) its API routes and feature flags. Needs the `read` scope. 404 `not_found` for a name the daemon didn't discover.";
 const PLUGIN_CONTROL_DOC = (what: string) => `Capability plugins. ${what} Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. ` +
 	"404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. For this daemon's life: config doesn't record it yet.";
 
