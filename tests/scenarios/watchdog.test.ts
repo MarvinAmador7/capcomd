@@ -95,7 +95,7 @@ capcomd result --summary "watched" >/dev/null`), { task: "watch two workers" });
   const raisedAfter = notices[0]!.data.at - lastStuck;
   expect(raisedAfter).toBeGreaterThanOrEqual(STALLED_MS - 600);
   expect(raisedAfter).toBeLessThan(STALLED_MS + EVERY_MS + 2500);
-  expect(notices[0]!.data.detail).toMatch(/^no progress for \d s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished (no tool step|\d+ tool steps?) meanwhile; the watchdog stops it after 6 s without progress$/);
+  expect(notices[0]!.data.detail).toMatch(/^no progress for \d s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; (no tool step|\d+ tool steps?) seen meanwhile; the watchdog stops it after 6 s without progress$/);
   // Then stopped, by the watchdog, with why; after its notice and at the configured time.
   const cancelled = evs.filter((e) => e.type === "AGENT_CANCELLED");
   expect(cancelled.map((e) => e.agentId)).toEqual([stuckId]);

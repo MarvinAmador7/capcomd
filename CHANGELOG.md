@@ -11,7 +11,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   an agent spends waiting on a foreground command (a test run, a build) doesn't count against it, up to `stalledAfterMs`
   between two signs of progress, so a command that hangs, or one run again and again, is still caught. A job ending no
   longer counts as progress by itself, but the time it ran doesn't count either. The stalled notice and the stop now say
-  what the watchdog saw: `no file change seen`, how many tool steps the agent finished meanwhile, and a command it has
+  what the watchdog saw: `no file change seen`, how many tool steps it saw meanwhile, and a command it has
   been waiting on. `capcomd setup` (and `setup check`) warns when `plugins.watchdog.stalledAfterMs` is under a minute,
   since progress can take that long to show. This holds whatever an agent's checkpoint interval: an agent whose profile
   saves its work hourly (`checkpointEveryMs`, `--checkpoint-every-ms`, `CAPCOMD_AGENT_CHECKPOINT_MS`) is no longer

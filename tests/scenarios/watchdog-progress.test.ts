@@ -71,7 +71,7 @@ capcomd result --summary "watched" >/dev/null`), { task: "watch three workers" }
   const after = notices[0]!.data.at - start.at;
   expect(after).toBeGreaterThanOrEqual(STALLED_MS - 1000);
   expect(after).toBeLessThan(STALLED_MS + EVERY_MS + 5000);
-  expect(notices[0]!.data.detail).toMatch(/^no progress for 9\d s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished (no tool step|\d+ tool steps?) meanwhile$/);
+  expect(notices[0]!.data.detail).toMatch(/^no progress for 9\d s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; (no tool step|\d+ tool steps?) seen meanwhile$/);
   // No checkpoint came for any of them: what the watchdog saw was the runners' reports.
   expect(evs.filter((e) => e.type === "AGENT_CHECKPOINT")).toEqual([]);
   const final = new Map((await agentsOf(run)).map((a: any) => [a.agentId, a.status]));

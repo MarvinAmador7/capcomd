@@ -94,9 +94,11 @@ export function spoken(ms: number): string {
 /** What the watchdog saw an agent do while it made no progress (the notice and the stop say it). */
 export interface Seen { steps: number; commandMs: number | null }
 
-/** Why it is judged stalled, as observed: what didn't happen, and what it did meanwhile. */
+/** Why it is judged stalled, as observed: what didn't happen, and what it was seen doing meanwhile. Its steps as seen,
+ *  not as taken: a step is told when its streak ends, and the kernel keeps at most 500 of an agent's (STEPS_MAX), so
+ *  "none seen" isn't "none taken". */
 export function stalledWhy(quietMs: number, seen: Seen = { steps: 0, commandMs: null }): string {
-  const did = seen.steps ? `it finished ${seen.steps} tool step${seen.steps === 1 ? "" : "s"} meanwhile` : "it finished no tool step meanwhile";
+  const did = seen.steps ? `${seen.steps} tool step${seen.steps === 1 ? "" : "s"} seen meanwhile` : "no tool step seen meanwhile";
   const cmd = seen.commandMs !== null ? `; it has been waiting on one command for ${spoken(seen.commandMs)}` : "";
   return `no progress for ${spoken(quietMs)}: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; ${did}${cmd}`;
 }

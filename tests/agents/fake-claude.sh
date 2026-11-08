@@ -9,6 +9,7 @@
 #   [editing:N] edit, then change a file every 0.25 s for N s (its files changing between checkpoints, plugin API §16.4)
 #   [command:N] edit, then run one Bash command that takes N s with nothing said meanwhile (a foreground command)
 #   [command-lost] edit, then start a Bash call whose result never comes: its turn ends without it
+#   [command-ended] edit, then run a 1 s Bash command, then keep talking for ~3 s in the same turn (no command runs)
 #   [quiet:N] edit, then say nothing, change nothing and run nothing for N s (stalled, to the watchdog)
 #   [spend] edit, then keep working for ~10s, each message reporting 100k output tokens (live spend)
 #   [spin] or [spin:N] edit, then make the same Read call N times (default 30, 0.15s apart), then finish normally (stuck: spinning)
@@ -142,6 +143,12 @@ case "$prompt" in *"[command:"*)
   emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"all passed"}]}}';;
 esac
 case "$prompt" in *"[quiet:"*) sleep "$(printf '%s' "$prompt" | sed -n 's/.*\[quiet:\([0-9]*\)\].*/\1/p')";; esac
+case "$prompt" in *"[command-ended]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c3","name":"Bash","input":{"command":"npm test"}}]}}'
+  sleep 1
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c3","content":"all passed"}]}}'
+  for i in $(seq 1 12); do sleep 0.25; emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"thinking $i\"}]}}"; done;;
+esac
 case "$prompt" in *"[command-lost]"*)
   emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"npm test"}}]}}';;
 esac

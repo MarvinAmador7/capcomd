@@ -77,7 +77,7 @@ test("with an 8 s limit: a worker editing files and one waiting on a command are
   const evs: any[] = (await cj(["events", run])).j?.events ?? [];
   const stalled = evs.filter((e) => e.type === "AGENT_NOTICE" && e.event?.kind === "stalled");
   expect(stalled.map((e) => e.agentId)).toEqual([silent]);
-  expect(stalled[0].event.detail).toMatch(/^no progress for \d+ s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; it finished (no tool step|\d+ tool steps?) meanwhile$/);
+  expect(stalled[0].event.detail).toMatch(/^no progress for \d+ s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; (no tool step|\d+ tool steps?) seen meanwhile$/);
   // No checkpoint came (they are 10 minutes apart): what the watchdog saw was the runners' reports.
   expect(evs.filter((e) => e.type === "AGENT_CHECKPOINT")).toEqual([]);
 }, 150_000);

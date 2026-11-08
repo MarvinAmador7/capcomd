@@ -330,7 +330,16 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
     expect(lres.stopReason).toBe("success");
     expect(ended).toBe(true);
     expect(after.filter((x) => x.type === "worked" && x.commandSince !== null)).toEqual([]);
-  }, 60_000);
+    // A command whose result came while its turn goes on (more messages, no command): said while it ran, not after.
+    const d = await setup("[command-ended] run the tests, then think");
+    let done = false;
+    const during: SupervisorReport[] = [], later: SupervisorReport[] = [];
+    const dres = await runClaudeCode(d.provider, d.id, d.task, d.cfg, { apiKey: KEY, heartbeatMs: 200, onEvent: (ev) => { if (ev.commands?.ended?.includes("c3")) done = true; }, onReport: (x) => { if (x.type === "worked" && x.commandSince !== null) (done ? later : during).push(x); } });
+    expect(dres.stopReason).toBe("success");
+    expect(done).toBe(true);
+    expect(during.length).toBeGreaterThanOrEqual(1);
+    expect(later).toEqual([]);
+  }, 90_000);
 
   test("timeout kills the agent process group", async () => {
     const s = await setup("[sleep] hang", { CAPCOMD_AGENT_TIMEOUT_MS: "1500" });

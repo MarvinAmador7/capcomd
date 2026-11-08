@@ -71,7 +71,14 @@ test("a commit by the agent is checkpointed at once, not at the next interval", 
 test("progress (plugin API §16.4): heartbeats carry the workspace's fingerprint, a new one as files change, writing nothing; less often where taking it is slow", async () => {
   // (treeShare 1: at every heartbeat that isn't still taking the last one, so a loaded machine doesn't skip a change.)
   const s = await setup(`sleep 0.5; echo two >> a.txt; sleep 1; echo three >> a.txt; sleep 1; echo new > b.txt; sleep 1`, { checkpointEveryMs: 0, reportTree: "progress", treeShare: 1 });
+  // A tracked file whose time changed but not its content: a git status that may write would refresh the index for it.
+  writeFileSync(join(s.repo, "c.txt"), "same\n");
+  await s.r.ok(["add", "c.txt"]);
+  await s.r.ok(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"]);
+  utimesSync(join(s.repo, "c.txt"), new Date(Date.now() - 3600_000), new Date(Date.now() - 3600_000));
+  const index = readFileSync(join(s.repo, ".git", "index"));
   const { reports } = await s.run();
+  const indexAfter = readFileSync(join(s.repo, ".git", "index"));
   const trees = reports.filter((x) => x.type === "heartbeat" && typeof x.tree === "string").map((x) => x.tree);
   // HEAD's, then a.txt changed, changed again (git status says the same of it), then b.txt too: what the runner reads
   // as its files changing.
@@ -81,6 +88,8 @@ test("progress (plugin API §16.4): heartbeats carry the workspace's fingerprint
   const blob = (await s.r.ok(["hash-object", "b.txt"])).trim();
   expect((await s.r.run(["cat-file", "-e", blob])).code).not.toBe(0);
   expect((await s.r.ok(["diff", "--cached", "--name-only"])).trim()).toBe("");
+  // Nor its index refreshed (the agent's own git would find it locked): byte for byte as it was.
+  expect(indexAfter.equals(index)).toBe(true);
   // A git that takes 0.2 s a call: taking it takes over half a second, so the next one waits 20 times that.
   const bin = join(s.dir, "bin");
   mkdirSync(bin);
