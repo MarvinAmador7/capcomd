@@ -188,7 +188,11 @@ your secrets' values are redacted from it.
   environment variable of the daemon). Your process gets the resolved value once, in the handshake's `secrets`, never
   in its environment or arguments. The user sets the reference (below): a `default` reference in your schema is not
   followed, since a plugin doesn't choose which of the user's variables it receives. Until it is set, the secret is
-  missing from `secrets`; say what to set.
+  missing from `secrets`; say what to set. A reference may not name one of capcomd's own variables (`BOXD_API_KEY`,
+  `GITHUB_TOKEN`, `GH_TOKEN`, `CAPCOMD_*`, `RELAY_*`, `GIT_*`, `RIVET*`, `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*`,
+  `CODEX_*`, in any case) or its keychain items (`keychain:capcomd…`), as your default or in the user's config: the
+  plugin fails `config_invalid` instead (§10.3). Suggest a variable of your own (`env:MY_PLUGIN_GITHUB_TOKEN`);
+  `capcomd plugins validate` flags a default that names one of capcomd's.
 - `"x-per-run": true`: a run may set it (`capcomd run --plugin-config my-gate.strict=true`, or `plugins` in
   `POST /v1/runs`).
 
