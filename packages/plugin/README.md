@@ -31,6 +31,13 @@ for await (const frame of client.hooks(new AbortController().signal)) {
 process.exit(0);                                // the daemon stopped the plugin, or went away
 ```
 
+A plugin is **self-contained**: everything it runs lies inside its own directory (its files, its own `node_modules`),
+because that is what capcomd hashes and asks the user to trust. One that imports from outside it (`../lib`, a
+`node_modules` above it, a link that points out) is refused at install, trust and load; `node:` and Bun built-ins are
+allowed, and so is this package installed in the plugin's own `node_modules` (a copy above the plugin's directory is
+refused like any other module). Bundling the plugin into one file is the easy way; `capcomd plugins validate <dir>` lists
+each import that reaches out.
+
 The guide is [docs/plugins.md](https://github.com/MarvinAmador7/capcomd/blob/main/docs/plugins.md): the manifest,
 the hooks, secrets and settings, testing, shipping and installing. The normative reference is the plugin API spec,
 [docs/spec/plugin-api.md](https://github.com/MarvinAmador7/capcomd/blob/main/docs/spec/plugin-api.md). Worked
