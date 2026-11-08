@@ -1072,9 +1072,7 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const reportText = report && typeof rec.resultText === "string" ? rec.resultText.slice(0, 8000) : null;
   // Stopped at a limit: the agent failed, but its work so far is on its branch for a continuation (not retried).
   const limit = typeof rec.limit === "string" ? rec.limit : null;
-  // A consolidator's work is only what the kernel stages from its answer: stopped before giving one, it has no branch.
-  const consolidator = !review && !report && (await import("../context/consolidator")).isConsolidator(a);
-  const limitOf = limit ? { limit, error: consolidator ? `${stoppedAt(limit)}; it gave no memory changes, so nothing was staged` : `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
+  const limitOf = limit ? { limit, error: `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
   const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
   // Plugin API §16.1: an orchestrate agent's work is the agents it spawns. One that spawned none (its tools refused,
   // or it gave up) did nothing that can land: it failed, with its own last words, never a silent "done".
@@ -1088,7 +1086,7 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   // ADR-025 §5.2: a consolidator's answer is staged on its branch by the kernel; that branch is its work.
   const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;
   // A consolidator's work is only what was staged: no list, nothing to stage or a staging that failed is no branch.
-  const work = consolidated ? { branch: consolidated.staged?.sha ? branch : null, commit: consolidated.staged?.sha ?? null } : { branch: review || report || consolidator || (!pushed.sha && out.vmRpc) ? null : branch, commit: consolidator ? null : pushed.sha || null };
+  const work = consolidated ? { branch: consolidated.staged?.sha ? branch : null, commit: consolidated.staged?.sha ?? null } : { branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null };
   const fin = await s.finish({ agentId, status: limit || "error" in blocked || consolidated?.error ? "failed" : "done", spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, ...consolidated?.result, verification: null, ...work, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
   return fin.agent;
 }

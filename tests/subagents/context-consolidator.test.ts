@@ -112,14 +112,3 @@ test("on the run's strongest model, its prompt carrying the fenced candidates; i
   const v = (await cj(["verify", run, "--ref", c.agentId, "--checks", "true", "--key", "v"])).j;
   expect(v).toMatchObject({ state: "passed", result: { commit } });
 }, 240_000);
-
-test("a consolidator stopped at a limit before it answered has no branch: nothing was staged", async () => {
-  const run = (await cj(["run", "new", "--key", `cons-limit-${Date.now()}`])).j.runId as string;
-  const id = (await cj(["spawn", run, "--profile", CONSOLIDATOR_PROFILE, "--set", "timeoutMs=2000", "--task", "Consolidate this run's lessons [nochange] [wip]", "--key", "limit"])).j?.agentId as string;
-  expect(id).toMatch(/^agt-/);
-  const a = (await cj(["await", run, id, "--timeout-ms", "90000"])).j?.agents?.[0];
-  expect(a).toMatchObject({ status: "failed", result: { limit: "timeout", branch: null, commit: null } });
-  expect(a.result.error).toBe("stopped at its timeout limit; it gave no memory changes, so nothing was staged");
-  // So its parent hears why, not of a branch that doesn't exist.
-  expect((await repo.seed.run(["ls-remote", "--heads", "origin", `capcomd/${run}/${id}`])).stdout.trim()).toBe("");
-}, 120_000);

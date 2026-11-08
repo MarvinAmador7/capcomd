@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: the project's memory gate now refuses an agent's branch that writes into `.capcomd/context/` under another
+  spelling of the path, such as `.Capcomd/Context/memory/x.md`. Git treats that as a different folder, but a checkout
+  on macOS or Windows puts those files next to the real memory, and before this fix they got past the check. The gate
+  also judges the agent whose work actually lands: when an agent handed its task off, the gate judges its successor.
+  A `capcomd/<run>/<agent>` branch from another run is now judged as that run's agent, not let through as if a person
+  had written it.
 - Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
   as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
   agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.

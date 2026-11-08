@@ -191,9 +191,21 @@ describe("what the gates judge of a branch (ADR-025 §5.3)", () => {
     const worker = { id: "agt-w1", profile: "worker", review: "human" as const };
     for (const path of [".capcomd/context", ".capcomd"]) {
       expect(judgeBranch(facts({ agent: worker, files: [{ path }, { path: "docs/mem/memory/evil.md" }] }), o).problems[0]).toContain(NOT_A_CONSOLIDATOR);
-      expect(judgeBranch(facts({ files: [...facts().files, { path }] }), o).problems).toContain(`a consolidator's branch changes the items in ${CONTEXT_DIR}, never the directory itself: agt-cons1 changed ${path}`);
+      expect(judgeBranch(facts({ files: [...facts().files, { path }] }), o).problems).toContain(`a consolidator's branch changes the items in ${CONTEXT_DIR} by that exact name, never the directory itself or a name a checkout reads as it: agt-cons1 changed ${path}`);
     }
     expect(judgeBranch(facts({ agent: worker, files: [{ path: ".capcomd/agents.json" }, { path: ".capcomd/contexts/x.md" }] }), o)).toMatchObject({ touches: false, problems: [] });
+  });
+
+  test("a name a checkout reads as the memory is a change to it: another case, an HFS+-ignored character, a trailing dot", () => {
+    // On macOS's (and Windows') default file system `.Capcomd/Context/memory/evil.md` is checked out into
+    // .capcomd/context/memory/, beside the items, though git, the brief and a plain prefix see another directory.
+    const worker = { id: "agt-w1", profile: "worker", review: "human" as const };
+    for (const path of [".Capcomd/Context/memory/evil.md", ".CAPCOMD/context/index.md", ".capcomd/CONTEXT", ".CAPCOMD", ".capcomd/conte‌xt/memory/evil.md", ".capcomd./context./memory/evil.md", ".capcomd /context/memory/evil.md"]) {
+      expect(judgeBranch(facts({ agent: worker, files: [{ path }] }), o)).toMatchObject({ touches: true, problems: [expect.stringContaining(NOT_A_CONSOLIDATOR)] });
+      // A consolidator's branch changes the items by their exact name only.
+      expect(judgeBranch(facts({ files: [...facts().files, { path }] }), o).problems).toContain(`a consolidator's branch changes the items in ${CONTEXT_DIR} by that exact name, never the directory itself or a name a checkout reads as it: agt-cons1 changed ${path}`);
+    }
+    expect(judgeBranch(facts({ agent: worker, files: [{ path: ".Capcomd/Contexts/x.md" }, { path: "docs/.capcomd/context/x.md" }] }), o)).toMatchObject({ touches: false, problems: [] });
   });
 
   test("a consolidator's branch: lint-clean passes, with what lint flags for the person; a file outside, or lint's problems, fail it", () => {
@@ -272,24 +284,54 @@ describe("the context-memory plugin's gates (verify.judging, merge.landing)", ()
     await fake.dispose();
   });
 
-  test("an agent that handed off is judged as its successor, whose branch and commit its result is", async () => {
-    // A consolidator (review: lint) that handed its task to a worker: its result is the worker's, written by the worker.
+  describe("whose work a ref lands", () => {
     const run = samplePayload("merge.landing").merge.runId;
+    const OTHER = "run-other1";
+    const lint = { context: { review: "lint" } };
+    // By run and id, as the engine keeps them.
     const records: Record<string, { profile: string | null; spec: unknown; result: unknown }> = {
-      "agt-test1": { profile: CONSOLIDATOR_PROFILE, spec: { context: { review: "lint" } }, result: { branch: `capcomd/${run}/agt-w9`, commit: COMMIT, handoffTo: "agt-w9" } },
-      "agt-w9": { profile: "worker", spec: {}, result: { branch: `capcomd/${run}/agt-w9`, commit: COMMIT } },
-      "agt-cons2": { profile: CONSOLIDATOR_PROFILE, spec: { context: { review: "lint" } }, result: { branch: `capcomd/${run}/agt-cons2`, commit: COMMIT } },
+      // A consolidator (review: lint) that handed its task to a worker: its result is the worker's, written by the worker.
+      [`${run}/agt-test1`]: { profile: CONSOLIDATOR_PROFILE, spec: lint, result: { branch: `capcomd/${run}/agt-w9`, commit: COMMIT, handoffTo: "agt-w9" } },
+      [`${run}/agt-w9`]: { profile: "worker", spec: {}, result: { branch: `capcomd/${run}/agt-w9`, commit: COMMIT } },
+      // A worker that handed its task to a consolidator: its result is the consolidator's staging.
+      [`${run}/agt-w2`]: { profile: "worker", spec: {}, result: { branch: `capcomd/${run}/agt-cons2`, commit: COMMIT, handoffTo: "agt-cons2" } },
+      [`${run}/agt-cons2`]: { profile: CONSOLIDATOR_PROFILE, spec: lint, result: { branch: `capcomd/${run}/agt-cons2`, commit: COMMIT } },
+      // A worker of another run of the same repository.
+      [`${OTHER}/agt-w5`]: { profile: "worker", spec: {}, result: { branch: `capcomd/${OTHER}/agt-w5`, commit: COMMIT } },
     };
-    kernel(null);
-    memoryPlugin.promotionKernel.agent = saved.agent;
-    memoryPlugin.promotionKernel.record = async (_runId, id) => records[id]!;
-    expect(await memoryPlugin.promotionKernel.agent(run, "agt-test1")).toEqual({ id: "agt-w9", profile: "worker", review: "human", commit: COMMIT, branch: `capcomd/${run}/agt-w9` });
-    const fake = await load();
-    const m = await fake.fire("merge.landing", samplePayload("merge.landing"));
-    expect(m.result).toMatchObject({ decision: "deny", reason: expect.stringContaining(`${NOT_A_CONSOLIDATOR}: agt-w9 (profile worker)`) });
-    // An agent that didn't hand off is judged as itself.
-    expect(await memoryPlugin.promotionKernel.agent(run, "agt-cons2")).toMatchObject({ id: "agt-cons2", profile: CONSOLIDATOR_PROFILE, review: "lint" });
-    await fake.dispose();
+    const real = () => {
+      kernel(null);
+      memoryPlugin.promotionKernel.agent = saved.agent;
+      memoryPlugin.promotionKernel.record = async (runId, id) => { const r = records[`${runId}/${id}`]; if (!r) throw new Error(`agent ${id} isn't one of run ${runId} here`); return r; };
+    };
+
+    test("an agent id lands its result's branch: one that handed off is judged as its successor", async () => {
+      real();
+      expect(await memoryPlugin.promotionKernel.agent(run, "agt-test1")).toEqual({ id: "agt-w9", profile: "worker", review: "human", commit: COMMIT, branch: `capcomd/${run}/agt-w9` });
+      const fake = await load();
+      const m = await fake.fire("merge.landing", samplePayload("merge.landing"));
+      expect(m.result).toMatchObject({ decision: "deny", reason: expect.stringContaining(`${NOT_A_CONSOLIDATOR}: agt-w9 (profile worker)`) });
+      // A worker whose successor is a consolidator lands the consolidator's staging, as the consolidator's.
+      expect(await memoryPlugin.promotionKernel.agent(run, "agt-w2")).toEqual({ id: "agt-cons2", profile: CONSOLIDATOR_PROFILE, review: "lint", commit: COMMIT, branch: `capcomd/${run}/agt-cons2` });
+      // One that didn't hand off is judged as itself.
+      expect(await memoryPlugin.promotionKernel.agent(run, "agt-cons2")).toMatchObject({ id: "agt-cons2", profile: CONSOLIDATOR_PROFILE, review: "lint" });
+      await fake.dispose();
+    });
+
+    test("an agent's branch is that agent's, whatever its result says, in whichever run it is; any other name is a person's", async () => {
+      real();
+      // The branch named is what lands (a branch ref isn't followed to a result).
+      expect(await memoryPlugin.promotionKernel.agent(run, `capcomd/${run}/agt-test1`)).toEqual({ id: "agt-test1", profile: CONSOLIDATOR_PROFILE, review: "lint", commit: COMMIT, branch: `capcomd/${run}/agt-test1` });
+      // Another run's worker is no person: judged, so its change to the memory is refused here too.
+      expect(await memoryPlugin.promotionKernel.agent(run, `capcomd/${OTHER}/agt-w5`)).toEqual({ id: "agt-w5", profile: "worker", review: "human", commit: COMMIT, branch: `capcomd/${OTHER}/agt-w5` });
+      const fake = await load();
+      const branchRef = (ref: string) => { const p = samplePayload("merge.landing"); return { ...p, merge: { ...p.merge, ref } }; };
+      expect((await fake.fire("merge.landing", branchRef(`capcomd/${OTHER}/agt-w5`))).result).toMatchObject({ decision: "deny", reason: expect.stringContaining(`${NOT_A_CONSOLIDATOR}: agt-w5 (profile worker)`) });
+      // An agent's branch the engine has no record of: the gate can't say whose it is, so it fails closed.
+      expect((await fake.fire("merge.landing", branchRef("capcomd/run-gone/agt-x1"))).failure).toMatchObject({ message: expect.stringContaining("isn't one of run run-gone") });
+      for (const ref of ["feature/memory", "capcomd/run-x/notes", "capcomd/agt-x1", "refs/heads/main"]) expect(await memoryPlugin.promotionKernel.agent(run, ref)).toBeNull();
+      await fake.dispose();
+    });
   });
 
   test("fail-closed: a branch the gate can't read doesn't land (the call fails; the host denies it)", async () => {
