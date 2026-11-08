@@ -5,6 +5,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- New: once you open a pull request from a goal branch (`capcomd pr open`, the app, or `capcomd_pr_open`), the run
+  follows its conversation on GitHub. When someone you allow (`triggers.sources.github.allowed` in
+  `~/.capcomd/config.json`) writes there with `/capcomd …` (or, in `mode: "auto"`, without it), the run's planner starts
+  again with their comment in its inbox and pushes more work onto the goal branch, which updates the pull request. In
+  the default observe mode a comment without `/capcomd` is only recorded (`capcomd triggers log` says the planner would
+  have started again); anyone else's comment reaches only the planner's inbox. This works for any trigger source: a
+  person's request on a thread an ended run follows starts its planner again the same way, a bot's never does. The
+  GitHub source now reads the threads runs follow without `sourceRepos` (only those threads), and calls GitHub only
+  when there is something to read.
+- New: a run started (or started again) by a trigger can answer where it was asked when it ends: one short reply, under
+  100 words, with the planner's summary, or why it stopped if it failed. Turn it on per source with
+  `triggers.sources.<source>.reply: true` (off by default). On GitHub it is one comment on the issue or pull request,
+  posted with your login and marked so capcomd never reads it back as a request. Each reply is a `trigger.replied`
+  event on the daemon stream. Plugins that feed triggers can offer the same with `ctx.triggers.onReply`.
 - New: `capcomd plugins disable <name>` and `capcomd plugins enable <name>` turn a plugin off and on. The choice is
   saved in your config (`plugins.<name>.enabled` in `~/.capcomd/config.json`), so it survives a daemon restart, and a
   running daemon applies it at once (`enable` also resets a plugin whose hooks were suspended after failing). With no

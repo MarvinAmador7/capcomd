@@ -200,7 +200,7 @@ under some settings is registered anyway and does nothing without them, as the b
 |---|---|---|
 | `hooks` | `{ [hook]: { timeoutMs?, failure? } }` (§6) | `ctx.hooks.on` |
 | `seams` | `{ kind, name }`, at most one per kind (§7) | `ctx.seams.sandbox/agent/forge` |
-| `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source) |
+| `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source); its reply path, optional, `ctx.triggers.onReply(source, reply)` (§16.3.7; in process only in protocol v1, like the seams) |
 | `context` | `{ name, kinds: ("fact" \| "memory")[] }`, each also in `provides` as `context:<name>` (ADR-025 §3.1) | `ctx.context.register(impl)`: `impl.describe().name` is the declared name; in process only in protocol v1, like the seams |
 | `cli` | `{ name, summary }` (§4.7.1) | `ctx.cli.command` |
 | `mcp` | `{ name, summary }` (§4.7.2) | `ctx.mcp.tool` |
@@ -1025,7 +1025,7 @@ fetch and integrate (`src/merge/integrate.ts`), the checks (`src/merge/verify.ts
 | `matches(remote)` | pure; the default selection rule (§7.1) |
 | `classifyError(e)` | §7.2.3 |
 | `land(req, c)` | Called **under the kernel's target lock**. `mode: "direct"`: push `req.sha` to `req.target` as a compare-and-swap on `req.targetSha` (with `req.leaseBranch`, the branch leased at `req.branchSha` in the same atomic push; a remote that refuses atomic pushes is `{status: "failed", retryable: true}`); a moved target is `{status: "conflict", targetSha}` (`""` when the forge doesn't know it) and the kernel fetches and re-integrates. `mode: "pr"`: the branch is pushed already; find or open the pull request and merge it with `req.strategy` at exactly `req.branchSha`, the head the kernel integrated as `req.sha` and checked (the hosting service makes the merge commit, so the outcome's `sha` is the service's); a pull request the service can't merge is `conflict`, a wait past the deadline `{status: "failed", retryable: true}`. **Idempotent by `req.mrgId`**: a replay after a crash finds the existing PR or the pushed commit and reports `already: true`. MUST reject `unsupported` for `pr` when `pullRequests` is false. |
-| `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)`. A merged pull request carries `mergeSha`, so a pr-mode merge that finds one records it without integrating again |
+| `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)`. A merged pull request carries `mergeSha`, so a pr-mode merge that finds one records it without integrating again. `thread` (optional, additive): the pull request's conversation as a trigger source names it (`{source, thread}`; forge-github: `{source: "github", thread: "owner/name#N"}`), which the run then follows (§16.3.6) |
 | `publishRepository` | `POST /v1/projects/publish`, asked of the first active forge whose `describe().publish` (forge-github: `gh repo create`); the event names where it went by the returned `url`. A name the service has already is `conflict` |
 | `listBranches({remote, cwd, max}, c)` | `POST /v1/runs` base resolution (`capcomd run`, `capcomd_run_new`) and `GET /v1/projects/branches`: `{defaultBranch, branches, source, note}`, from the service's API (`source: "service"`; the kernel reports the forge's name, `describe().name`: `github`, or a forge plugin's own, so the route's `source` is a string) when it can, else from the remote itself (`"git"`: `git ls-remote`, its `HEAD` the default branch, never guessed), with `note` saying why the service wasn't used. Rejects, saying why, when the remote can't be read at all; the kernel then reads the checkout's own refs (`local`) |
 | `login({use, accounts?}, c)` | Whether the user's own login at the service is on this machine for `use`: `pullRequests` (the goal branch's `openPullRequest.available`, the setup wizard's suggestion; forge-github: a token, `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`) or `publish` (`GET /v1/projects/inspect` and `publish-options` `ghReady`, publishing; forge-github: `gh auth status`); with `accounts`, as whom (`publish-options` `accounts`: the user, then its organizations; forge-github: `gh api user`, `gh api user/orgs`). Shaped like `available`: `{ok: true, accounts}` or `{ok: false, reason, fix}`, sentences the kernel puts in its own ("capcomd opens pull requests with your GitHub login, and there is none on this machine: <fix>, then try again"). Cheap (the forge may cache it; forge-github asks at most every 30 s) and never rejects |
@@ -2032,7 +2032,9 @@ structured context, never used for authorization. `trigger.text` is an `Untruste
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
 ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
 log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
-before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4). A source MAY give
+the daemon a reply path (`ctx.triggers.onReply`, §16.3.7); what it posts there MUST carry the source's own mark, so its
+next read drops it as its bot's words.
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -2043,21 +2045,24 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   {id: schedule:<name>, bot: true}, addressed: direct, text}`. Every fire is its own thread, so one night's run never
   gets the next night's fire as a message. The operator allows the actor (or opens `schedule:*`) like any other.
 - `github` (`forge-github`, `src/plugins/forges/github-source.ts`; no GitHub code in the kernel): the issue and pull
-  request comments of its config's `sourceRepos` (`owner/name`), and of the repositories of the `github` threads runs
-  follow, read every `sourceEveryMs` (60 s) with the user's GitHub login; thread `owner/name#<number>`, id
+  request comments of its config's `sourceRepos` (`owner/name`), and the comments on the `github` threads runs follow
+  (in a repository `sourceRepos` doesn't name, only those threads: a goal branch's pull request is no reason to read the
+  rest of its repository), read every `sourceEveryMs` (60 s) with the user's GitHub login; thread `owner/name#<number>`, id
   `comment-<id>`, actor the author (`bot` from GitHub's user type), `addressed: mention` when a line starts with the
   command word (`sourceCommand`, `/capcomd`), or, with `sourceMentions: true` (off by default), when someone else
   @-mentions the login; `replyTo` the comment's URL. The login is usually the user's own: a mention of it addresses
   the user, not capcomd, and their comments are theirs, not the bot's: what the source drops as its own is what
-  capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
+  capcomd wrote (a comment carrying `<!-- capcomd -->`, as its replies do: its reply path posts one comment on the
+  thread, §16.3.7). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
   comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
   position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
   keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
   `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
-  manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
-  nothing without a schedule); the built-in sandboxes listen there already, so the daemon reads background jobs'
-  output (§6.6.19) either way.
+  manifest declares it (§4.7), and its timer runs in the daemon whatever its settings (a run follows its goal branch's
+  pull request once it is open, §16.3.6); a fire calls GitHub only when `sourceRepos` names a repository or a run
+  follows a `github` thread (nothing configured and nothing followed: no call, not even for the login). The built-in
+  sandboxes listen to `job.changed` already, so the daemon reads background jobs' output (§6.6.19) either way.
 
 #### 16.3.2 The intake
 
@@ -2073,8 +2078,19 @@ with the `TriggerDecision`:
    (the prototype's rule). The planner is the run's `_planner` record, else its top-level agent spawned with the key
    `planner`; a run with neither (a run driven from outside, or the built-in recipe's) has no one to read it, and the
    trigger goes on to the gate. The message is `from: trigger:<source>`, its body who wrote on which thread and what
-   (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. A person's trigger
-   on an ended run's thread lands in its planner's inbox; starting the planner again on it is a later step's.
+   (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. On a run that
+   **ended**, a person's trigger is asked steps 3 to 5 (once per trigger; `trigger.admitting`'s `gate.subscribed` names
+   the run), since starting its planner again spends as a start does: when they would act (allowed and addressed, or
+   allowed in `auto`), the planner **starts again** on it: a new top-level planner (the last one's profile ref, brief and
+   contract without `from`, the key `planner-<hash of the message key>`, so a trigger starts at most one), the run's
+   `_planner` from then on, with the message in its inbox before it starts and its brief saying why it works again
+   (`restartBrief`) → `continued {runId, seq, restarted: <its agent id>}`; a planner that works again already only gets
+   the message (`continued` without `restarted`). In `observe`, inferred: the message lands in the ended planner's inbox
+   → `recorded {wouldHave: "continue", runId}`. Refused (not allowed, a plugin's denial, `off`): it lands in the inbox
+   only → `continued {runId, seq}`, the log's `gate` saying why nothing started. A planner that can't start (its
+   profile, the run's budget or sandbox: a `RelayError` other than an unreachable engine) is a start that fails, refused
+   for good (`invalid`); anything else fails for now (`unavailable`, the source sends it again). The new planner is
+   spawned as the operator's (§3.2: no source principal reaches `agent.spawning`; the trigger's gate decided).
 3. **Gate**: config `triggers.sources.<source>` (kernel-owned, operator-written: `allowed: [actor ids]`,
    `opened: [thread patterns]`, `mode: off|observe|auto`, `project`). The trigger is **allowed** when its actor's id is
    in `allowed` or its thread matches an `opened` pattern (exact, `*` matching any run of characters). Strength is
@@ -2092,9 +2108,9 @@ with the `TriggerDecision`:
    with the source plugin as the principal; harness.v1's additive `Run.trigger {source, id, thread, actor, at}`, under
    the capability `triggers`) → `started`, and subscribe the run to the thread. The goal is checked as `POST /v1/runs`
    checks one (`CreateRunBody.goal`: not empty, ≤ 16 KB, no NUL, no leading `[agent:NAME]`, so a source's words never
-   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start` in
-   this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
-   §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
+   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start`
+   here (`continue` is step 2's, for an ended run). A started run answers on the thread when it ends, if the source's
+   replies are on (§16.3.7). A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
    trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`.
 
@@ -2121,7 +2137,7 @@ threads runs follow, from the daemon's state on this machine (the daemon need no
 #### 16.3.5 Subscriptions and lifetimes
 
 `ctx.triggers.subscribe {runId, source, thread, until?}`; the intake subscribes a started run to its thread
-automatically. Default `until` = 14 days after the run ends; the host expires them (`trigger.unsubscribed {cause:
+automatically, and a goal branch's run follows its pull request's thread once it is opened (§16.3.6). Default `until` = 14 days after the run ends; the host expires them (`trigger.unsubscribed {cause:
 expired}`). A stopped run (`run.ended {state: cancelled}` by a person) unsubscribes at once (`stopped`). Sources poll
 subscribed threads while a subscription is live. `TriggerSubscription.until` is null while the run works and nobody set
 one (the run's end is not known yet); a subscriber's own `until` ends it then, whatever the run does. "Stopped" is a
@@ -2137,7 +2153,35 @@ second call may change `until`. A subscription's run must exist (`not_found`).
 | `POST /v1/runs` from the app, `capcomd run`, `capcomd_run_new` | an **explicit** trigger from source `operator`/`driver` that skips the gate: the same `runNew` path; `run.creating` fires either way (step 10 leaves these paths as they are: they don't pass through the intake yet) |
 | a person replying in the app (messages) | source `app`, always allowed (likewise unchanged in step 10) |
 | GitHub comments, CI, Slack, schedules | source plugins (`github`, `slack`, `schedule`: a timer job that emits) |
-| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread, so review comments reach the planner (a later step: step 10's `github` source already reads the threads runs follow) |
+| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread when the pull request is opened or found (`src/primitives/goal.ts` `openGoalPullRequest`, from whichever process opens it; the forge names the thread, `PullRequestRef.thread`, so the kernel has no GitHub code; a failed subscription is logged, never the opening's failure), so comments on it reach the planner: as a message while the run works, and, since a pull request is opened once the planner finished, mostly by starting the planner again (§16.3.2 step 2) on an allowed person's comment. The `github` source reads the pull request's conversation (issue comments); review comments on lines of the diff are not read yet |
+
+#### 16.3.7 Replies
+
+A run a trigger started (step 6), or whose planner a trigger started again (step 2), answers that request **once**, on
+the request's thread, when it ends, through the source's **reply path**; only when the operator turned the source's
+replies on (`triggers.sources.<source>.reply: true`; off by default, §16.5 rule 3: capcomd says nothing where people
+talk unless asked to). The rules, from §16.5:
+
+- **Only a result.** It answers when the run ended `completed` (its planner's summary) or `failed` (that it stopped
+  before it finished, and why); a person's stop (§16.3.5) needs no answer, and progress is never posted.
+- **Short.** The words are the daemon's: the planner's summary (its error, when it failed), redacted, cut to 90 words
+  (and 1,500 characters) with ` …`, then `— capcomd (<runId>)` (`replyText`), under 100 words in all.
+- **Where it was asked.** `TriggerReply {source, thread, replyTo, triggerId, runId, text, key}` goes to the source's
+  reply path, which posts it where `thread` (and `replyTo`) say. forge-github posts one comment on the issue or pull
+  request (`POST /repos/{repo}/issues/{n}/comments`, the user's login), the text then `<!-- capcomd -->`, which the
+  source drops when it reads it back (§16.3.1); its own retryable failures are GitHub's rate limit and 5xx.
+- **Once.** The intake keeps one pending request per run (`state/triggers/replies/<runId>.json`; a newer request, its
+  planner started again, replaces one not answered yet). The daemon's sweep (§16.3.5) posts it once the run has ended
+  after the request (a run that ended before it, its planner starting again, is not answering it yet), claiming it
+  first, so a crash while posting never posts twice. A rejection that is `retryable` is tried at the next sweep, at most
+  three times in all; any other, or no answer within 30 s (it may have been posted), is given up. `key` is the same for
+  every attempt.
+
+`ctx.triggers.onReply(source, reply)` registers a source's reply path: `source` is one the plugin contributes
+(`forbidden` otherwise), one per source (`conflict`), disposed with the plugin; in process only in protocol v1
+(`unsupported` for a process plugin), like the seams. The daemon's host holds them (the host whose plugins have
+`ctx.triggers`); a reply for a source with none is dropped (logged). Each posted reply is a `trigger.replied {source,
+thread, runId, id, url}` on the daemon stream (`entity` `run:<runId>`).
 
 ### 16.4 A watchdog
 
@@ -2342,6 +2386,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.53 | 2026-11-08 | `context-memory`'s judge and gate, after a second review of ADR-025 step 3 (§6.6.13, §6.6.15): a path a checkout on a case-insensitive file system reads as the memory (`.Capcomd/Context/…`, with HFS+-ignored characters or Windows' trailing dots and spaces) is a change to it, so an agent's branch can't put files in a macOS checkout's `.capcomd/context/` unjudged, and a consolidator's branch changes items by their exact names only; the agent judged is the one whose work the ref lands (an agent id's result branch, so a handed-off agent's successor), and a branch `capcomd/<run>/<agt>` of another run is judged as that run's agent instead of let through as a person's (an agent the engine has no record of fails it closed). No hook, seam, route or contract shape changes. |
 | 1.0.54 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route, from a sender that holds a capcomd client token: every route needs one, so a signed webhook that can't send one (GitHub's, Slack's) isn't served yet. |
 | 1.0.55 | 2026-11-08 | `capcomd plugins enable\|disable <name>` (§5.4, §6.5, §9.9): they record `plugins.<name>.enabled` in the user's config and call `POST /v1/plugins/{name}/enable\|disable` on the running daemon (at the harness socket it now records in `state/plugins.json`, with a token made for the call and deleted after), so a toggle lasts past a restart; with no daemon only the config changes. A built-in is still refused (409, the CLI's `conflict`), except the watchdog, which a person turns on and may turn off. `GET /v1/plugins` lists each plugin's declared CLI `commands` (§13.2, additive), and a command whose plugin isn't running is refused naming the plugin and its cause instead of as an unknown command (§4.7.1), with the next step: `capcomd plugins enable`, or the environment variable that turns it off. |
+| 1.0.56 | 2026-11-08 | Trigger continuations (the steps §16.3.1, §16.3.2 step 2, §16.3.6 left to later): a goal branch's run follows its pull request's thread once it is opened, the forge naming it (`PullRequestRef.thread`, additive; forge-github `owner/name#N`), and the `github` source reads the threads runs follow on its timer whatever its settings (in a repository `sourceRepos` doesn't name, only those threads); on an ended run's thread a person's trigger is asked steps 3 to 5, and when they would act its planner starts again (a new planner continuing the last, with the message in its inbox: `continued {restarted}`, additive), `observe` records `wouldHave: "continue"`, and a refusal leaves it in the inbox only; replies (§16.3.7, new): `ctx.triggers.onReply(source, reply)` (in process only), `TriggerReply`, `triggers.sources.<source>.reply` (off by default), one short answer per request when the run ends completed or failed, posted by the sweep with a claim and at most three tries, forge-github's a marked comment the source drops; `trigger.replied` on the daemon stream and `trigger.received.restarted` (both additive). Owner questions taken conservatively: replies are opt-in, and a restart needs what a start needs (the gate), not just a person. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
