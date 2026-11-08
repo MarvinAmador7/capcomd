@@ -18,13 +18,16 @@ import { jobLimits, jobMessage, resetJobs, resumeTimers, startJob, useDaemonEven
 import * as relay from "../../src/core/relay";
 import { kernelHost } from "../../src/plugins/host";
 import { hooks, useHooks } from "../../src/plugins/hooks";
-import { useSandboxHost } from "../../src/plugins/sandboxes";
+import { sweepPlace, useSandboxHost } from "../../src/plugins/sandboxes";
 import { sandboxDocker, SWEEP_EVERY_MS } from "../../src/plugins/builtin/sandbox-docker";
 import { stateDir } from "../../src/utils/home";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 afterEach(() => { resetJobs(); useHooks(null); useSandboxHost(null); useDaemonEvents(null); });
 
+// A test that starts real processes waits for them with `until` (15 s each); bun's 5 s default would cut it short on a
+// loaded machine (seen running this file 5 at a time).
+const PROCESS_MS = 30_000;
 function hostMachine(): JobMachine {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-jobs-m-"));
   return {
@@ -53,7 +56,7 @@ describe("a job's process in its machine (src/jobs/machine.ts)", () => {
     expect(await tails(m, "job-aaaaaa1", 6, 1000)).toEqual({ stdout: "out-2\n", stderr: "err-1\n", truncated: true });
     // argv runs without a shell: nothing is expanded.
     expect((await tails(m, "job-aaaaaa2", 100, 100)).stdout).toBe("a b|$HOME|");
-  });
+  }, PROCESS_MS);
 
   test("a job that ends while a look is at it is reported with all of its output (its sizes are read after its exit)", async () => {
     // The job ends exactly between the look's reads: a `cat` that, on the look's first read of its exit file, writes
@@ -91,7 +94,7 @@ describe("a job's process in its machine (src/jobs/machine.ts)", () => {
     process.kill(rpid, "SIGKILL");
     expect(await until(async () => { const x = (await look(m, ["job-bbbbbb2"])).get("job-bbbbbb2"); return x?.state === "gone" ? x : null; })).toEqual({ state: "gone", why: "its process is gone, with no exit code (its machine restarted?)" });
     try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
-  });
+  }, PROCESS_MS);
 
   test("a machine without the node it names refuses to start one", async () => {
     const m = { ...hostMachine(), node: "/nonexistent/node" };
@@ -358,12 +361,16 @@ describe("the Docker sweep is sandbox-docker's own timer (§15.1, §16.2)", () =
     const dir = mkdtempSync(join(tmpdir(), "capcomd-jobs-docker-"));
     const calls = join(dir, "calls");
     const bin = join(dir, "docker");
-    writeFileSync(bin, `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\nexit 0\n`);
+    // Its `ps` takes a while, as on a loaded machine: a sweep's line is there before its round is over.
+    writeFileSync(bin, `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\n[ "$1" = ps ] && sleep 0.5\nexit 0\n`);
     chmodSync(bin, 0o755);
     const saved = { bin: process.env.CAPCOMD_DOCKER_BIN, sandbox: process.env.CAPCOMD_SANDBOX };
     process.env.CAPCOMD_DOCKER_BIN = bin;
     process.env.CAPCOMD_SANDBOX = "docker";
     const sweeps = () => (existsSync(calls) ? readFileSync(calls, "utf8").split("\n").filter((l) => l.startsWith("ps ")).length : 0);
+    // A round still going is not started twice, so the next sweep the test waits for would be skipped while the last one
+    // is still going: the test runs a round of its own to its end (one starts once none is going), and counts from there.
+    const settled = async () => { await until(async () => { const n = sweeps(); await sweepPlace("docker"); return sweeps() > n; }); return sweeps(); };
     try {
       const start = async () => {
         const host = kernelHost({ log: false, jobs: true });
@@ -379,17 +386,20 @@ describe("the Docker sweep is sandbox-docker's own timer (§15.1, §16.2)", () =
       expect(timers()).toHaveLength(1);
       const t = timers()[0]!;
       expect(t).toMatchObject({ state: "running", by: "plugin:sandbox-docker", spec: { kind: "timer", runId: null, owner: { plugin: true }, label: "sweep idle containers", everyMs: SWEEP_EVERY_MS } });
-      // The daemon restarts: the same timer (its key), not a second one; its fire sweeps again.
+      // The daemon restarts (with no round going, as a new process): the same timer (its key), not a second one; its fire
+      // sweeps again.
+      let n = await settled();
       await host.stop();
       resetJobs();
       host = await start();
-      await until(async () => sweeps() >= 2);
+      await until(async () => sweeps() >= n + 1);
       expect(timers().map((r) => r.jobId)).toEqual([t.jobId]);
+      n = await settled();
       const file = join(stateDir(), "jobs", `${t.jobId}.json`);
       writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), nextAt: Date.now() - 1 }));
       resetJobs();
       await resumeTimers();
-      await until(async () => sweeps() >= 3);
+      await until(async () => sweeps() >= n + 1);
       expect(timers()[0]!.fired).toBe(1);
       await host.stop();
     } finally {
