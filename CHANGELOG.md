@@ -19,6 +19,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   sandbox's plain image, or no build yet); `capcomd run` refuses such a planner the same way, the app shows it as not
   ready, and `capcomd profiles validate` warns. A range that isn't a semver range is now an error when the profile is
   read. Before, both settings were read and ignored (`validate` said so).
+- Fixed: triggers (GitHub comments, schedules and other sources) are sturdier. A trigger whose thread or sender carries
+  invisible characters (bidi overrides, zero-width spaces, line separators), as well as terminal escapes, is refused,
+  and a sender's display name loses them; `capcomd triggers log` and `capcomd triggers subscriptions` print any such
+  character as `\u{…}` instead of sending it to your terminal. When the engine doesn't say in time (15 s,
+  `CAPCOMD_TRIGGERS_ENGINE_MS`) whether a run follows a comment's thread, the trigger fails for now and the source sends
+  it again, instead of possibly starting a second run on that thread. When a run started but its line in the trigger
+  log couldn't be written, the trigger stays handled (no second run), and what couldn't be recorded is reported on the
+  daemon's stream and log. The GitHub source no longer lets one comment that keeps failing for now hold back newer
+  comments: it tries that comment again after 1, 2, 4… poll intervals (at most an hour apart) while it reads the rest,
+  and gives up on it after 8 tries, with a warning in the daemon's log.
 - New: `capcomd plugins disable <name>` and `capcomd plugins enable <name>` turn a plugin off and on. The choice is
   saved in your config (`plugins.<name>.enabled` in `~/.capcomd/config.json`), so it survives a daemon restart, and a
   running daemon applies it at once (`enable` also resets a plugin whose hooks were suspended after failing). With no

@@ -2,7 +2,8 @@
 // source plugin hands it (`ctx.triggers.emit`). It decides, in this order, and records every decision:
 //  1. dedupe: the same (source, id) within 30 days is `deduped`;
 //  2. subscription: a thread a run follows (a live run, or one that ended less than `until` ago) gets the trigger as a
-//     message to the run's planner, `continued`, when a person sent it (a bot's reaches only a live run);
+//     message to the run's planner, `continued`, when a person sent it (a bot's reaches only a live run); a run the
+//     engine doesn't say anything about makes it fail for now, never a new request (that could be a second run);
 //  3. the kernel's gate, `triggers.sources.<source>` in the operator's config: an actor it allows or a thread it opened
 //     to requests is `allowed`, else `denied {by: allowlist}`; addressed and allowed is `explicit`, else `inferred`;
 //  4. `trigger.admitting`: a plugin may deny (`denied {by: plugin}`), never admit;
@@ -25,6 +26,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import { Redactor } from "../agents/redact";
 import { readConfig, userConfigPath } from "../config/store";
 import { hooks, iso } from "../plugins/hooks";
+import { INVISIBLE } from "../primitives/title-rules.mjs";
 import { env } from "../utils/env";
 import { stateDir } from "../utils/home";
 
@@ -115,6 +117,8 @@ export interface TriggerLogEntry {
   text: string;
   decision: LoggedDecision;
   gate: { allowed: boolean; strength: "explicit" | "inferred"; mode: AcceptMode } | null;
+  /** What capcomd couldn't record about a run it started (the trigger a run was started from), when something failed. */
+  unrecorded?: string[];
 }
 
 /** The intake's log, oldest first (`capcomd triggers log`; the daemon need not run). */
@@ -196,7 +200,9 @@ const kernelDeps: IntakeDeps = {
   },
   async standing(runId) {
     const { existingActor } = await import("../core/relay");
-    const s = /^run-[A-Za-z0-9_-]+$/.test(runId) ? await existingActor("scope", [runId]).catch(() => null) : null;
+    // The engine's error is passed on: a run it can't say about isn't a run that doesn't exist (that would end the run's
+    // subscriptions, and a trigger on its thread could start a second run).
+    const s = /^run-[A-Za-z0-9_-]+$/.test(runId) ? await existingActor("scope", [runId]).catch((e) => { throw new PluginError("unavailable", `the engine didn't answer: ${(e as Error)?.message ?? e}`, undefined, true); }) : null;
     if (!s) return { exists: false, live: false, endedAt: null, stopped: false };
     const { lifecycleEvents } = await import("../api/lifecycle");
     const evs = await s.getEvents({});
@@ -226,15 +232,19 @@ async function record(type: "trigger.received" | "trigger.subscribed" | "trigger
 const usage = (m: string, hint?: string): never => { throw new PluginError("invalid", m, hint); };
 const SOURCE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const TEXT_MAX = 64 * 1024, DATA_MAX = 64 * 1024;
-/** Control characters (a terminal's escapes among them): `capcomd triggers log` prints a source's ids as they are. */
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
-const CONTROLS = new RegExp(CONTROL.source, "g");
+/** Control characters (a terminal's escapes among them), line and paragraph separators, and invisible format characters
+ *  (bidi overrides that reorder what a terminal shows, zero-width spaces that make two ids look alike): a source's ids
+ *  and threads have none, as `capcomd triggers log` and the planner's message show them. */
+const CONTROL = /[\p{Cc}\p{Cf}\u2028\u2029]/u;
 const short = (v: unknown, what: string, max: number): string => {
   if (typeof v !== "string" || !v.trim()) usage(`${what} is a non-empty string`);
   if ((v as string).length > max) usage(`${what} is longer than ${max} characters`);
-  if (CONTROL.test(v as string)) usage(`${what} has a control character`);
+  if (CONTROL.test(v as string)) usage(`${what} has a control or format character`, "A source names threads and actors with the characters they show; it never passes a terminal's escapes or invisible characters on.");
   return v as string;
 };
+/** A display name as one plain line: control characters and line breaks are spaces, format characters go (a zero-width
+ *  joiner inside an emoji stays: it is part of one character). */
+const plainName = (s: string) => s.replace(/[\p{Cc}\u2028\u2029]/gu, " ").replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
 
 /** A source's trigger as the kernel keeps it: checked, its text an `Untrusted` the source vouches for. */
 export function checkTrigger(t: Trigger): Trigger {
@@ -244,7 +254,7 @@ export function checkTrigger(t: Trigger): Trigger {
   const at = typeof t.at === "string" && Number.isFinite(Date.parse(t.at)) ? new Date(t.at).toISOString() : usage("trigger.at is an ISO time");
   const a = t.actor as Trigger["actor"] | undefined;
   if (!a || typeof a !== "object" || typeof a.bot !== "boolean") usage("trigger.actor is {id, display, bot}", "Fill it from the source's own facts: who sent it, and whether a bot did.");
-  const display = typeof a!.display === "string" ? a!.display.replace(CONTROLS, " ").trim().slice(0, 200) : "";
+  const display = typeof a!.display === "string" ? plainName(a!.display).slice(0, 200) : "";
   const actor = { id: short(a!.id, "trigger.actor.id", 200), display: display || a!.id, bot: a!.bot };
   if (t.addressed !== null && t.addressed !== "mention" && t.addressed !== "direct") usage("trigger.addressed is mention, direct or null");
   const raw = t.text as Untrusted | string | undefined;
@@ -269,13 +279,26 @@ export function triggerMessage(t: Trigger): string {
   return `${t.actor.display}${t.actor.display !== t.actor.id ? ` (${t.actor.id})` : ""}${t.actor.bot ? ", a bot," : ""} wrote on ${t.thread}:\n\n${t.text.text}${t.replyTo ? `\n\n(A reply goes to ${t.replyTo}.)` : ""}`;
 }
 
-async function finish(t: Trigger, decision: LoggedDecision, gate: TriggerLogEntry["gate"], principal: Principal): Promise<void> {
+const why = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 500);
+
+/** Records a decision: its line in the log, `trigger.received` on the daemon stream, `trigger.changed`. Each is tried
+ *  whatever the others do, and what a record before it couldn't keep (`unrecorded`) goes in the ones that work. Returns
+ *  whether the log's line was written; it never throws (the decision was made). */
+async function finish(t: Trigger, decision: LoggedDecision, gate: TriggerLogEntry["gate"], principal: Principal, unrecorded: string[] = []): Promise<{ logged: boolean; unrecorded: string[] }> {
   const runId = "runId" in decision ? decision.runId : null;
-  appendLog({ at: iso(), source: t.source, id: t.id, thread: t.thread, actor: t.actor, addressed: t.addressed, text: said(t), decision, gate });
-  await record("trigger.received", entityOf(t), { source: t.source, id: redactor.text(t.id), thread: redactor.text(t.thread), actor: redactor.text(t.actor.id), addressed: t.addressed, decision: decisionWord(decision), runId }).catch(() => {});
+  const missing = [...unrecorded];
+  let logged = true;
+  try {
+    appendLog({ at: iso(), source: t.source, id: t.id, thread: t.thread, actor: t.actor, addressed: t.addressed, text: said(t), decision, gate, ...(missing.length ? { unrecorded: missing } : {}) });
+  } catch (e) { logged = false; missing.push(`its line in the trigger log: ${why(e)}`); }
+  try {
+    await record("trigger.received", entityOf(t), { source: t.source, id: redactor.text(t.id), thread: redactor.text(t.thread), actor: redactor.text(t.actor.id), addressed: t.addressed, decision: decisionWord(decision), runId, ...(missing.length ? { unrecorded: missing.map((m) => redactor.text(m)) } : {}) });
+  } catch (e) { missing.push(`its trigger.received event: ${why(e)}`); }
   if (decision.kind !== "failed" && hooks.listening("trigger.changed")) {
     hooks.fire("trigger.changed", "observe", { trigger: t, decision }, { principal, entity: `${entityOf(t)}#${decision.kind}`, runId });
   }
+  if (missing.length) console.error(`[triggers] ${t.source}/${t.id} was ${decision.kind}${runId ? ` (${runId})` : ""}, but capcomd couldn't record ${missing.join("; ")}`);
+  return { logged, unrecorded: missing };
 }
 
 /** The dedupe marker: created only if absent (one emit of a (source, id) wins); an old one is taken over. */
@@ -294,34 +317,46 @@ const forget = (t: Trigger) => rmSync(dir("seen", t.source, `${sha(t.id)}.json`)
 /**
  * `ctx.triggers.emit` (§16.3.2): decide about one trigger, act on it, record the decision. `principal` is the source
  * plugin's. A start that failed is no decision: it is logged as `failed`, the trigger can come again, and the emit
- * rejects (`invalid` for the operator's settings, else `unavailable`).
+ * rejects (`invalid` for the operator's settings, else `unavailable`). So is a decision that started nothing and whose
+ * line in the log couldn't be written (it is decided again when the trigger comes again). A run that started is never
+ * undone: whatever couldn't be recorded after it, the dedupe mark stays, so the trigger never starts a second run.
  */
 export async function admit(input: Trigger, principal: Principal): Promise<TriggerDecision> {
   const t = checkTrigger(input);
   const dup = firstSight(t);
   if (dup) { const d: TriggerDecision = { kind: "deduped", first: dup.first }; await finish(t, d, null, principal); return d; }
+  let d: Awaited<ReturnType<typeof decide>>;
   try {
-    const d = await decide(t, principal);
-    await finish(t, d.decision, d.gate, principal);
-    return d.decision;
+    d = await decide(t, principal);
   } catch (e) {
     forget(t);
-    const reason = String((e as Error)?.message ?? e).slice(0, 500);
-    await finish(t, { kind: "failed", reason }, null, principal).catch(() => {});
+    const reason = why(e);
+    await finish(t, { kind: "failed", reason }, null, principal);
     if (e instanceof PluginError) throw e;
     const config = e instanceof (await import("../api/source")).CreateRunError;
     throw new PluginError(config ? "invalid" : "unavailable", `trigger ${t.source}/${t.id} was not acted on: ${reason}`, config ? "Set triggers.sources.<source>.project to a project checkout (capcomd setup project), or give the daemon a repository (CAPCOMD_REPO)." : undefined, !config);
   }
+  const done = await finish(t, d.decision, d.gate, principal, d.unrecorded);
+  if (!done.logged && d.decision.kind !== "started") {
+    // Nothing that can't be done again happened (a continued message is idempotent by its key): it comes again.
+    forget(t);
+    throw new PluginError("unavailable", `trigger ${t.source}/${t.id} was ${d.decision.kind}, but its line in the trigger log couldn't be written: ${done.unrecorded.join("; ")}`, undefined, true);
+  }
+  return d.decision;
 }
 
-async function decide(t: Trigger, principal: Principal): Promise<{ decision: TriggerDecision; gate: TriggerLogEntry["gate"] }> {
+async function decide(t: Trigger, principal: Principal): Promise<{ decision: TriggerDecision; gate: TriggerLogEntry["gate"]; unrecorded?: string[] }> {
   // 2. A run follows the thread: a person's trigger reaches its planner, with no further gate; a bot's only a live run.
-  const followed = await following(t.source, t.thread);
+  const { followed, unanswered } = await following(t.source, t.thread);
   for (const f of followed) {
     if (t.actor.bot && !f.standing.live) continue;
-    const sent = await deps.deliver(f.sub.runId, { from: `trigger:${t.source}`, body: triggerMessage(t), key: `trigger-${t.source}-${sha(t.id)}` });
+    // Idempotent by its key: a delivery the engine didn't confirm in time is sent again with the trigger.
+    const sent = await engine(`delivering to ${f.sub.runId}`, deps.deliver(f.sub.runId, { from: `trigger:${t.source}`, body: triggerMessage(t), key: `trigger-${t.source}-${sha(t.id)}` }));
     if (sent) return { decision: { kind: "continued", runId: f.sub.runId, seq: sent.seq }, gate: null };
   }
+  // A run that may follow the thread didn't say where it stands: the trigger may be its to read, so it isn't taken for a
+  // new request (that could start a second run on the thread). It fails for now, and the source sends it again.
+  if (unanswered) throw new PluginError("unavailable", `trigger ${t.source}/${t.id} was not acted on: ${unanswered.runId} follows ${t.thread}, and the engine didn't say where it stands (${unanswered.reason})`, "It is tried again when the source sends it again.", true);
   // 3. The kernel's gate.
   const g = gateOf(triggersConfig(), t.source);
   const allowed = g.allowed.includes(t.actor.id) || g.opened.some((p) => threadMatches(p, t.thread));
@@ -343,9 +378,11 @@ async function decide(t: Trigger, principal: Principal): Promise<{ decision: Tri
   const checked = (await import("../api/contract")).CreateRunBody.shape.goal.safeParse(goal);
   if (!checked.success) throw new PluginError("invalid", `trigger ${t.source}/${t.id} can't be a run's goal: ${checked.error.issues[0]?.message ?? "invalid"}`);
   const { runId } = await deps.startRun({ goal, ...(g.project ? { repo: g.project } : {}) }, principal);
-  writeAtomic(dir("runs", `${runId}.json`), JSON.stringify({ source: t.source, id: t.id, thread: t.thread, actor: t.actor, at: t.at }));
-  await subscribe({ runId, source: t.source, thread: t.thread }, "intake", { started: true }).catch((e) => console.error(`[triggers] ${runId}: subscribing to ${t.thread}: ${(e as Error)?.message ?? e}`));
-  return { decision: { kind: "started", runId }, gate };
+  // The run exists from here on: nothing below undoes the decision; what fails is recorded with it.
+  const unrecorded: string[] = [];
+  try { writeAtomic(dir("runs", `${runId}.json`), JSON.stringify({ source: t.source, id: t.id, thread: t.thread, actor: t.actor, at: t.at })); } catch (e) { unrecorded.push(`the trigger ${runId} started from: ${why(e)}`); }
+  await subscribe({ runId, source: t.source, thread: t.thread }, "intake", { started: true }).catch((e) => unrecorded.push(`${runId}'s subscription to ${t.thread}: ${why(e)}`));
+  return { decision: { kind: "started", runId }, gate, ...(unrecorded.length ? { unrecorded } : {}) };
 }
 
 // ---- subscriptions (§16.3.5) -----------------------------------------------------------------------------------------
@@ -371,17 +408,29 @@ async function end(r: SubRecord, cause: Cause) {
   await record("trigger.unsubscribed", `run:${r.runId}`, { source: r.source, thread: redactor.text(r.thread), runId: r.runId, cause });
 }
 
-/** The live subscriptions to a thread, newest first, each with where its run stands; ended ones end now. */
-async function following(source: string, thread: string): Promise<Array<{ sub: SubRecord; standing: RunStanding }>> {
-  const out: Array<{ sub: SubRecord; standing: RunStanding }> = [];
+/** How long the intake waits for the engine to say where a run stands, or to take a message (CAPCOMD_TRIGGERS_ENGINE_MS,
+ *  15 s): past it, the trigger fails for now (`unavailable`) instead of holding its source's poll. */
+const engineMs = () => { const v = Number(env("TRIGGERS_ENGINE_MS") ?? 15_000); return Number.isFinite(v) && v >= 10 ? v : 15_000; };
+async function engine<T>(what: string, p: Promise<T>): Promise<T> {
+  const ms = engineMs();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`the engine didn't answer ${what} within ${ms} ms`)), ms); });
+  try { return await Promise.race([p, late]); } finally { clearTimeout(timer); }
+}
+
+/** The live subscriptions to a thread, newest first, each with where its run stands; ended ones end now. `unanswered`:
+ *  a subscription whose run the engine said nothing about (an error or no answer in time), which may still hold. */
+async function following(source: string, thread: string): Promise<{ followed: Array<{ sub: SubRecord; standing: RunStanding }>; unanswered: { runId: string; reason: string } | null }> {
+  const followed: Array<{ sub: SubRecord; standing: RunStanding }> = [];
+  let unanswered: { runId: string; reason: string } | null = null;
   for (const r of allSubs().filter((x) => x.source === source && x.thread === thread).sort((a, b) => b.at.localeCompare(a.at))) {
-    const s = await deps.standing(r.runId).catch(() => null);
-    if (!s) continue; // the engine didn't answer: not this time
+    let s: RunStanding;
+    try { s = await engine(`where ${r.runId} stands`, deps.standing(r.runId)); } catch (e) { unanswered ??= { runId: r.runId, reason: why(e) }; continue; }
     const cause = endOf(r, s);
     if (cause) await end(r, cause);
-    else out.push({ sub: r, standing: s });
+    else followed.push({ sub: r, standing: s });
   }
-  return out;
+  return { followed, unanswered };
 }
 
 /** `ctx.triggers.subscribe`: later triggers on `thread` reach the run's planner. Idempotent; `until` may be changed. */
@@ -415,7 +464,7 @@ export async function subscriptions(filter: { runId?: string; source?: string } 
   const out: TriggerSubscription[] = [];
   const standing = new Map<string, RunStanding | null>();
   for (const r of allSubs().filter((x) => (!filter.runId || x.runId === filter.runId) && (!filter.source || x.source === filter.source))) {
-    if (!standing.has(r.runId)) standing.set(r.runId, await deps.standing(r.runId).catch(() => null));
+    if (!standing.has(r.runId)) standing.set(r.runId, await engine(`where ${r.runId} stands`, deps.standing(r.runId)).catch(() => null));
     const s = standing.get(r.runId);
     const cause = s ? endOf(r, s) : null;
     if (cause) await end(r, cause);
