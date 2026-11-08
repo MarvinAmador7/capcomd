@@ -56,8 +56,11 @@ export async function runCandidates(runId: string): Promise<CaptureRecord[]> {
  * text: data to judge, never instructions), how many were refused and why, and the run's verifies and merges by id,
  * which an item cites as its `outcomes`. Deterministic for one state of the run; cut at INPUTS_MAX_BYTES, saying so.
  */
-export function inputsText(records: ReadonlyArray<CaptureRecord>, ops: ReadonlyArray<RunOp>): string {
+export function inputsText(records: ReadonlyArray<CaptureRecord>, ops: ReadonlyArray<RunOp>, goal?: string | null): string {
   const out: string[] = [];
+  // The run's goal, as it was given (a person's words, or a trigger's: fenced as data like a candidate): what it asks the
+  // project to remember is a request the consolidator weighs (the prompt says how), never an instruction to it.
+  const asked = goal?.trim() ? `The run's goal, as it was given:\n${fence("goal", goal.trim().slice(0, 4000)).text}` : null;
   const total = records.reduce((n, r) => n + r.candidates.length, 0);
   const agents = records.filter((r) => r.candidates.length).length;
   out.push(total
@@ -82,12 +85,13 @@ export function inputsText(records: ReadonlyArray<CaptureRecord>, ops: ReadonlyA
     return `- ${o.id}: verify of ${who}: ${o.state}${checks ? ` (checks ${checks})` : ""}`;
   };
   out.push(ops.length ? `The run's verifies and merges (cite one as an outcome: {"kind": "verify" or "merge", "id": …}; only a passed verify or a landed merge counts):\n${ops.map(said).join("\n")}` : "The run has no verifies or merges.");
-  return out.join("\n\n");
+  return [...(asked ? [asked] : []), ...out].join("\n\n");
 }
 
 /** What a consolidator of run `runId` reads of it, now. */
 export async function consolidationInputs(runId: string): Promise<string> {
-  return inputsText(await runCandidates(runId), await runOps(runId));
+  const goal = ((await (await scopeOf(runId)).getScope({}).catch(() => null)) as { goal?: string | null } | null)?.goal ?? null;
+  return inputsText(await runCandidates(runId), await runOps(runId), goal);
 }
 
 /** An agent of the run as `lessonsOf` reads it. */
@@ -152,7 +156,7 @@ export function lessonsText(l: RunLessons): string {
   const n = l.candidates + l.pending;
   const ran = l.consolidators.filter((c) => c.status !== "cancelled");
   if (!n) return ran.length ? `No candidate lessons; ${ran[0]!.agentId} (${CONSOLIDATOR_PROFILE}) is ${ran[0]!.status}.` : "No candidate lessons in this run yet: nothing to consolidate.";
-  const what = `${n} candidate lesson${n === 1 ? "" : "s"} from ${l.agents} agent${l.agents === 1 ? "" : "s"}${l.pending ? ` (${l.pending} declared by an agent still working, yours included: collected when the consolidator starts)` : ""}`;
+  const what = `${n} candidate lesson${n === 1 ? "" : "s"} from ${l.agents} agent${l.agents === 1 ? "" : "s"}${l.pending ? ` (${l.pending} declared in a result and not collected yet, as your own are until the consolidator starts)` : ""}`;
   if (ran.length) return `${what}; ${ran.map((c) => `${c.agentId} (${CONSOLIDATOR_PROFILE}) is ${c.status}${c.commit ? `, its branch at ${c.commit.slice(0, 12)}` : ""}`).join("; ")}.`;
   return `${what}; no ${CONSOLIDATOR_PROFILE} yet: spawn it as your last child, once every other child has ended.`;
 }
