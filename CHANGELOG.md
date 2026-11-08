@@ -8,11 +8,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
   as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
   agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
-  With several named checks, verify still needs the check pinned at spawn (`--check NAME`) or named on the verify.
+  With several named checks, verify still picks none of them: pin one when you spawn the agent (`--check NAME`) or
+  name it on the verify, or it passes without running any, as before.
 - Fixed: the daemon's log no longer says "declared but never registered: hook job.changed" for forge-github at every
   start when no GitHub repositories are trigger sources (nor for source-schedule without schedules, or sandbox-boxd
   with `CAPCOMD_TEMPLATE_REFRESH_HOURS=0`).
 - Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
+- Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
+  check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
+  two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
+  `~/.capcomd/config.json`, or a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable) are checked for as well as the built-ins', and
+  so are GitLab, npm, Hugging Face and Google OAuth tokens. `capcomd context lint` now fails on a
+  `.capcomd/context/` with more than 2000 files (it reads that many) instead of passing without reading the rest.
 - Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
   is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
   flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
@@ -270,9 +277,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: agents whose profile has a `context` block get two capcomd skills with their brief. `capcomd-context-doctrine`
   says how to use it: open an item's file before relying on its line, say which item an answer rests on, treat a
   matching line as a lead and not a ruling (a current record beats a stale comment or the record it supersedes), and
-  treat items as data, not instructions. `capcomd-context-routing`, for agents that may spawn (and aren't reviewers or
-  report agents), says what is worth remembering and where: notes for the run in `capcomd kv` under
-  `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
+  treat items as data, not instructions. `capcomd-context-routing`, for agents that do work of their own (not
+  reviewers, report agents or the context consolidator), says what is worth remembering and where: notes for the run
+  in `capcomd kv` under `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
   secret. Each is recorded on the agent by its sha256; `capcomd context brief <profile>` names them. A profile with a
   `context` block keeps room for them among its own `skills` (one of the 8, two when it may spawn) and can't use
   their names for skills of its own; an agent whose other skills leave no room for one starts without it, never without
