@@ -69,8 +69,9 @@ const fire = ((hook: HookName, mode: "observe" | "veto" | "modify", payload: unk
 }) as HookRegistry["fire"];
 
 export const hooks = {
-  /** Whether a plugin listens to `hook` in this process. Synchronous: guard every site with it. */
-  listening: (hook: HookName): boolean => current()?.listening(hook) ?? false,
+  /** Whether a plugin listens to `hook` in this process (with `kind`, to that kind of change: job.changed's `changes`,
+   *  §4.7). Synchronous: guard every site with it. */
+  listening: (hook: HookName, kind?: string): boolean => current()?.listening(hook, kind) ?? false,
   /** Any of `names`: the scope's change tap asks once for all the `*.changed` hooks. */
   listeningAny: (names: readonly HookName[]): boolean => { const r = current(); return !!r && names.some((n) => r.listening(n)); },
   fire,

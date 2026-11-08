@@ -12,7 +12,7 @@
     "hooks": {
       "daemon.started": {},
       "agent.changed": {},
-      "job.changed": {}
+      "job.changed": { "changes": ["fired"] }
     },
     "events": ["stalled", "stopped"]
   },

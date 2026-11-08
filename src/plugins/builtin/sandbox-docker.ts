@@ -24,7 +24,7 @@ export const manifest = {
   description: "Containers on this machine's Docker (Docker Desktop, OrbStack, Colima, Podman's docker). Snapshots are images; idle containers are swept by capcomd.",
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./sandbox-docker.ts" },
   provides: ["seam:sandbox/docker"], scopes: ["steer"],
-  contributes: { seams: [{ kind: "sandbox", name: "docker" }], hooks: { "job.changed": {} } },
+  contributes: { seams: [{ kind: "sandbox", name: "docker" }], hooks: { "job.changed": { changes: ["fired"] } } },
   config: { type: "object", additionalProperties: false, properties: {} },
 } as const;
 
