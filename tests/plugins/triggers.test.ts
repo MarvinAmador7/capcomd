@@ -265,6 +265,73 @@ describe("an ended run's planner starts again (§16.3.2 step 2)", () => {
     expect(later.retryable).toBe(true);
   });
 
+  test("a restart that fails part way never leaves the run's planner one that doesn't start; the same trigger again finishes it", async () => {
+    const { restartPlanner } = await import("../../src/triggers/intake");
+    // A run whose planner finished; the engine fails as told.
+    const agents: Record<string, { agentId: string; status: string; ref: string; task: string; contract: Record<string, unknown> | null }> = {
+      "agt-p1": { agentId: "agt-p1", status: "done", ref: "planner;ov=x", task: "Goal: add a", contract: { from: "agt-w", report: true } },
+    };
+    let planner = "agt-p1";
+    const inbox: Array<{ to: string; key: string }> = [], spawned: Array<{ key: string; profile?: string; contract?: unknown }> = [];
+    const fail = { send: 0, spawn: 0, becomes: 0 };
+    const k = {
+      planner: async () => agents[planner] ?? null,
+      idFor: (key: string) => `agt-${key}`,
+      send: async (to: string, m: { key: string }) => { if (fail.send && fail.send--) throw new Error("engine went away"); inbox.push({ to, key: m.key }); return { seq: inbox.length }; },
+      spawn: async (o: { key: string; profile?: string; task: string; contract?: Record<string, unknown> }) => {
+        if (fail.spawn && fail.spawn--) throw new Error("engine went away");
+        spawned.push({ key: o.key, profile: o.profile, contract: o.contract });
+        const id = `agt-${o.key}`;
+        agents[id] = { agentId: id, status: "running", ref: o.profile ?? "", task: o.task, contract: o.contract ?? null };
+        return { agentId: id };
+      },
+      becomes: async (id: string) => { if (fail.becomes && fail.becomes--) throw new Error("engine went away"); planner = id; },
+    };
+    const m = { from: "trigger:test", body: "Alice wrote", key: "trigger-test-1" };
+    for (const at of ["send", "spawn", "becomes"] as const) {
+      fail[at] = 1;
+      await expect(restartPlanner(k, m)).rejects.toThrow("engine went away");
+      // Still the planner that finished: the trigger again starts one, never just messages one that may not run.
+      expect(planner).toBe("agt-p1");
+    }
+    const again = await restartPlanner(k, m);
+    expect(again).toEqual({ agentId: expect.stringMatching(/^agt-planner-/), seq: inbox.length, started: true });
+    expect(planner).toBe(again!.agentId);
+    expect(agents[again!.agentId]!.status).toBe("running");
+    // One planner for the trigger (one key), with its profile ref and contract (without a worker's `from`), and its message
+    // addressed to it before it was spawned (the same key: the engine keeps it once).
+    expect(new Set(spawned.map((s) => s.key))).toEqual(new Set([again!.agentId.slice(4)]));
+    expect(spawned.at(-1)).toEqual({ key: again!.agentId.slice(4), profile: "planner;ov=x", contract: { report: true } });
+    expect(new Set(inbox.map((x) => `${x.to} ${x.key}`))).toEqual(new Set([`${again!.agentId} trigger-test-1`]));
+    // Working again: a later trigger only messages it.
+    expect(await restartPlanner(k, { ...m, key: "trigger-test-2" })).toEqual({ agentId: again!.agentId, seq: inbox.length, started: false });
+    expect(spawned.filter((s) => s.key !== again!.agentId.slice(4))).toEqual([]);
+  });
+
+  test("two triggers on one ended run at once start one planner: the second only messages it", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    await subscribe({ runId: "run-two", source: "test", thread: "pr/5" }, "pull-request");
+    ended("run-two");
+    let inFlight = 0, most = 0, planner: string | null = null;
+    useIntakeDeps({
+      restart: async (_runId, m) => {
+        // It reads the run's planner, then takes a while to start one (as the engine does).
+        most = Math.max(most, ++inFlight);
+        const had = planner;
+        await sleep(20);
+        inFlight--;
+        if (had) return { agentId: had, seq: 2, started: false };
+        planner = `agt-for-${m.key}`;
+        return { agentId: planner, seq: 1, started: true };
+      },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+    });
+    const [a, b] = await Promise.all([admit(trigger({ thread: "pr/5" }), SOURCE), admit(trigger({ thread: "pr/5" }), SOURCE)]);
+    expect(most).toBe(1);
+    expect([a, b].filter((d) => d.kind === "continued" && d.restarted)).toHaveLength(1);
+    expect([a, b].map((d) => d.kind)).toEqual(["continued", "continued"]);
+  });
+
   test("the planner started again is told why, on top of its first brief (never twice)", async () => {
     const { restartBrief } = await import("../../src/triggers/intake");
     const once = restartBrief("Goal: add a\n\nYou are the planner.", { agentId: "agt-p1", status: "done" });
@@ -360,6 +427,29 @@ describe("replies (§16.3.7)", () => {
     await sweepTriggers();
     expect(posted.map((r) => r.runId)).toEqual(["run-r3"]);
     expect(readdirSync(join(home, "state", "triggers", "replies"))).toEqual([]);
+  });
+
+  test("a run that ends as soon as it starts is answered; an engine that doesn't answer, or no reply path yet, loses no reply", async () => {
+    setGate({ test: { allowed: ["alice"], reply: true } });
+    const { useTriggerReplies } = await import("../../src/triggers/intake");
+    let outcomeFails = 1;
+    useIntakeDeps({
+      // It ends while it starts (a planner that has nothing to do), before the intake has returned.
+      startRun: async () => { standing["run-quick"] = { exists: true, live: false, endedAt: Date.now(), stopped: false }; await sleep(10); return { runId: "run-quick" }; },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+      outcome: async (runId) => { if (outcomeFails && outcomeFails--) throw new Error("engine went away"); return outcomes[runId] ?? null; },
+    });
+    outcomes["run-quick"] = { state: "completed", summary: "Nothing to change: it was fixed already." };
+    expect(await admit(trigger({ thread: "issue/30" }), SOURCE)).toEqual({ kind: "started", runId: "run-quick" });
+    // The engine doesn't say how it ended, then the source's plugin isn't there to post it: each is tried again.
+    await sweepTriggers();
+    useTriggerReplies(null);
+    await sweepTriggers();
+    expect(posted).toEqual([]);
+    useTriggerReplies(host.contributions);
+    await sweepTriggers();
+    await sweepTriggers();
+    expect(posted.map((r) => [r.runId, r.text])).toEqual([["run-quick", "Nothing to change: it was fixed already.\n\n— capcomd (run-quick)"]]);
   });
 
   test("a run started again answers the request that started it, once it ends again", async () => {

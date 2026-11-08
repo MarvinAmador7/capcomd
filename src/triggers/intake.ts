@@ -214,6 +214,41 @@ export function restartBrief(task: string, was: { agentId: string; status: strin
 }
 
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
+
+/** What starting an ended run's planner again asks of the run (the kernel's: its scope actor and spawnAgent). */
+export interface PlannerKernel {
+  /** The run's planner as the run records it (`_planner`, else the key "planner"), or null. */
+  planner(): Promise<{ agentId: string; status: string; ref?: string | null; profile?: string | null; task: string; contract?: Record<string, unknown> | null } | null>;
+  /** The id a top-level agent spawned with `key` gets (known before it exists). */
+  idFor(key: string): string;
+  send(to: string, m: Message): Promise<{ seq: number }>;
+  /** spawnAgent in this run, started (idempotent by `key`: the same key, the same agent, started if it isn't). */
+  spawn(o: { profile?: string; task: string; key: string; contract?: Record<string, unknown> }): Promise<{ agentId: string }>;
+  /** The run's `_planner` from now on. */
+  becomes(agentId: string): Promise<void>;
+}
+
+/**
+ * §16.3.2 step 2: an ended run's planner works again on `m`. A new top-level planner continues the one that finished: its
+ * profile (as it was spawned, overrides and all), its brief and its contract (a work contract's `from` is a worker's; a
+ * planner continues by reading the run), one per trigger (the key). Its message is in its inbox before it starts (its id
+ * is known before it exists), then it is spawned and started, and only then is it the run's planner: a restart that
+ * fails part way is done again by the same trigger (the same key, the same agent, started if it wasn't), and never
+ * leaves the run's planner one that doesn't start. A planner that works again already only gets the message.
+ */
+export async function restartPlanner(k: PlannerKernel, m: Message): Promise<{ agentId: string; seq: number; started: boolean } | null> {
+  const was = await k.planner();
+  if (!was) return null;
+  if (!TERMINAL.has(was.status)) { const r = await k.send(was.agentId, m); return { agentId: was.agentId, seq: r.seq, started: false }; }
+  const key = `planner-${sha(m.key).slice(0, 16)}`;
+  const { from: _from, ...contract } = (was.contract ?? {}) as Record<string, unknown>;
+  const r = await k.send(k.idFor(key), m);
+  const profile = was.ref ?? was.profile;
+  const a = await k.spawn({ ...(profile ? { profile } : {}), task: restartBrief(was.task, was), key, ...(Object.keys(contract).length ? { contract } : {}) });
+  await k.becomes(a.agentId);
+  return { agentId: a.agentId, seq: r.seq, started: true };
+}
+
 const kernelDeps: IntakeDeps = {
   async startRun(input, principal) {
     const { createRunAs } = await import("../api/rivet-source");
@@ -233,25 +268,14 @@ const kernelDeps: IntakeDeps = {
     const { existingActor } = await import("../core/relay");
     const s = await existingActor("scope", [runId]);
     if (!s) return null;
-    const to = await plannerOf(s, runId);
-    const was: any = to ? await s.getAgent({ agentId: to }).catch(() => null) : null;
-    if (!was) return null;
-    // Its planner works again already (an earlier trigger started it): the message is for it.
-    if (!TERMINAL.has(was.status)) { const r = await s.sendMessage({ to: to!, from: m.from, body: m.body, key: m.key }); return { agentId: to!, seq: r.seq, started: false }; }
-    // The same planner again: its profile (as it was spawned, overrides and all), its brief and its contract (a work
-    // contract's `from` is a worker's; a planner continues by reading the run), one per trigger (the key).
     const O = await import("../primitives/ops");
-    const { from: _from, ...contract } = (was.contract ?? {}) as Record<string, unknown>;
-    const a = await O.spawnAgent({
-      runId, ...(was.ref ?? was.profile ? { profile: was.ref ?? was.profile } : {}), task: restartBrief(was.task, was), key: `planner-${sha(m.key).slice(0, 16)}`,
-      ...(Object.keys(contract).length ? { contract } : {}), start: false,
-    });
-    // It is the run's planner from now on (its goal is ready when it finishes; later messages go to it), and its message
-    // is in its inbox before it starts.
-    await (await import("../primitives/state")).kvWrite(runId, { k: O.PLANNER_KV, value: { agentId: a.agentId }, writer: "operator" });
-    const r = await s.sendMessage({ to: a.agentId, from: m.from, body: m.body, key: m.key });
-    if (!TERMINAL.has(a.status)) await (await import("../primitives/drivers")).startDriver(runId, a.agentId);
-    return { agentId: a.agentId, seq: r.seq, started: true };
+    return restartPlanner({
+      planner: async () => { const to = await plannerOf(s, runId); return to ? await s.getAgent({ agentId: to }).catch(() => null) : null; },
+      idFor: (key) => O.rootAgentIdFor(runId, key),
+      send: (to, msg) => s.sendMessage({ to, from: msg.from, body: msg.body, key: msg.key }),
+      spawn: (o) => O.spawnAgent({ runId, ...o }),
+      becomes: async (agentId) => { await (await import("../primitives/state")).kvWrite(runId, { k: O.PLANNER_KV, value: { agentId }, writer: "operator" }); },
+    }, m);
   },
   async outcome(runId) {
     const { existingActor } = await import("../core/relay");
@@ -418,6 +442,16 @@ async function judge(t: Trigger, principal: Principal, subscribed: string | null
   return { gate, denied: null, recorded: false, act: true };
 }
 
+/** Restarts in flight, per run (the intake is the daemon's only: one process). */
+const restarting = new Map<string, Promise<unknown>>();
+function oneAtATime<T>(runId: string, f: () => Promise<T>): Promise<T> {
+  const turn = (restarting.get(runId) ?? Promise.resolve()).then(f);
+  const done = turn.then(() => {}, () => {});
+  restarting.set(runId, done);
+  void done.then(() => { if (restarting.get(runId) === done) restarting.delete(runId); });
+  return turn;
+}
+
 async function decide(t: Trigger, principal: Principal): Promise<{ decision: TriggerDecision; gate: TriggerLogEntry["gate"] }> {
   // 2. A run follows the thread: a person's trigger reaches its planner, with no further gate; a bot's only a live run.
   const followed = await following(t.source, t.thread);
@@ -437,9 +471,11 @@ async function decide(t: Trigger, principal: Principal): Promise<{ decision: Tri
     // `observe` it is recorded with what would have happened; refused, it is only in the inbox.
     const j = await judging();
     if (j.act) {
-      const again = await deps.restart(runId, m).catch((e) => { throw restartRefused(t, runId, e); });
+      // One restart of a run at a time: a second trigger finds the planner the first started, and only messages it.
+      const asked = iso();
+      const again = await oneAtATime(runId, () => deps.restart(runId, m)).catch((e) => { throw restartRefused(t, runId, e); });
       if (again) {
-        if (again.started) awaitReply(runId, t);
+        if (again.started) awaitReply(runId, t, asked);
         return { decision: { kind: "continued", runId, seq: again.seq, ...(again.started ? { restarted: again.agentId } : {}) }, gate: j.gate };
       }
       continue;
@@ -456,10 +492,11 @@ async function decide(t: Trigger, principal: Principal): Promise<{ decision: Tri
   const goal = t.text.text.trim();
   const checked = (await import("../api/contract")).CreateRunBody.shape.goal.safeParse(goal);
   if (!checked.success) throw new PluginError("invalid", `trigger ${t.source}/${t.id} can't be a run's goal: ${checked.error.issues[0]?.message ?? "invalid"}`);
+  const asked = iso();
   const { runId } = await deps.startRun({ goal, ...(g.project ? { repo: g.project } : {}) }, principal);
   writeAtomic(dir("runs", `${runId}.json`), JSON.stringify({ source: t.source, id: t.id, thread: t.thread, actor: t.actor, at: t.at }));
   await subscribe({ runId, source: t.source, thread: t.thread }, "intake", { started: true }).catch((e) => console.error(`[triggers] ${runId}: subscribing to ${t.thread}: ${(e as Error)?.message ?? e}`));
-  awaitReply(runId, t);
+  awaitReply(runId, t, asked);
   return { decision: { kind: "started", runId }, gate };
 }
 
@@ -560,11 +597,12 @@ const REPLY_ATTEMPTS = 3;
 /** §16.5: under 100 words, with the line that says who wrote it. */
 const REPLY_WORDS = 90, REPLY_CHARS = 1500;
 
-/** A run a trigger started (or started again) answers on its thread when it ends, if the operator turned replies on. */
-function awaitReply(runId: string, t: Trigger) {
+/** A run a trigger started (or started again) answers on its thread when it ends, if the operator turned replies on.
+ *  `at`: when it was asked, before the run (or its planner) started, so an end however soon after is its answer's. */
+function awaitReply(runId: string, t: Trigger, at: Timestamp) {
   if (!gateOf(triggersConfig(), t.source).reply) return;
   try {
-    writeAtomic(dir("replies", `${runId}.json`), JSON.stringify({ runId, source: t.source, thread: t.thread, replyTo: t.replyTo, triggerId: t.id, at: iso(), attempts: 0 } satisfies ReplyTarget));
+    writeAtomic(dir("replies", `${runId}.json`), JSON.stringify({ runId, source: t.source, thread: t.thread, replyTo: t.replyTo, triggerId: t.id, at, attempts: 0 } satisfies ReplyTarget));
   } catch (e) { console.error(`[triggers] ${runId}: noting its reply on ${t.thread}: ${(e as Error)?.message ?? e}`); }
 }
 
@@ -582,8 +620,8 @@ export function replyText(runId: string, o: RunOutcome): string {
 /**
  * The sweep's replies: each run that ended since its request posts once through its source's reply path, if it
  * completed or failed (a person's stop needs no answer) and the source's replies are still on. A reply is claimed before
- * it is posted, so a crash while posting never posts it twice; a retryable failure is tried again at the next sweep (at
- * most three times).
+ * it is posted, so a crash while posting never posts it twice; a retryable failure, or no reply path for the source yet,
+ * is tried again at the next sweep (at most three times).
  */
 export async function sendReplies(): Promise<void> {
   if (!existsSync(dir("replies"))) return;
@@ -596,18 +634,22 @@ export async function sendReplies(): Promise<void> {
     // Still working, or ended before the request (an ended run's planner, starting again).
     if (s.live || s.endedAt === null || s.endedAt < Date.parse(r.at)) continue;
     if (s.stopped || !gateOf(triggersConfig(), r.source).reply) { rmSync(path, { force: true }); continue; }
+    // How it ended, asked before the claim: an engine that doesn't answer now loses no reply.
+    const out = await deps.outcome(r.runId).then((o) => ({ o }), () => null);
+    if (!out) continue;
+    if (!out.o || out.o.state === "cancelled") { rmSync(path, { force: true }); continue; }
     const claim = dir("replies", `${r.runId}.posting`);
     try { renameSync(path, claim); } catch { continue; } // another sweep took it
     const done = () => rmSync(claim, { force: true });
-    const out = await deps.outcome(r.runId).catch(() => null);
-    if (!out || out.state === "cancelled") { done(); continue; }
-    const reply: TriggerReply = { source: r.source, thread: r.thread, replyTo: r.replyTo, triggerId: r.triggerId, runId: r.runId, text: replyText(r.runId, out), key: `reply-${r.runId}-${sha(r.triggerId).slice(0, 16)}` };
+    const reply: TriggerReply = { source: r.source, thread: r.thread, replyTo: r.replyTo, triggerId: r.triggerId, runId: r.runId, text: replyText(r.runId, out.o), key: `reply-${r.runId}-${sha(r.triggerId).slice(0, 16)}` };
     try {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new PluginError("timeout", `the ${r.source} source didn't post the reply within ${REPLY_TIMEOUT_MS} ms`)), REPLY_TIMEOUT_MS); });
       const posted = await Promise.race([deps.reply(reply), late]).finally(() => clearTimeout(timer));
+      // No reply path for the source now (its plugin is still loading, or restarting): tried again, as GitHub's own
+      // trouble is, and dropped after the last try.
+      if (!posted) throw new PluginError("unavailable", `the ${r.source} source has no reply path`, undefined, true);
       done();
-      if (!posted) { console.error(`[triggers] ${r.runId}: the ${r.source} source has no reply path; its reply on ${r.thread} is dropped`); continue; }
       await record("trigger.replied", `run:${r.runId}`, { source: r.source, thread: redactor.text(r.thread), runId: r.runId, id: redactor.text(r.triggerId), url: typeof posted.url === "string" ? redactor.text(posted.url) : null }).catch(() => {});
     } catch (e) {
       // A reply that may have been posted (no answer in time) is not posted again.
