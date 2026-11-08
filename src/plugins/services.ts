@@ -65,31 +65,6 @@ export async function showsFileChanges(runId: string, agentId: string): Promise<
   return !contract.review && contract.report !== true && (a.spec as { toolMode?: string } | null)?.toolMode !== "orchestrate";
 }
 
-/** How often the agent's files are checkpointed (ms), for the built-in watchdog's windows (§16.4): its profile's
- *  `checkpointEveryMs` (or CAPCOMD_AGENT_CHECKPOINT_MS) as its worker reads it (src/actors/worker.ts, from the env its
- *  machine sees); null for an agent no supervisor runs under (a scripted or fake one), or whose config doesn't read
- *  (its run says why). */
-export async function checkpointEvery(runId: string, agentId: string): Promise<number | null> {
-  const a = await agentRecord(runId, agentId);
-  const { pinnedMachine } = await import("../profiles");
-  const source = await (await import("../providers/run-sandbox")).agentSandboxEnv(runId, pinnedMachine(a.spec).sandbox).catch(() => process.env);
-  return checkpointEveryOf(a, source);
-}
-
-/** `checkpointEvery` for an agent's record and the env its machine sees. */
-export async function checkpointEveryOf(a: { ref: string | null; spec: unknown }, source: Record<string, string | undefined>): Promise<number | null> {
-  const { env } = await import("../utils/env");
-  const mode = env("SPAWN_EXEC", source);
-  if (mode === "fake" || mode === "script") return null;
-  const C = await import("../agents/config");
-  // What its worker is given (src/primitives/ops.ts): its profile's ref and, with one, its pinned spec.
-  const ref = a.ref ?? undefined, spec = ref ? a.spec : undefined;
-  try {
-    if (!C.isRealAgent(C.agentFromEnv(source, ref, spec))) return null;
-    return C.loadAgentConfig(source, ref, spec).checkpointEveryMs;
-  } catch { return null; }
-}
-
 /** `ctx.agents` for one plugin (§8.1, §8.4). */
 export function pluginAgents(plugin: string): Partial<AgentsService> {
   return {

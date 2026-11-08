@@ -117,6 +117,10 @@ export const claude: AgentProvider = {
       if (uses.length) ev.calls = uses.map((u: any) => { const call = toolCall(u.name, u.input); if (u.id) (state.toolCalls ??= {})[String(u.id)] = call; return call; });
       const results = content.filter((c: any) => c?.type === "tool_result" && state.toolCalls?.[String(c.tool_use_id)]);
       if (results.length) ev.results = results.map((x: any) => ({ call: state.toolCalls![String(x.tool_use_id)]!, ...(x.is_error ? { error: contentText(x.content) } : {}) }));
+      // A Bash call it waits on (not one it sent to the background) runs until its result comes (plugin API §16.4).
+      const started = uses.filter((u: any) => u.name === "Bash" && u.id && u.input?.run_in_background !== true).map((u: any) => String(u.id));
+      const ended = content.filter((c: any) => c?.type === "tool_result" && c.tool_use_id).map((c: any) => String(c.tool_use_id));
+      if (started.length || ended.length) ev.commands = { ...(started.length ? { started } : {}), ...(ended.length ? { ended } : {}) };
     }
     // Live spend (ADR-019): claude reports a cost only in its final result, so meanwhile it is estimated from each
     // message's usage. A message streams as several events with the same id and usage: counted once.

@@ -525,11 +525,14 @@ export function watchdogStep(v: Values, env: Record<string, string | undefined> 
   const num = (k: string) => (typeof set[k] === "number" ? (set[k] as number) : props[k]!.default);
   const what = `an agent whose work hasn't changed for ${W.spoken(num("stalledAfterMs"))} gets a stalled notice${num("stopAfterMs") > 0 ? `, and is stopped after ${W.spoken(num("stopAfterMs"))}` : ""}`;
   const where = `plugins.watchdog in ${path}`;
+  // A stall limit shorter than progress takes to show flags agents that are working: said, not refused.
+  const warning = W.configWarning({ stalledAfterMs: num("stalledAfterMs") });
+  const warn = warning ? { advice: true, hint: `${warning}. Set stalledAfterMs to ${W.PROGRESS_SIGNAL_MS} or more in ${where}.` } : {};
   if (set.enabled === false) return { step: "watchdog", ok: true, detail: `off: turned off in ${where}` };
-  if (set.enabled === true) return { step: "watchdog", ok: true, detail: `on: ${what}` };
+  if (set.enabled === true) return { step: "watchdog", ok: true, detail: `on: ${what}`, ...warn };
   if (v["no-watchdog"] === true) return { step: "watchdog", ok: true, detail: `off (--no-watchdog): turn it on with "enabled": true in ${where}` };
   writeConfig(path, { plugins: { watchdog: { enabled: true } } });
-  return { step: "watchdog", ok: true, detail: `on: ${what} (${where}; a running engine picks it up when it restarts)` };
+  return { step: "watchdog", ok: true, detail: `on: ${what} (${where}; a running engine picks it up when it restarts)`, ...warn };
 }
 
 /** 4. The engine as a background service. */
@@ -619,9 +622,12 @@ export async function checkSetup(cwd = process.cwd(), o: { mcpClient?: boolean }
   const wd = (await import("../../plugins/config")).pluginSettings(W.manifest, { cwd });
   // What the schema accepts but activation refuses (a stop before the notice), over the schema's defaults.
   const defaults = Object.fromEntries(Object.entries((W.manifest.config as { properties: Record<string, { default: number }> }).properties).map(([k, p]) => [k, p.default]));
-  const problem = wd.enabled && !wd.errors.length ? W.configProblem({ ...defaults, ...wd.config } as unknown as import("../../plugins/watchdog").WatchdogConfig) : null;
+  const settings = { ...defaults, ...wd.config } as unknown as import("../../plugins/watchdog").WatchdogConfig;
+  const problem = wd.enabled && !wd.errors.length ? W.configProblem(settings) : null;
+  const warning = wd.enabled && !wd.errors.length ? W.configWarning(settings) : null;
   if (wd.enabled && wd.errors.length) out.push({ step: "watchdog", ok: false, detail: `its settings are refused, so it won't load: ${wd.errors.map((e) => `${e.layer}: plugins.watchdog.${e.path} ${e.message}`).join("; ")}`, hint: "Fix plugins.watchdog in your config, then restart the engine." });
   else if (problem) out.push({ step: "watchdog", ok: false, detail: `it won't load: ${problem}`, hint: "Fix plugins.watchdog in your config, then restart the engine." });
+  else if (warning) out.push({ step: "watchdog", ok: true, advice: true, detail: `on, but ${warning}`, hint: `Set plugins.watchdog.stalledAfterMs to ${W.PROGRESS_SIGNAL_MS} or more in your config, then restart the engine.` });
   else out.push({ step: "watchdog", ok: true, detail: wd.enabled ? "on" : "off (`capcomd setup service` turns it on)" });
   return out;
 }
