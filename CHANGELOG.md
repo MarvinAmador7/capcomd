@@ -18,6 +18,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `validate` warns, and the profile lists (`capcomd profiles list --json`, `capcomd_profiles`, `GET /v1/profiles`)
   name the untrusted files in `untrustedSandbox`. Your own profiles (`~/.capcomd/profiles/`) need no trust. If you
   use such a project profile, run `capcomd profiles trust <name>` once, or start the run with `--sandbox`.
+- Fixed: a profile's `memory: { files: [NOTES.md] }` now does what it says. Agents of that profile get only the
+  project-memory items that `.capcomd/context/NOTES.md` links to (Markdown links, or the `→ path` lines that
+  `capcomd context lint --fix` writes, so `files: [index.md]` works too). Before, the setting was ignored and every
+  item was shown. If the file isn't there, the brief's header says `memory: skipped (not found)` instead of showing
+  every item. An item that another item supersedes stays out of the brief even if the file links to it.
+  `capcomd context lint` accepts the file next to `index.md` and checks it for secrets.
+- **Breaking:** a profile whose `memory.files` names a file in a subdirectory (`files: [docs/MEMORY.md]`) no longer
+  loads: move the file into `.capcomd/context/` and name it alone (`files: [MEMORY.md]`). A profile whose
+  `memory.files` names a file the repository doesn't have now briefs its agents with no project memory (the header
+  says `memory: skipped (not found)`) instead of every item: add the file, or remove `files` to read every item.
+- Fixed: when a profile reads both the project's memory and a groundray brain, every fact now comes before any
+  lesson in the context brief, whichever provider the profile lists first. So when the brief is over its size budget,
+  lessons are cut before facts. The brief's header no longer says that a brain's files are "in your checkout": it
+  says they are in the read-only copy of the bundle in the agent's sandbox, at the path each line gives, and so does
+  the `capcomd-context-doctrine` skill agents get with the brief.
 - New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at
   most 32 KiB) is now the first thing each of its agents reads, once, before the profile's prompt and its skills. The
   agent keeps the text it was spawned with; a later edit reaches only agents spawned after it. A persona from the
