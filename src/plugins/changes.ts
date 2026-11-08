@@ -107,6 +107,19 @@ async function flush(db: Db, runId: string, t: Tap, rows: Rows) {
   }
 }
 
+/**
+ * `agent.changed` `worked` (§6.6.8, §16.4): what the agent's runner saw it doing (its files changed, a foreground command
+ * running), told from the scope's `worked` once the agent's record says it runs. It is no event in the run's log (one
+ * every heartbeat for each working agent would crowd it), so it is told when seen and never replayed. The agent's own.
+ */
+export function tellWorked(runId: string, a: ScopeAgent, w: { files: boolean; commandSince: number | null; at: number }): void {
+  if (!hooks.listening("agent.changed")) return;
+  const lifecycle = pinnedRuntime(a.spec).lifecycle;
+  const change: AgentChange = { kind: "worked", files: w.files, command: w.commandSince ? { since: iso(w.commandSince) } : null, at: iso(w.at) };
+  hooks.fire("agent.changed", "observe", { agent: agentOf(a), change, ...(lifecycle ? { lifecycle } : {}) },
+    { principal: principalOf(a.agentId, runId), entity: `${runId}#worked-${a.agentId}-${w.at}`, runId, agentId: a.agentId });
+}
+
 /** The events about a verification or a merge: their asker is the op's (`askedBy`), their approver the event's `by`. */
 const OP_EVENTS = new Set(["VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED", "MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED"]);
 

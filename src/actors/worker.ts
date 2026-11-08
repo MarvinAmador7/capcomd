@@ -460,6 +460,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       onReport: (rep) => {
         if (!scope) return;
         if (rep.type === "checkpoint") { scope.checkpoint({ agentId: workerId, ref: rep.ref, sha: rep.sha, reason: rep.reason, files: rep.files }).catch(() => {}); return; }
+        // Plugin API §16.4: its files changed, or it waits on a foreground command (the runner says so once a heartbeat).
+        if (rep.type === "worked") { scope.worked({ agentId: workerId, files: rep.files, commandSince: rep.commandSince }).catch(() => {}); return; }
         if (Date.now() - beatAt < beatEvery) return;
         beatAt = Date.now();
         scope.heartbeat({ agentId: workerId }).catch(() => {});

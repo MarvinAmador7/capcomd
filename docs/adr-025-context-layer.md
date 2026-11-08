@@ -684,7 +684,7 @@ this list says why):
   kept for them (a host repo), fail closed, and are asked about every verify and merge (they let a branch that doesn't
   touch the directory through without reading further); the judge runs before the reviewer gate, so a memory change that
   can't land costs no review. A branch that isn't an agent's (a person's) isn't judged.
-- From a second review (spec 1.0.52): a path counts as the memory by any name a checkout reads as it, since macOS's
+- From a second review (spec 1.0.53): a path counts as the memory by any name a checkout reads as it, since macOS's
   and Windows' default file systems ignore case (`.Capcomd/Context/memory/x.md` is checked out into
   `.capcomd/context/memory/`, beside the items, while git, the brief and a prefix check see another directory); the
   gates also drop what HFS+ ignores in a name and the dots and spaces Windows drops from its end. A consolidator's branch
