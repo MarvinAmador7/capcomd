@@ -1,14 +1,28 @@
-// The kernel's primitives for a plugin in the daemon (docs/spec/plugin-api.md §8.1), beyond `ctx.jobs`
-// (src/jobs/service.ts) and `ctx.storage` (src/plugins/storage.ts): `ctx.agents` (`get`, `tree`, `cancel`, `notice`).
-// Each is the kernel's own path (src/primitives/ops.ts, the scope actor), with the plugin as the caller; the host has
-// already checked the plugin's scopes (packages/plugin/src/host/context.ts). Errors reach the plugin as PluginErrors
-// (§8.3). What isn't here (`agents.spawn`, `await`, `grant`, `title`, …) answers `unsupported` until a later step
-// implements it.
-import type { AgentsService } from "../../packages/plugin/src/context";
+// The kernel's primitives for a plugin (docs/spec/plugin-api.md §8.1, §8.4), beyond `ctx.jobs` (src/jobs/service.ts),
+// `ctx.storage` (src/plugins/storage.ts) and `ctx.triggers` (src/triggers/intake.ts). In the daemon only (`daemonServices`):
+// `ctx.runs`, `ctx.agents` (`get`, `tree`, `cancel`, `notice`), `ctx.messages`, `ctx.kv`, `ctx.board`, `ctx.gates.pending`
+// and `ctx.profiles`, which act on the engine or resolve as a spawn does. In every process (`localServices`), like the
+// gates: `ctx.sandboxes` and `ctx.auth`, facts about this process's places and logins. Each is the kernel's own path
+// (src/primitives/ops.ts, the scope actor), with the plugin as the caller; the host has already checked the plugin's
+// scopes (packages/plugin/src/host/context.ts). A call never creates a run: an unknown one is `not_found`. A mutating
+// call's `key` (§8.2) is the plugin's own, kept apart from the CLI's and every other plugin's. Errors reach the plugin as
+// PluginErrors (§8.3). What isn't here (`agents.spawn`, `await`, `grant`, `title`, `gates.verify`, `merge`) answers
+// `unsupported` until a later step implements it.
+import type { AgentsService, AuthService, BoardService, BoardTask, CallOptions, GatesService, KvService, MessagesService, ProfilesService, RunsService, SandboxesService } from "../../packages/plugin/src/context";
 import { PluginError } from "../../packages/plugin/src/errors";
-import type { ScopeAgent } from "../actors/scope";
+import type { PluginManifest } from "../../packages/plugin/src/manifest";
+import type { SandboxProvider as SandboxSeam, SeamCall } from "../../packages/plugin/src/seams";
+import type { Budget, PinnedSpec, Principal, Run } from "../../packages/plugin/src/shapes";
+import type { ScopeAgent, ScopeOp, ScopeTask } from "../actors/scope";
 import { RelayError } from "../core/errors";
-import { agentOf } from "./shapes";
+import { classifySandboxError } from "../providers/seam";
+import type { SandboxProvider } from "../providers/sandbox";
+import { checkKey, leaseMs } from "../primitives/board";
+import { paramsHash } from "../primitives/policy";
+import { agentSeam, kindOf } from "./agents";
+import { iso, skillHash, SKILL_BYTES_MAX, SKILLS_MAX, untrusted } from "./hooks";
+import { describedSandboxes, sandboxSeam } from "./sandboxes";
+import { agentOf, approvalOf } from "./shapes";
 
 /** A kernel error as a plugin sees it (§8.3). */
 export function asPluginError(e: unknown): never {
@@ -86,4 +100,428 @@ export function pluginAgents(plugin: string): Partial<AgentsService> {
       await s.notice({ agentId, notice: { kind: notice.kind, detail: detail.slice(0, 300) } });
     },
   };
+}
+
+// ---- the daemon's: runs, messages, kv, board, gates, profiles ---------------------------------------------------------
+
+const ops = () => import("../primitives/ops");
+/** An actor's error (its UserError code, src/primitives/ops.ts asRelay) or the kernel's, as a plugin sees it. */
+async function kernelError(e: unknown): Promise<never> {
+  // The kernel's own errors as they are: through asRelay, a plugin's refusal (refusedError) would lose its reason.
+  if (e instanceof RelayError || e instanceof PluginError) return asPluginError(e);
+  const { asRelay } = await ops();
+  try { return asRelay(e); } catch (x) { return asPluginError(x); }
+}
+const invalid = (message: string) => new PluginError("invalid", message);
+/** A mutating call's idempotency key (§8.2), the plugin's own: a run's scope keeps one table of keys for every caller. */
+function keyOf(plugin: string, o?: CallOptions): { key?: string } {
+  if (o?.key === undefined) return {};
+  // Refused, not cut: two keys that differ past the cut would be one key.
+  if (typeof o.key !== "string" || !o.key || o.key.length > KEY_MAX) throw invalid(`a call's key is a non-empty string of at most ${KEY_MAX} characters`);
+  return { key: `plugin:${plugin}:${o.key}` };
+}
+const KEY_MAX = 200;
+const VALUE_MAX = 64 * 1024;
+function checkValue(value: unknown, what: string): void {
+  let json: string | undefined;
+  try { json = JSON.stringify(value); } catch { json = undefined; }
+  // undefined, a function or a symbol has no JSON; a BigInt or a cycle throws.
+  if (json === undefined) throw invalid(`a ${what} value is JSON (not undefined, a function, a BigInt or a cycle)`);
+  if (Buffer.byteLength(json) > VALUE_MAX) throw invalid(`a ${what} value is at most 64 KB of JSON (§8.4)`);
+}
+
+/** The run as harness.v1 shows it (GET /v1/runs/{id}): its row of the runs index, else what its scope recorded. */
+async function runOf(runId: string): Promise<Run> {
+  const s = await scopeOf(runId);
+  const meta = await s.getScope({}) as { label: string | null; createdAt: number } | null;
+  if (!meta) throw new PluginError("not_found", `no run ${runId}`);
+  const { RUN_REPO_KV } = await import("../merge/run-config");
+  const row = (await ops()).recentRuns(500).find((r) => r.runId === runId)
+    ?? { runId, label: meta.label, repo: ((await s.kvGet({ k: RUN_REPO_KV }).catch(() => null)) as { value?: Record<string, string> } | null)?.value?.CAPCOMD_REPO ?? null, cwd: "", createdAt: meta.createdAt };
+  return runShape(await (await import("../api/rivet-source")).runOfRow(row));
+}
+const runShape = (r: Run): Run => ({ id: r.id, projectId: r.projectId, label: r.label, state: r.state, goal: r.goal, title: r.title, repo: r.repo, createdAt: r.createdAt });
+
+const UNITS = new Set(["usd", "turns", "wallSeconds"]);
+function budgetOf(b: unknown): Budget {
+  if (!b || typeof b !== "object" || Array.isArray(b)) throw invalid("a run has a budget: {usd?, turns?, wallSeconds?}");
+  for (const [k, v] of Object.entries(b)) if (!UNITS.has(k) || typeof v !== "number" || !Number.isFinite(v) || v <= 0) throw invalid(`budget ${k}: a positive number of usd, turns or wallSeconds`);
+  return b as Budget;
+}
+function named<K extends string>(name: K, v: unknown): { [k in K]?: string } {
+  if (v === undefined || v === null) return {};
+  if (typeof v !== "string" || !v.trim()) throw invalid(`${name} is a non-empty string`);
+  return { [name]: v } as { [k in K]?: string };
+}
+
+/** A run's goal, checked as POST /v1/runs checks one (src/api/contract.ts `CreateRunBody`): at most 16 KB, no NUL, no
+ *  leading `[agent:…]` directive. */
+async function goalOf(goal: unknown): Promise<{ goal?: string }> {
+  if (goal === undefined || goal === null) return {};
+  if (typeof goal !== "string") throw invalid("goal is a non-empty string");
+  const checked = (await import("../api/contract")).CreateRunBody.shape.goal.safeParse(goal);
+  if (!checked.success) throw invalid(`goal: ${checked.error.issues.map((i) => i.message).join("; ")}`);
+  return { goal };
+}
+
+/** `ctx.runs` (§8.1): what `capcomd run new`, `pause`, `resume`, `cancel` and `title --run` do, as the plugin. */
+export function pluginRuns(plugin: string, principal: Principal): RunsService {
+  const by = `plugin:${plugin}`;
+  return {
+    /** A run with no agent yet (`ops.runNew`); run.creating says the plugin asked (§6.6.3). */
+    new: async (input, o) => {
+      if (!input || typeof input !== "object") throw invalid("runs.new takes {budget, label?, goal?, checks?, reviewer?, target?, sandbox?}");
+      if (input.checks !== undefined && (!input.checks || typeof input.checks !== "object" || Object.values(input.checks).some((c) => typeof c !== "string" || !c.trim()))) throw invalid("checks name commands: {name: command}");
+      const r = await (await ops()).runNew({
+        budget: budgetOf(input.budget), ...named("label", input.label), ...(await goalOf(input.goal)), ...named("reviewer", input.reviewer), ...named("target", input.target), ...named("sandbox", input.sandbox),
+        ...(input.checks && Object.keys(input.checks).length ? { checks: input.checks } : {}), ...keyOf(plugin, o), principal,
+      }).catch(kernelError);
+      return runOf(r.runId);
+    },
+    get: (runId) => runOf(runId),
+    async list(input) {
+      const limit = input?.limit ?? 20;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw invalid("limit is a whole number from 1 to 500");
+      const { runOfRow } = await import("../api/rivet-source");
+      return Promise.all((await ops()).recentRuns(limit).map(async (r) => runShape(await runOfRow(r))));
+    },
+    /** Ends the run as `state` and cancels its agents, as `capcomd cancel <run>` does, saying which plugin did and why. */
+    async end(runId, input) {
+      await scopeOf(runId);
+      if (input?.state !== "failed" && input?.state !== "cancelled") throw invalid("a run ends failed or cancelled");
+      const why = `by the ${plugin} plugin: ${String(input.reason ?? "").trim().slice(0, 300) || "no reason given"}`;
+      const { cancelAgents, endRun } = await ops();
+      await endRun(runId, input.state, why, by, { evenIfAgentsEnded: true }).catch(kernelError);
+      await cancelAgents(runId, undefined, why, by).catch(kernelError);
+    },
+    async pause(runId) {
+      await scopeOf(runId);
+      await (await ops()).pauseAgents(runId, undefined, by).catch(kernelError);
+    },
+    async resume(runId) {
+      await scopeOf(runId);
+      await (await ops()).resumeAgents(runId, undefined, by).catch(kernelError);
+    },
+    async title(runId, title, o) {
+      await scopeOf(runId);
+      if (typeof title !== "string") throw invalid("a title is a string");
+      await (await ops()).setRunTitle(runId, title, { setBy: by, ...keyOf(plugin, o) }).catch(kernelError);
+    },
+  };
+}
+
+const SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** A message's skills (§8.1 `AttachedSkill`), each pinned by the hash of its text, as the kernel keeps them. */
+function messageSkills(skills: unknown): Array<{ name: string; content: string }> {
+  if (skills === undefined) return [];
+  if (!Array.isArray(skills) || skills.length > SKILLS_MAX) throw invalid(`skills is a list of at most ${SKILLS_MAX}`);
+  const out = skills.map((s: { name?: unknown; text?: unknown; hash?: unknown } | null) => {
+    if (!s || typeof s.name !== "string" || !SKILL_NAME.test(s.name)) throw invalid("a skill has a name of lowercase letters, digits, ., _ and -");
+    if (typeof s.text !== "string" || !s.text.trim()) throw invalid(`skill ${s.name}: text is its SKILL.md, a non-empty string`);
+    if (s.hash !== skillHash(s.text)) throw invalid(`skill ${s.name}: hash is the sha256 of its text`);
+    return { name: s.name, content: s.text };
+  });
+  if (out.reduce((n, s) => n + Buffer.byteLength(s.content), 0) > SKILL_BYTES_MAX) throw invalid(`a message's skills are at most ${SKILL_BYTES_MAX} bytes together`);
+  return out;
+}
+
+/** `ctx.messages` (§8.1): `capcomd send` from `plugin:<name>`, and an agent's inbox. */
+export function pluginMessages(plugin: string): MessagesService {
+  const from = `plugin:${plugin}`;
+  return {
+    async send(runId, input, o) {
+      await agentRecord(runId, input?.to);
+      const body = input.body;
+      if (typeof body !== "string" || !body.trim()) throw invalid("a message has a body");
+      if (Buffer.byteLength(body) > VALUE_MAX) throw invalid("a message's body is at most 64 KB");
+      const skills = messageSkills(input.skills);
+      const r = await (await ops()).sendToAgent(runId, { to: input.to, from, body, ...keyOf(plugin, o), ...(skills.length ? { skills } : {}) }).catch(kernelError);
+      // A key the scope has seen answers with its first message: this one again, or a conflict (§8.2).
+      if ((r as { replayed?: boolean }).replayed) {
+        const [m] = await (await scopeOf(runId)).inbox({ agentId: input.to, after: r.seq - 1 }) as Array<{ seq: number; from: string; body: string }>;
+        if (!m || m.seq !== r.seq || m.from !== from || m.body !== body) throw new PluginError("conflict", `key ${o!.key} was already used with different parameters`);
+      }
+      return { seq: r.seq };
+    },
+    async inbox(runId, agentId, after) {
+      await agentRecord(runId, agentId);
+      if (after !== undefined && (!Number.isInteger(after) || after < 0)) throw invalid("after is a message's seq (0: from the first)");
+      const rows = await (await scopeOf(runId)).inbox({ agentId, after: after ?? 0 }) as Array<{ seq: number; from: string; body: string; at: number }>;
+      return rows.map((m) => ({ seq: m.seq, from: m.from, body: untrusted(m.body, m.from), at: iso(m.at) }));
+    },
+  };
+}
+
+/** Keys a plugin reads and never writes (§8.4): the run's settings (`_`), and what only capcomd writes. */
+export const RESERVED_KV = ["_", "approval/", "recipe/", "handoff/", "plugin/"] as const;
+function kvKey(key: unknown, write: boolean): string {
+  try { checkKey(key as string); } catch { throw invalid(`kv key ${JSON.stringify(String(key).slice(0, 64))}: letters, digits and . _ : / - (at most 200)`); }
+  const k = key as string;
+  if (write && RESERVED_KV.some((p) => k.startsWith(p))) throw new PluginError("forbidden", `kv key ${k} is reserved for capcomd: a plugin reads the keys under ${RESERVED_KV.join(", ")} and writes others (§8.4)`);
+  return k;
+}
+type KvRow = { value: unknown; version: number; deleted: boolean } | null;
+
+/** `ctx.kv` (§8.1): the run's blackboard (src/primitives/state.ts), written as `plugin:<name>`. */
+export function pluginKv(plugin: string): KvService {
+  const writer = `plugin:${plugin}`;
+  return {
+    async get(runId, key) {
+      const k = kvKey(key, false);
+      const r = await (await scopeOf(runId)).kvGet({ k }) as KvRow;
+      return r && !r.deleted ? r.value : undefined;
+    },
+    async put(runId, key, value, o) {
+      const k = kvKey(key, true);
+      checkValue(value, "kv");
+      const idem = keyOf(plugin, o);
+      await (await scopeOf(runId)).kvWrite({ k, value, writer, ...idem, paramsHash: paramsHash({ k, value, expect: null }) }).catch(kernelError);
+    },
+    /** Compare-and-swap on the JSON of the current value (`expect` undefined: the key must not exist). */
+    async cas(runId, key, expect, value, o) {
+      const k = kvKey(key, true);
+      checkValue(value, "kv");
+      const idem = keyOf(plugin, o);
+      const s = await scopeOf(runId);
+      const cur = await s.kvGet({ k }) as KvRow;
+      const live = cur && !cur.deleted ? cur : null;
+      const matches = expect === undefined ? !live : !!live && JSON.stringify(live.value) === JSON.stringify(expect);
+      if (!matches && !idem.key) return false;
+      // With a key and a value that no longer matches: a version that never matches, so only a call the scope recorded
+      // under the key (this one, before) answers true.
+      try {
+        await s.kvWrite({ k, value, writer, expect: matches ? cur?.version ?? 0 : -1, ...idem, paramsHash: paramsHash({ k, value, cas: expect === undefined ? null : JSON.stringify(expect) }) });
+        return true;
+      } catch (e) {
+        if ((e as { code?: string }).code === "cas_mismatch") return false;
+        return kernelError(e);
+      }
+    },
+    /** The keys under `prefix`, in order; the run's settings (`_`) only when the prefix asks for them. */
+    async list(runId, prefix) {
+      if (typeof prefix !== "string" || !/^[A-Za-z0-9._:/-]{0,200}$/.test(prefix)) throw invalid("a kv prefix uses the characters of a key");
+      const rows = await (await scopeOf(runId)).kvList({ ...(prefix ? { prefix } : {}) }) as Array<{ k: string }>;
+      return rows.map((r) => r.k).filter((k) => prefix.startsWith("_") || !k.startsWith("_"));
+    },
+  };
+}
+
+const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
+/** A board task as the plugin API shows it: open (`pending`; `released` once a lease on it ended), `leased`, `done`. */
+function taskOf(t: ScopeTask): BoardTask {
+  const state = t.status === "done" ? "done" : t.status === "claimed" ? "leased" : t.epoch > 0 ? "released" : "pending";
+  return { id: t.taskId, goal: untrusted(t.title, "board"), state, holder: t.holder, after: t.after ?? [] };
+}
+
+/** `ctx.board` (§8.1): the run's task board (src/primitives/board.ts); what the plugin claims, `plugin:<name>` holds. */
+export function pluginBoard(plugin: string): BoardService {
+  const holder = `plugin:${plugin}`;
+  const task = async (runId: string, id: unknown) => {
+    if (typeof id !== "string" || !TASK_ID.test(id)) throw invalid(`not a task id: ${String(id).slice(0, 80)}`);
+    const t = await (await scopeOf(runId)).taskGet({ taskId: id }) as ScopeTask | null;
+    if (!t) throw new PluginError("not_found", `task ${id} not found in ${runId}`);
+    return t;
+  };
+  const finish = async (runId: string, id: string, outcome: "done" | "released") => {
+    const t = await task(runId, id);
+    if (outcome === "done" && t.status === "done" && t.holder === holder) return;
+    if (t.status !== "claimed" || t.holder !== holder) throw new PluginError("conflict", `task ${id} is ${t.status === "claimed" ? `held by ${t.holder}` : t.status}, not held by ${holder}`);
+    await (await scopeOf(runId)).taskFinish({ taskId: id, holder, epoch: t.epoch, outcome, paramsHash: paramsHash({ taskId: id, holder, epoch: t.epoch, outcome, result: null }) }).catch(kernelError);
+  };
+  return {
+    async add(runId, input, o) {
+      const id = input?.id;
+      if (typeof id !== "string" || !TASK_ID.test(id)) throw invalid("a task's id is letters, digits and . _ : - (at most 100)");
+      if (typeof input.goal !== "string" || !input.goal.trim()) throw invalid("a task has a goal");
+      if (input.after !== undefined && (!Array.isArray(input.after) || input.after.some((a) => typeof a !== "string" || !TASK_ID.test(a)))) throw invalid("after names task ids");
+      const after = input.after?.length ? [...new Set(input.after)].sort() : undefined;
+      const idem = keyOf(plugin, o);
+      const r = await (await scopeOf(runId)).taskAdd({ taskId: id, title: input.goal, ...(after ? { after } : {}), ...idem, paramsHash: paramsHash({ title: input.goal, data: null, ...(after ? { after } : {}) }) }).catch(kernelError);
+      return taskOf(r.task as ScopeTask);
+    },
+    /** The named task, or the next ready one; null when none is free. */
+    async claim(runId, input, o) {
+      if (input?.id !== undefined) await task(runId, input.id);
+      const ms = leaseMs(undefined);
+      const r = await (await scopeOf(runId)).taskClaim({ holder, ...(input?.id ? { taskId: input.id } : {}), leaseMs: ms, ...keyOf(plugin, o), paramsHash: paramsHash({ holder, taskId: input?.id ?? null, leaseMs: ms }) }).catch(kernelError) as { claimed?: boolean; taskId?: string };
+      return !r.claimed || !r.taskId ? null : taskOf(await task(runId, r.taskId));
+    },
+    done: (runId, id) => finish(runId, id, "done"),
+    release: (runId, id) => finish(runId, id, "released"),
+    list: async (runId) => ((await (await scopeOf(runId)).taskList({})) as ScopeTask[]).map(taskOf),
+  };
+}
+
+/** `ctx.gates.pending` (§8.1): the run's merges parked for a person's approval, oldest first. */
+export function pluginGates(): Partial<GatesService> {
+  return {
+    async pending(runId) {
+      const parked = await (await scopeOf(runId)).listOps({ state: "awaiting_approval", kind: "merge" }) as ScopeOp[];
+      const { approvalIdFor } = await import("../api/source");
+      return parked.map((op) => approvalOf(runId, op, approvalIdFor(runId, op.id)));
+    },
+  };
+}
+
+const PROFILE_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+/** Where a project's profiles are read (GET /v1/profiles?repo=): the daemon's own without one. */
+async function profileSource(project: unknown): Promise<Record<string, string | undefined>> {
+  if (project === undefined || project === null) return process.env;
+  if (typeof project !== "string" || !project.trim()) throw invalid("project is a project's repository or directory");
+  const { projectSource } = await import("../api/create-run");
+  try { return projectSource(project, process.env); } catch (e) { throw invalid((e as Error).message); }
+}
+
+/** `ctx.profiles` (§8.1, ADR-024 §3): what a spawn of a profile would run, and what there is to spawn. */
+export function pluginProfiles(plugin: string, principal: Principal): ProfilesService {
+  return {
+    /** The profile with the overrides applied (they only narrow), then profile.resolved (§6.6.5): the spec a spawn pins. */
+    async resolve(name, input, o) {
+      if (typeof name !== "string" || !PROFILE_NAME.test(name)) throw invalid(`not a profile name: ${String(name).slice(0, 80)}`);
+      const overrides = input?.overrides;
+      if (overrides !== undefined && (!overrides || typeof overrides !== "object" || Array.isArray(overrides))) throw invalid("overrides are {field: value}, as `--set` takes them");
+      const source = await profileSource(input?.project);
+      const P = await import("../profiles");
+      let resolved: import("../profiles").ResolvedAgent;
+      try {
+        resolved = P.resolveAgent(P.encodeAgentRef(name, overrides && Object.keys(overrides).length ? { set: overrides } : undefined), source);
+      } catch (e) {
+        if (!(e instanceof P.AgentConfigError)) throw e;
+        throw new PluginError(/unknown agent profile/.test(e.message) ? "not_found" : /would widen/.test(e.message) ? "widening" : "invalid", e.message);
+      }
+      const out = await (await ops()).resolvedProfile(resolved, overrides && Object.keys(overrides).length ? overrides : null, { principal, entity: `plugin:${plugin}/${name}${o?.key ? `/${o.key}` : ""}` }).catch(kernelError);
+      const { kind: _kind, ...spec } = (out.spec ?? {}) as unknown as Record<string, unknown>;
+      return { ...spec, ...(out.profile ? { profile: out.profile } : {}) } as unknown as PinnedSpec;
+    },
+    async list(input) {
+      const set = (await import("../api/profiles")).profilesOf(await profileSource(input?.project));
+      if (set.error) throw invalid(`the profiles can't be read: ${set.error}`);
+      return set.profiles.map((p) => ({ name: p.name, version: p.version, source: p.source, description: p.description, tags: p.tags }));
+    },
+  };
+}
+
+/** A plugin's services in the daemon (§8.4), beside `jobs`, `storage` and `triggers`. */
+export function daemonServices(m: PluginManifest) {
+  const principal: Principal = { kind: "plugin", name: m.name, scopes: [...(m.scopes ?? [])] };
+  return {
+    runs: pluginRuns(m.name, principal), agents: pluginAgents(m.name), messages: pluginMessages(m.name), kv: pluginKv(m.name),
+    board: pluginBoard(m.name), gates: pluginGates(), profiles: pluginProfiles(m.name, principal),
+  };
+}
+
+// ---- every process's: sandboxes, auth ---------------------------------------------------------------------------------
+
+/** A kernel sandbox error as a plugin sees it, by its class (§7.2.3). */
+function sandboxError(e: unknown): never {
+  if (e instanceof PluginError) throw e;
+  const c = classifySandboxError(e, "");
+  const message = (e as Error)?.message ?? String(e);
+  if (c.kind === "not_found") throw new PluginError("not_found", message);
+  if (c.kind === "timeout") throw new PluginError("timeout", message, undefined, true);
+  if (c.kind === "transient" || c.kind === "quota") throw new PluginError("unavailable", message, "hint" in c ? c.hint : undefined, true);
+  if (c.kind === "config" || c.kind === "auth") throw new PluginError("invalid", message, c.hint || undefined);
+  throw e;
+}
+
+/**
+ * The sandbox `name` as a plugin gets it (§7.1, §8.4): the kernel's provider for the place (src/dependencies.ts
+ * `providerNamed`: traced, riding out outages, the sandbox hooks fired), shaped as the seam and made on first use. A
+ * provider plugin asking for its own place gets this too, never its own object. A call waits until its deadline at most.
+ */
+function sandboxFor(name: string, seam: SandboxSeam): SandboxSeam {
+  let kernel: SandboxProvider | null = null;
+  const left = (c: SeamCall) => Math.max(1, Date.parse(c.deadline) - Date.now());
+  const go = async <T>(c: SeamCall, f: (p: SandboxProvider) => Promise<T>): Promise<T> => {
+    if (c?.signal?.aborted) throw new PluginError("timeout", `the call to the ${name} sandbox was cancelled`);
+    const ms = Date.parse(c?.deadline) - Date.now();
+    if (Number.isNaN(ms)) throw new PluginError("invalid", "a seam call's deadline is an ISO 8601 time (§7.1 SeamCall)");
+    if (ms <= 0) throw new PluginError("timeout", `the call to the ${name} sandbox passed its deadline`);
+    kernel ??= (await import("../dependencies")).providerNamed(name);
+    let off = () => {};
+    // The call's signal, or its deadline when the signal never fires (§8.4: a call waits until its deadline at most).
+    const stopped = new Promise<never>((_, reject) => {
+      const on = () => reject(new PluginError("timeout", `the call to the ${name} sandbox passed its deadline`));
+      const timer = setTimeout(on, ms);
+      c?.signal?.addEventListener("abort", on, { once: true });
+      off = () => { clearTimeout(timer); c?.signal?.removeEventListener("abort", on); };
+    });
+    try { return await Promise.race([f(kernel), stopped]); } catch (e) { return sandboxError(e); } finally { off(); }
+  };
+  const extra = <K extends "extendTtl" | "probe">(p: SandboxProvider, what: K): NonNullable<SandboxProvider[K]> => {
+    const f = p[what];
+    if (!f) throw new PluginError("unsupported", `the ${name} sandbox has no ${what}`);
+    return f.bind(p) as NonNullable<SandboxProvider[K]>;
+  };
+  const wrapped: SandboxSeam = {
+    describe: () => seam.describe(),
+    available: (c) => go(c, () => seam.available(c)),
+    classifyError: (e) => seam.classifyError(e),
+    ensure: (spec, c) => go(c, (p) => p.ensure(spec)),
+    waitReady: (id, c) => go(c, (p) => p.waitReady(id, left(c))),
+    exec: (id, cmd, opts, c) => go(c, (p) => p.exec(id, cmd, { ...(opts?.env ? { env: opts.env } : {}), ...(opts?.cwd ? { cwd: opts.cwd } : {}), timeoutMs: left(c) })),
+    upload: (id, path, data, c) => go(c, (p) => p.upload(id, path, data)),
+    download: (id, path, c) => go(c, (p) => p.download(id, path)),
+    setEgress: (id, allow, c) => go(c, (p) => p.setEgress(id, allow)),
+    snapshot: (id, n, c) => go(c, (p) => p.snapshot(id, n)),
+    checkpoint: (id, n, c) => go(c, (p) => p.checkpoint(id, n)),
+    restore: (id, n, c) => go(c, (p) => p.restore(id, n)),
+    suspend: (id, c) => go(c, (p) => p.suspend(id)),
+    resume: (id, c) => go(c, (p) => p.resume(id)),
+    destroy: (id, c) => go(c, (p) => p.destroy(id)),
+    list: (prefix, c) => go(c, (p) => p.list(prefix)),
+    ...(seam.extendTtl ? { extendTtl: (id: string, seconds: number, c: SeamCall) => go(c, (p) => extra(p, "extendTtl")(id, seconds)) } : {}),
+    ...(seam.probe ? { probe: (id: string | undefined, c: SeamCall) => go(c, (p) => extra(p, "probe")(id)) } : {}),
+  };
+  return Object.freeze(wrapped);
+}
+
+/** `ctx.sandboxes` (§8.1): the active places, by name or by the run that uses one. */
+export function pluginSandboxes(): SandboxesService {
+  const made = new Map<string, SandboxSeam>();
+  const provider = (name: string): SandboxSeam => {
+    const seam = typeof name === "string" ? sandboxSeam(name) : null;
+    if (!seam) throw new PluginError("not_found", `no active plugin provides the ${String(name).slice(0, 64)} sandbox`, "See `capcomd plugins list`.");
+    let p = made.get(name);
+    if (!p) made.set(name, (p = sandboxFor(name, seam)));
+    return p;
+  };
+  return {
+    provider,
+    /** The run's place: the one it was started on (`capcomd run --sandbox`), else this process's. */
+    async forRun(runId) {
+      await scopeOf(runId);
+      const name = (await (await import("../providers/run-sandbox")).runSandbox(runId)) ?? (await import("../providers/registry")).sandboxName();
+      return { provider: provider(name), name };
+    },
+    descriptors: () => describedSandboxes(),
+  };
+}
+
+/** `ctx.auth` (§8.1, §11.4): how an agent of `provider` gets its credential here, and whether a login is there; facts,
+ *  never a value. `redact` is the host's. */
+export function pluginAuth(): Partial<AuthService> {
+  const known = (provider: unknown): string => {
+    if (typeof provider !== "string" || !agentSeam(provider)) throw new PluginError("not_found", `no active plugin provides the ${String(provider).slice(0, 64)} agent`, "See `capcomd plugins list`.");
+    return provider;
+  };
+  return {
+    credentialMode(provider, auth) {
+      known(provider);
+      if (auth !== "apikey" && auth !== "subscription") throw invalid("auth is apikey or subscription");
+      const { credentialModeFor } = require("../agents/config") as typeof import("../agents/config");
+      // None configured (or both, or a bad CAPCOMD_CREDENTIALS) is an error at spawn; here it is `none`.
+      try { const m = credentialModeFor(kindOf(provider), process.env, auth); return m === "auto" ? "secret" : m; } catch { return "none"; }
+    },
+    async loginPresent(provider, sandbox) {
+      known(provider);
+      if (typeof sandbox !== "string" || !sandboxSeam(sandbox)) throw new PluginError("not_found", `no active plugin provides the ${String(sandbox).slice(0, 64)} sandbox`);
+      return (await import("../api/settings")).logins(process.env).some((l) => l.provider === provider && l.sandbox === sandbox && l.loggedIn);
+    },
+  };
+}
+
+/** A plugin's services in any process (§8.4), like the gates: facts about this process's places and logins. */
+export function localServices() {
+  return { sandboxes: pluginSandboxes(), auth: pluginAuth() };
 }

@@ -9,6 +9,7 @@ import { eventTypeOwner } from "../../packages/plugin/src/event-type";
 import { attach, inlineOrAttach } from "../api/inline-cap";
 import { workspaceOf, type AgentWorkspace } from "../api/workspace";
 import { RUN_REPO_KV } from "../merge/run-config";
+import { sameHold, type PluginHold } from "../merge/types";
 import { env as envVar } from "../utils/env";
 import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
@@ -1185,7 +1186,8 @@ export const scopeActor = actor({
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },
 
-    /** The operator's decision on a parked merge: approve → running again (the merge then runs), deny → failed. */
+    /** The operator's decision on a parked merge: approve → running again (the merge then runs), with a plugin's hold
+     *  (`heldBy`) added to its `approvedHolds`; deny → failed. */
     async decideOp(c, params: { opId: string; approve: boolean; by: string; reason?: string }) {
       let decided = false;
       await c.db.transaction(async (tx: RawAccess) => {
@@ -1195,7 +1197,12 @@ export const scopeActor = actor({
         if (op.state !== "awaiting_approval") return;
         const now = Date.now();
         if (params.approve) {
-          await tx.execute("UPDATE ops SET state = 'running', updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", now, params.opId);
+          // A plugin's hold the person approved goes on the merge's record with the ones approved before it
+          // (`approvedHolds`, plugin API §6.6.15): what the re-run lands past, and what a reader sees was approved.
+          const held = op.data.heldBy as PluginHold | undefined;
+          const before = (op.data.approvedHolds as PluginHold[] | undefined) ?? [];
+          const data = held && !before.some((h) => sameHold(h, { ...held, text: held.reason })) ? { ...op.data, approvedHolds: [...before, held] } : op.data;
+          await tx.execute("UPDATE ops SET state = 'running', data = ?, updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", JSON.stringify(data), now, params.opId);
           await addEvent(tx, "MERGE_APPROVED", (op.data.agentId as string) ?? null, { id: params.opId, by: params.by }, await nthKey(tx, `approve-${params.opId}`));
         } else {
           const result = { merged: false, status: "denied", by: params.by, ...(params.reason ? { reason: params.reason } : {}) };
