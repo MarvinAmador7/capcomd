@@ -25,7 +25,8 @@ export type { BootedDaemon, BootOptions } from "./boot";
 export type Registration =
   | { kind: "hook"; hook: HookName } | { kind: "seam"; seam: "sandbox" | "agent" | "forge"; name: string } | { kind: "context"; name: string }
   | { kind: "cli"; name: string } | { kind: "mcp"; name: string } | { kind: "api"; method: string; path: string }
-  | { kind: "ui"; id: string } | { kind: "capability"; name: string } | { kind: "subscription"; stream: string } | { kind: "instructions" } | { kind: "onDispose" };
+  | { kind: "ui"; id: string } | { kind: "capability"; name: string } | { kind: "subscription"; stream: string } | { kind: "instructions" } | { kind: "onDispose" }
+  | { kind: "reply"; source: string };
 
 /** An in-memory context: every service answers from fixtures the test sets; every registration is recorded. */
 export interface FakeContext<C = Record<string, unknown>> {

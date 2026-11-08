@@ -76,7 +76,8 @@ export class GitHubForge implements Forge {
   }
   private ref(p: PullRequest, repo: string, input: { head: string; base: string }): PullRequestRef {
     const web = this.settings().api.replace(/\/$/, "") === "https://api.github.com" ? `https://github.com/${repo}/pull/${p.number}` : null;
-    return { number: p.number, url: p.html_url ?? web, state: p.merged ? "merged" : p.state, head: p.head?.ref ?? input.head, base: p.base?.ref ?? input.base, mergeSha: p.merge_commit_sha ?? null };
+    // Its conversation is the github source's thread owner/name#number (./github-source.ts).
+    return { number: p.number, url: p.html_url ?? web, state: p.merged ? "merged" : p.state, head: p.head?.ref ?? input.head, base: p.base?.ref ?? input.base, mergeSha: p.merge_commit_sha ?? null, thread: { source: "github", thread: `${repo}#${p.number}` } };
   }
 
   async land(req: LandRequest, c: SeamCall): Promise<LandOutcome> {

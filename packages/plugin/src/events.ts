@@ -33,10 +33,12 @@ export interface PluginEventData {
   "job.started": { jobId: string; kind: "exec" | "timer"; owner: string; label: string; plugin: string | null };
   "job.ended": { jobId: string; state: "done" | "failed" | "killed" | "lost"; code: number | null; reason: string | null; ms: number };
   /** §16.3: on the daemon stream, one per trigger the intake saw; `decision` is the audit of record-only mode. */
-  "trigger.received": { source: string; id: string; thread: string; actor: string; addressed: "mention" | "direct" | null; decision: string; runId: string | null };
+  "trigger.received": { source: string; id: string; thread: string; actor: string; addressed: "mention" | "direct" | null; decision: string; runId: string | null; restarted?: string };
   /** `until` is null while the run works and nobody set one (it ends 14 days after the run does). */
   "trigger.subscribed": { source: string; thread: string; runId: string; until: string | null };
   "trigger.unsubscribed": { source: string; thread: string; runId: string; cause: "expired" | "unsubscribed" | "stopped" };
+  /** §16.3.7: a run that ended answered its request on the request's thread, through the source's reply path. */
+  "trigger.replied": { source: string; thread: string; runId: string; id: string; url: string | null };
 }
 export type PluginEventType = keyof PluginEventData;
 
@@ -45,7 +47,7 @@ export const PLUGIN_EVENT_TYPES = [
   "plugin.loaded", "plugin.failed", "plugin.disposed", "plugin.version_refused", "plugin.duplicate_refused",
   "plugin.config_refused", "plugin.hook_failed", "plugin.suspended", "plugin.resumed", "plugin.gate_denied",
   "plugin.gate_bypassed", "plugin.hook_deprecated", "plugin.process_changed", "plugin.trusted",
-  "job.started", "job.ended", "trigger.received", "trigger.subscribed", "trigger.unsubscribed",
+  "job.started", "job.ended", "trigger.received", "trigger.subscribed", "trigger.unsubscribed", "trigger.replied",
 ] as const satisfies readonly PluginEventType[];
 type Missing = Exclude<PluginEventType, (typeof PLUGIN_EVENT_TYPES)[number]>;
 const _allListed: [Missing] extends [never] ? true : Missing = true;

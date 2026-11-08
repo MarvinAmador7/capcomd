@@ -2,7 +2,9 @@
 // source plugin hands it (`ctx.triggers.emit`). It decides, in this order, and records every decision:
 //  1. dedupe: the same (source, id) within 30 days is `deduped`;
 //  2. subscription: a thread a run follows (a live run, or one that ended less than `until` ago) gets the trigger as a
-//     message to the run's planner, `continued`, when a person sent it (a bot's reaches only a live run);
+//     message to the run's planner, `continued`, when a person sent it (a bot's reaches only a live run); on an ended
+//     run, steps 3-5 then say whether its planner starts again on it (`continued` with `restarted`), or the observe mode
+//     only records that it would have (`recorded {wouldHave: continue}`);
 //  3. the kernel's gate, `triggers.sources.<source>` in the operator's config: an actor it allows or a thread it opened
 //     to requests is `allowed`, else `denied {by: allowlist}`; addressed and allowed is `explicit`, else `inferred`;
 //  4. `trigger.admitting`: a plugin may deny (`denied {by: plugin}`), never admit;
@@ -10,20 +12,25 @@
 //     what would have happened (`observe`), or acted on (`auto`);
 //  6. act: a run on the source's project with the trigger's text as its goal (POST /v1/runs semantics: run.creating
 //     fires), `started`, subscribed to the trigger's thread.
+// A run a trigger started (or started again) answers on the trigger's thread when it ends, once, through the source's
+// reply path (`ctx.triggers.onReply`), when the operator turned the source's replies on (§16.3.7).
 // What the intake never does is judge content: the planner reads the goal and may decide there is nothing to do.
 // Only the daemon has an intake (its plugins get `ctx.triggers`, src/plugins/host.ts); its records are files in the
 // daemon's state (state/triggers/): `seen/` (dedupe), `subs/` (subscriptions), `runs/` (the trigger a run started
-// from), and `log.ndjson`, what `capcomd triggers log` reads. Its events (trigger.received, trigger.subscribed,
-// trigger.unsubscribed) go on the daemon stream; `trigger.changed` tells plugins each decision.
+// from), `replies/` (the request a run answers when it ends), and `log.ndjson`, what `capcomd triggers log` reads. Its
+// events (trigger.received, trigger.subscribed, trigger.unsubscribed, trigger.replied) go on the daemon stream;
+// `trigger.changed` tells plugins each decision.
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Principal, Timestamp, Trigger, TriggerDecision, TriggerSubscription, Untrusted } from "../../packages/plugin/src/shapes";
+import type { Principal, Timestamp, Trigger, TriggerDecision, TriggerReply, TriggerSubscription, Untrusted } from "../../packages/plugin/src/shapes";
 import type { TriggerAdmitting } from "../../packages/plugin/src/hooks";
 import type { TriggersService } from "../../packages/plugin/src/context";
+import type { ContributionStore } from "../../packages/plugin/src/host/context";
 import { PluginError } from "../../packages/plugin/src/errors";
 import { Redactor } from "../agents/redact";
 import { readConfig, userConfigPath } from "../config/store";
+import { RelayError } from "../core/errors";
 import { hooks, iso } from "../plugins/hooks";
 import { env } from "../utils/env";
 import { stateDir } from "../utils/home";
@@ -43,6 +50,9 @@ export interface SourceGate {
   /** The project a started run works in: the absolute path of a checkout set up with `capcomd setup project`. Unset:
    *  the daemon's own repository (CAPCOMD_REPO). */
   project?: string;
+  /** Whether a run a trigger started (or started again) answers on its thread when it ends, through the source's reply
+   *  path (§16.3.7). Off by default: capcomd says nothing where people talk unless the operator turns it on. */
+  reply?: boolean;
 }
 export interface TriggersConfig { sources?: Record<string, SourceGate> }
 
@@ -59,12 +69,13 @@ export function triggersConfig(source: Record<string, string | undefined> = proc
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : []);
 /** A source's gate, its values checked: a mode that isn't one is `observe`, a list that isn't one is empty. */
-export function gateOf(cfg: TriggersConfig, source: string): { allowed: string[]; opened: string[]; mode: AcceptMode; project: string | null } {
+export function gateOf(cfg: TriggersConfig, source: string): { allowed: string[]; opened: string[]; mode: AcceptMode; project: string | null; reply: boolean } {
   const g = (cfg.sources?.[source] ?? {}) as SourceGate;
   return {
     allowed: strings(g.allowed), opened: strings(g.opened),
     mode: ACCEPT_MODES.includes(g.mode as AcceptMode) ? (g.mode as AcceptMode) : "observe",
     project: typeof g.project === "string" && g.project.trim() ? g.project.trim() : null,
+    reply: g.reply === true,
   };
 }
 
@@ -167,14 +178,42 @@ export function triggerOfRun(runId: string): { source: string; id: string; threa
 
 /** Where a run stands for its subscriptions: whether it exists, still works, and when and how it ended. */
 export interface RunStanding { exists: boolean; live: boolean; endedAt: number | null; stopped: boolean }
+/** How a run ended, for its reply: its planner's state and summary (its error, when it failed). */
+export interface RunOutcome { state: "completed" | "failed" | "cancelled"; summary: string | null }
+type Message = { from: string; body: string; key: string };
 export interface IntakeDeps {
   /** Start a run with `goal` (POST /v1/runs semantics; run.creating fires), in `repo` (a project checkout) or the daemon's. */
   startRun(input: { goal: string; repo?: string }, principal: Principal): Promise<{ runId: string }>;
   /** A message to the run's planner; null when the run has none to read it. */
-  deliver(runId: string, m: { from: string; body: string; key: string }): Promise<{ seq: number } | null>;
+  deliver(runId: string, m: Message): Promise<{ seq: number } | null>;
+  /** An ended run's planner works again on `m` (§16.3.2 step 2): a new planner continues the one that finished, with
+   *  `m` in its inbox (`started`); a planner already at it again gets `m` as a message. Null: the run has no planner. */
+  restart(runId: string, m: Message): Promise<{ agentId: string; seq: number; started: boolean } | null>;
   standing(runId: string): Promise<RunStanding>;
+  /** How the run's planner ended; null when it has none (or it hasn't ended). */
+  outcome(runId: string): Promise<RunOutcome | null>;
+  /** Post a reply through `source`'s reply path (§16.3.7); null when the source has none here. */
+  reply(r: TriggerReply): Promise<{ url: string | null } | null>;
 }
 
+/** The run's planner: its `_planner` record, else its top-level agent spawned with the key "planner" (a run from before
+ *  the record, or one whose driver spawned its planner that way); null for a run with neither. */
+async function plannerOf(s: any, runId: string): Promise<string | null> {
+  const { PLANNER_KV, rootAgentIdFor } = await import("../primitives/ops");
+  const kv: any = await s.kvGet({ k: PLANNER_KV }).catch(() => null);
+  if (typeof kv?.value?.agentId === "string" && !kv.deleted) return kv.value.agentId;
+  const id = rootAgentIdFor(runId, "planner");
+  return (await s.getAgent({ agentId: id }).catch(() => null)) ? id : null;
+}
+
+const RESTARTED = "\n\nThis run had ended: ";
+/** What a planner started again on a trigger is told, after its first brief: the run had ended, and why it works again. */
+export function restartBrief(task: string, was: { agentId: string; status: string }): string {
+  // Its first brief, without what an earlier restart added.
+  return `${task.split(RESTARTED)[0]}${RESTARTED}its planner ${was.agentId} finished (${was.status}; its result: \`capcomd inspect ${was.agentId}\`). You are its planner again because someone wrote on a thread this run follows: their message is in your inbox (\`capcomd inbox\`), in their words, not the operator's. Read it and decide what, if anything, it needs; work as before, and finish with \`capcomd result --summary\` again, saying what changed since. Your summary may be posted where they wrote: keep it short.`;
+}
+
+const TERMINAL = new Set(["done", "failed", "cancelled"]);
 const kernelDeps: IntakeDeps = {
   async startRun(input, principal) {
     const { createRunAs } = await import("../api/rivet-source");
@@ -185,14 +224,49 @@ const kernelDeps: IntakeDeps = {
     const { existingActor } = await import("../core/relay");
     const s = await existingActor("scope", [runId]);
     if (!s) return null;
-    const { PLANNER_KV, rootAgentIdFor } = await import("../primitives/ops");
-    const kv: any = await s.kvGet({ k: PLANNER_KV }).catch(() => null);
-    let to: string | null = typeof kv?.value?.agentId === "string" && !kv.deleted ? kv.value.agentId : null;
-    // A run from before the record, or one whose driver spawned its planner with the key "planner".
-    if (!to) { const id = rootAgentIdFor(runId, "planner"); if (await s.getAgent({ agentId: id }).catch(() => null)) to = id; }
+    const to = await plannerOf(s, runId);
     if (!to) return null;
     const r = await s.sendMessage({ to, from: m.from, body: m.body, key: m.key });
     return { seq: r.seq };
+  },
+  async restart(runId, m) {
+    const { existingActor } = await import("../core/relay");
+    const s = await existingActor("scope", [runId]);
+    if (!s) return null;
+    const to = await plannerOf(s, runId);
+    const was: any = to ? await s.getAgent({ agentId: to }).catch(() => null) : null;
+    if (!was) return null;
+    // Its planner works again already (an earlier trigger started it): the message is for it.
+    if (!TERMINAL.has(was.status)) { const r = await s.sendMessage({ to: to!, from: m.from, body: m.body, key: m.key }); return { agentId: to!, seq: r.seq, started: false }; }
+    // The same planner again: its profile (as it was spawned, overrides and all), its brief and its contract (a work
+    // contract's `from` is a worker's; a planner continues by reading the run), one per trigger (the key).
+    const O = await import("../primitives/ops");
+    const { from: _from, ...contract } = (was.contract ?? {}) as Record<string, unknown>;
+    const a = await O.spawnAgent({
+      runId, ...(was.ref ?? was.profile ? { profile: was.ref ?? was.profile } : {}), task: restartBrief(was.task, was), key: `planner-${sha(m.key).slice(0, 16)}`,
+      ...(Object.keys(contract).length ? { contract } : {}), start: false,
+    });
+    // It is the run's planner from now on (its goal is ready when it finishes; later messages go to it), and its message
+    // is in its inbox before it starts.
+    await (await import("../primitives/state")).kvWrite(runId, { k: O.PLANNER_KV, value: { agentId: a.agentId }, writer: "operator" });
+    const r = await s.sendMessage({ to: a.agentId, from: m.from, body: m.body, key: m.key });
+    if (!TERMINAL.has(a.status)) await (await import("../primitives/drivers")).startDriver(runId, a.agentId);
+    return { agentId: a.agentId, seq: r.seq, started: true };
+  },
+  async outcome(runId) {
+    const { existingActor } = await import("../core/relay");
+    const s = /^run-[A-Za-z0-9_-]+$/.test(runId) ? await existingActor("scope", [runId]).catch(() => null) : null;
+    const to = s ? await plannerOf(s, runId) : null;
+    const a: any = s && to ? await s.getAgent({ agentId: to }).catch(() => null) : null;
+    if (!a || !TERMINAL.has(a.status)) return null;
+    const r = (a.result ?? {}) as Record<string, unknown>;
+    const said = typeof r.summary === "string" && r.summary.trim() ? r.summary : typeof r.error === "string" && r.error.trim() ? r.error : null;
+    return { state: a.status === "done" ? "completed" : a.status === "failed" ? "failed" : "cancelled", summary: said };
+  },
+  async reply(r) {
+    const path = replyPaths?.get("reply", r.source);
+    if (!path) return null;
+    return path.value.reply(r, { key: r.key, timeoutMs: REPLY_TIMEOUT_MS, signal: AbortSignal.timeout(REPLY_TIMEOUT_MS) });
   },
   async standing(runId) {
     const { existingActor } = await import("../core/relay");
@@ -211,11 +285,17 @@ let deps: IntakeDeps = kernelDeps;
 /** Tests: run starts, messages and run states of their own (null: the kernel's). */
 export function useIntakeDeps(d: Partial<IntakeDeps> | null) { deps = d ? { ...kernelDeps, ...d } : kernelDeps; }
 
+/** The sources' reply paths (`ctx.triggers.onReply`): the daemon's plugin host's registrations (src/plugins/host.ts
+ *  kernelHost with triggers sets it). */
+let replyPaths: ContributionStore | null = null;
+export function useTriggerReplies(store: ContributionStore | null) { replyPaths = store; }
+const REPLY_TIMEOUT_MS = 30_000;
+
 /** Where the intake's events go: the daemon stream (`capcomd serve` sets harnessState().recordDaemonEvent). */
 type DaemonSink = (e: { type: string; entity: string; text: string; data: Record<string, unknown> }) => unknown;
 let daemonSink: DaemonSink | null = null;
 export function useTriggerEvents(sink: DaemonSink | null) { daemonSink = sink; }
-async function record(type: "trigger.received" | "trigger.subscribed" | "trigger.unsubscribed", entity: string, data: Record<string, unknown>) {
+async function record(type: "trigger.received" | "trigger.subscribed" | "trigger.unsubscribed" | "trigger.replied", entity: string, data: Record<string, unknown>) {
   if (!daemonSink) return;
   const { describeEvent } = await import("../api/describe");
   daemonSink({ type, entity, text: describeEvent(type, data, null), data });
@@ -272,7 +352,8 @@ export function triggerMessage(t: Trigger): string {
 async function finish(t: Trigger, decision: LoggedDecision, gate: TriggerLogEntry["gate"], principal: Principal): Promise<void> {
   const runId = "runId" in decision ? decision.runId : null;
   appendLog({ at: iso(), source: t.source, id: t.id, thread: t.thread, actor: t.actor, addressed: t.addressed, text: said(t), decision, gate });
-  await record("trigger.received", entityOf(t), { source: t.source, id: redactor.text(t.id), thread: redactor.text(t.thread), actor: redactor.text(t.actor.id), addressed: t.addressed, decision: decisionWord(decision), runId }).catch(() => {});
+  const restarted = decision.kind === "continued" && decision.restarted ? { restarted: decision.restarted } : {};
+  await record("trigger.received", entityOf(t), { source: t.source, id: redactor.text(t.id), thread: redactor.text(t.thread), actor: redactor.text(t.actor.id), addressed: t.addressed, decision: decisionWord(decision), runId, ...restarted }).catch(() => {});
   if (decision.kind !== "failed" && hooks.listening("trigger.changed")) {
     hooks.fire("trigger.changed", "observe", { trigger: t, decision }, { principal, entity: `${entityOf(t)}#${decision.kind}`, runId });
   }
@@ -314,29 +395,62 @@ export async function admit(input: Trigger, principal: Principal): Promise<Trigg
   }
 }
 
-async function decide(t: Trigger, principal: Principal): Promise<{ decision: TriggerDecision; gate: TriggerLogEntry["gate"] }> {
-  // 2. A run follows the thread: a person's trigger reaches its planner, with no further gate; a bot's only a live run.
-  const followed = await following(t.source, t.thread);
-  for (const f of followed) {
-    if (t.actor.bot && !f.standing.live) continue;
-    const sent = await deps.deliver(f.sub.runId, { from: `trigger:${t.source}`, body: triggerMessage(t), key: `trigger-${t.source}-${sha(t.id)}` });
-    if (sent) return { decision: { kind: "continued", runId: f.sub.runId, seq: sent.seq }, gate: null };
-  }
+/** Steps 3 to 5 for one trigger: the kernel's gate, `trigger.admitting`, the accept mode. `act`: it may start a run (or
+ *  start an ended run's planner again); else it is `denied`, or only `recorded` (observe). */
+type Judged = { gate: NonNullable<TriggerLogEntry["gate"]>; denied: Extract<TriggerDecision, { kind: "denied" }> | null; recorded: boolean; act: boolean };
+async function judge(t: Trigger, principal: Principal, subscribed: string | null): Promise<Judged> {
   // 3. The kernel's gate.
   const g = gateOf(triggersConfig(), t.source);
   const allowed = g.allowed.includes(t.actor.id) || g.opened.some((p) => threadMatches(p, t.thread));
   const strength = t.addressed && allowed ? "explicit" as const : "inferred" as const;
   const gate = { allowed, strength, mode: g.mode };
-  if (!allowed) return { decision: { kind: "denied", by: "allowlist", reason: `${t.actor.id} isn't allowed on ${t.source}, and ${t.thread} isn't opened to requests (triggers.sources.${t.source})` }, gate };
+  const no = (denied: Judged["denied"]): Judged => ({ gate, denied, recorded: false, act: false });
+  if (!allowed) return no({ kind: "denied", by: "allowlist", reason: `${t.actor.id} isn't allowed on ${t.source}, and ${t.thread} isn't opened to requests (triggers.sources.${t.source})` });
   // 4. A plugin may deny what the gate allowed.
   if (hooks.listening("trigger.admitting")) {
-    const payload: TriggerAdmitting = { trigger: t, gate: { ...gate, subscribed: followed[0] ? { runId: followed[0].sub.runId } : null } };
+    const payload: TriggerAdmitting = { trigger: t, gate: { ...gate, subscribed: subscribed ? { runId: subscribed } : null } };
     const out = await hooks.fire("trigger.admitting", "veto", payload, { principal, entity: entityOf(t) });
-    if (out.decision === "deny") return { decision: { kind: "denied", by: "plugin", reason: `${out.plugin ? `the ${out.plugin} plugin` : "capcomd (the daemon is stopping)"}: ${out.text}`.slice(0, 500) }, gate };
+    if (out.decision === "deny") return no({ kind: "denied", by: "plugin", reason: `${out.plugin ? `the ${out.plugin} plugin` : "capcomd (the daemon is stopping)"}: ${out.text}`.slice(0, 500) });
   }
   // 5. The accept mode.
-  if (strength === "inferred" && g.mode === "off") return { decision: { kind: "denied", by: "mode", reason: `${t.source} is off for requests that don't address capcomd (triggers.sources.${t.source}.mode)` }, gate };
-  if (strength === "inferred" && g.mode === "observe") return { decision: { kind: "recorded", wouldHave: "start", runId: null }, gate };
+  if (strength === "inferred" && g.mode === "off") return no({ kind: "denied", by: "mode", reason: `${t.source} is off for requests that don't address capcomd (triggers.sources.${t.source}.mode)` });
+  if (strength === "inferred" && g.mode === "observe") return { gate, denied: null, recorded: true, act: false };
+  return { gate, denied: null, recorded: false, act: true };
+}
+
+async function decide(t: Trigger, principal: Principal): Promise<{ decision: TriggerDecision; gate: TriggerLogEntry["gate"] }> {
+  // 2. A run follows the thread: a person's trigger reaches its planner, with no further gate; a bot's only a live run.
+  const followed = await following(t.source, t.thread);
+  // Steps 3 to 5 are asked once, the first time they matter.
+  let judged: Judged | null = null;
+  const judging = async () => (judged ??= await judge(t, principal, followed[0]?.sub.runId ?? null));
+  for (const f of followed) {
+    if (t.actor.bot && !f.standing.live) continue;
+    const runId = f.sub.runId, m = { from: `trigger:${t.source}`, body: triggerMessage(t), key: `trigger-${t.source}-${sha(t.id)}` };
+    if (f.standing.live) {
+      const sent = await deps.deliver(runId, m);
+      if (sent) return { decision: { kind: "continued", runId, seq: sent.seq }, gate: null };
+      continue;
+    }
+    // The run ended: a person's trigger lands in its planner's inbox, and starts the planner again only when the gate
+    // would let it start a run (a restart spends as a start does): allowed and addressed, or allowed in `auto`. In
+    // `observe` it is recorded with what would have happened; refused, it is only in the inbox.
+    const j = await judging();
+    if (j.act) {
+      const again = await deps.restart(runId, m).catch((e) => { throw restartRefused(t, runId, e); });
+      if (again) {
+        if (again.started) awaitReply(runId, t);
+        return { decision: { kind: "continued", runId, seq: again.seq, ...(again.started ? { restarted: again.agentId } : {}) }, gate: j.gate };
+      }
+      continue;
+    }
+    const sent = await deps.deliver(runId, m);
+    if (sent) return { decision: j.recorded ? { kind: "recorded", wouldHave: "continue", runId } : { kind: "continued", runId, seq: sent.seq }, gate: j.gate };
+  }
+  const j = await judging();
+  if (j.denied) return { decision: j.denied, gate: j.gate };
+  if (j.recorded) return { decision: { kind: "recorded", wouldHave: "start", runId: null }, gate: j.gate };
+  const { gate } = j, g = gateOf(triggersConfig(), t.source);
   // 6. Act: a run on the source's project, following the thread from now on. Its goal is checked as POST /v1/runs checks
   // one: above all, a source's words never pick the run's agent profile (a leading `[agent:NAME]`).
   const goal = t.text.text.trim();
@@ -345,6 +459,7 @@ async function decide(t: Trigger, principal: Principal): Promise<{ decision: Tri
   const { runId } = await deps.startRun({ goal, ...(g.project ? { repo: g.project } : {}) }, principal);
   writeAtomic(dir("runs", `${runId}.json`), JSON.stringify({ source: t.source, id: t.id, thread: t.thread, actor: t.actor, at: t.at }));
   await subscribe({ runId, source: t.source, thread: t.thread }, "intake", { started: true }).catch((e) => console.error(`[triggers] ${runId}: subscribing to ${t.thread}: ${(e as Error)?.message ?? e}`));
+  awaitReply(runId, t);
   return { decision: { kind: "started", runId }, gate };
 }
 
@@ -427,12 +542,91 @@ export async function subscriptions(filter: { runId?: string; source?: string } 
 /** The subscriptions as `capcomd triggers subscriptions` lists them, without asking the engine (the daemon need not run). */
 export function listSubscriptionRecords(): TriggerSubscription[] { return allSubs().map(subOf); }
 
+/** A planner that couldn't start again: refused for good (the operator's or the run's settings: its profile, budget,
+ *  sandbox) unless the engine was out of reach, which may pass (the source sends the trigger again). */
+function restartRefused(t: Trigger, runId: string, e: unknown): Error {
+  if (e instanceof PluginError) return e;
+  const message = `trigger ${t.source}/${t.id} couldn't start ${runId}'s planner again: ${String((e as Error)?.message ?? e).slice(0, 400)}`;
+  if (e instanceof RelayError && e.code !== "engine_unreachable" && !e.retryable) return new PluginError("invalid", message, e.hint);
+  return new PluginError("unavailable", message, undefined, true);
+}
+
+// ---- replies (§16.3.7) -----------------------------------------------------------------------------------------------
+
+/** The request a run answers when it ends: the trigger that started it, or that started its planner again. One per run
+ *  (the newest request is the one its planner works on). */
+interface ReplyTarget { runId: string; source: string; thread: string; replyTo: string | null; triggerId: string; at: Timestamp; attempts: number }
+const REPLY_ATTEMPTS = 3;
+/** §16.5: under 100 words, with the line that says who wrote it. */
+const REPLY_WORDS = 90, REPLY_CHARS = 1500;
+
+/** A run a trigger started (or started again) answers on its thread when it ends, if the operator turned replies on. */
+function awaitReply(runId: string, t: Trigger) {
+  if (!gateOf(triggersConfig(), t.source).reply) return;
+  try {
+    writeAtomic(dir("replies", `${runId}.json`), JSON.stringify({ runId, source: t.source, thread: t.thread, replyTo: t.replyTo, triggerId: t.id, at: iso(), attempts: 0 } satisfies ReplyTarget));
+  } catch (e) { console.error(`[triggers] ${runId}: noting its reply on ${t.thread}: ${(e as Error)?.message ?? e}`); }
+}
+
+/** A reply's words: the run's result, redacted and cut to under 100 words, and who wrote it. */
+export function replyText(runId: string, o: RunOutcome): string {
+  const said = o.summary ? redactor.text(o.summary).trim() : "";
+  let cut = said;
+  let n = 0;
+  for (const w of said.matchAll(/\S+/g)) if (++n > REPLY_WORDS) { cut = `${said.slice(0, w.index).trimEnd()} …`; break; }
+  if (cut.length > REPLY_CHARS) cut = `${cut.slice(0, REPLY_CHARS).trimEnd()} …`;
+  const body = o.state === "completed" ? cut || "Done." : `The run stopped before it finished${cut ? `: ${cut}` : "."}`;
+  return `${body}\n\n— capcomd (${runId})`;
+}
+
+/**
+ * The sweep's replies: each run that ended since its request posts once through its source's reply path, if it
+ * completed or failed (a person's stop needs no answer) and the source's replies are still on. A reply is claimed before
+ * it is posted, so a crash while posting never posts it twice; a retryable failure is tried again at the next sweep (at
+ * most three times).
+ */
+export async function sendReplies(): Promise<void> {
+  if (!existsSync(dir("replies"))) return;
+  for (const f of readdirSync(dir("replies")).filter((x) => x.endsWith(".json"))) {
+    const path = dir("replies", f), r = readJson<ReplyTarget>(path);
+    if (!r) { rmSync(path, { force: true }); continue; }
+    const s = await deps.standing(r.runId).catch(() => null);
+    if (!s) continue; // the engine didn't answer: not this time
+    if (!s.exists) { if (Date.now() - Date.parse(r.at) >= STARTING_GRACE_MS) rmSync(path, { force: true }); continue; }
+    // Still working, or ended before the request (an ended run's planner, starting again).
+    if (s.live || s.endedAt === null || s.endedAt < Date.parse(r.at)) continue;
+    if (s.stopped || !gateOf(triggersConfig(), r.source).reply) { rmSync(path, { force: true }); continue; }
+    const claim = dir("replies", `${r.runId}.posting`);
+    try { renameSync(path, claim); } catch { continue; } // another sweep took it
+    const done = () => rmSync(claim, { force: true });
+    const out = await deps.outcome(r.runId).catch(() => null);
+    if (!out || out.state === "cancelled") { done(); continue; }
+    const reply: TriggerReply = { source: r.source, thread: r.thread, replyTo: r.replyTo, triggerId: r.triggerId, runId: r.runId, text: replyText(r.runId, out), key: `reply-${r.runId}-${sha(r.triggerId).slice(0, 16)}` };
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new PluginError("timeout", `the ${r.source} source didn't post the reply within ${REPLY_TIMEOUT_MS} ms`)), REPLY_TIMEOUT_MS); });
+      const posted = await Promise.race([deps.reply(reply), late]).finally(() => clearTimeout(timer));
+      done();
+      if (!posted) { console.error(`[triggers] ${r.runId}: the ${r.source} source has no reply path; its reply on ${r.thread} is dropped`); continue; }
+      await record("trigger.replied", `run:${r.runId}`, { source: r.source, thread: redactor.text(r.thread), runId: r.runId, id: redactor.text(r.triggerId), url: typeof posted.url === "string" ? redactor.text(posted.url) : null }).catch(() => {});
+    } catch (e) {
+      // A reply that may have been posted (no answer in time) is not posted again.
+      const again = e instanceof PluginError && e.retryable && e.code !== "timeout" && r.attempts + 1 < REPLY_ATTEMPTS;
+      if (again) writeAtomic(path, JSON.stringify({ ...r, attempts: r.attempts + 1 }));
+      done();
+      console.error(`[triggers] ${r.runId}: replying on ${r.thread} through ${r.source}${again ? " (tried again at the next sweep)" : ""}: ${(e as Error)?.message ?? e}`);
+    }
+  }
+}
+
 // ---- the daemon's sweep ----------------------------------------------------------------------------------------------
 
 let sweeper: ReturnType<typeof setInterval> | null = null;
-/** One round: subscriptions whose run was stopped or whose time is up end; dedupe markers past 30 days go. */
+/** One round: subscriptions whose run was stopped or whose time is up end; runs that ended since their request answer
+ *  it (§16.3.7); dedupe markers past 30 days go. */
 export async function sweepTriggers(): Promise<void> {
   await subscriptions().catch((e) => console.error(`[triggers] sweeping subscriptions: ${(e as Error)?.message ?? e}`));
+  await sendReplies().catch((e) => console.error(`[triggers] sending replies: ${(e as Error)?.message ?? e}`));
   if (!existsSync(dir("seen"))) return;
   for (const source of readdirSync(dir("seen"))) {
     for (const f of readdirSync(dir("seen", source))) {
@@ -456,7 +650,7 @@ export function startTriggers(sink: DaemonSink): void {
 
 /** `ctx.triggers` for one plugin (§8.1): only the daemon has it. That `emit` names a source the plugin contributes is
  *  the host's check (packages/plugin/src/host/context.ts). */
-export function pluginTriggers(plugin: string, scopes: readonly ("read" | "steer" | "configure")[] = []): TriggersService {
+export function pluginTriggers(plugin: string, scopes: readonly ("read" | "steer" | "configure")[] = []): Omit<TriggersService, "onReply"> {
   const principal: Principal = { kind: "plugin", name: plugin, scopes };
   return {
     emit: (t) => admit(t, principal),
@@ -466,10 +660,11 @@ export function pluginTriggers(plugin: string, scopes: readonly ("read" | "steer
   };
 }
 
-/** Tests: stop the sweep and forget the sink and the injected kernel. */
+/** Tests: stop the sweep and forget the sink, the injected kernel and the reply paths. */
 export function resetTriggers() {
   if (sweeper) clearInterval(sweeper);
   sweeper = null;
   daemonSink = null;
   deps = kernelDeps;
+  replyPaths = null;
 }
