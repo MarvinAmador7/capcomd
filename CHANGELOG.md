@@ -14,6 +14,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   profile sets is refused unless you pass `--operator`. A profile in another's `children.allowedChildProfiles` may not
   allow more jobs at once (`max`) or longer ones (`afterTurnMs`) than the profile that spawns it (its `foregroundMs`
   is its own); `capcomd profiles validate` names one that does. Lower the child's values, or raise the spawner's.
+  A job started with `--timeout-ms` longer than the profile's `afterTurnMs` now stops at `afterTurnMs` (a profile
+  that doesn't set it is unchanged), and a job's `cwd` over 4 KB or `env` over 16 KB is refused.
 - Changed: plugins only reach their own jobs and the jobs of a run's agents: `ctx.jobs.get`, `wait` and `cancel` on
   another plugin's job answer `not_found`, and `ctx.jobs.list` leaves those out.
 - Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the

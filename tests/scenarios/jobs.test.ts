@@ -202,18 +202,19 @@ test("an agent that fails leaves no running jobs on record: killed in its machin
   const { client } = await import("../../src/core/relay");
   const s = client().scope.getOrCreate([run]);
   const pidFile = join(dir, `failed-${Date.now()}`);
-  // A scripted agent fails with two background jobs running: they end with it, killed, their processes gone.
+  // A scripted agent fails with two background jobs running: they end with it, killed, their processes gone. Its
+  // profile's afterTurnMs is a limit: a start asking for longer gets that (§16.2 rule 2).
   const agent = await spawnRoot(w, run, "worker", w.script("fail-with-jobs", `
-a=$(capcomd job start --label server --foreground-ms 300 -- 'echo $$ > ${pidFile}; exec sleep 600')
+a=$(capcomd job start --label server --foreground-ms 300 --timeout-ms 3600000 -- 'echo $$ > ${pidFile}; exec sleep 600')
 b=$(capcomd job start --label watcher --foreground-ms 300 -- 'sleep 600')
 echo "started: $(printf "%s" "$a" | $S/jget state) $(printf "%s" "$b" | $S/jget state)"
-exit 3`));
+exit 3`), { args: ["--set", "jobs.afterTurnMs=600000"] });
   const done = (await waitAll(w, run, [agent], 120_000)).agents[0];
   expect(done.status).toBe("failed");
   expect(await logsOf(run, agent)).toContain("started: running running");
   const jobs = ((await s.kvList({ prefix: "_jobs/" })) as Array<{ value: any }>).map((r) => r.value);
   expect(jobs).toHaveLength(2);
-  for (const j of jobs) expect(j).toMatchObject({ state: "killed", reason: "its agent ended", spec: { owner: { agentId: agent } } });
+  for (const j of jobs) expect(j).toMatchObject({ state: "killed", reason: "its agent ended", timeoutMs: 600_000, spec: { owner: { agentId: agent } } });
   const pid = Number(readFileSync(pidFile, "utf8").trim());
   let alive = true;
   for (let i = 0; i < 50 && alive; i++) { try { process.kill(pid, 0); await sleep(100); } catch { alive = false; } }

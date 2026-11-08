@@ -477,7 +477,10 @@ function checkSpec(spec: JobSpec) {
     if (!Array.isArray(spec.cmd) || !spec.cmd.length || spec.cmd.length > 256 || spec.cmd.some((x) => typeof x !== "string")) usage("cmd is a non-empty list of strings", "One string runs with sh -c; more are argv.");
     if (Buffer.byteLength(JSON.stringify(spec.cmd)) > 16 * 1024) usage("cmd is over 16 KB", "Put a long script in a file and run that.");
     if (spec.cwd !== undefined && (typeof spec.cwd !== "string" || !spec.cwd.startsWith("/") || spec.cwd.split("/").includes(".."))) usage("cwd is an absolute path", "Where the command runs, e.g. your checkout.");
+    // With the cmd's 16 KB, what a record keeps besides its output stays well under a kv value's 64 KB (src/jobs/record.ts).
+    if (spec.cwd !== undefined && Buffer.byteLength(spec.cwd) > 4096) usage("cwd is over 4 KB", "Where the command runs, e.g. your checkout.");
     if (spec.env !== undefined && (!spec.env || typeof spec.env !== "object" || Object.entries(spec.env).some(([k, v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || typeof v !== "string"))) usage("env is an object of strings", "Names are letters, digits and _.");
+    if (spec.env !== undefined && Buffer.byteLength(JSON.stringify(spec.env)) > 16 * 1024) usage("env is over 16 KB", "Put long values in a file the command reads.");
     for (const k of ["foregroundMs", "timeoutMs"] as const) if (spec[k] !== undefined && !(Number.isInteger(spec[k]) && spec[k]! >= 0)) usage(`${k} is a whole number of milliseconds`, "e.g. 60000.");
     if (spec.timeoutMs !== undefined && spec.timeoutMs < 1000) usage("timeoutMs is at least 1000", "A job gets at least a second.");
   } else {
@@ -531,8 +534,10 @@ export async function startJob(spec: JobSpec, o: StartOptions): Promise<Job> {
   const m = o.machine ?? at?.m;
   if (!m) throw new RelayError("engine_unreachable", `agent ${owner}'s machine isn't reachable from here: its jobs run where its spool is pumped`, "Start it from the agent (capcomd job start), or while the agent runs in this daemon.", { code: "unavailable", retryable: true });
   const att = machines.get(machineKey(m.runId, m.agentId)) ?? (await attachMachine(m), machines.get(machineKey(m.runId, m.agentId))!);
-  // §16.2 rule 2: a job's own timeout, by default the owner's afterTurnMs.
-  const rec: JobRecord = { ...base, timeoutMs: spec.timeoutMs ?? limits.afterTurnMs };
+  // §16.2 rule 2: a job's own timeout, by default the owner's afterTurnMs, and never longer than an afterTurnMs its
+  // profile sets: that is a limit (a child or an override may only lower it), which a start's timeoutMs can't lift.
+  const cap = (a?.spec as { jobs?: { afterTurnMs?: number } } | null | undefined)?.jobs?.afterTurnMs;
+  const rec: JobRecord = { ...base, timeoutMs: Math.min(spec.timeoutMs ?? limits.afterTurnMs, cap ?? Infinity) };
   await writeRecord(rec, "started");
   try {
     await launch(m, jobId, { cmd: spec.cmd, cwd: spec.cwd ?? m.cwd, ...(spec.env ? { env: spec.env } : {}) });

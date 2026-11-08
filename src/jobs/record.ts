@@ -11,7 +11,7 @@ const dropHead = (s: string, n: number) => s.slice(n).replace(/^[\uDC00-\uDFFF]/
 /**
  * The record as it is stored, at most `max` bytes (UTF-8 JSON): the longer of its output's tails loses its oldest part
  * first, then the other, and `truncated` says so. A record without output, or one whose other fields alone are over
- * (none is: a label, a reason and a cmd are capped well under it), is stored as it is.
+ * (none is: a label, a reason, a cmd, a cwd and an env are capped well under it), is stored as it is.
  */
 export function fitJobRecord<T extends { result?: unknown }>(job: T, max: number): T {
   const res = job.result as { stdout?: unknown; stderr?: unknown } | null | undefined;

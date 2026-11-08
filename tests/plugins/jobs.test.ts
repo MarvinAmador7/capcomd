@@ -232,6 +232,10 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: "never" })).rejects.toMatchObject({ code: "invalid" });
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { run: true }, label: "x", everyMs: 1000 })).rejects.toMatchObject({ code: "invalid", message: "only a plugin's timer lives outside a run" });
     await expect(ctx.jobs.start({ kind: "exec", runId: "run-x", owner: { run: true }, cmd: ["true"], label: "x" })).rejects.toMatchObject({ code: "unsupported" });
+    // What a record keeps besides its output is bounded, so its output's tails always make it fit 64 KB (§16.2 rule 2).
+    const exec = { kind: "exec" as const, runId: "run-x", owner: { agentId: "agt-x" }, cmd: ["true"], label: "x" };
+    await expect(ctx.jobs.start({ ...exec, cwd: `/${"d".repeat(5000)}` })).rejects.toMatchObject({ code: "invalid", message: "cwd is over 4 KB" });
+    await expect(ctx.jobs.start({ ...exec, env: Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`NAME_${i}_${"n".repeat(8)}`, "v"])) })).rejects.toMatchObject({ code: "invalid", message: "env is over 16 KB" });
     await host.stop();
   });
 
