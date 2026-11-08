@@ -17,7 +17,7 @@ import { valueBytes } from "../../src/primitives/board";
 import { jobLimits, jobMessage, resetJobs, resumeTimers, startJob, useDaemonEvents, type JobRecord } from "../../src/jobs/service";
 import * as relay from "../../src/core/relay";
 import { kernelHost } from "../../src/plugins/host";
-import { useHooks } from "../../src/plugins/hooks";
+import { hooks, useHooks } from "../../src/plugins/hooks";
 import { useSandboxHost } from "../../src/plugins/sandboxes";
 import { sandboxDocker, SWEEP_EVERY_MS } from "../../src/plugins/builtin/sandbox-docker";
 import { stateDir } from "../../src/utils/home";
@@ -305,7 +305,7 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
       expect(count("readFrom")).toBe(0);
       // Its settled record still has all of its output (read once, when it ended).
       expect(run.records.get(job.jobId)!.result).toMatchObject({ code: 0, stdout: expect.stringContaining("line-25\n") });
-      await useHooksIdle();
+      await hooks.idle();
       expect(told).toEqual([]);
     });
   }, 30_000);
@@ -316,11 +316,12 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
       // 40 KB at once, then a line every 0.1 s for 3 s.
       const job = await startJob(exec(`head -c 40960 /dev/zero | tr '\\0' x; for i in $(seq 1 30); do echo l$i; sleep 0.1; done`), { by: "operator", machine: m });
       await until(async () => run.records.get(job.jobId)?.state === "done", 20_000);
-      await useHooksIdle();
+      await hooks.idle();
       const frames = told.filter((c) => c.payload.change.kind === "output").map((c) => c.payload.change as { stdout: string; stderr: string });
       expect(frames.length).toBeGreaterThanOrEqual(3);
       for (const f of frames) expect(Buffer.byteLength(f.stdout)).toBeLessThanOrEqual(16 * 1024);
-      expect(Buffer.byteLength(frames[0]!.stdout)).toBe(16 * 1024);
+      // Its first 40 KB came in frames cut at 16 KB.
+      expect(Math.max(...frames.map((f) => Buffer.byteLength(f.stdout)))).toBe(16 * 1024);
       const reads = execs.filter((e) => e.kind === "readFrom").map((e) => e.at);
       expect(reads.length).toBe(frames.length);
       for (let i = 1; i < reads.length; i++) expect(reads[i]! - reads[i - 1]!).toBeGreaterThanOrEqual(950);
@@ -331,8 +332,6 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
     });
   }, 30_000);
 });
-
-const useHooksIdle = () => import("../../src/plugins/hooks").then((h) => h.hooks.idle());
 
 describe("the Docker sweep is sandbox-docker's own timer (§15.1, §16.2)", () => {
   test("the daemon's plugin sets one timer (kept across restarts by its key), sweeps at once, and again when it fires", async () => {
