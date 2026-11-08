@@ -123,8 +123,28 @@ describe("the host and the built-ins", () => {
     const read: string[] = [];
     const env = new Proxy({ ...p.env, BOXD_API_KEY: "bxd_kernel" } as Record<string, string | undefined>, { get: (t, k: string) => { read.push(k); return t[k]; } });
     expect(() => resolveSecret(peek, "apiKey", env, dir)).toThrow(expect.objectContaining({ code: "forbidden" }));
+    // A test plugin is `builtin` by source but has a directory: refused too.
+    expect(() => resolveSecret(peek, "apiKey", env, dir, { builtin: true })).toThrow(expect.objectContaining({ code: "forbidden" }));
+    // As the host asks for a third-party plugin's: its default isn't followed at all.
+    expect(() => resolveSecret(peek, "apiKey", env, dir, { builtin: false })).toThrow(expect.objectContaining({ code: "not_found" }));
     expect(read).not.toContain("BOXD_API_KEY");
-    expect(resolveSecret(peek, "apiKey", env, null, true)).toBe("bxd_kernel");
+    expect(resolveSecret(peek, "apiKey", env, null, { builtin: true })).toBe("bxd_kernel");
+  });
+
+  test("the deprecated RELAY_* spelling, another case, or capcomd's keychain item is the kernel's too; resolving one is forbidden unread", () => {
+    for (const ref of ["env:RELAY_RPC_KEY", "env:relay_git_token", "env:boxd_api_key", "env:Github_Token", "keychain:capcomd", "keychain:capcomd.boxd"]) expect(kernelSecretRef(ref)).toContain(ref);
+    for (const ref of ["env:MY_RELAY_TOKEN", "keychain:github-token", "keychain:my-capcomd"]) expect(kernelSecretRef(ref)).toBeNull();
+    const env = { ...place(undefined, undefined).env, CAPCOMD_PLUGIN_MY_PLUGIN_TOKEN: '{"$secret":"env:RELAY_RPC_KEY"}', RELAY_RPC_KEY: "rpc-secret" };
+    expect(pluginSettings(M, { env, source: "user", dir: "/plugins/my-plugin" }).errors).toMatchObject([{ path: "token", layer: "env", message: expect.stringContaining("env:RELAY_RPC_KEY") }]);
+    const user = place({ token: { $secret: "keychain:capcomd" } }, undefined);
+    expect(pluginSettings(M, { ...user, source: "user", dir: "/plugins/my-plugin" }).errors).toMatchObject([{ path: "token", layer: "user", message: expect.stringContaining("keychain items") }]);
+    // A test plugin (source builtin, with a directory) is held to the same rule as a user's.
+    expect(pluginSettings(M, { env, source: "builtin", dir: "/tests/fixtures/my-plugin" }).errors).toMatchObject([{ path: "token", layer: "env" }]);
+    expect(pluginSettings(M, { env, source: "builtin", dir: null }).errors).toEqual([]);
+    const read: string[] = [];
+    const watched = new Proxy(env as Record<string, string | undefined>, { get: (t, k: string) => { read.push(k); return t[k]; } });
+    expect(() => resolveSecret(M, "token", watched, "/plugins/my-plugin", { builtin: false })).toThrow(expect.objectContaining({ code: "forbidden" }));
+    expect(read).not.toContain("RELAY_RPC_KEY");
   });
 
   test("an override in the user's config or CAPCOMD_PLUGIN_* that names a kernel variable is refused; a variable of its own isn't", () => {

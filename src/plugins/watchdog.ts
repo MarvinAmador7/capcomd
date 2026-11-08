@@ -13,7 +13,9 @@
 // over it (the stop still comes). No progress for `stalledAfterMs`
 // (15 min) raises the `stalled` notice (the app's amber hand; a parent sees it on its child); for `stopAfterMs` (45 min,
 // both counted from the last progress) cancels the agent and its descendants, and says so once on the run's stream
-// (`plugin.watchdog.stopped`, the one message §16.5 allows). Progress clears the notice.
+// (`plugin.watchdog.stopped`, the one message §16.5 allows). Progress clears the notice. Files changing show only at its
+// checkpoints, so an agent checkpointed less often than every 10 min (its profile's `checkpointEveryMs`) gets longer
+// windows: `stalled` no sooner than one and a half of its interval, the stop as much later (`windowsFor`).
 // Its clock is one plugin timer (§16.2, re-armed by the daemon after a restart); what it knows of each agent is kept in
 // its storage, and the time the daemon was down doesn't count.
 import { definePlugin, type PluginContext } from "../../packages/plugin/src/context";
@@ -63,6 +65,8 @@ export interface Watched {
   blind?: boolean;
   /** The kind of a notice of the kernel's that shows on it (`idle`, `spinning`, …); `stalled` isn't raised over it. */
   other?: string | null;
+  /** How often its files are checkpointed (ms; null: not known), asked when it was first judged: it sets its windows. */
+  every?: number | null;
 }
 
 const ACTIVE = new Set(["pending", "running", "paused"]);
@@ -74,9 +78,17 @@ export function spoken(ms: number): string {
 }
 
 /** The notice's text: what didn't happen, and what comes next. */
-export function stalledDetail(quietMs: number, cfg: WatchdogConfig): string {
+export function stalledDetail(quietMs: number, cfg: Pick<WatchdogConfig, "stopAfterMs">): string {
   const next = cfg.stopAfterMs > 0 ? `; the watchdog stops it after ${spoken(cfg.stopAfterMs)} without progress` : "";
   return `no progress for ${spoken(quietMs)} (no file changed; no agent, job, check or approval of its own finished)${next}`;
+}
+
+/** The windows of an agent whose files are checkpointed every `everyMs` (null: not known, the configured ones): a file
+ *  change shows only at the next checkpoint, so `stalled` comes no sooner than one and a half of the interval (the
+ *  default 10 min interval keeps the default 15 min), and the stop as much later as `stalled` moved. */
+export function windowsFor(cfg: Pick<WatchdogConfig, "stalledAfterMs" | "stopAfterMs">, everyMs: number | null | undefined): Pick<WatchdogConfig, "stalledAfterMs" | "stopAfterMs"> {
+  const stalledAfterMs = Math.max(cfg.stalledAfterMs, Math.ceil(1.5 * Math.max(0, everyMs ?? 0)));
+  return { stalledAfterMs, stopAfterMs: cfg.stopAfterMs === 0 ? 0 : cfg.stopAfterMs + stalledAfterMs - cfg.stalledAfterMs };
 }
 
 /** What's wrong with settings the schema accepts (null: nothing): the stop comes after the notice, or never. */
@@ -90,6 +102,10 @@ export interface WatchdogOptions {
   /** Whether the agent's work shows as its files changing (the kernel's answer, src/plugins/services.ts
    *  `showsFileChanges`); without it every agent is judged. A rejection: ask again at the next look. */
   showsWork?: (runId: string, agentId: string) => Promise<boolean>;
+  /** How often the agent's files are checkpointed (ms; null: not known, or no supervisor checkpoints them), the
+   *  kernel's answer (src/plugins/services.ts `checkpointEvery`); without it the configured windows hold for every
+   *  agent. A rejection: ask again at the next look. */
+  checkpointEvery?: (runId: string, agentId: string) => Promise<number | null>;
 }
 
 export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions = {}) {
@@ -235,12 +251,13 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
         return w.waits.length > 0 || (children.get(k) ?? []).some((c) => held(c, seen));
       };
       for (const w of all) {
-        if (!watched.has(keyOf(w.runId, w.agentId)) || w.stopping) continue;
+        if (!watched.has(keyOf(w.runId, w.agentId))) continue;
         const quiet = now - w.since;
         // Look it up when it may need acting on, and now and then anyway (one that ended while the daemon was down, or
         // whose ending nobody told, is forgotten).
         const stale = now - (w.checkedAt ?? 0) >= cfg.stalledAfterMs;
-        const judged = !held(w) && !(children.get(keyOf(w.runId, w.agentId)) ?? []).length && quiet >= cfg.stalledAfterMs;
+        // One being stopped is only looked up (it is forgotten once it ended, even if nobody said so).
+        const judged = !w.stopping && !held(w) && !(children.get(keyOf(w.runId, w.agentId)) ?? []).length && quiet >= cfg.stalledAfterMs;
         if (!judged && !stale) continue;
         const a = await ctx.agents.get(w.runId, w.agentId).catch((e: unknown) => (e instanceof PluginError && (e.code === "not_found" || e.code === "invalid") ? null : undefined));
         if (a === undefined) continue; // the engine didn't answer: next time
@@ -256,15 +273,23 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
           save(w);
         }
         if (w.blind) continue;
-        if (cfg.stopAfterMs > 0 && quiet >= cfg.stopAfterMs) await stop(w, quiet);
-        else if (w.stalledAt === null && !w.other) await stalled(w, quiet);
+        // Its windows, from how often its files are checkpointed.
+        if (w.every === undefined && o.checkpointEvery) {
+          const every = await o.checkpointEvery(w.runId, w.agentId).catch(() => undefined);
+          if (every === undefined) continue; // the engine didn't answer: next time
+          w.every = typeof every === "number" && every > 0 ? every : null;
+          save(w);
+        }
+        const win = windowsFor(cfg, w.every);
+        if (win.stopAfterMs > 0 && quiet >= win.stopAfterMs) await stop(w, quiet);
+        else if (quiet >= win.stalledAfterMs && w.stalledAt === null && !w.other) await stalled(w, quiet, win);
       }
     } finally { ticking = false; }
   }
 
-  async function stalled(w: Watched, quiet: number) {
+  async function stalled(w: Watched, quiet: number, win: Pick<WatchdogConfig, "stopAfterMs">) {
     try {
-      await ctx.agents.notice(w.runId, w.agentId, { kind: "stalled", detail: stalledDetail(quiet, cfg) });
+      await ctx.agents.notice(w.runId, w.agentId, { kind: "stalled", detail: stalledDetail(quiet, win) });
       w.stalledAt = Date.now();
       save(w);
       ctx.log.info("an agent looks stalled", { runId: w.runId, agentId: w.agentId, quietMs: quiet });
@@ -328,4 +353,7 @@ export const watchdogPlugin = (o: WatchdogOptions = {}) => definePlugin<Watchdog
   },
 });
 
-export const plugin = watchdogPlugin({ showsWork: async (runId, agentId) => (await import("./services")).showsFileChanges(runId, agentId) });
+export const plugin = watchdogPlugin({
+  showsWork: async (runId, agentId) => (await import("./services")).showsFileChanges(runId, agentId),
+  checkpointEvery: async (runId, agentId) => (await import("./services")).checkpointEvery(runId, agentId),
+});

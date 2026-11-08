@@ -608,11 +608,15 @@ this list says why):
   `too_large`, `over_cap`; never the text). A run's own event log keeps what the agent wrote in its result, as before;
   what capture keeps out is the candidates.
 - The seeded scan is `src/context/scan.ts`, shared by capture and lint: seeded with the agent providers' credentials,
-  the plugins' secrets, every variable of the run's environment named like a credential, the in-VM tokens' signing key
-  and the forge's credential for the run's repository; then the redactor's shapes (exported as `PATTERNS`) and a few
-  more, words of 32 or more characters with digits and both cases at 4.3 bits a character or more (commit ids and code
-  names stay out), and the path denylist with `~/.ssh`, `id_*` keys, `.netrc` and `.git-credentials` added. It reads
-  the text with invisible characters dropped and look-alikes folded (NFKC, every dash a hyphen), the seeds too.
+  the plugins' secrets (the built-ins', and every reference the user sets for another plugin, a user's or a project's), every variable of the run's environment named like
+  a credential, the in-VM tokens' signing key and the forge's credential for the run's repository; then the redactor's
+  shapes (exported as `PATTERNS`) and a few more, words of 32 or more characters with digits and both cases at 4.3
+  bits a character or more (commit ids and code names stay out), and the path denylist with `~/.ssh`, `id_*` keys,
+  `.netrc` and `.git-credentials` added. It reads the text with look-alikes folded (NFKC, every dash a hyphen) and
+  every default-ignorable character (format characters, variation selectors, Hangul fillers, tag characters) and
+  combining mark dropped, the seeds too, and looks for a seed with spaces and line breaks taken out of both, so a
+  secret wrapped or spaced out is still found (the step's review: format characters alone let a variation selector
+  or a combining mark hide one).
 - Budgets: `itemBytes` is 4 KiB in capcomd's defaults and every eval file (half of a result's 8 KB of data);
   `proposalsPerRun` stays null until consolidation (step 3) sets it, and capture honours one a profile sets.
 - `capcomd context lint` is a verb of the router's command group (one group has one owner), over `src/context/lint.ts`,
@@ -620,7 +624,8 @@ this list says why):
   supersession, citations and "ids immutable" need); checks ids against `--base <ref>` (local `git ls-tree` and `git
   cat-file`, no network) for "never changes" and "never deleted" (deprecated instead; a moved file keeps its id);
   resolves `outcomes[]` only with `--run`, and only for items the change touches; and treats a link (`.capcomd/` or
-  `.capcomd/context/` being one included), a binary or a file over 64 KB as a problem, and `--fix` never writes
+  `.capcomd/context/` being one included), a binary or a file over 64 KB as a problem, and so a directory with more
+  files than it reads (2000, the memory provider's cap: it never passes what it didn't read), and `--fix` never writes
   `index.md` through a link. A file's name is scanned as well as its text; an item holding a secret is in `index.md` by
   its id alone, or not at all when its id or name holds it. `index.md` is the items by kind (facts first) and path, with no date of its own, so it is
   deterministic; `--fix` writes only it. The imperative-language flag §8 gives step 3 is a warning now, with stale
@@ -646,7 +651,7 @@ this list says why):
   unset), but the agent works as a reporting agent does: a read-only checkout of the run's target, nothing of it kept,
   its final message its answer (a JSON block; a scripted agent's `capcomd result --data`). It reads its run in its
   prompt (every candidate fenced as its agent's text, refusals by number and reason, the run's verifies and merges by
-  id), since an agent that may not spawn has no in-VM `capcomd` to read kv with.
+  id), since a consolidator has no in-VM `capcomd` to read kv with (it answers with its final message).
 - The staging rules (deterministic: a replay stages the same files, and a branch already there is the answer): an `add`
   whose words are mostly an active item's (Jaccard ≥ 0.8) adds nothing and counts one more `helpful` (a memory item's: a
   fact's file, counters too, is a person's to change), an `add` titled as an active memory item supersedes it (the
@@ -821,6 +826,17 @@ says why):
   have admitted k = 1 and k = 3 for one model (sonnet), which is the point.
 - §12's "a `paths` column vs none" ablation is an arm (`index-paths`, the items without `paths`) run on the fake
   sandbox in CI; "each doctrine skill present vs absent" is not an arm yet (the index arms all get the skills).
+
+**Changed since: every working agent has the in-VM capcomd** (spec 1.0.39). A live run showed that with the profiles
+`capcomd setup project` writes no agent could propose a lesson (the workers can't spawn, so they had no `capcomd
+result`) or run a job. Now every agent that does work of its own has the in-VM capcomd with a leaf token (ADR-017 §2):
+notes in `kv`, `capcomd result --data '{"context": […]}'`, jobs, reads; never spawn, verify or merge. So the routing
+paragraph goes to every such agent (the router's test is `src/subagents/skill.ts` `hasVmCapcomd`, not
+`children.allowSpawn`), and the worker's own lines (`workerSkill`) carry step 2's short "Notes and lessons" paragraph,
+as the orchestration skill does. Still not to a reviewer, a report agent or the consolidator (D11; a consolidator's
+`result.data.context` is its answer, never candidates). A profile keeps room for the routing paragraph only when it may
+spawn, as before: a worker's profile that resolved before still does, and the router leaves the paragraph out (and logs
+it) when its other skills leave no room.
 
 ## 14. What the review changed
 

@@ -60,6 +60,7 @@
     "tests/scenarios/run-start-failures.test.ts": 19280,
     "tests/scenarios/sandbox-resources.test.ts": 8070,
     "tests/scenarios/smoke.test.ts": 14390,
+    "tests/scenarios/worker-capcomd.test.ts": 14320,
     "tests/subagents/limits.test.ts": 204326,
     "tests/subagents/liveness.test.ts": 147881,
     "tests/subagents/orchestrate-writes.test.ts": 15136,

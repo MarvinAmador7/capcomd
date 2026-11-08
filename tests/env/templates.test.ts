@@ -3,6 +3,7 @@
 // ledger that keeps one per project and deletes only what capcomd made), and when a rebuild is scheduled. The sandbox
 // is FakeProvider's host mode, so the build's commands run here.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -237,6 +238,22 @@ describe("seeing them", () => {
     expect(b.p.snapshots.has("capcomd-env-owners")).toBe(true);
     expect(readTemplates().templates).toEqual({});
   }, 60_000);
+
+  test("on a sandbox that keeps none, `env templates` and `rm` refuse, and the ledger keeps the boxd template (live run)", () => {
+    // The fake sandbox (CAPCOMD_SANDBOX unset) reads boxd's ledger file: `rm` used to forget the template, say
+    // "removed" and leave its boxd snapshot behind with no record of it.
+    const repo = "https://github.com/acme/widgets.git";
+    const name = templateName(PINS, repo, "0123abcd");
+    writeTemplates({ templates: { [projectKey(repo)]: { project: projectKey(repo), repo, name, base: "b", pins: PINS, target: "main", commit: "0".repeat(40), heads: { main: "0".repeat(40) }, lockFile: "none", lockHash: "none", depsInstalled: false, setup: null, builtAt: new Date().toISOString(), buildMs: 1, sizeBytes: 1 } as any }, created: [name] });
+    const before = readFileSync(process.env.CAPCOMD_TEMPLATE_LEDGER!, "utf8");
+    const cli = join(import.meta.dir, "..", "..", "src", "cli", "index.ts");
+    for (const [sandbox, args] of [["fake", ["env", "templates", "rm", "--repo", repo]], ["docker", ["env", "templates", "--json"]]] as const) {
+      const r = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", cwd: state, env: { ...process.env, CAPCOMD_SANDBOX: sandbox, CAPCOMD_HOME: state, CAPCOMD_NO_CONFIG: "1" } });
+      expect(r.status).not.toBe(0);
+      expect(`${r.stdout}${r.stderr}`).toContain(`the ${sandbox} sandbox keeps no project templates`);
+    }
+    expect(readFileSync(process.env.CAPCOMD_TEMPLATE_LEDGER!, "utf8")).toBe(before);
+  });
 });
 
 describe("what the build VM may reach (review)", () => {

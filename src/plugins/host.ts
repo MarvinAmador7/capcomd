@@ -169,8 +169,8 @@ export function kernelHost(o: { record?: DaemonEventSink; snapshot?: string | nu
       ...(o.jobs ? { jobs: pluginJobs(m.name), agents: pluginAgents(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
       ...(o.triggers ? { triggers: pluginTriggers(m.name, m.scopes ?? []) } : {}),
     }) } : {}),
-    // A shipped built-in, the only plugin without a directory, may name the kernel's own variables (§10.3).
-    secret: async (m, key, dir) => resolveSecret(m, key, process.env, dir, dir === null),
+    // Only a shipped built-in (no directory) may name the kernel's own variables (§10.3): resolveSecret checks both.
+    secret: async (m, key, dir, source) => resolveSecret(m, key, process.env, dir, { builtin: source === "builtin" }),
     exempt: (name, version) => isExempt(name, version),
     // A project's plugin runs only with its content as the operator trusted it (§4.8). The daemon audits each trust
     // the first time it acts on it (`plugin.trusted`; the CLI that recorded it can't write the daemon's stream).

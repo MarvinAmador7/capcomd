@@ -42,19 +42,26 @@ export const secretRefOf = (v: unknown): string | null =>
 
 /**
  * The daemon's own variables (§10.3): the boxd key, the GitHub tokens the forges use, every CAPCOMD_* (client tokens,
- * the RPC key, the git token), the engine's and git's, and the agent providers' families (the keys the kernel binds
- * into sandboxes). Only a shipped built-in's reference may name one (sandbox-boxd's `env:BOXD_API_KEY`); a plugin of the
- * user's or a project's never reads the kernel's secrets, whichever layer names the variable.
+ * the RPC key, the git token) and its deprecated RELAY_* alias (src/utils/env.ts reads RELAY_RPC_KEY as CAPCOMD_RPC_KEY),
+ * the engine's and git's, and the agent providers' families (the keys the kernel binds into sandboxes), whatever their
+ * case. And its keychain items (`keychain:capcomd…`: `capcomd setup` keeps the boxd key there), refused before keychain
+ * references resolve at all. Only a shipped built-in's reference may name one (sandbox-boxd's `env:BOXD_API_KEY`); a
+ * plugin of the user's or a project's never reads the kernel's secrets, whichever layer names it.
  */
-const KERNEL_ENV_PREFIXES = ["CAPCOMD_", "BOXD_", "RIVET", "GIT_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_"];
+const KERNEL_ENV_PREFIXES = ["CAPCOMD_", "RELAY_", "BOXD_", "RIVET", "GIT_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_"];
 const KERNEL_ENV = new Set(["GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]);
-export const kernelVariable = (name: string): boolean => KERNEL_ENV.has(name) || KERNEL_ENV_PREFIXES.some((p) => name.startsWith(p));
+export const kernelVariable = (name: string): boolean => {
+  const n = name.toUpperCase();
+  return KERNEL_ENV.has(n) || KERNEL_ENV_PREFIXES.some((p) => n.startsWith(p));
+};
 
 /** Why reference `ref` is the kernel's and no plugin's (words to follow "names"), or null when it isn't. */
 export function kernelSecretRef(ref: string): string | null {
   const name = /^env:(.+)$/.exec(ref)?.[1];
-  if (!name || !kernelVariable(name)) return null;
-  return `${ref}, one of capcomd's own variables: a plugin never reads the kernel's secrets (§10.3); export a variable of its own and reference that`;
+  if (name ? !kernelVariable(name) : !/^keychain:capcomd/i.test(ref)) return null;
+  return name
+    ? `${ref}, one of capcomd's own variables: a plugin never reads the kernel's secrets (§10.3); export a variable of its own and reference that`
+    : `${ref}, one of capcomd's own keychain items: a plugin never reads the kernel's secrets (§10.3); keep its secret under another name`;
 }
 
 type Schema = {
@@ -199,7 +206,9 @@ export function pluginSettings(m: { name: string; config?: unknown }, o: { dir?:
     else config = mergePatch(config, rest) as Record<string, unknown>;
     for (const k of Object.keys(rest)) { if (k in config) sources[k] = layer; else delete sources[k]; }
   }
-  // A secret no layer gave a reference takes the manifest's default (§10.3), which can't name the kernel's either.
+  // A secret no layer gave a reference: the manifest's default can't name the kernel's either. A third-party's default
+  // is never followed (src/plugins/secrets.ts), but one that names the kernel's variables is refused outright (§10.3),
+  // so the operator sees what the plugin asked for; a test plugin's (source builtin, with a directory) is followed.
   if (!kernel) for (const k of secret) {
     if (named.has(k)) continue;
     const ref = secretRefOf((schema?.properties?.[k] as { default?: unknown } | undefined)?.default);

@@ -5,10 +5,12 @@
 //   frames.ndjson  one line per frame: frame, hook, callId, idempotencyKey, mode, subject (the merge, agent or run id).
 // and does what control.json there says, read again for every call (absent: deny every merge, allow the rest):
 //   { "<hook>": "allow" | "deny" | "hold" | "invalid" | "widen" | "slow" | "crash" | "none", "slowMs": n,
-//     "atStart": "exit" | "hang" | "badHash" | "badHooks", "emit": true, "store": true, "print": true }
+//     "atStart": "exit" | "hang" | "badHash" | "badHooks", "emit": true, "store": true, "print": true, "child": true }
 // "none" never answers; "slow" answers after slowMs; "crash" exits with the call in flight; "print" writes its token
-// and secrets to stdout and stderr once it is open (the host must redact them from its log). It exits 0 on
+// and secrets to stdout and stderr once it is open (the host must redact them from its log); "child" starts a helper
+// (`sleep`) at start and writes its pid to child.pid (what the process started must go with it). It exits 0 on
 // session.closing, and when its stdin closes (the daemon is gone).
+import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -28,6 +30,11 @@ writeFileSync(join(data, "env.json"), JSON.stringify(Object.fromEntries(Object.e
 const c0 = control();
 if (c0.atStart === "exit") process.exit(3);
 if (c0.atStart === "hang") await new Promise(() => {});
+if (c0.child) {
+  const helper = spawn("sleep", ["300"], { stdio: "ignore" });
+  helper.unref();
+  writeFileSync(join(data, "child.pid"), String(helper.pid));
+}
 
 const client = connect(env);
 const root = env.CAPCOMD_PLUGIN_ROOT;

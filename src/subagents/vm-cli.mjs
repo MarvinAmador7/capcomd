@@ -276,6 +276,16 @@ export const TOOLS = [
   ["result", "Declare your structured result before you exit: summary, artifacts, data.", S({ summary: str, artifacts: { type: "array", items: S({ name: str, ref: str }) }, data: {} }, ["summary"])],
 ].map(([name, description, inputSchema]) => ({ name: `capcomd_${name}`, description, inputSchema }));
 
+/** The tools this agent's token lets it call (an agent that may not spawn sees no spawn, verify or merge tool). Its claims
+ *  are readable, not secret (only the signature is checked, by the orchestrator, which refuses an op outside them all
+ *  the same); without a token yet, every tool. */
+export function toolsFor(token) {
+  let ops = null;
+  try { const c = JSON.parse(Buffer.from(String(token ?? "").trim().split(".")[1] ?? "", "base64url").toString("utf8")); if (Array.isArray(c.ops)) ops = new Set(c.ops); } catch { /* not a token: every tool */ }
+  if (!ops) return TOOLS;
+  return TOOLS.filter((t) => ops.has(t.name.replace(/^capcomd_/, "").replace("wait_any", "wait-any").replace(/^job_/, "job.")));
+}
+
 async function mcp() {
   let buf = "";
   const send = (m) => process.stdout.write(JSON.stringify(m) + "\n");
@@ -289,7 +299,7 @@ async function mcp() {
       let m; try { m = JSON.parse(line); } catch { continue; }
       if (m.id === undefined) continue; // notification
       if (m.method === "initialize") send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: m.params?.protocolVersion ?? "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "capcomd", version: "1" } } });
-      else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } });
+      else if (m.method === "tools/list") send({ jsonrpc: "2.0", id: m.id, result: { tools: toolsFor(existsSync(TOKEN_FILE) ? readFileSync(TOKEN_FILE, "utf8") : "") } });
       else if (m.method === "tools/call") {
         const name = String(m.params?.name ?? "").replace(/^capcomd_/, "").replace("wait_any", "wait-any").replace(/^job_/, "job.");
         const a0 = m.params?.arguments ?? {};

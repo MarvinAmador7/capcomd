@@ -5,8 +5,8 @@
 // instructions say which text it read; their text is fixed (no agent's or run's detail in it), so every agent of a
 // profile gets the same bytes and shares one cached prefix. The context router attaches them at agent.preparing
 // (src/plugins/context.ts) to an agent whose profile has a context block: the doctrine to every one, the routing
-// paragraph to one that can write notes and a result's data (an agent that may spawn has the in-VM capcomd) and isn't a
-// reviewer or a report agent (D11).
+// paragraph to one that can write notes and a result's data (an agent with the in-VM capcomd: every one that may spawn
+// or does work of its own, but the consolidator) and isn't a reviewer or a report agent (D11).
 import { createHash } from "node:crypto";
 // @ts-ignore: a text import (Bun) of a Markdown file gives its contents
 import doctrine from "./skills/capcomd-context-doctrine.md" with { type: "text" };
@@ -23,7 +23,8 @@ export const ROUTING_SKILL = skill("capcomd-context-routing", routing as string)
 export const CONTEXT_SKILLS: readonly ContextSkill[] = [DOCTRINE_SKILL, ROUTING_SKILL];
 
 /** The skills an agent with a context block gets: the doctrine always; the routing paragraph when it does work (not a
- *  review or a report) and can write run notes and a result's data (it may spawn, so it has the in-VM capcomd). */
-export function contextSkills(o: { role: "work" | "review"; maySpawn: boolean }): ContextSkill[] {
-  return [DOCTRINE_SKILL, ...(o.role === "work" && o.maySpawn ? [ROUTING_SKILL] : [])];
+ *  review or a report) and can write run notes and a result's data (`capcomd`: it has the in-VM capcomd,
+ *  src/subagents/skill.ts `hasVmCapcomd`: every agent that may spawn or does work of its own, but the consolidator). */
+export function contextSkills(o: { role: "work" | "review"; capcomd: boolean }): ContextSkill[] {
+  return [DOCTRINE_SKILL, ...(o.role === "work" && o.capcomd ? [ROUTING_SKILL] : [])];
 }

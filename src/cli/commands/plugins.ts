@@ -182,15 +182,20 @@ async function trustCommand(args: string[], values: Values): Promise<number> {
     if (m.entry.runtime === "process") console.log(`  runs     ${m.entry.command.map((a) => /^[\w./${}=:@%+,-]+$/.test(a) ? a : visible(JSON.stringify(a))).join(" ")}  (on this machine, as you, out of process)`);
     console.log(`  scopes   ${(m.scopes ?? []).join(", ") || "none"}`);
     console.log(`  hooks    ${Object.keys(m.contributes?.hooks ?? {}).join(", ") || "none"}`);
-    // Its secrets reach it at its start (§10.3): a manifest's default reference names a variable of yours. One of the
-    // kernel's own (BOXD_API_KEY, GITHUB_TOKEN, CAPCOMD_*…) is refused: the daemon fails the plugin config_invalid.
+    // Its secrets reach it at its start (§10.3), each from the reference you set for it (never its manifest's default).
+    // One that names the kernel's own (BOXD_API_KEY, GITHUB_TOKEN, CAPCOMD_*…), yours or its default, is refused: the
+    // daemon fails the plugin config_invalid until your config names another.
     const { secretKeys } = await import("../../../packages/plugin/src/host/host");
     const { secretRef } = await import("../../plugins/secrets");
-    const { kernelSecretRef } = await import("../../plugins/config");
+    const { kernelSecretRef, schemaOf, secretRefOf } = await import("../../plugins/config");
+    const refused = "refused: one of capcomd's own, which no plugin reads; it won't start until your config names another";
     const refs = secretKeys(m, p.dir).map((k) => {
       let ref: string;
-      try { ref = secretRef(m, k, process.env, p.dir); } catch { return `${k} (none set)`; }
-      return `${k} ← ${visible(ref)}${kernelSecretRef(ref) ? " (refused: one of capcomd's own variables, which no plugin reads; it won't start until your config names another)" : ""}`;
+      try { ref = secretRef(m, k, process.env, p.dir, { builtin: false }); } catch {
+        const def = secretRefOf((schemaOf(m, p.dir)?.properties?.[k] as { default?: unknown } | undefined)?.default);
+        return def && kernelSecretRef(def) ? `${k} (none set; its default ${visible(def)} is ${refused})` : `${k} (none set)`;
+      }
+      return `${k} ← ${visible(ref)}${kernelSecretRef(ref) ? ` (${refused})` : ""}`;
     });
     console.log(`  secrets  ${refs.join(", ") || "none"}`);
     console.log(`  hash     ${p.hash}`);

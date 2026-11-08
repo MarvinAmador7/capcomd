@@ -42,7 +42,7 @@ function builtins(): ContributionStore {
     const { b, manifest } = loaded.find((l) => l.manifest.name === name)!;
     const runtime = createContext({
       manifest, runtime: "in-process", root: "", dataDir: join(stateDir(), "plugins", name), hooks, store,
-      config: configDefaults(manifest, null), secret: async (key) => resolveSecret(manifest, key, process.env, null, true),
+      config: configDefaults(manifest, null), secret: async (key) => resolveSecret(manifest, key, process.env, null, { builtin: true }),
     });
     const r = b.module.activate(runtime.ctx as never) as unknown;
     if (r instanceof Promise) throw new Error(`built-in plugin ${name}: a sandbox plugin activates synchronously`);

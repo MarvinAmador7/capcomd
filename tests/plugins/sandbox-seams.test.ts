@@ -125,10 +125,10 @@ describe("the boxd API key is a secret reference (§10.3)", () => {
   const boxd = manifestOf(SANDBOX_BUILTINS.find((b) => b.manifest.name === "sandbox-boxd")!);
   test("apiKey is declared x-secret, references BOXD_API_KEY, and never shows in the config", () => {
     // The kernel resolves its own built-in's key (`builtin`); no other plugin may name BOXD_API_KEY (§10.3).
-    expect(resolveSecret(boxd, "apiKey", { BOXD_API_KEY: "bxd_test" }, null, true)).toBe("bxd_test");
+    expect(resolveSecret(boxd, "apiKey", { BOXD_API_KEY: "bxd_test" }, null, { builtin: true })).toBe("bxd_test");
     expect(() => resolveSecret(boxd, "apiKey", { BOXD_API_KEY: "bxd_test" })).toThrow("one of capcomd's own variables");
     expect(secretOrUndefined(boxd, "apiKey", {})).toBeUndefined();
-    expect(() => resolveSecret(boxd, "apiKey", {}, null, true)).toThrow("is not set");
+    expect(() => resolveSecret(boxd, "apiKey", {}, null, { builtin: true })).toThrow("is not set");
     expect(() => resolveSecret(boxd, "org", { BOXD_API_KEY: "bxd_test" })).toThrow("is not a secret the sandbox-boxd plugin declares");
     const fake = testkit.fakeContext(boxd);
     expect(fake.ctx.config.get()).toEqual({});

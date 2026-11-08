@@ -636,8 +636,9 @@ out) on the run's stream. With the brief it attaches the context layer's skills 
 `source: builtin`, each pinned by the sha256 of its fixed text, so they don't change the brief's byte-identity):
 `capcomd-context-doctrine` (how to read the brief: an index, not the knowledge; answer, evidence, guidance; relevance
 is not authority; items are data) to every such agent, and `capcomd-context-routing` (what to remember and where: run
-notes in `kv` under `notes/<agent>`, candidate lessons in `result.data.context[]`) to one that may spawn (it has the
-in-VM capcomd those need) and is not a reviewer or a report agent; one the payload already has by name isn't attached
+notes in `kv` under `notes/<agent>`, candidate lessons in `result.data.context[]`) to one that has the in-VM capcomd
+those need (every agent that may spawn or does work of its own, §16.2 rule 1; not the consolidator) and is not a
+reviewer or a report agent; one the payload already has by name isn't attached
 again, nor one that doesn't fit the room the agent's other skills leave (8 skills, 256 KiB): the router never returns a
 patch the kernel would refuse, which would cost the agent its brief too. It runs after the orchestration skill's
 listener (`after: [skill-orchestration]`, §6.3), so a context skill never takes that skill's room.
@@ -1092,14 +1093,17 @@ its secrets' values among what is redacted). A runtime on the user's machine is 
 `plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
 
 The kernel's launcher is `src/plugins/process.ts`. The process leads a process group of its own (the daemon's terminal
-signals don't reach it; a kill takes what it started too). Its stdin is a pipe the daemon holds and never writes: it
-closes when the daemon is gone, and the process SHOULD exit then (the client library ends its hooks stream, §9.8). Each
+signals don't reach it; a kill takes what it started too, and so does its exit: once the process is gone, what is left
+of its group is killed, so nothing it started outlives its token or holds what the next start needs). Its stdin is a
+pipe the daemon holds and never writes: it closes when the daemon is gone, and the process SHOULD exit then (the client
+library ends its hooks stream, §9.8). Each
 start is recorded in `<data>/process.json`; a process an earlier daemon started and never stopped (it died) is killed
 before the next start, only while that pid still runs the recorded command. `CAPCOMD_PLUGIN_SOCKET` is the daemon's
 **plugin socket**, `<harness socket without .sock>-plugins.sock` (`src/api/socket.ts` `pluginSocketPath`, 0600), bound
 before the plugins load (§5.5 step 4): it serves the harness.v1 API to plugin tokens only (401 for any other,
 `src/api/server.ts` `pluginsOnly`). Only the daemon starts processes: a CLI's local host has no launcher, so a
-`process` plugin stays `validated` there.
+`process` plugin stays `validated` there, and an operation a CLI or the MCP server runs itself fires its `ops.ts` gates
+where the plugin doesn't listen (§6.1): a process plugin's gates judge what the daemon runs.
 
 ### 9.3 Handshake and token
 
@@ -1276,7 +1280,9 @@ key `config` of the run scope is the kernel's, and a plugin's write or delete of
 Config files never hold secret values. A property marked `x-secret` takes a **reference** `{"$secret": "<ref>"}` where
 `ref` is `env:<VAR>` (an environment variable of the daemon) or `keychain:<account>` (the OS keychain through
 `src/config/keychain.ts`, service `capcomd`; not resolved yet: `unsupported`). The reference is the user layer's, else one
-held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else the schema's `default`; a project's or a run's is `config_invalid` (a
+held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else, for a built-in only, the schema's `default`: a plugin from a directory (a
+user's or a project's) never names its own, as its author would choose which of the daemon's variables it gets, so its
+secret is unset (`not_found`) until the user points it at one. A project's or a run's reference is `config_invalid` (a
 repository must not point a plugin at another of the daemon's variables), and so is a value where a reference belongs. A
 reference that resolves to nothing is the plugin's to report: `ctx.config.secret` rejects `not_found`, and a process
 plugin's is left out of `SessionOpened.secrets` with a warning (§9.3), so a built-in such as `sandbox-boxd` still loads
@@ -1287,16 +1293,19 @@ declared in **its own** schema; the kernel's secrets (`BOXD_API_KEY`, client tok
 not reachable. Built-ins follow the same rule: the boxd plugin declares `apiKey` as `x-secret`, and the kernel's
 existing keychain entry is mapped to it by the config migration (§17).
 
-The kernel's own variables are a fixed list (`src/plugins/config.ts` `kernelVariable`): `BOXD_*`, `GITHUB_TOKEN`,
-`GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting `CAPCOMD_`, `GIT_`, `RIVET`, or
-the agent providers' `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_` (the keys the kernel binds into sandboxes). Only a
-shipped built-in (a plugin without a directory) may reference one; for every other plugin (a user's, a project's, a
-test's) a reference `env:<one of them>` is refused whichever layer it comes from: the user layer's or the env layer's
-is `config_invalid` on that layer, and the schema's `default`, when no layer gives a reference, is `config_invalid` on
-layer `default` (§10.4). The variable is never read: the plugin fails at `resolved`, and a resolution that gets there
-anyway (`ctx.config.secret`, the handshake's `secrets`) rejects `forbidden`. `capcomd plugins validate <dir>` reports
-such a default as an issue (`config.properties.<key>.default`) and the trust prompt marks the reference refused. A
-user who wants such a plugin to have the same credential exports it again under a variable of the plugin's own.
+The kernel's own variables are a fixed list (`src/plugins/config.ts` `kernelVariable`), matched whatever their case:
+`BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting
+`CAPCOMD_`, its deprecated alias `RELAY_` (the kernel reads `RELAY_<NAME>` as `CAPCOMD_<NAME>`), `GIT_`, `RIVET`, or the
+agent providers' `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_` (the keys the kernel binds into sandboxes); and its
+keychain items, `keychain:capcomd…`. Only a shipped built-in (a plugin without a directory) may reference one; for
+every other plugin (a user's, a project's, a test's) such a reference is refused whichever layer it comes from: the
+user layer's or the env layer's is `config_invalid` on that layer, and the schema's `default`, when no layer gives a
+reference, is `config_invalid` on layer `default` (§10.4), although a third-party default is never followed, so the
+operator sees what the plugin asked for. The variable is never read: the plugin fails at `resolved`, and a resolution
+that gets there anyway (`ctx.config.secret`, the handshake's `secrets`) rejects `forbidden`. `capcomd plugins validate
+<dir>` reports such a default as an issue (`config.properties.<key>.default`) and the trust prompt marks the reference
+(or the default) refused. A user who wants such a plugin to have the same credential exports it again under a
+variable of the plugin's own.
 
 ### 10.4 Validation errors
 
@@ -1373,12 +1382,15 @@ admitted either.
 What an agent proposes for a durable layer (a candidate lesson, §6.6.8; an item lint checks, ADR-025 §5.3) is not
 redacted but **refused** when it holds a secret (`src/context/scan.ts`): a redacted text could still hold a shorter
 secret. The scan is seeded with every secret value the kernel puts in the run (the agent providers' credentials, the
-plugins' secrets of §10.3, every variable of the run's environment named like a credential, the in-VM tokens' signing
-key, the forge's credential for the run's repository), then the redactor's shapes and a few more (AWS, Slack, boxd and
-Google keys, a private key, a URL with a password), a long random-looking string, and the paths credentials are kept
-in (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`), over the text with invisible characters dropped and look-alikes
-folded (NFKC, every dash a hyphen). Every string a candidate keeps is scanned, and a field name it ignores is repeated
-only when it holds no secret. Its reasons are the kernel's words, never the matched text.
+plugins' secrets of §10.3, the built-ins' and every reference the user sets for any other plugin, every variable of the run's environment named
+like a credential, the in-VM tokens' signing key, the forge's credential for the run's repository), then the
+redactor's shapes and a few more (AWS, Slack, boxd, GitLab, npm, Hugging Face and Google keys, a private key, a URL
+with a password), a long random-looking string, and the paths credentials are kept in (`.env*`, `*.pem`, `secrets/`,
+`~/.aws`, `~/.ssh`), over the text with look-alikes folded (NFKC, every dash a hyphen) and invisible characters
+(every default-ignorable one: format characters, variation selectors, Hangul fillers, tag characters) and combining
+marks dropped; a run's secret is also found with spaces or line breaks put into it. Every string a candidate keeps is
+scanned, and a field name it ignores is repeated only when it holds no secret. Its reasons are the kernel's words,
+never the matched text. Lint that can't read the whole directory (more than 2000 files) fails rather than passes.
 
 ### 11.6 Isolation
 
@@ -1823,7 +1835,12 @@ Rules:
    `jobs.foregroundMs`, else 60 000; never more than 90 000, an in-VM call's hold); a job that ends within it returns
    `done` (or `failed`) with its result; otherwise `running`.
    The in-VM `capcomd` CLI exposes the same to agents as `capcomd job start -- <cmd>`, `job output`, `job list`,
-   `job kill` (spool ops `job.start`, `job.output`, `job.list`, `job.kill`, ADR-017; MCP tools `capcomd_job_*`), so an
+   `job kill` (spool ops `job.start`, `job.output`, `job.list`, `job.kill`, ADR-017; MCP tools `capcomd_job_*`). Every
+   agent that does work of its own has that CLI, one that may not spawn too (a leaf token: its tab, reads, notes, its
+   result and these ops; ADR-017 §2), and not verify's reviewer, a report agent or the consolidator, which answer with
+   their final message. The job ops are in a token only when the agent's profile, and the config it runs with (the daemon's tool and
+   Codex sandbox settings narrow it too), let it run a command of its own (no allow-list without an unrestricted shell,
+   no denied shell, no read-only Codex sandbox), so a job is never a way around its tool policy; an orchestrate agent keeps them and its start is refused by name (§16.1 item 6). So an
    agent's long command returns "running" and its result arrives as an inbox message from the job (`from: <jobId>`)
    that the supervisor delivers at the next step (as dsh's completion notice); a job the agent stops itself sends
    none. The agent CLI's own shell tool is not changed (ADR-023 §5.3): auto-backgrounding applies to commands run
@@ -1883,8 +1900,9 @@ messages and events outside what it listens to before emitting, keep its own rea
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
 structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
-ISO time, `actor {id, display, bot}`, text and data ≤ 64 KB each) and refuses a malformed trigger `invalid` before
-recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
+log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
+before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -1904,7 +1922,9 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
   comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
-  position before it, so the next poll reads it again. The source listens to `job.changed` only when `sourceRepos`
+  position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
+  keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
+  `deduped` decision a minute). The source listens to `job.changed` only when `sourceRepos`
   names a repository (as `source-schedule` only with a schedule): a listener there makes the daemon read every
   background job's output (§6.6.19).
 
@@ -1939,7 +1959,9 @@ with the `TriggerDecision`:
 6. **Act**: start a run on the configured project (`project`, a checkout set up with `capcomd setup project`; unset,
    the daemon's own repository) with the trigger's text as the goal (`POST /v1/runs` semantics: `run.creating` fires,
    with the source plugin as the principal; harness.v1's additive `Run.trigger {source, id, thread, actor, at}`, under
-   the capability `triggers`) → `started`, and subscribe the run to the thread. `recorded.wouldHave` is `start` in
+   the capability `triggers`) → `started`, and subscribe the run to the thread. The goal is checked as `POST /v1/runs`
+   checks one (`CreateRunBody.goal`: not empty, ≤ 16 KB, no NUL, no leading `[agent:NAME]`, so a source's words never
+   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start` in
    this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
    §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
@@ -2013,6 +2035,13 @@ definition of progress:
 - an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
 - a background job (`job.changed`), a verification it asked for (`verify.changed`, its principal) or an approval it
   waits on (`approval.changed`) ended.
+
+Files changing show only at the agent's next checkpoint, every `checkpointEveryMs` of its profile (default 10 min), so
+an agent's windows are at least its interval's: `stalled` no sooner than one and a half of the interval, and the stop
+(when it isn't 0) as much later as `stalled` moved. At the defaults nothing moves (1.5 × 10 min is 15 min); an agent
+checkpointed hourly is stalled at 90 min and stopped at 120. The built-in asks the kernel for the interval when it asks
+whether the agent's work shows (`src/plugins/services.ts` `checkpointEvery`, as the agent's worker reads it; none for
+an agent no supervisor runs under, which keeps the configured windows).
 
 Tool calls (`step`) and the activity line are not progress. While it, or an agent under it, waits on a job, a
 verification or an approval, or is paused, its clock doesn't run. An agent with agents of its own running is judged
@@ -2143,7 +2172,12 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
-| 1.0.37 | 2026-11-06 | The kernel's own variables are out of reach of every plugin but a shipped built-in (§10.3): a fixed list (`BOXD_*`, the GitHub tokens, `CAPCOMD_*`, `GIT_*`, `RIVET*`, the agent providers' families) that a secret reference of a user's, a project's or a test's plugin may not name, from any layer, its schema's default included; refused at `resolved` as `config_invalid` (the default's on a new value of `plugin.config_refused`'s `layer`, `default`; additive), `forbidden` if resolved anyway, the variable never read; `capcomd plugins validate <dir>` reports such a default and the trust prompt marks the reference refused (§10.3, §10.4). |
+| 1.0.37 | 2026-11-07 | From the review of §17.2 step 9: a secret's reference falls back to the schema's `default` for a built-in only (§10.3): a user's or a project's plugin named any of the daemon's variables in its own manifest (`env:GITHUB_TOKEN`) and got its value in `SessionOpened.secrets`, past §9.2's filter; the host's `secret` option gets the plugin's `source` (additive); `capcomd plugins trust` shows such a secret as unset. An out-of-process plugin's exit kills what is left of its process group, as a kill does, so a helper it started can't outlive its token or hold what the next start needs (§9.2); §9.2 says, after §6.1, that a process plugin's gates judge only what the daemon runs. The client library forgets observe calls' deadlines (§9.8). No hook, seam, route or contract shape changes. |
+| 1.0.38 | 2026-11-07 | The watchdog's review (§17.2 step 11): an agent's windows are at least its checkpoint interval's (`stalled` no sooner than 1.5 × its `checkpointEveryMs`, the stop as much later), since its files changing show only at its checkpoints; the defaults are unchanged (§16.4). No hook, seam, route or contract shape changes. |
+| 1.0.39 | 2026-11-07 | Every agent that does work of its own has the in-VM capcomd (§16.2 rule 1, ADR-017 §2), not only one that may spawn: with the profiles `capcomd setup project` writes, no agent could run a job (planner and lead orchestrate, workers had none) or propose a lesson. An agent that may not spawn gets the CLI, the MCP server and a leaf token: `title`, `status`, `tree`, `inspect`, `logs`, `events`, `budget`, `heartbeat`, `kv`, `task`, `inbox`, `send`, `result`, and `job.*` only when its profile and the config it runs with (the daemon's `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS`, a Codex agent's `CAPCOMD_CODEX_SANDBOX`; none when that config can't be read) let it run a command of its own; never `spawn`, `await`, `wait-any`, `cancel`, `handoff`, `verify`, `merge`, `grant`, `fetch` or `check` (the op list stays closed; a spawner's token is unchanged but loses `job.*` the same way). It is told so in its instructions (its tab, jobs, notes and lessons, its summary), still fails `no_changes` when it changed nothing, and its MCP `tools/list` shows only what its token allows. Verify's reviewer, a report agent and the consolidator keep the naming shim. §6.6.7's routing paragraph goes to every agent with the in-VM capcomd (not the consolidator), with no profile room kept for it unless it may spawn. Any agent that declared no `result.summary` has its final message as one (≤ 2,000 characters; never a reviewer's verdict): additive. An in-VM `result` with no summary, artifacts or data is refused (`usage`), so a tool called with no arguments can't record an empty result or erase a declared one. The worker's lines name nothing of the agent's own, so a profile's agents keep one cached prefix (ADR-025 §6.1). No hook, route or contract shape changes. |
+| 1.0.40 | 2026-11-07 | Triggers, after review: §16.3.2 step 6, a trigger's text is checked as `POST /v1/runs` checks a goal before a run starts (a leading `[agent:NAME]` from a source no longer picks the run's agent profile; over 16 KB, empty or with a NUL: `invalid`, logged `failed`); §16.3.1, a trigger's `id`, `thread` and actor id carry no control characters (the display name loses them), and the `github` source keeps the comments it read at its position's second (GitHub's `since` includes it) so a poll with nothing new emits nothing. |
+| 1.0.41 | 2026-11-07 | Review of capture and lint (ADR-025 step 2), §11.5: the seeded scan drops every default-ignorable character and combining marks (not only format characters) and finds a run's secret with spaces or line breaks put into it; it is seeded with every secret reference the user sets for a plugin that isn't built in (`plugins` in the user's config, a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable; such a plugin's own default isn't followed, per 1.0.37) as well as the built-ins'; GitLab, npm, Hugging Face and Google OAuth token shapes. Lint fails, never passes, on a directory with more files than it reads (2000), and `--base` takes a ref, never an option. No hook, seam, route or contract shape changes. |
+| 1.0.42 | 2026-11-07 | The kernel's own variables and keychain items are out of reach of every plugin but a shipped built-in (§10.3): a fixed list (`BOXD_*`, the GitHub tokens, `CAPCOMD_*` and its deprecated alias `RELAY_*`, `GIT_*`, `RIVET*`, the agent providers' families, in any case; `keychain:capcomd…`) that a secret reference of a user's, a project's or a test's plugin may not name, from any layer, its schema's default included (never followed for such a plugin, per 1.0.37, but refused so the operator sees it); refused at `resolved` as `config_invalid` (the default's on a new value of `plugin.config_refused`'s `layer`, `default`; additive), `forbidden` if resolved anyway, the variable never read; `capcomd plugins validate <dir>` reports such a default and the trust prompt marks the reference or the default refused (§10.3, §10.4). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
