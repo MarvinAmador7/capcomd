@@ -16,6 +16,30 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `lifecycle` plugin that isn't active on the daemon, no agent environment built, an egress limit its sandbox can't
   enforce (Docker), or a `sandbox.provider` that would run it outside the run's isolation. Before, these only showed
   when the planner's spawn was refused. Capability `runs.options.planners`.
+- Fixed: an agent that fails now has its background jobs (`capcomd job start`) stopped and recorded as ended when it
+  fails, as a cancelled one's are, instead of showing as running until something reads them. A job with a lot of
+  output keeps a record within the run's 64 KB limit (the oldest output is cut first), and `capcomd job output` on a
+  finished job says when it was cut.
+- **Breaking:** a profile's `jobs` block (`max`, `foregroundMs`, `afterTurnMs`) is a limit like `limits`. An override
+  (`--set jobs.max=2`, which now keeps the block's other values) may lower one, but raising or unsetting one the
+  profile sets is refused unless you pass `--operator`. A profile in another's `children.allowedChildProfiles` may not
+  allow more jobs at once (`max`) or longer ones (`afterTurnMs`) than the profile that spawns it (its `foregroundMs`
+  is its own); `capcomd profiles validate` names one that does. Lower the child's values, or raise the spawner's.
+  A job started with `--timeout-ms` longer than the profile's `afterTurnMs` now stops at `afterTurnMs` (a profile
+  that doesn't set it is unchanged), and a job's `cwd` over 4 KB or `env` over 16 KB is refused.
+- Changed: plugins only reach their own jobs and the jobs of a run's agents: `ctx.jobs.get`, `wait` and `cancel` on
+  another plugin's job answer `not_found`, and `ctx.jobs.list` leaves those out.
+- Fixed: `capcomd profiles update <name>` no longer deletes files you added to an installed profile's directory (a
+  `notes.md`, an extra file in a skill's folder). It keeps every file the package didn't install, as it keeps your
+  `override.yaml`, and lists them as "added by you, kept" (`kept` in `--json`). If the new version of the package
+  ships a file in the place of one of yours (on macOS, a name that differs only in case or accents counts), the
+  update is refused and nothing changes: move your file and update again.
+- Fixed: trusting or untrusting plugins and profile skills from the CLI while the daemon also records a trust no
+  longer loses one of the two changes in `~/.capcomd/trust.json`. If another change holds the file for more than 5
+  seconds, the command fails with nothing changed; run it again. If `trust.json.lock` is something capcomd didn't
+  make (a directory or a link), or one left over that it can't move aside, the command says so at once: remove it.
+- Fixed: writing a profile file, `agents.json` or `trust.json` never writes through a link a repository placed next
+  to it under the name of the temporary file capcomd used.
 - Fix: an in-process plugin's `ctx.events.subscribe` now delivers events, and `ctx.events.replay` works. In the daemon
   a subscription to `daemon` or a run id gets that stream's events (the ones `GET /v1/events` lists) in order, one at a
   time, filtered by `types` if you give them, from `after` or else from now; a handler that throws is logged and that

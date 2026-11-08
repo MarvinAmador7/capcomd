@@ -307,14 +307,22 @@ file edited since the install, before replacing it (`--dry-run` stops there); a 
 `capcomd plugins remove <name>` removes the files and any trust given to them; the plugin's data directory stays. The
 running daemon picks up any of these at its next start or the plugin's `enable` (§5.4: `enable` reads a plugin's
 directory again). A profile package (ADR-024 §7 step 7, `capcomd profiles install|update|export`) is fetched and
-locked the same way, with `kind: "profile"` in its `LOCK` and the same content hash.
+locked the same way, with `kind: "profile"` in its `LOCK` and the same content hash. Its `update` keeps what is the
+user's in the package's directory: an `override.yaml`, and every file its `LOCK` doesn't list (reported as `kept`); a
+new package file in the place of one of those (the same path, or a file where it needs a directory, or the reverse;
+whether two names are one is asked of the file system that holds them, so on macOS's, which folds case and Unicode form,
+`Notes.md` and `STRASSE.md` are in the place of `notes.md` and `straße.md`) is a `conflict`, and nothing is changed.
 
 **Trusting** a project's plugins. `capcomd plugins install --project [<source>]` adds the source to `plugins.use` and
 fetches every entry into the user's home (`<home>/plugins/.project/<key>/<name>/`, keyed by the project's directory),
 never into the checkout; an entry not fetched yet isn't discovered. A `.capcomd/plugins/<name>/` that is a link out of
 the checkout (to another project's plugin) isn't one of the project's plugins. Trust is given to one content hash of one
 plugin at one place (its directory, made real) and kept in `<home>/trust.json` (0600), which no project can write: a
-changed file, or the same plugin copied to another project, needs trusting again. In a checkout the hash covers every
+changed file, or the same plugin copied to another project, needs trusting again. The CLI and the daemon change it
+under `<home>/trust.json.lock` (created exclusively; one whose process is gone, or older than 30 s, is taken over): a
+change that waits 5 s for another, or that finds there something no change made (a directory, a link, a file it can't
+read) or a left-over lock it can't move aside, is refused with nothing changed (`conflict`, code `locked`), except the daemon's mark that it wrote
+`plugin.trusted`, which waits for the next time it acts on that trust (a trust it marked already needs no lock). In a checkout the hash covers every
 file, a `LOCK` there included (only a copy capcomd installed leaves out the `LOCK` it wrote). `capcomd plugins trust
 <name>` is the prompt: it shows what would run (the command, the scopes its token gets, the hooks it answers, the secret
 references it is given, its directory and hash; the manifest's text with control and format characters shown escaped,
@@ -1878,9 +1886,16 @@ Rules:
    `CAPCOMD_JOBS_AFTER_TURN_MS`, settable in config `env`): `max` running jobs per owner (8), `foregroundMs` (60 000;
    5 000 for `orchestrate`), `afterTurnMs` (1 800 000): an agent's `exec` jobs are killed when the agent ends;
    `timeoutMs` per job (default `afterTurnMs`, counted from the job's start; counting it from the agent's last step
-   is a later refinement). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
-   to 64 KB of each from the machine while it runs). A `timer`'s `everyMs` ≥ 1 000; `at` with `everyMs` is the first
-   fire.
+   is a later refinement), never longer than an `afterTurnMs` the owner's profile sets (a longer one asked for gets
+   that; with none set, a job may ask for longer than the default). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
+   to 64 KB of each from the machine while it runs), and is stored within a kv value's 64 KB: when the JSON of the
+   whole record is over, the longer tail loses its oldest part first, then the other, and `truncated` is set (the
+   rest of it is bounded: `cmd` ≤ 16 KB, `cwd` ≤ 4 KB, `env` ≤ 16 KB as JSON, else the start is `invalid`). A
+   `timer`'s `everyMs` ≥ 1 000; `at` with `everyMs` is the first fire. The `jobs` block is limits like `limits`
+   (`widenings()`): an override or a `profile.resolved` patch may lower `max`, `foregroundMs` or `afterTurnMs`, never
+   raise one the profile sets or unset it (unset in the profile: not checked); a profile in `allowedChildProfiles`
+   is held to its spawner's `max` and `afterTurnMs` the same way, while `foregroundMs` is the child's own, as its tool
+   mode is (an orchestrator's 5 000 isn't its workers').
 3. **Slots.** An agent with a running `exec` job keeps its slot (`src/providers/capacity.ts`): it is not `idle` and the
    kernel's idle notice is not raised while jobs run. Its supervisor keeps the agent CLI's input open while one of its
    jobs runs or a result message is on its way (so the CLI is there to read it), and says in each heartbeat how many
@@ -1890,7 +1905,9 @@ Rules:
 4. **Handoff** (`capcomd spawn --continue`): the agent's `exec` jobs are **killed** with its machine when it ends
    (today its machine is destroyed after its push, `ops.ts` → `worker.ts`); a job meant to outlive the agent (a server
    kept for review) is started `owner: {run: true}` and lives until the run ends or its `timeoutMs`. Timers owned by an
-   agent end with it; run-owned and plugin-owned timers do not.
+   agent end with it; run-owned and plugin-owned timers do not. An agent that ends failed or cancelled has its jobs
+   settled when it does, before its machine goes: killed while its machine is attached, else (its last attempt let go
+   of the machine, which a retry would have used) `lost`; none stays `running` on record until someone reads it.
 5. **Cancel**: `jobs.cancel` and an agent's cancel kill its jobs (SIGTERM, SIGKILL after 5 s; state `killed`).
 6. **Daemon restart**: job records are durable. `exec` jobs keep running inside their machine (their runner holds the
    process, in a session of its own); on restart the kernel re-attaches when the agent's spool pump starts again, by
@@ -1898,9 +1915,15 @@ Rules:
    or runner is gone settles `lost`, as does one whose agent ended while nobody watched (when it is next read). Timers
    are re-armed from their records once the daemon's plugins have loaded; a missed `at` (or interval) fires once on
    restart. A plugin's timer is a file in the daemon's state (`state/jobs/<id>.json`); a run's job is kv `_jobs/<id>`,
-   with a pointer there for `get` by id and re-arming.
+   with a pointer there (`state/jobs/<id>.run`) for `get` by id and re-arming. A settled job's pointer records when
+   it settled and is pruned a day later (at the daemon's start, then at most hourly as jobs settle); after that the
+   job is read with its run. A pointer left unmarked is checked at the daemon's start without making its run again.
 7. **Events**: results arrive as `job.changed` hook calls and `job.started`/`job.ended` events; nobody polls. `wait` is
    a convenience bounded by its deadline.
+8. **One owner**: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach the jobs it started (`by: plugin:<name>`) and
+   the jobs of a run that no other plugin started (an agent's, the operator's), as `ctx.agents` reaches a run's
+   agents. Another plugin's job, in a run or the daemon's, is `not_found`, the same answer as an id nobody made, and
+   `list` leaves it out. An agent reaches only its own jobs (in-VM `job.*`).
 
 Why one primitive: the watchdog's clock (§16.4), a source's poll loop (§16.3), the Docker sweep (§15.1, `sandbox-docker`'s
 own timer) and background shell are all "work that reports back later"; one durable record, one owner rule, one event
@@ -2205,7 +2228,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.42 | 2026-11-07 | `agent.spawning` (§6.6.6): ADR-024's `permissions.report` check (`report_not_allowed`) runs on the contract the hook leaves, beside `cannot_spawn`, so a `report: true` a plugin adds to a profile that may not report refuses the spawn as the spawner's own would (before, it was checked before the hook and a plugin's could slip past it). The spawner's own `report` is still refused before the hook (no plugin is asked about a spawn that is refused anyway). The contract keys the kernel checks when the spawner sends them are checked in the patch too (`applySpawnPatch`): adding a key a spawn from an agent's VM never carries (`from`, `review`, `checks`, `orphansPolicyOverride`) is `widening`, a `report` other than `true` or a `check` that isn't a string is `invalid`, and an added `check` the run doesn't have refuses the spawn (`usage`). No hook, seam, route or contract shape changes. |
 | 1.0.43 | 2026-11-07 | `ctx.events.subscribe` delivers and `ctx.events.replay` answers, in the daemon's host (§8.4, `src/plugins/events.ts`): the envelopes `GET /v1/events` gives, on `daemon` (its own events, not the SSE stream's `run.created` frames) or a run's stream (through the engine); a stream that is neither is `invalid`, a run that doesn't exist `not_found` on replay; `subscribe` from `filter.after` or else the head, `filter.types` exact, polled, one handler call at a time; a host that isn't the daemon's, or has no sink for them, refuses both `unsupported` instead of registering a subscription that never delivers; the test kit's fake context has streams of its own, `FakeContext.publish(event)` delivering and replaying by the same rules, so a plugin that subscribes at activate still loads there (additive). No contract shape changes. |
 | 1.0.44 | 2026-11-07 | The kernel's own variables and keychain items are out of reach of every plugin but a shipped built-in (§10.3): a fixed list (`BOXD_*`, the GitHub tokens, `CAPCOMD_*` and its deprecated alias `RELAY_*`, `GIT_*`, `RIVET*`, the agent providers' families, in any case; `keychain:capcomd…`) that a secret reference of a user's, a project's or a test's plugin may not name, from any layer, its schema's default included (never followed for such a plugin, per 1.0.37, but refused so the operator sees it); refused at `resolved` as `config_invalid` (the default's on a new value of `plugin.config_refused`'s `layer`, `default`; additive), `forbidden` if resolved anyway, the variable never read; `capcomd plugins validate <dir>` reports such a default and the trust prompt marks the reference or the default refused (§10.3, §10.4). |
-| 1.0.45 | 2026-11-07 | With ADR-024 §4, §5 and §8 shown over the API (additive; capabilities `profiles.facts` and `runs.options.planners`): `GET /v1/profiles` rows (what `profiles.list`, §9.6, maps to) gain optional `title` (untrusted text), `fit` (daemon-written, from structured fields only), `cost`, `canReport`, `skills` (name, source, `sha256:` hash and trust; never a skill's text) and `untrustedSkills`, the project skills a spawn waits on the operator's trust for (decision 4); `GET /v1/run-options` gains optional `planners`, every profile that may spawn, each with `available` and a daemon-written `reason` for what its spawn would refuse: login, untrusted skills, a `sandbox.environment` its sandbox has no build of, a `lifecycle` plugin not active on the daemon (with no daemon to ask, not held against it: the spawn asks again), no agent environment, an egress limit its sandbox can't enforce (its hosts named only when each is shaped like one, else counted, so a project's file can't word the reason; the spawn's refusal says the same), a `sandbox.provider` outside the run's isolation (the spawn's own checks). `drivers[]` are unchanged. No hook, seam or service changes. |
+| 1.0.45 | 2026-11-07 | A profile package's `update` keeps every file in its directory that its `LOCK` doesn't list (the user's, as an `override.yaml` is), reports them as `kept` (additive) and refuses (`conflict`) when the new package needs the place of one (an `override.yaml` too), as the file system holding them compares names (on macOS's, case and Unicode form folded; on a case-sensitive one, `Readme.md` beside `README.md` is no conflict); before, it replaced the whole directory but the override (§4.8; ADR-024 §2.5). `trust.json` is changed under `trust.json.lock` by the CLI and the daemon alike, so two changes at once both persist; a lock that isn't a plain file, or a left-over one that can't be moved aside, is refused at once, and `capcomd profiles rm` refused that way puts the package back (§4.8). The temporary files beside `trust.json` and a profile file are created exclusively under a name no one can guess, so a link a checkout put there is never written through. No hook, seam, route or contract shape changes. |
+| 1.0.46 | 2026-11-08 | Jobs, after review of step 7 (§16.2): rule 8, one owner: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach its own jobs and a run's jobs no other plugin started; another plugin's job is `not_found` and `list` leaves it out. Rule 2: the `jobs` block is limits in `widenings()` (an override, a patch or a spawned profile may lower `max` and `afterTurnMs`, never raise or unset one; `foregroundMs` the same for an override and a patch, and a spawned profile's own); a job's `timeoutMs` is at most an `afterTurnMs` its owner's profile sets, so a start can't lift that limit; a settled record is stored within a kv value's 64 KB, its tails cut oldest first, with `cwd` (≤ 4 KB) and `env` (≤ 16 KB) bounded as `cmd` is. Rule 4: an agent that ends failed or cancelled has its jobs settled at once (killed, else `lost`). Rule 6: a settled job's pointer is pruned a day after it settled. No hook, seam, route or contract shape changes. |
+| 1.0.47 | 2026-11-07 | With ADR-024 §4, §5 and §8 shown over the API (additive; capabilities `profiles.facts` and `runs.options.planners`): `GET /v1/profiles` rows (what `profiles.list`, §9.6, maps to) gain optional `title` (untrusted text), `fit` (daemon-written, from structured fields only), `cost`, `canReport`, `skills` (name, source, `sha256:` hash and trust; never a skill's text) and `untrustedSkills`, the project skills a spawn waits on the operator's trust for (decision 4); `GET /v1/run-options` gains optional `planners`, every profile that may spawn, each with `available` and a daemon-written `reason` for what its spawn would refuse: login, untrusted skills, a `sandbox.environment` its sandbox has no build of, a `lifecycle` plugin not active on the daemon (with no daemon to ask, not held against it: the spawn asks again), no agent environment, an egress limit its sandbox can't enforce (its hosts named only when each is shaped like one, else counted, so a project's file can't word the reason; the spawn's refusal says the same), a `sandbox.provider` outside the run's isolation (the spawn's own checks). `drivers[]` are unchanged. No hook, seam or service changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

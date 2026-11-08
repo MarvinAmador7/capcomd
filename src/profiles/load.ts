@@ -4,7 +4,8 @@
 // layer over it. `agents.json` (v1) is still read: its entries are profiles of the layer it sits in, and a v2 profile
 // of the same name in that layer wins. Every profile resolves to the flat v1 spec (./v1.ts AgentSpec, the pin), and
 // the parent → child narrowing is checked on those, never on the files.
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { env as envVar } from "../utils/env";
@@ -40,12 +41,24 @@ export function writeAgentsFile(f: AgentsFile, path = agentsFilePath()) {
 }
 /** An agents.json's text as capcomd writes it. */
 export const agentsFileText = (f: AgentsFile): string => JSON.stringify({ $schema: AGENTS_JSON_SCHEMA.$id, ...f }, null, 2) + "\n";
-/** Write a file whole or not at all (a reader never sees half of it): a temporary file beside it, renamed over it. */
+/**
+ * Write a file whole or not at all (a reader never sees half of it): a temporary file beside it, renamed over it. The
+ * directory may be a checkout's, so the temporary file's name can't be guessed and it is created exclusively: a file or
+ * a link a repository put there is never written through.
+ */
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+  let made = false;
+  try {
+    writeFileSync(tmp, text, { flag: "wx" });
+    made = true;
+    renameSync(tmp, path);
+  } catch (e) {
+    // Remove what this write made (a full disk leaves half a file), never what was there before it.
+    if (made || (e as NodeJS.ErrnoException).code !== "EEXIST") rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 /**
