@@ -150,6 +150,9 @@ export interface AgentConfig {
   /** The context bundles this attempt's brief cites (ADR-025 §6.2; src/primitives/ops.ts `agentPreparing`): each
    *  repository at its commit, placed by the runner at `dir` (under `<workdir>/context/`) before the agent starts. */
   contextBundles?: ContextBundleSpec[];
+  /** Its profile's persona (ADR-024 `identity.persona`), pinned at spawn and attached by agent.preparing
+   *  (src/primitives/ops.ts `agentPreparing`): the runner makes it the first text of the agent's instructions. */
+  persona?: string;
 }
 
 /** A context bundle as the attempt's spec records it: `path`, the directory in the repository that is placed (else the
@@ -181,6 +184,12 @@ function pluginEnvOf(spec: unknown): Record<string, string> | null {
   if (!e || typeof e !== "object" || Array.isArray(e)) return null;
   const ok = Object.entries(e).filter((x): x is [string, string] => /^[A-Z][A-Z0-9_]*$/.test(x[0]) && !reservedEnvName(x[0]) && typeof x[1] === "string");
   return ok.length ? Object.fromEntries(ok) : null;
+}
+
+/** Its persona's text, from the attempt's spec (src/primitives/ops.ts `agentPreparing`), when it has one. */
+function personaOf(spec: unknown): string | null {
+  const p = (spec as { personaPrompt?: unknown } | null | undefined)?.personaPrompt;
+  return typeof p === "string" && p.trim() ? p : null;
 }
 
 /** The reasoning effort an agent runs with: CAPCOMD_AGENT_EFFORT, else its profile's; undefined means the CLI's default. */
@@ -244,6 +253,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
     credentialMode: cred,
     ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
+    ...(personaOf(spec) ? { persona: personaOf(spec)! } : {}),
     // An orchestrate agent runs nothing (§16.1): never a server, whatever made it orchestrate after its profile was checked.
     ...(mcp && isRealAgent(kind) && spec?.toolMode !== "orchestrate" ? { mcp } : {}),
     ...(contextBundlesOf(spec, agentWorkdir(source)) ? { contextBundles: contextBundlesOf(spec, agentWorkdir(source))! } : {}),

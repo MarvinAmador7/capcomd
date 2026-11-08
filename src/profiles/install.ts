@@ -27,7 +27,7 @@ import { parseSource, SourceError, type PackageSource } from "../install/source"
 import { revokeTrust } from "../install/trust";
 import { agentsFilePath, BUNDLED_PROFILES, LOOKS_LIKE_FILE, profileLayers, readProfiles, type ProfileSet, type ResolvedProfile } from "./load";
 import { AgentConfigError, NAME } from "./v1";
-import { PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, checkManifest, fromFlat, type ProfileDoc } from "./v2";
+import { FILE_REF, PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, checkManifest, fromFlat, type ProfileDoc } from "./v2";
 import { PROFILE_TRUST_KIND } from "./trust";
 
 type Env = Record<string, string | undefined>;
@@ -346,7 +346,8 @@ export async function updateProfile(name: string, o: { project?: boolean; path?:
 }
 
 /**
- * Remove the installed package `name` (`capcomd profiles rm` of one): its directory and any trust given to its skills.
+ * Remove the installed package `name` (`capcomd profiles rm` of one): its directory and any trust given to its skills
+ * and persona.
  * One holding an override.yaml (the user's) is refused, and so is a removal that leaves another profile without its
  * parent.
  */
@@ -355,11 +356,11 @@ export function removeInstalledProfile(name: string, o: { project?: boolean; pat
   const { dir, layer } = installedPackage(name, { project: o.project, path, env });
   const ov = readdirSync(dir).filter((f) => OVERRIDE_FILE.test(f));
   if (ov.length) throw new RelayError("conflict", `${dir} holds ${ov.join(", ")}, which is yours, not the package's`, "Move or delete it first, then remove the profile.");
-  const skills = listSkills(dir);
+  const trusted = trustedFiles(dir);
   const gone = join(dirname(dir), `.removed-${name}-${process.pid}-${Date.now()}`);
   checkedChange(views(path, env, layer), env, `removing ${name}`, () => renameSync(dir, gone), () => renameSync(gone, dir));
   // trust.json held by another change past its wait: the package goes back, so the refusal's "nothing was changed" holds.
-  try { for (const s of skills) revokeTrust(PROFILE_TRUST_KIND, s, env); } catch (e) { renameSync(gone, dir); throw e; }
+  try { for (const f of trusted) revokeTrust(PROFILE_TRUST_KIND, f, env); } catch (e) { renameSync(gone, dir); throw e; }
   rmSync(gone, { recursive: true, force: true });
   return { name, dir, layer };
 }
@@ -367,6 +368,18 @@ export function removeInstalledProfile(name: string, o: { project?: boolean; pat
 /** The SKILL.md files of a package directory, made real as trust keeps them (their trust goes with the package). */
 function listSkills(dir: string): string[] {
   try { return readdirSync(join(dir, "skills")).map((n) => join(dir, "skills", n, "SKILL.md")).filter((p) => existsSync(p)).map((p) => realpathSync(p)); } catch { return []; }
+}
+
+/** The files of the package at `dir` that trust is given to: its skills' SKILL.md and the persona its manifest names. */
+function trustedFiles(dir: string): string[] {
+  const out = listSkills(dir);
+  try {
+    const manifest = readdirSync(dir).find((f) => /^profile\.(?:ya?ml|json)$/.test(f));
+    const doc = manifest ? parseYaml(readFileSync(join(dir, manifest), "utf8")) : null;
+    const persona = isMap(doc) && isMap(doc.identity) ? doc.identity.persona : undefined;
+    if (typeof persona === "string" && FILE_REF.test(persona) && existsSync(join(dir, persona))) out.push(realpathSync(join(dir, persona)));
+  } catch { /* a manifest that can't be read names no persona */ }
+  return out;
 }
 
 export interface ExportedProfile { name: string; dir: string; flat: boolean; files: string[]; extends: string | null }

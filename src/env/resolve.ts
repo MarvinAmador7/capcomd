@@ -151,6 +151,15 @@ export function resolveEnvSnapshot(source: Record<string, string | undefined> = 
   return readLedger(ledgerPath(source)).current?.name;
 }
 
+/** What the build `name` recorded of each tool in it (`versions`, src/env/build.ts): an env build of `source`'s sandbox
+ *  (its ledger's current one or an earlier one), else a project template of that name; null when it is neither. */
+export function recordedVersions(name: string, source: Record<string, string | undefined> = process.env): EnvRecord["versions"] | null {
+  const l = readLedger(ledgerPath(source));
+  const built = l.current?.name === name ? l.current : l.history.find((h) => h.name === name);
+  if (built) return built.versions ?? null;
+  return Object.values(readTemplates(templateLedgerPath(source)).templates).find((t) => t.name === name)?.versions ?? null;
+}
+
 /** A profile's `sandbox.environment` the agent's sandbox can't boot from as asked: a configuration problem. */
 export class EnvironmentProblem extends Error { readonly code = "environment"; }
 
