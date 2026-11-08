@@ -587,7 +587,8 @@ member, not a new hook).
 `sandbox` must be a listed, available provider (available: an active plugin provides its seam, §7.2); `checks`, `reviewer`, `target` and `goalBranch` are the operator's and
 read-only (ADR-018 §4). For cost caps and run policies. Fires once per run. At `POST /v1/runs` (the daemon, before
 it starts `capcomd run`) only `sandbox` applies: the request has no label or budget to lower, so such a patch there
-is `invalid_result`.
+is `invalid_result`. A `sandbox` the patch picks is the run's own, as one the caller asked for: it beats every agent
+profile's `sandbox.provider` (§7.1).
 
 #### 6.6.4 `run.changed` · observe · after the run's event is committed
 `RunChanged {run, change: created|started|paused|resumed|titled|ended{state, reason}}`. Notifiers, the runs index,
@@ -619,8 +620,8 @@ not through the contract's `budget` or `children`, which are read before this ho
 `spec` is the agent's pinned spec with `profile: {name, version, source}` when the agent recorded one at spawn (as
 `profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same), and its profile's runtime
 blocks when it has them (ADR-024 §7 step 8: `mcp`, `sandboxProvider`, `environment`, `size`, `lifecycle`; additive).
-`sandbox` is where its machine is made: `provider`, its profile's `sandbox.provider`, else the run's, else the
-daemon's; `environment`, its profile's `sandbox.environment`, else null (the sandbox's current build). Patch
+`sandbox` is where its machine is made: `provider`, the run's when the run asked for one, else its profile's
+`sandbox.provider`, else the run's, else the daemon's (§7.1); `environment`, its profile's `sandbox.environment`, else null (the sandbox's current build). Patch
 `{prompt?: {append?, skills?}, env?, egress?}`: `append` is appended after the profile's own (never replaces); `skills` are added (pinned by hash, `src/agents/skills.ts`); `env` adds variables whose names match `^[A-Z][A-Z0-9_]*$`
 and are not already set, and whose values match no secret pattern (`src/agents/redact.ts`); `egress` may only remove
 hosts. **The only place a plugin adds prompt text**: the orchestration skill (`src/subagents/skill.ts`) and ADR-024's
@@ -961,7 +962,7 @@ Selection, per use:
 
 | Seam | Selected by | Today |
 |---|---|---|
-| sandbox | for an agent's machine, its profile's `sandbox.provider` (ADR-024; pinned at spawn as `PinnedSpec.sandboxProvider`, recorded on its worker; one whose `caps.isolation` is `host` is refused at spawn, `config` reason `sandbox_isolation`, unless the run's is `host` too); else, and for a run's checks, the run's `sandbox` (`POST /v1/runs`, `capcomd run --sandbox`, kv `RUN_SANDBOX_KV`), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForAgent`, `providerForRun` |
+| sandbox | for an agent's machine, the run's `sandbox` when the run asked for it (`POST /v1/runs` `sandbox`, `capcomd run [new] --sandbox`, `capcomd_run_new`'s, a `run.creating` patch: kv `RUN_SANDBOX_KV` `explicit: true`), which beats every profile's (ADR-024 §9 decision 5, the owner's, 2026-11-08: the agent is pinned without its profile's `sandboxProvider`); else its profile's `sandbox.provider` (ADR-024; pinned at spawn as `PinnedSpec.sandboxProvider`, recorded on its worker; one whose `caps.isolation` is `host` is refused at spawn, `config` reason `sandbox_isolation`, unless the run's is `host` too; one a project-layer profile file sets, or sets the `environment` or `size` of, only once the operator trusts that file as it is, else the spawn is refused, `config` reason `untrusted`, decision 6: trust kind `profile`, per file sha256, `capcomd profiles trust`); else, and for a run's checks, the run's `sandbox` (from the request or the settings: `CAPCOMD_SANDBOX`, the project's or the user's config), else the daemon's `CAPCOMD_SANDBOX` | `src/dependencies.ts` `providerNamed`, `providerForAgent`, `providerForRun` |
 | agent | the resolved profile's `provider` (`PinnedSpec.provider`; ADR-024 `harness.provider`) | `src/agents/adapters.ts` `adapterFor` on the closed union `claude \| codex` |
 | forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`); creating a repository asks the first active forge whose `describe().publish` | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request, a run's base (`listBranches`), the logins the app shows (`login`); `publishForge` for `POST /v1/projects/publish` |
 
@@ -2406,3 +2407,4 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
+| 1.0.60 | 2026-11-08 | Where an agent's machine goes, decided by the owner (ADR-024 §9 decisions 5 and 6, 2026-11-08; §7.1, §6.6.3, §6.6.7): a run's sandbox it asked for (`POST /v1/runs` `sandbox`, `capcomd run [new] --sandbox`, `capcomd_run_new`'s, a `run.creating` patch) beats every agent profile's `sandbox.provider` for every agent of the run (the agent is pinned without `sandboxProvider`; its `environment` and `size` apply on the run's sandbox); the run's `RUN_SANDBOX_KV` record gains `explicit: true` for such a place (additive; a record without it, or a place from the settings, isn't explicit, and a profile's provider still wins over it). Otherwise a project-layer profile file that sets the resolved `sandbox.provider`, `sandbox.environment` or `sandbox.size` of a profile naming a provider is honoured only once the operator trusts that file as it is (trust kind `profile`, per file sha256 at its real path, `capcomd profiles trust`); before that, or after it changes, the spawn is refused (`config`, reason `untrusted`), as is a planner's `capcomd run`, and GET /v1/run-options says the planner isn't ready. A user-layer profile needs no trust. `GET /v1/profiles` rows (and `capcomd_profiles`, `capcomd profiles list --json`) gain `untrustedSandbox` (capability `profiles.facts`; optional in the contract, always sent; additive): the project's files a spawn of the profile on a run without its own sandbox waits on the operator's trust for, else empty; `capcomd profiles show` gains `machine` (additive). |

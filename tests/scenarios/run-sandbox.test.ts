@@ -16,7 +16,7 @@ test("an agent of a run started on another sandbox gets its VM there; a run with
   expect(await runSandbox(own)).toBe("fake-host");
   expect(await runSandbox(plain)).toBeNull();
   // Reserved for the orchestrator: an agent can't change where its run's VMs are made.
-  expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", settings: { idleLifetime: 3600 } });
+  expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", explicit: true, settings: { idleLifetime: 3600 } });
 
   const done = w.script("rs-done", `capcomd result --summary ok >/dev/null`);
   const spawn = async (run: string) => (await w.cj(["spawn", run, "--profile", "worker", "--task", "t", "--key", "w", "--contract", JSON.stringify({ script: done })])).j.agentId as string;
@@ -60,6 +60,8 @@ test("a run made in a project gets the project's sandbox, not the engine's; outs
   const inProject = await cli(["run", "new", "--label", "project sandbox", "--key", `rsp-${Date.now()}`], project);
   expect(inProject.sandbox).toEqual({ name: "fake-host", source: "project" });
   expect(await runSandbox(inProject.runId)).toBe("fake-host");
+  // Taken from the settings, not asked for: a profile's sandbox.provider still wins over it (ADR-024 §9, 2026-11-08).
+  expect((await w.cj(["kv", "get", inProject.runId, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", settings: { idleLifetime: 3600 } });
   const outside = await cli(["run", "new", "--label", "user sandbox", "--key", `rsu-${Date.now()}`], away);
   expect(outside.sandbox).toEqual({ name: "fake", source: "user" });
   // --sandbox wins over both.
