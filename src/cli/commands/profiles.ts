@@ -11,7 +11,7 @@
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
 import { existsSync } from "node:fs";
-import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile } from "../../profiles";
+import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -70,6 +70,10 @@ export function editFromFlags(v: Record<string, any>): ProfileEdit {
   return edit;
 }
 
+/** agents.json as `add` and `set` read and write it: a provider no daemon is running to confirm, which reading the
+ *  profiles warns about (`validate` lists it), doesn't stop a change to another entry (spec §7.1). */
+const unconfirmedOk = (): SeamCheck => ({ warnings: [] });
+
 /** Is this profile's single credential actually present? (never reads values out) */
 export function readiness(name: string, spec: AgentSpec, source = process.env) {
   const kind = spec.provider === "codex" ? "codex" : "claude-code";
@@ -98,6 +102,7 @@ async function hostChecks(set: ProfileSet): Promise<{ errors: string[]; warnings
   const { lifecycleCheck } = await import("../../plugins/lifecycle");
   const { bootSnapshot, EnvironmentProblem } = await import("../../env/resolve");
   const { withSandbox } = await import("../../providers/run-sandbox");
+  const { sandboxSeam } = await import("../../plugins/sandboxes");
   for (const [n, r] of Object.entries(set.profiles)) {
     const names = lifecyclePlugins(r.runtime.lifecycle);
     if (names.length) {
@@ -105,7 +110,9 @@ async function hostChecks(set: ProfileSet): Promise<{ errors: string[]; warnings
       if (c.problem) errors.push(`profiles.${n}: ${c.problem}`);
       else if (!c.checked) warnings.push(`profiles.${n}: lifecycle names ${names.join(", ")}: no daemon is running to say whether ${names.length === 1 ? "it is" : "they are"} active (a spawn checks again)`);
     }
-    if (r.runtime.environment) {
+    // Only on a sandbox this process has: one only the running daemon's plugins provide (or none, with no daemon to
+    // ask) keeps its environments there, and a spawn checks them.
+    if (r.runtime.environment && (!r.runtime.sandboxProvider || sandboxSeam(r.runtime.sandboxProvider))) {
       try { bootSnapshot({ environment: r.runtime.environment, real: false }, withSandbox(process.env, r.runtime.sandboxProvider)); } catch (e) {
         if (!(e instanceof EnvironmentProblem)) throw e;
         warnings.push(`profiles.${n}: ${e.message}`);
@@ -160,7 +167,10 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
     }
     case "list": {
       const f = guard(() => readProfiles(path));
-      const rows = profileRows(f).map((r) => ({ ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!) }));
+      const rows = profileRows(f).map((r) => {
+        const skills = skillRows(f.profiles[r.name]!.skills);
+        return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name) };
+      });
       const warned = f.warnings.length ? `\n(${f.warnings.length} warning${f.warnings.length === 1 ? "" : "s"}: \`${cmd} validate\` lists ${f.warnings.length === 1 ? "it" : "them"})` : "";
       out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title, r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
       return 0;
@@ -185,7 +195,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       const installed = (await import("../../profiles/install")).installedFacts(r);
       const text = [
         `${n}: version ${r.version}, found in ${{ project: "the project's profiles", user: "your profiles", bundled: "capcomd's bundled profiles" }[r.source]}${isDefault ? ", the default" : ""}`,
-        ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces them)` : ""}`] : []),
+        ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces your edits and keeps files you added)` : ""}`] : []),
         ...(facts.title || facts.tags.length ? [[facts.title, facts.tags.length ? `tags: ${facts.tags.join(", ")}` : null].filter(Boolean).join(" · ")] : []),
         `Fit: ${facts.fit}`,
         "Files, first to last (a later one wins):",
@@ -206,14 +216,14 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       // A profile that needs what agents.json can't hold (extends, tags, a title, …) is added as a profile file, and so is
       // any profile of a project whose profiles are files (a profiles/ folder and no agents.json entries: what
       // `capcomd setup project` and `migrate` leave).
-      const filesHere = existsSync(profileLayers(path)[0]!.dir) && !Object.keys(guard(() => readAgentsFile(path)).agents).length;
+      const filesHere = existsSync(profileLayers(path)[0]!.dir) && !Object.keys(guard(() => readAgentsFile(path, unconfirmedOk())).agents).length;
       if (values.extends !== undefined || onlyInProfileFile(edit).length || filesHere) {
         const w = written(() => addProfileFile(n, { ...(values.extends !== undefined ? { extends: values.extends } : {}), ...edit }, { path }), n);
         const isDefault = w.after.default === n;
         out({ name: n, spec: w.after.agents[n], default: isDefault, file: path, path: w.file, version: w.version }, `added ${n}${isDefault ? " (default)" : ""} → ${w.file}`);
         return 0;
       }
-      const f = guard(() => readAgentsFile(path));
+      const f = guard(() => readAgentsFile(path, unconfirmedOk()));
       const v2 = v2File(n);
       if (v2 && !f.agents[n]) throw new RelayError("conflict", `profile "${n}" is defined in ${v2}`, `${cmd} set ${n} …`);
       if (f.agents[n]) throw new RelayError("conflict", `profile "${n}" already exists`, `${cmd} set ${n} …`);
@@ -222,7 +232,9 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       if (errs.length) throw new RelayError("config", errs.join("; "), "Each agent needs provider (claude|codex) and exactly one auth (apikey|subscription).");
       const file: AgentsFile = { ...f, schema: AGENTS_SCHEMA, agents: { ...f.agents, [n]: next as unknown as AgentSpec } };
       if (values.default || !file.default) file.default = n;
-      guard(() => writeAgentsFile(file, path));
+      // The new entry was checked above as a candidate is; one already there that names a provider no daemon is running
+      // to confirm doesn't stop it (as a profile file's change, src/profiles/write.ts `checked`).
+      guard(() => writeAgentsFile(file, path, unconfirmedOk()));
       out({ name: n, spec: next, default: file.default === n, file: path, path, version: 1 }, `added ${n}${file.default === n ? " (default)" : ""} → ${path}`);
       return 0;
     }
@@ -234,7 +246,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       if (!r) throw new RelayError("not_found", `profile "${n}" not found`, `${cmd} add ${n} …`);
       const edit = editFromFlags(values);
       // As before profile files: an agents.json without a default gets the profile set.
-      if (r.format === "v1" && r.path === path && guard(() => readAgentsFile(path)).default === undefined) edit.default = true;
+      if (r.format === "v1" && r.path === path && guard(() => readAgentsFile(path, unconfirmedOk())).default === undefined) edit.default = true;
       if (!Object.keys(edit).length) throw new RelayError("usage", `nothing to set: give the values to change`, `${cmd} set ${n} --max-turns 40, or --set limits.maxTurns=40 (--unset limits.maxTurns removes one)`);
       const w = written(() => editProfile(n, edit, { path }), n);
       const isDefault = w.after.default === n;
@@ -319,15 +331,19 @@ async function updateCommand(args: string[], values: Record<string, any>, cmd: s
   if (!name || args.length > 1) throw new RelayError("usage", "update takes a profile's name", `${cmd} update <name> [--project] [--dry-run]`);
   const u = await (await import("../../profiles/install")).updateProfile(name, { project: !!values.project, path, dryRun: !!values["dry-run"] });
   if (values.json) { ok({ update: u }); return 0; }
-  if (u.from.hash === u.to.hash && !u.modified) {
+  const kept = u.kept.length ? `  added by you, kept: ${u.kept.join(", ")}` : null;
+  if (u.from.hash === u.to.hash && !u.modified?.changed.length && !u.modified?.removed.length) {
     console.log(`${name} is up to date (${u.to.hash})${u.updated ? `; its LOCK now names commit ${short(u.to.commit)}` : ""}.`);
+    if (kept) console.log(kept);
     return 0;
   }
   console.log(`${name}: version ${u.from.version ?? "?"} → ${u.to.version ?? "?"}, commit ${short(u.from.commit)} → ${short(u.to.commit)}`);
   console.log(`  hash ${u.from.hash}\n    → ${u.to.hash}`);
   for (const s of u.skills) console.log(`  skill ${s.name}: ${s.from ?? "(new)"} → ${s.to ?? "(removed)"}`);
   for (const [k, list] of [["changed", u.changed], ["added", u.added], ["removed", u.removed]] as const) if (list.length) console.log(`  ${k}: ${list.join(", ")}`);
-  if (u.modified) console.log(`  edited since it was installed (replaced by the update): ${[...u.modified.changed, ...u.modified.added, ...u.modified.removed].join(", ")}`);
+  const edited = u.modified ? [...u.modified.changed, ...u.modified.removed] : [];
+  if (edited.length) console.log(`  edited since it was installed (replaced by the update): ${edited.join(", ")}`);
+  if (kept) console.log(kept);
   if (!u.updated) { console.log("Nothing was changed (--dry-run)."); return 0; }
   console.log(`Updated ${u.dir}.${u.layer === "project" && u.skills.length ? ` Its changed skills reach its agents once you trust them: ${cmd} trust ${name}` : ""}`);
   return 0;
