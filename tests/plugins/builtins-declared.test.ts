@@ -85,15 +85,17 @@ describe("built-ins ask only for the job changes they use (§6.6.19)", () => {
 });
 
 describe("a listener registered without its settings does nothing", () => {
-  test("forge-github never polls with no source repositories, though a timer of its fires", async () => {
-    // A timer from earlier settings can fire before it is cancelled; a poll would read the threads runs follow.
+  test("forge-github calls GitHub on its timer only for a configured repository or a thread a run follows", async () => {
+    // Its timer runs in the daemon whatever is configured (a goal branch's pull request is followed once it is open,
+    // §16.3.6); with nothing to read, a fire reads only the subscriptions, and GitHub is never asked.
     let asked = 0;
     let listener: ((call: HookCall<"job.changed">) => void) | undefined;
+    let followed: Array<{ runId: string; source: string; thread: string; until: null }> = [];
     setGitHubApi({ listIssueComments: async () => { asked++; return []; } } as never);
     const ctx = {
       plugin: { name: "forge-github" }, hooks: { on: (_: string, f: typeof listener) => { listener = f; } }, log: { warn: () => {} },
       jobs: { list: async () => [], cancel: async () => {} },
-      triggers: { subscriptions: async () => { asked++; return [{ runId: "run-1", source: "github", thread: "acme/app#3", until: null }]; } },
+      triggers: { subscriptions: async () => followed, onReply: () => ({ dispose() {} }) },
       storage: { get: async () => ({ since: "2026-11-01T00:00:00Z" }), put: async () => {} },
     } as unknown as PluginContext<unknown>;
     const cfg = { api: "http://127.0.0.1:9", sourceRepos: [] as string[], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
@@ -101,11 +103,17 @@ describe("a listener registered without its settings does nothing", () => {
     listener!({ payload: fired("forge-github", SOURCE_TIMER) } as HookCall<"job.changed">);
     await sleep(100);
     expect(asked).toBe(0);
-    // With a repository the same fire polls (the stand-ins above are what a poll reads).
+    // A run follows a pull request's thread: the same fire reads its repository.
+    followed = [{ runId: "run-1", source: "github", thread: "acme/app#3", until: null }];
+    listener!({ payload: fired("forge-github", SOURCE_TIMER) } as HookCall<"job.changed">);
+    for (let i = 0; i < 40 && asked < 1; i++) await sleep(25);
+    expect(asked).toBe(1);
+    // And a configured repository, with nothing followed.
+    followed = [];
     startGitHubSource(ctx, { ...cfg, sourceRepos: ["acme/app"] });
     listener!({ payload: fired("forge-github", SOURCE_TIMER) } as HookCall<"job.changed">);
     for (let i = 0; i < 40 && asked < 2; i++) await sleep(25);
-    expect(asked).toBeGreaterThanOrEqual(2);
+    expect(asked).toBe(2);
   });
 
   test("sandbox-boxd refreshes nothing with the refresh off, though its timer (kept across restarts) fires", async () => {

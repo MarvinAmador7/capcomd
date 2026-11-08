@@ -741,8 +741,8 @@ this list says why):
   second checkout: an agent cites `(id, commit)` and never pushes to a brain. A bundle that can't be placed leaves the
   agent to start without it (its log says so). The environment image doesn't bake brains yet: the runner keeps a bundle
   the sandbox already has at the commit (the marker), so `capcomd env build` placing them is the follow-up; until then
-  every agent's sandbox gets the tree at start. (Built since, spec 1.0.61: see the follow-up below.)
-- **Follow-up: brains in the image, only the bundle in the sandbox** (spec 1.0.61). The whole repository was placed, but
+  every agent's sandbox gets the tree at start. (Built since, spec 1.0.62: see the follow-up below.)
+- **Follow-up: brains in the image, only the bundle in the sandbox** (spec 1.0.62). The whole repository was placed, but
   only the bundle's Markdown was checked for `restricted`: a restricted file elsewhere in the brain's repository (or a
   non-Markdown file in the bundle) reached every sandbox. `ContextBundle` now names a `path`, the directory placed (at
   the same path under the bundle's directory, so lines' paths don't change); groundray names its bundle's, so brain.yaml

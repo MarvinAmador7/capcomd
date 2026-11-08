@@ -6,23 +6,40 @@
 // policy refuses at trigger.admitting is denied by the plugin; a person on a thread a scripted planner's run follows
 // reaches that planner as a message; a subscription with a short `until` expires, and the thread is gated again after.
 // The daemon stream has trigger.received / subscribed / unsubscribed, and `capcomd triggers log` lists every decision.
+// Continuations (§16.3.2 step 2, §16.3.6, §16.3.7): on a run whose planner finished, a bot's trigger starts nothing and
+// alice's starts the planner again, with her words in its inbox; when it ends the run answers once on her thread through
+// the fixture's reply path, and the fixture drops its own reply when it reads it back. A goal-branch run's pull request
+// (a fake GitHub) is followed once it is open: a reviewer's comment there starts its planner again through the real
+// github source, and the answer is one marked comment on the pull request, which the source never reads as a trigger.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { world, newRun, spawnRoot, waitAll, type World } from "./harness";
+import { world, newRun, spawnRoot, waitAll, WORKER, type World } from "./harness";
+import { fakeGitHub } from "../merge/fake-github";
 
 const FIXTURE = join(import.meta.dir, "..", "plugins", "fixtures", "trigger-source");
 let w: World;
-let dir: string, inbox: string, tlog: string;
+let gh: ReturnType<typeof fakeGitHub>;
+let dir: string, inbox: string, tlog: string, settings: string;
 const started: string[] = [];
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-scn-triggers-"));
   inbox = join(dir, "inbox.ndjson");
   tlog = join(dir, "source.ndjson");
-  const settings = join(dir, "triggers.json");
+  settings = join(dir, "triggers.json");
   writeFileSync(settings, JSON.stringify({ sources: { fixture: { allowed: ["alice"], mode: "observe" } } }));
-  w = await world("triggers", { CAPCOMD_TEST_PLUGINS: FIXTURE, CAPCOMD_TEST_TRIGGER_INBOX: inbox, CAPCOMD_TEST_TRIGGER_LOG: tlog, CAPCOMD_TRIGGERS_FILE: settings, CAPCOMD_TRIGGERS_SWEEP_MS: "300", NODE_ENV: "test" });
+  w = await world("triggers", {
+    CAPCOMD_TEST_PLUGINS: FIXTURE, CAPCOMD_TEST_TRIGGER_INBOX: inbox, CAPCOMD_TEST_TRIGGER_LOG: tlog, CAPCOMD_TRIGGERS_FILE: settings, CAPCOMD_TRIGGERS_SWEEP_MS: "300", NODE_ENV: "test",
+    // A fake GitHub for the goal branch's pull request; the github source reads it every 10 s (its shortest).
+    GITHUB_TOKEN: "fake-token", CAPCOMD_PLUGIN_FORGE_GITHUB_SOURCEEVERYMS: "10000",
+  }, {
+    envFor: async (repo) => {
+      await repo.seed.ok(["push", "-q", "origin", "main:dev"]);
+      gh = fakeGitHub(repo.bare);
+      return { CAPCOMD_GITHUB_API: gh.url };
+    },
+  });
 }, 120_000);
 afterAll(async () => {
   // The run the trigger started: let it finish (fake agents: seconds), else cancel it, before the engine goes.
@@ -34,7 +51,7 @@ afterAll(async () => {
     }
     if (!["completed", "failed", "cancelled"].includes(state)) await w.cj(["cancel", id]);
   }
-  try { await w?.stop(); } finally { if (dir) rmSync(dir, { recursive: true, force: true }); }
+  try { await w?.stop(); } finally { gh?.stop(); if (dir) rmSync(dir, { recursive: true, force: true }); }
 }, 120_000);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -133,3 +150,111 @@ capcomd result --summary "read it" >/dev/null`), { args: ["--key", "planner"] })
   expect(tl.j.triggers.map((e: any) => `${e.id} ${e.decision.kind}`)).toEqual(["c1 started", "c1 deduped", "c2 denied", "c3 recorded", "c4 denied", "c5 continued", "c6 denied"]);
   expect(tl.j.triggers[3]).toMatchObject({ gate: { allowed: true, strength: "inferred", mode: "observe" }, decision: { wouldHave: "start" } });
 }, 240_000);
+
+/** A planner that does its first pass, and, started again on a message containing $MARK, reads it and says so. */
+const againPlanner = (name: string, mark: string, first: string) => w.script(name, `${WAIT_MSG}
+case "$(capcomd inbox)" in
+  *${mark}*) wait_msg ${mark} || exit 9; capcomd result --summary "Did what was asked on the thread too." >/dev/null;;
+  *) ${first}
+     capcomd result --summary "first pass done" >/dev/null;;
+esac`);
+/** Where the run stands in the lifecycle feed (new, running, paused, ended): what the intake asks. */
+const runPhase = async (id: string) => (await import("../../src/api/lifecycle")).runPhase(id, await (await import("../../src/api/rivet-source")).rivetSource().events(id, 0));
+/** Await an agent, saying what the CLI said when it can't. */
+async function awaitAgent(run: string, id: string) {
+  const r = await w.cj(["await", run, id, "--timeout-ms", "120000"]);
+  if (!r.j?.agents) throw new Error(`capcomd await ${run} ${id}: ${r.stdout} ${r.stderr}`);
+  return r.j.agents[0];
+}
+async function until<T>(what: string, f: () => T | Promise<T>, ms = 60_000): Promise<NonNullable<T>> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await f();
+    if (v) return v as NonNullable<T>;
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await sleep(200);
+  }
+}
+
+test("an ended run's planner starts again on a person's trigger, never a bot's; the run answers once on the thread, and never reads its answer back", async () => {
+  writeFileSync(settings, JSON.stringify({ sources: { fixture: { allowed: ["alice"], mode: "observe", reply: true } } }));
+  const run = await newRun(w);
+  const first = await spawnRoot(w, run, "planner", againPlanner("again", "MARK-AGAIN", ":"), { args: ["--key", "planner"] });
+  send({ op: "subscribe", tag: "sub-again", sub: { runId: run, source: "fixture", thread: "issue/20" } });
+  expect((await answer("sub-again")).sub).toMatchObject({ runId: run, thread: "issue/20" });
+  expect((await waitAll(w, run, [first], 120_000)).agents[0].status).toBe("done");
+  await until("the run to end", async () => (await runPhase(run)) === "ended");
+
+  // A bot on the ended run's thread: gated like any trigger, and it isn't allowed; nothing starts.
+  expect((await emit("c20", { thread: "issue/20", actor: { id: "ci-bot", display: "ci-bot", bot: true }, text: { text: "MARK-AGAIN checks passed", untrusted: true, by: "fixture" } })).decision).toMatchObject({ kind: "denied", by: "allowlist" });
+  // Alice, allowed and addressing capcomd: the planner works again, with her words in its inbox.
+  const c = await emit("c21", { thread: "issue/20", text: { text: "MARK-AGAIN please add a changelog entry too", untrusted: true, by: "fixture" } });
+  const again = String(c.decision.restarted);
+  expect(c.decision).toMatchObject({ kind: "continued", runId: run });
+  expect(again).toMatch(/^agt-/);
+  expect(again).not.toBe(first);
+  const done = await awaitAgent(run, again);
+  const logs = (await w.cj(["logs", run, again, "--tail", "500"])).j.lines.map((l: any) => l.line).join("\n");
+  if (done.status !== "done") console.log(logs);
+  expect(done.status).toBe("done");
+  expect(logs).toContain("msg-from: trigger:fixture");
+  expect(logs).toContain("Alice (alice) wrote on issue/20:");
+  // The bot's words never reached a planner; the first planner is still done, its record intact.
+  expect(logs).not.toContain("checks passed");
+  const agents = (await w.cj(["tree", run])).j.tree.map((n: any) => [n.agentId, n.status]);
+  expect(agents).toEqual(expect.arrayContaining([[first, "done"], [again, "done"]]));
+
+  // It answers once on alice's thread, and the fixture drops its own reply when it reads it back.
+  const replied = await until("the reply", () => heard().find((l) => l.what === "replied" && (l as any).reply.runId === run));
+  expect((replied as any).reply).toMatchObject({ source: "fixture", thread: "issue/20", triggerId: "c21", runId: run, text: `Did what was asked on the thread too.\n\n— capcomd (${run})` });
+  await until("the reply read back", () => heard().find((l) => l.what === "dropped-own" && String(l.tag).startsWith(`reply-${run}-`)));
+  await sleep(1500);
+  expect(heard().filter((l) => l.what === "replied" && (l as any).reply.runId === run)).toHaveLength(1);
+  expect(daemonEvents().filter((e) => e.type === "trigger.replied" && e.data.runId === run).map((e) => e.data)).toEqual([{ source: "fixture", thread: "issue/20", runId: run, id: "c21", url: "fixture:issue/20" }]);
+  expect(daemonEvents().filter((e) => e.type === "trigger.received").some((e) => String(e.data.id).startsWith("reply-"))).toBe(false);
+  expect(await runPhase(run)).toBe("ended");
+}, 300_000);
+
+test("a goal branch's pull request is followed once open: a reviewer's comment starts its planner again, and the answer is one marked comment there", async () => {
+  writeFileSync(settings, JSON.stringify({ sources: { fixture: { allowed: ["alice"] }, github: { allowed: ["octo"], reply: true } } }));
+  const r = await w.cj(["run", "new", "--budget", "usd=10,turns=400,wallSeconds=3600", "--key", `trig-goal-${Date.now()}`, "--goal", "Add t", "--goal-branch", "capcomd/scn-trig", "--base", "dev"]);
+  expect(r.code).toBe(0);
+  const run = r.j.runId as string;
+  const worker = w.script("trig-worker", WORKER);
+  const land = `id=$(capcomd spawn --profile worker --task "write src/t.txt" --key t --budget turns=10 --children.maxChildren=0 --contract "$($S/json script="FILE=src/t.txt CONTENT=t ${worker}")" | $S/jget agentId)
+     capcomd await $id >/dev/null; v=$(capcomd verify --ref $id --key v-t); capcomd merge --ref $id --require "$(echo "$v" | $S/jget id)" --key m-t >/dev/null`;
+  const first = await spawnRoot(w, run, "planner", againPlanner("goal-again", "MARK-REVIEW", land), { args: ["--key", "planner"] });
+  expect((await waitAll(w, run, [first], 180_000)).agents[0].status).toBe("done");
+  const pr = await w.cj(["pr", "open", run]);
+  expect(pr.code).toBe(0);
+  expect(pr.j).toMatchObject({ created: true, pullRequest: { number: 1 } });
+  // The run follows the pull request's conversation (the forge names it: acme/widgets#1).
+  const subs = await w.cj(["triggers", "subscriptions", run]);
+  // It had ended (its planner finished before the pull request): it follows the thread for 14 days from its end.
+  expect(subs.j.subscriptions.map((s: any) => [s.runId, s.source, s.thread])).toEqual([[run, "github", "acme/widgets#1"]]);
+
+  // The source's first look at the repository marks where it starts; once it reads it, a reviewer writes.
+  await until("the source to read acme/widgets", () => gh.calls.some((c) => c === "GET /repos/acme/widgets/issues/comments"), 60_000);
+  gh.comment("acme/widgets", 7, "octo", "/capcomd unrelated issue"); // a thread nobody follows: passed over
+  gh.comment("acme/widgets", 1, "octo", "/capcomd MARK-REVIEW please also handle an empty input");
+  const received = await until("octo's comment", () => daemonEvents().find((e) => e.type === "trigger.received" && e.data.source === "github"), 60_000);
+  const again = String(received.data.restarted);
+  expect(received.data).toMatchObject({ thread: "acme/widgets#1", actor: "octo", addressed: "mention", decision: "continued", runId: run });
+  expect(again).toMatch(/^agt-/);
+  const done = await awaitAgent(run, again);
+  const logs = (await w.cj(["logs", run, again, "--tail", "500"])).j.lines.map((l: any) => l.line).join("\n");
+  if (done.status !== "done") console.log(logs);
+  expect(done.status).toBe("done");
+  expect(logs).toContain("msg-from: trigger:github");
+  expect(logs).toContain("octo wrote on acme/widgets#1:");
+
+  // One reply, on the pull request, marked; the source reads it back at its next poll and drops it.
+  const reply = await until("the reply on the pull request", () => gh.comments.find((c) => c.user.login === "you"), 60_000);
+  expect(reply).toMatchObject({ repo: "acme/widgets", body: `Did what was asked on the thread too.\n\n— capcomd (${run})\n\n<!-- capcomd -->`, issue_url: expect.stringMatching(/\/issues\/1$/) });
+  const reads = gh.calls.filter((c) => c === "GET /repos/acme/widgets/issues/comments").length;
+  await until("the source to read past the reply", () => gh.calls.filter((c) => c === "GET /repos/acme/widgets/issues/comments").length > reads, 30_000);
+  await sleep(500);
+  expect(gh.comments.filter((c) => c.user.login === "you")).toHaveLength(1);
+  expect(daemonEvents().filter((e) => e.type === "trigger.received" && e.data.source === "github").map((e) => [e.data.thread, e.data.decision])).toEqual([["acme/widgets#1", "continued"]]);
+  expect(daemonEvents().filter((e) => e.type === "trigger.replied" && e.data.runId === run).map((e) => e.data)).toEqual([{ source: "github", thread: "acme/widgets#1", runId: run, id: received.data.id, url: reply.html_url }]);
+}, 300_000);

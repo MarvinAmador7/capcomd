@@ -294,10 +294,16 @@ export async function openGoalPullRequest(runId: string, o: { by: string; stoppe
     runId, branch: g.branch, base: g.base, created,
     pullRequest: { number: p.number, url: p.url, state: p.state },
   });
-  const record = async (v: ReturnType<typeof view>) => { await s.goalDecision({ choice: "pull_request", by: o.by, pr: { number: v.pullRequest.number, url: v.pullRequest.url } }); return v; };
+  // Recorded once (run.pr_opened); the run then follows the pull request's conversation, when a trigger source reads
+  // it (the forge names it: `thread`), so what people write there reaches its planner (docs/spec/plugin-api.md §16.3.6).
+  const record = async (p: import("../../packages/plugin/src/seams").PullRequestRef, v: ReturnType<typeof view>) => {
+    await s.goalDecision({ choice: "pull_request", by: o.by, pr: { number: v.pullRequest.number, url: v.pullRequest.url } });
+    if (p.thread) await followPullRequest(runId, p.thread);
+    return v;
+  };
   const head = { remote: fit.cfg.remote, head: g.branch, base: g.base };
   const existing = await call((c) => forge.findPullRequest(head, c)).catch((e) => { throw noLogin(e) ?? new RelayError("conflict", `${label}: ${(e as Error).message}`, next(e, `Check your ${label} login and try again.`), { code: "github" }); });
-  if (existing) return record(view(existing, false));
+  if (existing) return record(existing, view(existing, false));
   const compare = await compareOf(fit.cfg, g);
   if (!("error" in compare) && compare.ahead === 0) throw new RelayError("conflict", `nothing landed on ${g.branch}: it has no commits that ${g.base} doesn't`, "There is nothing to open a pull request for.", { code: "empty" });
   const { landed, notLanded } = landedOf(g, agents, ops);
@@ -310,7 +316,14 @@ export async function openGoalPullRequest(runId: string, o: { by: string; stoppe
   const stopped = !ask ? null : planner?.status === "failed" ? "the planner failed" : planner?.status === "cancelled" ? "the planner was cancelled" : "the run ended first";
   const body = pullRequestBody({ runId, branch: g.branch, summary: typeof (planner?.result as any)?.summary === "string" ? (planner!.result as any).summary : g.ready?.summary ?? null, landed, notLanded, stopped, forge: label });
   const pr = await call((c) => forge.openPullRequest({ ...head, title, body }, c)).catch((e) => { throw noLogin(e) ?? new RelayError("conflict", `${label} refused the pull request: ${(e as Error).message}`, `Check the branch on ${label} and your access to the repository.`, { code: "github" }); });
-  return record(view(pr, true));
+  return record(pr, view(pr, true));
+}
+
+/** The run follows its pull request's thread (the intake's subscription, idempotent). The pull request is open whatever
+ *  happens here: a subscription that fails is logged, never the opening's failure. */
+async function followPullRequest(runId: string, t: { source: string; thread: string }): Promise<void> {
+  const { subscribe } = await import("../triggers/intake");
+  await subscribe({ runId, source: t.source, thread: t.thread }, "pull-request").catch((e) => console.error(`[goal] ${runId}: following ${t.thread}: ${(e as Error)?.message ?? e}`));
 }
 
 /** Keep the goal branch without a pull request (clients stop asking). Refused after a pull request was opened. */

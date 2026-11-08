@@ -18,7 +18,7 @@ import { resolveSecret } from "./secrets";
 import { pluginJobs } from "../jobs/service";
 import { mergePatch, pluginConfigFiles, pluginSettings } from "./config";
 import { daemonServices, localServices } from "./services";
-import { pluginTriggers } from "../triggers/intake";
+import { pluginTriggers, useTriggerReplies } from "../triggers/intake";
 import { announce } from "../install/trust";
 import { isExempt, projectOf, projectPluginDirs, projectPluginTrusted } from "./install";
 import { pluginStore, storageService } from "./storage";
@@ -151,7 +151,7 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
   const streams = o.events ? eventSinks({ daemon: o.events.daemon, run: o.events.run ?? scopeEvents }, o.events.pollMs ? { pollMs: o.events.pollMs } : {}) : noEventSinks;
   // §13.3: one JSON line per log call in the daemon's log, never an event. A CLI's local host keeps its output clean.
   const log = (l: { plugin: string; level: string; message: string; fields: Record<string, unknown> }) => { if (o.log !== false) console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })); };
-  return new PluginHost({
+  const host = new PluginHost({
     capcomd: VERSION,
     kernel: CAPABILITY_NAMES.map((n) => `kernel:${n}`),
     emit: (e) => {
@@ -185,6 +185,9 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
     ...(o.process ? { launcher: processLauncher({ socket: o.process.socket, log }), ...(o.process.timings ? { processTimings: o.process.timings } : {}) } : {}),
     ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins, o.socket) } : {}),
   });
+  // The host whose plugins have ctx.triggers holds their sources' reply paths: the intake posts replies through them.
+  if (o.triggers) useTriggerReplies(host.contributions);
+  return host;
 }
 
 /** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges, the

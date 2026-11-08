@@ -18,6 +18,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   big attachments outside the knowledge folder). An agent's sandbox also keeps only the brains its own brief cites:
   brains another project's image carries are removed before the agent starts (an agent whose sandbox can't be cleaned
   doesn't start), and checks that `capcomd verify` runs in a VM never see any brain.
+- New: once you open a pull request from a goal branch (`capcomd pr open`, the app, or `capcomd_pr_open`), the run
+  follows its conversation on GitHub. When someone you allow (`triggers.sources.github.allowed` in
+  `~/.capcomd/config.json`) writes there with `/capcomd …` (or, in `mode: "auto"`, without it), the run's planner starts
+  again with their comment in its inbox and pushes more work onto the goal branch, which updates the pull request. In
+  the default observe mode a comment without `/capcomd` is only recorded (`capcomd triggers log` says the planner would
+  have started again); anyone else's comment reaches only the planner's inbox. This works for any trigger source: a
+  person's request on a thread an ended run follows starts its planner again the same way, a bot's never does. The
+  GitHub source now reads the threads runs follow without `sourceRepos` (only those threads), and calls GitHub only
+  when there is something to read.
+- New: a run started (or started again) by a trigger can answer where it was asked when it ends: one short reply, under
+  100 words, with the planner's summary, or why it stopped if it failed. Turn it on per source with
+  `triggers.sources.<source>.reply: true` (off by default). On GitHub it is one comment on the issue or pull request,
+  posted with your login and marked so capcomd never reads it back as a request; an `@name` in it is posted as code,
+  so a reply never pings anyone. Each reply is a `trigger.replied`
+  event on the daemon stream. Plugins that feed triggers can offer the same with `ctx.triggers.onReply`.
 - Fixed: a profile's `memory: { files: [NOTES.md] }` now does what it says. Agents of that profile get only the
   project-memory items that `.capcomd/context/NOTES.md` links to (Markdown links, or the `→ path` lines that
   `capcomd context lint --fix` writes, so `files: [index.md]` works too). Before, the setting was ignored and every
