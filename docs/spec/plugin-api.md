@@ -198,7 +198,7 @@ under some settings is registered anyway and does nothing without them, as the b
 
 | Key | Item | Registered through |
 |---|---|---|
-| `hooks` | `{ [hook]: { timeoutMs?, failure? } }` (§6) | `ctx.hooks.on` |
+| `hooks` | `{ [hook]: { timeoutMs?, failure?, changes? } }` (§6); `changes`, for `job.changed` only, lists the change kinds the listener is called for (§6.6.19) | `ctx.hooks.on` |
 | `seams` | `{ kind, name }`, at most one per kind (§7) | `ctx.seams.sandbox/agent/forge` |
 | `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source) |
 | `context` | `{ name, kinds: ("fact" \| "memory")[] }`, each also in `provides` as `context:<name>` (ADR-025 §3.1) | `ctx.context.register(impl)`: `impl.describe().name` is the declared name; in process only in protocol v1, like the seams |
@@ -663,7 +663,7 @@ reaches only agents spawned after it. The orchestration skill (`capcomd-orchestr
 may spawn may name it, and `skill-orchestration` attaches it, written for the agent, so the agent gets it once; a
 profile that can't spawn, or that pins its hash, is refused when it resolves.
 
-The profile's persona (ADR-024 `identity.persona`; since 1.0.56): `prompt.persona` is `{hash, source, text}` or null
+The profile's persona (ADR-024 `identity.persona`; since 1.0.57): `prompt.persona` is `{hash, source, text}` or null
 (additive; `source` `project` or `user`, the layer of the manifest that named the file). It is read when the profile
 resolves (`src/profiles/persona.ts`: the file in the directory of the manifest that set `identity.persona`, its own, an
 ancestor's or an override's; at most 32 KiB, not empty), pinned on the agent at spawn by `{hash, source}`
@@ -885,8 +885,13 @@ on the lint alone. `merge --operator` lands a branch it denied, recorded as bypa
 #### 6.6.19 `job.changed` · observe · the jobs service (§16.2)
 `JobChanged {job, change: started|output{stdout, stderr}|fired{n}|ended{state}}`. Results of background work arrive
 here; timers tick here. 5 s deadline. Fired by `src/jobs/service.ts` in the process that watches the job (the daemon,
-where agents' spools are pumped and timers armed); `output` frames are read only while a plugin listens. `trigger.*`'s
-sites are the intake's (§16.3.2, `src/triggers/intake.ts`).
+where agents' spools are pumped and timers armed). A listener may declare `changes` in its manifest (§4.7): the change
+kinds it is called for (`started`, `output`, `fired`, `ended`; default all), and it isn't called for another. A running
+job's new output is read (one more exec in its machine, at most once a second) only while a listener wants `output`,
+so a plugin that only keeps a timer declares `changes: ["fired"]` and its listening costs a running job nothing; the
+built-ins declare what they use (`fired`; the watchdog `started`, `fired`, `ended`). The test kit's `fire` refuses
+(`not_found`) a change of a kind the listener didn't declare, as the host never calls it (§14.5). `trigger.*`'s sites are the
+intake's (§16.3.2, `src/triggers/intake.ts`).
 
 #### 6.6.20 `trigger.admitting` · veto · gate · the intake (§16.3), after the kernel's gate, before any action
 `TriggerAdmitting {trigger, gate: {allowed, strength, mode, subscribed}}`. A listener may only **deny**; it cannot
@@ -2071,8 +2076,8 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
   `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
   manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
-  nothing without a schedule); the built-in sandboxes listen there already, so the daemon reads background jobs'
-  output (§6.6.19) either way.
+  nothing without a schedule); it declares `changes: ["fired"]`, so its listening never makes the daemon read a
+  running job's output (§6.6.19).
 
 #### 16.3.2 The intake
 
@@ -2357,7 +2362,8 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.53 | 2026-11-08 | `context-memory`'s judge and gate, after a second review of ADR-025 step 3 (§6.6.13, §6.6.15): a path a checkout on a case-insensitive file system reads as the memory (`.Capcomd/Context/…`, with HFS+-ignored characters or Windows' trailing dots and spaces) is a change to it, so an agent's branch can't put files in a macOS checkout's `.capcomd/context/` unjudged, and a consolidator's branch changes items by their exact names only; the agent judged is the one whose work the ref lands (an agent id's result branch, so a handed-off agent's successor), and a branch `capcomd/<run>/<agt>` of another run is judged as that run's agent instead of let through as a person's (an agent the engine has no record of fails it closed). No hook, seam, route or contract shape changes. |
 | 1.0.54 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route, from a sender that holds a capcomd client token: every route needs one, so a signed webhook that can't send one (GitHub's, Slack's) isn't served yet. |
 | 1.0.55 | 2026-11-08 | `capcomd plugins enable\|disable <name>` (§5.4, §6.5, §9.9): they record `plugins.<name>.enabled` in the user's config and call `POST /v1/plugins/{name}/enable\|disable` on the running daemon (at the harness socket it now records in `state/plugins.json`, with a token made for the call and deleted after), so a toggle lasts past a restart; with no daemon only the config changes. A built-in is still refused (409, the CLI's `conflict`), except the watchdog, which a person turns on and may turn off. `GET /v1/plugins` lists each plugin's declared CLI `commands` (§13.2, additive), and a command whose plugin isn't running is refused naming the plugin and its cause instead of as an unknown command (§4.7.1), with the next step: `capcomd plugins enable`, or the environment variable that turns it off. |
-| 1.0.56 | 2026-11-08 | ADR-024 `identity.persona` and `harness.cliVersion` get their runtime (they were read but not applied): `AgentPreparing.prompt.persona` (`{hash, source, text}` or null) and `PinnedSpec.persona` (`{hash, source}`), `PinnedSpec.cliVersion` (all additive); the persona is pinned at spawn like the profile's skills (content-addressed with the run), checked against its pin per attempt, made the first text of the agent's instructions once, and a project's persona is gated on trust per file hash (reason `untrusted`), §6.6.7. A `harness.cliVersion` the CLI version recorded by the agent's environment (its build in the sandbox's ledger, or the one its plan login's image was made from) doesn't satisfy, or that no version was recorded for, refuses the spawn (`config`, reason `environment`), a planner's run, and makes GET /v1/run-options say the planner isn't ready; `capcomd profiles validate` warns. The range is checked as a semver range when the profile is read (§17.1). |
+| 1.0.56 | 2026-11-08 | A `job.changed` listener may declare `changes` (§4.7, §6.6.19): the change kinds it is called for (`started`, `output`, `fired`, `ended`; default all, so an existing manifest is unchanged); the registry doesn't call it for another, and the jobs service reads a running job's new output (one exec in its machine a second) only while a listener wants `output`. The built-ins declare what they use (sandbox-docker, sandbox-boxd, forge-github and source-schedule `fired`; the watchdog `started`, `fired`, `ended`), so with no other plugin a running job costs one look a second, not two. `changes` on another hook is `invalid`. The test kit holds a plugin to it as the host does (§14.5): `fire` of a change kind its listener didn't declare is refused `not_found`, and `hookContract` calls a listener with a kind it declared. Manifest schema additive; no hook payload, seam, route or contract shape changes. |
+| 1.0.57 | 2026-11-08 | ADR-024 `identity.persona` and `harness.cliVersion` get their runtime (they were read but not applied): `AgentPreparing.prompt.persona` (`{hash, source, text}` or null) and `PinnedSpec.persona` (`{hash, source}`), `PinnedSpec.cliVersion` (all additive); the persona is pinned at spawn like the profile's skills (content-addressed with the run), checked against its pin per attempt, made the first text of the agent's instructions once, and a project's persona is gated on trust per file hash (reason `untrusted`), §6.6.7. A `harness.cliVersion` the CLI version recorded by the agent's environment (its build in the sandbox's ledger, or the one its plan login's image was made from) doesn't satisfy, or that no version was recorded for, refuses the spawn (`config`, reason `environment`), a planner's run, and makes GET /v1/run-options say the planner isn't ready; `capcomd profiles validate` warns. The range is checked as a semver range when the profile is read (§17.1). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

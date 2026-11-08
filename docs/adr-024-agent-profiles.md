@@ -732,7 +732,7 @@ Made while building migrate and the templates (§7 step 9, 2026-11-06; `src/prof
   releases, then `validate` warns, then it isn't read. Nothing warns yet.
 
 Made while giving `identity.persona` and `harness.cliVersion` their runtime (2026-11-08; `src/profiles/persona.ts`,
-`src/env/cli-version.ts`, spec §6.6.7, 1.0.56):
+`src/env/cli-version.ts`, spec §6.6.7, 1.0.57):
 
 - **The persona is pinned like a skill**: read when the profile resolves, from the directory of the manifest that set
   `identity.persona` (its own, an ancestor's, since a persona is inherited, or an override's), at most 32 KiB and not
