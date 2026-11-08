@@ -217,7 +217,10 @@ treats a distribution-owned `SOUL.md` that way).
   nothing to strip, unlike Hermes's export.
 - `capcomd profiles update <name>` re-fetches at the locked source and replaces only the **package-owned** files
   (`profile.yaml`, `SOUL.md`, `prompt.md`, `skills/`); a project's `override.yaml` and the profile's memory (§2.2
-  `memory`) are user-owned and never touched. A changed hash on a pinned skill or persona is shown before it is applied.
+  `memory`) are user-owned and never touched. So is any file the user added in the package's directory (one its `LOCK`
+  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.45; before, the
+  update replaced the whole directory but the override). A changed hash on a pinned skill or persona is shown before
+  it is applied.
   **From the research:** Hermes's `distribution_owned` list is exactly this split; adopted as is.
 - Discovery of shareable profiles uses the same marketplace files as the plugin (ADR-018 §1): a repository's
   `.claude-plugin/marketplace.json` may list `profiles` beside `plugins`. **Judgment call:** reuse the marketplace file
@@ -552,7 +555,7 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   differ only in what they say to a reader (the plugin cares about the start, or the end); the kernel treats them alike.
   `validate` reports a plugin the running daemon doesn't have as an error (spec §7.1's rule for seams), and as a
   warning when no daemon runs.
-- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.45, 2026-11-07;
+- **`harness.provider` and `sandbox.provider` are checked the same way** (spec 1.0.46, 2026-11-07;
   `src/plugins/snapshot.ts` `seamPresence`): a seam only the daemon loads made every resolution in the CLI fail,
   `capcomd profiles list` included, so outside the daemon a name is a built-in or one the running daemon lists from an
   active, enabled plugin; any other is an error while a daemon runs and a warning (from every reader of profiles, not

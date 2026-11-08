@@ -263,7 +263,9 @@ capcomd profiles export lead --flat --out ./shared
   changed before replacing it: the files changed, added and removed, each skill whose `SKILL.md` hash changes, the old
   and new commit and hash, and any file you edited since it was installed (which the update replaces; `capcomd
   profiles show` and `validate` say when a package was edited). `--dry-run` stops there. An `override.yaml` you put
-  beside the package stays; an update the profiles wouldn't resolve with is put back. A name installed in both places
+  beside the package stays, and so does any other file you added there (it is listed as "added by you, kept"); when
+  the new package has a file of its own in the place of one of yours, the update is refused until you move yours. An
+  update the profiles wouldn't resolve with is put back. A name installed in both places
   is the project's, as it resolves (`--project` looks only there).
 - `export <name>` writes the profile as a package to `./<name>/` (`--out DIR` for another place): its own files as
   they are, `extends` kept (whoever installs it needs a profile of that name), or with `--flat` what it resolves to:
