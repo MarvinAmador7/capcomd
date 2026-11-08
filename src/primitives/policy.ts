@@ -261,8 +261,10 @@ export function checkSpawn(x: SpawnCheck): SpawnDecision {
   }
   if (!x.operator && p.spec && x.childSpec) {
     // A child's provider, auth and tool mode are its own (an orchestrator's children do the work: plugin API §16.1), and
-    // with its tool mode how long its job starts wait (jobs.foregroundMs, §16.2 rule 2).
-    const w = widenings(p.spec, x.childSpec).filter((s) => !s.startsWith("provider ") && !s.startsWith("auth ") && !s.startsWith("toolMode ") && !s.startsWith("jobs.foregroundMs "));
+    // with its tool mode how long its job starts wait (jobs.foregroundMs, §16.2 rule 2). So is its context block: a child
+    // is briefed by its own profile (ADR-025 D12), which only an operator writes (an override can't change one,
+    // applyOverrides); the planner spawns the consolidator, whose block says `review` and the planner's doesn't.
+    const w = widenings(p.spec, x.childSpec).filter((s) => !s.startsWith("provider ") && !s.startsWith("auth ") && !s.startsWith("toolMode ") && !s.startsWith("jobs.foregroundMs ") && !s.startsWith("context changed"));
     if (w.length) return { ok: false, code: "widening", error: `child spec widens parent ${p.agentId}: ${w.join("; ")} (pass --operator to allow)` };
   }
   const avail = available(p.budget, p.spent, x.siblings);

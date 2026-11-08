@@ -135,7 +135,17 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     case "status": {
       const targets = args.agents || args.agent ? ids(args) : [c.sub];
       await assertReadable(c, targets);
-      return { agents: (await Promise.all(targets.map((t) => O.getAgentOrThrow(run, t)))).map((a) => agentFor(c, a)) };
+      const agents = await Promise.all(targets.map((t) => O.getAgentOrThrow(run, t)));
+      // ADR-025 §5.2: an agent that may spawn the consolidator sees, with its own status, what the run holds for the
+      // project's memory (counts and the consolidators' states, no lesson's text): when to spawn it, and whether to.
+      const me = agents.find((a) => a.agentId === c.sub);
+      const { CONSOLIDATOR_PROFILE } = await import("../context/consolidate");
+      if (me?.limits.allowSpawn && me.limits.allowedChildProfiles.includes(CONSOLIDATOR_PROFILE)) {
+        const C = await import("../context/consolidator");
+        const l = await C.runLessons(run);
+        return { agents: agents.map((a) => agentFor(c, a)), lessons: { ...l, text: C.lessonsText(l) } };
+      }
+      return { agents: agents.map((a) => agentFor(c, a)) };
     }
     case "await":
     case "wait-any": {

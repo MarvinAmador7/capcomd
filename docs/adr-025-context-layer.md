@@ -247,7 +247,8 @@ written back by the agent" (ADR-024 §2.2); it is read from the checkout and cha
 `.capcomd/context/` only (the agent provider's tool policy enforces the path; the kernel's gate re-checks it, §5.3). The
 planner spawns it as the **last child of its run** (an orchestration-skill rule: "before you end, spawn `consolidator`
 with the run's lessons"); an orchestrate profile cannot be the consolidator (it may not write files and ends failed if it
-spawned nothing, spec 1.0.6 and 1.0.16), and `run.changed ended` is too late to spawn anything. It reads the run's candidates
+spawned nothing, spec 1.0.6 and 1.0.16), and `run.changed ended` is too late to spawn anything (so D6a's fallback acts
+on the planner's own end, §13 "consolidation is reachable"). It reads the run's candidates
 (`result.data` of every agent, `kv notes/*`), the verify verdicts and merge outcomes (every capcomd read), and the
 current `.capcomd/context/`, and writes **itemised deltas** (ACE Reflector/Curator): one lesson per subtask with the
 failure case and the guardrail; `supersede` for a contradiction; `deprecate` for an item the repository no longer
@@ -847,7 +848,55 @@ as the orchestration skill does. Still not to a reviewer, a report agent or the 
 spawn, as before: a worker's profile that resolved before still does, and the router leaves the paragraph out (and logs
 it) when its other skills leave no room.
 
-**Made while closing the live gaps: the memory index and the brief's order** (spec 1.0.58; where the code and §6.1 or
+**Changed since: consolidation is reachable in a default team** (spec 1.0.58; D6 as amended by D6a, §15). A live run
+whose goal asked for lessons ended with none consolidated: its planner proposed none and never spawned the consolidator.
+Four things stood between D6 and a held memory change, each fixed:
+
+- **The planner couldn't spawn it.** The child-spawn check compared the parent's spec with the child's and refused a
+  different `context` block ("context changed"), a rule written for overrides; the consolidator's block says `review`
+  and the planner's doesn't, so the planner `capcomd setup project` writes was refused the consolidator it writes. A
+  child's context block is its own profile's (D12), which only an operator writes, so the spawn check leaves it out as
+  it leaves out the child's provider, auth and tool mode; an override still can't change one.
+- **The planner's own lessons came too late.** Capture collects an agent's lessons when it ends, and the planner ends
+  after its last child. Now the `context` router collects, as a consolidator starts (its `agent.preparing`, before its
+  inputs are read), the lessons every agent of the run declared that capture has no record of: the planner's own
+  among them, declared with `capcomd result --data '{"context": […]}'` before it spawns the consolidator. Each agent's
+  lessons are still collected once, so what the planner declares after that isn't read again. No new op (D16): the
+  checkpoint is the consolidator's start, which the planner causes.
+- **It didn't know when, or whether.** The orchestration skill's rule is steps (its lessons in its result first, then
+  `capcomd status`, then the consolidator last, then verify and merge), and the planner's brief has the step of its own
+  when its profile may spawn the consolidator. `capcomd status` from an agent that may spawn the consolidator carries
+  `lessons {candidates, pending, agents, consolidators, text}` (additive): the run's candidates, the lessons declared
+  but not collected yet, and its consolidators' states, counts only.
+- **Nothing caught a miss** (D6a). `context-memory` listens to `agent.changed` `ended`: once every agent of the run that
+  may spawn the consolidator has ended (none still working, so D6's "the planner spawns it" stays the first path), a
+  run whose agents proposed lessons and had no consolidator gets one, spawned by capcomd at the run's top (key
+  `consolidate`, the ended planner's drive settings, so its project's profile); when a consolidator ended with a branch
+  nobody asked to merge (the planner's or this one), capcomd verifies it (a passed verify of that commit is used again)
+  and asks to merge it as an agent's merge is asked (parked on a protected target), so the gate holds it for a person
+  under `review: human`. It does nothing while a consolidator runs (its end decides), for a run with no agent that may
+  spawn one (a driver's run is its driver's), or twice (the spawn, the verify and the merge are idempotent by their
+  keys, its events keyed). It says why when it doesn't (`consolidator_skipped`: `off`, `cancelled` when the planner
+  was, `consolidator_failed` when one ran and failed or was cancelled, `spawn_refused`, `verify_failed`,
+  `merge_failed`), never throws, and lands in the background, so the observe listener never waits on a verify.
+  `autoConsolidate` (the plugin's config, default `true`, `x-per-run`) turns it off. Why on by default: it spends a
+  consolidator's tokens only when the run's agents proposed lessons and its planner didn't consolidate them, which is
+  the case D6 meant to be consolidated (§12's rule decides whether consolidation stays on at all, not who starts it);
+  nothing it starts lands without the gate (lint, and a person under the default `review: human`); and it is a
+  convenience, so it fails open (a refusal is an event, never a stopped run).
+- **The consolidator didn't know what was asked.** In the live re-run the planner declared the lesson the goal asked
+  for and spawned the consolidator, which dropped it: `package.json` implied it, and the prompt's rule is "keep a
+  lesson only when the repository doesn't say it already". Its inputs now start with the run's goal (fenced as data,
+  at most 4 000 characters), and its prompt says that a candidate saying what the goal asks the project to remember is
+  kept, worded as what is true, unless it is false, holds a secret or the memory says it already. Under `review:
+  human` (the default, D5) a person still reviews it (the hold), so a goal can ask for a lesson but never land one; a
+  project on `review: lint` lets a goal's request land on lint alone, a goal a trigger wrote too (a reason D5 keeps
+  `lint` until the poisoning probe passes).
+- A person lands a consolidator's change on a protected target through the hold, not past it: `capcomd merge
+  --request-approval` parks the merge for `capcomd approve` as an agent's is (the gates then run at the approval, and
+  `context-memory`'s hold is a second approval of what lands), where `--operator` bypasses every plugin's veto.
+
+**Made while closing the live gaps: the memory index and the brief's order** (spec 1.0.59; where the code and §6.1 or
 §10 differ, the code is right and this list says why):
 
 - §10's "`files:` is honoured as the index path" is now read: `memory.files: [NOTES.md]` becomes the memory entry's
@@ -924,7 +973,8 @@ framing costs success.
 
 ## 15. Owner decisions
 
-Accepted by the owner on 2026-11-05: every decision below as recommended.
+Accepted by the owner on 2026-11-05: every decision below as recommended, except D6a, a proposed amendment awaiting the
+owner (built as recommended, and off with one setting if declined).
 
 | # | Decision | Recommendation |
 |---|---|---|
@@ -934,6 +984,7 @@ Accepted by the owner on 2026-11-05: every decision below as recommended.
 | D4 | Budgets and k | **Eval outputs per model** in `docs/evidence/context/<model>/limits.json`; no inline items in v1; start from 25 KB / 200 lines / k = 1 |
 | D5 | Gate for the consolidator's branch | **`review: human` (a `hold`) for the first release**; `lint` per project once the poisoning probe passes on the current model |
 | D6 | Consolidator: who spawns it, which model | **The planner, as its run's last child; the run's strongest model**; cheap is opt-in |
+| D6a | *Proposed amendment to D6 (2026-11-08, not yet accepted):* when the planner misses it | **A fallback in `context-memory`, on by default (`autoConsolidate`, per run too)**: once every agent that may spawn the consolidator has ended, a run with candidates and no consolidator gets one (spawned by capcomd at the run's top), and a consolidator's branch nobody merged is verified and its merge asked for, held by the gate as the planner's would be; why not is an event. The planner stays the first path (§13, "consolidation is reachable") |
 | D7 | Keep transcripts for cross-run search | **No**: distilled items only; `agent_items` keep their own retention |
 | D8 | Freshness defaults | **`lesson` 180 d, `feedback` 90 d, `reference` none, facts per brain**, as absolute `stale_after`; stale leaves the brief, is not deleted |
 | D9 | groundray: read through its CLI or the bundle; when `serve --stdio` | **Bundle for reads, CLI for proposals**; `serve --stdio` and the filters filed as asks, a precondition only for a hot write path |
