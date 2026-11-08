@@ -3,7 +3,7 @@
 // file is a changed hash and resets the trust; the daemon audits a trust once (plugin.trusted); `capcomd plugins trust`
 // is the prompt.
 import { beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost } from "../../packages/plugin/src/host/host";
@@ -12,6 +12,7 @@ import type { HostEvent } from "../../packages/plugin/src/host/registry";
 import { builtinCandidates, kernelHost, projectPlugins } from "../../src/plugins/host";
 import { installPlugin, projectCacheDir, projectPluginList, projectPluginTrusted, trustPlugin } from "../../src/plugins/install";
 import { Git } from "../../src/merge/git";
+import { announce, recordTrust, revokeTrust, trustState, TRUST_LOCK, TrustLockedError } from "../../src/install/trust";
 import { CLI } from "../helpers/engine";
 
 const home = process.env.CAPCOMD_HOME!;
@@ -172,8 +173,8 @@ describe("a project's plugin", () => {
 });
 
 describe("capcomd plugins trust (the prompt)", () => {
-  const cli = async (args: string[], cwd: string) => {
-    const proc = Bun.spawn(["bun", CLI, ...args], { cwd, env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const cli = async (args: string[], cwd: string, extra: Record<string, string> = {}) => {
+    const proc = Bun.spawn(["bun", CLI, ...args], { cwd, env: { ...process.env, ...extra }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     let j: any = null;
     try { j = JSON.parse(stdout.trim().split("\n").pop()!); } catch { /* text */ }
@@ -210,8 +211,143 @@ describe("capcomd plugins trust (the prompt)", () => {
     expect(asked.code).toBe(2);
     expect(asked.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u202e]/);
     expect(asked.stdout).toContain("harmless\\u{1b}[1A\\u{1b}[2K\\u{d}  runs");
-    // What it gets of yours at its start: a secret's reference (here the manifest's own default).
-    expect(asked.stdout).toContain("secrets  token ← env:GITHUB_TOKEN");
+    // What it gets of yours at its start: a secret's reference, the one you set. The manifest's own default
+    // (env:GITHUB_TOKEN) is never followed: the repository doesn't choose which of your variables it gets (§10.3).
+    // One that names the kernel's own variable is flagged: the daemon fails the plugin config_invalid.
+    expect(asked.stdout).toContain("secrets  token (none set; its default env:GITHUB_TOKEN is refused: one of capcomd's own");
+    expect(asked.stdout).not.toContain("token ← env:GITHUB_TOKEN");
     expect(asked.stdout).toContain(`runs     ./run.sh "x\\u001b[1A\\u001b[2K\\r" --flag=1 "a\\u{202e}b"  (on this machine`);
+  });
+
+  test("the prompt shows a default of the plugin's own as unset, and flags your reference to one of the kernel's variables", async () => {
+    const p = project();
+    writeFileSync(join(p.plugin, "plugin.json"), JSON.stringify({ ...manifest("pp"),
+      config: { type: "object", properties: { token: { type: "object", "x-secret": true, default: { $secret: "env:PP_TOKEN" } }, hook: { type: "object", "x-secret": true } } } }));
+    const asked = await cli(["plugins", "trust", "pp"], p.dir, { CAPCOMD_PLUGIN_PP_HOOK: '{"$secret":"env:RELAY_RPC_KEY"}' });
+    expect(asked.code).toBe(2);
+    expect(asked.stdout).toContain("secrets  token (none set), hook ← env:RELAY_RPC_KEY (refused: one of capcomd's own");
+    expect(asked.stdout).not.toContain("PP_TOKEN");
+  });
+});
+
+describe("trust.json, changed by the CLI and the daemon at once", () => {
+  const TRUST = new URL("../../src/install/trust.ts", import.meta.url).pathname;
+  /** A process recording `n` trusts (places `<tag>-<i>`) as `capcomd plugins trust` would, starting at `at` as the others do. */
+  const recorder = (tag: string, n: number, at: number) => Bun.spawn(["bun", "-e", `
+    const { recordTrust } = await import(${JSON.stringify(TRUST)});
+    while (Date.now() < ${at}) {}
+    for (let i = 0; i < ${n}; i++) recordTrust({ kind: "plugin", name: "${tag}-" + i, dir: ${JSON.stringify(home)} + "/places/${tag}-" + i, hash: "sha256:" + i, by: "operator" });
+  `], { env: { ...process.env, CAPCOMD_HOME: home }, stdout: "pipe", stderr: "pipe" });
+
+  test("two writers' trusts all persist: each change is made under trust.json.lock, gone after", async () => {
+    const at = Date.now() + 1500;
+    const ps = [recorder("a", 40, at), recorder("b", 40, at)];
+    const codes = await Promise.all(ps.map((p) => p.exited));
+    for (const p of ps) if (p.exitCode !== 0) console.log(await new Response(p.stderr).text());
+    expect(codes).toEqual([0, 0]);
+    const { entries } = JSON.parse(readFileSync(join(home, "trust.json"), "utf8")) as { entries: Array<{ name: string }> };
+    expect(entries.map((e) => e.name).sort()).toEqual(["a", "b"].flatMap((t) => Array.from({ length: 40 }, (_, i) => `${t}-${i}`)).sort());
+    expect(readdirSync(home).filter((n) => n.startsWith("trust.json."))).toEqual([]);
+  }, 30_000);
+
+  test("a lock left by a process that is gone is taken over; one a live process holds is waited for, then refused (announce skips)", () => {
+    const lock = join(home, "trust.json.lock"), dir = join(home, "places", "x");
+    mkdirSync(home, { recursive: true });
+    const dead = Bun.spawnSync(["true"]).pid;
+    writeFileSync(lock, JSON.stringify({ pid: dead, token: "old" }));
+    recordTrust({ kind: "plugin", name: "x", dir, hash: "sha256:1", by: "operator" });
+    expect(trustState("plugin", dir, "sha256:1").state).toBe("trusted");
+    expect(existsSync(lock)).toBe(false);
+    // Held by a live process (this one) for longer than a change waits.
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "held" }));
+    const wait = TRUST_LOCK.waitMs;
+    TRUST_LOCK.waitMs = 100;
+    try {
+      expect(() => recordTrust({ kind: "plugin", name: "y", dir: join(home, "places", "y"), hash: "sha256:2", by: "operator" })).toThrow(TrustLockedError);
+      expect(() => revokeTrust("plugin", dir)).toThrow(/is being changed by another capcomd/);
+      expect(announce("plugin", dir, "sha256:1")).toBeNull();
+    } finally { TRUST_LOCK.waitMs = wait; }
+    expect(readFileSync(lock, "utf8")).toContain("held");
+    expect(trustState("plugin", join(home, "places", "y"), "sha256:2").state).toBe("untrusted");
+    // A lock older than a change can take is left over, whoever it names.
+    utimesSync(lock, new Date(Date.now() - TRUST_LOCK.staleMs - 1000), new Date(Date.now() - TRUST_LOCK.staleMs - 1000));
+    expect(announce("plugin", dir, "sha256:1")).toMatchObject({ name: "x", announced: true });
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  test("a lock no change made (a directory, a dangling link) is refused at once, not spun on; announce skips it", () => {
+    const lock = join(home, "trust.json.lock"), dir = join(home, "places", "w");
+    mkdirSync(home, { recursive: true });
+    recordTrust({ kind: "plugin", name: "w", dir, hash: "sha256:1", by: "operator" });
+    for (const plant of [() => mkdirSync(lock), () => symlinkSync(join(home, "nowhere"), lock)]) {
+      plant();
+      try {
+        // In a child with a deadline: before, both spun forever (the daemon's announce too).
+        const p = Bun.spawnSync(["bun", "-e", `
+          const { announce, recordTrust } = await import(${JSON.stringify(new URL("../../src/install/trust.ts", import.meta.url).pathname)});
+          const out = { announce: announce("plugin", ${JSON.stringify(dir)}, "sha256:1") };
+          try { recordTrust({ kind: "plugin", name: "v", dir: ${JSON.stringify(join(home, "places", "v"))}, hash: "sha256:2", by: "operator" }); } catch (e) { out.record = [e.constructor.name, e.message, e.hint]; }
+          console.log(JSON.stringify(out));
+        `], { env: { ...process.env, CAPCOMD_HOME: home }, timeout: 15_000 });
+        expect(p.signalCode ?? null).toBeNull();
+        const out = JSON.parse(p.stdout.toString().trim());
+        expect(out.announce).toBeNull();
+        expect(out.record).toEqual(["TrustLockedError", expect.stringContaining("isn't a lock capcomd made"), `Remove ${lock}, then run it again.`]);
+      } finally { rmSync(lock, { recursive: true, force: true }); }
+    }
+    expect(trustState("plugin", join(home, "places", "v"), "sha256:2").state).toBe("untrusted");
+    expect(trustState("plugin", dir, "sha256:1").entry?.announced).toBe(false);
+  }, 40_000);
+
+  test("a left-over lock that can't be moved aside is refused at once, not tried forever; announce skips it", () => {
+    // Root may move it anyway: the directory's mode is what stops the move here.
+    if (process.getuid?.() === 0) return;
+    const lock = join(home, "trust.json.lock"), dir = join(home, "places", "u");
+    mkdirSync(home, { recursive: true });
+    recordTrust({ kind: "plugin", name: "u", dir, hash: "sha256:1", by: "operator" });
+    writeFileSync(lock, JSON.stringify({ pid: Bun.spawnSync(["true"]).pid, token: "old" }));
+    const mode = statSync(home).mode & 0o777;
+    chmodSync(home, 0o500);
+    try {
+      // In a child with a deadline: before, both tried the move again and again with no wait and no end.
+      const p = Bun.spawnSync(["bun", "-e", `
+        const { announce, recordTrust } = await import(${JSON.stringify(new URL("../../src/install/trust.ts", import.meta.url).pathname)});
+        const out = { announce: announce("plugin", ${JSON.stringify(dir)}, "sha256:1") };
+        try { recordTrust({ kind: "plugin", name: "v", dir: ${JSON.stringify(join(home, "places", "v"))}, hash: "sha256:2", by: "operator" }); } catch (e) { out.record = [e.constructor.name, e.message, e.hint]; }
+        console.log(JSON.stringify(out));
+      `], { env: { ...process.env, CAPCOMD_HOME: home }, timeout: 15_000 });
+      expect(p.signalCode ?? null).toBeNull();
+      const out = JSON.parse(p.stdout.toString().trim());
+      expect(out.announce).toBeNull();
+      expect(out.record).toEqual(["TrustLockedError", expect.stringContaining("can't be moved aside"), `Remove ${lock}, then run it again.`]);
+    } finally { chmodSync(home, mode); rmSync(lock, { force: true }); }
+    expect(trustState("plugin", join(home, "places", "v"), "sha256:2").state).toBe("untrusted");
+    expect(trustState("plugin", dir, "sha256:1").entry?.announced).toBe(false);
+  }, 40_000);
+
+  test("announce of a trust marked already doesn't wait on a held lock", () => {
+    const lock = join(home, "trust.json.lock"), dir = join(home, "places", "m");
+    mkdirSync(home, { recursive: true });
+    recordTrust({ kind: "plugin", name: "m", dir, hash: "sha256:1", by: "operator" });
+    expect(announce("plugin", dir, "sha256:1")).toMatchObject({ announced: true });
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "held" }));
+    try {
+      const t = Date.now();
+      expect(announce("plugin", dir, "sha256:1")).toBeNull();
+      expect(announce("plugin", dir, "sha256:other")).toBeNull();
+      expect(Date.now() - t).toBeLessThan(TRUST_LOCK.waitMs / 2);
+    } finally { rmSync(lock, { force: true }); }
+  });
+
+  test("a link where the temporary file used to be (trust.json.<pid>.tmp) is never written through", () => {
+    mkdirSync(home, { recursive: true });
+    const victim = join(home, "victim.txt"), planted = join(home, `trust.json.${process.pid}.tmp`);
+    writeFileSync(victim, "yours\n");
+    symlinkSync(victim, planted);
+    try {
+      recordTrust({ kind: "plugin", name: "z", dir: join(home, "places", "z"), hash: "sha256:3", by: "operator" });
+      expect(readFileSync(victim, "utf8")).toBe("yours\n");
+      expect(trustState("plugin", join(home, "places", "z"), "sha256:3").state).toBe("trusted");
+    } finally { rmSync(planted, { force: true }); rmSync(victim, { force: true }); }
   });
 });

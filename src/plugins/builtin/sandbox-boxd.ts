@@ -86,13 +86,15 @@ export const plugin = definePlugin({
     }));
     // The project templates' refresh: its timer fires (daily by default) and the refresh runs on its own (it fetches
     // every templated repository's mirror, longer than an observe call's deadline), starting builds in the background.
+    // Its listener is registered with the refresh turned off too, as the manifest declares it (a declaration the code
+    // never registers is a warning at every start, §4.7); then it refreshes nothing.
     const everyMs = refreshEveryMs();
-    if (!(everyMs > 0)) return;
     const log = (l: string) => ctx.log.info(l);
     ctx.hooks.on("job.changed", (call) => {
       const { job, change } = call.payload;
-      if (job.plugin === ctx.plugin.name && change.kind === "fired" && job.spec.label === REFRESH_LABEL) void refreshIfKept(log).catch(() => {});
+      if (everyMs > 0 && job.plugin === ctx.plugin.name && change.kind === "fired" && job.spec.label === REFRESH_LABEL) void refreshIfKept(log).catch(() => {});
     });
+    if (!(everyMs > 0)) return;
     // Only the daemon has jobs (a CLI's plugins are refused `unsupported`).
     ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: REFRESH_LABEL, everyMs }, { key: "refresh-templates" })
       .catch((e) => { if (!(e instanceof PluginError && e.code === "unsupported")) ctx.log.warn("the project templates' refresh timer did not start", { error: String((e as Error)?.message ?? e) }); });

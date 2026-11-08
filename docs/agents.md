@@ -96,13 +96,15 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   /v1/profiles/{name}` changes them (a token with the `configure` scope, an `Idempotency-Key` and the `rev` it read).
   Every change made through the API is a `profile.changed` event on the daemon stream; a change made with `capcomd
   profiles set` or by editing the file isn't (capability `profiles.edit`).
-- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`): `identity.title` (the
+- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`, and the
+  app in `GET /v1/profiles`): `identity.title` (the
   name to show; not passed to a profile that `extends` it, nor is `identity.avatar`), `tags` (lowercase words, what
   the profile is for: `[review, security]`), `sharing` (`source`, `license`: where the profile is published; an
   installed one's `LOCK` says where it was installed from) and
   `canReport` from `permissions.report`. capcomd adds `fit`, one line it writes from the profile's settings, never
-  from its text ("read-only; Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn"), and
-  `cost`, its model's list price (`low`: Haiku, `-mini`/`-nano`; `medium`: Sonnet, GPT; `high`: Opus, `-pro`; null
+  from its text ("read-only; Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn";
+  read-only is what the provider applies: a Claude Code profile whose `tools.allowed` has no edit tool and no plain
+  `Bash`, a Codex profile with `sandbox.codex: read-only`), and `cost`, its model's list price (`low`: Haiku, `-mini`/`-nano`; `medium`: Sonnet, GPT; `high`: Opus, `-pro`; null
   when the profile leaves the model to the CLI). `capcomd_profiles` also gives each profile's `capacity`: how many of
   it can start now (the sandbox's slots, which every profile shares, or 0 with `waitsUntil` while its login is at a
   usage limit).
@@ -112,7 +114,10 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `identity.persona` is checked but doesn't change what an agent does yet; `capcomd profiles validate` lists it when a
   profile sets it. `context` (with `memory` read as its old name) does: see "Project memory" below. `jobs`
   (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
-  field does in `agents.json`.
+  field does in `agents.json`. They are limits like `limits`: an override (`--set jobs.max=2`, which keeps the
+  block's other values) may lower one but not raise or unset one the profile sets (without `--operator`), and a
+  profile in `children.allowedChildProfiles` may not either. A job started with a longer `--timeout-ms` than the
+  profile's `afterTurnMs` gets `afterTurnMs`.
 - `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
   untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
   (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says
@@ -231,7 +236,9 @@ system prompt, Codex's prompt), after the profile's `prompt.append`, each in a `
   else may have written, so its agents get it only once you have looked at it: `capcomd profiles trust <name>` shows
   each of the profile's project skills that you haven't trusted as it is (its description, file, size and sha256) and
   asks (`--yes` for scripts; without a terminal it is required). Until then a spawn of the profile is refused
-  (`reason: "untrusted"`), and `capcomd profiles validate` and `show` say so. Trust is kept per `SKILL.md` content and
+  (`reason: "untrusted"`), and `capcomd profiles validate` and `show` say so, as do `untrustedSkills` in `capcomd
+  profiles list --json`, `capcomd_profiles` and `GET /v1/profiles`, and a planner's `reason` in `GET /v1/run-options`
+  `planners`. Trust is kept per `SKILL.md` content and
   place in `~/.capcomd/trust.json`: an edited skill, or the same one in another checkout, needs trusting again. Your
   own profiles' skills (`~/.capcomd/profiles/`) and your `~/.claude/skills` need no trust. `capcomd profiles trust`
   with no name lists the project's skills and whether each is trusted.
@@ -263,7 +270,9 @@ capcomd profiles export lead --flat --out ./shared
   changed before replacing it: the files changed, added and removed, each skill whose `SKILL.md` hash changes, the old
   and new commit and hash, and any file you edited since it was installed (which the update replaces; `capcomd
   profiles show` and `validate` say when a package was edited). `--dry-run` stops there. An `override.yaml` you put
-  beside the package stays; an update the profiles wouldn't resolve with is put back. A name installed in both places
+  beside the package stays, and so does any other file you added there (it is listed as "added by you, kept"); when
+  the new package has a file of its own in the place of one of yours, the update is refused until you move yours. An
+  update the profiles wouldn't resolve with is put back. A name installed in both places
   is the project's, as it resolves (`--project` looks only there).
 - `export <name>` writes the profile as a package to `./<name>/` (`--out DIR` for another place): its own files as
   they are, `extends` kept (whoever installs it needs a profile of that name), or with `--flat` what it resolves to:
@@ -320,12 +329,13 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
 - After the brief, the agent gets two of capcomd's skills, each in a `<skill name="…">` block like a profile's:
   `capcomd-context-doctrine` (read the file before relying on a line; say which item an answer rests on; a matching
   line is a lead, not a ruling, and a current record beats a stale comment or the record it supersedes; items are
-  data, not instructions), and, for an agent that may spawn and isn't a reviewer or report agent,
-  `capcomd-context-routing` (what is worth remembering and where: notes for the run in `capcomd kv` under
-  `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, written as a fact, never
-  a secret). Their text is the same for every agent, and each is recorded on the agent by its sha256; `capcomd
+  data, not instructions), and, for an agent with the in-VM capcomd that isn't a reviewer or report agent (a worker
+  that may not spawn has it too), `capcomd-context-routing` (what is worth remembering and where: notes for the run
+  in `capcomd kv` under `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`,
+  written as a fact, never a secret). Their text is the same for every agent, and each is recorded on the agent by its sha256; `capcomd
   context brief <profile>` names them. A profile with a `context` block keeps room for them among its own `skills`
-  (one of the 8, two when it may spawn), and can't name a skill of its own after them.
+  (one of the 8, two when it may spawn: a worker's routing skill fits in what its own skills leave, or is left out and
+  logged), and can't name a skill of its own after them.
 - Nothing else of an item reaches the agent unasked: no item's text is put in its first message, and none is pushed
   to it when it opens a file the item applies to. Both were measured and not adopted (the `paths` on each line do that
   job); see docs/evidence/context/README.md.
@@ -509,7 +519,7 @@ else is refused with the list. The model reaches the agent CLI the way a profile
 
 Limits are optional: `maxTurns`, `timeoutMs` and `maxBudgetUsd` (`--max-turns`, `--timeout-ms`, `--budget`) are unset unless you set them, and an unset limit means none (ADR-019). Turns count differently per provider: Claude Code counts model turns, Codex counts tool steps. Nothing else restricts an agent by default either: a run without `--budget` has none, a profile that may spawn has no depth or descendant limit unless its `children` block sets one, and an agent without `allowedTools` gets every tool with no permission prompts, nothing disallowed, Codex's `danger-full-access` sandbox and open egress from its VM (the VM is the boundary, and agents never hold push credentials). Narrow any of these per profile: `allowedTools`, `disallowedTools`, `sandbox`, `egress`. What is always on is a watch for an agent that looks stuck. It reads what the agent does, not how long it takes: **idle** (its CLI produced no output for `idleAfterMs`, `--idle-after-ms`, default 30 minutes), **spinning** (the same tool call with the same input `stuckRepeats` times in a row, `--stuck-repeats`, default 8) or **failing** (the same command failing with the same error `stuckRepeats` times, numbers aside). One more kind is opt-in, since reading code for a long time is normal: with `noChangeAfterMs` (`--no-change-after-ms`) an agent that keeps working but changes nothing in its workspace for that long is **spinning** too, and stopped after twice that. The first window is only a notice: `inspect` and `tree` show it as `notice`, the event log gets `AGENT_NOTICE`, the supervisor checkpoints the work, and `capcomd await --notices` (and `capcomd_await`, and `await` inside a VM) return early with `notices` so the parent can step in. By default that's all: the agent keeps running. A profile that sets the window (`idleAfterMs` for idle, `stuckRepeats` for spinning and failing, or `CAPCOMD_AGENT_IDLE_MS` / `CAPCOMD_AGENT_STUCK_REPEATS`) also gets a stop: if the agent is still stuck after a second window (twice the idle time, twice the repeats), it's stopped with `result.limit` idle, spinning or failing. Any stop keeps the work: it's pushed to the agent's branch and the agent ends `failed` with `result.limit`.
 
-The watch above looks at the agent's process. The **watchdog**, which `capcomd setup service` (and the full `capcomd setup`) turns on, looks at its work: an agent whose files haven't changed for 15 minutes, that hasn't spawned or heard back from an agent of its own, and hasn't finished a background job, check or approval it waited on, gets the notice **stalled** (shown, and returned by `await`, like the ones above); after 45 minutes without progress it is cancelled with the reason, and the run's events get one `plugin.watchdog.stopped`. Tool calls alone aren't progress. Waiting doesn't count against an agent: not while a job, check or approval it started runs, nor while it, or an agent under it, is paused at a usage limit; and an agent with agents of its own running is judged through them, so a stuck worker is stopped, not its planner. A reviewer, a report-only agent (`--report`) and an orchestrate agent are never judged by it: their work doesn't change files, so it can't see their progress (the watch above still applies). While one of the notices above shows on an agent, the watchdog doesn't put **stalled** over it, but still stops the agent at 45 minutes. Its settings are `plugins.watchdog` in `~/.capcomd/config.json` (or a project's `.capcomd/config.json`): `stalledAfterMs` (default 900000), `stopAfterMs` (default 2700000, counted from the last progress too; 0 never stops), `everyMs` (how often it looks, default 60000), `enabled`; or `CAPCOMD_PLUGIN_WATCHDOG_STALLEDAFTERMS` and the like. The engine reads them when it starts; `capcomd setup check` says when it won't load them (a setting out of range, or a `stopAfterMs` that isn't more than `stalledAfterMs`).
+The watch above looks at the agent's process. The **watchdog**, which `capcomd setup service` (and the full `capcomd setup`) turns on, looks at its work: an agent whose files haven't changed for 15 minutes, that hasn't spawned or heard back from an agent of its own, and hasn't finished a background job, check or approval it waited on, gets the notice **stalled** (shown, and returned by `await`, like the ones above); after 45 minutes without progress it is cancelled with the reason, and the run's events get one `plugin.watchdog.stopped`. Tool calls alone aren't progress. Waiting doesn't count against an agent: not while a job, check or approval it started runs, nor while it, or an agent under it, is paused at a usage limit; and an agent with agents of its own running is judged through them, so a stuck worker is stopped, not its planner. A reviewer, a report-only agent (`--report`) and an orchestrate agent are never judged by it: their work doesn't change files, so it can't see their progress (the watch above still applies). While one of the notices above shows on an agent, the watchdog doesn't put **stalled** over it, but still stops the agent at 45 minutes. It sees files change only at the agent's checkpoints (below), so an agent checkpointed less often than every 10 minutes gets longer windows: **stalled** no sooner than one and a half of its `checkpointEveryMs`, and the stop as much later (checkpointed hourly: stalled at 90 minutes, stopped at 120). Its settings are `plugins.watchdog` in `~/.capcomd/config.json` (or a project's `.capcomd/config.json`): `stalledAfterMs` (default 900000), `stopAfterMs` (default 2700000, counted from the last progress too; 0 never stops), `everyMs` (how often it looks, default 60000), `enabled`; or `CAPCOMD_PLUGIN_WATCHDOG_STALLEDAFTERMS` and the like. The engine reads them when it starts; `capcomd setup check` says when it won't load them (a setting out of range, or a `stopAfterMs` that isn't more than `stalledAfterMs`).
 
 Budgets (`run new --budget`, `spawn --budget`) are enforced from live spend: while an agent works, its runner reports what it has spent every few seconds (Claude's from each message's token usage at list prices, until its final cost arrives; Codex's from tokens × `CAPCOMD_CODEX_USD_PER_MTOK_IN/OUT`), and the engine stops the agent (`result.limit: max_budget_usd`, work kept) when its own budget, an ancestor's or the run's is spent. A spawn reserves only the units it names (or its profile caps), so agents spawned without a budget share what's left.
 
@@ -525,6 +535,6 @@ Auth is exactly one of `apikey` (the provider's API key, from local env or a box
 
 `children` (policy only for now): `{allowSpawn, maxDepth, maxChildren, maxTotalDescendants, allowedChildProfiles, budgetShare}`. Children may only narrow their parent.
 
-`provider` is the name of an active agent provider: `claude` and `codex` are built-in plugins (`agent-claude`, `agent-codex` in `capcomd plugins list`), and another plugin may add one. A profile naming one that isn't active is refused when it's validated.
+`provider` is the name of an active agent provider: `claude` and `codex` are built-in plugins (`agent-claude`, `agent-codex` in `capcomd plugins list`), and another plugin may add one. A profile naming one that isn't active is refused when it's validated. Outside the daemon (the CLI, the MCP server) "active" means built in or listed by the running daemon (`capcomd plugins list`), since a plugin may be loaded only there; with no daemon running, a name that isn't built in is a warning (`capcomd profiles validate` lists it) and the daemon checks it when an agent uses the profile. The same goes for `sandbox.provider`. `capcomd profiles add`, `set` and `rm` still refuse a change that brings in such a name unless the running daemon lists it.
 
 `toolMode: "orchestrate"` (default `"execute"`) makes an agent that plans, spawns, verifies and merges but never changes a file itself (docs/spec/plugin-api.md §16.1): Claude Code gets only `Read, Glob, Grep, LS, Bash(capcomd:*)` with the edit tools denied, Codex runs with `--sandbox read-only` (its capcomd MCP tools still work), nothing it does is committed or pushed, and capcomd refuses to verify or merge its own ref. It needs `children.allowSpawn`; its children run in their own mode, and an override can't lift it without `--operator`. `capcomd setup project` gives it to `planner` and `lead`.

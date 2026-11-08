@@ -136,7 +136,7 @@ flowchart TB
   subgraph Sandbox["Sandbox provider (UNTRUSTED): boxd VM or Docker container, one per agent"]
     SUP["supervisor.mjs<br/>outbox · checkpoints · inbox"]
     AG["Claude Code / Codex CLI<br/>(plan login or API key)"]
-    VCLI["in-VM capcomd<br/>(capability token, spawners only)"]
+    VCLI["in-VM capcomd<br/>(capability token, scoped to its profile)"]
   end
   GH[("GitHub<br/>repos · PRs")]
   PROV[("Anthropic / OpenAI")]

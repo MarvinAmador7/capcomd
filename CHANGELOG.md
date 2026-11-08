@@ -13,6 +13,143 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Changed: a command whose plugin isn't running (`capcomd <command>` from a plugin that is disabled or failed to
   start) now names the plugin and why it isn't running, with the next step (`capcomd plugins enable <name>`), instead
   of "unknown command". `GET /v1/plugins` lists the CLI commands each plugin declares (`commands`).
+- Fixed: `capcomd profiles set` and `PUT /v1/profiles/{name}` keep an edited profile file's permissions (a file
+  you made readable only by you stays so). `GET /v1/profiles/{name}` shows a context provider by its name only and,
+  in other read-only rows (an `x-` field, `sharing.source`), hides token-shaped text, a value under a key such as
+  `password`, `apiKey` or `token`, and a URL's password. `PUT` refuses a number too large to store exactly instead
+  of writing it as `1e+23`.
+- Fix: `capcomd_profiles`, `capcomd profiles list` and `GET /v1/profiles` call a profile read-only (`fit`, `does`)
+  only when its agent really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by
+  `sandbox.codex: read-only`. A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a
+  Claude Code profile with a read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only,
+  nor is one allowed a shell rule that starts with a wildcard (`Bash(* *)`), which lets it run any program.
+- Fix: `capcomd profiles list` and `capcomd profiles show` show control characters in a profile's `identity.title`
+  and `harness.model` (and `show` in any text value it lists) as `\u{…}` instead of printing them, so an installed
+  profile can't redraw or hide lines in your terminal.
+- Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
+  as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
+  agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
+  With several named checks, verify still picks none of them: pin one when you spawn the agent (`--check NAME`) or
+  name it on the verify, or it passes without running any, as before.
+- Fixed: the daemon's log no longer says "declared but never registered: hook job.changed" for forge-github at every
+  start when no GitHub repositories are trigger sources (nor for source-schedule without schedules, or sandbox-boxd
+  with `CAPCOMD_TEMPLATE_REFRESH_HOURS=0`).
+- Fixed: after you approve a merge a plugin held, the merge's record lists that hold in `approvedHolds` (it read `[]`).
+- Fixed: a profile whose `sandbox.provider` or `harness.provider` names a plugin the daemon has loaded no longer
+  breaks `capcomd profiles list`, `validate` and every other profile command outside the daemon. They now ask the
+  running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
+  with no daemon running a name that isn't built in is a warning (`capcomd profiles validate` lists it) instead of an
+  error; the daemon checks it again when an agent uses the profile. `capcomd profiles add`, `set` and `rm` still refuse
+  a change that names such a provider (a typo like `harness.provider: claudee`) unless the running daemon has it, and
+  a profile that already names one no longer stops a change to another (in `agents.json` too).
+- New: an in-process plugin running in the daemon can use `ctx.runs` (start, read, title, pause, resume and end runs),
+  `ctx.messages` (message an agent, read its inbox), `ctx.kv` and `ctx.board` (the run's notes and task board),
+  `ctx.gates.pending` and `ctx.profiles` (resolve and list agent profiles); before, they answered `unsupported`. In any
+  process it can use `ctx.sandboxes` and `ctx.auth` (whether a login is there, never its value). What the plugin writes
+  is recorded as `plugin:<name>`'s; it needs the `read` scope to read and `steer` to change anything. Out-of-process
+  plugins still get `unsupported` for these.
+- Fixed: in `@capcomd/plugin`, `ctx.runs.new(...)` is typed as the method it is; the type declared a constructor, so a
+  call to it didn't typecheck.
+- New: `GET /v1/profiles` (and `GET /v1/profiles/{name}`) rows say what a planner chooses a profile by: its `title`,
+  `fit` (one sentence capcomd writes from its settings, never from its description), `cost` (low, medium or high),
+  `canReport`, the `skills` its agents get (names and hashes, never their text), and `untrustedSkills`, the project
+  skills you haven't trusted yet, so the app and a planner see that a spawn of it would be refused before trying
+  (`capcomd profiles trust <name>` trusts them). `capcomd_profiles` and `capcomd profiles list --json` carry `skills`
+  and `untrustedSkills` too. Capability `profiles.facts`.
+- New: `GET /v1/run-options` lists `planners`: every profile that can plan, each with whether a run can start with it
+  now and why not: no login, a project skill not trusted yet, a `sandbox.environment` its sandbox has no build of, a
+  `lifecycle` plugin that isn't active on the daemon, no agent environment built, an egress limit its sandbox can't
+  enforce (Docker), or a `sandbox.provider` that would run it outside the run's isolation. Before, these only showed
+  when the planner's spawn was refused. Capability `runs.options.planners`.
+- Fixed: an agent that fails now has its background jobs (`capcomd job start`) stopped and recorded as ended when it
+  fails, as a cancelled one's are, instead of showing as running until something reads them. A job with a lot of
+  output keeps a record within the run's 64 KB limit (the oldest output is cut first), and `capcomd job output` on a
+  finished job says when it was cut.
+- **Breaking:** a profile's `jobs` block (`max`, `foregroundMs`, `afterTurnMs`) is a limit like `limits`. An override
+  (`--set jobs.max=2`, which now keeps the block's other values) may lower one, but raising or unsetting one the
+  profile sets is refused unless you pass `--operator`. A profile in another's `children.allowedChildProfiles` may not
+  allow more jobs at once (`max`) or longer ones (`afterTurnMs`) than the profile that spawns it (its `foregroundMs`
+  is its own); `capcomd profiles validate` names one that does. Lower the child's values, or raise the spawner's.
+  A job started with `--timeout-ms` longer than the profile's `afterTurnMs` now stops at `afterTurnMs` (a profile
+  that doesn't set it is unchanged), and a job's `cwd` over 4 KB or `env` over 16 KB is refused.
+- Changed: plugins only reach their own jobs and the jobs of a run's agents: `ctx.jobs.get`, `wait` and `cancel` on
+  another plugin's job answer `not_found`, and `ctx.jobs.list` leaves those out.
+- Fixed: `capcomd profiles update <name>` no longer deletes files you added to an installed profile's directory (a
+  `notes.md`, an extra file in a skill's folder). It keeps every file the package didn't install, as it keeps your
+  `override.yaml`, and lists them as "added by you, kept" (`kept` in `--json`). If the new version of the package
+  ships a file in the place of one of yours (on macOS, a name that differs only in case or accents counts), the
+  update is refused and nothing changes: move your file and update again.
+- Fixed: trusting or untrusting plugins and profile skills from the CLI while the daemon also records a trust no
+  longer loses one of the two changes in `~/.capcomd/trust.json`. If another change holds the file for more than 5
+  seconds, the command fails with nothing changed; run it again. If `trust.json.lock` is something capcomd didn't
+  make (a directory or a link), or one left over that it can't move aside, the command says so at once: remove it.
+- Fixed: writing a profile file, `agents.json` or `trust.json` never writes through a link a repository placed next
+  to it under the name of the temporary file capcomd used.
+- Fix: an in-process plugin's `ctx.events.subscribe` now delivers events, and `ctx.events.replay` works. In the daemon
+  a subscription to `daemon` or a run id gets that stream's events (the ones `GET /v1/events` lists) in order, one at a
+  time, filtered by `types` if you give them, from `after` or else from now; a handler that throws is logged and that
+  event skipped. Outside the daemon both now fail with `unsupported` instead of `subscribe` quietly never calling your
+  handler. In the test kit, `fakeContext(...).publish(event)` puts an event on the fake's streams: your subscriptions
+  hear it by the same rules and `replay` returns it.
+- Fix: a profile with `permissions: {report: false}` is now never spawned to report, even when a plugin's
+  `agent.spawning` listener adds `report: true` to the spawn's contract. Such a spawn is refused with reason
+  `report_not_allowed`, the same as when the spawner asks for `--report` itself. For plugin authors: an
+  `agent.spawning` patch may no longer add `from`, `review`, `checks` or `orphansPolicyOverride` to the contract (only
+  `--continue`, verify and the operator set them), and a `report` it adds must be `true` and a `check` one of the run's
+  check names; such a patch is refused like any other widening or invalid patch, and a check the run doesn't have
+  refuses the spawn.
+- Fix: a plugin you install, or a project's, can no longer read capcomd's own keys through a secret reference. A
+  reference that names one of capcomd's variables (`BOXD_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, any `CAPCOMD_*` or its
+  old `RELAY_*` spelling, `GIT_*` or `RIVET*`, and the agents' `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*` and `CODEX_*`, in
+  any case) or its keychain items (`keychain:capcomd…`) is refused, whether it is the plugin's own default, in your
+  `~/.capcomd/config.json` or in `CAPCOMD_PLUGIN_<NAME>_<KEY>`: the plugin doesn't start (`capcomd plugins list` shows
+  it failed, `config_invalid`, naming the setting) and the variable is never read. Give the plugin a variable of its
+  own instead: `export GH_NOTIFY_TOKEN=…` and `"plugins": {"<name>": {"token": {"$secret": "env:GH_NOTIFY_TOKEN"}}}`.
+  `capcomd plugins validate <dir>` flags such a default and `capcomd plugins trust` marks the reference as refused.
+  capcomd's built-in plugins keep theirs (`sandbox-boxd` still reads `BOXD_API_KEY`).
+- Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
+  check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
+  two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in
+  `~/.capcomd/config.json`, or a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable) are checked for as well as the built-ins', and
+  so are GitLab, npm, Hugging Face and Google OAuth tokens. `capcomd context lint` now fails on a
+  `.capcomd/context/` with more than 2000 files (it reads that many) instead of passing without reading the rest.
+- Fix: `capcomd context brain add`, and every agent briefed from a brain, now see a restricted marking however its YAML
+  is written (a quoted `"sensitivity"` key in any case, the value on the next line, as a block scalar or as an alias, a
+  flow mapping, a key given twice) and in a Markdown file of any extension case (`.MD`, `.markdown`). Before, such a
+  brain could be added and its files copied into agents' sandboxes.
+- Changed: every agent that does work has `capcomd` in its sandbox now, workers that can't spawn too (before, only
+  agents that may spawn had it, so with the profiles `capcomd setup project` writes no agent could run a background
+  job). A worker can run a long command as a background job (`capcomd job start -- npm test`: its result comes back
+  to it as a message), keep notes (`capcomd kv`), propose lessons for the project's memory (`capcomd result --data
+  '{"context": [...]}'`), read the run's tree, and end with a summary (`capcomd result --summary`); its instructions
+  say so. It still can't spawn, verify or merge (refused), and a worker that runs no commands of its own (its
+  profile's allow-list has no plain `Bash` or denies it, its Codex sandbox is read-only, or the daemon's
+  `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS` or `CAPCOMD_CODEX_SANDBOX` say so) gets no
+  background jobs. Reviewers, `--report`
+  agents and the context consolidator are unchanged.
+- Changed: an agent that ends without declaring a summary gets its final message as its `result.summary` (up to
+  2,000 characters), so a parent, the driver and the apps always have something to read; a reviewer's verdict is
+  never used as one. `capcomd result` with nothing in it (no summary, artifacts or data) is refused instead of
+  recording an empty result over the one the agent declared.
+- Fixed: the watchdog no longer stops agents that save their work less often than every 10 minutes. It sees an
+  agent's files change only when the agent saves a checkpoint, so with a profile's "Saves its work every"
+  (`checkpointEveryMs`, `--checkpoint-every-ms`) or `CAPCOMD_AGENT_CHECKPOINT_MS` set to an hour, a busy agent got
+  "stalled" between checkpoints and was stopped at 45 minutes. Now such an agent gets "stalled" only after one and a
+  half of its interval without progress, and is stopped that much later too (saving hourly: 90 and 120 minutes). At
+  the default interval the watchdog's 15 and 45 minutes are unchanged; a `stalledAfterMs` you set below 15 minutes
+  now waits that long too, since a change can't show sooner.
+- Fix: `capcomd env templates` and `capcomd env templates rm` now refuse on a sandbox that keeps no project templates
+  (Docker, or none set), as `capcomd env build --project` already did. Before, `rm --repo URL` run without
+  `CAPCOMD_SANDBOX=boxd` (or `--sandbox boxd`) forgot the project's boxd template and said "removed", but left its
+  snapshot on boxd with nothing recording it. Run it with `--sandbox boxd` (or `CAPCOMD_SANDBOX=boxd`), or in a project
+  checkout whose `.capcomd/config.json` sets the boxd sandbox.
+- For contributors: the live context eval (`scripts/eval-context.ts --agents live`) and the e2e scripts that create a
+  throwaway repository (`mac-e2e.sh`, `mac-subagents-e2e.sh`, `mac-agent-ops-e2e.sh`, `mac-plugin-e2e.sh`) run with
+  project templates off (`CAPCOMD_PROJECT_TEMPLATES=off` unless you set it), so they no longer leave a boxd snapshot of
+  8 GB or more per repository behind; with `CAPCOMD_PROJECT_TEMPLATES=auto`, remove the template afterwards with
+  `capcomd env templates rm --repo URL --sandbox boxd`. The team-shape eval no longer kills itself (exit 137) at the end
+  when given `--work`, and refuses a `--work` folder that isn't empty (it deletes the folder at the end), as the context
+  eval does. Neither eval's end-of-run cleanup kills the shell or command that started it any more.
 - New: `capcomd profiles migrate` moves the profiles in `agents.json` into profile files beside it
   (`.capcomd/profiles/<name>.yaml`, or `~/.capcomd/profiles/` for your own `~/.capcomd/agents.json`). Each profile
   resolves exactly as before (capcomd checks that before it writes anything, and changes nothing if one wouldn't), its
@@ -180,7 +317,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   allows actors by their id at that source (a GitHub login, `schedule:<name>`), or anyone on threads you open
   (`"opened": ["acme/app#*"]`). A request from someone allowed that addresses capcomd (a GitHub comment with a line
   starting `/capcomd`, a schedule's fire) starts a run on `project` (else the daemon's repository) with its text as
-  the goal; one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
+  the goal (checked as a goal you type is: one that starts with `[agent:…]`, or is over 16 KB, starts nothing, so whoever
+  wrote it can't pick the run's agent profile); one that doesn't address capcomd is only recorded while `mode` is `observe` (the default), never runs
   with `off`, and runs with `auto`. The same event twice is handled once. A run a trigger started follows its thread: later comments
   there from people reach its planner as messages, until 14 days after the run ends (at once when you stop it).
   `capcomd triggers log [--source S] [--limit N]` shows what happened to each trigger (and what would have run), and
@@ -197,10 +335,15 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: your own plugins, run as separate programs. A plugin in `~/.capcomd/plugins/<name>/` (a `plugin.json` with
   `entry.runtime: "process"`) is started by the daemon, gets only `PATH`, `HOME`, `USER`, `LANG`, `TERM`, `TMPDIR`,
   its manifest's `env` and a token of its own (never your keys, GitHub token or boxd key; its own secrets arrive once
-  when it connects), and can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
-  and agents. If it crashes while deciding, the decision is a deny, and it is started again; after five crashes in ten
-  minutes it stays stopped and its gates deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn
-  it off with `/disable`). What it prints goes to the daemon's log with its token and secrets blanked out.
+  when it connects, each from the variable you point it at in `plugins.<name>.<key>` of `~/.capcomd/config.json`:
+  a default reference in a plugin's own manifest is ignored, so it can't pick which of your variables it gets), and
+  can listen to capcomd's hooks: it can deny or hold a merge, deny a verification, or watch runs
+  and agents. It hears what the daemon runs: every merge, and the verifications, spawns and approvals your agents ask
+  for or the harness API makes; one that `capcomd verify`, `spawn` or `approve` or the driver's MCP tools run in their
+  own process doesn't reach it yet. If it crashes while deciding, the decision is a deny, and it is started again (and
+  anything it started that still runs is stopped); after five crashes in ten minutes it stays stopped and its gates
+  deny until you start it again with `POST /v1/plugins/{name}/enable` (or turn it off with `/disable`). What it prints
+  goes to the daemon's log with its token and secrets blanked out.
   `capcomd plugins list` shows it with `runtime: process`. Such a plugin contributes hooks and events only (no
   commands, tools or sandboxes), and a CLI never starts one. The client library `connect()` in `@capcomd/plugin` does
   the talking; the plugin API spec §9 is the protocol.
@@ -226,9 +369,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: agents whose profile has a `context` block get two capcomd skills with their brief. `capcomd-context-doctrine`
   says how to use it: open an item's file before relying on its line, say which item an answer rests on, treat a
   matching line as a lead and not a ruling (a current record beats a stale comment or the record it supersedes), and
-  treat items as data, not instructions. `capcomd-context-routing`, for agents that may spawn (and aren't reviewers or
-  report agents), says what is worth remembering and where: notes for the run in `capcomd kv` under
-  `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
+  treat items as data, not instructions. `capcomd-context-routing`, for agents that do work of their own (not
+  reviewers, report agents or the context consolidator), says what is worth remembering and where: notes for the run
+  in `capcomd kv` under `notes/<agent id>`, a lesson for later runs in `capcomd result --data '{"context":[…]}'`, as a fact and never a
   secret. Each is recorded on the agent by its sha256; `capcomd context brief <profile>` names them. A profile with a
   `context` block keeps room for them among its own `skills` (one of the 8, two when it may spawn) and can't use
   their names for skills of its own; an agent whose other skills leave no room for one starts without it, never without

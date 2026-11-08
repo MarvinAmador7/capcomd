@@ -15,7 +15,7 @@
     "additionalProperties": false,
     "properties": {
       "api": { "type": "string", "format": "uri", "default": "https://api.github.com", "description": "The REST API base (GitHub Enterprise: https://ghe.example.com/api/v3)" },
-      "token": { "type": "string", "x-secret": true, "description": "A token with repo scope. A secret reference: {\"$secret\": \"env:GITHUB_TOKEN\"} or {\"$secret\": \"keychain:github-token\"}. Unset: the plugin asks `gh auth token`" },
+      "token": { "type": "string", "x-secret": true, "description": "A token with repo scope. A secret reference to a variable of its own (capcomd refuses GITHUB_TOKEN and GH_TOKEN, its own, to a plugin that is not built in): {\"$secret\": \"env:FORGE_GITHUB_TOKEN\"} or {\"$secret\": \"keychain:github-token\"}. Unset: the plugin asks `gh auth token`" },
       "pollMs": { "type": "integer", "minimum": 1000, "default": 5000 },
       "timeoutMs": { "type": "integer", "minimum": 10000, "default": 600000, "description": "How long to wait for a pull request to become mergeable" }
     }

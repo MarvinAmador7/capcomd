@@ -35,7 +35,7 @@ export interface Candidate {
   config?: Record<string, unknown>;
   /** What its schema refused in those layers (§10.4): an enabled plugin with any is failed `config_invalid`, except for
    *  those `setAside` (a project's settings for a plugin not its own, left out of `config`): those are only reported. */
-  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env"; setAside?: true }>;
+  configErrors?: Array<{ path: string; message: string; layer: "user" | "project" | "env" | "default"; setAside?: true }>;
   /** The layer each top-level key of `config` came from (`GET /v1/plugins/{name}` `config.sources`); a key not listed
    *  is the user's. */
   configSources?: Record<string, "user" | "project" | "env">;
@@ -76,8 +76,9 @@ export interface HostOptions {
   /** The kernel's primitive implementations for a plugin (absent: `unsupported`). */
   services?(manifest: PluginManifest): ContextOptions<unknown>["services"];
   sinks?: HostSinks;
-  /** A plugin's own secret (§10.3): the value its `x-secret` property `key` references, for that plugin only. */
-  secret?(manifest: PluginManifest, key: string, dir: string | null): Promise<string>;
+  /** A plugin's own secret (§10.3): the value its `x-secret` property `key` references, for that plugin only. `source`:
+   *  where it came from (only a built-in's schema default names a reference; a plugin from a directory's never does). */
+  secret?(manifest: PluginManifest, key: string, dir: string | null, source: PluginSource): Promise<string>;
   /** An operator's `allow-version` exemption (§4.4). */
   exempt?(name: string, version: string): boolean;
   /**
@@ -391,7 +392,7 @@ export class PluginHost {
     const runtime = createContext({
       manifest: m, runtime: m.entry.runtime, root: r.dir ?? "", dataDir: this.o.dataDir(r.name), kernelSurface: kernelSurfaceOf(r.candidate),
       hooks: this.hooks, store: this.contributions, config, ...(this.o.services ? { services: this.o.services(m) } : {}), ...this.o.sinks,
-      ...(this.o.secret ? { secret: (key: string) => this.o.secret!(m, key, r.dir) } : {}),
+      ...(this.o.secret ? { secret: (key: string) => this.o.secret!(m, key, r.dir, r.source) } : {}),
     });
     r.runtime = runtime;
     this.hooks.attach(r.name, runtime.ctx.signal);
@@ -426,7 +427,7 @@ export class PluginHost {
     // The plugin's own secrets go to its process once, in the handshake's answer (§10.3), never in its environment.
     const secrets: Record<string, string> = {};
     for (const key of secretKeys(m, r.dir)) {
-      try { if (this.o.secret) secrets[key] = await this.o.secret(m, key, r.dir); } catch (e) {
+      try { if (this.o.secret) secrets[key] = await this.o.secret(m, key, r.dir, r.source); } catch (e) {
         this.o.sinks?.log?.({ plugin: r.name, level: "warn", message: `its secret ${key} is not available: ${(e as Error).message}`, fields: {} });
       }
     }

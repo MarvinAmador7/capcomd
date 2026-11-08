@@ -19,6 +19,8 @@ export function redactShapes<T>(v: T): T {
 }
 
 export const REDACTED = "[REDACTED]";
+/** The keys whose string value `Redactor.value` replaces whole, whatever its shape. */
+export const SECRET_KEY = /api[_-]?key|token|secret|password|authorization/i;
 
 export class Redactor {
   private secrets: string[];
@@ -43,7 +45,7 @@ export class Redactor {
     if (Array.isArray(v)) return v.map((x) => this.value(x)) as unknown as T;
     if (v && typeof v === "object") {
       const o: Record<string, unknown> = {};
-      for (const [k, x] of Object.entries(v)) o[k] = /api[_-]?key|token|secret|password|authorization/i.test(k) && typeof x === "string" ? REDACTED : this.value(x);
+      for (const [k, x] of Object.entries(v)) o[k] = SECRET_KEY.test(k) && typeof x === "string" ? REDACTED : this.value(x);
       return o as T;
     }
     return v;

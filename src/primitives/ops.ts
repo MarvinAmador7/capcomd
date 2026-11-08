@@ -25,10 +25,13 @@ import { ORCHESTRATION_SKILL_NAME, pinnedSkills } from "../profiles/skills";
 import { untrustedSkillsHint, untrustedSkillsProblem } from "../profiles/trust";
 import { attachmentId } from "../api/inline-cap";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
+import { hasVmCapcomd } from "../subagents/skill";
+import { mayRunJobs } from "../subagents/token";
 import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
 import { parseVerdict } from "./review";
 import type { AgentPreparing, PreparePatch, ReviewReport } from "../../packages/plugin/src/hooks";
+import type { Principal } from "../../packages/plugin/src/shapes";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
 import { stateDir } from "../utils/home";
 import { clearQuota, loginOf, quotaRetryMs, quotaUntil, recordQuota } from "./quota";
@@ -40,7 +43,7 @@ import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
 import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import { agentSeam } from "../plugins/agents";
-import type { PluginHold } from "../merge/types";
+import { sameHold, type PluginHold } from "../merge/types";
 import { isInternalActorError } from "../utils/actor-errors";
 export { startDriver };
 
@@ -239,6 +242,12 @@ export async function namedCheck(runId: string, name: string): Promise<string> {
   return cmd;
 }
 
+/** The names of the run's operator-named checks (`run new --checks-set`, or the project's `run.checks`). */
+async function namedCheckNames(runId: string): Promise<string[]> {
+  const set = (await (await import("./state")).kvGet(runId, CHECKS_KV)).value as Record<string, unknown> | null;
+  return set ? Object.keys(set).filter((k) => typeof set[k] === "string") : [];
+}
+
 export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key?: string; runId?: string; checks?: Record<string, string>; reviewer?: string; target?: string; targetFrom?: string;
   /** The run's own sandbox (`capcomd run --sandbox`): its agents and checks run there, not on the daemon's CAPCOMD_SANDBOX. */
   sandbox?: string;
@@ -247,7 +256,9 @@ export interface RunNewOpts { budget: Budget; label?: string; goal?: string; key
   goalBranch?: string; base?: string;
   /** The run's plugin config (plugin API §10.2 layer 5, `--plugin-config`): only per-run settings, checked here and kept
    *  in each plugin's run storage (src/plugins/run-config.ts). */
-  pluginConfig?: Record<string, Record<string, unknown>> }
+  pluginConfig?: Record<string, Record<string, unknown>>;
+  /** Who asked, as run.creating says it (§6.6.3): a plugin's `ctx.runs.new` names itself; else the operator. */
+  principal?: Principal }
 /** What a run's key is scoped by: the project's repository (its clone URL), else the project's directory (the nearest
  *  .capcomd/config.json, else the working directory). */
 export function projectIdentity(source: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
@@ -380,9 +391,10 @@ export async function runNew(o: RunNewOpts) {
  *  The checks, the reviewer, the target and the goal branch are the operator's and read-only. */
 async function runCreating(runId: string, o: RunNewOpts): Promise<RunNewOpts> {
   const { isListedProvider } = await import("../providers/registry");
-  const options = { runId, label: o.label ?? null, goal: o.goal ? untrusted(o.goal, "operator") : null, budget: o.budget, checks: o.checks ?? {}, reviewer: o.reviewer ?? null,
+  const principal = o.principal ?? principalOf(null);
+  const options = { runId, label: o.label ?? null, goal: o.goal ? untrusted(o.goal, principal.kind === "plugin" ? `plugin:${principal.name}` : "operator") : null, budget: o.budget, checks: o.checks ?? {}, reviewer: o.reviewer ?? null,
     target: o.target ?? null, goalBranch: o.goalBranch && o.base ? { branch: o.goalBranch, base: o.base } : null, sandbox: o.sandbox ?? null, profile: null, driver: null, repo: env("REPO") ?? null };
-  const out = await hooks.fire("run.creating", "modify", { options }, { principal: principalOf(null), entity: runId, runId,
+  const out = await hooks.fire("run.creating", "modify", { options }, { principal, entity: runId, runId,
     apply: (p, patch) => applyRunPatch(p, patch, isListedProvider) });
   if (out.decision === "deny") throw refusedError("run.creating", out);
   const n = out.payload.options;
@@ -446,20 +458,35 @@ function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string
   const rp = resolved.spec ? runtimeProblems(resolved.name ?? resolved.kind, rt, resolved.spec) : [];
   if (rp.length) throw new RelayError("config", rp.join("; "), "Spawn it without making it orchestrate (tools.mode), or give the MCP servers to the profiles it spawns.", { code: "orchestrate_mcp" });
   const source = rt.sandboxProvider ? withSandbox(runSource, rt.sandboxProvider) : runSource;
-  // A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
-  // commands run in a sandbox, never on the host): a sandbox that runs them on this host (the test fakes) only when the
-  // run's own does too.
-  if (rt.sandboxProvider && !realSandbox(source) && realSandbox(runSource))
-    throw new RelayError("config", `profile ${resolved.name}: sandbox.provider ${rt.sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
+  const outside = isolationProblem(resolved.name, rt.sandboxProvider, runSource);
+  if (outside) throw new RelayError("config", outside, "Name an isolated sandbox (docker, boxd) in the profile's sandbox.provider, or remove it so its agents run on the run's.", { code: "sandbox_isolation" });
   const envProblem = envSnapshotProblem(spec?.provider, source, rt.environment);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
   if (rt.environment) environmentCheck(resolved, source);
-  // A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist).
-  const egress = spec?.egress as string[] | undefined;
-  if (egress?.length && !egress.includes(OPEN_EGRESS) && realSandbox(source) && !sandboxCaps(source).egressAllowlist)
-    throw new RelayError("config", `profile ${resolved.name} limits egress (${egress.join(", ")}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
+  const unkept = egressProblem(resolved.name, spec?.egress as string[] | undefined, source);
+  if (unkept) throw new RelayError("config", unkept, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   return { resolved, spec };
 }
+
+/** A profile never takes its agents out of isolation (profiles are data, ADR-024 §2.5: its MCP servers and the agent's
+ *  commands run in a sandbox, never on the host): its `sandbox.provider` may run them on this host (the test fakes) only
+ *  when the run's own sandbox (`runSource`'s) does too. Why not, or null. Also asked by GET /v1/run-options `planners`. */
+export function isolationProblem(name: string | null | undefined, sandboxProvider: string | undefined, runSource: Record<string, string | undefined>): string | null {
+  if (!sandboxProvider || realSandbox(withSandbox(runSource, sandboxProvider)) || !realSandbox(runSource)) return null;
+  return `profile ${name}: sandbox.provider ${sandboxProvider} runs its agents on this host, outside any sandbox, and this run's agents are isolated (${sandboxName(runSource)})`;
+}
+
+/** A profile that limits egress must get that limit, not an open network (ADR-020: Docker has no allowlist): why its
+ *  agents can't on `source`'s sandbox (their own), or null. Also asked by GET /v1/run-options `planners`, whose reason
+ *  is the daemon's own text: a profile file's egress is shown only when every entry is shaped like a host (the
+ *  schema's pattern), else counted, so a project's file can't word it. */
+export function egressProblem(name: string | null | undefined, egress: readonly string[] | undefined, source: Record<string, string | undefined>): string | null {
+  if (!egress?.length || egress.includes(OPEN_EGRESS) || !realSandbox(source) || sandboxCaps(source).egressAllowlist) return null;
+  const hosts = egress.every((h) => EGRESS_HOST.test(h)) ? egress.join(", ") : `${egress.length} host${egress.length === 1 ? "" : "s"}`;
+  return `profile ${name} limits egress (${hosts}), and the ${sandboxName(source)} sandbox can't enforce an egress allowlist`;
+}
+/** An egress entry as the profile schema's pattern allows one (src/profiles/v1.ts `egress`), at most a DNS name long. */
+const EGRESS_HOST = /^[A-Za-z0-9.*-]{1,253}$/;
 
 /** ADR-024 `sandbox.environment`: the sandbox has it, and a plan login kept in an image is one made from it (the agent
  *  boots from one image: src/env/resolve.ts `bootSnapshot`, which the worker asks again when it makes the machine). */
@@ -508,9 +535,7 @@ export async function spawnAgent(o: SpawnOpts) {
   // The run's own sandbox, if it was started on one (`capcomd run --sandbox`), else this process's.
   const runEnv = await (await import("../providers/run-sandbox")).runSandboxEnv(o.runId);
   const { resolved, spec } = hooks.listening("profile.resolved") ? checkResolved(await profileResolved(o, ref, resolveProfile(ref)), runEnv) : spawnChecks(ref, runEnv);
-  // ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be).
-  if (o.contract?.report === true && resolved.permissions?.report === false)
-    throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
+  reportAllowed(resolved, o.contract);
   // ADR-024 `lifecycle.onStart|onEnd`: the plugins its profile names must be there to hear it.
   const unheard = await lifecycleProblem(lifecyclePlugins(resolved.runtime?.lifecycle));
   if (unheard) throw new RelayError("config", `profile ${resolved.name} can't be spawned: its ${unheard}`, LIFECYCLE_HINT, { code: "lifecycle_inactive" });
@@ -523,7 +548,12 @@ export async function spawnAgent(o: SpawnOpts) {
     const s = await agentSpawning(o, agentId, resolved, spec, requested, grant);
     requested = s.budget ?? {};
     grant = s.grant ?? {};
-    if (s.contract) o = { ...o, contract: s.contract as Record<string, unknown> };
+    if (s.contract) {
+      o = { ...o, contract: s.contract as Record<string, unknown> };
+      // What a plugin added to the contract is checked as the spawner's own was (applySpawnPatch checks its shape).
+      reportAllowed(resolved, o.contract);
+      if (pin === undefined && typeof o.contract?.check === "string") await namedCheck(o.runId, o.contract.check);
+    }
   }
   const hasGrant = Object.keys(grant).length > 0;
   // Fan-out for a profile that can't spawn (a worker) would have no effect: refuse it by name, with what to do instead.
@@ -558,18 +588,28 @@ export async function spawnAgent(o: SpawnOpts) {
   return { ...view(res.agent), created: res.created };
 }
 
+/** ADR-024 §2.2 `permissions.report`: a profile may say it is never spawned to report (unset: it may be). Checked on
+ *  the spawner's contract and again on the one agent.spawning leaves, as a plugin may add `report` to it. */
+function reportAllowed(resolved: ResolvedAgent, contract: Record<string, unknown> | undefined) {
+  if (contract?.report === true && resolved.permissions?.report === false)
+    throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
+}
+
 /** Who asked for a spawn (§3.2): the parent agent from its VM, else the operator or driver on the host. */
 const spawnPrincipal = (o: SpawnOpts) => (o.parent && !o.operator ? principalOf(o.parent, o.runId) : principalOf(null));
 
 /** profile.resolved (plugin API §6.6.5): a plugin may narrow the resolved spec as a user override does; a widening is
  *  refused (`widening`). Fires on every resolution of a spawn, before the spawn checks run on the result. */
-async function profileResolved(o: SpawnOpts, ref: string | null, resolved: ResolvedAgent): Promise<ResolvedAgent> {
+function profileResolved(o: SpawnOpts, ref: string | null, resolved: ResolvedAgent): Promise<ResolvedAgent> {
+  return resolvedProfile(resolved, ref ? decodeAgentRef(ref).overrides?.set ?? null : null,
+    { principal: spawnPrincipal(o), entity: `${o.runId}/${o.parent ?? "operator"}/${o.key ?? resolved.name}`, runId: o.runId, agentId: o.parent ?? null });
+}
+/** profile.resolved for one resolution, a spawn's or a plugin's `ctx.profiles.resolve` (§8.4): `at` says who asked. */
+export async function resolvedProfile(resolved: ResolvedAgent, overrides: Record<string, unknown> | null, at: { principal: Principal; entity: string; runId?: string | null; agentId?: string | null }): Promise<ResolvedAgent> {
   if (!resolved.spec || !resolved.name) return resolved;
   const name = resolved.name;
-  const overrides = ref ? decodeAgentRef(ref).overrides?.set ?? null : null;
   const out = await hooks.fire("profile.resolved", "modify", { profile: resolved.profile ?? { name, version: 1, source: "user" }, spec: resolved.spec as unknown as import("../../packages/plugin/src/shapes").PinnedSpec, overrides },
-    { principal: spawnPrincipal(o), entity: `${o.runId}/${o.parent ?? "operator"}/${o.key ?? name}`, runId: o.runId, agentId: o.parent ?? null,
-      apply: (p, patch) => applyProfilePatch(p, patch, (spec, set) => applyOverrides(name, spec as unknown as AgentSpec, { set }) as unknown as Record<string, unknown>) });
+    { ...at, apply: (p, patch) => applyProfilePatch(p, patch, (spec, set) => applyOverrides(name, spec as unknown as AgentSpec, { set }) as unknown as Record<string, unknown>) });
   if (out.decision === "deny") throw refusedError("profile.resolved", out);
   return out.patches.length ? { ...resolved, spec: out.payload.spec as unknown as AgentSpec, overridden: true } : resolved;
 }
@@ -850,7 +890,8 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
     }
     const res = await resultOf(runId, agentId);
     const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
-    // A failed agent's machine goes too (its worker retries a destroy the provider didn't answer).
+    // A failed agent's jobs settle and its machine goes too (its worker retries a destroy the provider didn't answer).
+    await endJobs(runId, agentId, "its agent failed");
     await workerOf(runId, agentId, fin.agent.epoch).drainWorker({ workerId: agentId }).catch(() => {});
     stampSpent(span, fin.agent);
     return fin.agent;
@@ -959,7 +1000,7 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
     await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
     return { kind: "ended" };
   }
-  const vmRpc = exec && a.limits.allowSpawn ? await vmRpcFor(runId, a, w, agentId, prepared) : null;
+  const vmRpc = exec && hasVmCapcomd(a) ? await vmRpcFor(runId, a, w, agentId, prepared) : null;
   const review = reviewOf(a);
   const report = (a.contract as any)?.report === true;
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
@@ -977,7 +1018,8 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const machine = pinnedMachine(a.spec);
   const doPush = () => push({ workerId: agentId, parentAgentId: a.parent ?? null, taskId: taskLabel, epoch, ...(epoch > 1 ? { resumed: true } : {}), branch, runId, goal: a.task, ...(title ? { title } : {}), ...(Object.keys(machine).length ? { machine } : {}), ...(exec ? { agent: exec, ...(prepared ?? a.spec ? { agentSpec: (prepared ?? a.spec) as Record<string, unknown> } : {}) } : {}), ...fakeFileParams(fakeFile), ...(vmRpc ? { subagents: vmRpc.params } : {}), ...(review ? { review } : {}), ...(report ? { report: true } : {}), ...(consolidate ? { consolidate } : {}), ...(from ? { from } : {}), ...(target ? { target } : {}) });
   const pushed: any = vmRpc ? await vmRpc.run(doPush) : await doPush();
-  return { kind: "pushed", pushed, vmRpc: !!vmRpc };
+  // `vmRpc`: an agent that may spawn ran with its capcomd, so its work may be all its children's (no branch of its own).
+  return { kind: "pushed", pushed, vmRpc: !!vmRpc && a.limits.allowSpawn };
 }
 
 /** After a push: charge it, release the VM, then finish the agent (or pause it at a usage limit or the operator's ask). */
@@ -1035,10 +1077,12 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   // Plugin API §16.1: an orchestrate agent's work is the agents it spawns. One that spawned none (its tools refused,
   // or it gave up) did nothing that can land: it failed, with its own last words, never a silent "done".
   const orchestrate = (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate";
-  const lastWords = orchestrate && typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
+  const lastWords = typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
   const blocked = orchestrate && !limit && !(await s.listAgents({})).some((x: ScopeAgent) => x.parent === agentId)
     ? { error: `${agentId} is an orchestrate agent and spawned no agents, so nothing it did can land${lastWords ? `. It said: ${lastWords.slice(0, 500)}` : ""}`, errorKind: "orchestrate_no_children" } : {};
-  const said = orchestrate && !declared.summary && lastWords ? { summary: lastWords } : {};
+  // An agent that declared no summary (`capcomd result --summary`) has its final message as one, so its parent reads
+  // what it said it did (a reviewer's final message is its verdict, not a summary).
+  const said = !review && !declared.summary && lastWords ? { summary: lastWords } : {};
   // ADR-025 §5.2: a consolidator's answer is staged on its branch by the kernel; that branch is its work.
   const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;
   // A consolidator's work is only what was staged: no list, nothing to stage or a staging that failed is no branch.
@@ -1259,8 +1303,19 @@ export async function settleAttempt(runId: string, agentId: string, epoch: numbe
 /** Ended without a push (cancelled, or a handoff finished it): release its VM when it was cancelled. */
 export async function settleEnded(runId: string, agentId: string, epoch: number): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
-  if (a.status === "cancelled") await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  if (a.status === "cancelled") {
+    await endJobs(runId, agentId, "its agent was cancelled");
+    await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  }
   return getAgentOrThrow(runId, agentId);
+}
+
+/**
+ * Plugin API §16.2 rule 4: an agent that ended for good (failed or cancelled) has its background jobs settled now, before
+ * its machine goes: killed while its machine is attached here, else `lost`; never left `running` until someone reads them.
+ */
+async function endJobs(runId: string, agentId: string, reason: string): Promise<void> {
+  await (await import("../jobs/service")).endAgentJobs(runId, agentId, reason).catch((e) => console.error(`[jobs] ${agentId}: ending its jobs: ${(e as Error)?.message ?? e}`));
 }
 
 /** Record one failed attempt (DRIVE_FAILED) and say whether to try again: the driver's rules (3 attempts, N identical
@@ -1301,8 +1356,9 @@ export async function recordAgentRunSpan(runId: string, agentId: string, started
 export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string }): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
   if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
-  // Its machine goes once it has failed (here too when an earlier settle recorded the failure but stopped before this).
-  const drain = () => workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {});
+  // Its jobs settle and its machine goes once it has failed (here too when an earlier settle recorded the failure but
+  // stopped before this).
+  const drain = async () => { await endJobs(runId, agentId, "its agent failed"); await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {}); };
   if (TERMINAL_AGENT.has(a.status)) { if (a.status === "failed") await drain(); return a; }
   const res = await resultOf(runId, agentId);
   const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
@@ -1316,7 +1372,8 @@ function fakeFileParams(f: { path?: string; content?: string }) {
   return f.path ? { fakePath: f.path, fakeContent: f.content ?? "" } : {};
 }
 
-/** Real agent allowed to spawn: token + pump on its VM; the runner installs CLI, MCP and skill. */
+/** Real agent with the in-VM capcomd (`hasVmCapcomd`): token + pump on its VM; the runner installs CLI, MCP and skill
+ *  (the orchestration skill for one that may spawn, the worker's lines for any other). */
 async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, prepared: PreparedSpec) {
   const wk: any = await w.getWorker({ workerId: agentId });
   const vmId = wk?.context?.vmId;
@@ -1324,14 +1381,19 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
   // Its machine's sandbox, as recorded on its worker when it was made (its profile's, else the run's).
   const made = typeof wk?.context?.sandbox === "string" && wk.context.sandbox ? wk.context.sandbox as string : null;
   const { provider, sandbox } = await (await import("../dependencies")).providerForAgent(runId, pinnedMachine(a.spec).sandbox ?? made);
-  const { VM_RPC_DIR } = await import("../subagents/skill");
+  const { VM_RPC_DIR, workerSkill } = await import("../subagents/skill");
   const kind = (a.spec as any)?.kind ?? (a.spec as any)?.provider;
   // The test sandbox that runs "VMs" on this host shares one /tmp: each agent's spool gets its own folder there.
   const place = sandbox ?? (() => { try { return sandboxName(); } catch { return null; } })();
   const rpcDir = place === "fake-host" ? join(tmpdir(), "capcomd-rpc", runId, agentId) : VM_RPC_DIR;
-  const skill = await unpreparedSkill(runId, a, prepared);
-  const params = { kind, rpcDir, ...(skill ? { skill } : {}) };
-  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir) };
+  const maySpawn = a.limits.allowSpawn;
+  // The job ops: by its profile and the config it runs with (the daemon's tool and sandbox settings narrow it too).
+  const effective = await (async () => { try { return (await import("../agents/config")).loadAgentConfig(withSandbox(process.env, sandbox), a.ref, a.spec); } catch { return null; } })();
+  const jobs = mayRunJobs(a.spec, effective);
+  const orchestrate = (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate";
+  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ mcp: true, jobs: jobs && !orchestrate });
+  const params = { kind, rpcDir, ...(skill ? { skill } : {}), ...(maySpawn ? {} : { maySpawn: false }) };
+  return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir, { jobs }) };
 }
 
 /**
@@ -1484,7 +1546,7 @@ export async function messageNote(runId: string, to: string): Promise<string | n
   if (!a) return null;
   if (TERMINAL_AGENT.has(a.status)) return `${to} is ${a.status}: nothing will read this message`;
   if ((a.spec as { provider?: string } | null)?.provider !== "codex") return null;
-  return a.limits.allowSpawn
+  return hasVmCapcomd(a)
     ? `${to} is a Codex agent: it can't read messages while it works, only when it checks its inbox (capcomd inbox)`
     : `${to} is a Codex agent that can't read messages while it works: this one stays in its inbox, unread`;
 }
@@ -1753,6 +1815,14 @@ async function verifyOnce(o: VerifyOpts, vfyId: string) {
   if (o.check !== undefined && o.checks) throw new RelayError("usage", "pass --check NAME or --checks CMD, not both", "--check picks one of the run's operator-named checks.");
   // A child pinned to a check at spawn is verified with it unless the caller names another.
   if (o.check === undefined && !o.checks && pinnedCheck) o = { ...o, check: pinnedCheck };
+  // No check named, given or pinned, and no command configured for the repository: the run's one named check (the
+  // project's `run.checks` that `run new` recorded, or a lone --checks-set), as `capcomd check` takes it, so the verify
+  // doesn't pass on "no test command configured". With several, the repository's as before: an unpinned child's in-VM
+  // verify can't name one.
+  if (o.check === undefined && !o.checks && cfg && !cfg.testCommand.trim()) {
+    const names = await namedCheckNames(o.runId);
+    if (names.length === 1) o = { ...o, check: names[0]! };
+  }
   const checks = o.check !== undefined ? await namedCheck(o.runId, o.check) : o.checks;
   const reviewProfile = o.reviewProfile ?? o.judgeProfile ?? (await runReviewer(o.runId));
   if (reviewProfile) reviewerSpec(reviewProfile); // an unknown reviewer is refused before anything runs
@@ -1960,8 +2030,7 @@ async function resolveCheck(o: CheckOpts): Promise<{ ref: string; branch: string
   // No command named and none configured for the repository, but the run has named checks (the project's
   // `run.checks`): its one check is the run's checks; with several, the caller picks one (never "nothing ran: pass").
   if (check === undefined && !o.checks && cfg && !cfg.testCommand.trim()) {
-    const set = (await (await import("./state")).kvGet(o.runId, CHECKS_KV)).value as Record<string, unknown> | null;
-    const names = set ? Object.keys(set).filter((k) => typeof set[k] === "string") : [];
+    const names = await namedCheckNames(o.runId);
     if (names.length === 1) check = names[0]!;
     else if (names.length > 1) throw new RelayError("usage", `this run has ${names.length} named checks and no default one: name the one to run`, `Pass --check NAME (check: in the tool): ${names.join(", ")}.`);
   }
@@ -2123,7 +2192,9 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   // listens there, so it always says. A running merge with a plugin's hold on record is one a person approved after that
   // hold (decideOp): that hold, and the ones approved before it, no longer stop it; any other plugin's still does. Each
   // approved hold makes the next landing a new attempt (its own idempotency key, §6.7); a replay of one keeps its key.
-  const approvedHolds = [...(d.approvedHolds ?? []), ...(d.heldBy ? [d.heldBy] : [])];
+  // The approval put that hold on the record's `approvedHolds` already (decideOp); a merge approved before it did, not.
+  const prior = d.approvedHolds ?? [];
+  const approvedHolds = [...prior, ...(d.heldBy && !prior.some((h) => sameHold(h, { ...d.heldBy!, text: d.heldBy!.reason })) ? [d.heldBy] : [])];
   const gate: import("../merge/types").MergeGate = {
     merge: mergeOf(runId, op), verification: v ? verificationOf(runId, v) : null, operator: !!d.operator, requestedBy: principalOf(d.askedBy ?? null, runId),
     attempt: approvedHolds.length + 1, ...(approvedHolds.length ? { approvedHolds } : {}),

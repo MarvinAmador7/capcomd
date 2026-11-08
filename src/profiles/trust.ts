@@ -49,3 +49,26 @@ export function trustProfileSkills(skills: readonly ProfileSkill[], o: { by?: st
     return { ...s, trust: "trusted", trustedHash: s.hash };
   });
 }
+
+/** One skill a profile's agents are pinned with, as a profile's row lists it (GET /v1/profiles, capcomd_profiles,
+ *  `capcomd profiles list --json`): its name, where it came from and its hash, never its text. */
+export interface SkillRow {
+  name: string;
+  source: ProfileSkill["source"];
+  /** `sha256:<hex>`, as `skills[].hash` pins one. */
+  hash: string;
+  /** false: a project skill the operator hasn't trusted as it is now, so an agent of the profile is refused until they
+   *  do (`capcomd profiles trust <name>`). The user's skills and capcomd's need no trust. */
+  trusted: boolean;
+  /** It was trusted with other content: its SKILL.md changed since. */
+  changed: boolean;
+}
+
+/** A resolved profile's skills as rows, in its order, each with its trust. */
+export function skillRows(skills: readonly ProfileSkill[], env: Env = process.env): SkillRow[] {
+  const trust = new Map(projectSkillTrust(skills, env).map((t) => [t.name, t.trust]));
+  return skills.map((s) => {
+    const t = trust.get(s.name);
+    return { name: s.name, source: s.source, hash: `sha256:${s.hash}`, trusted: t === undefined || t === "trusted", changed: t === "changed" };
+  });
+}

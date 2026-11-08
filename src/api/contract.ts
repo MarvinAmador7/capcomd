@@ -310,7 +310,7 @@ const PluginEventData = {
 	"plugin.config_refused": z.looseObject({
 		plugin: z.string(),
 		errors: z.array(z.looseObject({ path: z.string().describe("The setting, under plugins.<name> (e.g. stalledAfterMs)"), message: z.string() })),
-		layer: z.string().describe("Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), or run (more may come)"),
+		layer: z.string().describe("Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), run, or default (the manifest's own default, e.g. a secret reference naming one of capcomd's own variables; more may come)"),
 	}).describe(`${PLUGIN_EVENT}. A plugin's settings failed its config schema (spec §10.4): it is failed with cause config_invalid, never run with defaults`),
 	"plugin.trusted": z.looseObject({
 		plugin: z.string(), source: z.string().describe("project: a project's plugin, which runs only once trusted (more may come)"),
@@ -522,6 +522,8 @@ export const CAPABILITIES = {
 	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from",
 	"profiles.edit": "GET /v1/profiles/{name}: one profile as typed rows a client renders and edits (each with the file that sets it, `source` and `editable`) and its `rev`; PUT /v1/profiles/{name} (the `configure` scope, an Idempotency-Key): change them in the profile's own file, its version bumped; each write is a profile.changed event on the daemon stream",
 	"plugins.config": "Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.trusted on the daemon stream audits a trust",
+	"profiles.facts": "GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) and `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for",
+	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -588,9 +590,19 @@ export const SandboxOption = z.object({
 	reason: z.string().nullable().describe("Why it isn't available (trusted), e.g. \"Docker isn't running\", \"No boxd API key (run capcomd setup)\"; null when available"),
 	default: z.boolean().describe("The daemon's own CAPCOMD_SANDBOX: what a run without `sandbox` uses (none is default when the daemon runs another sandbox)"),
 });
+export const PlannerOption = z.object({
+	name: ProfileName.describe("The profile (GET /v1/profiles has the rest of it): `capcomd run --planner <name>`"),
+	title: UntrustedText.nullable().describe("Agent-written text: render as plain text, never markdown, links or actions. Its `identity.title` as its file says it; null: show its name"),
+	provider: z.string().describe("The agent provider it runs on, by its plugin's name: claude or codex today"),
+	model: z.string().nullable().describe("Its model; null: the provider CLI's default"),
+	default: z.boolean().describe("The planner a run without one uses (the profile named planner); `drivers[]` are this one on each provider"),
+	available: z.boolean().describe("A run can start with it now, in the daemon's sandbox (its profile's sandbox.provider when it names one)"),
+	reason: z.string().nullable().describe("Why not, one short sentence written by the daemon naming what fixes it (trusted; never a credential): its login, a project skill not trusted yet, a sandbox.provider that runs its agents outside the run's isolation, its sandbox.environment that sandbox has no build of, no agent environment built there, an egress limit that sandbox can't enforce, or a lifecycle plugin that isn't active on this daemon. null when available"),
+});
 export const RunOptions = z.object({
 	drivers: z.array(DriverOption).describe("Always claude, then codex"),
 	sandboxes: z.array(SandboxOption).describe("Every listed place, in order: today docker, then boxd"),
+	planners: z.array(PlannerOption).optional().describe("Capability runs.options.planners. Every profile that can plan (it may spawn agents: children.allowSpawn), in the profiles' order (GET /v1/profiles), each with whether a run can start with it now and why not. Empty when none can, or the profiles can't be read"),
 });
 export const RUN_OPTIONS_DOC = "Capability runs.options. Who can drive a new run and where it can run: the values POST /v1/runs takes for `driver` and `sandbox`, each with whether it can be used now and why not, and (capability runs.options.sandbox) whether each driver can run in each sandbox. Needs the `read` scope. Cheap checks (logins, API keys, the boxd key, agent environments, whether Docker answers, cached a few seconds), so poll it freely. " +
 	"`repo` (capability runs.options.repo): the answer for a run of that project, as POST /v1/runs with the same `repo` starts it: its settings and agent profiles (.capcomd/profiles/ from `capcomd setup project`, and .capcomd/agents.json), not the daemon's. 422 `invalid` when it isn't a project checkout, with the message POST /v1/runs gives.";
@@ -755,6 +767,18 @@ export const ProfileSummary = z.object({
 	ready: z.boolean().describe("Its login is there for the daemon's own sandbox (a plan login, or the API key); GET /v1/logins has every sandbox's"),
 	readiness: z.string().describe("Why it is ready or not, one short sentence written by the daemon (never a credential), e.g. \"not logged in: capcomd auth login claude\""),
 	applied: z.array(ProfileFile).describe("The files laid together to make it, first to last (a later one wins): its `extends` ancestors (root first), itself, then its overrides (the user's, then the project's)"),
+	title: UntrustedText.nullable().optional().describe("Agent-written text: render as plain text, never markdown, links or actions. Capability profiles.facts. Its `identity.title` as its file says it, what to call it in a list (a project's profile files are in its repository, which agents change); null: show its name"),
+	fit: z.string().optional().describe("Capability profiles.facts. What it is fit for, one sentence written by the daemon from its settings only, never from its description or title (what it may do, whether it reports, provider, model, effort and cost, limits, whom it leads), e.g. \"read-only; answers with a report (spawn it with report); Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn\": as capcomd_profiles gives it to a planner"),
+	cost: z.enum(["low", "medium", "high"]).nullable().optional().describe("Capability profiles.facts. Its model's list price, relative to the others its provider offers: what a planner gives mechanical parts the low one by. null when its model is the CLI's default or one capcomd doesn't rate"),
+	canReport: z.boolean().optional().describe("Capability profiles.facts. It may be spawned to answer with a report (its `permissions.report`; unset: it may)"),
+	skills: z.array(z.object({
+		name: z.string().describe("The skill's name (a profile file's `skills[].name`: lowercase letters, digits, - and _)"),
+		source: z.string().describe("Where its SKILL.md came from: project (a profile package in the project's profiles), user (yours: ~/.capcomd/profiles, or ~/.claude/skills), builtin. More may be added: treat one you don't know as user"),
+		hash: z.string().describe("sha256:<hex> of its SKILL.md: what an agent of the profile is pinned with"),
+		trusted: z.boolean().describe("false: a project skill the operator hasn't trusted as it is now; a spawn of the profile is refused until `capcomd profiles trust <name>` (an interactive prompt that shows each). Yours and capcomd's need no trust: always true"),
+		changed: z.boolean().describe("It was trusted before with other content (its SKILL.md changed since); `trusted` is then false"),
+	})).optional().describe("Capability profiles.facts. The skills its agents are pinned with, in its order: names and hashes, never their text (`capcomd profiles show <name>` names each file). Empty when it has none"),
+	untrustedSkills: z.array(z.string()).optional().describe("Capability profiles.facts. The names of its project skills that aren't trusted as they are (`skills[].trusted` false): a spawn of it is refused until `capcomd profiles trust <name>`. Empty when none: nothing is refused for trust"),
 });
 export const Profiles = z.object({
 	file: z.string().describe("The agents.json the profiles are read with, on the daemon's machine (it may not exist); the profiles/ folder beside it is the project's layer"),

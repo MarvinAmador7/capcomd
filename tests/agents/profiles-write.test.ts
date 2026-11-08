@@ -1,10 +1,10 @@
 // ADR-024 §7 step 6: writing profiles. A write changes the one file a profile is defined in and bumps its version; it is
 // checked as the files would be after it and changes nothing when they wouldn't resolve, or when a later file hides it.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, type ProfileWriteError } from "../../src/profiles";
+import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, writeAtomic, type ProfileWriteError } from "../../src/profiles";
 
 /** A project (repo/.capcomd/) and a CAPCOMD_HOME (home/) with these files; `P/` is the project's profiles, `U/` the user's. */
 function world(files: Record<string, string>, agents?: Record<string, unknown>, def?: string) {
@@ -98,6 +98,36 @@ describe("editProfile: the profile's own file", () => {
     expect(w.read("P/lead.yaml")).toBe(text);
   });
 
+  test("an edited file keeps its mode, all of it (the umask doesn't narrow it); a new one gets the umask's", () => {
+    const w = world({ "P/lead.yaml": LEAD }, { worker });
+    chmodSync(w.at("P/lead.yaml"), 0o600);
+    editProfile("lead", { "limits.maxTurns": 30 }, w.o);
+    expect(w.read("P/lead.yaml")).toContain("maxTurns: 30");
+    expect(statSync(w.at("P/lead.yaml")).mode & 0o777).toBe(0o600);
+    // Group-writable: a umask of 022 would have made it 0644.
+    const umask = process.umask(0o022);
+    try {
+      chmodSync(w.at("P/lead.yaml"), 0o664);
+      editProfile("lead", { "limits.maxTurns": 31 }, w.o);
+      expect(statSync(w.at("P/lead.yaml")).mode & 0o777).toBe(0o664);
+      process.umask(0o077);
+      writeAtomic(w.at("P/fresh.yaml"), "name: fresh\n");
+      expect(statSync(w.at("P/fresh.yaml")).mode & 0o777).toBe(0o600);
+      // A link (a checkout's) is replaced by a file, its target never written, and with the umask's mode, never the
+      // target's: a link to a world-writable file of yours doesn't make the profile world-writable.
+      const target = w.at("home/target.yaml");
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, "old\n");
+      chmodSync(target, 0o666);
+      symlinkSync(target, w.at("P/linked.yaml"));
+      writeAtomic(w.at("P/linked.yaml"), "new\n");
+      expect([readFileSync(target, "utf8"), lstatSync(w.at("P/linked.yaml")).isSymbolicLink(), statSync(w.at("P/linked.yaml")).mode & 0o777]).toEqual(["old\n", false, 0o600]);
+    } finally {
+      process.umask(umask);
+    }
+    expect(readdirSync(dirname(w.at("P/lead.yaml"))).filter((n) => n.includes(".tmp-"))).toEqual([]);
+  });
+
   test("a parent's edit: the child keeps its own version, and its rev changes", () => {
     const w = world({ "P/lead.yaml": LEAD }, { worker });
     const rev = profileRev(w.load().profiles.lead!);
@@ -117,6 +147,28 @@ describe("addProfileFile and removeProfile", () => {
     expect(refusal(() => addProfileFile("worker", { extends: "worker" }, w.o))).toMatchObject({ code: "conflict", message: `profile "worker" already exists (${w.agentsFile})` });
     expect(refusal(() => addProfileFile("orphan", { extends: "nobody" }, w.o))?.message).toContain('extends "nobody", which isn\'t a profile here');
     expect(existsSync(w.at("P/orphan.yaml"))).toBe(false);
+  });
+
+  test("a link a checkout put where the write's temporary file would be is never written through", () => {
+    const w = world({}, { worker });
+    // The project's checkout carries a link at the name a write used to take (<file>.tmp-<pid>), to a file of yours.
+    const victim = w.at("home/victim.txt");
+    mkdirSync(dirname(victim), { recursive: true });
+    writeFileSync(victim, "yours\n");
+    const file = w.at("P/reviewer.yaml");
+    mkdirSync(dirname(file), { recursive: true });
+    symlinkSync(victim, `${file}.tmp-${process.pid}`);
+    symlinkSync(victim, `${w.agentsFile}.tmp-${process.pid}`);
+    addProfileFile("reviewer", { extends: "worker" }, w.o);
+    editProfile("worker", { "limits.maxTurns": 30 }, w.o);
+    expect(readFileSync(victim, "utf8")).toBe("yours\n");
+    expect(w.read("P/reviewer.yaml")).toContain("name: reviewer");
+    expect(w.load().profiles.worker!.spec.maxTurns).toBe(30);
+    expect(lstatSync(w.agentsFile).isSymbolicLink()).toBe(false);
+    // A write that fails leaves no temporary file of its own (a directory is in the file's place).
+    mkdirSync(w.at("P/taken.yaml/inside"), { recursive: true });
+    expect(() => writeAtomic(w.at("P/taken.yaml"), "x\n")).toThrow();
+    expect(readdirSync(dirname(file)).filter((n) => n.includes(".tmp-")).sort()).toEqual([`reviewer.yaml.tmp-${process.pid}`]);
   });
 
   test("rm: a single profile file, or an agents.json entry (the default moves on); a package and a parent others extend stay", () => {
@@ -148,6 +200,43 @@ describe("addProfileFile and removeProfile", () => {
   });
 });
 
+// Spec §7.1: reading profiles outside the daemon only warns about a provider no daemon is running to confirm; a write
+// that names one is refused, as a candidate is (`capcomd agents validate --spec`), and one a running daemon lists is fine.
+describe("a write naming a provider no daemon is running to confirm", () => {
+  /** The running daemon's listing in this world's home: this process stands in for the daemon (its pid is alive). */
+  const listing = (w: ReturnType<typeof world>, seams: Array<{ kind: "sandbox" | "agent"; name: string }>) => {
+    mkdirSync(join(w.o.source.CAPCOMD_HOME, "state"), { recursive: true });
+    const plugin = { name: "third-party", version: "1.0.0", apiVersion: 1, runtime: "in-process", source: "user", state: "active", enabled: true, cause: null, hooks: [], seams, hooksSuspended: false, stats: {} };
+    writeFileSync(join(w.o.source.CAPCOMD_HOME, "state", "plugins.json"), JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins: [plugin] }));
+  };
+  const SOLO = "name: solo\nharness: { provider: claude, auth: subscription }\n";
+  const unconfirmed = (at: string, field: string, kind: string, name: string) => `${at}: ${field} "${name}" isn't a built-in ${kind} provider, and no daemon is running to say whether one of its plugins provides it, so nothing was changed`;
+
+  test("set and add are refused and change nothing; with a daemon that lists it they write", () => {
+    const w = world({ "P/solo.yaml": SOLO }, { worker });
+    const agents = readFileSync(w.agentsFile, "utf8");
+    expect(refusal(() => editProfile("solo", { "harness.provider": "gemini" }, w.o))).toMatchObject({ code: "invalid", message: expect.stringContaining(unconfirmed("profiles.solo", "harness.provider", "agent", "gemini")) });
+    expect(refusal(() => editProfile("solo", { "sandbox.provider": "modal" }, w.o))?.message).toContain(unconfirmed("profiles.solo", "sandbox.provider", "sandbox", "modal"));
+    expect(refusal(() => editProfile("worker", { provider: "gemini" }, w.o))?.message).toContain(unconfirmed("agents.worker", "provider", "agent", "gemini"));
+    expect(refusal(() => addProfileFile("cloud", { extends: "worker", "sandbox.provider": "modal" }, w.o))?.message).toContain(unconfirmed("profiles.cloud", "sandbox.provider", "sandbox", "modal"));
+    expect([w.read("P/solo.yaml"), readFileSync(w.agentsFile, "utf8"), existsSync(w.at("P/cloud.yaml"))]).toEqual([SOLO, agents, false]);
+    listing(w, [{ kind: "agent", name: "gemini" }, { kind: "sandbox", name: "modal" }]);
+    editProfile("solo", { "harness.provider": "gemini", "sandbox.provider": "modal" }, w.o);
+    addProfileFile("cloud", { extends: "worker", "sandbox.provider": "modal" }, w.o);
+    expect(w.load()).toMatchObject({ warnings: [], profiles: { solo: { spec: { provider: "gemini" }, runtime: { sandboxProvider: "modal" } }, cloud: { runtime: { sandboxProvider: "modal" } } } });
+  });
+
+  test("a profile that already names one can still be changed otherwise, and removed", () => {
+    const w = world({ "P/solo.yaml": "name: solo\nharness: { provider: claude, auth: subscription }\nsandbox: { provider: modal }\n", "P/other.yaml": SOLO.replace("solo", "other") });
+    expect(w.load().warnings).toHaveLength(1);
+    expect(editProfile("solo", { "limits.maxTurns": 30 }, w.o)).toMatchObject({ changed: true, version: 2 });
+    expect(editProfile("other", { "limits.maxTurns": 30 }, w.o)).toMatchObject({ changed: true, version: 2 });
+    expect(refusal(() => editProfile("solo", { "sandbox.provider": "fly" }, w.o))?.message).toContain(unconfirmed("profiles.solo", "sandbox.provider", "sandbox", "fly"));
+    removeProfile("solo", w.o);
+    expect(w.load().warnings).toEqual([]);
+  });
+});
+
 describe("profileFields: the rows a client edits", () => {
   test("each value with its type, encoding, display, the file that sets it and whether PUT can change it", () => {
     const w = world({ "P/lead.yaml": LEAD.replace("description: Leads a part.", "description: Leads a part.\nprompt: { append: Plan first. }\nx-perfloop: { gestures: [scroll] }\ntools: { mcp: [{ name: gh, command: [gh-mcp, --token, ghp_secret] }, { name: docs, command: [docs-mcp] }] }"), "P/lead/override.yaml": "harness: { effort: low }\n" }, { worker });
@@ -167,10 +256,23 @@ describe("profileFields: the rows a client edits", () => {
     // An MCP server by its name only: its command line may hold a token.
     expect(f["tools.mcp"]).toMatchObject({ type: "info", value: null, display: "gh, docs", editable: false });
     expect(JSON.stringify(profileFields(lead))).not.toContain("ghp_secret");
+    // A context provider by its name only (its settings may hold a token); any other value with a token's shape redacted.
+    const ctx = world({ "P/lead.yaml": `${LEAD}context: { providers: [{ name: groundray, url: "https://x-access-token:s3cr3t@example.com" }] }\nx-hook: { token: ghp_abcdefghijklmnopqrstuvwxyz0123 }\n` }, { worker });
+    const cf = Object.fromEntries(profileFields(ctx.load().profiles.lead!).map((r) => [r.id, r]));
+    expect([cf["context.providers"]?.display, cf["x-hook.token"]?.display]).toEqual(["groundray", "[REDACTED]"]);
+    expect(JSON.stringify(profileFields(ctx.load().profiles.lead!))).not.toMatch(/s3cr3t|ghp_abc/);
+    // A secret with no token shape: by the key that holds it (as the redactor's values), or in a URL's password.
+    const plain = world({ "P/lead.yaml": `${LEAD}sharing: { source: "https://me:hunter2@git.example.com/p.git" }\nx-db: { password: hunter3, url: "postgres://app:hunter4@db:5432/x", port: 5432 }\nx-hook: { auth: { apiKey: hunter5, Authorization: Bearer hunter6 } }\n` }, { worker });
+    const pf = Object.fromEntries(profileFields(plain.load().profiles.lead!).map((r) => [r.id, r]));
+    expect([pf["sharing.source"]?.display, pf["x-db.password"]?.display, pf["x-db.url"]?.display, pf["x-db.port"]?.display, pf["x-hook.auth"]?.display])
+      .toEqual(["https://me:[REDACTED]@git.example.com/p.git", "[REDACTED]", "postgres://app:[REDACTED]@db:5432/x", "5432", '{"apiKey":"[REDACTED]","Authorization":"[REDACTED]"}']);
+    expect(JSON.stringify(profileFields(plain.load().profiles.lead!))).not.toMatch(/hunter/);
     // PUT's values: an editable row with a value of its type.
     expect(editOf(lead, { "limits.maxTurns": "60", tags: '["a"]', "permissions.report": "false", "harness.model": null })).toEqual({ edit: { "limits.maxTurns": 60, tags: ["a"], "permissions.report": false, "harness.model": null } });
     expect(editOf(lead, { "harness.effort": "high" })).toMatchObject({ field: "harness.effort" });
     expect(editOf(lead, { "limits.maxTurns": "many" })).toEqual({ field: "limits.maxTurns", message: "limits.maxTurns: must be a number" });
+    // Past 2^53 a number isn't the one sent: refused, not written as 1e+23.
+    expect(editOf(lead, { "limits.maxTurns": "99999999999999999999999" })).toEqual({ field: "limits.maxTurns", message: `limits.maxTurns: must be at most ${Number.MAX_SAFE_INTEGER}` });
     expect(editOf(lead, { "tools.mode": "sideways" })).toEqual({ field: "tools.mode", message: "tools.mode: must be one of execute, orchestrate" });
     expect(editOf(lead, { tags: "a,b" })).toEqual({ field: "tags", message: "tags: must be a JSON array of strings" });
     expect(editOf(lead, { "prompt.append": "x" })).toMatchObject({ field: "prompt.append" });

@@ -42,6 +42,14 @@ describe("harness.v1 contract", () => {
 		expect(row.properties.source.type).toBe("string");
 		expect(row.properties.source.enum).toBeUndefined();
 		expect(row.properties.applied.items.properties.as.enum).toEqual(["extends", "profile", "override"]);
+		// Capability profiles.facts: optional (older daemons don't send them); the title is the file's text, marked untrusted.
+		expect(CAPABILITY_NAMES).toContain("profiles.facts");
+		for (const k of ["title", "fit", "cost", "canReport", "skills", "untrustedSkills"]) { expect(row.properties).toHaveProperty(k); expect(row.required).not.toContain(k); }
+		expect(row.properties.title).toMatchObject({ "x-untrusted": true, type: ["string", "null"] });
+		expect(row.properties.fit["x-untrusted"]).toBeUndefined();
+		expect(row.properties.cost).toMatchObject({ type: ["string", "null"], enum: ["low", "medium", "high", null] });
+		expect(row.properties.skills.items.required).toEqual(["name", "source", "hash", "trusted", "changed"]);
+		expect(row.properties.skills.items.properties).not.toHaveProperty("text");
 	});
 	test("scope is daemon, prj-… or run-…", () => {
 		for (const s of ["daemon", "prj-a1", "run-mvhd"]) expect(Scope.safeParse(s).success).toBe(true);

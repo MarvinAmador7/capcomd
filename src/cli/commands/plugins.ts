@@ -187,10 +187,21 @@ async function trustCommand(args: string[], values: Values): Promise<number> {
     if (m.entry.runtime === "process") console.log(`  runs     ${m.entry.command.map((a) => /^[\w./${}=:@%+,-]+$/.test(a) ? a : visible(JSON.stringify(a))).join(" ")}  (on this machine, as you, out of process)`);
     console.log(`  scopes   ${(m.scopes ?? []).join(", ") || "none"}`);
     console.log(`  hooks    ${Object.keys(m.contributes?.hooks ?? {}).join(", ") || "none"}`);
-    // Its secrets reach it at its start (§10.3): a manifest's default reference names a variable of yours.
+    // Its secrets reach it at its start (§10.3), each from the reference you set for it (never its manifest's default).
+    // One that names the kernel's own (BOXD_API_KEY, GITHUB_TOKEN, CAPCOMD_*…), yours or its default, is refused: the
+    // daemon fails the plugin config_invalid until your config names another.
     const { secretKeys } = await import("../../../packages/plugin/src/host/host");
     const { secretRef } = await import("../../plugins/secrets");
-    const refs = secretKeys(m, p.dir).map((k) => { try { return `${k} ← ${visible(secretRef(m, k, process.env, p.dir))}`; } catch { return `${k} (none set)`; } });
+    const { kernelSecretRef, schemaOf, secretRefOf } = await import("../../plugins/config");
+    const refused = "refused: one of capcomd's own, which no plugin reads; it won't start until your config names another";
+    const refs = secretKeys(m, p.dir).map((k) => {
+      let ref: string;
+      try { ref = secretRef(m, k, process.env, p.dir, { builtin: false }); } catch {
+        const def = secretRefOf((schemaOf(m, p.dir)?.properties?.[k] as { default?: unknown } | undefined)?.default);
+        return def && kernelSecretRef(def) ? `${k} (none set; its default ${visible(def)} is ${refused})` : `${k} (none set)`;
+      }
+      return `${k} ← ${visible(ref)}${kernelSecretRef(ref) ? ` (${refused})` : ""}`;
+    });
     console.log(`  secrets  ${refs.join(", ") || "none"}`);
     console.log(`  hash     ${p.hash}`);
     if (p.trust === "changed") console.log(`  You trusted other content before (${p.trustedHash}): its files changed since.`);
@@ -325,7 +336,18 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
   const loaded = t.dir ? readManifest(t.dir, { capcomd: VERSION }) : loadManifest(t.manifest, { capcomd: VERSION, kernelSurface: !!t.kernelSurface });
   const m = loaded.manifest;
   const v: Validated = { name: m?.name ?? t.label, version: m?.version ?? null, source: t.dir ? "dir" : "builtin", path: t.dir, ok: loaded.ok, issues: loaded.ok ? [] : loaded.issues, warnings: loaded.ok ? loaded.warnings : [], conformance: [] };
-  if (!loaded.ok || !conformance) return v;
+  // §10.3: a plugin directory's default secret reference can't name the kernel's own variables (only a built-in's can);
+  // the daemon would fail it config_invalid unless the user's config names another variable.
+  if (loaded.ok && t.dir) {
+    const { schemaOf, secretRefOf, kernelSecretRef } = await import("../../plugins/config");
+    for (const [k, p] of Object.entries(schemaOf(loaded.manifest, t.dir)?.properties ?? {})) {
+      const ref = p?.["x-secret"] === true ? secretRefOf((p as { default?: unknown }).default) : null;
+      const owned = ref ? kernelSecretRef(ref) : null;
+      if (owned) v.issues.push({ path: `config.properties.${k}.default`, message: `names ${owned}` });
+    }
+    if (v.issues.length) v.ok = false;
+  }
+  if (!loaded.ok || !v.ok || !conformance) return v;
   const manifest = loaded.manifest;
   const result = (name: string, r: Partial<ConformanceResult>) => v.conformance.push({ name, ok: false, skipped: false, ms: 0, message: null, ...r });
   if (manifest.entry.runtime !== "in-process") {
