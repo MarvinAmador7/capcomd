@@ -225,6 +225,26 @@ describe("context-memory's fallback on agent.changed ended", () => {
     await fake.dispose();
   });
 
+  test("its verify and merge resolve profiles from the consolidator's own agents file, whatever context the listener ran in", async () => {
+    const { env, withDriveEnv } = await import("../../src/utils/env");
+    const cons: RunAgent = { agentId: "agt-cons", parent: null, profile: CONSOLIDATOR_PROFILE, status: "done", limits: { allowSpawn: false, allowedChildProfiles: [] }, driveEnv: { CAPCOMD_AGENTS_FILE: "/project/agents.json" } };
+    const run = (agents: RunAgent[]) => kernel({ agents, lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40) }] }) });
+    const seen: Array<string | undefined> = [];
+    const watch = () => { const land = memoryPlugin.fallbackKernel.land; memoryPlugin.fallbackKernel.land = async (...a) => { seen.push(env("AGENTS_FILE")); return land(...a); }; };
+    const fake = testkit.fakeContext(memoryPlugin.manifest);
+    await testkit.load(fake, memoryPlugin.plugin as never);
+    // The listener's queue may be started by any agent's change (another project's): its settings must not leak in.
+    run([PLANNER, cons]); watch();
+    await withDriveEnv({ CAPCOMD_AGENTS_FILE: "/another/agents.json" }, () => fake.fire("agent.changed", ended("agt-cons", CONSOLIDATOR_PROFILE), { runId: RUN }));
+    await memoryPlugin.settleFallbacks();
+    // A consolidator with no recorded settings: its planner's.
+    run([PLANNER, { ...cons, driveEnv: null }]); watch();
+    await withDriveEnv({ CAPCOMD_AGENTS_FILE: "/another/agents.json" }, () => fake.fire("agent.changed", ended("agt-cons", CONSOLIDATOR_PROFILE), { runId: RUN }));
+    await memoryPlugin.settleFallbacks();
+    expect(seen).toEqual(["/project/agents.json", "/p/agents.json"]);
+    await fake.dispose();
+  });
+
   test("its verify failing is said, and nothing is merged; a kernel that fails is logged, never thrown", async () => {
     const cons: RunAgent = { agentId: "agt-cons", parent: null, profile: CONSOLIDATOR_PROFILE, status: "done", limits: { allowSpawn: false, allowedChildProfiles: [] } };
     kernel({ agents: [PLANNER, cons], lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40) }] }) });

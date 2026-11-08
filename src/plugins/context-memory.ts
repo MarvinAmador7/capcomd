@@ -20,6 +20,7 @@ import { definePlugin } from "../../packages/plugin/src/context";
 import type { Outcome } from "../../packages/plugin/src/context-layer";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { VERSION } from "../utils/self";
+import { withDriveEnv } from "../utils/env";
 import { CONSOLIDATOR_PROFILE } from "../context/consolidate";
 import { memoryProvider } from "../context/memory";
 import { holdOf, judgeBranch, touchesContext, type BranchFacts, type Judgement, type Review } from "../context/promotion";
@@ -243,7 +244,6 @@ export const fallbackKernel = {
    *  project's profiles). Idempotent by its key. */
   spawn: async (runId: string, driveEnv: Record<string, string> | null): Promise<{ agentId: string; created: boolean }> => {
     const { spawnAgent } = await import("../primitives/ops");
-    const { withDriveEnv } = await import("../utils/env");
     const a = await withDriveEnv(driveEnv, () => spawnAgent({ runId, profile: CONSOLIDATOR_PROFILE, task: FALLBACK_TASK, key: FALLBACK_KEY, title: "memory lessons" }));
     return { agentId: a.agentId, created: !!a.created };
   },
@@ -295,7 +295,12 @@ export async function fallback(runId: string, ended: RunAgent, o: { enabled: boo
     }
     return plan;
   }
-  const p: Promise<unknown> = fallbackKernel.land(runId, plan.agentId, plan.commit).then(async (r) => {
+  // The verify and the merge resolve the run's reviewer and checks from the consolidator's agents file (its drive
+  // settings, the project's profiles), as its spawner's in-VM verify would: never the daemon's own file, nor whichever
+  // agent's settings this listener's queue happened to start under.
+  const cons = st.agents.find((a) => a.agentId === plan.agentId);
+  const driveEnv = cons?.driveEnv ?? st.agents.find(mayConsolidate)?.driveEnv ?? null;
+  const p: Promise<unknown> = withDriveEnv(driveEnv, () => fallbackKernel.land(runId, plan.agentId, plan.commit)).then(async (r) => {
     if (!r.merge) return skipped("verify_failed", `${plan.agentId}'s memory change didn't pass its verify (${r.verify.id}: ${r.verify.state}), so capcomd didn't ask to merge it.`, { agentId: plan.agentId, verify: r.verify.id });
     const held = r.merge.state === "awaiting_approval";
     return o.emit("merge_requested", `capcomd asked to merge ${plan.agentId}'s memory change (${r.merge.id}): ${held ? `it waits for a person: capcomd approve ${runId} ${r.merge.id}` : r.merge.state}.`,
