@@ -345,11 +345,13 @@ test("a paused agent wakes at its reset with nobody awaiting it (the engine sche
   rmSync(quotaLedger, { force: true });
   const run = (await cj(["run", "new"])).j?.runId;
   const id = (await cj(["spawn", run, "--profile", "open", "--task", "[quota:3] short limit", "--key", "alone"])).j?.agentId;
-  await until(run, id, "paused");
-  // Only `inspect` from here on: it never wakes or drives anything.
+  // Only `inspect`: it never wakes or drives anything. The 3 s pause can fall between two looks on a slow runner, so
+  // the pause is read from the run's events afterwards, not caught as a status.
   const a = await until(run, id, "done");
   expect(a.epoch).toBe(2);
-  expect((await capcomd(["events", run, "--json"], env)).stdout).toContain('"by":"reset"');
+  const events = (await capcomd(["events", run, "--json"], env)).stdout;
+  expect(events).toContain("AGENT_PAUSED");
+  expect(events).toContain('"by":"reset"');
 }, 180_000);
 
 test("waiting through a pause: a wait that ends while the agent is paused waits again (the run recipe's way)", async () => {

@@ -11,7 +11,7 @@
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
 import { existsSync } from "node:fs";
-import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile } from "../../profiles";
+import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfileSkills, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -160,7 +160,10 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
     }
     case "list": {
       const f = guard(() => readProfiles(path));
-      const rows = profileRows(f).map((r) => ({ ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!) }));
+      const rows = profileRows(f).map((r) => {
+        const skills = skillRows(f.profiles[r.name]!.skills);
+        return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name) };
+      });
       const warned = f.warnings.length ? `\n(${f.warnings.length} warning${f.warnings.length === 1 ? "" : "s"}: \`${cmd} validate\` lists ${f.warnings.length === 1 ? "it" : "them"})` : "";
       out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title, r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
       return 0;
@@ -185,7 +188,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       const installed = (await import("../../profiles/install")).installedFacts(r);
       const text = [
         `${n}: version ${r.version}, found in ${{ project: "the project's profiles", user: "your profiles", bundled: "capcomd's bundled profiles" }[r.source]}${isDefault ? ", the default" : ""}`,
-        ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces them)` : ""}`] : []),
+        ...(installed ? [`Installed from ${installed.source} (commit ${installed.commit.slice(0, 12)}, ${installed.hash})${installed.error ? `; can't be checked against its LOCK: ${installed.error}` : installed.modified ? `; edited since: ${installed.modified.join(", ")} (\`${cmd} update ${n}\` replaces your edits and keeps files you added)` : ""}`] : []),
         ...(facts.title || facts.tags.length ? [[facts.title, facts.tags.length ? `tags: ${facts.tags.join(", ")}` : null].filter(Boolean).join(" · ")] : []),
         `Fit: ${facts.fit}`,
         "Files, first to last (a later one wins):",
@@ -319,15 +322,19 @@ async function updateCommand(args: string[], values: Record<string, any>, cmd: s
   if (!name || args.length > 1) throw new RelayError("usage", "update takes a profile's name", `${cmd} update <name> [--project] [--dry-run]`);
   const u = await (await import("../../profiles/install")).updateProfile(name, { project: !!values.project, path, dryRun: !!values["dry-run"] });
   if (values.json) { ok({ update: u }); return 0; }
-  if (u.from.hash === u.to.hash && !u.modified) {
+  const kept = u.kept.length ? `  added by you, kept: ${u.kept.join(", ")}` : null;
+  if (u.from.hash === u.to.hash && !u.modified?.changed.length && !u.modified?.removed.length) {
     console.log(`${name} is up to date (${u.to.hash})${u.updated ? `; its LOCK now names commit ${short(u.to.commit)}` : ""}.`);
+    if (kept) console.log(kept);
     return 0;
   }
   console.log(`${name}: version ${u.from.version ?? "?"} → ${u.to.version ?? "?"}, commit ${short(u.from.commit)} → ${short(u.to.commit)}`);
   console.log(`  hash ${u.from.hash}\n    → ${u.to.hash}`);
   for (const s of u.skills) console.log(`  skill ${s.name}: ${s.from ?? "(new)"} → ${s.to ?? "(removed)"}`);
   for (const [k, list] of [["changed", u.changed], ["added", u.added], ["removed", u.removed]] as const) if (list.length) console.log(`  ${k}: ${list.join(", ")}`);
-  if (u.modified) console.log(`  edited since it was installed (replaced by the update): ${[...u.modified.changed, ...u.modified.added, ...u.modified.removed].join(", ")}`);
+  const edited = u.modified ? [...u.modified.changed, ...u.modified.removed] : [];
+  if (edited.length) console.log(`  edited since it was installed (replaced by the update): ${edited.join(", ")}`);
+  if (kept) console.log(kept);
   if (!u.updated) { console.log("Nothing was changed (--dry-run)."); return 0; }
   console.log(`Updated ${u.dir}.${u.layer === "project" && u.skills.length ? ` Its changed skills reach its agents once you trust them: ${cmd} trust ${name}` : ""}`);
   return 0;

@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { homeFile } from "../utils/home";
+import { isoTs } from "./envelope";
 import type { StoredKey } from "./idempotency";
 
 export const KEY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -11,6 +12,11 @@ type StampedKey = StoredKey & { at?: number };
 /** A durable event of the `daemon` scope itself (not a run's): today the audit of settings changes (ADR-021 §5). Its seq
  *  comes from the same counter as the daemon stream's run.created frames, so the stream's cursor orders both. */
 export type DaemonEvent = { seq: number; at: number; type: string; entity: string; entitySeq: number; text: string; data: Record<string, unknown> };
+/** A daemon event as the `daemon` stream, GET /v1/events?scope=daemon and a plugin's `ctx.events` send it. */
+export const daemonEnvelope = (e: DaemonEvent) => ({
+	v: 1 as const, id: `evt_daemon_${e.seq}`, scope: "daemon", seq: e.seq, entity: e.entity, entitySeq: e.entitySeq, type: e.type, typeVersion: 1,
+	durability: "durable" as const, ts: isoTs(e.at), epochMs: e.at, projectId: null, runId: null, agentId: null, text: e.text, data: e.data,
+});
 /** The daemon's own events kept for replay (the oldest go first). */
 export const DAEMON_EVENTS_MAX = 1000;
 export type HarnessStateData = { keys: Record<string, StampedKey>; decisions: Record<string, Record<string, unknown>>; runSeq: Record<string, number>; nextSeq: number; daemonEvents?: DaemonEvent[]; entitySeq?: Record<string, number> };

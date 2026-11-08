@@ -1,10 +1,10 @@
 // ADR-024 §7 step 6: writing profiles. A write changes the one file a profile is defined in and bumps its version; it is
 // checked as the files would be after it and changes nothing when they wouldn't resolve, or when a later file hides it.
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, type ProfileWriteError } from "../../src/profiles";
+import { addProfileFile, AGENTS_SCHEMA, editOf, editProfile, profileFields, profileRev, readProfiles, removeProfile, writeAtomic, type ProfileWriteError } from "../../src/profiles";
 
 /** A project (repo/.capcomd/) and a CAPCOMD_HOME (home/) with these files; `P/` is the project's profiles, `U/` the user's. */
 function world(files: Record<string, string>, agents?: Record<string, unknown>, def?: string) {
@@ -98,19 +98,34 @@ describe("editProfile: the profile's own file", () => {
     expect(w.read("P/lead.yaml")).toBe(text);
   });
 
-  test("written through an unguessable, exclusive temporary file: a link planted beside the profile isn't written through; the file keeps its mode", () => {
+  test("an edited file keeps its mode, all of it (the umask doesn't narrow it); a new one gets the umask's", () => {
     const w = world({ "P/lead.yaml": LEAD }, { worker });
-    // A repository's profiles may hold anything, a link at the old predictable temporary name included.
-    const victim = join(dirname(w.agentsFile), "victim.txt");
-    writeFileSync(victim, "untouched\n");
-    symlinkSync(victim, `${w.at("P/lead.yaml")}.tmp-${process.pid}`);
     chmodSync(w.at("P/lead.yaml"), 0o600);
     editProfile("lead", { "limits.maxTurns": 30 }, w.o);
-    expect(readFileSync(victim, "utf8")).toBe("untouched\n");
     expect(w.read("P/lead.yaml")).toContain("maxTurns: 30");
     expect(statSync(w.at("P/lead.yaml")).mode & 0o777).toBe(0o600);
-    // No temporary file is left beside it.
-    expect(readdirSync(dirname(w.at("P/lead.yaml"))).sort()).toEqual(["lead.yaml", `lead.yaml.tmp-${process.pid}`]);
+    // Group-writable: a umask of 022 would have made it 0644.
+    const umask = process.umask(0o022);
+    try {
+      chmodSync(w.at("P/lead.yaml"), 0o664);
+      editProfile("lead", { "limits.maxTurns": 31 }, w.o);
+      expect(statSync(w.at("P/lead.yaml")).mode & 0o777).toBe(0o664);
+      process.umask(0o077);
+      writeAtomic(w.at("P/fresh.yaml"), "name: fresh\n");
+      expect(statSync(w.at("P/fresh.yaml")).mode & 0o777).toBe(0o600);
+      // A link (a checkout's) is replaced by a file, its target never written, and with the umask's mode, never the
+      // target's: a link to a world-writable file of yours doesn't make the profile world-writable.
+      const target = w.at("home/target.yaml");
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, "old\n");
+      chmodSync(target, 0o666);
+      symlinkSync(target, w.at("P/linked.yaml"));
+      writeAtomic(w.at("P/linked.yaml"), "new\n");
+      expect([readFileSync(target, "utf8"), lstatSync(w.at("P/linked.yaml")).isSymbolicLink(), statSync(w.at("P/linked.yaml")).mode & 0o777]).toEqual(["old\n", false, 0o600]);
+    } finally {
+      process.umask(umask);
+    }
+    expect(readdirSync(dirname(w.at("P/lead.yaml"))).filter((n) => n.includes(".tmp-"))).toEqual([]);
   });
 
   test("a parent's edit: the child keeps its own version, and its rev changes", () => {
@@ -132,6 +147,28 @@ describe("addProfileFile and removeProfile", () => {
     expect(refusal(() => addProfileFile("worker", { extends: "worker" }, w.o))).toMatchObject({ code: "conflict", message: `profile "worker" already exists (${w.agentsFile})` });
     expect(refusal(() => addProfileFile("orphan", { extends: "nobody" }, w.o))?.message).toContain('extends "nobody", which isn\'t a profile here');
     expect(existsSync(w.at("P/orphan.yaml"))).toBe(false);
+  });
+
+  test("a link a checkout put where the write's temporary file would be is never written through", () => {
+    const w = world({}, { worker });
+    // The project's checkout carries a link at the name a write used to take (<file>.tmp-<pid>), to a file of yours.
+    const victim = w.at("home/victim.txt");
+    mkdirSync(dirname(victim), { recursive: true });
+    writeFileSync(victim, "yours\n");
+    const file = w.at("P/reviewer.yaml");
+    mkdirSync(dirname(file), { recursive: true });
+    symlinkSync(victim, `${file}.tmp-${process.pid}`);
+    symlinkSync(victim, `${w.agentsFile}.tmp-${process.pid}`);
+    addProfileFile("reviewer", { extends: "worker" }, w.o);
+    editProfile("worker", { "limits.maxTurns": 30 }, w.o);
+    expect(readFileSync(victim, "utf8")).toBe("yours\n");
+    expect(w.read("P/reviewer.yaml")).toContain("name: reviewer");
+    expect(w.load().profiles.worker!.spec.maxTurns).toBe(30);
+    expect(lstatSync(w.agentsFile).isSymbolicLink()).toBe(false);
+    // A write that fails leaves no temporary file of its own (a directory is in the file's place).
+    mkdirSync(w.at("P/taken.yaml/inside"), { recursive: true });
+    expect(() => writeAtomic(w.at("P/taken.yaml"), "x\n")).toThrow();
+    expect(readdirSync(dirname(file)).filter((n) => n.includes(".tmp-")).sort()).toEqual([`reviewer.yaml.tmp-${process.pid}`]);
   });
 
   test("rm: a single profile file, or an agents.json entry (the default moves on); a package and a parent others extend stay", () => {
@@ -187,6 +224,12 @@ describe("profileFields: the rows a client edits", () => {
     const cf = Object.fromEntries(profileFields(ctx.load().profiles.lead!).map((r) => [r.id, r]));
     expect([cf["context.providers"]?.display, cf["x-hook.token"]?.display]).toEqual(["groundray", "[REDACTED]"]);
     expect(JSON.stringify(profileFields(ctx.load().profiles.lead!))).not.toMatch(/s3cr3t|ghp_abc/);
+    // A secret with no token shape: by the key that holds it (as the redactor's values), or in a URL's password.
+    const plain = world({ "P/lead.yaml": `${LEAD}sharing: { source: "https://me:hunter2@git.example.com/p.git" }\nx-db: { password: hunter3, url: "postgres://app:hunter4@db:5432/x", port: 5432 }\nx-hook: { auth: { apiKey: hunter5, Authorization: Bearer hunter6 } }\n` }, { worker });
+    const pf = Object.fromEntries(profileFields(plain.load().profiles.lead!).map((r) => [r.id, r]));
+    expect([pf["sharing.source"]?.display, pf["x-db.password"]?.display, pf["x-db.url"]?.display, pf["x-db.port"]?.display, pf["x-hook.auth"]?.display])
+      .toEqual(["https://me:[REDACTED]@git.example.com/p.git", "[REDACTED]", "postgres://app:[REDACTED]@db:5432/x", "5432", '{"apiKey":"[REDACTED]","Authorization":"[REDACTED]"}']);
+    expect(JSON.stringify(profileFields(plain.load().profiles.lead!))).not.toMatch(/hunter/);
     // PUT's values: an editable row with a value of its type.
     expect(editOf(lead, { "limits.maxTurns": "60", tags: '["a"]', "permissions.report": "false", "harness.model": null })).toEqual({ edit: { "limits.maxTurns": 60, tags: ["a"], "permissions.report": false, "harness.model": null } });
     expect(editOf(lead, { "harness.effort": "high" })).toMatchObject({ field: "harness.effort" });

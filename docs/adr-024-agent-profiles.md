@@ -182,7 +182,12 @@ treats a distribution-owned `SOUL.md` that way).
   `allowedChildProfiles` entry is no wider than its parent (`widenings`). That stays, on resolved specs. A profile
   that `extends` another may widen it (a lead is a worker that can also spawn) because `extends` is authoring, not
   delegation; only the parent → child spawn relation is narrow-only. This distinction is the main thing to get right
-  in review.
+  in review. The `jobs` block is limits like `limits` (spec §16.2 rule 2): an override or a `profile.resolved` patch
+  may lower `max`, `foregroundMs` or `afterTurnMs` (`--set jobs.max=2` keeps the block's other values), never raise
+  one the profile sets or unset it; a spawned profile is held to its spawner's `max` and `afterTurnMs`, while its
+  `foregroundMs` is its own, as its tool mode is (an orchestrate planner waits 5 s, its workers 60 s). A job's own
+  `timeoutMs` (`capcomd job start --timeout-ms`) is at most an `afterTurnMs` the profile sets, so a start can't lift
+  that limit either.
 - **Per-run and per-spawn overrides** keep today's mechanism: `--set k=v` and `--overrides` produce an `Overrides`
   that `applyOverrides` merges and checks (`profiles.ts`); the ref encoding `name;ov=…[;op=1]` is unchanged, so the
   planner → worker carry (`encodeAgentRef`/`decodeAgentRef`) needs no change. Keys use the v2 paths
@@ -217,7 +222,10 @@ treats a distribution-owned `SOUL.md` that way).
   nothing to strip, unlike Hermes's export.
 - `capcomd profiles update <name>` re-fetches at the locked source and replaces only the **package-owned** files
   (`profile.yaml`, `SOUL.md`, `prompt.md`, `skills/`); a project's `override.yaml` and the profile's memory (§2.2
-  `memory`) are user-owned and never touched. A changed hash on a pinned skill or persona is shown before it is applied.
+  `memory`) are user-owned and never touched. So is any file the user added in the package's directory (one its `LOCK`
+  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.45; before, the
+  update replaced the whole directory but the override). A changed hash on a pinned skill or persona is shown before
+  it is applied.
   **From the research:** Hermes's `distribution_owned` list is exactly this split; adopted as is.
 - Discovery of shareable profiles uses the same marketplace files as the plugin (ADR-018 §1): a repository's
   `.claude-plugin/marketplace.json` may list `profiles` beside `plugins`. **Judgment call:** reuse the marketplace file
@@ -287,7 +295,10 @@ model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it 
   title, provider mark, tags and readiness (login present, environment built, sandbox up), with the resolved values
   and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
   setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
-  profile that can plan, not only the one named `planner`.
+  profile that can plan, not only the one named `planner` (`planners`, each with its readiness; done 2026-11-07, spec
+  1.0.47). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
+  skills each is pinned with and their trust (`untrustedSkills`), so the app and a planner see that a spawn would wait
+  on the operator's trust before it is refused.
 - **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
   across runs of the same profile (bot-avatar memory: "agent id + role + size → SVG"; the seed becomes the profile's
   when it sets one).
@@ -359,7 +370,8 @@ Each step ships alone, with tests, and leaves every existing test green.
   where every value came from.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
   environment is warned about by `capcomd profiles validate` and refused at spawn (`reason: environment`, §9), not left
-  to the provider's boot error; showing it as readiness before the run (`GET /v1/run-options`) is still to do.
+  to the provider's boot error; and shown before the run: `GET /v1/run-options` `planners` says a planner whose
+  environment isn't built (or whose `lifecycle` plugin isn't active) isn't ready, and why (2026-11-07, spec 1.0.47).
 - **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
   per hash (decision 4 below).
 - A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam
@@ -456,8 +468,9 @@ Made while pinning the version (§7 step 3, 2026-11-05; `src/actors/scope.ts`, `
 Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src/profiles/describe.ts`):
 
 - **`permissions.report: false` refuses a spawn with `report`** (`reason: report_not_allowed`), checked on the host
-  where every spawn is (`ops.spawnAgent`, after `profile.resolved`), not pinned. Unset means allowed, as before any
-  profile could say: `true` changes nothing at spawn and says, in `fit`, that the profile answers with a report.
+  where every spawn is (`ops.spawnAgent`, after `profile.resolved`, and again after `agent.spawning` so a `report` a
+  plugin adds is refused too), not pinned. Unset means allowed, as before any profile could say: `true` changes nothing
+  at spawn and says, in `fit`, that the profile answers with a report.
 - **`identity.title` and `identity.avatar` are not inherited**, like `name`: a `lead` that extends `worker` would
   otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
   a reviewer until it says otherwise).
@@ -584,9 +597,12 @@ Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`,
   and how long, never its text (`GET /v1/profiles` serves no prompt; neither does this). Values capcomd has no row for
   (`skills`, `tools.mcp`, `x-` fields) are read-only rows labelled by their path, so they show without an app release;
   `tools.mcp` and `context.providers` show their names only, since a command line or a provider's own settings may
-  carry a token, and any other such row has the redactor's token shapes taken out. Files are written through a
-  temporary file with an unguessable name, created exclusively, and keep their mode: a project's profiles directory
-  is its repository's, and a link planted at a predictable name would be written through.
+  carry a token, and any other such row has the redactor's token shapes taken out, a value under a key named like a
+  secret (`password`, `apiKey`, `token`, …, as the redactor's values) replaced whole and a URL's password removed;
+  a secret with none of these shapes still shows, as the file's other free text does. Files are written through a
+  temporary file with an unguessable name, created exclusively (spec 1.0.45): a project's profiles directory is its
+  repository's, and a link planted at a predictable name would be written through. A file keeps its mode (spec
+  1.0.49); a link in its place is replaced by a file with the umask's mode, never its target's.
 - **`PUT` takes an `Idempotency-Key` and the `rev`**: the key makes a retry after a lost response replay its first
   answer (the write-route rules), the `rev` refuses a change made from a read that is out of date (409 with the current
   one), as `PATCH /v1/sandboxes/{name}/settings` does. The `configure` scope, as project setup. Writes in the daemon

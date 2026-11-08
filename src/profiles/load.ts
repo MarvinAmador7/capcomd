@@ -5,7 +5,7 @@
 // of the same name in that layer wins. Every profile resolves to the flat v1 spec (./v1.ts AgentSpec, the pin), and
 // the parent → child narrowing is checked on those, never on the files.
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { env as envVar } from "../utils/env";
@@ -43,19 +43,30 @@ export function writeAgentsFile(f: AgentsFile, path = agentsFilePath()) {
 export const agentsFileText = (f: AgentsFile): string => JSON.stringify({ $schema: AGENTS_JSON_SCHEMA.$id, ...f }, null, 2) + "\n";
 /**
  * Write a file whole or not at all (a reader never sees half of it): a temporary file beside it, renamed over it. The
- * temporary name is unguessable and created exclusively: a profile's directory may be a repository's, and a link
- * planted at a predictable name would have the write go through it to any file on the host. The file keeps its mode.
+ * directory may be a checkout's, so the temporary file's name can't be guessed and it is created exclusively: a file or
+ * a link a repository put there is never written through. A file it replaces keeps its mode (a profile you made
+ * readable only by you stays so); a new one, or one replacing a link, gets the umask's (never a link target's mode).
  */
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
-  let mode = 0o644;
-  try { mode = statSync(path).mode & 0o777; } catch { /* a new file */ }
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+  let mode: number | undefined;
+  try { const st = lstatSync(path); if (st.isFile()) mode = st.mode & 0o777; } catch { /* a new file */ }
+  let made = false;
   try {
-    writeFileSync(tmp, text, { flag: "wx", mode });
+    const fd = openSync(tmp, "wx", mode ?? 0o666);
+    made = true;
+    try {
+      // The umask narrowed the mode it was created with; the file's own is put back whole.
+      if (mode !== undefined) fchmodSync(fd, mode);
+      writeFileSync(fd, text);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(tmp, path);
   } catch (e) {
-    rmSync(tmp, { force: true });
+    // Remove what this write made (a full disk leaves half a file), never what was there before it.
+    if (made || (e as NodeJS.ErrnoException).code !== "EEXIST") rmSync(tmp, { force: true });
     throw e;
   }
 }

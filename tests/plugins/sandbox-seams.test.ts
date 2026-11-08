@@ -124,9 +124,11 @@ describe("the kernel asks the seams for its providers (§7.1)", () => {
 describe("the boxd API key is a secret reference (§10.3)", () => {
   const boxd = manifestOf(SANDBOX_BUILTINS.find((b) => b.manifest.name === "sandbox-boxd")!);
   test("apiKey is declared x-secret, references BOXD_API_KEY, and never shows in the config", () => {
-    expect(resolveSecret(boxd, "apiKey", { BOXD_API_KEY: "bxd_test" })).toBe("bxd_test");
+    // The kernel resolves its own built-in's key (`builtin`); no other plugin may name BOXD_API_KEY (§10.3).
+    expect(resolveSecret(boxd, "apiKey", { BOXD_API_KEY: "bxd_test" }, null, { builtin: true })).toBe("bxd_test");
+    expect(() => resolveSecret(boxd, "apiKey", { BOXD_API_KEY: "bxd_test" })).toThrow("one of capcomd's own variables");
     expect(secretOrUndefined(boxd, "apiKey", {})).toBeUndefined();
-    expect(() => resolveSecret(boxd, "apiKey", {})).toThrow("is not set");
+    expect(() => resolveSecret(boxd, "apiKey", {}, null, { builtin: true })).toThrow("is not set");
     expect(() => resolveSecret(boxd, "org", { BOXD_API_KEY: "bxd_test" })).toThrow("is not a secret the sandbox-boxd plugin declares");
     const fake = testkit.fakeContext(boxd);
     expect(fake.ctx.config.get()).toEqual({});
@@ -198,4 +200,19 @@ describe("capcomd plugins validate (§4.9, §14)", () => {
     expect(JSON.parse(b.out)).toMatchObject({ ok: false, plugins: [{ ok: false, source: "dir", issues: expect.arrayContaining([expect.objectContaining({ path: "name" })]) }] });
     expect(cli("no-such-plugin").code).toBe(3);
   }, 60_000);
+  test("a plugin directory whose default secret names one of the kernel's own variables is refused (§10.3)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-plugin-dir-"));
+    const write = (ref: string) => writeFileSync(join(dir, "plugin.json"), JSON.stringify({
+      schema: "capcomd.plugin/v1", name: "gh-notify", version: "1.0.0", description: "Posts to GitHub", apiVersion: 1,
+      engines: { capcomd: ">=0.0.0" }, entry: { runtime: "process", command: ["./run.sh"] }, contributes: { hooks: { "run.changed": {} } },
+      config: { type: "object", additionalProperties: false, properties: { token: { type: "object", "x-secret": true, default: { $secret: ref } } } },
+    }));
+    writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
+    write("env:GITHUB_TOKEN");
+    const r = cli(dir);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("✗ config.properties.token.default: names env:GITHUB_TOKEN, one of capcomd's own variables");
+    write("env:GH_NOTIFY_TOKEN");
+    expect(cli(dir).code).toBe(0);
+  });
 });

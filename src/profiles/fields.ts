@@ -4,7 +4,7 @@
 // value is a string in one encoding both ways (a list is a JSON array). Labels, help and `display` are written here,
 // except for the free text a profile's file holds (`description`, `identity.title`, a value outside the catalog). No
 // prompt text is ever served: a prompt row says only whether it is set.
-import { redactShapes } from "../agents/redact";
+import { REDACTED, Redactor, SECRET_KEY } from "../agents/redact";
 import { agentSeams } from "../plugins/agents";
 import { profileValues } from "./describe";
 import type { ResolvedProfile } from "./load";
@@ -124,6 +124,17 @@ function encode(f: ProfileFieldSpec, v: unknown): string | null {
 }
 
 /** A value outside the catalog, shown as the file has it: one line, at most 80 characters. */
+/**
+ * A value of the file as a reading client may see it: the token shapes the redactor knows taken out, a value under a
+ * key named like a secret (`password`, `apiKey`, `token`, …; the row's own last key too) replaced whole, and a URL's
+ * password. It is still text from the file: a secret with no such shape or key shows.
+ */
+function withoutSecrets(path: string, v: unknown): string {
+  if (SECRET_KEY.test(path.slice(path.lastIndexOf(".") + 1)) && v !== null && v !== undefined) return REDACTED;
+  const r = new Redactor().value(v);
+  return (typeof r === "string" ? r : JSON.stringify(r)).replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]*:)[^\s/?#@]+@/gi, `$1${REDACTED}@`);
+}
+
 function shown(v: unknown): string {
   const t = typeof v === "string" ? v : JSON.stringify(v);
   const line = t.split("\n")[0]!;
@@ -163,9 +174,9 @@ export function profileFields(p: ResolvedProfile): ProfileField[] {
     if (BY_ID.has(v.path) || NOT_A_ROW.has(v.path)) continue;
     const r = row({ id: v.path, type: "info", label: v.path, help: "capcomd shows it as the profile's file has it; change it there", unset: "Not set", untrusted: true }, v.value);
     // An MCP server or a context provider by its name: a server's command line, or a provider's own settings, may
-    // carry a token, and the rows are served to any reading client. Any other value (an `x-` field) has the token
-    // shapes the redactor knows taken out, before it is cut to one line.
-    const value = BY_NAME.has(v.path) && Array.isArray(v.value) ? v.value.map((s) => (s && typeof s === "object" && typeof (s as { name?: unknown }).name === "string" ? (s as { name: string }).name : "?")).join(", ") : redactShapes(v.value);
+    // carry a token, and the rows are served to any reading client. Any other value (an `x-` field, `sharing.source`)
+    // is shown without what looks secret, before it is cut to one line.
+    const value = BY_NAME.has(v.path) && Array.isArray(v.value) ? v.value.map((s) => (s && typeof s === "object" && typeof (s as { name?: unknown }).name === "string" ? (s as { name: string }).name : "?")).join(", ") : withoutSecrets(v.path, v.value);
     rows.push({ ...r, value: null, display: shown(value) });
   }
   return rows;
