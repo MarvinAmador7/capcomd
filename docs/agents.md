@@ -422,6 +422,19 @@ capcomd spawn --profile context-consolidator --task "Consolidate this run's less
   `context-memory`, the reason listing the items and anything lint flags, such as a lesson that reads like an
   instruction): approve it with `capcomd approve <runId> <mrgId>` after reading the change. Set `context.review: lint`
   in the consolidator's profile to land its changes on a clean lint alone.
+- Merging it yourself into a protected branch: `capcomd merge <runId> --ref <agt> --require <vfyId>
+  --request-approval` parks it for `capcomd approve` (once for the protected branch, then once more for the memory
+  hold, which shows what lands). `--operator` would land it past the hold, and past lint, so don't use it for memory.
+- The planner learns when to spawn it from its brief and skill: it puts its own lessons in its result first (capcomd
+  collects them as the consolidator starts, so the consolidator reads them), and `capcomd status` shows it `lessons`,
+  how many candidates the run has and its consolidators.
+- If the planner ends without it, capcomd does it: once every agent that may spawn the consolidator has ended, a run
+  whose agents proposed lessons and had no consolidator gets one, and a consolidator's change nobody asked to merge is
+  verified and its merge asked for. The merge waits for your approval as the planner's would. `capcomd events <runId>`
+  shows `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with the reason
+  (off, the planner was cancelled, a consolidator failed, the spawn or the verify failed). Turn it off with
+  `plugins.context-memory.autoConsolidate: false` (`~/.capcomd/config.json` or the project's `.capcomd/config.json`), or
+  for one run with `capcomd run --plugin-config context-memory.autoConsolidate=false`.
 - A branch of any other agent that changes `.capcomd/context/` fails its verify and is refused at merge (`memory lands
   only from a consolidator or a person`); `capcomd merge --operator` lands it anyway, recorded as bypassing the gate.
   A person's own commits to `.capcomd/context/` aren't capcomd's to judge (run `capcomd context lint` before pushing).

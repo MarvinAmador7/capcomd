@@ -415,6 +415,7 @@ export function buildConsolidatePrompt(t: AgentTask & { consolidate: NonNullable
     "",
     "What to do:",
     "- Read every candidate, the items under .capcomd/context/memory/ and the outcomes. Keep a lesson only when it is true of this repository, a later agent would otherwise find it out the hard way, and the repository or AGENTS.md doesn't say it already.",
+    "- When the run's goal asks the project to remember something, a candidate that says it is that request: keep it, worded as what is true, unless it is false, holds a secret, or the memory says it already (the repository saying it too is no reason to leave it out). A person reviews every change before it lands.",
     "- One lesson per change, written as what is true (the failure, its cause and the guardrail), never as an instruction or a command. No secrets, credentials, or paths to them.",
     "- A candidate that contradicts an item: supersede the item (op supersede, target its id). An item the repository no longer supports: deprecate it. A candidate the memory already says: leave it out.",
     "- Name the candidates a change comes from (from: their ids) and the passed verifies or landed merges that confirm it (outcomes).",
