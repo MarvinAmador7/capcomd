@@ -200,7 +200,9 @@ const kernelDeps: IntakeDeps = {
   },
   async standing(runId) {
     const { existingActor } = await import("../core/relay");
-    const s = /^run-[A-Za-z0-9_-]+$/.test(runId) ? await existingActor("scope", [runId]).catch(() => null) : null;
+    // The engine's error is passed on: a run it can't say about isn't a run that doesn't exist (that would end the run's
+    // subscriptions, and a trigger on its thread could start a second run).
+    const s = /^run-[A-Za-z0-9_-]+$/.test(runId) ? await existingActor("scope", [runId]).catch((e) => { throw new PluginError("unavailable", `the engine didn't answer: ${(e as Error)?.message ?? e}`, undefined, true); }) : null;
     if (!s) return { exists: false, live: false, endedAt: null, stopped: false };
     const { lifecycleEvents } = await import("../api/lifecycle");
     const evs = await s.getEvents({});

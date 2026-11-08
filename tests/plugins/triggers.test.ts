@@ -4,7 +4,7 @@
 // on the daemon's host only, and the two built-in sources: schedules (source-schedule, on its timers) and GitHub comments
 // (forge-github). Runs start and messages go through injected stand-ins here; tests/scenarios/triggers.test.ts has the
 // real ones.
-import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,13 @@ import { commentTrigger, pollGitHub, RETRY_TRIES } from "../../src/plugins/forge
 import type { IssueComment } from "../../src/plugins/forges/github-rest";
 import { admit, gateOf, listSubscriptionRecords, readTriggerLog, resetTriggers, subscribe, subscriptions, sweepTriggers, threadMatches, triggerMessage, triggerOfRun, triggersConfig, useIntakeDeps, useTriggerEvents, type RunStanding } from "../../src/triggers/intake";
 import { capcomd } from "../helpers/engine";
+import * as relay from "../../src/core/relay";
+
+// The engine's lookup of a run, as the kernel's own `standing` makes it: failing when a test says so (an engine that
+// errors rather than hangs), else the real one.
+let lookupFails: Error | null = null;
+const realExistingActor = relay.existingActor;
+mock.module("../../src/core/relay", () => ({ ...relay, existingActor: (...a: Parameters<typeof realExistingActor>) => (lookupFails ? Promise.reject(lookupFails) : realExistingActor(...a)) }));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const SOURCE: Principal = { kind: "plugin", name: "test-source", scopes: ["steer"] };
@@ -185,6 +192,26 @@ describe("the intake decides in order and records each decision", () => {
       expect(await admit(t, SOURCE)).toMatchObject({ kind: "continued", runId: "run-slow" });
       expect(started).toEqual([]);
     } finally { delete process.env.CAPCOMD_TRIGGERS_ENGINE_MS; }
+  });
+
+  test("the kernel's own lookup of a run the engine errors on: the subscription holds and no second run starts", async () => {
+    setGate({ test: { allowed: ["alice"], mode: "auto" } });
+    // An hour-old subscription (past the starting grace): a run the engine said doesn't exist would end it here.
+    setSystemTime(new Date(Date.now() - 3_600_000));
+    try { await subscribe({ runId: "run-first", source: "test", thread: "pr/7" }, "intake", { started: true }); } finally { setSystemTime(); }
+    // Runs start and messages go to stand-ins; where a run stands is the kernel's own lookup.
+    useIntakeDeps({
+      startRun: async (input, principal) => { started.push({ ...input, principal }); return { runId: "run-second" }; },
+      deliver: async (runId, m) => { delivered.push({ runId, ...m }); return { seq: delivered.length }; },
+    });
+    lookupFails = new Error("engine overloaded");
+    try {
+      await expect(admit(trigger({ thread: "pr/7" }), SOURCE)).rejects.toMatchObject({ code: "unavailable", retryable: true, message: expect.stringContaining("engine overloaded") });
+      expect(started).toEqual([]);
+      expect(listSubscriptionRecords().map((s) => s.runId)).toEqual(["run-first"]);
+      // A plugin subscribing a run the engine can't say about is told to try again, not that the run doesn't exist.
+      await expect(subscribe({ runId: "run-other", source: "test", thread: "pr/8" }, "plugin:test-source")).rejects.toMatchObject({ code: "unavailable" });
+    } finally { lookupFails = null; }
   });
 
   test("a run started and its log line couldn't be written: the trigger stays deduped, and the failure is recorded", async () => {
