@@ -11,6 +11,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   also judges the agent whose work actually lands: when an agent handed its task off, the gate judges its successor.
   A `capcomd/<run>/<agent>` branch from another run is now judged as that run's agent, not let through as if a person
   had written it.
+- Fixed: `capcomd profiles set` and `PUT /v1/profiles/{name}` keep an edited profile file's permissions (a file
+  you made readable only by you stays so). `GET /v1/profiles/{name}` shows a context provider by its name only and,
+  in other read-only rows (an `x-` field, `sharing.source`), hides token-shaped text, a value under a key such as
+  `password`, `apiKey` or `token`, and a URL's password. `PUT` refuses a number too large to store exactly instead
+  of writing it as `1e+23`.
 - Fix: `capcomd_profiles`, `capcomd profiles list` and `GET /v1/profiles` call a profile read-only (`fit`, `does`)
   only when its agent really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by
   `sandbox.codex: read-only`. A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a
