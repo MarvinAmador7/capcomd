@@ -896,7 +896,7 @@ Four things stood between D6 and a held memory change, each fixed:
   --request-approval` parks the merge for `capcomd approve` as an agent's is (the gates then run at the approval, and
   `context-memory`'s hold is a second approval of what lands), where `--operator` bypasses every plugin's veto.
 
-**Made while closing the live gaps: the memory index and the brief's order** (spec 1.0.59; where the code and §6.1 or
+**Made while closing the live gaps: the memory index and the brief's order** (spec 1.0.60; where the code and §6.1 or
 §10 differ, the code is right and this list says why):
 
 - §10's "`files:` is honoured as the index path" is now read: `memory.files: [NOTES.md]` becomes the memory entry's

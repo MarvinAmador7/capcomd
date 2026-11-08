@@ -34,13 +34,21 @@ const v1 = AGENTS_JSON_SCHEMA.$defs.agent.properties;
 /** A file next to the manifest, by a relative name (`SOUL.md`, `prompts/review.md`): never absolute, never `..`. */
 export const FILE_REF = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9_][A-Za-z0-9._/-]*\.(?:md|txt)$/;
 const fileRef = { type: "string", pattern: FILE_REF.source };
+/** `harness.cliVersion`: a semver range as npm writes one (`>=2.1`, `^2.1.0`, `2.x`, `>=2.1 <3`, `1.2 - 1.4`, `a || b`),
+ *  at most CLI_VERSION_MAX characters. Checked here: Bun.semver.satisfies takes any text, and says yes to some it can't read. */
+const VERSION_PART = "(?:0|[1-9][0-9]{0,8}|[xX*])";
+const VERSION = `v?${VERSION_PART}(?:\\.${VERSION_PART}){0,2}(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?`;
+const COMPARATOR = `(?:[<>]=?|=|~|\\^)?\\s*${VERSION}`;
+const VERSION_SET = `(?:${VERSION}\\s+-\\s+${VERSION}|${COMPARATOR}(?:\\s+${COMPARATOR})*)`;
+export const CLI_VERSION_RANGE = new RegExp(`^\\s*${VERSION_SET}(?:\\s*\\|\\|\\s*${VERSION_SET})*\\s*$`);
+export const CLI_VERSION_MAX = 64;
 export { CONTEXT_LIMITS };
 const DAYS = /^[1-9][0-9]*d$/;
 
 /** Each block and its keys. Fields the flat spec has are checked once resolved (./v1.ts validateSpec); the rest here. */
 const BLOCKS: Record<string, Record<string, object>> = {
   identity: { title: text, persona: fileRef, avatar: { type: "object", additionalProperties: false, required: ["seed"], properties: { seed: text } } },
-  harness: { provider: v1.provider, auth: v1.auth, model: v1.model, effort: v1.effort, cliVersion: { ...text, description: "A version range the environment's agent CLI must satisfy" } },
+  harness: { provider: v1.provider, auth: v1.auth, model: v1.model, effort: v1.effort, cliVersion: { ...text, maxLength: CLI_VERSION_MAX, pattern: CLI_VERSION_RANGE.source, description: "A semver range (>=2.1, ^2.1.0) the agent CLI recorded for its environment (capcomd env build) must satisfy; a spawn is refused otherwise" } },
   prompt: {
     system: { ...str, description: "Replaces the CLI's system prompt; a file name (prompt.md) in a profile directory is read from it" },
     append: { ...str, description: "Appended to the system prompt; a file name (prompt.md) in a profile directory is read from it" },
@@ -160,7 +168,7 @@ export function checkManifest(raw: unknown, as: "profile" | "override", fileName
   if (id.persona != null && (typeof id.persona !== "string" || !FILE_REF.test(id.persona))) at("identity.persona", "must name a .md or .txt file next to the manifest (SOUL.md)");
   if (id.avatar != null && !(isMap(id.avatar) && Object.keys(id.avatar).every((k) => k === "seed") && typeof id.avatar.seed === "string" && id.avatar.seed)) at("identity.avatar", "must be { seed: <text> }");
   const h = block("harness");
-  if (h.cliVersion != null && (typeof h.cliVersion !== "string" || !h.cliVersion)) at("harness.cliVersion", "must be a non-empty string");
+  if (h.cliVersion != null && (typeof h.cliVersion !== "string" || h.cliVersion.length > CLI_VERSION_MAX || !CLI_VERSION_RANGE.test(h.cliVersion))) at("harness.cliVersion", `must be a semver range of at most ${CLI_VERSION_MAX} characters (>=2.1, ^2.1.0, >=2.1 <3)`);
 
   if (raw.skills != null) {
     if (!Array.isArray(raw.skills)) at("skills", "must be a list of { name, source?, hash? }");
@@ -353,12 +361,16 @@ export function flatOverrides(set: Record<string, unknown>): Record<string, unkn
 /** The v2 paths `--set` takes a comma list for. */
 export const LIST_PATHS = ["sandbox.egress", "tools.allowed", "tools.disallowed", "tags"];
 
+/** The paths this capcomd reads but doesn't apply yet. None now: `tools.mcp`, `sandbox.provider|environment|size` and
+ *  `lifecycle.onStart|onEnd` apply since ADR-024 §7 step 8 (./runtime.ts), `context` since ADR-025's router,
+ *  `identity.persona` (./persona.ts) and `harness.cliVersion` (src/env/cli-version.ts) since they got theirs. A block
+ *  added before its runtime is listed here until it has one. */
+const NOT_APPLIED: readonly string[] = [];
 /**
  * What a resolved manifest sets that this capcomd reads but doesn't apply yet, so `validate` can say so instead of the
- * setting silently doing nothing. `tools.mcp`, `sandbox.provider|environment|size` and `lifecycle.onStart|onEnd` apply
- * since ADR-024 §7 step 8 (./runtime.ts), `context` since ADR-025's router.
+ * setting silently doing nothing.
  */
 export function notApplied(doc: ProfileDoc): string[] {
   const set = (path: string) => { const v = get(doc, path); return v !== undefined && v !== null && !(Array.isArray(v) && !v.length); };
-  return ["identity.persona", "harness.cliVersion"].filter(set);
+  return NOT_APPLIED.filter(set);
 }

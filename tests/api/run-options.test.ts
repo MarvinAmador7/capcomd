@@ -646,6 +646,10 @@ describe("GET /v1/run-options planners (capability runs.options.planners; ADR-02
 			"rev/profile.yaml": "name: rev\nharness: { provider: claude, auth: subscription }\nchildren: { allowSpawn: true, allowedChildProfiles: [worker] }\nskills: [{ name: house-rules }]\n",
 			"rev/skills/house-rules/SKILL.md": "---\nname: house-rules\ndescription: How we review.\n---\nReview carefully.\n",
 			"cx/profile.yaml": "name: cx\nharness: { provider: codex, auth: subscription }\nchildren: { allowSpawn: true, allowedChildProfiles: [worker] }\n",
+			// A project persona waits for trust as a skill does; a CLI range its environment doesn't record is refused.
+			"soul/profile.yaml": "name: soul\nharness: { provider: claude, auth: subscription }\nchildren: { allowSpawn: true, allowedChildProfiles: [worker] }\nidentity: { persona: SOUL.md }\n",
+			"soul/SOUL.md": "You are Vera.\n",
+			"pin/profile.yaml": "name: pin\nharness: { provider: claude, auth: subscription, cliVersion: \">=2.1\" }\nchildren: { allowSpawn: true, allowedChildProfiles: [worker] }\n",
 		};
 		const env = place(files);
 		// No daemon to ask: the lifecycle isn't held against it (its spawn asks again).
@@ -659,6 +663,9 @@ describe("GET /v1/run-options planners (capability runs.options.planners; ADR-02
 		expect(by.night).toMatchObject({ available: false, reason: "profile night can't be spawned: its lifecycle names notes, which isn't an active plugin listening to agent.changed on this daemon (`capcomd plugins list` shows each plugin and its state)" });
 		expect(by.rev).toMatchObject({ available: false, reason: "profile rev can't be spawned: its project skill house-rules isn't trusted (run `capcomd profiles trust rev`)" });
 		expect(by.cx).toMatchObject({ provider: "codex", available: false, reason: "Not logged in to Codex (run capcomd auth login codex)" });
+		expect(by.soul).toMatchObject({ available: false, reason: "profile soul can't be spawned: its project persona SOUL.md isn't trusted (run `capcomd profiles trust soul`)" });
+		// Its plan login is kept in an image made from the environment x, whose build recorded no claude version.
+		expect(by.pin).toMatchObject({ available: false, reason: "profile pin: harness.cliVersion >=2.1 can't be checked: the environment x has no recorded claude version (build an environment with a CLI in that range, or change its harness.cliVersion)" });
 		expect(by.planner).toMatchObject({ available: true });
 		resetDockerCheck();
 	});
