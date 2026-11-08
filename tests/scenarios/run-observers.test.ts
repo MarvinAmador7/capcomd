@@ -1,6 +1,6 @@
 // The runs index and each run's trace directory are written by the daemon's observers of run.changed (plugin API
 // §6.6.4, §17.1: observe-runs-index, observe-traces, src/plugins/observe.ts), from what `run new` kept with the run,
-// not by `run new` itself: the row is the one `run new` always wrote, in the daemon's index.
+// not by `run new` itself: the row is the one `run new` always wrote, in the index it lists runs from.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -10,7 +10,7 @@ import { world, type World } from "./harness";
 
 let w: World;
 const work = mkdtempSync(join(tmpdir(), "capcomd-observers-"));
-/** The daemon's runs index (the engine and the CLI share it, as they share the capcomd home). */
+/** The runs index (the engine and the CLI share it, as they share the capcomd home). */
 const index = join(work, "runs.jsonl");
 beforeAll(async () => { w = await world("observers", { CAPCOMD_RUNS_INDEX: index }); }, 120_000);
 afterAll(async () => { await w?.stop(); }, 60_000);
@@ -28,10 +28,14 @@ async function runNew(cwd: string, args: string[], env: Record<string, string> =
   return JSON.parse(out.trim().split("\n").pop()!).runId as string;
 }
 
-test("a created run's row is the one run new wrote: its creator's folder, repository and label, in the daemon's index", async () => {
+test("a created run's row is the one run new wrote: its creator's folder, repository and label, in its creator's index", async () => {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "capcomd-observers-project-")));
-  // The CLI's own CAPCOMD_RUNS_INDEX names another file: the row isn't the CLI's to write any more.
+  // The CLI lists runs from another file (its own CAPCOMD_RUNS_INDEX): the row goes there, where it always went.
   const theirs = join(work, "cli-runs.jsonl");
+  const rowOf = async (runId: string) => {
+    for (let i = 0; i < 100; i++) { const l = (existsSync(theirs) ? readFileSync(theirs, "utf8").split("\n") : []).find((x) => x && JSON.parse(x).runId === runId); if (l) return l; await Bun.sleep(100); }
+    return null;
+  };
   const key = `obs-${Date.now()}`;
   const runId = await runNew(project, ["--label", "watch me", "--key", key], { CAPCOMD_RUNS_INDEX: theirs, CAPCOMD_TRACE_DIR: join(work, "cli-traces") });
   const line = await rowOf(runId);
@@ -40,15 +44,15 @@ test("a created run's row is the one run new wrote: its creator's folder, reposi
   const created = (await client().scope.getOrCreate([runId]).getScope({}))!.createdAt;
   // Byte for byte: the same keys in the same order.
   expect(line).toBe(JSON.stringify({ runId, label: "watch me", repo: w.env.CAPCOMD_REPO ?? null, cwd: project, createdAt: created }));
-  expect(existsSync(theirs)).toBe(false);
+  expect(rows().some((l) => JSON.parse(l).runId === runId)).toBe(false);
   // The trace directory is the creator's, for `capcomd trace` in another shell.
   let trace: unknown = null;
   for (let i = 0; i < 100 && !trace; i++) { trace = (await w.cj(["kv", "get", runId, "_trace"])).j?.value; if (!trace) await Bun.sleep(100); }
   expect(trace).toEqual({ dir: join(work, "cli-traces") });
   // A retry of the same run new is no second row.
-  expect(await runNew(project, ["--label", "watch me", "--key", key])).toBe(runId);
+  expect(await runNew(project, ["--label", "watch me", "--key", key], { CAPCOMD_RUNS_INDEX: theirs })).toBe(runId);
   await Bun.sleep(500);
-  expect(rows().filter((l) => JSON.parse(l).runId === runId)).toHaveLength(1);
+  expect(readFileSync(theirs, "utf8").split("\n").filter((l) => l && JSON.parse(l).runId === runId)).toHaveLength(1);
 }, 120_000);
 
 test("a run whose run new failed partway is never created as far as plugins know: no row, so it holds no goal branch", async () => {

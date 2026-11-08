@@ -608,10 +608,10 @@ is `invalid_result`.
 cost observers. `created` is told when `ops.runNew` finished creating the run (its last step, scope `setOrigin`), not
 at the scope's first event: a run whose `run new` failed partway (its goal branch refused, say) is never told as
 created. `setOrigin` keeps with the run what `run new`'s process knew of where it ran (its folder, `CAPCOMD_REPO`, trace
-directory and goal branch; scope `getOrigin`). The runs index and each run's trace directory are the built-in
-observers' (§17.1, `src/plugins/observe.ts`), in the daemon: on `created`, `observe-runs-index` appends the run's row
-to the runs index (`src/primitives/ops.ts` `runsIndexPath`, the daemon's), the row `run new` wrote itself before, and
-`observe-traces` writes the run's `_trace` key. A run the index doesn't have yet (one created while the daemon's
+directory, goal branch and the runs index it lists runs from; scope `getOrigin`). The runs index and each run's trace
+directory are the built-in observers' (§17.1, `src/plugins/observe.ts`), in the daemon: on `created`,
+`observe-runs-index` appends the run's row to that runs index (`src/primitives/ops.ts` `runsIndexPath` in `run new`'s
+process), the row `run new` wrote there itself before, and `observe-traces` writes the run's `_trace` key. A run the index doesn't have yet (one created while the daemon's
 plugins were starting, before anything listened) gets its row the first time `run.changed` tells of it; one with no
 origin is left alone (not finished, or made by a capcomd whose `run new` wrote its own row).
 

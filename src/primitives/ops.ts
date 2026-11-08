@@ -386,7 +386,7 @@ export async function runNew(o: RunNewOpts) {
   // index, the run's trace directory: run.changed `created`, src/plugins/observe.ts). Not on a retry: a run is recorded
   // once, by the call that created it.
   if (res.created) {
-    const origin = { cwd: process.cwd(), repo: repoEnv.CAPCOMD_REPO ?? null, traceDir: (await import("../utils/tracing-simple")).traceDir(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) };
+    const origin = { cwd: process.cwd(), repo: repoEnv.CAPCOMD_REPO ?? null, traceDir: (await import("../utils/tracing-simple")).traceDir(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}), index: resolve(runsIndexPath()) };
     await c.scope.getOrCreate([runId]).setOrigin({ origin }).catch(() => {});
   }
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.

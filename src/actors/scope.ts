@@ -219,7 +219,12 @@ export type GoalState = {
 
 /** What the process that created a run knew of where it ran (`run new`, src/primitives/ops.ts), kept with the run so
  *  the daemon's observers can record it (observe-runs-index, observe-traces: src/plugins/observe.ts). */
-export type RunOrigin = { cwd: string; repo: string | null; traceDir: string; goalBranch?: string };
+export type RunOrigin = {
+  cwd: string; repo: string | null; traceDir: string; goalBranch?: string;
+  /** The runs index that process lists runs from (its CAPCOMD_RUNS_INDEX, else its home's), so the run is listed where
+   *  it would have written it itself. */
+  index?: string;
+};
 
 /** The run's title as its planner set it (`capcomd title --run`, scope_meta run_title), with its rename counts. */
 export type RunAgentTitle = { title: string; setBy: string; at: number; count: number; last: Record<string, number> };

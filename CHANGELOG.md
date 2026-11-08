@@ -12,10 +12,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   writes one named `planner`), or turn the placeholder back on with `capcomd plugins enable recipe-hierarchical` (or
   `CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED=true`). The same goes for `POST /v1/runs` without a driver on such a
   place: it answers 422 with that reason. `capcomd plugins list` shows it as `recipe-hierarchical`.
-- The run list (`state/runs.jsonl`) and each run's trace directory are now recorded by capcomd's daemon, as two
-  built-in plugins you can see in `capcomd plugins list` (`observe-runs-index`, `observe-traces`). The rows are the
-  same as before. If you point `capcomd run new` at another index with `CAPCOMD_RUNS_INDEX`, set it for the daemon
-  too: the daemon's setting decides where runs are listed now.
+- The run list (`state/runs.jsonl`, or the file `CAPCOMD_RUNS_INDEX` names for `capcomd run new`) and each run's
+  trace directory are now recorded by capcomd's daemon, as two built-in plugins you can see in `capcomd plugins list`
+  (`observe-runs-index`, `observe-traces`). The rows are the same as before, in the same file.
 - Plugins that listen to `run.changed` are now told `created` once `capcomd run new` has finished setting the run up,
   not when its record is first made. A run whose `run new` failed partway is never told as created.
 - The settings and info rows of a place's details screen (`GET /v1/sandboxes/{name}`) now come from that place's

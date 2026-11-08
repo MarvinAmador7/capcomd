@@ -3,8 +3,9 @@
 // knew of where it ran (scope `setOrigin`, read back with `getOrigin`: its folder, repository, trace directory and goal
 // branch, src/primitives/ops.ts runNew) and tells the daemon's plugins the run was created (`created`,
 // src/plugins/changes.ts tellCreated); a run whose `run new` failed partway is never told so. Then:
-//  - observe-runs-index appends the run's row to the runs index (src/primitives/ops.ts runsIndexPath; read by
-//    `capcomd_runs`, GET /v1/runs, `ctx.runs`), exactly as `run new` wrote it. A run it hasn't recorded yet is recorded
+//  - observe-runs-index appends the run's row to the runs index its creator lists runs from (src/primitives/ops.ts
+//    runsIndexPath, in `run new`'s process; read by `capcomd_runs`, GET /v1/runs, `ctx.runs`), exactly as `run new`
+//    wrote it there. A run it hasn't recorded yet is recorded
 //    the first time it hears of it, so a run created while the daemon's plugins were starting is listed once its run
 //    changes again (an agent starts, it ends);
 //  - observe-traces records the run's trace directory (`_trace`: where its spans are written, for `capcomd trace` in
@@ -13,7 +14,7 @@
 // Both are built-ins the kernel runs on (listed, never disabled), loaded in the daemon only: the `*.changed` hooks fire
 // there (§6.1).
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { definePlugin } from "../../packages/plugin/src/context";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import type { RunRow } from "../primitives/ops";
@@ -47,23 +48,26 @@ function recordedIn(path: string): Set<string> {
   return s;
 }
 
-/** Append the run's row unless the index has it: `run new`'s row, from what the run's creator kept with it. A run with
+/** Runs this daemon has settled (recorded, found recorded, or with nothing kept), so each is looked up once. */
+const settled = new Set<string>();
+
+/** Append the run's row unless its index has it: `run new`'s row, from what the run's creator kept with it. A run with
  *  nothing kept (made by an older capcomd, whose `run new` wrote its own row) is left alone. */
 export async function indexRun(runId: string): Promise<boolean> {
   const O = await import("../primitives/ops");
-  const path = O.runsIndexPath();
-  const seen = recordedIn(path);
-  if (seen.has(runId)) return false;
+  if (settled.has(runId) || recordedIn(O.runsIndexPath()).has(runId)) return false;
   const o = await O.runOrigin(runId);
-  if (!o || seen.has(runId)) return false;
+  if (!o) { settled.add(runId); return false; }
+  // The index its creator lists runs from (where its `run new` wrote the row itself), else this daemon's.
+  const path = o.index && isAbsolute(o.index) ? o.index : O.runsIndexPath();
+  const seen = recordedIn(path);
+  if (seen.has(runId)) { settled.add(runId); return false; }
   const row: RunRow = { runId, label: o.label, repo: o.repo, cwd: o.cwd, createdAt: o.createdAt, ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) };
   try { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, JSON.stringify(row) + "\n"); } catch { return false; /* an index, not state */ }
   seen.add(runId);
+  settled.add(runId);
   return true;
 }
-
-/** Forget what the index was read as (tests that replace the file). */
-export function forgetRecorded(): void { recorded.clear(); }
 
 export const runsIndex = definePlugin({
   activate(ctx) {
