@@ -72,11 +72,17 @@ type Schema = {
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
-/** JSON merge-patch (RFC 7396): objects merge recursively, anything else replaces, `null` deletes. */
+/** `o` itself has `k` (not its prototype: a schema's `properties.constructor` isn't Object's). */
+const own = (o: object | undefined, k: string): boolean => !!o && Object.hasOwn(o, k);
+
+/** JSON merge-patch (RFC 7396): objects merge recursively, anything else replaces, `null` deletes. A `__proto__` key
+ *  (JSON.parse makes it an own one) is no setting: assigned, it would swap the result's prototype, which then carries
+ *  the layer's values past every check of its own keys. */
 export function mergePatch(target: unknown, patch: unknown): unknown {
   if (!isObject(patch)) return patch;
   const out: Record<string, unknown> = isObject(target) ? { ...target } : {};
   for (const [k, v] of Object.entries(patch)) {
+    if (k === "__proto__") continue;
     if (v === null) delete out[k];
     else out[k] = mergePatch(out[k], v);
   }
@@ -142,11 +148,13 @@ export function checkSchema(s: Schema, v: unknown, path = ""): Array<{ path: str
   }
   if (Array.isArray(v) && s.items) v.forEach((x, i) => out.push(...checkSchema(s.items!, x, `${path}[${i}]`)));
   if (isObject(v)) {
-    for (const r of s.required ?? []) if (!(r in v)) out.push({ path: path ? `${path}.${r}` : r, message: "is required" });
+    for (const r of s.required ?? []) if (!own(v, r)) out.push({ path: path ? `${path}.${r}` : r, message: "is required" });
     for (const [k, x] of Object.entries(v)) {
       const p = path ? `${path}.${k}` : k;
-      const prop = s.properties?.[k];
-      if (prop) out.push(...checkSchema(prop, x, p));
+      // Only the schema's own properties: `toString` or `constructor` would otherwise pass any schema (as Object's).
+      const prop = own(s.properties, k) ? s.properties![k] : undefined;
+      if (k === "__proto__") out.push({ path: p, message: "is not a setting of any plugin" });
+      else if (prop) out.push(...checkSchema(prop, x, p));
       else if (s.additionalProperties === false) out.push({ path: p, message: "is not a setting of this plugin" });
       else if (isObject(s.additionalProperties)) out.push(...checkSchema(s.additionalProperties, x, p));
     }

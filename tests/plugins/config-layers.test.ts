@@ -13,7 +13,7 @@ import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { configured } from "../../src/plugins/host";
 import { resolveSecret } from "../../src/plugins/secrets";
 import { checkRunPluginConfig, parsePluginConfigFlags, pluginConfigFlags, runConfigIssues, RunConfigError } from "../../src/plugins/run-config";
-import { pluginConfigFiles, pluginSettings } from "../../src/plugins/config";
+import { checkSchema, pluginConfigFiles, pluginSettings } from "../../src/plugins/config";
 import { pluginStore } from "../../src/plugins/storage";
 import { addClient, loadClients } from "../../src/api/clients";
 import { harnessApp } from "../../src/api/server";
@@ -73,6 +73,27 @@ describe("layers 1-4 (§10.2)", () => {
     expect(events.filter((e) => e.type === "plugin.config_refused").map((e) => e.data)).toEqual([{ plugin: "notify", layer: "project", errors: [{ path: "channel", message: "must be string" }] }]);
     host.plan([{ source: "builtin", manifest: M, configErrors: [{ path: "channel", layer: "user", message: "must be string" }] }]);
     expect(host.get("notify")).toMatchObject({ state: "failed", cause: "config_invalid" });
+  });
+
+  test("a key named like Object's own (toString, constructor) or __proto__ is no setting: refused, never in the config", () => {
+    // As the config file reads them: JSON.parse makes `__proto__` an own key.
+    const project = JSON.parse('{"notify": {"toString": 1, "constructor": {"x": 1}, "hasOwnProperty": "no"}}') as Record<string, unknown>;
+    const s = pluginSettings(M, { env: {}, files: files({ notify: { channel: "#ops" } }, project), source: "user" });
+    expect(s.errors.map((e) => [e.path, e.layer, e.setAside])).toEqual([["toString", "project", true], ["constructor", "project", true], ["hasOwnProperty", "project", true]]);
+    expect(Object.keys(s.config)).toEqual(["channel"]);
+    expect(configured({ source: "user", manifest: M }, {}, files({}, project)).config).toBeUndefined();
+    // `__proto__` would swap the config's prototype: a secret reference (or any value) the checks of its own keys never saw.
+    const user = JSON.parse('{"notify": {"__proto__": {"webhook": {"$secret": "env:BOXD_API_KEY"}, "channel": 7}}}') as Record<string, unknown>;
+    const u = pluginSettings(M, { env: {}, files: files(user) });
+    expect(u.errors).toEqual([{ path: "__proto__", layer: "user", message: "is not a setting of any plugin" }]);
+    expect(Object.getPrototypeOf(u.config)).toBe(Object.prototype);
+    expect((u.config as Record<string, unknown>).webhook).toBeUndefined();
+    // Even with no schema to check it against, a merge never takes it.
+    const free = pluginSettings({ name: "free" }, { env: {}, files: files(JSON.parse('{"free": {"__proto__": {"a": 1}}}') as Record<string, unknown>) });
+    expect(Object.getPrototypeOf(free.config)).toBe(Object.prototype);
+    expect((free.config as Record<string, unknown>).a).toBeUndefined();
+    // A `required: ["constructor"]` isn't met by Object's.
+    expect(checkSchema({ type: "object", required: ["constructor"] }, { a: 1 })).toEqual([{ path: "constructor", message: "is required" }]);
   });
 
   test("the kernel reads the user's and the project's config files; a plugin from a directory is configured too", () => {

@@ -12,6 +12,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fixed: `capcomd run --plugin-config` and `POST /v1/runs` `plugins` accept settings for a plugin version you allowed
   with `capcomd plugins allow-version`; before, they answered "no plugin … here" although the daemon ran it.
   `--plugin-config` also refuses `__proto__`, `constructor` and `prototype` in a setting's path.
+- Fixed: a plugin's settings named like a built-in JavaScript property (`toString`, `constructor`, `hasOwnProperty`)
+  or `__proto__` are refused like any other setting its schema doesn't have. Before, a project's
+  `.capcomd/config.json` could hand any of your plugins such a setting although its schema allowed none, and a
+  `__proto__` key carried values past the checks (a secret reference among them). A project's are set aside with a
+  warning, as its other refused settings for your plugins are.
 - Fixed: a profile whose `sandbox.provider` or `harness.provider` names a plugin the daemon has loaded no longer
   breaks `capcomd profiles list`, `validate` and every other profile command outside the daemon. They now ask the
   running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
