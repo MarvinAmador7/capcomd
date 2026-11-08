@@ -14,11 +14,13 @@ type Env = Record<string, string | undefined>;
 export const pluginsSnapshotPath = (env: Env = process.env) => join(stateDir(env), "plugins.json");
 export type PluginsSnapshot = { pid: number; at: string; plugins: PluginSummary[] };
 
-/** The running daemon's listing, or null when there is none or the daemon that wrote it is gone. */
+/** The running daemon's listing, or null when there is none or the daemon that wrote it is gone. A pid that isn't a
+ *  process's (0 and -1 name a process group and every process, which a signal 0 always reaches) is no daemon. */
 export function readSnapshot(path = pluginsSnapshotPath()): PluginsSnapshot | null {
   if (!existsSync(path)) return null;
   try {
     const s = JSON.parse(readFileSync(path, "utf8")) as PluginsSnapshot;
+    if (!Number.isSafeInteger(s.pid) || s.pid <= 0) return null;
     process.kill(s.pid, 0);
     return Array.isArray(s.plugins) ? s : null;
   } catch { return null; }

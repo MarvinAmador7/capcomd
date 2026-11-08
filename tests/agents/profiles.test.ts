@@ -471,6 +471,12 @@ describe("profiles v2: loader and resolution", () => {
       mkdirSync(join(gone.source.CAPCOMD_HOME, "state"), { recursive: true });
       writeFileSync(join(gone.source.CAPCOMD_HOME, "state", "plugins.json"), JSON.stringify({ pid: 2 ** 22 + 12345, at: "", plugins: [] }));
       expect(gone.load().warnings).toEqual([`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`]);
+      // So is one whose pid isn't a process's: a signal 0 to 0 (this process group) or -1 (every process) always
+      // gets through, and a string pid isn't the daemon's either.
+      for (const pid of [0, -1, String(process.pid), null]) {
+        writeFileSync(join(gone.source.CAPCOMD_HOME, "state", "plugins.json"), JSON.stringify({ pid, at: "", plugins: [] }));
+        expect(gone.load().warnings).toEqual([`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`]);
+      }
     });
 
     test("a damaged listing from a live daemon doesn't break reading profiles: entries not of the daemon's shape provide nothing", () => {
