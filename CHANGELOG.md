@@ -19,6 +19,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - `capcomd merge --request-approval` parks a merge into a protected branch for `capcomd approve`, as an agent's merge
   is parked, so you can land a consolidator's memory change on `main` through its review hold instead of past it with
   `--operator` (which bypasses every plugin's gate).
+- Fixed: the project's memory gate now refuses an agent's branch that writes into `.capcomd/context/` under another
+  spelling of the path, such as `.Capcomd/Context/memory/x.md`. Git treats that as a different folder, but a checkout
+  on macOS or Windows puts those files next to the real memory, and before this fix they got past the check. The gate
+  also judges the agent whose work actually lands: when an agent handed its task off, the gate judges its successor.
+  A `capcomd/<run>/<agent>` branch from another run is now judged as that run's agent, not let through as if a person
+  had written it.
 - Fix: the watchdog no longer flags an agent that is working. It used to see an agent's files change only at its
   checkpoints (every 10 minutes), so with a shorter `stalledAfterMs` it flagged agents in the middle of editing, and it
   flagged agents waiting on a long command. Now an agent's files changing counts within about 30 seconds, and the time

@@ -685,6 +685,15 @@ this list says why):
   kept for them (a host repo), fail closed, and are asked about every verify and merge (they let a branch that doesn't
   touch the directory through without reading further); the judge runs before the reviewer gate, so a memory change that
   can't land costs no review. A branch that isn't an agent's (a person's) isn't judged.
+- From a second review (spec 1.0.53): a path counts as the memory by any name a checkout reads as it, since macOS's
+  and Windows' default file systems ignore case (`.Capcomd/Context/memory/x.md` is checked out into
+  `.capcomd/context/memory/`, beside the items, while git, the brief and a prefix check see another directory); the
+  gates also drop what HFS+ ignores in a name and the dots and spaces Windows drops from its end. A consolidator's branch
+  writes items by their exact names only. The agent judged is the one whose work the ref lands: an agent id lands its
+  result's branch (resolveRef), and one that handed off has its successor's, so the successor is judged (else a worker's
+  edits handed back to a consolidator would land as the consolidator's). Any `capcomd/<run>/<agt>` branch is that
+  agent's, in its own run: one of another run of the same repository was let through as a person's. An agent the
+  engine has no record of fails the gate closed.
 - Two runs' consolidators land one at a time under the target's lock, the second integrated on the first. `index.md` is
   one sorted line per item, so items far apart in it merge cleanly; two that sort next to each other conflict, and the
   second merge fails (its planner spawns a consolidator again, from the new target). `plugin.context.staged` joins §10's
@@ -839,7 +848,7 @@ as the orchestration skill does. Still not to a reviewer, a report agent or the 
 spawn, as before: a worker's profile that resolved before still does, and the router leaves the paragraph out (and logs
 it) when its other skills leave no room.
 
-**Changed since: consolidation is reachable in a default team** (spec 1.0.53; D6 as amended by D6a, §15). A live run
+**Changed since: consolidation is reachable in a default team** (spec 1.0.54; D6 as amended by D6a, §15). A live run
 whose goal asked for lessons ended with none consolidated: its planner proposed none and never spawned the consolidator.
 Four things stood between D6 and a held memory change, each fixed:
 
