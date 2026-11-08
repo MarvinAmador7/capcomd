@@ -5,16 +5,20 @@
 //
 // What this reads, without running any of the plugin's code:
 //  - `entry.command`: every element that names a path (one with a `/`, or `..`; `${PLUGIN_ROOT}` and `${PLUGIN_DATA}`
-//    substituted; a flag's value after `=` too) must lie inside the folder, the first element excepted when it is a bare
-//    program name (`bun`, `node`, `sh`: a runtime on the PATH, not the plugin's code);
+//    substituted; a flag's value after `=` too), or a module as a runtime finds one (`.`, `src`, `main`: a directory's
+//    package.json `main` or index, a name without its extension), must lie inside the folder, the first element excepted
+//    when it is a bare program name (`bun`, `node`, `sh`: a runtime on the PATH, not the plugin's code);
 //  - `entry.env`: `NODE_PATH`'s directories, and the paths `NODE_OPTIONS` and `BUN_OPTIONS` name (a `--require` or
 //    `--preload` is code);
 //  - `bunfig.toml`'s `preload` (Bun reads it from the folder, its cwd);
 //  - every JavaScript or TypeScript module those reach, followed through its static imports, `require()` calls and
 //    `import()`s of a literal, each resolved as Bun resolves it (tsconfig `paths`, package.json `imports` and
 //    `exports`) and made real, so a link that points out is outside. The folder's own node_modules is inside.
-// Allowed wherever they are: `node:` and Node's built-in modules, `bun` and `bun:` ones, and the client library the
-// kernel defines, `@capcomd/plugin` (not followed; where it resolved is reported). A bare import that resolves nowhere
+// Allowed wherever they are: `node:` and Node's built-in modules, `bun` and `bun:` ones. The client library,
+// `@capcomd/plugin`, is allowed from outside the folder only as the kernel provides it: capcomd's own copy (KERNEL_CLIENT,
+// covered by capcomd's own integrity; not followed). A copy anywhere else outside the folder (a parent node_modules, a
+// package.json above it that names itself `@capcomd/plugin`) is outside like any module; one inside is followed like any
+// other (fail-closed, the owner's rule for a security question still open). A bare import that resolves nowhere
 // is a warning, not a refusal (a bundle's optional `require` in a `try`); a relative one that leaves the folder is
 // outside whether or not its target exists. A specifier computed at run time, and what a shell script or any program
 // that isn't JavaScript loads, can't be read here: the runtime guard (src/plugins/guard.ts) covers Bun and Node.
@@ -25,8 +29,18 @@ import { fileURLToPath } from "node:url";
 import type { ManifestIssue } from "../../packages/plugin/src/load";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 
-/** The client library a plugin may import from wherever it resolves (§9.8). */
+/** The client library (§9.8). */
 export const CLIENT_PACKAGE = "@capcomd/plugin";
+
+/** capcomd's own copy of the client library, made real, when capcomd runs from its files (a checkout); null otherwise
+ *  (the single executable has no files; the npm package carries no package.json of its own there). The one copy of
+ *  `@capcomd/plugin` a plugin may load from outside its folder: capcomd's integrity, not the plugin's hash, covers it. */
+export const KERNEL_CLIENT: string | null = (() => {
+  // The single executable's own paths are virtual (/$bunfs/…, B:\~BUN\…): "../../packages/plugin" would be the host's.
+  if (/\$bunfs|~BUN/.test(import.meta.dir)) return null;
+  const d = join(import.meta.dir, "..", "..", "packages", "plugin");
+  try { return (JSON.parse(readFileSync(join(d, "package.json"), "utf8")) as { name?: unknown }).name === CLIENT_PACKAGE ? realpathSync(d) : null; } catch { return null; }
+})();
 
 /** One reference to code outside the folder: where it is named (a file of the plugin, relative to its folder, or a
  *  manifest path such as `entry.command.1`), what it names, and the real path it leads to. */
@@ -37,7 +51,8 @@ export interface SelfContained {
   outside: OutsideRef[];
   /** Bare imports that resolve nowhere (warnings: they fail at run time as they would anyway). */
   unresolved: Array<{ from: string; specifier: string }>;
-  /** Imports of the client library, and where each resolved (null: nowhere yet). */
+  /** Imports of the client library, and where each resolved (null: nowhere yet). One outside the folder that isn't
+   *  capcomd's own copy is in `outside` too. */
   client: Array<{ from: string; specifier: string; resolved: string | null }>;
   /** How many modules were read. */
   modules: number;
@@ -50,6 +65,12 @@ const real = (p: string) => { try { return realpathSync(p); } catch { return res
 /** `path` is `root` or under it (both real, or both as written). */
 const within = (root: string, path: string) => { const rel = relative(root, path); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); };
 const isFile = (p: string) => { try { return statSync(p).isFile(); } catch { return false; } };
+/** The module a runtime runs for a path: the file itself, else as Bun resolves it (a directory's package.json `main`
+ *  or index, a name without its extension); null when there is none. */
+const moduleAt = (p: string): string | null => {
+  if (isFile(p)) return p;
+  try { const r = Bun.resolveSync(p, dirname(p)); return isAbsolute(r) && isFile(r) ? r : null; } catch { return null; }
+};
 
 /** Where a path that may not exist yet leads: its nearest existing ancestor made real, the rest as written. */
 function lead(p: string): string {
@@ -98,11 +119,16 @@ export function selfContained(dir: string, m: PluginManifest, o: { dataDir?: str
     if (!seen.has(r) && CODE.test(r) && isFile(r)) { seen.add(r); queue.push(r); }
   };
   const sub = (s: string) => s.replaceAll("${PLUGIN_ROOT}", dir).replaceAll("${PLUGIN_DATA}", o.dataDir ?? join(dirname(root), ".capcomd-plugin-data"));
-  // A path a manifest names (relative ones from the folder, its cwd): inside, or outside with where it leads.
+  // A path a manifest names (relative ones from the folder, its cwd): inside, or outside with where it leads; the
+  // module a runtime would run for it (`bun .` runs package.json's `main`) is followed, and must be inside too.
   const named = (from: string, raw: string, value: string) => {
     const to = lead(resolve(dir, value));
     if (!within(root, to)) return outside(from, raw, to);
-    enqueue(to);
+    const mod = moduleAt(to);
+    if (!mod) return;
+    const r = real(mod);
+    if (!within(root, r)) return outside(from, raw, r);
+    enqueue(r);
   };
   // No shell runs the command: `~/x` is a directory named `~` in the folder, as the runtime reads it.
   const pathish = (s: string) => s.includes("/") || s === "..";
@@ -112,7 +138,7 @@ export function selfContained(dir: string, m: PluginManifest, o: { dataDir?: str
     const flag = /^--?[^=\s]+=(.*)$/.exec(v);
     if (flag) { if (pathish(flag[1]!)) named(from, raw, flag[1]!); return; }
     if (v.startsWith("-")) return;
-    if (pathish(v) || isFile(resolve(dir, v))) named(from, raw, v);
+    if (pathish(v) || moduleAt(resolve(dir, v))) named(from, raw, v);
   };
 
   if (m.entry.runtime === "in-process") named("entry.module", m.entry.module, m.entry.module);
@@ -147,7 +173,8 @@ export function selfContained(dir: string, m: PluginManifest, o: { dataDir?: str
         let to: string | null = null;
         try { to = real(Bun.resolveSync(spec, dirname(file))); } catch { /* not installed here */ }
         if (!out.client.some((c) => c.from === from && c.specifier === spec)) out.client.push({ from, specifier: spec, resolved: to });
-        continue;
+        // capcomd's own copy is the kernel's to vouch for; one inside the folder is checked below like any module.
+        if (to === null || (KERNEL_CLIENT && within(KERNEL_CLIENT, to))) continue;
       }
       let resolved: string;
       try { resolved = Bun.resolveSync(spec, dirname(file)); } catch {
@@ -170,8 +197,7 @@ export function selfContained(dir: string, m: PluginManifest, o: { dataDir?: str
 }
 
 /** What `validate` lists (§4.9): each outside reference as an issue with its path, the rest as warnings. */
-export function containedIssues(r: SelfContained, dir: string): { issues: ManifestIssue[]; warnings: ManifestIssue[] } {
-  const root = real(dir);
+export function containedIssues(r: SelfContained, _dir?: string): { issues: ManifestIssue[]; warnings: ManifestIssue[] } {
   return {
     issues: r.outside.map((x) => ({
       path: x.from,
@@ -179,10 +205,7 @@ export function containedIssues(r: SelfContained, dir: string): { issues: Manife
         : x.specifier === "(unreadable)" ? `can't be read to check what it imports (${x.resolved}): the plugin can't be checked to be self-contained`
         : `${x.specifier} resolves outside the plugin's folder: ${x.resolved}`,
     })),
-    warnings: [
-      ...r.unresolved.map((u) => ({ path: u.from, message: `${u.specifier} resolves nowhere from here: if it ever does, it must be inside the plugin's folder` })),
-      ...r.client.filter((c) => c.resolved && !within(root, c.resolved)).map((c) => ({ path: c.from, message: `${c.specifier} (the client library, allowed) resolves outside the plugin's folder: ${c.resolved}; its hash doesn't cover it (bundle it, or install it in the folder, to have it covered)` })),
-    ],
+    warnings: r.unresolved.map((u) => ({ path: u.from, message: `${u.specifier} resolves nowhere from here: if it ever does, it must be inside the plugin's folder` })),
   };
 }
 

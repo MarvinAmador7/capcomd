@@ -280,8 +280,10 @@ hash); the daemon starts it at its next start.
 trust cover that directory, so code from anywhere else could change without anyone being asked again (§4.9). capcomd
 refuses, at `install`, `update`, `trust` and `validate`, and again before every start, a plugin whose entry or any
 module it imports lies outside its directory: `../lib`, a `node_modules` above it, a link that points out, its data
-directory. What is fine: its own files and its own `node_modules`, `node:` and Bun's built-ins, and `@capcomd/plugin`
-(wherever it resolves; bundle it to have it covered too). Name the runtime by its name (`bun`, `node`), not its path.
+directory. What is fine: its own files and its own `node_modules` (`@capcomd/plugin` installed there, or bundled),
+`node:` and Bun's built-ins. A copy of `@capcomd/plugin` above the directory is outside like anything else (only
+capcomd's own copy, when it runs from a checkout, is allowed from outside). Name the runtime by its name (`bun`,
+`node`), not its path.
 `capcomd plugins validate <dir>` lists each import that reaches out, with the file that makes it and where it leads:
 
 ```text
@@ -290,7 +292,8 @@ directory. What is fine: its own files and its own `node_modules`, `node:` and B
 ```
 
 Bundling (above) is the easy way to be self-contained. While it runs, a Bun or Node process also has a guard that
-refuses a module from outside the directory as it loads (so an import whose path is computed at run time is held too);
+refuses a module from outside the directory as it loads, in its workers too (so an import whose path is computed at run
+time is held too);
 what a shell script or another runtime loads isn't checked, so keep those inside as well.
 
 **Project plugins.** A repository can bring its own plugins (`.capcomd/plugins/<name>/`, or `plugins.use` in its

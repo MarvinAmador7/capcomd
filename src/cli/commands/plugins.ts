@@ -353,7 +353,8 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
       if (owned) v.issues.push({ path: `config.properties.${k}.default`, message: `names ${owned}` });
     }
     // §4.9, §11.6: a plugin from a directory runs out of process, and only from its own folder. Each path it would run
-    // from elsewhere is an issue; a bare import that resolves nowhere, or the client library found outside, a warning.
+    // from elsewhere is an issue (a copy of the client library outside, not capcomd's own, among them); a bare import that
+    // resolves nowhere, a warning.
     if (loaded.manifest.entry.runtime === "process") {
       const { selfContained, containedIssues } = await import("../../plugins/contained");
       const r = selfContained(t.dir, loaded.manifest);

@@ -26,8 +26,10 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   lies outside its directory (`../lib`, a `node_modules` above it, a link that points out, its data directory), and
   name each path; the daemon fails such a plugin (`untrusted`) and won't start its process if one appears while it
   runs. `capcomd plugins validate <dir>` lists each import that reaches out, with the file that makes it and where it
-  leads (`--json`: `outside`). Its own `node_modules`, `node:` and Bun built-ins and `@capcomd/plugin` are fine. A
-  plugin running on Bun or Node is also stopped from loading a module outside its directory while it runs. To fix a
+  leads (`--json`: `outside`). Its own `node_modules` (`@capcomd/plugin` installed there, or bundled) and `node:` and
+  Bun built-ins are fine; a copy of `@capcomd/plugin` above the plugin's directory is refused like anything else. A
+  plugin running on Bun or Node, and each worker it starts, is also stopped from loading a module outside its directory
+  while it runs. To fix a
   plugin that is refused: bundle it into one file (`bun build index.ts --target=node --outfile dist/index.js`), or move
   the code and dependencies it needs into its directory, and name its runtime by name (`bun`, not `/usr/bin/env bun`).
 - New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at

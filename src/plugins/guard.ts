@@ -6,8 +6,11 @@
 //    allowed directories and throws;
 //  - Node reads NODE_OPTIONS: `--require <guard>.cjs`, a resolve hook (`module.registerHooks`; on a Node without it, the
 //    CommonJS resolver and an ES module `resolve` hook through `module.register`) that throws.
-// Allowed: the folder; and the client library `@capcomd/plugin` where it resolves from the folder (its node_modules up
-// the tree, or the package itself), with its dependencies. Each guard takes its own option back out of the variable,
+// Allowed: the folder; and capcomd's own copy of the client library `@capcomd/plugin` (KERNEL_CLIENT, when capcomd runs
+// from its files), with its dependencies; a copy anywhere else outside the folder is refused like any module. A worker
+// the plugin starts (Bun's `Worker`, `node:worker_threads`) gets the guard too: Bun doesn't carry a preload's plugins
+// into a worker, so the Bun guard makes itself each worker's preload (Node applies `--require` to workers itself).
+// Each guard takes its own option back out of the variable,
 // so a program the plugin starts (a tool on the PATH) runs without it. It is a guardrail for a process running as the
 // same user, not a boundary: another runtime (Python, a binary, Deno), an old Bun that doesn't read BUN_OPTIONS, a guard
 // path holding whitespace (BUN_OPTIONS can't carry one: no Bun guard then) or a process that clears the hooks aren't held.
@@ -16,14 +19,16 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { KERNEL_CLIENT } from "./contained";
 
 /** Shared by both guards: the directories a plugin's process may load modules from. */
 const ALLOWED = String.raw`
 const real = (p) => { try { return realpathSync(p); } catch { return p; } };
-/** The package \`name\` as it resolves from \`from\`: the package itself (a self-reference), or node_modules up the tree. */
+/** capcomd's own copy of @capcomd/plugin (made real), or null: the only copy allowed from outside the folder. */
+const KERNEL_CLIENT = ${JSON.stringify(KERNEL_CLIENT)};
+/** The package \`name\` as it resolves from \`from\`: node_modules up the tree. */
 function packageDir(name, from) {
   for (let d = from; ; d = dirname(d)) {
-    try { if (JSON.parse(readFileSync(join(d, "package.json"), "utf8")).name === name) return real(d); } catch {}
     const p = join(d, "node_modules", name);
     if (existsSync(join(p, "package.json"))) return real(p);
     if (dirname(d) === d) return null;
@@ -31,12 +36,11 @@ function packageDir(name, from) {
 }
 function allowedDirs(root) {
   const dirs = [root];
-  const client = packageDir("@capcomd/plugin", root);
-  if (client) {
-    dirs.push(client);
+  if (KERNEL_CLIENT && existsSync(KERNEL_CLIENT)) {
+    dirs.push(KERNEL_CLIENT);
     let deps = [];
-    try { deps = Object.keys(JSON.parse(readFileSync(join(client, "package.json"), "utf8")).dependencies || {}); } catch {}
-    for (const dep of deps) { const d = packageDir(dep, client); if (d) dirs.push(d); }
+    try { deps = Object.keys(JSON.parse(readFileSync(join(KERNEL_CLIENT, "package.json"), "utf8")).dependencies || {}); } catch {}
+    for (const dep of deps) { const d = packageDir(dep, KERNEL_CLIENT); if (d) dirs.push(d); }
   }
   return dirs;
 }
@@ -59,10 +63,16 @@ const outsideError = (what, root) => Object.assign(new Error("capcomd: " + what 
 export const BUN_GUARD = String.raw`// capcomd's runtime guard for a plugin's Bun process (written by the daemon: src/plugins/guard.ts). Do not edit.
 import { plugin } from "bun";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 ${ALLOWED}
 dropGuards(import.meta.path);
 if (process.env.CAPCOMD_PLUGIN_ROOT) {
+  // A worker starts without this process's runtime plugins: this file is each worker's preload too.
+  const own = import.meta.path;
+  const guarded = (W) => W && class extends W { constructor(url, options) { const o = options || {}; super(url, { ...o, preload: [own, ...(o.preload ? [].concat(o.preload) : [])] }); } };
+  globalThis.Worker = guarded(globalThis.Worker);
+  try { const wt = createRequire(own)("node:worker_threads"); wt.Worker = guarded(wt.Worker); } catch {}
   const root = real(process.env.CAPCOMD_PLUGIN_ROOT);
   const esc = (s) => s.replace(/[.*+?^${"$"}{}()|[\]\\]/g, "\\$&");
   const filter = new RegExp("^(?!(?:" + allowedDirs(root).map((d) => esc(d) + "/").join("|") + "))");

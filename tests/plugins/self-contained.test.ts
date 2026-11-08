@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RelayError } from "../../src/core/errors";
 import { Git } from "../../src/merge/git";
-import { containedIssues, selfContained } from "../../src/plugins/contained";
+import { containedIssues, KERNEL_CLIENT, selfContained } from "../../src/plugins/contained";
 import { guardFiles } from "../../src/plugins/guard";
 import { kernelHost } from "../../src/plugins/host";
 import { installPlugin, projectPluginList, trustPlugin } from "../../src/plugins/install";
@@ -114,6 +114,40 @@ describe("what the check reads (src/plugins/contained.ts)", () => {
     const r = selfContained(p.dir, p.manifest);
     expect(r.outside.map((o) => [o.from, o.specifier])).toEqual([["main.ts", "(unreadable)"]]);
     expect(containedIssues(r, p.dir).issues[0]!.message).toContain("can't be read to check what it imports");
+  });
+
+  test("an entry a runtime finds for a directory or a name without its extension is followed too (`bun .`, `bun src`, `bun main`)", () => {
+    const lib = { "lib/x.ts": "export {};\n" };
+    const from = (command: string[], files: Record<string, string>) => {
+      const p = plugin({ ...lib, ...files }, manifest("pp", { runtime: "process", command }));
+      return selfContained(p.dir, p.manifest).outside.map((o) => [o.from, o.specifier]);
+    };
+    expect(from(["bun", "."], { "p/package.json": '{"main":"start.ts"}', "p/start.ts": 'import "../lib/x";\n' })).toEqual([["start.ts", "../lib/x"]]);
+    expect(from(["bun", "${PLUGIN_ROOT}"], { "p/index.ts": 'import "../lib/x";\n' })).toEqual([["index.ts", "../lib/x"]]);
+    expect(from(["bun", "src"], { "p/src/index.ts": 'import "../../lib/x";\n' })).toEqual([["src/index.ts", "../../lib/x"]]);
+    expect(from(["node", "main"], { "p/main.js": 'import "../lib/x.ts";\n' })).toEqual([["main.js", "../lib/x.ts"]]);
+    // A package.json `main` that points out of the folder is the entry leaving it.
+    expect(from(["bun", "."], { "p/package.json": '{"main":"../lib/x.ts"}' })).toEqual([["entry.command.1", "."]]);
+  });
+
+  test("the client library is allowed from outside only as capcomd's own copy: a parent node_modules, or a package above that names itself @capcomd/plugin, is outside", () => {
+    const main = { "p/main.ts": 'import { connect } from "@capcomd/plugin";\nconsole.log(connect);\n' };
+    const parent = plugin({ "node_modules/@capcomd/plugin/package.json": '{"name":"@capcomd/plugin","main":"i.js"}', "node_modules/@capcomd/plugin/i.js": "export const connect = 1;\n", ...main });
+    expect(selfContained(parent.dir, parent.manifest).outside).toEqual([{ from: "main.ts", specifier: "@capcomd/plugin", resolved: join(parent.root, "node_modules", "@capcomd", "plugin", "i.js") }]);
+    const self = plugin({ "package.json": '{"name":"@capcomd/plugin","exports":{".":"./evil.js"}}', "evil.js": "export const connect = 1;\n", ...main });
+    expect(selfContained(self.dir, self.manifest).outside).toEqual([{ from: "main.ts", specifier: "@capcomd/plugin", resolved: join(self.root, "evil.js") }]);
+    // Installed in the folder, it is followed like the plugin's own code (its dependencies in the folder too).
+    const inside = plugin({
+      "p/node_modules/@capcomd/plugin/package.json": '{"name":"@capcomd/plugin","main":"i.js"}', "p/node_modules/@capcomd/plugin/i.js": 'export { z as connect } from "zod";\n',
+      "p/node_modules/zod/package.json": '{"name":"zod","main":"z.js"}', "p/node_modules/zod/z.js": "export const z = 1;\n", ...main,
+    });
+    expect(selfContained(inside.dir, inside.manifest)).toMatchObject({ outside: [], modules: 3 });
+    // capcomd's own copy (here this checkout's, linked in as an author's workspace would): allowed, not followed.
+    expect(KERNEL_CLIENT).toBe(realpathSync(join(ROOT, "packages", "plugin")));
+    const kernel = plugin(main);
+    mkdirSync(join(kernel.dir, "node_modules", "@capcomd"), { recursive: true });
+    symlinkSync(join(ROOT, "packages", "plugin"), join(kernel.dir, "node_modules", "@capcomd", "plugin"));
+    expect(selfContained(kernel.dir, kernel.manifest)).toMatchObject({ outside: [], modules: 1, client: [{ from: "main.ts", specifier: "@capcomd/plugin", resolved: join(KERNEL_CLIENT!, "src", "index.ts") }] });
   });
 
   test("the entry's own imports are followed from the command", () => {
@@ -239,6 +273,22 @@ describe("the runtime guard (src/plugins/guard.ts)", () => {
       expect(r.err).toContain(`capcomd: ${join(p.root, "lib", "x.mjs")} is outside the plugin's folder (${p.dir})`);
       expect(r.out).not.toContain("loaded");
     }
+    // A worker the plugin starts is guarded too (Bun doesn't carry a preload's plugins into one), either kind.
+    writeFileSync(join(p.dir, "worker.ts"), 'const w = new Worker(new URL("../lib/x.mjs", import.meta.url));\nw.onerror = (e) => { console.error(e.message); process.exit(3); };\nsetTimeout(() => process.exit(0), 3000);\n');
+    writeFileSync(join(p.dir, "worker-threads.ts"), 'import { Worker } from "node:worker_threads";\nconst w = new Worker(new URL("../lib/x.mjs", import.meta.url));\nw.on("error", (e) => { console.error(e.message); process.exit(3); });\nsetTimeout(() => process.exit(0), 3000);\n');
+    writeFileSync(join(p.root, "lib", "x.mjs"), 'console.log("loaded");\nexport const x = 1;\n');
+    for (const f of ["worker.ts", "worker-threads.ts"]) {
+      const r = run(p.dir, ["bun", f]);
+      expect(r.out).not.toContain("loaded");
+      expect(r.code).toBe(3);
+      expect(r.err).toContain(`capcomd: ${join(p.root, "lib", "x.mjs")} is outside the plugin's folder`);
+    }
+    // A copy of the client library outside the folder that isn't capcomd's own is refused like any module.
+    const fake = plugin({ "node_modules/@capcomd/plugin/package.json": '{"name":"@capcomd/plugin","main":"i.js"}', "node_modules/@capcomd/plugin/i.js": 'console.log("loaded");\n', "p/main.ts": 'import "@capcomd/plugin";\n' });
+    const f = run(fake.dir, ["bun", "main.ts"]);
+    expect(f.code).not.toBe(0);
+    expect(f.out).not.toContain("loaded");
+    expect(f.err).toContain(`capcomd: ${join(fake.root, "node_modules", "@capcomd", "plugin", "i.js")} is outside the plugin's folder`);
     // The manifest's own BUN_OPTIONS stays, after the guard's.
     const own = run(p.dir, ["bun", "-e", "console.log(process.env.BUN_OPTIONS)"], { BUN_OPTIONS: "--smol" });
     expect(own.out.trim()).toBe("--smol");

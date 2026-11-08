@@ -464,8 +464,9 @@ Decided by the owner on 2026-11-08:
 
 7. **Third-party plugins are self-contained.** A plugin's trust hash and its `LOCK` cover its own directory only (the
    critic's C12), so a plugin whose entry, or any module it resolves, lies outside that directory (made real, so a link
-   that points out is outside; its own `node_modules` is inside; `node:`, Node and Bun built-ins and the client library
-   `@capcomd/plugin` are allowed) is refused at `install`, `update`, `trust` and `validate`, and by the host when it
+   that points out is outside; its own `node_modules` is inside; `node:`, Node and Bun built-ins are allowed, and the
+   kernel-provided client library `@capcomd/plugin`, read as capcomd's own copy: another copy outside the directory is
+   refused like any module) is refused at `install`, `update`, `trust` and `validate`, and by the host when it
    validates the plugin and before every start of its process, naming each path. Out of process, the child's module
    loading is guarded too: a Bun and a Node preload refuse a module outside the directory as it loads. Built-ins are
    exempt. What this does and doesn't hold is in spec §4.9 and §11.6 (spec 1.0.61).
