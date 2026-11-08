@@ -10,7 +10,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   own profile. The planner's brief and skill now say when and how: put its own lessons in its result, read
   `capcomd status` (`lessons`: how many candidates the run has, and its consolidators), spawn the consolidator last,
   then verify and merge its change. capcomd collects the planner's own lessons when the consolidator starts, so the
-  consolidator reads them. And if a run's planner ends with lessons and no consolidator ran, capcomd starts one, then
+  consolidator reads them, and the consolidator now reads the run's goal: a lesson your goal asks the project to
+  remember is kept for your review, even when the repository implies it. And if a run's planner ends with lessons and no consolidator ran, capcomd starts one, then
   verifies its change and asks to merge it (or asks to merge a consolidator's change the planner left unmerged); the
   merge waits for your approval as before (`capcomd approve <runId> <mrgId>`). `capcomd events` shows
   `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with why. Turn it off with

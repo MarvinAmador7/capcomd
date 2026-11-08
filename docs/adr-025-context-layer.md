@@ -884,6 +884,12 @@ Four things stood between D6 and a held memory change, each fixed:
   the case D6 meant to be consolidated (§12's rule decides whether consolidation stays on at all, not who starts it);
   nothing it starts lands without the gate (lint, and a person under the default `review: human`); and it is a
   convenience, so it fails open (a refusal is an event, never a stopped run).
+- **The consolidator didn't know what was asked.** In the live re-run the planner declared the lesson the goal asked
+  for and spawned the consolidator, which dropped it: `package.json` implied it, and the prompt's rule is "keep a
+  lesson only when the repository doesn't say it already". Its inputs now start with the run's goal (fenced as data,
+  at most 4 000 characters), and its prompt says that a candidate saying what the goal asks the project to remember is
+  kept, worded as what is true, unless it is false, holds a secret or the memory says it already. A person still
+  reviews it (the hold), so a goal can ask for a lesson but never land one.
 - A person lands a consolidator's change on a protected target through the hold, not past it: `capcomd merge
   --request-approval` parks the merge for `capcomd approve` as an agent's is (the gates then run at the approval, and
   `context-memory`'s hold is a second approval of what lands), where `--operator` bypasses every plugin's veto.
