@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fix: a profile with `permissions: {report: false}` is now never spawned to report, even when a plugin's
+  `agent.spawning` listener adds `report: true` to the spawn's contract. Such a spawn is refused with reason
+  `report_not_allowed`, the same as when the spawner asks for `--report` itself. For plugin authors: an
+  `agent.spawning` patch may no longer add `from`, `review`, `checks` or `orphansPolicyOverride` to the contract (only
+  `--continue`, verify and the operator set them), and a `report` it adds must be `true` and a `check` one of the run's
+  check names; such a patch is refused like any other widening or invalid patch, and a check the run doesn't have
+  refuses the spawn.
 - Fix: a plugin you install, or a project's, can no longer read capcomd's own keys through a secret reference. A
   reference that names one of capcomd's variables (`BOXD_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, any `CAPCOMD_*` or its
   old `RELAY_*` spelling, `GIT_*` or `RIVET*`, and the agents' `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*` and `CODEX_*`, in
