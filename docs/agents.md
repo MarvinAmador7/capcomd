@@ -300,8 +300,8 @@ capcomd profiles export lead --flat --out ./shared
   one `profile.yaml` with its ancestors and overrides laid in, its prompts as files, and each skill it is pinned with
   from a package in `skills/`. `default` is never exported, nor the `LOCK`, nor anything of capcomd's state (a profile
   holds no credential: `auth` is a mode).
-- `rm <name>` of an installed package deletes its directory and the trust given to its skills (refused while it holds
-  your `override.yaml`, or another profile extends it).
+- `rm <name>` of an installed package deletes its directory and the trust given to its skills, persona and profile
+  file (refused while it holds your `override.yaml`, or another profile extends it).
 
 ## Project memory: the `context` block
 
