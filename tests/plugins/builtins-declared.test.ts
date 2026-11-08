@@ -65,6 +65,25 @@ describe("built-ins register what they declare (§4.7)", () => {
   });
 });
 
+describe("built-ins ask only for the job changes they use (§6.6.19)", () => {
+  test("with every built-in on, a fire reaches them but nobody wants a running job's output, so none is read", async () => {
+    process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9";
+    process.env.CAPCOMD_TEMPLATE_REFRESH_HOURS = "0";
+    const host = new PluginHost({ capcomd: VERSION, kernel: [], emit: () => {}, dataDir: () => "/nonexistent", sinks: { log: () => {} } });
+    try {
+      await host.start(BUILTINS.map((b) => ({ ...candidateOf(b), enabled: true })));
+      const listeners = BUILTINS.map((b) => b.manifest as { name: string; contributes?: { hooks?: Record<string, { changes?: string[] }> } }).filter((m) => m.contributes?.hooks?.["job.changed"]);
+      expect(listeners.map((m) => m.name).sort()).toEqual(["forge-github", "sandbox-boxd", "sandbox-docker", "source-schedule", "watchdog"]);
+      for (const m of listeners) expect(m.contributes!.hooks!["job.changed"]!.changes).not.toContain("output");
+      expect(host.hooks.listening("job.changed", "fired")).toBe(true);
+      expect(host.hooks.listening("job.changed", "ended")).toBe(true);
+      expect(host.hooks.listening("job.changed", "output")).toBe(false);
+    } finally {
+      await host.stop();
+    }
+  });
+});
+
 describe("a listener registered without its settings does nothing", () => {
   test("forge-github calls GitHub on its timer only for a configured repository or a thread a run follows", async () => {
     // Its timer runs in the daemon whatever is configured (a goal branch's pull request is followed once it is open,

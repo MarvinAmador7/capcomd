@@ -4,7 +4,7 @@
 // suite is ./conformance.ts, the agent suite ./agent-conformance.ts, the context suite ./context-conformance.ts; the
 // forge suite isn't in the kit: only built-ins are forges (the kernel tests them in tests/plugins/forges.test.ts).
 import { PluginError } from "./errors";
-import { HOOKS, type HookCall, type HookName, type HookPayload, type HookResult } from "./hooks";
+import { HOOKS, type HookCall, type HookName, type HookPayload, type HookResult, type JobChange } from "./hooks";
 import { readManifest } from "./load";
 import type { HarnessEventEnvelope, PluginContext, PluginModule } from "./context";
 import type { PluginManifest } from "./manifest";
@@ -118,6 +118,16 @@ const SAMPLES: { [N in HookName]: HookPayload<N> } = {
   "trigger.admitting": { trigger: TRIGGER, gate: { allowed: true, strength: "explicit", mode: "observe", subscribed: null } },
   "trigger.changed": { trigger: TRIGGER, decision: { kind: "recorded", wouldHave: "start", runId: null } },
 };
+
+/** One change of each kind, for the hook contract of a job.changed listener that declared `changes` (§4.7). */
+const JOB_CHANGES: { [K in JobChange["kind"]]: Extract<JobChange, { kind: K }> } = {
+  started: { kind: "started" }, output: { kind: "output", stdout: "", stderr: "" }, fired: { kind: "fired", n: 1 }, ended: { kind: "ended", state: "done" },
+};
+/** The contract's call for `hook`: its sample, or for a job.changed listener with `changes`, a change it is called for. */
+function contractPayload(manifest: PluginManifest, hook: HookName): HookPayload<HookName> {
+  const kinds = hook === "job.changed" ? manifest.contributes?.hooks?.["job.changed"]?.changes : undefined;
+  return kinds?.length ? { ...samplePayload("job.changed"), change: structuredClone(JOB_CHANGES[kinds[0]!]) } : samplePayload(hook);
+}
 
 /** A payload of the right shape for `hook`, for unit tests and the hook contract (§14.4). A fresh copy each time. */
 export function samplePayload<N extends HookName>(hook: N): HookPayload<N> {
@@ -279,11 +289,11 @@ export const testkit: TestKit = {
       for (const hook of Object.keys(manifest.contributes?.hooks ?? {}) as HookName[]) {
         // A primitive the fake doesn't serve fails the call with `threw`: not the contract's business. A result of the
         // wrong shape for the mode, or a patch outside the hook's patchable fields, is.
-        const r = await fake.fire(hook, samplePayload(hook));
+        const r = await fake.fire(hook, contractPayload(manifest, hook));
         if (r.failure?.kind === "invalid_result") fail(`${manifest.name}'s ${hook} listener answered with the wrong shape: ${r.failure.message} (§6.2)`);
         fake.hooks.resume(manifest.name, "testkit");
         // A 100 ms deadline: the call settles (the host gives up on it) well within a second.
-        const t = await fake.fire(hook, samplePayload(hook), { timeoutMs: 100 });
+        const t = await fake.fire(hook, contractPayload(manifest, hook), { timeoutMs: 100 });
         if (t.ms > 1000) fail(`${manifest.name}'s ${hook} call with a 100 ms deadline took ${t.ms} ms (§14.4)`);
         fake.hooks.resume(manifest.name, "testkit");
       }

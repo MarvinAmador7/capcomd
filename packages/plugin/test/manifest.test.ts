@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { HOOK_NAMES, HOOKS } from "../src/hooks";
-import { MANIFEST_HOOK_NAMES, parseManifest, type PluginManifest } from "../src/manifest";
+import { HOOK_NAMES, HOOKS, type JobChange } from "../src/hooks";
+import { JOB_CHANGE_KINDS, MANIFEST_HOOK_NAMES, parseManifest, type PluginManifest } from "../src/manifest";
 import { manifestJsonSchema, SCHEMA_PATH } from "../scripts/schema";
 
 const base = (): Record<string, unknown> => ({
@@ -37,6 +37,17 @@ describe("plugin manifest (spec §4)", () => {
   test("a gate hook cannot declare failure: open", () => {
     expect(issues({ ...base(), contributes: { hooks: { "merge.landing": { failure: "open" } } } })).toContainEqual(expect.stringContaining("failure is always closed"));
     expect(issues({ ...base(), contributes: { hooks: { "verify.judging": { failure: "closed", timeoutMs: 60_000 } } } })).toEqual([]);
+  });
+  test("job.changed may name the change kinds it wants; no other hook may, nor an unknown kind or none", () => {
+    // The kinds are JobChange's, both ways (a kind added to one and not the other fails to compile).
+    type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+    const same: Same<JobChange["kind"], (typeof JOB_CHANGE_KINDS)[number]> = true;
+    expect(same).toBe(true);
+    expect(issues({ ...base(), contributes: { hooks: { "job.changed": { changes: ["fired"] } } } })).toEqual([]);
+    expect(issues({ ...base(), contributes: { hooks: { "job.changed": { changes: ["started", "output", "ended"], timeoutMs: 2000 } } } })).toEqual([]);
+    expect(issues({ ...base(), contributes: { hooks: { "run.changed": { changes: ["fired"] } } } })).toContainEqual("contributes.hooks.run.changed.changes: changes is for job.changed only, not run.changed (§4.7)");
+    expect(issues({ ...base(), contributes: { hooks: { "job.changed": { changes: ["tick"] } } } })).toContainEqual(expect.stringContaining("contributes.hooks.job.changed.changes.0"));
+    expect(issues({ ...base(), contributes: { hooks: { "job.changed": { changes: [] } } } })).toContainEqual(expect.stringContaining("contributes.hooks.job.changed.changes"));
   });
   test("an unknown hook name is refused", () => {
     expect(issues({ ...base(), contributes: { hooks: { "run.started": {} } } }).length).toBeGreaterThan(0);
