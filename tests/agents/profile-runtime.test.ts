@@ -62,7 +62,8 @@ describe("the runtime blocks of a profile", () => {
     const bad = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "lifecycle: { onEnd: [Not A Plugin] }"]) });
     expect(errorOf(() => bad.load())).toContain("lifecycle.onEnd: must be a list of plugin names");
     const nowhere = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { provider: nowhere }"]) });
-    expect(errorOf(() => nowhere.load())).toContain(`sandbox.provider "nowhere" isn't an active sandbox provider`);
+    // With no daemon running to say whether a plugin provides it, a warning (tests/agents/profiles.test.ts has the rest).
+    expect(nowhere.load().warnings).toEqual([expect.stringContaining(`sandbox.provider "nowhere" isn't a built-in sandbox provider, and no daemon is running`)]);
     // The fix names a command that exists: builds are listed by `capcomd env status` (there is no `env build --name`).
     const unnamed = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { environment: Not.A.Build }"]) });
     expect(errorOf(() => unnamed.load())).toContain("sandbox.environment: must be default, image or a build's name (capcomd env status lists them)");

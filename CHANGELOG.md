@@ -13,6 +13,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: `capcomd profiles list` and `capcomd profiles show` show control characters in a profile's `identity.title`
   and `harness.model` (and `show` in any text value it lists) as `\u{…}` instead of printing them, so an installed
   profile can't redraw or hide lines in your terminal.
+- Fixed: a profile whose `sandbox.provider` or `harness.provider` names a plugin the daemon has loaded no longer
+  breaks `capcomd profiles list`, `validate` and every other profile command outside the daemon. They now ask the
+  running daemon which plugins it has (as `capcomd plugins list` does): a name it doesn't have is still an error, and
+  with no daemon running a name that isn't built in is a warning (`capcomd profiles validate` lists it) instead of an
+  error; the daemon checks it again when an agent uses the profile. `capcomd profiles add`, `set` and `rm` still refuse
+  a change that names such a provider (a typo like `harness.provider: claudee`) unless the running daemon has it, and
+  a profile that already names one no longer stops a change to another (in `agents.json` too).
+- New: an in-process plugin running in the daemon can use `ctx.runs` (start, read, title, pause, resume and end runs),
+  `ctx.messages` (message an agent, read its inbox), `ctx.kv` and `ctx.board` (the run's notes and task board),
+  `ctx.gates.pending` and `ctx.profiles` (resolve and list agent profiles); before, they answered `unsupported`. In any
+  process it can use `ctx.sandboxes` and `ctx.auth` (whether a login is there, never its value). What the plugin writes
+  is recorded as `plugin:<name>`'s; it needs the `read` scope to read and `steer` to change anything. Out-of-process
+  plugins still get `unsupported` for these.
+- Fixed: in `@capcomd/plugin`, `ctx.runs.new(...)` is typed as the method it is; the type declared a constructor, so a
+  call to it didn't typecheck.
 - New: `GET /v1/profiles` (and `GET /v1/profiles/{name}`) rows say what a planner chooses a profile by: its `title`,
   `fit` (one sentence capcomd writes from its settings, never from its description), `cost` (low, medium or high),
   `canReport`, the `skills` its agents get (names and hashes, never their text), and `untrustedSkills`, the project
