@@ -176,6 +176,11 @@ describe("the intake decides in order and records each decision", () => {
       expect(readTriggerLog().map((e) => e.decision.kind)).toEqual(["failed", "failed"]);
       // The subscription still holds, and once the engine answers, the trigger reaches the run that follows the thread.
       expect(listSubscriptionRecords().map((s) => s.runId)).toEqual(["run-slow"]);
+      // A source's ctx.triggers.subscriptions doesn't wait on the engine either: the subscription is listed as it is.
+      answer = "hang";
+      const t0 = Date.now();
+      expect((await subscriptions({ source: "test" })).map((s) => s.runId)).toEqual(["run-slow"]);
+      expect(Date.now() - t0).toBeLessThan(500);
       answer = "live";
       expect(await admit(t, SOURCE)).toMatchObject({ kind: "continued", runId: "run-slow" });
       expect(started).toEqual([]);

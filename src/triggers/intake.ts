@@ -462,7 +462,7 @@ export async function subscriptions(filter: { runId?: string; source?: string } 
   const out: TriggerSubscription[] = [];
   const standing = new Map<string, RunStanding | null>();
   for (const r of allSubs().filter((x) => (!filter.runId || x.runId === filter.runId) && (!filter.source || x.source === filter.source))) {
-    if (!standing.has(r.runId)) standing.set(r.runId, await deps.standing(r.runId).catch(() => null));
+    if (!standing.has(r.runId)) standing.set(r.runId, await engine(`where ${r.runId} stands`, deps.standing(r.runId)).catch(() => null));
     const s = standing.get(r.runId);
     const cause = s ? endOf(r, s) : null;
     if (cause) await end(r, cause);
