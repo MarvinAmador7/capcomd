@@ -251,7 +251,7 @@ export const TOOLS = [
   ["spawn", "Spawn a child agent under you. Set its fan-out with `children` (narrow-only, ≤ your own limits). `title`: its tab's name (2-4 lowercase words).", S({ task: str, title: str, profile: str, key: str, budget: str, check: str, report: { type: "boolean" }, continue: str, contract: { type: "object" }, children: S({ maxChildren: num, maxDepth: num, maxTotalDescendants: num, allowedChildProfiles: ids, budgetShare: num }) }, ["task"])],
   ["await", "Block until all given children finish; returns their structured results (fenced).", S({ agents: ids, timeoutMs: num }, ["agents"])],
   ["wait_any", "Block until any given child finishes.", S({ agents: ids, timeoutMs: num }, ["agents"])],
-  ["status", "Status of agents (default: you).", S({ agents: ids })],
+  ["status", "Status of agents (default: you; to an agent that may spawn the consolidator, the run's lessons too).", S({ agents: ids })],
   ["tree", "Your subtree with cost/turn rollups and stuck flags.", S({ root: str })],
   ["cancel", "Cancel a descendant and its whole subtree (VMs torn down).", S({ agent: str, reason: str }, ["agent"])],
   ["send", "Message a descendant or your parent (to: agent id or \"parent\").", S({ to: str, body: str, key: str }, ["to", "body"])],

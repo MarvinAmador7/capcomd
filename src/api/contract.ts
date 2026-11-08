@@ -350,6 +350,7 @@ const TriggerEventData = {
 		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"),
 		runId: z.string().nullable().describe("The run it started or continued; null otherwise"),
 		restarted: z.string().optional().describe("With continued: the run had ended, and this planner agent (a new one, continuing the last) started on the trigger (spec §16.3.2 step 2). Absent otherwise"),
+		unrecorded: z.array(z.string()).optional().describe("What capcomd couldn't record about this decision (its line in the trigger log, the trigger a run started from, the run's subscription to the thread), each with why; absent when everything was recorded. A run that started stands either way"),
 	}).describe(`${TRIGGER_EVENT}. One per trigger a source handed to the intake (spec §16.3.2); \`entity\` is trigger:<source>/<hash of id>`),
 	"trigger.subscribed": z.looseObject({
 		source: z.string(), thread: z.string(), runId: z.string(),

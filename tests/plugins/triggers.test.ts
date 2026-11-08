@@ -4,8 +4,8 @@
 // on the daemon's host only, and the two built-in sources: schedules (source-schedule, on its timers) and GitHub comments
 // (forge-github). Runs start and messages go through injected stand-ins here; tests/scenarios/triggers.test.ts has the
 // real ones.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Candidate } from "../../packages/plugin/src/host/host";
@@ -19,10 +19,17 @@ import { configured, kernelHost } from "../../src/plugins/host";
 import { useHooks } from "../../src/plugins/hooks";
 import { pluginStore, storageService } from "../../src/plugins/storage";
 import { checkSchedule, fireTrigger, manifest as scheduleManifest, plugin as schedulePlugin } from "../../src/plugins/sources/schedule";
-import { commentTrigger, pollGitHub } from "../../src/plugins/forges/github-source";
+import { commentTrigger, pollGitHub, RETRY_TRIES } from "../../src/plugins/forges/github-source";
 import type { IssueComment } from "../../src/plugins/forges/github-rest";
 import { admit, gateOf, listSubscriptionRecords, readTriggerLog, resetTriggers, subscribe, subscriptions, sweepTriggers, threadMatches, triggerMessage, triggerOfRun, triggersConfig, useIntakeDeps, useTriggerEvents, type RunOutcome, type RunStanding } from "../../src/triggers/intake";
 import { capcomd } from "../helpers/engine";
+import * as relay from "../../src/core/relay";
+
+// The engine's lookup of a run, as the kernel's own `standing` makes it: failing when a test says so (an engine that
+// errors rather than hangs), else the real one.
+let lookupFails: Error | null = null;
+const realExistingActor = relay.existingActor;
+mock.module("../../src/core/relay", () => ({ ...relay, existingActor: (...a: Parameters<typeof realExistingActor>) => (lookupFails ? Promise.reject(lookupFails) : realExistingActor(...a)) }));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const SOURCE: Principal = { kind: "plugin", name: "test-source", scopes: ["steer"] };
@@ -154,6 +161,90 @@ describe("the intake decides in order and records each decision", () => {
     await expect(admit(t, SOURCE)).rejects.toMatchObject({ code: "invalid" });
   });
 
+  test("the engine doesn't say where a run following the thread stands: unavailable, no run, and the trigger comes again", async () => {
+    setGate({ test: { allowed: ["alice"], mode: "auto" } });
+    await subscribe({ runId: "run-slow", source: "test", thread: "pr/4" }, "plugin:test-source");
+    process.env.CAPCOMD_TRIGGERS_ENGINE_MS = "50";
+    let answer: "hang" | "throw" | "live" = "hang";
+    useIntakeDeps({
+      startRun: async (input, principal) => { started.push({ ...input, principal }); return { runId: "run-second" }; },
+      deliver: async (runId, m) => { delivered.push({ runId, ...m }); return { seq: delivered.length }; },
+      standing: (runId) => runId !== "run-slow" || answer === "live" ? Promise.resolve({ exists: true, live: true, endedAt: null, stopped: false })
+        : answer === "throw" ? Promise.reject(new Error("the engine is restarting")) : new Promise<RunStanding>((r) => setTimeout(() => r({ exists: true, live: true, endedAt: null, stopped: false }), 1000)),
+    });
+    try {
+      const t = trigger({ thread: "pr/4" });
+      // No answer in time: not taken for a new request on the thread (that would be a second run on it).
+      await expect(admit(t, SOURCE)).rejects.toMatchObject({ code: "unavailable", retryable: true, message: expect.stringContaining("didn't answer where run-slow stands within 50 ms") });
+      answer = "throw";
+      await expect(admit(t, SOURCE)).rejects.toMatchObject({ code: "unavailable", retryable: true, message: expect.stringContaining("the engine is restarting") });
+      expect(started).toEqual([]);
+      expect(delivered).toEqual([]);
+      expect(readTriggerLog().map((e) => e.decision.kind)).toEqual(["failed", "failed"]);
+      // The subscription still holds, and once the engine answers, the trigger reaches the run that follows the thread.
+      expect(listSubscriptionRecords().map((s) => s.runId)).toEqual(["run-slow"]);
+      // A source's ctx.triggers.subscriptions doesn't wait on the engine either: the subscription is listed as it is.
+      answer = "hang";
+      const t0 = Date.now();
+      expect((await subscriptions({ source: "test" })).map((s) => s.runId)).toEqual(["run-slow"]);
+      expect(Date.now() - t0).toBeLessThan(500);
+      answer = "live";
+      expect(await admit(t, SOURCE)).toMatchObject({ kind: "continued", runId: "run-slow" });
+      expect(started).toEqual([]);
+    } finally { delete process.env.CAPCOMD_TRIGGERS_ENGINE_MS; }
+  });
+
+  test("the kernel's own lookup of a run the engine errors on: the subscription holds and no second run starts", async () => {
+    setGate({ test: { allowed: ["alice"], mode: "auto" } });
+    // An hour-old subscription (past the starting grace): a run the engine said doesn't exist would end it here.
+    setSystemTime(new Date(Date.now() - 3_600_000));
+    try { await subscribe({ runId: "run-first", source: "test", thread: "pr/7" }, "intake", { started: true }); } finally { setSystemTime(); }
+    // Runs start and messages go to stand-ins; where a run stands is the kernel's own lookup.
+    useIntakeDeps({
+      startRun: async (input, principal) => { started.push({ ...input, principal }); return { runId: "run-second" }; },
+      deliver: async (runId, m) => { delivered.push({ runId, ...m }); return { seq: delivered.length }; },
+    });
+    lookupFails = new Error("engine overloaded");
+    try {
+      await expect(admit(trigger({ thread: "pr/7" }), SOURCE)).rejects.toMatchObject({ code: "unavailable", retryable: true, message: expect.stringContaining("engine overloaded") });
+      expect(started).toEqual([]);
+      expect(listSubscriptionRecords().map((s) => s.runId)).toEqual(["run-first"]);
+      // A plugin subscribing a run the engine can't say about is told to try again, not that the run doesn't exist.
+      await expect(subscribe({ runId: "run-other", source: "test", thread: "pr/8" }, "plugin:test-source")).rejects.toMatchObject({ code: "unavailable" });
+    } finally { lookupFails = null; }
+  });
+
+  test("a run started and its log line couldn't be written: the trigger stays deduped, and the failure is recorded", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    // The log can't be written (a directory where its file goes).
+    mkdirSync(join(home, "state", "triggers", "log.ndjson"), { recursive: true });
+    const errors: string[] = [];
+    const error = console.error;
+    console.error = (...a: unknown[]) => { errors.push(a.join(" ")); };
+    try {
+      const t = trigger({ thread: "issue/8" });
+      expect(await admit(t, SOURCE)).toEqual({ kind: "started", runId: "run-started1" });
+      // The run exists: the same trigger again is deduped, never a second run.
+      expect(await admit(t, SOURCE)).toMatchObject({ kind: "deduped" });
+      expect(started).toHaveLength(1);
+      expect(events.filter((e) => e.type === "trigger.received").map((e) => e.data.decision)).toEqual(["started", "deduped"]);
+      expect(events.find((e) => e.data.decision === "started")!.data.unrecorded).toEqual([expect.stringContaining("its line in the trigger log")]);
+      expect(errors.some((l) => l.includes("test/") && l.includes("was started (run-started1)") && l.includes("its line in the trigger log"))).toBe(true);
+      // A decision that started nothing is made again when the trigger comes again: it isn't lost from the log.
+      const denied = trigger({ actor: { id: "mallory" } });
+      await expect(admit(denied, SOURCE)).rejects.toMatchObject({ code: "unavailable", retryable: true });
+      rmSync(join(home, "state", "triggers", "log.ndjson"), { recursive: true });
+      expect(await admit(denied, SOURCE)).toMatchObject({ kind: "denied" });
+      expect(readTriggerLog().map((e) => e.decision.kind)).toEqual(["denied"]);
+      // The run's own record can't be written: the run stands, and its log line says what is missing.
+      rmSync(join(home, "state", "triggers", "runs"), { recursive: true });
+      writeFileSync(join(home, "state", "triggers", "runs"), "not a directory");
+      expect(await admit(trigger({ thread: "issue/9" }), SOURCE)).toEqual({ kind: "started", runId: "run-started2" });
+      expect(readTriggerLog().at(-1)).toMatchObject({ decision: { kind: "started", runId: "run-started2" }, unrecorded: [expect.stringContaining("the trigger run-started2 started from")] });
+      expect(listSubscriptionRecords().map((s) => s.thread).sort()).toEqual(["issue/8", "issue/9"]);
+    } finally { console.error = error; }
+  });
+
   test("a malformed trigger is refused before anything is recorded; text may be a plain string", async () => {
     await expect(admit({ ...trigger(), actor: { id: "x" } } as never, SOURCE)).rejects.toMatchObject({ code: "invalid", message: expect.stringContaining("actor") });
     await expect(admit({ ...trigger(), addressed: "loudly" } as never, SOURCE)).rejects.toMatchObject({ code: "invalid" });
@@ -179,12 +270,20 @@ describe("the intake decides in order and records each decision", () => {
     expect(await admit({ ...t, id: "t-again", thread: "pr/9" }, SOURCE)).toMatchObject({ kind: "continued" });
   });
 
-  test("a source's ids and thread carry no control characters (capcomd triggers log prints them); a display name loses them", async () => {
-    await expect(admit(trigger({ thread: "issue/1\u001b[2J" }), SOURCE)).rejects.toMatchObject({ code: "invalid", message: expect.stringContaining("control character") });
+  test("a source's ids and thread carry no control or format characters (capcomd triggers log prints them); a display name loses them", async () => {
+    await expect(admit(trigger({ thread: "issue/1\u001b[2J" }), SOURCE)).rejects.toMatchObject({ code: "invalid", message: expect.stringContaining("control or format character") });
     await expect(admit(trigger({ actor: { id: "eve\r\nalice" } }), SOURCE)).rejects.toMatchObject({ code: "invalid" });
     await expect(admit(trigger({ id: "c\u0007" }), SOURCE)).rejects.toMatchObject({ code: "invalid" });
+    // Format characters: a bidi override that reorders what a terminal shows, a zero-width space that makes two actors
+    // look alike, a line separator.
+    await expect(admit(trigger({ thread: "acme/app#1\u202e9#ppa/emca" }), SOURCE)).rejects.toMatchObject({ code: "invalid", message: expect.stringContaining("trigger.thread") });
+    await expect(admit(trigger({ actor: { id: "al\u200bice" } }), SOURCE)).rejects.toMatchObject({ code: "invalid", message: expect.stringContaining("trigger.actor.id") });
+    await expect(admit(trigger({ id: "c-1\u2028" }), SOURCE)).rejects.toMatchObject({ code: "invalid" });
+    await expect(subscribe({ runId: "run-a", source: "test", thread: "t/\u2066x" }, "plugin:x")).rejects.toMatchObject({ code: "invalid" });
+    expect(readTriggerLog()).toEqual([]);
     await admit(trigger({ actor: { id: "eve", display: "Eve\u001b]0;pwned\u0007" } }), SOURCE);
-    expect(readTriggerLog().map((e) => e.actor)).toEqual([{ id: "eve", display: "Eve ]0;pwned", bot: false }]);
+    await admit(trigger({ actor: { id: "eve", display: "\u202eevE\u200b\u2028 the\u00adlead 👩\u200d💻" } }), SOURCE);
+    expect(readTriggerLog().map((e) => e.actor)).toEqual([{ id: "eve", display: "Eve ]0;pwned", bot: false }, { id: "eve", display: "evE thelead 👩\u200d💻", bot: false }]);
   });
 
   test("the planner reads who wrote it and where; a secret in the text is not in the log", async () => {
@@ -330,6 +429,27 @@ describe("an ended run's planner starts again (§16.3.2 step 2)", () => {
     expect(most).toBe(1);
     expect([a, b].filter((d) => d.kind === "continued" && d.restarted)).toHaveLength(1);
     expect([a, b].map((d) => d.kind)).toEqual(["continued", "continued"]);
+  });
+
+  test("a restart the engine doesn't finish in time fails for now; the same trigger again finds the planner it started", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    await subscribe({ runId: "run-slow", source: "test", thread: "pr/6" }, "pull-request");
+    ended("run-slow");
+    let planner: string | null = null;
+    useIntakeDeps({
+      restart: async () => { const had = planner; await sleep(150); if (had) return { agentId: had, seq: 2, started: false }; planner = "agt-slow"; return { agentId: planner, seq: 1, started: true }; },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+    });
+    process.env.CAPCOMD_TRIGGERS_ENGINE_MS = "50";
+    try {
+      const t = trigger({ thread: "pr/6" });
+      const late = await admit(t, SOURCE).catch((e) => e);
+      expect(late).toMatchObject({ code: "unavailable", retryable: true, message: expect.stringContaining("starting run-slow's planner again") });
+      // Sent again while the first is still at it: it waits its turn and finds that planner.
+      process.env.CAPCOMD_TRIGGERS_ENGINE_MS = "1000";
+      expect(await admit(t, SOURCE)).toEqual({ kind: "continued", runId: "run-slow", seq: 2 });
+      expect(planner as string | null).toBe("agt-slow");
+    } finally { delete process.env.CAPCOMD_TRIGGERS_ENGINE_MS; }
   });
 
   test("the planner started again is told why, on top of its first brief (never twice)", async () => {
@@ -581,6 +701,12 @@ describe("ctx.triggers and the trigger hooks", () => {
     expect((await capcomd(["triggers", "log", "--source", "github"], env)).stdout).toBe("No trigger from github yet.\n");
     const subs = JSON.parse((await capcomd(["triggers", "subscriptions", "--json"], env)).stdout);
     expect(subs.subscriptions).toEqual([{ runId: "run-started1", source: "test", thread: "issue/5", until: null }]);
+    // A line from before the intake refused them (or any other writer): its escapes and bidi overrides are printed
+    // escaped, never sent to the terminal.
+    appendFileSync(join(home, "state", "triggers", "log.ndjson"), `${JSON.stringify({ at: "2026-11-07T10:00:00.000Z", source: "test", id: "old", thread: "issue/1\u001b[2J\u202e", actor: { id: "eve\u001b]0;pwned\u0007", display: "Eve", bot: false }, addressed: null, text: "", decision: { kind: "denied", by: "allowlist", reason: "eve\r\nalice isn't allowed" }, gate: null })}\n`);
+    const last = (await capcomd(["triggers", "log", "--limit", "1"], env)).stdout;
+    expect(last).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u202e]/);
+    expect(last).toBe("2026-11-07T10:00:00.000Z  test  eve\\u{1b}]0;pwned\\u{7}  issue/1\\u{1b}[2J\\u{202e}  denied by allowlist: eve\\u{d}\\u{a}alice isn't allowed\n");
   }, 30_000);
 });
 
@@ -710,27 +836,85 @@ describe("the GitHub source (forge-github)", () => {
       emit: async (t: Trigger) => { tried.push(t.id); if (fail && t.id === failOn) throw fail; return { kind: "started", runId: "run-x" }; },
       subscriptions: async () => [],
     } } as unknown as PluginContext<unknown>;
-    const start = Date.now() - 600_000;
-    const ts = (s: number) => new Date(start + s * 1000).toISOString();
-    await store.put("daemon", "github/acme/app", { since: ts(0) });
-    // comment-2 was written before comment-1 and edited after it: read in update order, its creation is past the position.
-    const page = [comment(1, { created_at: ts(20), updated_at: ts(20) }), comment(2, { created_at: ts(10), updated_at: ts(30) }), comment(3, { created_at: ts(40), updated_at: ts(40) })];
-    const api = { listIssueComments: async (_r: string, since: string) => page.filter((c) => c.updated_at >= since) } as never;
-    const cfg = { api: "https://api.github.com", sourceRepos: ["acme/app"], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
-    expect(await pollGitHub(ctx, cfg, api)).toBe(1);
-    expect(tried).toEqual(["comment-1", "comment-2"]);
-    expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(20), read: [1], retry: 2 });
-    fail = null;
-    expect(await pollGitHub(ctx, cfg, api)).toBe(2);
-    expect(tried).toEqual(["comment-1", "comment-2", "comment-2", "comment-3"]);
-    expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(40), read: [3] });
-    // Refused for good (the operator's settings): the source moves on.
-    fail = new PluginError("invalid", "no project"); failOn = "comment-4";
-    page.push(comment(4, { created_at: ts(50), updated_at: ts(50) }));
-    tried.length = 0;
-    expect(await pollGitHub(ctx, cfg, api)).toBe(0);
-    expect(tried).toEqual(["comment-4"]);
-    expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(50), read: [4] });
+    const now = Date.parse("2026-11-08T12:00:00.000Z");
+    setSystemTime(new Date(now));
+    try {
+      const ts = (s: number) => new Date(now - 600_000 + s * 1000).toISOString();
+      await store.put("daemon", "github/acme/app", { since: ts(0) });
+      // comment-2 was written before comment-1 and edited after it: read in update order, its creation is past the position.
+      const page = [comment(1, { created_at: ts(20), updated_at: ts(20) }), comment(2, { created_at: ts(10), updated_at: ts(30) }), comment(3, { created_at: ts(40), updated_at: ts(40) })];
+      const api = { listIssueComments: async (_r: string, since: string) => page.filter((c) => c.updated_at >= since) } as never;
+      const cfg = { api: "https://api.github.com", sourceRepos: ["acme/app"], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+      // comment-2 waits for another try (a poll interval from now); the position stays before it, and comment-3, after
+      // it, is not held back: it is emitted, and kept as read.
+      expect(await pollGitHub(ctx, cfg, api)).toBe(2);
+      expect(tried).toEqual(["comment-1", "comment-2", "comment-3"]);
+      expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(20), read: [1, 3], waiting: { 2: { tries: 1, next: now + 60_000 } } });
+      fail = null;
+      // Not yet due: nothing is tried, nothing is emitted again.
+      expect(await pollGitHub(ctx, cfg, api)).toBe(0);
+      expect(tried).toEqual(["comment-1", "comment-2", "comment-3"]);
+      setSystemTime(new Date(now + 60_000));
+      expect(await pollGitHub(ctx, cfg, api)).toBe(1);
+      expect(tried).toEqual(["comment-1", "comment-2", "comment-3", "comment-2"]);
+      expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(40), read: [3] });
+      // Refused for good (the operator's settings): the source moves on.
+      fail = new PluginError("invalid", "no project"); failOn = "comment-4";
+      page.push(comment(4, { created_at: ts(50), updated_at: ts(50) }));
+      tried.length = 0;
+      expect(await pollGitHub(ctx, cfg, api)).toBe(0);
+      expect(tried).toEqual(["comment-4"]);
+      expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(50), read: [4] });
+      // A position an older capcomd stored, held before its one comment to try again (`retry`): that comment is tried at
+      // the next poll, and the ones it held back are read.
+      fail = null;
+      tried.length = 0;
+      await store.put("daemon", "github/acme/app", { since: ts(20), read: [1], retry: 2 });
+      expect(await pollGitHub(ctx, cfg, api)).toBe(3);
+      expect(tried).toEqual(["comment-2", "comment-3", "comment-4"]);
+      expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(50), read: [4] });
+    } finally { setSystemTime(); }
+  });
+
+  test("a comment that keeps failing for now doesn't hold back newer ones: tried again later and later, then given up", async () => {
+    const tried: string[] = [], warned: string[] = [];
+    const store = storageService(pluginStore("forge-github", join(home, "plugins", "forge-github")));
+    const ctx = { storage: store, log: { warn: (m: string) => { warned.push(m); } }, triggers: {
+      emit: async (t: Trigger) => { tried.push(t.id); if (t.id === "comment-1") throw new PluginError("unavailable", "the engine didn't answer", undefined, true); return { kind: "started", runId: "run-x" }; },
+      subscriptions: async () => [],
+    } } as unknown as PluginContext<unknown>;
+    let now = Date.parse("2026-11-08T12:00:00.000Z");
+    setSystemTime(new Date(now));
+    try {
+      const ts = (s: number) => new Date(Date.parse("2026-11-08T11:00:00.000Z") + s * 1000).toISOString();
+      await store.put("daemon", "github/acme/app", { since: ts(0) });
+      const page = [comment(1, { created_at: ts(10), updated_at: ts(10) }), comment(2, { created_at: ts(20), updated_at: ts(20) })];
+      const api = { listIssueComments: async (_r: string, since: string) => page.filter((c) => c.updated_at >= since) } as never;
+      const cfg = { api: "https://api.github.com", sourceRepos: ["acme/app"], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+      expect(await pollGitHub(ctx, cfg, api)).toBe(1);
+      const waits: number[] = [];
+      for (let i = 2; i <= RETRY_TRIES; i++) {
+        const pos = (await store.get("daemon", "github/acme/app")) as { since: string; waiting?: Record<string, { tries: number; next: number }> };
+        expect(pos.since).toBe(ts(0));
+        expect(pos.waiting?.[1]?.tries).toBe(i - 1);
+        waits.push(pos.waiting![1]!.next - now);
+        // A comment written while comment-1 waits is emitted at the next poll, once.
+        page.push(comment(100 + i, { created_at: ts(20 + i), updated_at: ts(20 + i) }));
+        now = pos.waiting![1]!.next;
+        setSystemTime(new Date(now));
+        expect(await pollGitHub(ctx, cfg, api)).toBe(1);
+      }
+      // Each wait twice the one before, from the poll interval, at most an hour.
+      expect(waits).toEqual([60_000, 120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000]);
+      expect(tried.filter((id) => id === "comment-1")).toHaveLength(RETRY_TRIES);
+      expect(tried.filter((id) => id !== "comment-1")).toEqual(["comment-2", ...Array.from({ length: RETRY_TRIES - 1 }, (_, k) => `comment-${102 + k}`)]);
+      expect(warned.at(-1)).toBe(`github source: gave up on acme/app comment 1 after ${RETRY_TRIES} tries`);
+      // Given up: the position moves past it, and it isn't tried again.
+      expect(await store.get("daemon", "github/acme/app")).toEqual({ since: ts(20 + RETRY_TRIES), read: [100 + RETRY_TRIES] });
+      setSystemTime(new Date(now + 7_200_000));
+      expect(await pollGitHub(ctx, cfg, api)).toBe(0);
+      expect(tried.filter((id) => id === "comment-1")).toHaveLength(RETRY_TRIES);
+    } finally { setSystemTime(); }
   });
 
   test("a repository only a followed thread brings in: just that thread's comments are triggers", async () => {

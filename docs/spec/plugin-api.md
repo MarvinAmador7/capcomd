@@ -738,9 +738,28 @@ finds said already adds nothing, every string scanned as a candidate's is, `prop
 item a draft with kernel-stamped provenance, `index.md` as lint writes it), committed and pushed on the host; its
 result carries the `branch`, the `commit` and `context` (what was applied and refused). It runs as a reporting agent
 does (a read-only checkout of the target, nothing of it kept), with the run's candidates and its verifies and merges in
-its prompt, fenced as their agents' text; its profile naming no model, it runs on the run's strongest (the most capable,
+its prompt, fenced as their agents' text, after the run's goal (fenced too, `goal`: what it asks the project to
+remember is kept unless false, secret or known, a person still reviewing it); its profile naming no model, it runs on the run's strongest (the most capable,
 by `src/config/models.ts`, of the models the run's agents on its provider use). The `context` plugin's listener then
 records `plugin.context.staged` (the branch, the commit, each change) and a `plugin.context.refused` per refused change.
+Before a consolidator starts (its `agent.preparing`, before its inputs are read), the `context` plugin collects the
+lessons every agent of the run declared that capture has no record of yet, as each one's end would have (its spawner's
+own, still running, among them; each agent's still once), so the planner's lessons reach the consolidator it spawns
+last. A spawn's check of a child's spec against its parent's leaves out the child's `context` block, as its provider,
+auth and tool mode (its own profile's, ADR-025 D12; an override still can't change one). In-VM `status` of an agent
+that may spawn the consolidator carries `lessons {candidates, pending, agents, consolidators[{agentId, status,
+commit}], text}` (additive): counts and states, never a lesson's text.
+
+The built-in `context-memory` listens here too (ADR-025 D6a), on `ended`: once every agent of the run that may spawn the
+consolidator (`children.allowedChildProfiles` has it) has ended and no consolidator still runs, it starts one at the
+run's top (key `consolidate`, the ended agent's drive settings) when the run's agents proposed lessons (candidates, or
+declared and not collected) and none ran; and for a consolidator that ended done with a branch no merge was asked for,
+it verifies that commit (a passed verify of it is used again) and asks to merge it as an agent's merge is asked
+(`requestApproval`: parked on a protected target; its own `merge.landing` hold applies), in the background. Each is
+idempotent by its key, and its events are keyed: `plugin.context-memory.consolidator_started`, `merge_requested`
+(`{agentId, commit, verify, merge, state}`), and `consolidator_skipped` (`reason`: `off`, `cancelled`,
+`consolidator_failed`, `spawn_refused`, `verify_failed`, `merge_failed`) when there was something to do. Its config
+`autoConsolidate` (boolean, default `true`, `x-per-run`) turns it off; it never throws.
 
 A consolidator's answer may also propose new facts to a company's brain (ADR-025 step 5): a change with `brain: <name>`
 for the brain its own profile names (its `groundray` entry), one of groundray's types (`concept`, `decision`,
@@ -2035,11 +2054,13 @@ messages and events outside what it listens to before emitting, keep its own rea
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
 structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
-ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
-log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
-before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4). A source MAY give
-the daemon a reply path (`ctx.triggers.onReply`, §16.3.7); what it posts there MUST carry the source's own mark, so its
-next read drops it as its bot's words.
+ISO time, `actor {id, display, bot}`, no control characters, format characters (Unicode `Cf`: bidi overrides,
+zero-width spaces) or line and paragraph separators in `id`, `thread` or the actor's id (`capcomd triggers log` and
+the planner's message show them; the display name loses its: control characters and line breaks become spaces, format
+characters go, but a zero-width joiner inside an emoji), text and data ≤ 64 KB each) and refuses a malformed trigger
+`invalid` before recording anything; `ctx.triggers.subscribe` checks its `thread` the same way. `capcomd triggers log`
+and `subscriptions` print any such character they find in the records as `\u{…}`. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4). A source MAY give the daemon a reply path (`ctx.triggers.onReply`, §16.3.7); what it
+posts there MUST carry the source's own mark, so its next read drops it as its bot's words.
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -2060,10 +2081,14 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   capcomd wrote (a comment carrying `<!-- capcomd -->`, as its replies do: its reply path posts one comment on the
   thread, §16.3.7). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
-  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
-  position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
-  keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
-  `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
+  comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2) waits for another
+  try, after one poll interval, then twice the wait before each time (at most an hour), and is given up after 8 tries
+  (a warning in the plugin's log; each try is a `failed` line of the intake's log). A waiting comment holds the
+  position before it, so later reads return it, but never holds back newer comments: they are emitted as they come,
+  and the position keeps the ids of the comments handled at or after it, which the next poll skips. GitHub's `since`
+  includes its own second, so this also covers the comments read at that second (else each poll would emit them
+  again, a `deduped` decision a minute). A read returns at most 100 comments: past that many handled after a
+  waiting comment, newer ones wait until it is handled or given up. The source's `job.changed` listener is registered whatever its settings, as its
   manifest declares it (§4.7), and its timer runs in the daemon whatever its settings (a run follows its goal branch's
   pull request once it is open, §16.3.6); a fire calls GitHub only when `sourceRepos` names a repository or a run
   follows a `github` thread (nothing configured and nothing followed: no call, not even for the login). It declares
@@ -2092,12 +2117,19 @@ with the `TriggerDecision`:
    `_planner` once it is started (`restartPlanner`: a restart that fails part way is done again by the same trigger, the
    same key and agent, and never leaves the run's planner one that doesn't start) → `continued {runId, seq, restarted:
    <its agent id>}`; a planner that works again already only gets the message (`continued` without `restarted`). One
-   restart of a run at a time: a second trigger on it finds the planner the first started. In `observe`, inferred: the message lands in the ended planner's inbox
+   restart of a run at a time: a second trigger on it finds the planner the first started; a restart the engine doesn't
+   finish within `CAPCOMD_TRIGGERS_ENGINE_MS` fails for now (`unavailable`), and sent again, the same trigger finds or
+   finishes the same planner. In `observe`, inferred: the message lands in the ended planner's inbox
    → `recorded {wouldHave: "continue", runId}`. Refused (not allowed, a plugin's denial, `off`): it lands in the inbox
    only → `continued {runId, seq}`, the log's `gate` saying why nothing started. A planner that can't start (its
    profile, the run's budget or sandbox: a `RelayError` other than an unreachable engine) is a start that fails, refused
    for good (`invalid`); anything else fails for now (`unavailable`, the source sends it again). The new planner is
    spawned as the operator's (§3.2: no source principal reaches `agent.spawning`; the trigger's gate decided).
+   When the engine doesn't say where a run subscribed to the thread stands (an error, or no answer within
+   `CAPCOMD_TRIGGERS_ENGINE_MS`, 15 s), and no other subscribed run took the message, the trigger doesn't go on to the
+   gate (a new request there could start a second run on the thread): it is a start that fails, `unavailable`
+   (retryable), and the subscription holds. A delivery the engine doesn't confirm in time is the same; sent again, it is
+   idempotent by its key.
 3. **Gate**: config `triggers.sources.<source>` (kernel-owned, operator-written: `allowed: [actor ids]`,
    `opened: [thread patterns]`, `mode: off|observe|auto`, `project`). The trigger is **allowed** when its actor's id is
    in `allowed` or its thread matches an `opened` pattern (exact, `*` matching any run of characters). Strength is
@@ -2119,7 +2151,13 @@ with the `TriggerDecision`:
    here (`continue` is step 2's, for an ended run). A started run answers on the thread when it ends, if the source's
    replies are on (§16.3.7). A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
-   trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`.
+   trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`. A run that
+   started is never undone: when its records can't be written after it (the log's line, `Run.trigger`'s record, its
+   subscription, the event), the decision stands, the dedupe mark stays (the same trigger again is `deduped`, never a
+   second run), and what is missing is recorded wherever it can be: the log line's `unrecorded` (additive), the
+   `trigger.received` event's `unrecorded` (additive) and the daemon's log. A decision that started nothing and whose
+   log line can't be written drops the mark and `emit` rejects `unavailable` (retryable), so it is decided and recorded
+   when the trigger comes again (a `continued` message is sent again idempotently, by its key).
 
 What the intake does **not** do: judge content. The model-side assessment the prototype's "Eval" performs is the
 planner's job once a run exists (it reads the trigger as its goal and may decide there is nothing to do, ending with a
@@ -2396,7 +2434,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.54 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route, from a sender that holds a capcomd client token: every route needs one, so a signed webhook that can't send one (GitHub's, Slack's) isn't served yet. |
 | 1.0.55 | 2026-11-08 | `capcomd plugins enable\|disable <name>` (§5.4, §6.5, §9.9): they record `plugins.<name>.enabled` in the user's config and call `POST /v1/plugins/{name}/enable\|disable` on the running daemon (at the harness socket it now records in `state/plugins.json`, with a token made for the call and deleted after), so a toggle lasts past a restart; with no daemon only the config changes. A built-in is still refused (409, the CLI's `conflict`), except the watchdog, which a person turns on and may turn off. `GET /v1/plugins` lists each plugin's declared CLI `commands` (§13.2, additive), and a command whose plugin isn't running is refused naming the plugin and its cause instead of as an unknown command (§4.7.1), with the next step: `capcomd plugins enable`, or the environment variable that turns it off. |
 | 1.0.56 | 2026-11-08 | A `job.changed` listener may declare `changes` (§4.7, §6.6.19): the change kinds it is called for (`started`, `output`, `fired`, `ended`; default all, so an existing manifest is unchanged); the registry doesn't call it for another, and the jobs service reads a running job's new output (one exec in its machine a second) only while a listener wants `output`. The built-ins declare what they use (sandbox-docker, sandbox-boxd, forge-github and source-schedule `fired`; the watchdog `started`, `fired`, `ended`), so with no other plugin a running job costs one look a second, not two. `changes` on another hook is `invalid`. The test kit holds a plugin to it as the host does (§14.5): `fire` of a change kind its listener didn't declare is refused `not_found`, and `hookContract` calls a listener with a kind it declared. Manifest schema additive; no hook payload, seam, route or contract shape changes. |
-| 1.0.57 | 2026-11-08 | Trigger continuations (the steps §16.3.1, §16.3.2 step 2, §16.3.6 left to later): a goal branch's run follows its pull request's thread once it is opened, the forge naming it (`PullRequestRef.thread`, additive; forge-github `owner/name#N`), and the `github` source reads the threads runs follow on its timer whatever its settings (in a repository `sourceRepos` doesn't name, only those threads); on an ended run's thread a person's trigger is asked steps 3 to 5, and when they would act its planner starts again (a new planner continuing the last, with the message in its inbox: `continued {restarted}`, additive), `observe` records `wouldHave: "continue"`, and a refusal leaves it in the inbox only; replies (§16.3.7, new): `ctx.triggers.onReply(source, reply)` (in process only), `TriggerReply`, `triggers.sources.<source>.reply` (off by default), one short answer per request when the run ends completed or failed, posted by the sweep with a claim and at most three tries, forge-github's a marked comment the source drops (a reply waits for its source's reply path, and an engine that doesn't answer loses none); a restart's planner is the run's `_planner` once started, one restart of a run at a time; `trigger.replied` on the daemon stream and `trigger.received.restarted` (both additive). Owner questions taken conservatively: replies are opt-in, and a restart needs what a start needs (the gate), not just a person. |
+| 1.0.57 | 2026-11-08 | Triggers hardened (§16.3.1, §16.3.2): `checkTrigger` and `ctx.triggers.subscribe` also refuse format characters (`Cf`: bidi overrides, zero-width spaces) and line and paragraph separators in a trigger's `id`, `thread` and actor id, and a display name loses them (control characters still become spaces); `capcomd triggers log` and `subscriptions` print any such character in the records as `\u{…}`. Step 2: a subscribed run whose standing the engine doesn't give (an error, or none within `CAPCOMD_TRIGGERS_ENGINE_MS`, 15 s) makes the trigger a start that fails, `unavailable` (retryable), instead of passing it on to the gate where it could start a second run on the thread; the same for a delivery the engine doesn't confirm in time (idempotent by its key). Step 6: once a run started, nothing undoes the decision: records that fail after it (the log line, `Run.trigger`'s record, the subscription, the event) leave the dedupe mark in place and are named in the log line's and `trigger.received`'s `unrecorded` (additive) and the daemon's log; a decision that started nothing and whose log line can't be written drops the mark and rejects `unavailable`. The `github` source: a comment refused retryably waits for another try (one poll interval, then doubling, at most an hour; given up after 8 tries) without holding back newer comments, its read position keeping the ids handled at or after it. The kernel's own lookup of a run's standing passes an engine error on (a run the engine can't say about is not a run that doesn't exist, which would end its subscription after the starting grace), and `ctx.triggers.subscribe` on such a run rejects `unavailable` (retryable), not `not_found`. The contract's `trigger.received` gains the optional `unrecorded` (additive); no hook, seam or route changes. |
+| 1.0.58 | 2026-11-08 | Consolidation reachable in a default team (ADR-025 D6, its proposed amendment D6a; the live run's L2): a spawn's check of a child against its parent leaves out the child's `context` block (the planner `capcomd setup project` writes was refused its consolidator, "context changed"); the `context` plugin collects, as a consolidator starts (`agent.preparing`), the lessons the run's agents declared that capture hasn't (the planner's own); in-VM `status` of an agent that may spawn the consolidator carries `lessons` (additive); the built-in `context-memory` listens to `agent.changed` `ended` (scope `steer`, events `consolidator_started`, `merge_requested`, `consolidator_skipped`, config `autoConsolidate`, default true, `x-per-run`) and, once every agent that may spawn the consolidator has ended, starts one for a run with lessons and none, or verifies and asks to merge a consolidator's branch nobody merged (held by its own gate); a consolidator reads the run's goal first, fenced, and keeps what it asks the project to remember (§6.6.8). `capcomd merge --request-approval` parks a merge into a protected target for `capcomd approve`, every plugin's gate still asked (additive). |
+| 1.0.59 | 2026-11-08 | Trigger continuations (the steps §16.3.1, §16.3.2 step 2, §16.3.6 left to later): a goal branch's run follows its pull request's thread once it is opened, the forge naming it (`PullRequestRef.thread`, additive; forge-github `owner/name#N`), and the `github` source reads the threads runs follow on its timer whatever its settings (in a repository `sourceRepos` doesn't name, only those threads); on an ended run's thread a person's trigger is asked steps 3 to 5, and when they would act its planner starts again (a new planner continuing the last, with the message in its inbox: `continued {restarted}`, additive), `observe` records `wouldHave: "continue"`, and a refusal leaves it in the inbox only; replies (§16.3.7, new): `ctx.triggers.onReply(source, reply)` (in process only), `TriggerReply`, `triggers.sources.<source>.reply` (off by default), one short answer per request when the run ends completed or failed, posted by the sweep with a claim and at most three tries, forge-github's a marked comment the source drops (a reply waits for its source's reply path, and an engine that doesn't answer loses none); a restart's planner is the run's `_planner` once started, one restart of a run at a time, under 1.0.57's engine timeout; `trigger.replied` on the daemon stream and `trigger.received.restarted` (both additive). Owner questions taken conservatively: replies are opt-in, and a restart needs what a start needs (the gate), not just a person. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

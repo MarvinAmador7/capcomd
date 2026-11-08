@@ -19,6 +19,31 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `triggers.sources.<source>.reply: true` (off by default). On GitHub it is one comment on the issue or pull request,
   posted with your login and marked so capcomd never reads it back as a request. Each reply is a `trigger.replied`
   event on the daemon stream. Plugins that feed triggers can offer the same with `ctx.triggers.onReply`.
+- Lessons now reach the project's memory in a default team without your help. Fixed: the planner `capcomd setup
+  project` writes couldn't spawn the consolidator it writes (refused as "context changed"); a child is briefed by its
+  own profile. The planner's brief and skill now say when and how: put its own lessons in its result, read
+  `capcomd status` (`lessons`: how many candidates the run has, and its consolidators), spawn the consolidator last,
+  then verify and merge its change. capcomd collects the planner's own lessons when the consolidator starts, so the
+  consolidator reads them, and the consolidator now reads the run's goal: a lesson your goal asks the project to
+  remember is kept for your review, even when the repository implies it. And if a run's planner ends with lessons and no consolidator ran, capcomd starts one, then
+  verifies its change and asks to merge it (or asks to merge a consolidator's change the planner left unmerged); the
+  merge waits for your approval as before (`capcomd approve <runId> <mrgId>`). `capcomd events` shows
+  `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with why. Turn it off with
+  `plugins.context-memory.autoConsolidate: false` in your config, or for one run with
+  `capcomd run --plugin-config context-memory.autoConsolidate=false`.
+- `capcomd merge --request-approval` parks a merge into a protected branch for `capcomd approve`, as an agent's merge
+  is parked, so you can land a consolidator's memory change on `main` through its review hold instead of past it with
+  `--operator` (which bypasses every plugin's gate).
+- Fixed: triggers (GitHub comments, schedules and other sources) are sturdier. A trigger whose thread or sender carries
+  invisible characters (bidi overrides, zero-width spaces, line separators), as well as terminal escapes, is refused,
+  and a sender's display name loses them; `capcomd triggers log` and `capcomd triggers subscriptions` print any such
+  character as `\u{…}` instead of sending it to your terminal. When the engine doesn't say in time (15 s,
+  `CAPCOMD_TRIGGERS_ENGINE_MS`) whether a run follows a comment's thread, the trigger fails for now and the source sends
+  it again, instead of possibly starting a second run on that thread. When a run started but its line in the trigger
+  log couldn't be written, the trigger stays handled (no second run), and what couldn't be recorded is reported on the
+  daemon's stream and log. The GitHub source no longer lets one comment that keeps failing for now hold back newer
+  comments: it tries that comment again after 1, 2, 4… poll intervals (at most an hour apart) while it reads the rest,
+  and gives up on it after 8 tries, with a warning in the daemon's log.
 - New: `capcomd plugins disable <name>` and `capcomd plugins enable <name>` turn a plugin off and on. The choice is
   saved in your config (`plugins.<name>.enabled` in `~/.capcomd/config.json`), so it survives a daemon restart, and a
   running daemon applies it at once (`enable` also resets a plugin whose hooks were suspended after failing). With no

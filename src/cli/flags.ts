@@ -108,6 +108,7 @@ export const FLAGS: NonNullable<ParseArgsConfig["options"]> = {
   "review-profile": { type: "string" },
   reviewer: { type: "string" },
   require: { type: "string" },
+  "request-approval": { type: "boolean" },
   target: { type: "string" },
   holder: { type: "string" },
   epoch: { type: "string" },

@@ -89,15 +89,18 @@ async function checkCommand({ positionals, values, json }: Cmd): Promise<number>
 
 /** `capcomd merge` */
 async function mergeCommand({ positionals, values, json }: Cmd): Promise<number> {
-  const runId = positionals[1] ?? usage("runId required: capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T]");
+  const runId = positionals[1] ?? usage("runId required: capcomd merge <runId> --ref <agt|branch> --require <vfyId> [--target T] [--request-approval | --operator]");
   const ref = (values.ref as string | undefined) ?? positionals[2] ?? usage("--ref required (an agent id or a branch)");
+  if (values.operator && values["request-approval"]) usage("--request-approval and --operator are two ways to merge into a protected target: pick one");
+  // --request-approval: a protected target parks the merge for `capcomd approve`, as an agent's merge is parked, so a
+  // person lands it through every plugin's gate (a memory change's hold too) instead of past them with --operator.
   const r: any = await (await import("../../primitives/ops")).mergeRef({
     runId, ref, require: values.require as string | undefined, target: values.target as string | undefined,
-    operator: !!values.operator, key: values.key as string | undefined,
+    operator: !!values.operator, key: values.key as string | undefined, ...(values["request-approval"] ? { requestApproval: true } : {}),
   });
   if (json) out(r);
   else console.log(`${r.id}: ${r.state}${r.result?.sha ? ` ${String(r.result.sha).slice(0, 12)}` : ""}${r.result?.reason ? ` ${r.result.reason}` : ""}${r.result?.combined?.text ? `\n  ${r.result.combined.text}` : ""}`);
-  if (!json && r.state === "awaiting_approval" && r.heldBy) console.log((await import("../status-text")).heldMergeText(runId, r.id, r).join("\n"));
+  if (!json && r.state === "awaiting_approval") console.log(r.heldBy ? (await import("../status-text")).heldMergeText(runId, r.id, r).join("\n") : `  approve it to land it: capcomd approve ${runId} ${r.id}`);
   // The merged agent's checkpoint refs are deleted after the merge's record: finish that before this process ends.
   await (await import("../../primitives/ops")).settleCleanups();
   return r.state === "merged" ? EXIT.ok : EXIT.run_failed;

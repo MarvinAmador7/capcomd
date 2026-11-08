@@ -112,13 +112,18 @@ checked, so it is refused).
  * the project lands memory on lint alone.
  */
 export function consolidatorRule(mcp: boolean): string {
-  return `- Before you end, when agents of this run proposed lessons (a child's result has a \`context\` list, or
-  \`capcomd kv get _context/<agt>\` has candidates), spawn ${CONSOLIDATOR_PROFILE} as your last child, once every other
-  child has ended: \`capcomd spawn --profile ${CONSOLIDATOR_PROFILE} --task "Consolidate this run's lessons" --key consolidate\`${mcp ? " (capcomd_spawn)" : ""}.
-  It reads every candidate, the project's memory and the run's verifies and merges, and capcomd writes the changes
-  it gives on its branch (only .capcomd/context/). Verify and merge it as any child's work: its merge waits for a
-  person's approval (state "awaiting_approval") unless the project lands memory on lint alone. When it has nothing to
-  change, it ends with no branch: there is nothing to merge.
+  return `- The project's memory, as your last step before you end, once every other child has ended:
+  1. Your own lessons (what this run found out that a later agent would otherwise learn the hard way, and anything
+     the goal asks to remember) go in your result first: \`capcomd result --summary "…" --data '{"context": [{"title": "…", "text": "…"}]}'\`.
+  2. \`capcomd status\`${mcp ? " (capcomd_status)" : ""} shows \`lessons\`: how many candidate lessons the run's agents proposed
+     (\`candidates\`, and \`pending\`: yours and others' declared but not collected yet) and its consolidators.
+  3. When there are any, spawn ${CONSOLIDATOR_PROFILE} as your last child: \`capcomd spawn --profile ${CONSOLIDATOR_PROFILE} --task "Consolidate this run's lessons" --key consolidate\`${mcp ? " (capcomd_spawn)" : ""}.
+     capcomd collects your lessons as it starts (what your result says after that isn't read again). It reads every
+     candidate, the project's memory and the run's verifies and merges, and capcomd writes the changes it gives on its
+     branch (only .capcomd/context/).
+  4. Await it, then verify and merge it as any child's work: its merge waits for a person's approval (state
+     "awaiting_approval") unless the project lands memory on lint alone. When it has nothing to change, it ends with
+     no branch: there is nothing to merge. Then write your final result.
 `;
 }
 
