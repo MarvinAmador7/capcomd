@@ -164,6 +164,7 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
       ...(o.jobs ? { jobs: pluginJobs(m.name), agents: pluginAgents(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
       ...(o.triggers ? { triggers: pluginTriggers(m.name, m.scopes ?? []) } : {}),
     }) } : {}),
+    // Only a shipped built-in (no directory) may name the kernel's own variables (§10.3): resolveSecret checks both.
     secret: async (m, key, dir, source) => resolveSecret(m, key, process.env, dir, { builtin: source === "builtin" }),
     exempt: (name, version) => isExempt(name, version),
     // A project's plugin runs only with its content as the operator trusted it (§4.8). The daemon audits each trust

@@ -310,7 +310,7 @@ const PluginEventData = {
 	"plugin.config_refused": z.looseObject({
 		plugin: z.string(),
 		errors: z.array(z.looseObject({ path: z.string().describe("The setting, under plugins.<name> (e.g. stalledAfterMs)"), message: z.string() })),
-		layer: z.string().describe("Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), or run (more may come)"),
+		layer: z.string().describe("Where the refused settings were: user (~/.capcomd/config.json), project (.capcomd/config.json), env (CAPCOMD_PLUGIN_<NAME>_<KEY>), run, or default (the manifest's own default, e.g. a secret reference naming one of capcomd's own variables; more may come)"),
 	}).describe(`${PLUGIN_EVENT}. A plugin's settings failed its config schema (spec §10.4): it is failed with cause config_invalid, never run with defaults`),
 	"plugin.trusted": z.looseObject({
 		plugin: z.string(), source: z.string().describe("project: a project's plugin, which runs only once trusted (more may come)"),
