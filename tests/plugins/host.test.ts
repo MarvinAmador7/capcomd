@@ -541,6 +541,22 @@ describe("the test kit (§14.5)", () => {
     expect(call.signal.aborted).toBe(true);
     expect(await fake.dispose()).toEqual([]);
   });
+
+  test("a fake context, like the host, doesn't call a job.changed listener for a kind its `changes` leave out (§4.7)", async () => {
+    const m = (await import("../../packages/plugin/src/manifest")).PluginManifest.parse(manifest("starts", hooks({ "job.changed": { changes: ["started", "ended"] } })));
+    const got: string[] = [];
+    const mod: PluginModule = { activate(ctx) { ctx.hooks.on("job.changed", (call) => { got.push(call.payload.change.kind); }); } };
+    const fake = testkit.fakeContext(m);
+    await testkit.load(fake, mod);
+    // A test that fires an output frame at it can't pass on a call the daemon never makes.
+    await expect(fake.fire("job.changed", { ...samplePayload("job.changed"), change: { kind: "output", stdout: "x", stderr: "" } })).rejects.toThrow(/starts is not called for job.changed output: its manifest's changes are started, ended/);
+    await expect(fake.fire("job.changed", samplePayload("job.changed"))).rejects.toThrow(/not called for job.changed fired/);
+    expect(await fake.fire("job.changed", { ...samplePayload("job.changed"), change: { kind: "started" } })).toMatchObject({ failure: null });
+    expect(got).toEqual(["started"]);
+    await fake.dispose();
+    // The hook contract calls it with a change it declared, not the sample's `fired`.
+    await testkit.hookContract(m, mod);
+  });
 });
 
 describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {

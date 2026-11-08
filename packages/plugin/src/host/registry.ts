@@ -206,11 +206,14 @@ export class HookRegistry {
   }
 
   /** One plugin's listener called as the host would (deadline, result check, failure accounting), returning its raw
-   *  answer: the test kit's `fire` (§14.5). `timeoutMs` replaces the listener's deadline. */
+   *  answer: the test kit's `fire` (§14.5). `timeoutMs` replaces the listener's deadline. A change of a kind the listener
+   *  didn't declare (`changes`) is refused `not_found`, as a hook it doesn't listen to is: the host never calls it. */
   async callOne(plugin: string, hook: HookName, payload: unknown, o: FireOptions & { timeoutMs?: number }): Promise<{ result: unknown; failure: { kind: HookFailureKind; message: string } | null; ms: number }> {
     const found = this.ordered(hook).find((x) => x.plugin === plugin);
     const p = this.plugins.get(plugin);
     if (!found || !p) throw new PluginError("not_found", `${plugin} does not listen to ${hook}`);
+    const kind = changeKind(payload);
+    if (!wants(found, kind)) throw new PluginError("not_found", `${plugin} is not called for ${hook} ${kind}: its manifest's changes are ${[...found.changes!].join(", ")} (§4.7)`);
     const l = o.timeoutMs === undefined ? found : { ...found, timeoutMs: o.timeoutMs };
     const started = this.now();
     if (p.suspended) {

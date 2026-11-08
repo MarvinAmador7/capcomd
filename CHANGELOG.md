@@ -9,7 +9,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   second while it prints output, besides the one that checks on it: capcomd now reads a running job's output only when
   a plugin wants it, which no built-in does. Plugin authors: a `job.changed` listener may declare the changes it wants in `plugin.json`,
   `"job.changed": { "changes": ["fired"] }` for a plugin that only keeps a timer (`started`, `output`, `fired`,
-  `ended`; default all, so existing plugins still get every change).
+  `ended`; default all, so existing plugins still get every change). The test kit's `fire` refuses a change of a kind
+  you left out, since capcomd never calls you for one.
 - Fixed: the project's memory gate now refuses an agent's branch that writes into `.capcomd/context/` under another
   spelling of the path, such as `.Capcomd/Context/memory/x.md`. Git treats that as a different folder, but a checkout
   on macOS or Windows puts those files next to the real memory, and before this fix they got past the check. The gate
