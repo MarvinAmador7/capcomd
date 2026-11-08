@@ -2,7 +2,8 @@
 // sha256 is stored, in ~/.capcomd/harness-clients.json (mode 0600). Scopes: read (GET), steer (start runs: POST /v1/runs;
 // pause/resume/cancel runs; send messages), approve (decisions), configure (change settings: PATCH
 // /v1/sandboxes/{name}/settings; set a folder up as a project: POST /v1/projects; start and publish its repository:
-// POST /v1/projects/git-init and /v1/projects/publish).
+// POST /v1/projects/git-init and /v1/projects/publish; send a run's proposals to a company's brain in the caller's
+// name: POST /v1/runs/{runId}/brain-proposals/send).
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

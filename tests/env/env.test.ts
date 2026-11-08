@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { bareRepo } from "../merge/gitfixture";
@@ -210,5 +210,131 @@ test("installed CLI version is the transcript's last x.y.z (node's download vers
   expect(lastVersion(transcript)).toBe("2.1.286");
   expect(lastVersion("v26.12.0\n")).toBe("26.12.0");
   expect(lastVersion("Executed: sh -c command -v node >/dev/null && node -v; true")).toBeUndefined();
+});
+
+describe("the project's brains in the env image (ADR-025 step 4)", () => {
+  const ACME_ID = "urn:uuid:6e7cc12e-b3f7-49da-875d-32b714fdc1e8";
+  const item = (id: string, sensitivity?: string) => `---\ntype: policy\nid: ${id}\ntitle: Refund window\ndescription: Refunds within 30 days\nstatus: stable\n${sensitivity ? `sensitivity: ${sensitivity}\n` : ""}---\n\nBody.\n`;
+  /** A groundray brain in a bare repository, with a restricted file outside its bundle. */
+  async function brainRepo(extra: Record<string, string> = {}) {
+    const b = await bareRepo();
+    const files: Record<string, string> = {
+      "brain.yaml": `schema_version: 1\nid: ${ACME_ID}\nslug: acme\nname: acme fictional\nbundle: knowledge\n`,
+      "knowledge/.core-kb.yaml": "default_sensitivity: internal\n",
+      "knowledge/policies/refunds.md": item("refunds"),
+      "knowledge/references/capture.txt": "raw capture\n",
+      "private/salaries.md": item("pay", "restricted"),
+      ...extra,
+    };
+    for (const [p, text] of Object.entries(files)) { mkdirSync(join(b.root, "seed", p, ".."), { recursive: true }); writeFileSync(join(b.root, "seed", p), text); }
+    await b.seed.ok(["add", "."]);
+    await b.seed.ok(["commit", "-q", "-m", "brain"]);
+    await b.seed.ok(["push", "-q", "origin", "main"]);
+    return { b, commit: (await b.sha("main"))! };
+  }
+  const listed = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? listed(join(dir, e.name)).map((x) => `${e.name}/${x}`) : [e.name]).sort();
+
+  test("env build places each mapped brain's bundle at its pinned commit, with the marker; an agent's runner keeps it and sends nothing at start", async () => {
+    const f = await fixture({ lock: false });
+    const { b, commit } = await brainRepo();
+    const { mappedBundles } = await import("../../src/context/groundray");
+    const settings = { brains: { acme: { repo: b.bare, branch: "main", commit, slug: "acme", id: ACME_ID } } };
+    const { bundles, skipped } = await mappedBundles(settings, f.cfg.workdir);
+    expect(skipped).toEqual([]);
+    const dir = join(f.workdir, "context/groundray/acme");
+    expect(bundles).toEqual([{ provider: "groundray", name: "acme", remote: b.bare, branch: "main", commit, path: "knowledge", dir }]);
+    const hostGit = { workdir: join(f.workdir, "host-git") };
+    const plain = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1, hostGit });
+    expect(existsSync(dir)).toBe(false);
+    const logs: string[] = [];
+    const res = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1, hostGit, bundles, log: (l) => logs.push(l) });
+    // The bundles are part of the image's name and record.
+    expect(res.cached).toBe(false);
+    expect(res.name).not.toBe(plain.name);
+    expect(res.name).toBe(envName(res.record.manifest));
+    expect(res.record.manifest.bundles).toEqual([{ provider: "groundray", name: "acme", commit, path: "knowledge" }]);
+    expect(logs.join("\n")).toContain(`context: placed groundray acme (knowledge/) at ${commit.slice(0, 12)}`);
+    // Only the bundle's directory, read-only, with the marker: nothing else of the brain's repository.
+    expect(listed(dir)).toEqual([".capcomd-bundle", "knowledge/.core-kb.yaml", "knowledge/policies/refunds.md", "knowledge/references/capture.txt"]);
+    expect(readFileSync(join(dir, ".capcomd-bundle"), "utf8")).toBe(`${commit} knowledge`);
+    expect(statSync(join(dir, "knowledge/policies/refunds.md")).mode & 0o222).toBe(0);
+    // Mapped again at a newer commit: a new image.
+    await b.pushToMain("knowledge/policies/later.md", item("later"));
+    const later = (await b.sha("main"))!;
+    const moved = (await mappedBundles({ brains: { acme: { ...settings.brains.acme, commit: later } } }, f.cfg.workdir)).bundles;
+    expect(moved[0]!.commit).toBe(later);
+    expect(envName({ ...res.record.manifest, bundles: moved.map((x) => ({ provider: x.provider, name: x.name, commit: x.commit, path: x.path })) })).not.toBe(res.name);
+
+    // A worker booted from the image: the runner finds the bundle at its commit and keeps it; nothing is uploaded for it.
+    // An image's bundle its brief doesn't cite goes before the agent starts.
+    mkdirSync(join(f.workdir, "context/groundray/globex/knowledge"), { recursive: true });
+    writeFileSync(join(f.workdir, "context/groundray/globex/knowledge/a.md"), "GLOBEX-ONLY\n");
+    resetSpans();
+    const uploads: string[] = [];
+    const upload = f.provider.upload.bind(f.provider);
+    f.provider.upload = async (vm, path, data) => { uploads.push(path); return upload(vm, path, data); };
+    const { id } = await f.provider.ensure({ idemKey: "w-brain", isolated: true, ttlSeconds: 60, egressAllow: ["github.com"], labels: {}, fromSnapshot: res.name });
+    await f.provider.waitReady(id, 1000);
+    const cfg = { ...loadAgentConfig({ CAPCOMD_AGENT: "codex", CAPCOMD_AGENT_WORKDIR: f.workdir, CAPCOMD_AGENT_BIN: new URL("../agents/fake-codex.sh", import.meta.url).pathname, CAPCOMD_AGENT_POLL_MS: "50", CAPCOMD_CREDENTIALS: "env" }), contextBundles: bundles };
+    const lines: string[] = [];
+    await runAgent(codexAdapter, f.provider, id, { runId: "r1", taskId: "task-b", epoch: 1, branch: taskBranch("r1", "task-b"), target: "main", repoUrl: f.r.bare, goal: "fix" }, cfg, { apiKey: "sk-proj-x-0123456789abcdef", hostGit, onLog: (l) => lines.push(...l) });
+    const events = getFinishedSpans().find((s) => s.name === "agent.codex")!.events.filter((e) => e.name === "agent.context_bundle");
+    expect(events.map((e) => e.attributes?.["context.placed"])).toEqual(["kept"]);
+    expect(lines.join("\n")).toContain(`context: groundray acme (knowledge/) at ${commit.slice(0, 12)} is already in ${dir}`);
+    expect(uploads.filter((p) => p.includes("capcomd-tree-"))).toEqual([]);
+    expect(existsSync(join(f.workdir, "context/groundray/globex"))).toBe(false);
+    expect(listed(dir)).toContain("knowledge/policies/refunds.md");
+
+    // A bundle that can't be removed: the agent doesn't start beside another project's brain.
+    mkdirSync(join(f.workdir, "context/groundray/initech/knowledge"), { recursive: true });
+    writeFileSync(join(f.workdir, "context/groundray/initech/knowledge/a.md"), "INITECH-ONLY\n");
+    chmodSync(join(f.workdir, "context/groundray/initech/knowledge"), 0o555);
+    try {
+      const { id: id2 } = await f.provider.ensure({ idemKey: "w-brain-2", isolated: true, ttlSeconds: 60, egressAllow: ["github.com"], labels: {}, fromSnapshot: res.name });
+      await f.provider.waitReady(id2, 1000);
+      await expect(runAgent(codexAdapter, f.provider, id2, { runId: "r1", taskId: "task-c", epoch: 1, branch: taskBranch("r1", "task-c"), target: "main", repoUrl: f.r.bare, goal: "fix" }, cfg, { apiKey: "sk-proj-x-0123456789abcdef", hostGit })).rejects.toThrow("so it doesn't start");
+    } finally { chmodSync(join(f.workdir, "context/groundray/initech/knowledge"), 0o755); }
+  }, 90_000);
+
+  test("a brain that is restricted, or isn't the brain it was mapped as, stays out of the image; one with credential-shaped text in it is left out", async () => {
+    const f = await fixture({ lock: false });
+    const { mappedBundles } = await import("../../src/context/groundray");
+    const vault = await brainRepo({ "knowledge/references/payroll.yaml": "sensitivity: restricted\n" });
+    const other = await brainRepo();
+    const { bundles, skipped } = await mappedBundles({ brains: {
+      vault: { repo: vault.b.bare, branch: "main", commit: vault.commit, slug: "acme", id: ACME_ID },
+      renamed: { repo: other.b.bare, branch: "main", commit: other.commit, slug: "globex", id: ACME_ID },
+    } }, f.cfg.workdir);
+    expect(bundles).toEqual([]);
+    expect(skipped.map((s) => s.name)).toEqual(["renamed", "vault"]);
+    expect(skipped[0]!.why).toContain("isn't the brain it was at");
+    expect(skipped[1]!.why).toContain("restricted");
+    // Credential-shaped text in a brain is the brain's: the image doesn't carry it (the runner places it at start).
+    const leaky = await brainRepo({ "knowledge/references/setup.txt": "token ghp_abcdefghijklmnopqrstuvwxyz0123\n" });
+    const ok = (await mappedBundles({ brains: { leaky: { repo: leaky.b.bare, branch: "main", commit: leaky.commit, slug: "acme", id: ACME_ID } } }, f.cfg.workdir)).bundles;
+    expect(ok.map((x) => x.name)).toEqual(["leaky"]);
+    const logs: string[] = [];
+    const res = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1, hostGit: { workdir: join(f.workdir, "host-git") }, bundles: ok, log: (l) => logs.push(l) });
+    expect(logs.join("\n")).toContain("context: left groundray leaky out of the image");
+    expect(logs.join("\n")).toContain("scrub: clean");
+    expect(existsSync(join(f.workdir, "context/groundray/leaky"))).toBe(false);
+    expect(f.provider.snapshots.get(res.name)!.status).toBe("ready");
+  }, 90_000);
+
+  test("a brain whose placing fails after its tree was unpacked (not marked, not scanned) is left out of the image whole", async () => {
+    const f = await fixture({ lock: false });
+    const { mappedBundles } = await import("../../src/context/groundray");
+    const leaky = await brainRepo({ "knowledge/references/setup.txt": "token ghp_abcdefghijklmnopqrstuvwxyz0123\n" });
+    const { bundles } = await mappedBundles({ brains: { acme: { repo: leaky.b.bare, branch: "main", commit: leaky.commit, slug: "acme", id: ACME_ID } } }, f.cfg.workdir);
+    expect(bundles.map((x) => x.name)).toEqual(["acme"]);
+    // Marking it read-only fails: the tree is there, the marker isn't.
+    const exec = f.provider.exec.bind(f.provider);
+    f.provider.exec = async (vm, cmd, o) => (cmd.join(" ").includes("chmod a-w") ? { code: 1, stdout: "", stderr: "read-only file system" } : exec(vm, cmd, o));
+    const logs: string[] = [];
+    const res = await envBuild(f.provider, { repoUrl: f.r.bare, cfg: f.cfg, ledgerPath: f.ledger, pollMs: 1, hostGit: { workdir: join(f.workdir, "host-git") }, bundles, log: (l) => logs.push(l) });
+    expect(logs.join("\n")).toContain("couldn't place groundray acme (knowledge/)");
+    expect(existsSync(join(f.workdir, "context/groundray/acme"))).toBe(false);
+    expect(f.provider.snapshots.get(res.name)!.status).toBe("ready");
+  }, 90_000);
 });
 

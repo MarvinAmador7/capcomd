@@ -3318,7 +3318,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "decision": {
       "type": "string",
-      "description": "What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId), failed (a run could not start; it may come again). More may be added"
+      "description": "What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"
     },
     "runId": {
       "description": "The run it started or continued; null otherwise",
@@ -3326,6 +3326,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "string",
         "null"
       ]
+    },
+    "restarted": {
+      "description": "With continued: the run had ended, and this planner agent (a new one, continuing the last) started on the trigger (spec §16.3.2 step 2). Absent otherwise",
+      "type": "string"
     },
     "unrecorded": {
       "description": "What capcomd couldn't record about this decision (its line in the trigger log, the trigger a run started from, the run's subscription to the thread), each with why; absent when everything was recorded. A run that started stands either way",
@@ -3421,6 +3425,46 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   ],
   "additionalProperties": {},
   "description": "Capability triggers. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon); the envelope text is daemon-written; the source's ids and thread are its own words. A run no longer follows a thread. `entity` is run:<runId>"
+}
+```
+
+## `trigger.replied`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "string"
+    },
+    "thread": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "description": "The trigger it answers (the one that started the run, or started its planner again)"
+    },
+    "url": {
+      "description": "Where the reply is, as the source says (a comment's URL); null when it doesn't",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "source",
+    "thread",
+    "runId",
+    "id",
+    "url"
+  ],
+  "additionalProperties": {},
+  "description": "Capability triggers. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon); the envelope text is daemon-written; the source's ids and thread are its own words. A run a trigger started (or started again) ended and answered on the trigger's thread, once, through the source's reply path, with a short result under 100 words (spec §16.3.7); only for a source whose replies the operator turned on (`triggers.sources.<source>.reply`). `entity` is run:<runId>"
 }
 ```
 

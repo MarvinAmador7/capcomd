@@ -347,8 +347,9 @@ const TriggerEventData = {
 		thread: z.string().describe("The conversation it belongs to, in the source's terms (a pull request, an issue, a schedule)"),
 		actor: z.string().describe("Who sent it, as the source names them (never mapped across sources)"),
 		addressed: z.enum(["mention", "direct"]).nullable().describe("Whether it addressed capcomd: a mention, a direct message, or neither (null)"),
-		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId), failed (a run could not start; it may come again). More may be added"),
+		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"),
 		runId: z.string().nullable().describe("The run it started or continued; null otherwise"),
+		restarted: z.string().optional().describe("With continued: the run had ended, and this planner agent (a new one, continuing the last) started on the trigger (spec §16.3.2 step 2). Absent otherwise"),
 		unrecorded: z.array(z.string()).optional().describe("What capcomd couldn't record about this decision (its line in the trigger log, the trigger a run started from, the run's subscription to the thread), each with why; absent when everything was recorded. A run that started stands either way"),
 	}).describe(`${TRIGGER_EVENT}. One per trigger a source handed to the intake (spec §16.3.2); \`entity\` is trigger:<source>/<hash of id>`),
 	"trigger.subscribed": z.looseObject({
@@ -359,6 +360,11 @@ const TriggerEventData = {
 		source: z.string(), thread: z.string(), runId: z.string(),
 		cause: z.string().describe("expired (its time ran out, or its run is gone), stopped (a person stopped the run), unsubscribed (a plugin ended it). More may be added"),
 	}).describe(`${TRIGGER_EVENT}. A run no longer follows a thread. \`entity\` is run:<runId>`),
+	"trigger.replied": z.looseObject({
+		source: z.string(), thread: z.string(), runId: z.string(),
+		id: z.string().describe("The trigger it answers (the one that started the run, or started its planner again)"),
+		url: z.string().nullable().describe("Where the reply is, as the source says (a comment's URL); null when it doesn't"),
+	}).describe(`${TRIGGER_EVENT}. A run a trigger started (or started again) ended and answered on the trigger's thread, once, through the source's reply path, with a short result under 100 words (spec §16.3.7); only for a source whose replies the operator turned on (\`triggers.sources.<source>.reply\`). \`entity\` is run:<runId>`),
 } as const;
 
 /** One value of a profile that changed (PUT /v1/profiles/{name}, profile.changed). */
@@ -520,12 +526,13 @@ export const CAPABILITIES = {
 	plugins: "GET /v1/plugins: every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or is disabled, the hooks and seams it contributes and its hook call statistics; GET /v1/plugins/{name} (its manifest and config, never a secret); POST /v1/plugins/{name}/enable and /disable (the configure scope, an Idempotency-Key); plugin.* events on the daemon stream audit the plugin host",
 	profiles: "GET /v1/profiles: every agent profile a run can use (the daemon's, or with `repo` a project's): its version, the layer it was found in and the files laid together to make it, what it does, its provider, model and tool mode, and whether its login is there",
 	"plugins.protocol": "The out-of-process plugin protocol, version 1 (spec §9): a plugin capcomd starts opens POST /v1/plugins/{name}/sessions, reads its hook calls on GET /v1/plugins/{name}/hooks (SSE), answers with POST /v1/plugins/{name}/hooks/{callId}, writes its events with POST /v1/plugins/{name}/events and keeps data in /v1/plugins/{name}/storage. Only the token the daemon minted for that plugin's process may call them; plugin.process_changed audits its process",
-	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed and trigger.unsubscribed on the daemon stream audit what the intake decided about each external event; Run.trigger names the trigger a run started from",
+	triggers: "Triggers from sources (plugin API §16.3): trigger.received, trigger.subscribed, trigger.unsubscribed and trigger.replied on the daemon stream audit what the intake decided about each external event and what a run answered; Run.trigger names the trigger a run started from",
 	"profiles.edit": "GET /v1/profiles/{name}: one profile as typed rows a client renders and edits (each with the file that sets it, `source` and `editable`) and its `rev`; PUT /v1/profiles/{name} (the `configure` scope, an Idempotency-Key): change them in the profile's own file, its version bumped; each write is a profile.changed event on the daemon stream",
 	"plugins.config": "Plugin install, trust and config layers (plugin API §4.8, §10): POST /v1/runs takes `plugins`, a run's per-run plugin settings; GET /v1/plugins/{name} config `sources` says which layer each value came from (default, user, project, env); a project's plugins (source project) stay validated with cause untrusted until the operator trusts their content; plugin.trusted on the daemon stream audits a trust",
 	"profiles.facts": "GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for, and `untrustedPersona`, its project persona when a spawn of it waits on the same",
 	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
 	"plugins.routes": "Plugin API routes (plugin API §4.7.3): METHOD /v1/x/{plugin}/… serves a plugin's own routes, JSON in and out, with the caller's token, which needs the scope the route declares (403 `forbidden` otherwise; 404 `not_found` for a route no active plugin serves; a plugin's failure is 500 `internal` with the message \"plugin error\"). GET /v1/plugins/{name} lists its `routes` and the `capabilities` it adds here, named x.<plugin>.<flag>",
+	"context.brain_proposals": "A run's proposals to a company's brain (ADR-025 step 5): GET /v1/runs/{runId}/brain-proposals lists them and whether each was sent; POST /v1/runs/{runId}/brain-proposals/send (the `configure` scope, an Idempotency-Key) sends those waiting for a person as the caller (groundray's actor human:<client id>), as `capcomd context brain propose --run <runId> --yes` does",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -1163,6 +1170,42 @@ export const PULL_REQUEST_DOC = "Capability runs.goal_branch. Open a GitHub pull
 	"Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. " + WRITE_DOC;
 export const KEEP_BRANCH_DOC = "Capability runs.goal_branch. Keep the goal branch without a pull request (no body): recorded so clients stop asking (Run.goalBranch.state kept; run.branch_kept on the run stream). Opening a pull request later is still allowed. 409 `conflict` while the planner works, or once a pull request was opened. Needs the steer scope. " + WRITE_DOC;
 
+/** A run's proposals to a company's brain (capability context.brain_proposals; ADR-025 step 5). */
+const BrainProposalSentTo = z.object({
+	actor: z.string().describe("groundray's actor the draft was written as: human:<client id> (a person sent it), else capcomd/<version> (the kernel, under a consolidator's `review: lint`)"),
+	at: z.string(), item: z.string().describe("The draft item's id in the brain (urn:uuid:…)"),
+	where: z.string().describe("The pull request on the brain's repository (its URL), else the repository and the branch that holds the draft"),
+});
+export const BrainProposal = z.object({
+	id: z.string().describe("<agentId>.<n>: the consolidator that proposed it and its place in its answer"),
+	agentId: z.string(), brain: z.string().describe("The brain's name, as the project maps it"),
+	type: z.string().describe("One of groundray's item types (concept, decision, procedure, policy, system, source-summary, question)"),
+	title: z.string().describe("The agent's title for it: untrusted text, render it as plain text"),
+	from: z.array(z.string()).describe("The run's lesson candidates it was made from"), at: z.string(),
+	sent: BrainProposalSentTo.nullable().describe("null: not sent yet"),
+	error: z.string().optional().describe("Why the last send failed, while it isn't sent"),
+});
+export const BrainProposals = z.object({ runId: z.string(), proposals: z.array(BrainProposal).describe("In the order they were proposed") });
+export const BrainProposalsSendBody = z.object({
+	agentId: z.string().regex(/^agt-[A-Za-z0-9_-]{1,64}$/).optional().describe("Only this consolidator's proposals (default: every consolidator of the run)"),
+});
+export const BrainProposalOutcome = z.object({
+	id: z.string(), brain: z.string(), title: z.string(),
+	ok: z.boolean(), already: z.boolean().describe("It was sent before (this call didn't send it again)"),
+	item: z.string().optional(), where: z.string().optional(), error: z.string().optional().describe("Why it couldn't be sent (ok false)"),
+});
+export const BrainProposalsSent = z.object({
+	runId: z.string(), actor: z.string().describe("Whom the drafts were written as: human:<your client id>"),
+	sent: z.array(BrainProposalOutcome).describe("Every proposal of the run (or of `agentId`), in order: sent now, or sent already. Empty: it proposed nothing to a brain"),
+});
+export const BRAIN_PROPOSALS_DOC = "Capability context.brain_proposals. A run's proposals to a company's brain (ADR-025 step 5): the new facts its consolidators proposed for the brain their profile names, with whether each was sent. " +
+	"A proposal waits for a person (its consolidator's `review: human`, the default) until one sends it with POST …/brain-proposals/send or `capcomd context brain propose --run <runId> --yes`; under `review: lint` the kernel sends it as capcomd. Needs the `read` scope. 404 `not_found` for an unknown run. " +
+	"Refetch on plugin.context.brain_staged and plugin.context.brain_proposed.";
+export const BRAIN_PROPOSALS_SEND_DOC = "Capability context.brain_proposals. Send the run's proposals not sent yet to their brains as you (body optional: `{\"agentId\": \"agt-…\"}`), as `capcomd context brain propose --run <runId> --yes` does: each becomes a draft on the run's proposal branch of the brain's repository (written by groundray with the actor human:<your client id>) and a pull request there for the brain's owners; what agents read doesn't change. " +
+	"Those sent already stay as they were (`already`), whoever sent them; a proposal the brain already holds (its pull request merged) isn't drafted again. Each one sent is a plugin.context.brain_proposed event on the run stream. " +
+	"200 once every proposal is sent (`sent` empty: the run proposed nothing). 503 `unavailable` when one or more couldn't be sent (the brain or groundray didn't answer, or refused): the body adds `sent`, each with its `error`; those sent stay sent, so send again (with the same Idempotency-Key or a new one) for the rest. " +
+	"Needs the `configure` scope: the drafts are written in your name in another repository. A plugin's token is 403 `forbidden`: a plugin never sends a proposal in a person's name. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: the same key and body answer the first 200 again without sending; the same key with another run or body is 409 `idempotency_conflict`. 404 `not_found` for an unknown run.";
+
 /** PUT /v1/runs/{runId}/agents/{agentId}/title (capability agents.title). */
 export const AgentTitleBody = z.object({
 	title: z.string().max(200).describe(`The user's title for the agent: 1 to ${TITLE_WORDS_MAX} words, at most ${TITLE_MAX_CHARS} characters. Trimmed, whitespace collapsed, lowercased, control and format characters dropped; refused (422 \`invalid\`, field title) when that leaves no words, or more words or characters than that`),
@@ -1217,6 +1260,9 @@ export const contract = {
 			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders, body: PullRequestBody.optional() })).output(GoalPullRequestResult),
 		keepBranch: oc.route({ method: "POST", path: "/v1/runs/{runId}/keep-branch", inputStructure: "detailed", description: KEEP_BRANCH_DOC })
 			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(z.object({ runId: z.string(), branch: z.string(), base: z.string(), kept: z.literal(true), changed: z.boolean().describe("This call recorded it (false: it was kept already)") })),
+		brainProposals: oc.route({ method: "GET", path: "/v1/runs/{runId}/brain-proposals", description: BRAIN_PROPOSALS_DOC }).input(z.object({ runId: z.string() })).output(BrainProposals),
+		sendBrainProposals: oc.route({ method: "POST", path: "/v1/runs/{runId}/brain-proposals/send", inputStructure: "detailed", description: BRAIN_PROPOSALS_SEND_DOC })
+			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders, body: BrainProposalsSendBody.optional() })).output(BrainProposalsSent),
 		pause: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/pause", inputStructure: "detailed",
 			description: `Pause every pending or running agent of the run (no body). An agent that hasn't started is paused now (\`changed\`); a running one is asked to stop (\`pending\`): ` +

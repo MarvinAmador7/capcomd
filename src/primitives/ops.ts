@@ -1147,6 +1147,14 @@ async function consolidatedOf(runId: string, a: ScopeAgent, declared: Record<str
  * themselves. What its result says of them (`context.brain`), and a sentence for its summary. null: it proposed none.
  */
 async function brainProposalsOf(runId: string, a: ScopeAgent, b: import("../context/consolidator").StagedBranch["brain"]) {
+  // A brain the run's project doesn't map: what it proposed for it was refused as it was staged, by the brain's name.
+  if (b.name && !b.mapped && b.refused.some((x) => x.reason === "no_brain")) {
+    const error = `the run's project doesn't map brain ${b.name}, the one its profile names`;
+    return {
+      result: { name: b.name, proposals: [], awaits: null, sent: [], error },
+      text: `Its proposals to brain ${b.name} were refused: ${error} (map it with capcomd context brain add ${b.name} <repository>; runs started after that can propose to it).`,
+    };
+  }
   if (!b.name || !b.proposals.length) return null;
   const n = b.proposals.length;
   const listed = b.proposals.map(({ n: k, title, type }) => ({ n: k, title, type }));

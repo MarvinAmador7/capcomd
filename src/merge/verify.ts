@@ -125,7 +125,10 @@ async function runInVm(git: Git, command: string, env: Record<string, string>, s
     const [tar, archiveErr, code] = await Promise.all([new Response(archive.stdout).arrayBuffer(), new Response(archive.stderr).text(), archive.exited]);
     if (code !== 0) return { passed: false, stage: "setup", output: `checks VM: git archive failed: ${archiveErr.slice(-500)}` };
     await provider.upload(id, `${W}.tar`, new Uint8Array(tar));
-    const unpack = await sh(`rm -rf ${sq(W)} && mkdir -p ${sq(W)} && tar -xf ${sq(`${W}.tar`)} -C ${sq(W)} && rm -f ${sq(`${W}.tar`)}`);
+    // The env image may carry the context bundles of the project it was built for (`capcomd env build`: its mapped
+    // brains, ADR-025 step 4), and this image is every project's: the tree under test is agent-written code, so they go
+    // before it runs (an agent's runner does the same for the bundles its brief doesn't cite).
+    const unpack = await sh(`rm -rf ${sq(`${cfg.workdir}/context`)} ${sq(W)} && mkdir -p ${sq(W)} && tar -xf ${sq(`${W}.tar`)} -C ${sq(W)} && rm -f ${sq(`${W}.tar`)}`);
     if (unpack.code !== 0) return { passed: false, stage: "setup", output: `checks VM: unpacking the tree failed: ${(unpack.stderr || unpack.stdout).slice(-500)}` };
     // Deps: the snapshot's node_modules when the lockfile matches; else a frozen install with the package manager the
     // project pins, put in the agent home first when the image lacks it (as `capcomd env build` does).

@@ -27,6 +27,9 @@ export interface GitHubApi {
   listIssueComments?(repo: string, since: string): Promise<IssueComment[]>;
   /** The login the token belongs to (whose comments the source drops: capcomd's own). */
   viewer?(): Promise<string>;
+  /** The source's reply path (§16.3.7): a comment on an issue or a pull request's conversation (POST
+   *  /repos/{repo}/issues/{number}/comments). Optional: an adapter without it posts no replies. */
+  createIssueComment?(repo: string, number: number, body: string): Promise<IssueComment>;
 }
 
 /** A comment on an issue or a pull request's conversation (GET /repos/{repo}/issues/comments). */
@@ -121,6 +124,12 @@ export class HttpGitHub implements GitHubApi {
     const r = await this.req("GET", `/repos/${repo}/issues/comments?sort=updated&direction=asc&per_page=100&since=${encodeURIComponent(since)}`);
     if (r.status !== 200) throw new GitHubHttpError(r.status, r.text, false);
     return Array.isArray(r.json) ? (r.json as IssueComment[]) : [];
+  }
+
+  async createIssueComment(repo: string, number: number, body: string): Promise<IssueComment> {
+    const r = await this.req("POST", `/repos/${repo}/issues/${number}/comments`, { body });
+    if (r.status !== 201) throw new GitHubHttpError(r.status, r.text, false);
+    return r.json as IssueComment;
   }
 
   async viewer(): Promise<string> {
