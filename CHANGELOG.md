@@ -18,6 +18,21 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   An agent's sandbox also keeps only the brains its own brief cites: brains another
   project's image carries are removed before the agent starts (an agent whose sandbox can't be cleaned doesn't start),
   and checks that `capcomd verify` runs in a VM never see any brain.
+- Lessons now reach the project's memory in a default team without your help. Fixed: the planner `capcomd setup
+  project` writes couldn't spawn the consolidator it writes (refused as "context changed"); a child is briefed by its
+  own profile. The planner's brief and skill now say when and how: put its own lessons in its result, read
+  `capcomd status` (`lessons`: how many candidates the run has, and its consolidators), spawn the consolidator last,
+  then verify and merge its change. capcomd collects the planner's own lessons when the consolidator starts, so the
+  consolidator reads them, and the consolidator now reads the run's goal: a lesson your goal asks the project to
+  remember is kept for your review, even when the repository implies it. And if a run's planner ends with lessons and no consolidator ran, capcomd starts one, then
+  verifies its change and asks to merge it (or asks to merge a consolidator's change the planner left unmerged); the
+  merge waits for your approval as before (`capcomd approve <runId> <mrgId>`). `capcomd events` shows
+  `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with why. Turn it off with
+  `plugins.context-memory.autoConsolidate: false` in your config, or for one run with
+  `capcomd run --plugin-config context-memory.autoConsolidate=false`.
+- `capcomd merge --request-approval` parks a merge into a protected branch for `capcomd approve`, as an agent's merge
+  is parked, so you can land a consolidator's memory change on `main` through its review hold instead of past it with
+  `--operator` (which bypasses every plugin's gate).
 - Fixed: triggers (GitHub comments, schedules and other sources) are sturdier. A trigger whose thread or sender carries
   invisible characters (bidi overrides, zero-width spaces, line separators), as well as terminal escapes, is refused,
   and a sender's display name loses them; `capcomd triggers log` and `capcomd triggers subscriptions` print any such

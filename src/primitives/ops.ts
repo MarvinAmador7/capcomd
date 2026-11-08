@@ -2140,7 +2140,7 @@ async function startMerge(o: MergeOpts, mrgId: string) {
   // The run's goal branch takes reviewed work with no human step: the person decides once, on the pull request into the
   // base, when the planner is done (it can't be a protected branch: `run new` refuses that).
   const needsApproval = !!cfg && !goal && isProtectedBranch(target, runEnv) && !o.operator;
-  if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need an operator: pass --operator (or use `capcomd run` + `capcomd approve`).");
+  if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need a person: pass --request-approval to park the merge for `capcomd approve` (every plugin's gate is still asked), or --operator to land it past their vetoes.");
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
   // Who asked is not a parameter of the merge: a retry by another caller is the same merge.
   const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data: o.askedBy ? { ...data, askedBy: o.askedBy } : data }).catch(asRelay);
