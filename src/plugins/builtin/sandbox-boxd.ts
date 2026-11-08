@@ -23,7 +23,7 @@ export const manifest = {
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./sandbox-boxd.ts" },
   // After docker: the order clients list places in (docker, then boxd) is the load order (§6.3).
   provides: ["seam:sandbox/boxd"], after: ["sandbox-docker"], scopes: ["steer"],
-  contributes: { seams: [{ kind: "sandbox", name: "boxd" }], hooks: { "job.changed": {} } },
+  contributes: { seams: [{ kind: "sandbox", name: "boxd" }], hooks: { "job.changed": { changes: ["fired"] } } },
   config: {
     type: "object", additionalProperties: false,
     properties: {

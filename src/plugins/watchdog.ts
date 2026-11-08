@@ -33,7 +33,7 @@ export const manifest: PluginManifest = {
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./watchdog.ts" },
   scopes: ["read", "steer"],
   contributes: {
-    hooks: { "agent.changed": {}, "job.changed": {}, "verify.changed": {}, "approval.changed": {} },
+    hooks: { "agent.changed": {}, "job.changed": { changes: ["started", "fired", "ended"] }, "verify.changed": {}, "approval.changed": {} },
     events: ["stopped"],
   },
   config: {

@@ -173,9 +173,9 @@ function principalOf(by: string, runId: string | null): Principal {
   return { kind: "operator", clientId: null };
 }
 let frames = 0;
-/** §6.6.19: a change told to the plugins that listen (never awaited). */
+/** §6.6.19: a change told to the plugins that listen for its kind (never awaited). */
 function tell(r: JobRecord, change: JobChange) {
-  if (!hooks.listening("job.changed")) return;
+  if (!hooks.listening("job.changed", change.kind)) return;
   hooks.fire("job.changed", "observe", { job: jobOf(r), change }, { principal: principalOf(r.by, runIdOf(r)), entity: `${r.jobId}#${change.kind}${++frames}`, runId: runIdOf(r), agentId: ownerAgent(r) });
 }
 
@@ -260,7 +260,9 @@ async function tick(at: Attached) {
     if (!s) continue;
     if (s.state === "exited") { void settleExec(at, w, s.killed ? "killed" : s.code === 0 ? "done" : "failed", s.code, s.killed, { endedAt: s.at }); continue; }
     if (s.state === "gone") { void settleExec(at, w, "lost", null, s.why); continue; }
-    if (hooks.listening("job.changed") && (s.out > w.out || s.err > w.err) && now - w.frameAt >= 1000) {
+    // Its new output is read (one more exec) only while a plugin wants `output` frames: one that keeps a timer declares
+    // `changes: ["fired"]` (§4.7), and its listening costs a running job nothing.
+    if ((s.out > w.out || s.err > w.err) && now - w.frameAt >= 1000 && hooks.listening("job.changed", "output")) {
       w.frameAt = now;
       const f = await readFrom(at.m, w.rec.jobId, { out: w.out, err: w.err }, FRAME_MAX).catch(() => null);
       if (f) { w.out += Buffer.byteLength(f.stdout); w.err += Buffer.byteLength(f.stderr); tell(w.rec, { kind: "output", stdout: f.stdout, stderr: f.stderr }); }

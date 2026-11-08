@@ -197,6 +197,20 @@
                   "closed",
                   "open"
                 ]
+              },
+              "changes": {
+                "description": "job.changed only: the change kinds this listener is called for (§6.6.19). Default: every kind. A plugin that only keeps a timer declares [\"fired\"], and the kernel then reads no running job's output for it",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "started",
+                    "output",
+                    "fired",
+                    "ended"
+                  ]
+                }
               }
             },
             "additionalProperties": false

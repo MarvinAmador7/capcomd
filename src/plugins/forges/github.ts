@@ -301,7 +301,7 @@ export const manifest = {
   contributes: {
     seams: [{ kind: "forge", name: "github" }],
     sources: [{ name: "github", summary: "Comments on the issues and pull requests of sourceRepos, and of the threads runs follow (thread owner/name#number)" }],
-    hooks: { "job.changed": {} },
+    hooks: { "job.changed": { changes: ["fired"] } },
   },
   config: {
     type: "object",

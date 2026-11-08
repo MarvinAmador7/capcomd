@@ -2,7 +2,7 @@
 // this host, as a scripted agent's), the daemon's plugin timers (fired on schedule, re-armed from their records, a
 // missed fire fired once, idempotent by key, cancelled), `ctx.jobs` refused outside the daemon, and the Docker sweep as
 // sandbox-docker's own timer. A run's jobs (records in its kv, the agent's message) are tests/scenarios/jobs.test.ts.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,9 +14,10 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import { launch, look, signal, tails, type JobMachine } from "../../src/jobs/machine";
 import { fitJobRecord } from "../../src/jobs/record";
 import { valueBytes } from "../../src/primitives/board";
-import { jobLimits, jobMessage, resetJobs, resumeTimers, useDaemonEvents, type JobRecord } from "../../src/jobs/service";
+import { jobLimits, jobMessage, resetJobs, resumeTimers, startJob, useDaemonEvents, type JobRecord } from "../../src/jobs/service";
+import * as relay from "../../src/core/relay";
 import { kernelHost } from "../../src/plugins/host";
-import { useHooks } from "../../src/plugins/hooks";
+import { hooks, useHooks } from "../../src/plugins/hooks";
 import { useSandboxHost } from "../../src/plugins/sandboxes";
 import { sandboxDocker, SWEEP_EVERY_MS } from "../../src/plugins/builtin/sandbox-docker";
 import { stateDir } from "../../src/utils/home";
@@ -247,6 +248,89 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     await expect(ctx.jobs.list({})).rejects.toMatchObject({ code: "unsupported" });
     await host.stop();
   });
+});
+
+describe("a running job's output is read only for a plugin that wants it (§6.6.19)", () => {
+  /** A run in memory, as the jobs service reads and writes it: the agent runs, its jobs' records are kept here. */
+  function fakeRun() {
+    const records = new Map<string, JobRecord>();
+    const scope = {
+      kvGet: async ({ k }: { k: string }) => { const r = records.get(k.slice("_jobs/".length)); return r ? { value: r, deleted: false } : null; },
+      kvList: async () => [...records.values()].map((value) => ({ value })),
+      getAgent: async () => ({ status: "running", spec: {} }),
+      jobWrite: async ({ job }: { job: JobRecord }) => { const was = records.get(job.jobId); if (was && !["running", "stopping"].includes(was.state)) return { ended: true }; records.set(job.jobId, job); return { ended: false }; },
+    };
+    return { records, client: { scope: { getOrCreate: () => scope } } };
+  }
+  /** The host machine, counting each kind of exec the jobs service runs in it (with when it started). */
+  function countingMachine() {
+    const m = hostMachine();
+    const execs: Array<{ kind: "look" | "readFrom" | "other"; at: number }> = [];
+    const exec = m.exec;
+    m.exec = (cmd, o) => {
+      const script = cmd[2] ?? "";
+      execs.push({ kind: script.includes("@@J") ? "look" : script.startsWith("tail -c +") ? "readFrom" : "other", at: Date.now() });
+      return exec(cmd, o);
+    };
+    return { m, execs, count: (k: string) => execs.filter((e) => e.kind === k).length };
+  }
+  async function withRun(decl: Record<string, unknown>, f: (o: { told: HookCall<"job.changed">[]; run: ReturnType<typeof fakeRun> }) => Promise<void>) {
+    const run = fakeRun();
+    const spy = spyOn(relay, "client").mockImplementation(() => run.client as never);
+    const poll = process.env.CAPCOMD_JOBS_POLL_MS;
+    process.env.CAPCOMD_JOBS_POLL_MS = "100"; // looked at ten times a second: a read per look would show
+    const told: HookCall<"job.changed">[] = [];
+    const host = kernelHost({ log: false, jobs: true });
+    useHooks(host.hooks);
+    const c = recorder(told, () => {});
+    (c.manifest as { contributes: { hooks: Record<string, unknown> } }).contributes.hooks["job.changed"] = decl;
+    try {
+      await host.start([c]);
+      await f({ told, run });
+    } finally {
+      await host.stop();
+      spy.mockRestore();
+      if (poll === undefined) delete process.env.CAPCOMD_JOBS_POLL_MS; else process.env.CAPCOMD_JOBS_POLL_MS = poll;
+    }
+  }
+  const exec = (cmd: string) => ({ kind: "exec" as const, runId: "run-t", owner: { agentId: "agt-t" }, cmd: [cmd], label: "build", foregroundMs: 0 });
+
+  test("with only a timer's listener (changes: [fired]) a job printing all along costs one look a tick, no read", async () => {
+    await withRun({ changes: ["fired"] }, async ({ told, run }) => {
+      const { m, count } = countingMachine();
+      const job = await startJob(exec("for i in $(seq 1 25); do echo line-$i; sleep 0.1; done"), { by: "operator", machine: m });
+      expect(job.state).toBe("running");
+      await until(async () => run.records.get(job.jobId)?.state === "done", 20_000);
+      expect(count("look")).toBeGreaterThanOrEqual(10);
+      expect(count("readFrom")).toBe(0);
+      // Its settled record still has all of its output (read once, when it ended).
+      expect(run.records.get(job.jobId)!.result).toMatchObject({ code: 0, stdout: expect.stringContaining("line-25\n") });
+      await hooks.idle();
+      expect(told).toEqual([]);
+    });
+  }, 30_000);
+
+  test("with an output listener, frames arrive at most once a second, each at most 16 KB, and together are all of it", async () => {
+    await withRun({}, async ({ told, run }) => {
+      const { m, execs, count } = countingMachine();
+      // 40 KB at once, then a line every 0.1 s for 3 s.
+      const job = await startJob(exec(`head -c 40960 /dev/zero | tr '\\0' x; for i in $(seq 1 30); do echo l$i; sleep 0.1; done`), { by: "operator", machine: m });
+      await until(async () => run.records.get(job.jobId)?.state === "done", 20_000);
+      await hooks.idle();
+      const frames = told.filter((c) => c.payload.change.kind === "output").map((c) => c.payload.change as { stdout: string; stderr: string });
+      expect(frames.length).toBeGreaterThanOrEqual(3);
+      for (const f of frames) expect(Buffer.byteLength(f.stdout)).toBeLessThanOrEqual(16 * 1024);
+      // Its first 40 KB came in frames cut at 16 KB.
+      expect(Math.max(...frames.map((f) => Buffer.byteLength(f.stdout)))).toBe(16 * 1024);
+      const reads = execs.filter((e) => e.kind === "readFrom").map((e) => e.at);
+      expect(reads.length).toBe(frames.length);
+      for (let i = 1; i < reads.length; i++) expect(reads[i]! - reads[i - 1]!).toBeGreaterThanOrEqual(950);
+      expect(count("look")).toBeGreaterThan(reads.length * 3);
+      // Nothing lost or repeated: the frames are its output from the start, in order.
+      expect(`${"x".repeat(40960)}${Array.from({ length: 30 }, (_, i) => `l${i + 1}\n`).join("")}`.startsWith(frames.map((f) => f.stdout).join(""))).toBe(true);
+      expect(told.map((c): string => c.payload.change.kind)).toEqual(["started", ...frames.map(() => "output"), "ended"]);
+    });
+  }, 30_000);
 });
 
 describe("the Docker sweep is sandbox-docker's own timer (§15.1, §16.2)", () => {
