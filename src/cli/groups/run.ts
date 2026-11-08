@@ -92,7 +92,8 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   // The checks the planner's spawn makes (its profile, the env snapshot its CLI needs on this run's sandbox, egress),
   // made before the run is created or detached: a run whose planner can't start is refused with the reason here,
   // instead of starting and then sitting with no agent.
-  if (plannerRef) (await import("../../primitives/ops")).spawnChecks(plannerRef);
+  // A --sandbox beats the planner profile's sandbox.provider, as it does at the spawn.
+  if (plannerRef) (await import("../../primitives/ops")).spawnChecks(plannerRef, process.env, { runChose: !!runSandbox });
   // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
   if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
   // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive

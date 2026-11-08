@@ -469,7 +469,7 @@ Decided by the owner on 2026-11-08:
    refused like any module) is refused at `install`, `update`, `trust` and `validate`, and by the host when it
    validates the plugin and before every start of its process, naming each path. Out of process, the child's module
    loading is guarded too: a Bun and a Node preload refuse a module outside the directory as it loads. Built-ins are
-   exempt. What this does and doesn't hold is in spec §4.9 and §11.6 (spec 1.0.64).
+   exempt. What this does and doesn't hold is in spec §4.9 and §11.6 (spec 1.0.65).
 
 Risks that stay:
 
