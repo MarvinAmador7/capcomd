@@ -4,12 +4,14 @@
 // layer over it. `agents.json` (v1) is still read: its entries are profiles of the layer it sits in, and a v2 profile
 // of the same name in that layer wins. Every profile resolves to the flat v1 spec (./v1.ts AgentSpec, the pin), and
 // the parent → child narrowing is checked on those, never on the files.
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { env as envVar } from "../utils/env";
 import { defaultAgentsFile, userProfilesDir } from "../utils/home";
-import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile } from "./v1";
+import { AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, NAME, childNarrowing, validateFile, validateFileShape, validateSpec, type AgentSpec, type AgentsFile, type SeamCheck } from "./v1";
+import { seamPresence, unconfirmedSeam } from "../plugins/snapshot";
 import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layerOver, notApplied, setByOver, toFlat, v2Path, withContext, type ProfileDoc, type SetBy } from "./v2";
 import { runtimeOf, runtimeProblems, type ProfileRuntime } from "./runtime";
 import { profileSkills, type ProfileSkill } from "./skills";
@@ -20,32 +22,45 @@ const jsonError = (e: unknown) => (e as Error).message.replace(/\s*["'`][^]*$/, 
 export function agentsFilePath(source: Record<string, string | undefined> = process.env): string {
   return envVar("AGENTS_FILE", source) ?? defaultAgentsFile(source);
 }
-/** The v1 file alone, as written (what `capcomd profiles add|set|rm` edit). Every reader of profiles uses readProfiles. */
-export function readAgentsFile(path = agentsFilePath()): AgentsFile {
-  return parseAgentsFile(path, existsSync(path) ? readFileSync(path, "utf8") : null);
+/** The v1 file alone, as written (what `capcomd profiles add|set|rm` edit). Every reader of profiles uses readProfiles.
+ *  `seams`: where a provider no daemon is running to confirm goes instead of an error (src/profiles/v1.ts `SeamCheck`). */
+export function readAgentsFile(path = agentsFilePath(), seams?: SeamCheck): AgentsFile {
+  return parseAgentsFile(path, existsSync(path) ? readFileSync(path, "utf8") : null, seams);
 }
 /** An agents.json's text (null: no file) as readAgentsFile reads it. */
-function parseAgentsFile(path: string, text: string | null): AgentsFile {
+function parseAgentsFile(path: string, text: string | null, seams?: SeamCheck): AgentsFile {
   if (text === null) return { schema: AGENTS_SCHEMA, agents: {} };
   let raw: unknown;
   try { raw = JSON.parse(text); } catch (e) { throw new AgentConfigError(`${path}: invalid JSON (${jsonError(e)})`); }
-  const errs = validateFile(raw);
+  const errs = validateFile(raw, seams);
   if (errs.length) throw new AgentConfigError(`${path}: ${errs.join("; ")}`);
   return raw as AgentsFile;
 }
-export function writeAgentsFile(f: AgentsFile, path = agentsFilePath()) {
-  const errs = validateFile(f);
+export function writeAgentsFile(f: AgentsFile, path = agentsFilePath(), seams?: SeamCheck) {
+  const errs = validateFile(f, seams);
   if (errs.length) throw new AgentConfigError(errs.join("; "));
   writeAtomic(path, agentsFileText(f));
 }
 /** An agents.json's text as capcomd writes it. */
 export const agentsFileText = (f: AgentsFile): string => JSON.stringify({ $schema: AGENTS_JSON_SCHEMA.$id, ...f }, null, 2) + "\n";
-/** Write a file whole or not at all (a reader never sees half of it): a temporary file beside it, renamed over it. */
+/**
+ * Write a file whole or not at all (a reader never sees half of it): a temporary file beside it, renamed over it. The
+ * directory may be a checkout's, so the temporary file's name can't be guessed and it is created exclusively: a file or
+ * a link a repository put there is never written through.
+ */
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
+  let made = false;
+  try {
+    writeFileSync(tmp, text, { flag: "wx" });
+    made = true;
+    renameSync(tmp, path);
+  } catch (e) {
+    // Remove what this write made (a full disk leaves half a file), never what was there before it.
+    if (made || (e as NodeJS.ErrnoException).code !== "EEXIST") rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 /**
@@ -236,6 +251,8 @@ function scanLayer(layer: "project" | "user", dir: string, errs: string[], fs: V
  */
 export function readProfiles(path = agentsFilePath(), source: Record<string, string | undefined> = process.env, bundled: Readonly<Record<string, ProfileDoc>> = BUNDLED_PROFILES, overlay: ProfileOverlay = new Map()): ProfileSet {
   const errs: string[] = [], warnings: string[] = [];
+  /** A provider no daemon is running to confirm is a warning here (src/plugins/snapshot.ts `seamPresence`). */
+  const seams: SeamCheck = { warnings, env: source };
   const fs = viewOf(overlay);
   const dirs = profileLayers(path, source);
   const layers: Layer[] = [...dirs.map((d) => scanLayer(d.layer, d.dir, errs, fs)), { layer: "bundled", profiles: new Map(), overrides: new Map() }];
@@ -248,7 +265,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
   const v1Layer = dirs[0]!.layer;
 
   if (!errs.length && layers.every((l) => !l.profiles.size && !l.overrides.size)) {
-    const f = parseAgentsFile(path, fs.exists(path) ? fs.text(path) : null);
+    const f = parseAgentsFile(path, fs.exists(path) ? fs.text(path) : null, seams);
     const bad = Object.entries(f.agents).flatMap(([name, spec]) => contextProblems(name, spec, `${path}: agents.${name}`));
     if (bad.length) throw new AgentConfigError(bad.join("; "));
     const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => {
@@ -265,7 +282,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     let raw: unknown;
     try { raw = JSON.parse(fs.text(path)); } catch (e) { errs.push(`${path}: invalid JSON (${jsonError(e)})`); }
     if (raw !== undefined) {
-      const e = validateFileShape(raw, () => true);
+      const e = validateFileShape(raw, () => true, seams);
       if (e.length) errs.push(`${path}: ${e.join("; ")}`);
       else v1 = raw as AgentsFile;
     }
@@ -330,11 +347,15 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       }
       const plainV1 = entry.format === "v1" && applied.length === 1;
       const spec = plainV1 ? entry.spec! : toFlat(doc);
-      const e = plainV1 ? [] : validateSpec(name, spec, { prefix: `profiles.${name}`, key: v2Path });
+      const e = plainV1 ? [] : validateSpec(name, spec, { prefix: `profiles.${name}`, key: v2Path }, seams);
       const sandbox = (doc.sandbox as Record<string, unknown> | undefined)?.provider;
       if (typeof sandbox === "string") {
+        // Its own seams in the daemon; elsewhere the built-ins, then the running daemon's listing (a plugin from the
+        // user's home or the project is loaded only there); with no daemon to ask, a warning (spec §7.1, ADR-024 §9).
         const { sandboxSeam } = require("../plugins/sandboxes") as typeof import("../plugins/sandboxes");
-        if (!sandboxSeam(sandbox)) e.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't an active sandbox provider (see \`capcomd plugins list\`)`);
+        const has = seamPresence("sandbox", sandbox, !!sandboxSeam(sandbox), source);
+        if (has === "missing") e.push(`profiles.${name}: sandbox.provider "${sandbox}" isn't an active sandbox provider (see \`capcomd plugins list\`)`);
+        else if (has === "unchecked") warnings.push(unconfirmedSeam(`profiles.${name}`, "sandbox.provider", "sandbox", sandbox));
       }
       const runtime = runtimeOf(doc);
       e.push(...runtimeProblems(name, runtime, spec));

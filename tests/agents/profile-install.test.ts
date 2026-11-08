@@ -14,7 +14,7 @@ import { RelayError } from "../../src/core/errors";
 import { exportProfile, installedFacts, installProfile, packageWarnings, removeInstalledProfile, updateProfile } from "../../src/profiles/install";
 import { projectSkillTrust, readProfiles, resolveAgent, trustProfileSkills, untrustedSkillsProblem } from "../../src/profiles";
 import { hashTree, readLock } from "../../src/install/lock";
-import { trustState } from "../../src/install/trust";
+import { TRUST_LOCK, TrustLockedError, trustState } from "../../src/install/trust";
 
 const CLI = new URL("../../src/cli/index.ts", import.meta.url).pathname;
 const sha = (t: string) => new Bun.CryptoHasher("sha256").update(t).digest("hex");
@@ -255,6 +255,102 @@ describe("update", () => {
     expect(leftovers(w.user)).toEqual([]);
   });
 
+  test("files you added beside the package are kept and said to be; one the new package needs the place of is a conflict", async () => {
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, w.o);
+    const dir = join(w.user, "security-critic");
+    // Yours: a note at the top, one inside a skill the update removes, and one the new package ships as it is.
+    writeFileSync(join(dir, "notes.md"), "My notes on this profile.\n");
+    writeFileSync(join(dir, "skills", "threat-model", "mine.md"), "Mine too.\n");
+    writeFileSync(join(dir, "CHANGES.md"), "v2\n");
+    const v2 = critic({ version: 2 }).replace("skills: [{ name: threat-model }]\n", "");
+    await repo.commit({ "profiles/security-critic/profile.yaml": v2, "profiles/security-critic/skills/threat-model/SKILL.md": null, "profiles/security-critic/CHANGES.md": "v2\n" });
+    const dry = await updateProfile("security-critic", { ...w.o, dryRun: true });
+    expect(dry).toMatchObject({ updated: false, kept: ["notes.md", "skills/threat-model/mine.md"], removed: ["skills/threat-model/SKILL.md"], added: ["CHANGES.md"] });
+    const text = w.cli(["profiles", "update", "security-critic", "--dry-run"]).out;
+    expect(text).toContain("added by you, kept: notes.md, skills/threat-model/mine.md");
+    expect(text).not.toContain("replaced by the update");
+    const u = await updateProfile("security-critic", w.o);
+    expect(u).toMatchObject({ updated: true, kept: ["notes.md", "skills/threat-model/mine.md"], to: { version: "2" } });
+    expect(readFileSync(join(dir, "notes.md"), "utf8")).toBe("My notes on this profile.\n");
+    expect(readFileSync(join(dir, "skills", "threat-model", "mine.md"), "utf8")).toBe("Mine too.\n");
+    expect(existsSync(join(dir, "skills", "threat-model", "SKILL.md"))).toBe(false);
+    expect(readLock(dir)!.files["CHANGES.md"]).toBeDefined();
+    expect(readLock(dir)!.files["notes.md"]).toBeUndefined();
+    expect(leftovers(w.user)).toEqual([]);
+    // Up to date, your files still there: nothing to replace.
+    expect(await updateProfile("security-critic", w.o)).toMatchObject({ updated: false, kept: ["notes.md", "skills/threat-model/mine.md"] });
+    expect(w.cli(["profiles", "update", "security-critic"]).out).toContain("security-critic is up to date");
+    // The package now ships a notes.md of its own, a directory where your mine.md is, and a file where your docs/ is:
+    // refused, nothing changed.
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "a.md"), "Mine.\n");
+    const lock = readLock(dir)!;
+    await repo.commit({ "profiles/security-critic/notes.md": "The package's notes.\n", "profiles/security-critic/skills/threat-model/mine.md/x.md": "x\n", "profiles/security-critic/docs": "a file\n" });
+    await refused(updateProfile("security-critic", { ...w.o, dryRun: true }), "conflict", /needs the place of files you added.*: docs\/a\.md, notes\.md, skills\/threat-model\/mine\.md .*Move them out/);
+    await refused(updateProfile("security-critic", w.o), "conflict", /notes\.md/);
+    expect(readLock(dir)).toEqual(lock);
+    expect(readFileSync(join(dir, "notes.md"), "utf8")).toBe("My notes on this profile.\n");
+    expect(leftovers(w.user)).toEqual([]);
+  });
+
+  test("a new package file at a name the file system takes for one you added (case, Unicode form, full folding) is a conflict; one it tells apart isn't", async () => {
+    // macOS's file system folds case and Unicode form, fully (STRASSE.md is straße.md there): kept where it is, your
+    // Notes.md would replace the package's notes.md. Whether two names are one is the file system's to say, so the test
+    // asks it; on one that tells them apart (Linux's) both files stay, side by side.
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, w.o);
+    const dir = join(w.user, "security-critic");
+    const yours: Record<string, string> = { "Notes.md": "notes.md", "Docs/a.md": "docs", "cafe\u0301.md": "caf\u00E9.md", "STRASSE.md": "stra\u00DFe.md", "\uFB01le.md": "file.md" };
+    for (const f of Object.keys(yours)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), "Mine.\n"); }
+    const lock = readLock(dir)!;
+    await repo.commit(Object.fromEntries(Object.values(yours).map((p) => [`profiles/security-critic/${p}`, "The package's.\n"])));
+    // Whether this file system takes two names for one: asked, beside where the profiles are.
+    const probe = mkdtempSync(join(tmpdir(), "fold-"));
+    const oneName = (a: string, b: string) => { writeFileSync(join(probe, a), ""); try { return existsSync(join(probe, b)); } finally { rmSync(join(probe, a)); } };
+    const folded = Object.keys(yours).filter((f) => oneName(f.split("/")[0]!, yours[f]!)).sort();
+    const foldsCase = oneName("override.yaml", "Override.yaml");
+    rmSync(probe, { recursive: true });
+    // macOS's default volume takes them all for the package's; even a case-sensitive one folds the Unicode form.
+    if (process.platform === "darwin") expect(folded.length).toBeGreaterThan(0);
+    if (process.platform === "linux") expect(folded).toEqual([]);
+    if (folded.length) {
+      const names = folded.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(", ");
+      await refused(updateProfile("security-critic", { ...w.o, dryRun: true }), "conflict", new RegExp(`needs the place of (a file|files) you added.*: ${names} `));
+      await refused(updateProfile("security-critic", w.o), "conflict", /needs the place of/);
+      expect(readLock(dir)).toEqual(lock);
+    } else {
+      expect(await updateProfile("security-critic", w.o)).toMatchObject({ updated: true, kept: Object.keys(yours).sort() });
+      for (const p of Object.values(yours)) expect(readFileSync(join(dir, p), "utf8")).toBe("The package's.\n");
+    }
+    for (const f of Object.keys(yours)) expect(readFileSync(join(dir, f), "utf8")).toBe("Mine.\n");
+    expect(leftovers(w.user)).toEqual([]);
+    // Your override.yaml is yours the same way: a package's Override.yaml, where the file system takes it for yours,
+    // would have it land on the package's file.
+    for (const f of Object.keys(yours)) rmSync(join(dir, f));
+    rmSync(join(dir, "Docs"), { recursive: true, force: true });
+    writeFileSync(join(dir, "override.yaml"), yaml(["limits: { maxTurns: 7 }"]));
+    await repo.commit({ "profiles/security-critic/Override.yaml": "The package's.\n" });
+    if (foldsCase) {
+      await refused(updateProfile("security-critic", w.o), "conflict", /needs the place of (a file|files) you added.*: override\.yaml /);
+      expect(readLock(dir)).toEqual(lock);
+    } else expect(await updateProfile("security-critic", w.o)).toMatchObject({ updated: true });
+    expect(readFileSync(join(dir, "override.yaml"), "utf8")).toBe(yaml(["limits: { maxTurns: 7 }"]));
+    expect(leftovers(w.user)).toEqual([]);
+  });
+
+  test("an update the profiles wouldn't resolve with is put back, with the files you added", async () => {
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, w.o);
+    const dir = join(w.user, "security-critic");
+    writeFileSync(join(dir, "notes.md"), "Mine.\n");
+    await repo.commit({ "profiles/security-critic/profile.yaml": critic({ extra: ["extends: gone-parent"] }) });
+    await refused(updateProfile("security-critic", w.o), "config", /gone-parent/);
+    expect(readFileSync(join(dir, "notes.md"), "utf8")).toBe("Mine.\n");
+    expect(readFileSync(join(dir, "profile.yaml"), "utf8")).toBe(critic());
+    expect(leftovers(w.user)).toEqual([]);
+  });
+
   test("an update the profiles wouldn't resolve with is put back", async () => {
     const w = world(), repo = await profileRepo(twoProfiles());
     await installProfile(`${repo.bare}#security-critic`, w.o);
@@ -336,6 +432,23 @@ describe("export and remove", () => {
     expect(trustState("profile", skill, `sha256:${sha(THREAT)}`, w.env).state).toBe("untrusted");
     expect(JSON.parse(readFileSync(join(w.env.CAPCOMD_HOME!, "trust.json"), "utf8")).entries).toEqual([]);
     expect(leftovers(w.projectProfiles)).toEqual([]);
+  });
+
+  test("rm while trust.json stays locked by another change is refused and leaves the package where it was", async () => {
+    const w = world(), repo = await profileRepo(twoProfiles());
+    await installProfile(`${repo.bare}#security-critic`, { ...w.o, project: true });
+    const dir = join(w.projectProfiles, "security-critic"), skill = join(dir, "skills", "threat-model", "SKILL.md");
+    trustProfileSkills(w.load().profiles["security-critic"]!.skills, { env: w.env });
+    const lock = join(w.env.CAPCOMD_HOME!, "trust.json.lock");
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "held" }));
+    const wait = TRUST_LOCK.waitMs;
+    TRUST_LOCK.waitMs = 50;
+    try {
+      expect(() => removeInstalledProfile("security-critic", { ...w.o, project: true })).toThrow(TrustLockedError);
+    } finally { TRUST_LOCK.waitMs = wait; rmSync(lock, { force: true }); }
+    expect(existsSync(join(dir, "profile.yaml"))).toBe(true);
+    expect(leftovers(w.projectProfiles)).toEqual([]);
+    expect(trustState("profile", skill, `sha256:${sha(THREAT)}`, w.env).state).toBe("trusted");
   });
 });
 

@@ -6,7 +6,7 @@
 import { PluginError } from "./errors";
 import { HOOKS, type HookCall, type HookName, type HookPayload, type HookResult } from "./hooks";
 import { readManifest } from "./load";
-import type { PluginContext, PluginModule } from "./context";
+import type { HarnessEventEnvelope, PluginContext, PluginModule } from "./context";
 import type { PluginManifest } from "./manifest";
 import type { AgentProvider, Forge, SandboxProvider } from "./seams";
 import type { Agent, Approval, Job, Merge, PinnedSpec, Principal, Run, Trigger, Untrusted, Verification } from "./shapes";
@@ -36,6 +36,10 @@ export interface FakeContext<C = Record<string, unknown>> {
   /** Everything the plugin emitted, logged and traced. */
   emitted(): Array<{ type: string; stream: string; data: Record<string, unknown> }>;
   logs(): Array<{ level: string; message: string; fields: Record<string, unknown> }>;
+  /** Put an event on its stream (`event.scope`: `daemon` or a run id) as the daemon would (§8.4): every subscription of
+   *  the plugin to that stream whose filter matches gets it, one at a time, in the order published; `ctx.events.replay`
+   *  returns it afterwards. Resolves once the handlers have run (one that throws is logged and skipped). */
+  publish(event: HarnessEventEnvelope): Promise<void>;
   /** Dispose the plugin and return what was still registered afterwards (must be empty). */
   dispose(): Promise<Registration[]>;
   /** The seam implementation the plugin registered for `kind`, if any (what the conformance suites run against). */
@@ -158,6 +162,10 @@ class Fake<C> implements FakeContext<C> {
   private readonly lines: Array<{ level: string; message: string; fields: Record<string, unknown> }> = [];
   private readonly host: HostEvent[] = [];
   private seq = 0;
+  // The streams `publish` writes (§8.4 in the daemon reads the real ones): what subscriptions hear and replay returns.
+  private readonly streams = new Map<string, HarnessEventEnvelope[]>();
+  private readonly subs = new Set<{ stream: string; types: Set<string> | null; after: number; deliver: (e: HarnessEventEnvelope) => void | Promise<void> }>();
+  private delivering: Promise<void> = Promise.resolve();
 
   constructor(readonly manifest: PluginManifest, config: C | undefined, opts: { services?: ContextOptions<C>["services"]; dir?: string }) {
     this.hooks = new HookRegistry({ emit: (e) => { this.host.push(e); }, rank: () => 0 });
@@ -168,6 +176,16 @@ class Fake<C> implements FakeContext<C> {
       services: { storage: memoryStorage(), ...(opts.services ?? {}) },
       emit: async (e) => { this.out.push({ type: e.type, stream: e.stream, data: e.data }); return { seq: ++this.seq }; },
       log: (l) => { this.lines.push({ level: l.level, message: l.message, fields: l.fields }); },
+      subscribe: (stream, filter, deliver) => {
+        const sub = { stream: streamOf(stream), types: filter.types?.length ? new Set(filter.types) : null, after: filter.after ?? 0, deliver };
+        this.subs.add(sub);
+        return { dispose: () => { this.subs.delete(sub); } };
+      },
+      replay: async (stream, after) => {
+        const evs = this.streams.get(streamOf(stream));
+        if (!evs && stream !== "daemon") throw new PluginError("not_found", `no run ${stream} (nothing was published on it)`);
+        return (evs ?? []).filter((e) => e.seq > after);
+      },
     });
     this.hooks.attach(manifest.name, this.runtime.ctx.signal);
   }
@@ -179,6 +197,19 @@ class Fake<C> implements FakeContext<C> {
   }
   emitted() { return [...this.out]; }
   logs() { return [...this.lines]; }
+  publish(event: HarnessEventEnvelope) {
+    const stream = streamOf(event.scope);
+    // One publish's handlers finish before the next one's start: never two calls to a handler at once.
+    const run = this.delivering.then(async () => {
+      this.streams.set(stream, [...(this.streams.get(stream) ?? []), event]);
+      for (const sub of [...this.subs]) {
+        if (!this.subs.has(sub) || sub.stream !== stream || event.seq <= sub.after || (sub.types && !sub.types.has(event.type))) continue;
+        await sub.deliver(event);
+      }
+    });
+    this.delivering = run.catch(() => {});
+    return run;
+  }
   /** The host's own events about this plugin (plugin.hook_failed, plugin.suspended, …). */
   hostEvents() { return [...this.host]; }
   async dispose() { return (await this.runtime.dispose()).remaining; }
@@ -189,6 +220,11 @@ class Fake<C> implements FakeContext<C> {
 }
 
 const fail = (message: string): never => { throw new Error(message); };
+/** A stream is `daemon` or a run id, as in the daemon (§8.4). */
+const streamOf = (stream: string) => {
+  if (stream === "daemon" || /^run-[A-Za-z0-9_-]+$/.test(stream)) return stream;
+  throw new PluginError("invalid", `a stream is daemon or a run id (run-…), not ${JSON.stringify(stream)}`);
+};
 
 async function loadInto<C>(fake: FakeContext<C>, module: PluginModule<C>, timeoutMs = 30_000): Promise<void> {
   if (!(fake instanceof Fake)) throw new PluginError("invalid", "load takes a context from testkit.fakeContext");

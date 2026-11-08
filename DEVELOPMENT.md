@@ -101,7 +101,8 @@ src/
   env/          - env snapshots, secrets sync, doctor
   jobs/         - background jobs and timers (plugin API §16.2): service.ts, the records (a run's kv `_jobs/`, the
                   daemon's state/jobs/), limits, ctx.jobs, the job.changed hook, timers; machine.ts, a job's detached
-                  runner in its agent's machine, reached through the agent's spool pump's exec (subagents/driver.ts)
+                  runner in its agent's machine, reached through the agent's spool pump's exec (subagents/driver.ts);
+                  record.ts, a record cut to a kv value's 64 KB (the scope actor's jobWrite)
   machines/     - XState state machines
   mcp/          - MCP server (server.ts: serves the registered tools; tools.ts: capcomd's own, front-mcp's)
   merge/        - git: direct and PR merge modes, verification runs (checks in a VM with boxd)
@@ -232,7 +233,10 @@ suites under `caffeinate -i`: a sleeping machine times tests out and can leave a
 `scripts/mac-subagents-e2e.sh` runs a planner agent that splits a three-file fix across Claude and Codex workers
 in boxd VMs, verifies each (checks in a VM, then a reviewer agent), merges them, runs the full suite on the
 result and checks that no VM is left. It needs `BOXD_API_KEY`, `gh` and working Claude and Codex logins, creates
-a private GitHub repo (it prints the delete command) and ends with `E2E PASS` or `E2E FAIL: <reasons>`.
+a private GitHub repo (it prints the delete command) and ends with `E2E PASS` or `E2E FAIL: <reasons>`. It and the
+other e2e scripts that create a repository run with project templates off (`CAPCOMD_PROJECT_TEMPLATES=off` unless
+you set it): a template is a boxd snapshot of 8 GB or more that nothing would delete. With `auto`, remove it afterwards
+with `capcomd env templates rm --repo URL --sandbox boxd`.
 
 `scripts/mac-plugin-e2e.sh` is the same goal driven the way users drive capcomd: a headless Claude Code session
 loads `plugins/capcomd` and may use only the plugin's MCP tools and skills (no shell, no edits). It needs `claude`
@@ -299,9 +303,11 @@ CAPCOMD_HOME=<a home with your logins> BOXD_API_KEY=… \
 agent that reads only its checkout and its prompt (the instruction file when there is one, the context brief's lines and
 the files they name when its profile has one, else the stub's stale comment and the docs), so `--expect` knows every verdict and fails when an arm, a checker or a metric stops working. `--agents live`
 runs real Claude Code or Codex agents (one profile per `--models` entry, plan logins) on `--sandbox` (boxd by default,
-or docker); a Codex model must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a
-`CAPCOMD_HOME` of its own with copies of your logins (`state/auths.json`, `state/envs.json`), never `~/.capcomd`
-itself (refused). `--evidence DIR` writes `DIR/<model>/<date>.json` (`<date>-2.json` and so on for another run that
+or docker), with project templates off unless `CAPCOMD_PROJECT_TEMPLATES` says otherwise (every chain's repository is
+new: each would get a snapshot, and a template appearing mid-run would change how later agents start); a Codex model
+must be one the login offers (`~/.codex/models_cache.json` lists them). Give it a `CAPCOMD_HOME` of its own with
+copies of your logins (`state/auths.json`, `state/envs.json`), never `~/.capcomd` itself (refused).
+`--evidence DIR` writes `DIR/<model>/<date>.json` (`<date>-2.json` and so on for another run that
 day: evidence is never overwritten) and, the first time, the model's `limits.json` (ADR-025 D4's starting values until
 an arm measures them). The world itself isn't written there: the seed and the
 recorded commit give it back, and its carriers file holds the planted instruction. The router reads a model's

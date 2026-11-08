@@ -16,8 +16,9 @@ import type { ScanHit } from "./scan";
 
 export const INDEX_FILE = `${CONTEXT_DIR}index.md`;
 
-/** A file under `.capcomd/context/`, its path from the repository's root; `text` null when it can't be read as text. */
-export interface LintFile { path: string; text: string | null; link?: boolean }
+/** A file under `.capcomd/context/`, its path from the repository's root; `text` null when it can't be read as text.
+ *  `more`: not a file, but the readers' word that the directory holds more files than they read (MEMORY_MAX_FILES). */
+export interface LintFile { path: string; text: string | null; link?: boolean; more?: boolean }
 
 export type LintRule =
   | "not-an-item" | "unreadable" | "frontmatter" | "field" | "duplicate-id" | "id-changed" | "deleted" | "supersession"
@@ -179,6 +180,8 @@ export function lintContext(i: LintInput): LintResult {
   const unlisted = new Set<Item>();
   const today = Math.floor((i.now ?? Date.now()) / DAY_MS) * DAY_MS;
   for (const f of files) {
+    // What lint didn't read it can't say is fit (a secret in the 2001st file, say): a problem, never a pass.
+    if (f.more) { err(f.path, "unreadable", `more than ${MEMORY_MAX_FILES} files: lint reads that many, so it can't check the rest`); continue; }
     if (f.link) { err(f.path, "unreadable", "a link: .capcomd/context/ holds files, so every agent reads the same thing"); continue; }
     const kind = kindOf(f.path);
     if (!kind) {
@@ -267,17 +270,19 @@ export function lintContext(i: LintInput): LintResult {
 }
 
 /** Every file under `<root>/.capcomd/context/`, as lint reads them: text, or null for a binary or one over 64 KB; a
- *  link is a link, never followed (`.capcomd/` or `.capcomd/context/` itself one too: then that is all there is). */
+ *  link is a link, never followed (`.capcomd/` or `.capcomd/context/` itself one too: then that is all there is); past
+ *  MEMORY_MAX_FILES, one `more` entry. */
 export function readContextDir(root: string): LintFile[] {
   for (const dir of [CONTEXT_DIR.slice(0, CONTEXT_DIR.indexOf("/")), CONTEXT_DIR.slice(0, -1)]) {
     try { if (lstatSync(join(root, dir)).isSymbolicLink()) return [{ path: dir, text: null, link: true }]; } catch { return []; }
   }
   const out: LintFile[] = [];
+  let more = false;
   const visit = (dir: string, prefix: string) => {
     let entries: string[];
     try { entries = readdirSync(dir).sort(); } catch { return; }
     for (const e of entries) {
-      if (out.length >= MEMORY_MAX_FILES) return;
+      if (out.length >= MEMORY_MAX_FILES) { more = true; return; }
       const abs = join(dir, e), path = `${prefix}${e}`;
       const st = lstatSync(abs);
       if (st.isSymbolicLink()) { out.push({ path, text: null, link: true }); continue; }
@@ -289,23 +294,31 @@ export function readContextDir(root: string): LintFile[] {
     }
   };
   visit(join(root, CONTEXT_DIR), CONTEXT_DIR);
-  return out;
+  return more ? [...out, { path: CONTEXT_DIR.slice(0, -1), text: null, more: true }] : out;
 }
 
 /** The same at `ref` in the repository at `root` (local reads only: `git ls-tree` and `git cat-file`). */
 export function readContextAt(root: string, ref: string): LintFile[] {
+  // A ref, never an option (`--base --output=…`).
+  if (!ref || ref.startsWith("-")) throw new Error(`"${ref}" isn't a branch or a commit`);
   const git = (args: string[]) => Bun.spawnSync(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" });
   const ls = git(["ls-tree", "-r", "-z", "--full-tree", ref, "--", CONTEXT_DIR]);
   if (ls.exitCode !== 0) throw new Error(`git can't read ${ref}: ${ls.stderr.toString().trim().split("\n")[0] ?? ""}`);
   const out: LintFile[] = [];
-  for (const entry of ls.stdout.toString().split("\0").filter(Boolean).slice(0, MEMORY_MAX_FILES)) {
+  const entries = ls.stdout.toString().split("\0").filter(Boolean);
+  const texts = new Map<string, string | null>();
+  for (const entry of entries.slice(0, MEMORY_MAX_FILES)) {
     const [head, path] = [entry.slice(0, entry.indexOf("\t")), entry.slice(entry.indexOf("\t") + 1)];
     const [mode, type, sha] = head.split(" ");
     if (type !== "blob" || !sha) continue;
     if (mode === "120000") { out.push({ path, text: null, link: true }); continue; }
-    const blob = git(["cat-file", "blob", sha]);
-    const buf = Buffer.from(blob.stdout);
-    out.push({ path, text: blob.exitCode !== 0 || buf.length > MEMORY_MAX_BYTES || buf.includes(0) ? null : buf.toString("utf8") });
+    // Files with the same content are one blob, read once.
+    if (!texts.has(sha)) {
+      const blob = git(["cat-file", "blob", sha]);
+      const buf = Buffer.from(blob.stdout);
+      texts.set(sha, blob.exitCode !== 0 || buf.length > MEMORY_MAX_BYTES || buf.includes(0) ? null : buf.toString("utf8"));
+    }
+    out.push({ path, text: texts.get(sha)! });
   }
-  return out;
+  return entries.length > MEMORY_MAX_FILES ? [...out, { path: CONTEXT_DIR.slice(0, -1), text: null, more: true }] : out;
 }

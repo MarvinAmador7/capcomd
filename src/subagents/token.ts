@@ -76,7 +76,54 @@ export function verifyToken(token: string, key = signingKey(), now = Date.now())
   return { ok: true, claims };
 }
 
-/** Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator). */
-export function opsFor(limits: { allowSpawn: boolean }): Op[] {
-  return limits.allowSpawn ? [...ALL_OPS] : ["status", "heartbeat", "kv", "task", "inbox", "send", "result", "title", "job.start", "job.output", "job.list", "job.kill"];
+/** Background jobs in the agent's own machine (plugin API §16.2). */
+export const JOB_OPS: readonly Op[] = ["job.start", "job.output", "job.list", "job.kill"];
+/** What an agent that may not spawn may call: name its tab, read what it sees of the tree (its own subtree and its
+ *  siblings'), keep notes and coordinate (kv, task, send, inbox), report progress and declare its result (where its
+ *  lessons go, ADR-025). Nothing that starts, stops, lands or pays for another agent's work. */
+export const LEAF_OPS: readonly Op[] = ["title", "status", "tree", "inspect", "logs", "events", "budget", "heartbeat", "kv", "task", "inbox", "send", "result"];
+
+/**
+ * Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator), LEAF_OPS and the job
+ * ops for any other. `jobs: false` (its profile lets it run no command of its own: `mayRunCommands`) leaves the job ops
+ * out, so `capcomd job start` is never a way around its tool policy.
+ */
+export function opsFor(limits: { allowSpawn: boolean }, o: { jobs?: boolean } = {}): Op[] {
+  const ops = limits.allowSpawn ? [...ALL_OPS] : [...LEAF_OPS, ...JOB_OPS];
+  return o.jobs === false ? ops.filter((x) => !JOB_OPS.includes(x)) : ops;
+}
+
+/** The unrestricted shell as a tool rule: `Bash`, `Bash()`, `Bash(*)`, `Bash(:*)` (the empty prefix: every command).
+ *  src/profiles/v1.ts `readOnlyTools` also counts a rule that starts with a wildcard as the shell (a description leans
+ *  to "can write"); here such a rule leaves the job ops out (the token leans to fewer ops). */
+const SHELL = /^Bash(\((:?\*)?\))?$/;
+/**
+ * Whether an agent's profile lets it run any command of its own: a background job runs whatever it is given, so only
+ * such an agent's token has the job ops. Not when its allow-list names tools but no unrestricted shell (`Bash`,
+ * `Bash(*)`, `Bash(:*)`; a reviewer's `Bash(bun test:*)` is a command, not a shell), its deny-list names the shell, or its Codex
+ * sandbox is read-only. An orchestrate agent keeps them in its token: the RPC refuses its `job start` by name (plugin API
+ * §16.1 item 6), and `job list` is harmless.
+ */
+export function mayRunCommands(spec: unknown): boolean {
+  const s = (spec ?? {}) as { allowedTools?: unknown; disallowedTools?: unknown; sandbox?: unknown };
+  const tools = (v: unknown) => (Array.isArray(v) ? v.map((t) => String(t).trim()) : null);
+  const allowed = tools(s.allowedTools), denied = tools(s.disallowedTools);
+  if (allowed?.length && !allowed.some((t) => SHELL.test(t))) return false;
+  if (denied?.some((t) => SHELL.test(t))) return false;
+  return s.sandbox !== "read-only";
+}
+
+/**
+ * Whether a real agent's token has the job ops: its profile lets it run commands of its own (`mayRunCommands`), and so
+ * does the config it runs with (src/agents/config.ts `loadAgentConfig`), which the daemon's CAPCOMD_AGENT_ALLOWED_TOOLS,
+ * CAPCOMD_AGENT_DISALLOWED_TOOLS and, for a Codex agent, CAPCOMD_CODEX_SANDBOX narrow too. `effective` null (a config
+ * that can't be read): none (fail closed; the run reports the config itself). An orchestrate agent's is its profile's
+ * alone: its config is its provider's orchestrate policy, and the RPC refuses its `job start` by name.
+ */
+export function mayRunJobs(spec: unknown, effective: { allowedTools?: string[]; disallowedTools?: string[]; codexSandbox?: string } | null): boolean {
+  const s = (spec ?? {}) as { toolMode?: unknown; provider?: unknown };
+  if (!mayRunCommands(spec)) return false;
+  if (s.toolMode === "orchestrate") return true;
+  if (!effective) return false;
+  return mayRunCommands({ allowedTools: effective.allowedTools, disallowedTools: effective.disallowedTools, ...(s.provider === "codex" ? { sandbox: effective.codexSandbox } : {}) });
 }

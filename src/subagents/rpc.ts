@@ -9,6 +9,7 @@
 import { redactShapes } from "../agents/redact";
 import { withSkills, type AttachedSkill } from "../agents/skills";
 import { RelayError } from "../core/errors";
+import { HOST_CONTRACT_KEYS } from "../plugins/hooks";
 import { client } from "../core/relay";
 import * as O from "../primitives/ops";
 import * as S from "../primitives/state";
@@ -121,7 +122,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     case "spawn": {
       // Parent is always the caller; never operator; contracts can't carry host-side checks.
       const contract = { ...(args.contract ?? {}) };
-      delete contract.checks; delete contract.orphansPolicyOverride; delete contract.review; delete contract.from; // review mode is verify's alone; from is --continue's
+      for (const k of Object.keys(HOST_CONTRACT_KEYS)) delete contract[k]; // review mode is verify's alone; from is --continue's
       const a = await O.spawnAgent({
         runId: run, parent: c.sub, task: String(args.task ?? ""), profile: args.profile, key: args.key ? `${c.sub}:${args.key}` : undefined,
         budget: args.budget !== undefined ? parseBudget(args.budget) : undefined, contract, grant: args.children, operator: false,
@@ -230,6 +231,8 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     }
     case "result": {
       const r = normalizeResult(args);
+      // An empty call (a tool called before its schema was read gives `{}`) would record nothing, or erase a result.
+      if (!r.summary.trim() && !r.artifacts.length && r.data === undefined) throw new RelayError("usage", "result needs a summary (or artifacts or data): nothing was recorded", "capcomd result --summary \"<what you did, what you checked, what is left>\" [--data JSON]");
       await S.kvWrite(run, { k: `_result/${c.sub}`, value: r, writer: c.sub });
       return { recorded: true, ...(r.truncated ? { truncated: r.truncated } : {}) };
     }

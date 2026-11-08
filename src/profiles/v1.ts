@@ -3,6 +3,7 @@
 // exactly one auth mode and harness limits; tasks and runs select one by name. Env (CAPCOMD_AGENT, CAPCOMD_AGENT_*)
 // stays an override on top.
 import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
+import { seamPresence, unconfirmedSeam } from "../plugins/snapshot";
 import type { ContextSpec } from "../../packages/plugin/src/context-layer";
 
 export const AGENTS_SCHEMA = "capcomd.agents/v1";
@@ -180,8 +181,19 @@ const KEYS = new Set(Object.keys(AGENTS_JSON_SCHEMA.$defs.agent.properties));
  */
 export interface SpecLabels { prefix: string; key?: (field: string) => string }
 
-/** Validate one profile; returns errors (empty = ok). */
-export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { prefix: `agents.${name}` }): string[] {
+/**
+ * Where reading profiles reports a provider no daemon is running to confirm, and the env (CAPCOMD_HOME) whose daemon is
+ * asked (src/plugins/snapshot.ts `seamPresence`). Without one (a candidate checked before it is written, an override)
+ * such a provider is an error, and the daemon asked is process.env's.
+ */
+export interface SeamCheck { warnings: string[]; env?: Record<string, string | undefined> }
+
+/**
+ * Validate one profile; returns errors (empty = ok). Its provider is an active agent seam's name: a built-in, or
+ * outside the daemon one the running daemon lists; one that is neither, with no daemon running to ask, is a warning in
+ * `seams` (spec §7.1, ADR-024 §9).
+ */
+export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { prefix: `agents.${name}` }, seams?: SeamCheck): string[] {
   const e: string[] = [];
   const at = (m: string) => e.push(`${labels.prefix}: ${m}`);
   const k$ = labels.key ?? ((k: string) => k);
@@ -193,7 +205,12 @@ export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { 
   const legacyKey = "apiKey" in s || "apikey" in s, legacySub = "subscription" in s;
   if (legacyKey && legacySub) at("both an API key and a subscription are configured; set exactly one via auth: \"apikey\" | \"subscription\"");
   if (s.provider === undefined && labels.key) at(`${k$("provider")} is required (${agentProviderNames().join(", ")}, or a plugin's agent provider)`);
-  else if (typeof s.provider !== "string" || !agentProviderNames().includes(s.provider)) at(unknownProviderText(s.provider));
+  else if (typeof s.provider !== "string") at(unknownProviderText(s.provider));
+  else {
+    const has = seamPresence("agent", s.provider, agentProviderNames().includes(s.provider), seams?.env);
+    if (has === "unchecked" && seams) seams.warnings.push(unconfirmedSeam(labels.prefix, k$("provider"), "agent", s.provider));
+    else if (has !== "active") at(unknownProviderText(s.provider, seams?.env));
+  }
   if (s.auth === undefined) at(legacyKey || legacySub ? `use auth: "${legacyKey ? "apikey" : "subscription"}" instead of a credential field` : `${k$("auth")} is required ("apikey" or "subscription"): neither is configured`);
   else if (!["apikey", "subscription"].includes(s.auth as string)) at(`${k$("auth")} must be "apikey" or "subscription"`);
   const posInt = (k: string, min = 1) => { if (s[k] !== undefined && (!Number.isInteger(s[k]) || (s[k] as number) < min)) at(`${k$(k)} must be an integer >= ${min}`); };
@@ -307,19 +324,30 @@ export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, 
 
 /**
  * Whether an allow-list leaves the agent read-only: it names tools, none of them edits files, and its shell, if any,
- * is limited to commands (`Bash(bun test:*)`, as `capcomd setup` gives a reviewer). A plain `Bash` (or `Bash(*)`)
- * can write any file.
+ * is limited to commands (`Bash(bun test:*)`, as `capcomd setup` gives a reviewer). A plain `Bash` (or `Bash(*)`),
+ * and a rule that starts with a wildcard (`Bash(* *)`: the agent picks the program), can write any file.
  */
 export function readOnlyTools(allowed: readonly string[] | undefined): boolean {
-  return !!allowed?.length && !allowed.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\((:?\*)?\))?$/.test(t.trim()));
+  return !!allowed?.length && !allowed.some((r) => { const t = r.trim(); return /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\(\s*(:?\*.*)?\))?$/.test(t); });
+}
+
+/**
+ * Whether the profile can't edit files, from what its provider applies: Claude Code its tool allow-list
+ * (readOnlyTools; it ignores `sandbox.codex`), Codex its own sandbox (`sandbox.codex: read-only`; it has no per-tool
+ * allow-list, so `tools.allowed` doesn't limit it). Another provider's: not known, so not read-only. No provider (a
+ * bare spec): its allow-list.
+ */
+export function readOnlySpec(s: { provider?: string; allowedTools?: readonly string[]; sandbox?: string }): boolean {
+  const kind = s.provider === undefined ? "claude-code" : kindOf(s.provider);
+  return kind === "claude-code" ? readOnlyTools(s.allowedTools) : kind === "codex" ? s.sandbox === "read-only" : false;
 }
 
 /** What a profile is for, in plain words (capcomd_profiles, `capcomd profiles list`). */
-export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & { toolMode?: string }): string {
+export function abilityText(s: Pick<AgentSpec, "children" | "allowedTools"> & Partial<Pick<AgentSpec, "provider" | "sandbox">> & { toolMode?: string }): string {
   const lead = leadText(s);
   const mode = s.toolMode === "orchestrate" ? `. ${ORCHESTRATE_TEXT}` : "";
   if (lead) return `leads a part: spawns ${lead}, and verifies and merges their work (spawn it with children: {maxChildren, maxDepth} to size it)${mode}`;
-  return readOnlyTools(s.allowedTools) ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
+  return readOnlySpec(s) ? "reads and runs its allowed commands (read-only: a reviewer); can't spawn helpers" : "does its task itself; can't spawn helpers (fan-out for it is refused)";
 }
 
 /**
@@ -331,6 +359,12 @@ export function widenings(base: AgentSpec, next: AgentSpec): string[] {
   const w: string[] = [];
   const le = (k: "maxTurns" | "maxBudgetUsd" | "timeoutMs" | "idleAfterMs" | "stuckRepeats" | "noChangeAfterMs") => { if (next[k] !== undefined && base[k] !== undefined && next[k]! > base[k]!) w.push(`${k} ${next[k]} > ${base[k]}`); if (base[k] !== undefined && next[k] === undefined) w.push(`${k} unset (would lift ${base[k]})`); };
   le("maxTurns"); le("maxBudgetUsd"); le("timeoutMs"); le("idleAfterMs"); le("stuckRepeats"); le("noChangeAfterMs");
+  // Plugin API §16.2 rule 2: the jobs block is limits too, checked as the ones above (unset in base: not checked).
+  const bj = base.jobs ?? {}, nj = next.jobs ?? {};
+  for (const k of ["max", "foregroundMs", "afterTurnMs"] as const) {
+    if (nj[k] !== undefined && bj[k] !== undefined && nj[k]! > bj[k]!) w.push(`jobs.${k} ${nj[k]} > ${bj[k]}`);
+    if (bj[k] !== undefined && nj[k] === undefined) w.push(`jobs.${k} unset (would lift ${bj[k]})`);
+  }
   if (next.provider !== base.provider) w.push(`provider ${base.provider} → ${next.provider}`);
   // §16.1: the mode is a limit; an orchestrate agent's override or patch can't give it back its tools.
   if (base.toolMode === "orchestrate" && next.toolMode !== "orchestrate") w.push(`toolMode orchestrate → ${next.toolMode ?? "execute"}`);
@@ -360,15 +394,15 @@ export function widenings(base: AgentSpec, next: AgentSpec): string[] {
   return w;
 }
 
-export function validateFile(raw: unknown): string[] {
-  const e = validateFileShape(raw);
+export function validateFile(raw: unknown, seams?: SeamCheck): string[] {
+  const e = validateFileShape(raw, undefined, seams);
   if (!e.length) e.push(...childNarrowing((raw as AgentsFile).agents));
   return e;
 }
 
 /** Everything validateFile checks but the parent → child narrowing, which runs on resolved specs (`childNarrowing`).
  *  `defined`: the names a `default` may name (the v2 loader passes every profile it resolved). */
-export function validateFileShape(raw: unknown, defined?: (name: string) => boolean): string[] {
+export function validateFileShape(raw: unknown, defined?: (name: string) => boolean, seams?: SeamCheck): string[] {
   if (!raw || typeof raw !== "object") return ["file must be a JSON object"];
   const f = raw as Record<string, any>;
   const e: string[] = [];
@@ -376,7 +410,7 @@ export function validateFileShape(raw: unknown, defined?: (name: string) => bool
   for (const k of Object.keys(f)) if (!["schema", "default", "agents", "$schema", "$comment"].includes(k)) e.push(`unknown top-level field "${k}"`);
   if (f.$comment !== undefined && typeof f.$comment !== "string") e.push("$comment must be a string");
   if (!f.agents || typeof f.agents !== "object") e.push("agents must be an object");
-  else for (const [n, s] of Object.entries(f.agents)) e.push(...validateSpec(n, s));
+  else for (const [n, s] of Object.entries(f.agents)) e.push(...validateSpec(n, s, undefined, seams));
   if (f.default !== undefined && !(defined ? defined(f.default) : f.agents?.[f.default])) e.push(`default "${f.default}" is not a defined agent`);
   return e;
 }
@@ -394,9 +428,11 @@ export function childNarrowing(agents: Record<string, AgentSpec>, label = (n: st
       if (!child) { e.push(`${label(n)}.children.allowedChildProfiles: "${c}" is not a defined agent`); continue; }
       if (c === n && s.children?.allowSpawn) continue; // self-similar children are narrowing by definition
       // Children inherit from the parent and may only narrow (provider/auth may differ: each child has its own credential;
-      // so may the tool mode: an orchestrator's children do the work; and its context: each profile is briefed with its own,
-      // ADR-025 D12).
-      const w = widenings({ ...s, provider: child.provider, auth: child.auth, toolMode: child.toolMode, context: child.context }, child).filter((x) => !x.startsWith("children."));
+      // so may the tool mode: an orchestrator's children do the work, and with it how long a job start waits, which is the
+      // agent's own shell (jobs.foregroundMs, 5 s for an orchestrator); and its context: each profile is briefed with its
+      // own, ADR-025 D12).
+      const jobs = s.jobs && { ...s.jobs, foregroundMs: child.jobs?.foregroundMs };
+      const w = widenings({ ...s, provider: child.provider, auth: child.auth, toolMode: child.toolMode, jobs, context: child.context }, child).filter((x) => !x.startsWith("children."));
       if (w.length) e.push(`${label(n)}.children: child profile "${c}" is wider than its parent (${w.join("; ")})`);
     }
   }

@@ -192,7 +192,9 @@ at `ctx.context.register`, so the later one in load order fails activation).
 app and the MCP server can describe a plugin without loading it (VS Code's `contributes`, research §4). The code MAY
 register only what the manifest declares; a registration not declared is `conflict` and fails activation (§5.4). A
 declaration the code never registers is a warning in `capcomd plugins validate --strict` and an error in the conformance
-suite (§14.1).
+suite (§14.1), and the host logs it at each activation (`declared but never registered`): a listener that matters only
+under some settings is registered anyway and does nothing without them, as the built-ins' `job.changed` listeners do
+(forge-github with no `sourceRepos`, source-schedule with no schedules, sandbox-boxd with the template refresh off).
 
 | Key | Item | Registered through |
 |---|---|---|
@@ -324,14 +326,22 @@ file edited since the install, before replacing it (`--dry-run` stops there); a 
 `capcomd plugins remove <name>` removes the files and any trust given to them; the plugin's data directory stays. The
 running daemon picks up any of these at its next start or the plugin's `enable` (§5.4: `enable` reads a plugin's
 directory again). A profile package (ADR-024 §7 step 7, `capcomd profiles install|update|export`) is fetched and
-locked the same way, with `kind: "profile"` in its `LOCK` and the same content hash.
+locked the same way, with `kind: "profile"` in its `LOCK` and the same content hash. Its `update` keeps what is the
+user's in the package's directory: an `override.yaml`, and every file its `LOCK` doesn't list (reported as `kept`); a
+new package file in the place of one of those (the same path, or a file where it needs a directory, or the reverse;
+whether two names are one is asked of the file system that holds them, so on macOS's, which folds case and Unicode form,
+`Notes.md` and `STRASSE.md` are in the place of `notes.md` and `straße.md`) is a `conflict`, and nothing is changed.
 
 **Trusting** a project's plugins. `capcomd plugins install --project [<source>]` adds the source to `plugins.use` and
 fetches every entry into the user's home (`<home>/plugins/.project/<key>/<name>/`, keyed by the project's directory),
 never into the checkout; an entry not fetched yet isn't discovered. A `.capcomd/plugins/<name>/` that is a link out of
 the checkout (to another project's plugin) isn't one of the project's plugins. Trust is given to one content hash of one
 plugin at one place (its directory, made real) and kept in `<home>/trust.json` (0600), which no project can write: a
-changed file, or the same plugin copied to another project, needs trusting again. In a checkout the hash covers every
+changed file, or the same plugin copied to another project, needs trusting again. The CLI and the daemon change it
+under `<home>/trust.json.lock` (created exclusively; one whose process is gone, or older than 30 s, is taken over): a
+change that waits 5 s for another, or that finds there something no change made (a directory, a link, a file it can't
+read) or a left-over lock it can't move aside, is refused with nothing changed (`conflict`, code `locked`), except the daemon's mark that it wrote
+`plugin.trusted`, which waits for the next time it acts on that trust (a trust it marked already needs no lock). In a checkout the hash covers every
 file, a `LOCK` there included (only a copy capcomd installed leaves out the `LOCK` it wrote). `capcomd plugins trust
 <name>` is the prompt: it shows what would run (the command, the scopes its token gets, the hooks it answers, the secret
 references it is given, its directory and hash; the manifest's text with control and format characters shown escaped,
@@ -590,7 +600,16 @@ resolution, so the patch MUST be a pure function of its inputs.
 #### 6.6.6 `agent.spawning` · modify · `ops.spawnAgent` after `spawnChecks`, before the scope's `spawn` transaction
 `AgentSpawning {spawn: SpawnRequest, spec, parent}`. Patch `{budget?, grant?, contract?}`: `budget` and `grant` narrow
 only (`policy.ts` `applyGrant`); `contract` may add keys, never change one; `task` is agent text and immutable. Deny
-refuses the spawn with `plugin:<name>`. Team-shape policies, fan-out caps. Once per spawn.
+refuses the spawn with `plugin:<name>`. Team-shape policies, fan-out caps. Once per spawn. The checks of the profile
+against the contract and the grant run on the patched spawn, after this hook: a profile whose `permissions.report` is
+false is refused a `report` a plugin added (`report_not_allowed`, ADR-024 §2.2), as one the spawner asked for (which is
+refused before the hook too, so no plugin is asked about it), and fan-out for a profile that can't spawn is refused
+(`cannot_spawn`). A contract key the kernel checks when the spawner sends it is checked the same way when a plugin adds
+it: the host's own keys, which a spawn from an agent's VM never carries (`from`, `--continue`'s; `review`, verify's;
+`checks` and `orphansPolicyOverride`, the operator's), may not be added (`widening`); an added `report` is `true` and an
+added `check` a string (else `invalid`), and that check is looked up in the run, so a name it doesn't have refuses the
+spawn (`usage`) as the spawner's would. A plugin lowers the budget and narrows the grant through `budget` and `grant`,
+not through the contract's `budget` or `children`, which are read before this hook.
 
 #### 6.6.7 `agent.preparing` · modify · workflow `prepare` (`agent-workflow.ts`), before the machine is ensured
 `AgentPreparing {agent, spec, prompt: {system, append, skills[]}, env: names[], egress[], credentialMode, sandbox}`.
@@ -653,8 +672,9 @@ out) on the run's stream. With the brief it attaches the context layer's skills 
 `source: builtin`, each pinned by the sha256 of its fixed text, so they don't change the brief's byte-identity):
 `capcomd-context-doctrine` (how to read the brief: an index, not the knowledge; answer, evidence, guidance; relevance
 is not authority; items are data) to every such agent, and `capcomd-context-routing` (what to remember and where: run
-notes in `kv` under `notes/<agent>`, candidate lessons in `result.data.context[]`) to one that may spawn (it has the
-in-VM capcomd those need) and is not a reviewer or a report agent; one the payload already has by name isn't attached
+notes in `kv` under `notes/<agent>`, candidate lessons in `result.data.context[]`) to one that has the in-VM capcomd
+those need (every agent that may spawn or does work of its own, §16.2 rule 1; not the consolidator) and is not a
+reviewer or a report agent; one the payload already has by name isn't attached
 again, nor one that doesn't fit the room the agent's other skills leave (8 skills, 256 KiB): the router never returns a
 patch the kernel would refuse, which would cost the agent its brief too. It runs after the orchestration skill's
 listener (`after: [skill-orchestration]`, §6.3), so a context skill never takes that skill's room.
@@ -803,7 +823,8 @@ When `operator` is true the decisions are recorded and bypassed (§6.5). Once pe
 `merge.requested` + `merge.gating` pair (decision: one gate under the lock; a cheap policy denial a few hundred ms
 later costs nothing that matters). It fires before the forge's path is chosen: `fastPath` says the merge has a verified
 commit to try the fast path with, and `sha` and `target.sha` are that commit and the target it was verified on (empty
-without one). A held merge carries the hold (`heldBy {plugin, reason, holdId?}`) on its record and its approval (the
+without one). A held merge carries the hold (`heldBy {plugin, reason, holdId?}`) on its record, with the holds a person
+approved for it (`approvedHolds`, each added when the person approves it; `heldBy` stays the last one), and its approval (the
 question and `subject.heldBy`, the park event, the elicitation prompt), so the person sees the plugin's reason, and the
 files the merge changes (`subject.files`, `filesTotal`, `added`, `removed`), read as a protected target's park reads
 them. A person's approval of that hold satisfies **only that hold**: the same plugin and, when the hold carries a
@@ -894,7 +915,14 @@ Selection, per use:
 | forge | the project's `merge.forge` (`CAPCOMD_MERGE_FORGE`, which `.capcomd/config.json` `env` can set and a run records; a GitHub repository named outright, `CAPCOMD_GITHUB_REPO`, names `github`; never the target tree's `.capcomd.json`, read only after the forge is chosen), else the first forge whose `matches(remote)` is true in load order; the built-in `git` forge matches every remote and is loaded last (`order: post`); creating a repository asks the first active forge whose `describe().publish` | `src/plugins/forges` `forgeFor`, from `mergeTask` (`prMerge`, `directMerge`), the goal branch's pull request, a run's base (`listBranches`), the logins the app shows (`login`); `publishForge` for `POST /v1/projects/publish` |
 
 A profile or run naming an implementation that is not active fails at **validation** (`capcomd profiles validate`,
-`POST /v1/runs` 422), not at spawn. For a forge that is the run's `merge.forge`: `POST /v1/runs` refuses it (422
+`POST /v1/runs` 422), not at spawn. For a profile's `harness.provider` and `sandbox.provider` (ADR-024), active is the
+daemon's: the daemon asks its own host; another process (the CLI, the MCP server, a run's driver) takes a built-in or
+a seam the running daemon's listing has from an active, enabled plugin (§13.2, `<home>/state/plugins.json`), since a
+plugin may be loaded only there, and refuses any other name while a daemon runs. With no daemon running there is
+nobody to ask: reading the profiles warns about a name that isn't a built-in instead of refusing it, and the daemon
+checks it when it resolves the profile. A candidate checked before it is written (`capcomd agents validate --spec`),
+a write (`capcomd profiles add`, `set`, `rm`: one that leaves a profile naming such a name it didn't name before,
+unless a running daemon lists it) and an override still need a provider this process or the running daemon has. For a forge that is the run's `merge.forge`: `POST /v1/runs` refuses it (422
 `invalid`, "merge.forge names <name>, which no active plugin provides" and the active forges), and so do `capcomd run`
 and `capcomd_run_new` (relay.v1 `config`, reason `forge`), before any merge. The kernel wraps every seam object in its
 traced, resilient wrappers (`src/providers/resilient.ts`, `tracedProvider`; for a forge, `src/plugins/forges`
@@ -1026,7 +1054,7 @@ rules the signatures cannot.
 | `mcp` | `tool`, `instructions` | | §4.7.2 |
 | `api` | `route`, `capability` | | §4.7.3 |
 | `ui` | `descriptor` | | §4.7.5 |
-| `events` | `emit`, `subscribe`, `replay` | `emit`: steer; others: read | scope `appendEvent`, the SSE source (`src/api/source.ts`) |
+| `events` | `emit`, `subscribe`, `replay` | `emit`: steer; others: read | scope `recordPluginEvent`, the daemon's events; `subscribe`, `replay`: `src/plugins/events.ts` (the daemon only, §8.4) |
 | `storage` | `get`, `put`, `cas`, `delete`, `list` | | kv with the `plugin/<name>/` prefix; `state/plugins/<name>/` |
 | `runs` | `new`, `get`, `list`, `end`, `pause`, `resume`, `title` | steer (`get`, `list`: read) | `ops.runNew`, `endRun`, `pauseAgents`, `recentRuns`, `setRunTitle` |
 | `agents` | `spawn`, `get`, `tree`, `await`, `cancel`, `grant`, `title`, `notice` | steer (`get`, `tree`, `await`: read) | `spawnAgent`, `treeOf`, `awaitAgents`, `cancelAgents`, `grantBudget`, `setAgentTitle`, `notice` |
@@ -1061,10 +1089,27 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 
 - `events.emit`: only `plugin.<name>.<type>` with a declared `type`; `data` redacted and ≤ 64 KB; `text` ≤ 500 chars.
   `subscribe` delivers in order and never concurrently to one handler; a handler that throws is logged and skipped.
+- `events.subscribe` and `events.replay` are the daemon's host's (`src/plugins/events.ts`). A stream is `daemon` or a
+  run id; anything else is `invalid`. Both give the durable envelopes `GET /v1/events` gives, with its `seq` and
+  `entitySeq`: on `daemon` the daemon's own events (not the `run.created` frames the SSE stream makes from the run
+  list), on a run its scope events, read through the engine; never an ephemeral frame. `replay(stream, after)` is every
+  such event after `after`; a run that doesn't exist is `not_found`. `subscribe` delivers what comes after
+  `filter.after`, or without it after the stream's head (the daemon's when it is called, a run's when it first reads
+  it); `filter.types` names exact types, none: every type. The host polls each subscription (500 ms), one read at a
+  time, and awaits each handler before calling it again; a read that fails is retried from the same cursor, and a run
+  that doesn't exist delivers nothing (logged) and isn't polled again. Disposing the subscription, or the plugin, stops
+  delivery: a handler already running finishes, and none is called after. A host that isn't the daemon's (a CLI's, the
+  MCP server's) has no stream to read and refuses both `unsupported`; so does any other host with no sink for them,
+  rather than register a subscription that never delivers. The test kit's fake context (§14.5) has streams of its own:
+  `publish(event)` puts an event on `event.scope`, delivered to the plugin's matching subscriptions by the same rules
+  (stream, `types`, `after`, one at a time, a throw logged and skipped, nothing after dispose) and replayed afterwards
+  (a run nothing was published on is `not_found`), so a plugin that subscribes at activate loads in the kit.
 - `storage`: private to the plugin. Keys `^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$`, values JSON ≤ 64 KB. Run scope is
   deleted with the run; daemon scope lives in `dataDir` and survives updates and reinstalls.
 - `kv`: the run's shared blackboard; reserved prefixes (`_`, `approval/`, `recipe/`, `handoff/`, `plugin/`) are
-  read-only (`forbidden`). Values ≤ 64 KB.
+  read-only (`forbidden`). Values ≤ 64 KB. A write's writer is `plugin:<name>`; `cas` compares the JSON of the current
+  value (`expect` undefined: the key must not exist) and answers `false` on a mismatch; `list` leaves out the run's `_`
+  settings unless the prefix starts with `_`, as `capcomd kv list` does.
 - `agents.spawn`: subject to `spawnChecks`, `checkSpawn` and the plugin's budget share as any caller; a plugin cannot
   pass `operator`. `agents.notice`: a plugin may raise kinds the kernel does not (`stalled`) and clear only notices it
   raised: raising a kernel kind is `forbidden`; a clear (`null`) takes away only a plugin kind, and the kernel's own
@@ -1072,14 +1117,42 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
   until progress or the plugin clears it. A notice needs a running agent (a later one replaces an earlier one of another
   kind, as the kernel's do). `agents.cancel` cancels the agent and its descendants as `capcomd cancel` does, the reason
   recorded as `by the <plugin> plugin: <reason>`. A call never creates a run (an unknown run is `not_found`).
-- In the daemon since §17.2 step 11, beside `jobs` and `storage`: `agents.get`, `agents.tree`, `agents.cancel`,
-  `agents.notice` (`src/plugins/services.ts`). The rest of `agents` answers `unsupported` until a later step; a CLI's
-  local host has none of them.
+- Which process has which (`src/plugins/services.ts`). The daemon's host only, beside `jobs`, `storage` and `triggers`:
+  `runs`, `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice`, `messages`, `kv`, `board`, `gates.pending` and
+  `profiles` (they act on the engine, or resolve as the daemon's spawns do, through its `profile.resolved` listeners).
+  Every process's host, as the gates are: `sandboxes` and `auth` (facts about that process's places and logins). A CLI's
+  local host answers `unsupported` for the daemon's; the rest of `agents` and `gates.verify`, `gates.merge` answer
+  `unsupported` everywhere until a later step.
+- A primitive's caller is the plugin (§11.2): what it writes is `plugin:<name>`'s (a message's sender, a kv writer, a
+  board holder, a run's or title's `setBy`), and a mutating call's `key` (§8.2) is the plugin's own, kept apart from the
+  CLI's and every other plugin's; a key over 200 characters is `invalid` (never cut short). A call never creates a run:
+  an unknown run is `not_found` for every service. A refusal (a hook's `deny`) reaches the plugin with the refusing
+  plugin's reason as the error's `hint`.
+- `runs.new`: `ops.runNew`, with `run.creating` (§6.6.3) naming the plugin's principal; the answer is the run as
+  `GET /v1/runs/{id}` shows it. Its `goal` is checked as `POST /v1/runs` checks one (≤ 16 KB, no NUL, no leading
+  `[agent:…]`; `invalid` otherwise). `runs.end` records the run's end (`by the <plugin> plugin: <reason>`) and cancels its
+  agents, as `capcomd cancel <run>` does. `runs.pause`, `resume` and `title` are `capcomd pause`, `resume` and
+  `title --run` on the whole run.
+- `messages.send`: to an agent of the run, from `plugin:<name>`, a body ≤ 64 KB, `skills` pinned by the sha256 of their
+  text; a replayed key answers its first message's `seq`. `messages.inbox`: the agent's messages after `seq`, each body
+  `Untrusted`.
+- `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task is `pending`, `leased`
+  while held, `released` once open again after a lease, or `done`; `running` is unused today. The plugin holds what it
+  claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds (`conflict` otherwise).
 - `gates.merge`: no `operator`; a plugin that wants to bypass vetoes cannot (§11.3).
 - `sandboxes.provider(name)`: the kernel's wrapped object (§7.1), never a raw plugin object; a provider plugin asking
-  for itself gets the wrapper too.
+  for itself gets the wrapper too. It is the seam's shape over the kernel's provider for the place
+  (`src/dependencies.ts` `providerNamed`: traced, riding out outages, `sandbox.ensuring` and `sandbox.changed` fired),
+  frozen, and a call waits until its `SeamCall`'s deadline at most (`timeout`, even when its `signal` never fires; a
+  deadline that isn't an ISO 8601 time is `invalid`). An unknown or inactive place is
+  `not_found`. `forRun` is the place the run was started on, else the process's own.
 - `auth`: facts, never values. The only way a plugin gets a secret is `config.secret` for its own declared secrets (§10.3).
+  `credentialMode` is how an agent of that provider with that `auth` gets its credential in this process (`none` when
+  it has none it could use); `loginPresent` is whether `GET /v1/logins` shows a login there. An unknown provider or
+  place is `not_found`.
 - `profiles.resolve`: fires `profile.resolved` (§6.6.5); the result is the same pinned shape the kernel spawns with.
+  `overrides` only narrow (`widening` otherwise), as a spawn's do; `project` reads that project's profiles, as
+  `GET /v1/profiles?repo=` does. An unknown profile is `not_found`.
 
 ### 8.5 What a plugin never gets
 
@@ -1109,14 +1182,17 @@ its secrets' values among what is redacted). A runtime on the user's machine is 
 `plugins/capcomd/mcp/launch.mjs`: Bun, else Node).
 
 The kernel's launcher is `src/plugins/process.ts`. The process leads a process group of its own (the daemon's terminal
-signals don't reach it; a kill takes what it started too). Its stdin is a pipe the daemon holds and never writes: it
-closes when the daemon is gone, and the process SHOULD exit then (the client library ends its hooks stream, §9.8). Each
+signals don't reach it; a kill takes what it started too, and so does its exit: once the process is gone, what is left
+of its group is killed, so nothing it started outlives its token or holds what the next start needs). Its stdin is a
+pipe the daemon holds and never writes: it closes when the daemon is gone, and the process SHOULD exit then (the client
+library ends its hooks stream, §9.8). Each
 start is recorded in `<data>/process.json`; a process an earlier daemon started and never stopped (it died) is killed
 before the next start, only while that pid still runs the recorded command. `CAPCOMD_PLUGIN_SOCKET` is the daemon's
 **plugin socket**, `<harness socket without .sock>-plugins.sock` (`src/api/socket.ts` `pluginSocketPath`, 0600), bound
 before the plugins load (§5.5 step 4): it serves the harness.v1 API to plugin tokens only (401 for any other,
 `src/api/server.ts` `pluginsOnly`). Only the daemon starts processes: a CLI's local host has no launcher, so a
-`process` plugin stays `validated` there.
+`process` plugin stays `validated` there, and an operation a CLI or the MCP server runs itself fires its `ops.ts` gates
+where the plugin doesn't listen (§6.1): a process plugin's gates judge what the daemon runs.
 
 ### 9.3 Handshake and token
 
@@ -1189,7 +1265,7 @@ primitive without a route in protocol v1 rejects `unsupported` out of process (i
 | `events.subscribe/replay` | `GET /v1/streams/{stream}/events`, `GET /v1/events` |
 | `events.emit` | **new** `POST /v1/plugins/{name}/events` |
 | `storage.*` | **new** `/v1/plugins/{name}/storage[/{key}]` |
-| `profiles.list`, `sandboxes.descriptors`, `auth.loginPresent` | `GET /v1/profiles` (ADR-024; capability `profiles`; `project` is its `?repo=`, and its rows carry `name`, `version`, `source`, `description`, `tags` and more), `GET /v1/sandboxes`, `GET /v1/logins` |
+| `profiles.list`, `sandboxes.descriptors`, `auth.loginPresent` | `GET /v1/profiles` (ADR-024; capability `profiles`; `project` is its `?repo=`, and its rows carry `name`, `version`, `source`, `description`, `tags` and more: with capability `profiles.facts`, `title`, `fit`, `cost`, `canReport`, `skills` and `untrustedSkills` too), `GET /v1/sandboxes`, `GET /v1/logins` |
 | `agents.spawn/await/grant/notice`, `gates.verify/merge`, `board.*`, `kv.*`, `jobs.*`, `triggers.*`, `profiles.resolve`, `sandboxes.provider/forRun`, `seams.*`, `cli`, `mcp`, `api`, `ui` | **protocol v1: in-process only** (`unsupported`). Routes for spawn, gates, board, kv, jobs and triggers are the next protocol version's additions (§9.10); front-door and seam contributions stay in-process by design (a seam call must not cross a process boundary per `exec`). |
 
 The caller's principal on these calls is the plugin's token's, so `ops.ts` and `policy.ts` enforce as for any client.
@@ -1293,7 +1369,9 @@ key `config` of the run scope is the kernel's, and a plugin's write or delete of
 Config files never hold secret values. A property marked `x-secret` takes a **reference** `{"$secret": "<ref>"}` where
 `ref` is `env:<VAR>` (an environment variable of the daemon) or `keychain:<account>` (the OS keychain through
 `src/config/keychain.ts`, service `capcomd`; not resolved yet: `unsupported`). The reference is the user layer's, else one
-held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else the schema's `default`; a project's or a run's is `config_invalid` (a
+held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else, for a built-in only, the schema's `default`: a plugin from a directory (a
+user's or a project's) never names its own, as its author would choose which of the daemon's variables it gets, so its
+secret is unset (`not_found`) until the user points it at one. A project's or a run's reference is `config_invalid` (a
 repository must not point a plugin at another of the daemon's variables), and so is a value where a reference belongs. A
 reference that resolves to nothing is the plugin's to report: `ctx.config.secret` rejects `not_found`, and a process
 plugin's is left out of `SessionOpened.secrets` with a warning (§9.3), so a built-in such as `sandbox-boxd` still loads
@@ -1304,11 +1382,25 @@ declared in **its own** schema; the kernel's secrets (`BOXD_API_KEY`, client tok
 not reachable. Built-ins follow the same rule: the boxd plugin declares `apiKey` as `x-secret`, and the kernel's
 existing keychain entry is mapped to it by the config migration (§17).
 
+The kernel's own variables are a fixed list (`src/plugins/config.ts` `kernelVariable`), matched whatever their case:
+`BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting
+`CAPCOMD_`, its deprecated alias `RELAY_` (the kernel reads `RELAY_<NAME>` as `CAPCOMD_<NAME>`), `GIT_`, `RIVET`, or the
+agent providers' `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_` (the keys the kernel binds into sandboxes); and its
+keychain items, `keychain:capcomd…`. Only a shipped built-in (a plugin without a directory) may reference one; for
+every other plugin (a user's, a project's, a test's) such a reference is refused whichever layer it comes from: the
+user layer's or the env layer's is `config_invalid` on that layer, and the schema's `default`, when no layer gives a
+reference, is `config_invalid` on layer `default` (§10.4), although a third-party default is never followed, so the
+operator sees what the plugin asked for. The variable is never read: the plugin fails at `resolved`, and a resolution
+that gets there anyway (`ctx.config.secret`, the handshake's `secrets`) rejects `forbidden`. `capcomd plugins validate
+<dir>` reports such a default as an issue (`config.properties.<key>.default`) and the trust prompt marks the reference
+(or the default) refused. A user who wants such a plugin to have the same credential exports it again under a
+variable of the plugin's own.
+
 ### 10.4 Validation errors
 
 Config is validated against the schema at `resolved` (layers 1–4) and at run creation (layer 5). Invalid config is
 `failed(config_invalid)` with `plugin.config_refused {errors: [{path, message}], layer}`; the plugin is **not** run with
-defaults (a project layer for a plugin not the project's is set aside instead, §10.2). Each layer is checked on its own, so an error names its layer (one event per layer); the kernel checks the
+defaults (a project layer for a plugin not the project's is set aside instead, §10.2). Each layer is checked on its own, so an error names its layer (one event per layer; `default` for a schema default the kernel refuses, a secret reference naming one of its own variables, §10.3); the kernel checks the
 subset of JSON Schema manifests use (`type`, `enum`, `minimum`/`maximum` and their exclusive forms, `minLength`/
 `maxLength`, `items`, `required`, `properties`, `additionalProperties`); a disabled plugin's settings aren't checked. `plugin.failed`'s message and `capcomd plugins show` show the errors; `GET /v1/plugins/{name}`'s `config.sources` say which layer each value came from. A run-layer error is a 422 on `POST
 /v1/runs` with `field: "plugins.<name>.<path>"`.
@@ -1379,12 +1471,15 @@ admitted either.
 What an agent proposes for a durable layer (a candidate lesson, §6.6.8; an item lint checks, ADR-025 §5.3) is not
 redacted but **refused** when it holds a secret (`src/context/scan.ts`): a redacted text could still hold a shorter
 secret. The scan is seeded with every secret value the kernel puts in the run (the agent providers' credentials, the
-plugins' secrets of §10.3, every variable of the run's environment named like a credential, the in-VM tokens' signing
-key, the forge's credential for the run's repository), then the redactor's shapes and a few more (AWS, Slack, boxd and
-Google keys, a private key, a URL with a password), a long random-looking string, and the paths credentials are kept
-in (`.env*`, `*.pem`, `secrets/`, `~/.aws`, `~/.ssh`), over the text with invisible characters dropped and look-alikes
-folded (NFKC, every dash a hyphen). Every string a candidate keeps is scanned, and a field name it ignores is repeated
-only when it holds no secret. Its reasons are the kernel's words, never the matched text.
+plugins' secrets of §10.3, the built-ins' and every reference the user sets for any other plugin, every variable of the run's environment named
+like a credential, the in-VM tokens' signing key, the forge's credential for the run's repository), then the
+redactor's shapes and a few more (AWS, Slack, boxd, GitLab, npm, Hugging Face and Google keys, a private key, a URL
+with a password), a long random-looking string, and the paths credentials are kept in (`.env*`, `*.pem`, `secrets/`,
+`~/.aws`, `~/.ssh`), over the text with look-alikes folded (NFKC, every dash a hyphen) and invisible characters
+(every default-ignorable one: format characters, variation selectors, Hangul fillers, tag characters) and combining
+marks dropped; a run's secret is also found with spaces or line breaks put into it. Every string a candidate keeps is
+scanned, and a field name it ignores is repeated only when it holds no secret. Its reasons are the kernel's words,
+never the matched text. Lint that can't read the whole directory (more than 2000 files) fails rather than passes.
 
 ### 11.6 Isolation
 
@@ -1608,7 +1703,8 @@ checks the mode against `HOOKS` (ADR-023 step 1).
 
 ### 14.5 The test kit
 
-`@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext`, `load`,
+`@capcomd/plugin/testkit` (`packages/plugin/src/testkit.ts`): `validateManifest`, `fakeContext` (with `publish`
+for its event streams, §8.4), `load`,
 `loadDispose`, `bootWith`, `hookContract`, `conformance.{sandbox, agent, forge, context}`, `call`, and `samplePayload`.
 Implemented with ADR-023 step 1 on the host's own context and hook registry (`packages/plugin/src/host/`), and what
 `test:fast` runs on `packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` is §14.3. `conformance.forge`
@@ -1768,7 +1864,10 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
    combined code without executing anything itself (in-VM `verify` takes only a child, and a host verify of the goal
    branch onto itself runs no checks). Rules: the commit is the branch's tip when asked (`result.commit`); the command is
    an operator-named check (`--check`), else the one pinned to the agent checked, else the run's (the repository's command; with none,
-   the run's one named check, and with several the caller must name one; an in-VM call can't pass `--checks`); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
+   the run's one named check, and with several the caller must name one; an in-VM call can't pass `--checks`; a verify
+   takes its command the same way, the run's one named check recorded as its `check` and re-run by its merge, so a run
+   whose project names one check in `run.checks` never verifies on "no test command configured", but with several it
+   keeps the repository's command, as an unpinned child's in-VM verify can't name one); a check id (`chk-…`) is one per (run, commit, command, key), so identical checks running at once
    run once and a later one gets the record (`--key` checks a commit again); a tree that already passed the same
    command in the run isn't run again (`checks.where: "reused"`); the check's sandbox takes a machine slot where the
    run's place has a cap (§16.2 rule 3; `src/providers/capacity.ts` `holdSlot`), waiting with the agents, and gives up
@@ -1830,7 +1929,12 @@ Rules:
    `jobs.foregroundMs`, else 60 000; never more than 90 000, an in-VM call's hold); a job that ends within it returns
    `done` (or `failed`) with its result; otherwise `running`.
    The in-VM `capcomd` CLI exposes the same to agents as `capcomd job start -- <cmd>`, `job output`, `job list`,
-   `job kill` (spool ops `job.start`, `job.output`, `job.list`, `job.kill`, ADR-017; MCP tools `capcomd_job_*`), so an
+   `job kill` (spool ops `job.start`, `job.output`, `job.list`, `job.kill`, ADR-017; MCP tools `capcomd_job_*`). Every
+   agent that does work of its own has that CLI, one that may not spawn too (a leaf token: its tab, reads, notes, its
+   result and these ops; ADR-017 §2), and not verify's reviewer, a report agent or the consolidator, which answer with
+   their final message. The job ops are in a token only when the agent's profile, and the config it runs with (the daemon's tool and
+   Codex sandbox settings narrow it too), let it run a command of its own (no allow-list without an unrestricted shell,
+   no denied shell, no read-only Codex sandbox), so a job is never a way around its tool policy; an orchestrate agent keeps them and its start is refused by name (§16.1 item 6). So an
    agent's long command returns "running" and its result arrives as an inbox message from the job (`from: <jobId>`)
    that the supervisor delivers at the next step (as dsh's completion notice); a job the agent stops itself sends
    none. The agent CLI's own shell tool is not changed (ADR-023 §5.3): auto-backgrounding applies to commands run
@@ -1843,9 +1947,16 @@ Rules:
    `CAPCOMD_JOBS_AFTER_TURN_MS`, settable in config `env`): `max` running jobs per owner (8), `foregroundMs` (60 000;
    5 000 for `orchestrate`), `afterTurnMs` (1 800 000): an agent's `exec` jobs are killed when the agent ends;
    `timeoutMs` per job (default `afterTurnMs`, counted from the job's start; counting it from the agent's last step
-   is a later refinement). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
-   to 64 KB of each from the machine while it runs). A `timer`'s `everyMs` ≥ 1 000; `at` with `everyMs` is the first
-   fire.
+   is a later refinement), never longer than an `afterTurnMs` the owner's profile sets (a longer one asked for gets
+   that; with none set, a job may ask for longer than the default). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
+   to 64 KB of each from the machine while it runs), and is stored within a kv value's 64 KB: when the JSON of the
+   whole record is over, the longer tail loses its oldest part first, then the other, and `truncated` is set (the
+   rest of it is bounded: `cmd` ≤ 16 KB, `cwd` ≤ 4 KB, `env` ≤ 16 KB as JSON, else the start is `invalid`). A
+   `timer`'s `everyMs` ≥ 1 000; `at` with `everyMs` is the first fire. The `jobs` block is limits like `limits`
+   (`widenings()`): an override or a `profile.resolved` patch may lower `max`, `foregroundMs` or `afterTurnMs`, never
+   raise one the profile sets or unset it (unset in the profile: not checked); a profile in `allowedChildProfiles`
+   is held to its spawner's `max` and `afterTurnMs` the same way, while `foregroundMs` is the child's own, as its tool
+   mode is (an orchestrator's 5 000 isn't its workers').
 3. **Slots.** An agent with a running `exec` job keeps its slot (`src/providers/capacity.ts`): it is not `idle` and the
    kernel's idle notice is not raised while jobs run. Its supervisor keeps the agent CLI's input open while one of its
    jobs runs or a result message is on its way (so the CLI is there to read it), and says in each heartbeat how many
@@ -1855,7 +1966,9 @@ Rules:
 4. **Handoff** (`capcomd spawn --continue`): the agent's `exec` jobs are **killed** with its machine when it ends
    (today its machine is destroyed after its push, `ops.ts` → `worker.ts`); a job meant to outlive the agent (a server
    kept for review) is started `owner: {run: true}` and lives until the run ends or its `timeoutMs`. Timers owned by an
-   agent end with it; run-owned and plugin-owned timers do not.
+   agent end with it; run-owned and plugin-owned timers do not. An agent that ends failed or cancelled has its jobs
+   settled when it does, before its machine goes: killed while its machine is attached, else (its last attempt let go
+   of the machine, which a retry would have used) `lost`; none stays `running` on record until someone reads it.
 5. **Cancel**: `jobs.cancel` and an agent's cancel kill its jobs (SIGTERM, SIGKILL after 5 s; state `killed`).
 6. **Daemon restart**: job records are durable. `exec` jobs keep running inside their machine (their runner holds the
    process, in a session of its own); on restart the kernel re-attaches when the agent's spool pump starts again, by
@@ -1863,9 +1976,15 @@ Rules:
    or runner is gone settles `lost`, as does one whose agent ended while nobody watched (when it is next read). Timers
    are re-armed from their records once the daemon's plugins have loaded; a missed `at` (or interval) fires once on
    restart. A plugin's timer is a file in the daemon's state (`state/jobs/<id>.json`); a run's job is kv `_jobs/<id>`,
-   with a pointer there for `get` by id and re-arming.
+   with a pointer there (`state/jobs/<id>.run`) for `get` by id and re-arming. A settled job's pointer records when
+   it settled and is pruned a day later (at the daemon's start, then at most hourly as jobs settle); after that the
+   job is read with its run. A pointer left unmarked is checked at the daemon's start without making its run again.
 7. **Events**: results arrive as `job.changed` hook calls and `job.started`/`job.ended` events; nobody polls. `wait` is
    a convenience bounded by its deadline.
+8. **One owner**: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach the jobs it started (`by: plugin:<name>`) and
+   the jobs of a run that no other plugin started (an agent's, the operator's), as `ctx.agents` reaches a run's
+   agents. Another plugin's job, in a run or the daemon's, is `not_found`, the same answer as an id nobody made, and
+   `list` leaves it out. An agent reaches only its own jobs (in-VM `job.*`).
 
 Why one primitive: the watchdog's clock (§16.4), a source's poll loop (§16.3), the Docker sweep (§15.1, `sandbox-docker`'s
 own timer) and background shell are all "work that reports back later"; one durable record, one owner rule, one event
@@ -1890,8 +2009,9 @@ messages and events outside what it listens to before emitting, keep its own rea
 must not replay), and fill `trigger.actor` and `trigger.addressed` from the source's own facts. `trigger.data` is
 structured context, never used for authorization. `trigger.text` is an `Untrusted` (a plain string is taken as one);
 the kernel checks the shape (`src/triggers/intake.ts` `checkTrigger`: `id` ≤ 200 characters, `thread` ≤ 500, `at` an
-ISO time, `actor {id, display, bot}`, text and data ≤ 64 KB each) and refuses a malformed trigger `invalid` before
-recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+ISO time, `actor {id, display, bot}`, no control characters in `id`, `thread` or the actor's id (`capcomd triggers
+log` prints them; the display name loses its), text and data ≤ 64 KB each) and refuses a malformed trigger `invalid`
+before recording anything. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -1911,9 +2031,12 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
   comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2 step 6) holds the
-  position before it, so the next poll reads it again. The source listens to `job.changed` only when `sourceRepos`
-  names a repository (as `source-schedule` only with a schedule): a listener there makes the daemon read every
-  background job's output (§6.6.19).
+  position before it, so the next poll reads it again. GitHub's `since` includes its own second, so the position also
+  keeps the comments read at that second, which the next poll skips (else each poll would emit them again, a
+  `deduped` decision a minute). The source's `job.changed` listener is registered whatever its settings, as its
+  manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
+  nothing without a schedule); the built-in sandboxes listen there already, so the daemon reads background jobs'
+  output (§6.6.19) either way.
 
 #### 16.3.2 The intake
 
@@ -1946,7 +2069,9 @@ with the `TriggerDecision`:
 6. **Act**: start a run on the configured project (`project`, a checkout set up with `capcomd setup project`; unset,
    the daemon's own repository) with the trigger's text as the goal (`POST /v1/runs` semantics: `run.creating` fires,
    with the source plugin as the principal; harness.v1's additive `Run.trigger {source, id, thread, actor, at}`, under
-   the capability `triggers`) → `started`, and subscribe the run to the thread. `recorded.wouldHave` is `start` in
+   the capability `triggers`) → `started`, and subscribe the run to the thread. The goal is checked as `POST /v1/runs`
+   checks one (`CreateRunBody.goal`: not empty, ≤ 16 KB, no NUL, no leading `[agent:NAME]`, so a source's words never
+   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start` in
    this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
    §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
@@ -2020,6 +2145,13 @@ definition of progress:
 - an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
 - a background job (`job.changed`), a verification it asked for (`verify.changed`, its principal) or an approval it
   waits on (`approval.changed`) ended.
+
+Files changing show only at the agent's next checkpoint, every `checkpointEveryMs` of its profile (default 10 min), so
+an agent's windows are at least its interval's: `stalled` no sooner than one and a half of the interval, and the stop
+(when it isn't 0) as much later as `stalled` moved. At the defaults nothing moves (1.5 × 10 min is 15 min); an agent
+checkpointed hourly is stalled at 90 min and stopped at 120. The built-in asks the kernel for the interval when it asks
+whether the agent's work shows (`src/plugins/services.ts` `checkpointEvery`, as the agent's worker reads it; none for
+an agent no supervisor runs under, which keeps the configured windows).
 
 Tool calls (`step`) and the activity line are not progress. While it, or an agent under it, waits on a job, a
 verification or an approval, or is paused, its clock doesn't run. An agent with agents of its own running is judged
@@ -2150,7 +2282,21 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.34 | 2026-11-06 | With the SDK (§17.2 step 13): `@capcomd/plugin` is built for publishing by `packages/plugin/scripts/pack.ts` (§14.6: Node ≥ 20 and Bun, no Bun API at run time, `nodenext` declarations, entry points `.`, `./client`, `./testkit`, `./schema`) at capcomd's own version, and published by the release workflow only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (ADR-023 §9 decision 6 superseded); `testkit.bootWith` runs a separate `capcomd serve` in a home of its own with the plugin directories as the user's, and takes directories only, its in-memory form dropped (a plugin is a process) (§14.3); `conformance.forge` stays out of the kit, as only built-ins have seams (§14.5); the client library adds `manifestHash` and `sessionOpen` for the handshake (§9.8; additive); the examples import the package by its name, and the Slack example is tested as an author would, against a daemon on the fake sandbox (§15, §15.4); the guide for plugin authors is `docs/plugins.md`. |
 | 1.0.35 | 2026-11-06 | Project templates (§11.7 item 4): on a VM provider with snapshots, a per-project env build with the repository's whole history (brought from the host's mirror as a bundle) and its setup step (`CAPCOMD_SETUP_COMMAND`), run with the place's secret placeholders unset and their domains out of the build VM's egress; named `capcomd-env-<base>-<project>-<build>`, adding at most 10 GB to the base image, recorded in `templates.json` with every snapshot capcomd made as one (the only ones it deletes); an agent boots from its project's template and the runner uses it in place under Docker's warm-checkout rules, so the host sends a delta bundle; a missing, stale or outgrown template is (re)built in the background, never waited for; `sandbox-boxd` gains a daily refresh timer (`job.changed`, a `steer` scope, both additive). `SnapshotInfo.sizeBytes`, `SendRequest.seed` and the runner's `onWorkspace` (all optional, additive). |
 | 1.0.36 | 2026-11-06 | With ADR-024's migrate and templates (its §7 step 9): the `planner` and `lead` profiles of §16.1 are profile files `capcomd setup project` writes in the project's `.capcomd/profiles/` (`lead` and `planner` extend `worker`), no longer `agents.json` entries, and every profile it writes has the project's memory (`context.providers: [{name: memory}]`, ADR-025 §6.1); the bundled layer stays empty (a bundled profile would need a harness every user can run). `agents.json` (v1) is deprecated: read for two more minor releases, then warned about by `validate`, then no longer read; its schema gains an optional `$comment`, which `capcomd profiles migrate` leaves in it. No hook, seam, route or contract shape changes (`POST /v1/projects`'s description says what it writes); the step's decisions are in ADR-024 §9. |
-| 1.0.37 | 2026-11-06 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route. |
+| 1.0.37 | 2026-11-07 | From the review of §17.2 step 9: a secret's reference falls back to the schema's `default` for a built-in only (§10.3): a user's or a project's plugin named any of the daemon's variables in its own manifest (`env:GITHUB_TOKEN`) and got its value in `SessionOpened.secrets`, past §9.2's filter; the host's `secret` option gets the plugin's `source` (additive); `capcomd plugins trust` shows such a secret as unset. An out-of-process plugin's exit kills what is left of its process group, as a kill does, so a helper it started can't outlive its token or hold what the next start needs (§9.2); §9.2 says, after §6.1, that a process plugin's gates judge only what the daemon runs. The client library forgets observe calls' deadlines (§9.8). No hook, seam, route or contract shape changes. |
+| 1.0.38 | 2026-11-07 | The watchdog's review (§17.2 step 11): an agent's windows are at least its checkpoint interval's (`stalled` no sooner than 1.5 × its `checkpointEveryMs`, the stop as much later), since its files changing show only at its checkpoints; the defaults are unchanged (§16.4). No hook, seam, route or contract shape changes. |
+| 1.0.39 | 2026-11-07 | Every agent that does work of its own has the in-VM capcomd (§16.2 rule 1, ADR-017 §2), not only one that may spawn: with the profiles `capcomd setup project` writes, no agent could run a job (planner and lead orchestrate, workers had none) or propose a lesson. An agent that may not spawn gets the CLI, the MCP server and a leaf token: `title`, `status`, `tree`, `inspect`, `logs`, `events`, `budget`, `heartbeat`, `kv`, `task`, `inbox`, `send`, `result`, and `job.*` only when its profile and the config it runs with (the daemon's `CAPCOMD_AGENT_ALLOWED_TOOLS`, `CAPCOMD_AGENT_DISALLOWED_TOOLS`, a Codex agent's `CAPCOMD_CODEX_SANDBOX`; none when that config can't be read) let it run a command of its own; never `spawn`, `await`, `wait-any`, `cancel`, `handoff`, `verify`, `merge`, `grant`, `fetch` or `check` (the op list stays closed; a spawner's token is unchanged but loses `job.*` the same way). It is told so in its instructions (its tab, jobs, notes and lessons, its summary), still fails `no_changes` when it changed nothing, and its MCP `tools/list` shows only what its token allows. Verify's reviewer, a report agent and the consolidator keep the naming shim. §6.6.7's routing paragraph goes to every agent with the in-VM capcomd (not the consolidator), with no profile room kept for it unless it may spawn. Any agent that declared no `result.summary` has its final message as one (≤ 2,000 characters; never a reviewer's verdict): additive. An in-VM `result` with no summary, artifacts or data is refused (`usage`), so a tool called with no arguments can't record an empty result or erase a declared one. The worker's lines name nothing of the agent's own, so a profile's agents keep one cached prefix (ADR-025 §6.1). No hook, route or contract shape changes. |
+| 1.0.40 | 2026-11-07 | Triggers, after review: §16.3.2 step 6, a trigger's text is checked as `POST /v1/runs` checks a goal before a run starts (a leading `[agent:NAME]` from a source no longer picks the run's agent profile; over 16 KB, empty or with a NUL: `invalid`, logged `failed`); §16.3.1, a trigger's `id`, `thread` and actor id carry no control characters (the display name loses them), and the `github` source keeps the comments it read at its position's second (GitHub's `since` includes it) so a poll with nothing new emits nothing. |
+| 1.0.41 | 2026-11-07 | Review of capture and lint (ADR-025 step 2), §11.5: the seeded scan drops every default-ignorable character and combining marks (not only format characters) and finds a run's secret with spaces or line breaks put into it; it is seeded with every secret reference the user sets for a plugin that isn't built in (`plugins` in the user's config, a `CAPCOMD_PLUGIN_<NAME>_<KEY>` variable; such a plugin's own default isn't followed, per 1.0.37) as well as the built-ins'; GitLab, npm, Hugging Face and Google OAuth token shapes. Lint fails, never passes, on a directory with more files than it reads (2000), and `--base` takes a ref, never an option. No hook, seam, route or contract shape changes. |
+| 1.0.42 | 2026-11-07 | `agent.spawning` (§6.6.6): ADR-024's `permissions.report` check (`report_not_allowed`) runs on the contract the hook leaves, beside `cannot_spawn`, so a `report: true` a plugin adds to a profile that may not report refuses the spawn as the spawner's own would (before, it was checked before the hook and a plugin's could slip past it). The spawner's own `report` is still refused before the hook (no plugin is asked about a spawn that is refused anyway). The contract keys the kernel checks when the spawner sends them are checked in the patch too (`applySpawnPatch`): adding a key a spawn from an agent's VM never carries (`from`, `review`, `checks`, `orphansPolicyOverride`) is `widening`, a `report` other than `true` or a `check` that isn't a string is `invalid`, and an added `check` the run doesn't have refuses the spawn (`usage`). No hook, seam, route or contract shape changes. |
+| 1.0.43 | 2026-11-07 | `ctx.events.subscribe` delivers and `ctx.events.replay` answers, in the daemon's host (§8.4, `src/plugins/events.ts`): the envelopes `GET /v1/events` gives, on `daemon` (its own events, not the SSE stream's `run.created` frames) or a run's stream (through the engine); a stream that is neither is `invalid`, a run that doesn't exist `not_found` on replay; `subscribe` from `filter.after` or else the head, `filter.types` exact, polled, one handler call at a time; a host that isn't the daemon's, or has no sink for them, refuses both `unsupported` instead of registering a subscription that never delivers; the test kit's fake context has streams of its own, `FakeContext.publish(event)` delivering and replaying by the same rules, so a plugin that subscribes at activate still loads there (additive). No contract shape changes. |
+| 1.0.44 | 2026-11-07 | The kernel's own variables and keychain items are out of reach of every plugin but a shipped built-in (§10.3): a fixed list (`BOXD_*`, the GitHub tokens, `CAPCOMD_*` and its deprecated alias `RELAY_*`, `GIT_*`, `RIVET*`, the agent providers' families, in any case; `keychain:capcomd…`) that a secret reference of a user's, a project's or a test's plugin may not name, from any layer, its schema's default included (never followed for such a plugin, per 1.0.37, but refused so the operator sees it); refused at `resolved` as `config_invalid` (the default's on a new value of `plugin.config_refused`'s `layer`, `default`; additive), `forbidden` if resolved anyway, the variable never read; `capcomd plugins validate <dir>` reports such a default and the trust prompt marks the reference or the default refused (§10.3, §10.4). |
+| 1.0.45 | 2026-11-07 | A profile package's `update` keeps every file in its directory that its `LOCK` doesn't list (the user's, as an `override.yaml` is), reports them as `kept` (additive) and refuses (`conflict`) when the new package needs the place of one (an `override.yaml` too), as the file system holding them compares names (on macOS's, case and Unicode form folded; on a case-sensitive one, `Readme.md` beside `README.md` is no conflict); before, it replaced the whole directory but the override (§4.8; ADR-024 §2.5). `trust.json` is changed under `trust.json.lock` by the CLI and the daemon alike, so two changes at once both persist; a lock that isn't a plain file, or a left-over one that can't be moved aside, is refused at once, and `capcomd profiles rm` refused that way puts the package back (§4.8). The temporary files beside `trust.json` and a profile file are created exclusively under a name no one can guess, so a link a checkout put there is never written through. No hook, seam, route or contract shape changes. |
+| 1.0.46 | 2026-11-08 | Jobs, after review of step 7 (§16.2): rule 8, one owner: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach its own jobs and a run's jobs no other plugin started; another plugin's job is `not_found` and `list` leaves it out. Rule 2: the `jobs` block is limits in `widenings()` (an override, a patch or a spawned profile may lower `max` and `afterTurnMs`, never raise or unset one; `foregroundMs` the same for an override and a patch, and a spawned profile's own); a job's `timeoutMs` is at most an `afterTurnMs` its owner's profile sets, so a start can't lift that limit; a settled record is stored within a kv value's 64 KB, its tails cut oldest first, with `cwd` (≤ 4 KB) and `env` (≤ 16 KB) bounded as `cmd` is. Rule 4: an agent that ends failed or cancelled has its jobs settled at once (killed, else `lost`). Rule 6: a settled job's pointer is pruned a day after it settled. No hook, seam, route or contract shape changes. |
+| 1.0.47 | 2026-11-07 | With ADR-024 §4, §5 and §8 shown over the API (additive; capabilities `profiles.facts` and `runs.options.planners`): `GET /v1/profiles` rows (what `profiles.list`, §9.6, maps to) gain optional `title` (untrusted text), `fit` (daemon-written, from structured fields only), `cost`, `canReport`, `skills` (name, source, `sha256:` hash and trust; never a skill's text) and `untrustedSkills`, the project skills a spawn waits on the operator's trust for (decision 4); `GET /v1/run-options` gains optional `planners`, every profile that may spawn, each with `available` and a daemon-written `reason` for what its spawn would refuse: login, untrusted skills, a `sandbox.environment` its sandbox has no build of, a `lifecycle` plugin not active on the daemon (with no daemon to ask, not held against it: the spawn asks again), no agent environment, an egress limit its sandbox can't enforce (its hosts named only when each is shaped like one, else counted, so a project's file can't word the reason; the spawn's refusal says the same), a `sandbox.provider` outside the run's isolation (the spawn's own checks). `drivers[]` are unchanged. No hook, seam or service changes. |
+| 1.0.48 | 2026-11-08 | The in-process primitives the context promised (§8.1, §8.4): `runs`, `messages`, `kv`, `board`, `gates.pending` and `profiles` in the daemon's host (beside `jobs`, `storage`, `triggers` and the `agents` reads, cancel and notice), and `sandboxes` and `auth` in every process's, with the plugin as the caller (its writes `plugin:<name>`'s, its keys its own) and an unknown run `not_found` everywhere; `runs.new` names the plugin's principal to `run.creating` and checks its goal as `POST /v1/runs` does, `profiles.resolve` names it to `profile.resolved`; a key over 200 characters is refused, a refusal keeps its reason as the hint, a sandbox call keeps its deadline without its signal; §8.4 says which process has which, what each writes, and the board's states. `RunsService` declares `new` as a method (`"new"(…)`: bare, it declared a constructor). No hook, seam, route or contract shape changes. |
+| 1.0.49 | 2026-11-07 | A profile's `harness.provider` and `sandbox.provider` outside the daemon (§7.1): a built-in or a seam the running daemon's listing has from an active, enabled plugin; any other name is refused while a daemon runs and a warning when none does (the daemon checks it at resolution), as `lifecycle` already was (§6.6.8). Reading profiles in the CLI no longer fails for a seam only the daemon loads. A candidate before a write, a write that brings in such a name (`profiles add|set|rm`) and an override still need one. No hook, seam, route or contract shape changes. |
+| 1.0.50 | 2026-11-08 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7, §16.3.1); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
+| 1.0.51 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

@@ -10,6 +10,7 @@ import { isMap as isYamlMap, isScalar, parseDocument, stringify as toYaml, type 
 import { agentsFilePath, agentsFileText, BUNDLED_PROFILES, profileLayers, readProfiles, writeAtomic, type ProfileOverlay, type ProfileSet, type ResolvedProfile } from "./load";
 import { compareValuePaths, profileValues } from "./describe";
 import { AGENTS_SCHEMA, AgentConfigError, NAME, type AgentsFile } from "./v1";
+import { unconfirmedOf } from "../plugins/snapshot";
 import { PROFILE_JSON_SCHEMA, PROFILE_SCHEMA, V2_PATH, type ProfileDoc } from "./v2";
 
 type Env = Record<string, string | undefined>;
@@ -196,12 +197,22 @@ function current(path: string, source: Env): ProfileSet {
     throw e;
   }
 }
-/** The profiles as `overlay` would leave them, or the write's refusal. */
-function checked(path: string, source: Env, overlay: ProfileOverlay): ProfileSet {
-  try { return readProfiles(path, source, BUNDLED_PROFILES, overlay); } catch (e) {
+/**
+ * The profiles as `overlay` would leave them, or the write's refusal. A provider the change names that no daemon is
+ * running to confirm, which reading the profiles only warns about (src/plugins/snapshot.ts `seamPresence`), is refused
+ * as a candidate's is (spec §7.1): a write needs one this process or the running daemon has. One `before` already had
+ * doesn't stop a change to something else.
+ */
+function checked(path: string, source: Env, overlay: ProfileOverlay, before: ProfileSet): ProfileSet {
+  let after: ProfileSet;
+  try { after = readProfiles(path, source, BUNDLED_PROFILES, overlay); } catch (e) {
     if (e instanceof AgentConfigError) throw new ProfileWriteError("invalid", `the change would leave the profiles unreadable, so nothing was changed: ${e.message}`);
     throw e;
   }
+  const had = new Set(before.warnings);
+  const unconfirmed = after.warnings.filter((w) => !had.has(w)).map(unconfirmedOf).filter((w): w is string => w !== null);
+  if (unconfirmed.length) throw new ProfileWriteError("invalid", `${unconfirmed.join("; ")}, so nothing was changed: start the daemon (\`capcomd serve\`) so its plugins' providers count, or name a built-in one`);
+  return after;
 }
 
 /** What changed between two resolutions of a profile, value by value (not its version, which every write bumps). */
@@ -282,7 +293,7 @@ export function editProfile(name: string, edit: ProfileEdit, o: WriteOptions = {
   }
   if (!changed) return { name, file, format: r.format, changed: false, version: r.version, previousVersion: r.version, before, after: before, changes: [] };
   const moved = defaultMoved(name, own.layer, edits, before);
-  const after = checked(path, source, new Map([...moved, [file, text]]));
+  const after = checked(path, source, new Map([...moved, [file, text]]), before);
   checkVisible(name, edits, after);
   // The default's old file first: cut short, the layer has no default rather than two.
   for (const [f, t] of moved) writeAtomic(f, t);
@@ -305,7 +316,7 @@ export function addProfileFile(name: string, edit: ProfileEdit, o: WriteOptions 
   const edits = editPaths(edit);
   const text = profileFileText(applyToObject({ schema: PROFILE_SCHEMA, name, version: 1 }, edits));
   const moved = defaultMoved(name, profileLayers(path, source)[0]!.layer, edits, before);
-  const after = checked(path, source, new Map([...moved, [file, text]]));
+  const after = checked(path, source, new Map([...moved, [file, text]]), before);
   for (const [f, t] of moved) writeAtomic(f, t);
   writeAtomic(file, text);
   return { name, file, format: "v2", changed: true, version: 1, previousVersion: 0, before, after, changes: profileChanges(undefined, after.profiles[name]) };
@@ -335,7 +346,7 @@ export function removeProfile(name: string, o: WriteOptions = {}): ProfileWrite 
   } else if (/^profile\.(ya?ml|json)$/.test(basename(file))) {
     throw new ProfileWriteError("read_only", `profile "${name}" is a package (${file} and the files beside it): remove its directory yourself`);
   }
-  const after = checked(path, source, new Map([[file, next]]));
+  const after = checked(path, source, new Map([[file, next]]), before);
   if (next === null) unlinkSync(file); else writeAtomic(file, next);
   return { name, file, format: r.format, changed: true, version: r.version, previousVersion: r.version, before, after, changes: profileChanges(r, undefined) };
 }

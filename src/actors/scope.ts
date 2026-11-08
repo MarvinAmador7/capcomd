@@ -9,6 +9,7 @@ import { eventTypeOwner } from "../../packages/plugin/src/event-type";
 import { attach, inlineOrAttach } from "../api/inline-cap";
 import { workspaceOf, type AgentWorkspace } from "../api/workspace";
 import { RUN_REPO_KV } from "../merge/run-config";
+import { sameHold, type PluginHold } from "../merge/types";
 import { env as envVar } from "../utils/env";
 import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
@@ -39,6 +40,7 @@ import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
 import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
 import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, type TitleState } from "../primitives/agent-title";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
+import { fitJobRecord } from "../jobs/record";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
   return {
@@ -1168,7 +1170,8 @@ export const scopeActor = actor({
       return opRow((await c.db.execute("SELECT * FROM ops WHERE op_id = ?", params.opId))[0]);
     },
 
-    /** The operator's decision on a parked merge: approve → running again (the merge then runs), deny → failed. */
+    /** The operator's decision on a parked merge: approve → running again (the merge then runs), with a plugin's hold
+     *  (`heldBy`) added to its `approvedHolds`; deny → failed. */
     async decideOp(c, params: { opId: string; approve: boolean; by: string; reason?: string }) {
       let decided = false;
       await c.db.transaction(async (tx: RawAccess) => {
@@ -1178,7 +1181,12 @@ export const scopeActor = actor({
         if (op.state !== "awaiting_approval") return;
         const now = Date.now();
         if (params.approve) {
-          await tx.execute("UPDATE ops SET state = 'running', updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", now, params.opId);
+          // A plugin's hold the person approved goes on the merge's record with the ones approved before it
+          // (`approvedHolds`, plugin API §6.6.15): what the re-run lands past, and what a reader sees was approved.
+          const held = op.data.heldBy as PluginHold | undefined;
+          const before = (op.data.approvedHolds as PluginHold[] | undefined) ?? [];
+          const data = held && !before.some((h) => sameHold(h, { ...held, text: held.reason })) ? { ...op.data, approvedHolds: [...before, held] } : op.data;
+          await tx.execute("UPDATE ops SET state = 'running', data = ?, updated_at = ? WHERE op_id = ? AND state = 'awaiting_approval'", JSON.stringify(data), now, params.opId);
           await addEvent(tx, "MERGE_APPROVED", (op.data.agentId as string) ?? null, { id: params.opId, by: params.by }, await nthKey(tx, `approve-${params.opId}`));
         } else {
           const result = { merged: false, status: "denied", by: params.by, ...(params.reason ? { reason: params.reason } : {}) };
@@ -1337,7 +1345,8 @@ export const scopeActor = actor({
     /**
      * A background job's record (plugin API §16.2): kv `_jobs/<id>`, written by the kernel only (src/jobs/service.ts),
      * with its `job.started` or `job.ended` event in the same transaction. A record that already ended stays as it is
-     * (a second settle, after a restart or from another watcher, changes nothing); `ended` says whether it had.
+     * (a second settle, after a restart or from another watcher, changes nothing); `ended` says whether it had. It is
+     * stored within the kv's value limit, its output's tails cut to fit (src/jobs/record.ts).
      */
     async jobWrite(c, params: { job: Record<string, any>; event?: "JOB_STARTED" | "JOB_ENDED"; agentId?: string | null; data?: Record<string, unknown> }) {
       const k = `_jobs/${params.job.jobId}`;
@@ -1348,7 +1357,7 @@ export const scopeActor = actor({
         if (cur && !["running", "stopping"].includes(String(cur.state))) { ended = true; version = Number(r[0]!.version); return; }
         version = (r.length ? Number(r[0]!.version) : 0) + 1;
         await tx.execute("INSERT INTO kv (k, v, version, writer, updated_at, deleted) VALUES (?, ?, ?, 'capcomd', ?, 0) ON CONFLICT(k) DO UPDATE SET v = excluded.v, version = excluded.version, writer = excluded.writer, updated_at = excluded.updated_at, deleted = 0",
-          k, JSON.stringify(params.job), version, Date.now());
+          k, JSON.stringify(fitJobRecord(params.job, KV_MAX_BYTES)), version, Date.now());
         if (params.event) await addEvent(tx, params.event, params.agentId ?? null, params.data ?? {}, `${params.event === "JOB_STARTED" ? "job-start" : "job-end"}-${params.job.jobId}`);
       }, { name: "scopeJobWrite" });
       return { version, ended };
