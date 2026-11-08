@@ -363,7 +363,7 @@ Each step ships alone, with tests, and leaves every existing test green.
 - **A shareable file that references host state** (`sandbox.environment`, `memory`). Names, not paths; a missing
   environment is warned about by `capcomd profiles validate` and refused at spawn (`reason: environment`, §9), not left
   to the provider's boot error; and shown before the run: `GET /v1/run-options` `planners` says a planner whose
-  environment isn't built (or whose `lifecycle` plugin isn't active) isn't ready, and why (2026-11-07, spec 1.0.42).
+  environment isn't built (or whose `lifecycle` plugin isn't active) isn't ready, and why (2026-11-07, spec 1.0.44).
 - **Persona text is prompt text.** An installed persona is as trusted as an installed skill: shown by hash, trusted once
   per hash (decision 4 below).
 - A profile may later set `harness.provider` to a model-API provider without an agent CLI: an agent seam
@@ -460,8 +460,9 @@ Made while pinning the version (§7 step 3, 2026-11-05; `src/actors/scope.ts`, `
 Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src/profiles/describe.ts`):
 
 - **`permissions.report: false` refuses a spawn with `report`** (`reason: report_not_allowed`), checked on the host
-  where every spawn is (`ops.spawnAgent`, after `profile.resolved`), not pinned. Unset means allowed, as before any
-  profile could say: `true` changes nothing at spawn and says, in `fit`, that the profile answers with a report.
+  where every spawn is (`ops.spawnAgent`, after `profile.resolved`, and again after `agent.spawning` so a `report` a
+  plugin adds is refused too), not pinned. Unset means allowed, as before any profile could say: `true` changes nothing
+  at spawn and says, in `fit`, that the profile answers with a report.
 - **`identity.title` and `identity.avatar` are not inherited**, like `name`: a `lead` that extends `worker` would
   otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
   a reviewer until it says otherwise).
