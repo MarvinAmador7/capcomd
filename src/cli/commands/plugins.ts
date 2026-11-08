@@ -6,7 +6,9 @@
 // (all of them with no argument), checked as the host checks it; with --conformance its code is loaded, disposed and
 // loaded again (§14.1), and its seams run their conformance suites (§14.2) against the real backend.
 // `capcomd plugins install|update|remove|trust|allow-version` (§4.4, §4.8, §17.2 step 12): src/plugins/install.ts. They
-// change files the daemon reads at its next start or a plugin's `enable` (the CLI can't reach a running daemon's host).
+// change files the daemon reads at its next start or a plugin's `enable`.
+// `capcomd plugins enable|disable <name>` (§5.4, §6.5, §10.2): `plugins.<name>.enabled` in the user's config, and the
+// running daemon's POST /v1/plugins/{name}/enable|disable (src/cli/daemon.ts), so it acts now and lasts.
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { RelayError, SCHEMA, EXIT } from "../../core/errors";
@@ -26,6 +28,8 @@ const USAGE = [
   "       capcomd plugins remove <name> [--project] [--json]",
   "       capcomd plugins trust [<name>] [--yes] [--json]",
   "       capcomd plugins allow-version <name>@<version> --accept-risk [--json]",
+  "       capcomd plugins enable <name> [--json]",
+  "       capcomd plugins disable <name> [--json]",
 ].join("\n");
 
 type Values = { json?: boolean; conformance?: boolean; project?: boolean; yes?: boolean; acceptRisk?: boolean; dryRun?: boolean };
@@ -45,6 +49,7 @@ export async function pluginsCommand(positionals: string[], values: Values): Pro
   if (sub === "trust") return trustCommand(args, values);
   if (sub === "allow-version") return allowVersionCommand(args, values);
   if (sub === "show") return showCommand(args, values);
+  if (sub === "enable" || sub === "disable") return toggleCommand(sub, args, values);
   if (sub !== "list") throw new RelayError("usage", `unknown plugins command: ${sub}`, USAGE);
   const P = await import("../../plugins/host");
   const snap = P.readSnapshot();
@@ -217,6 +222,58 @@ async function allowVersionCommand(args: string[], values: Values): Promise<numb
   const e = (await import("../../plugins/install")).allowVersion(args[0]!, { acceptRisk: !!values.acceptRisk });
   if (values.json) { out({ allowed: e }); return EXIT.ok; }
   console.log(`${e.name}@${e.version} may run on this capcomd although its engines range leaves it out (that version only).`);
+  return EXIT.ok;
+}
+
+/**
+ * `capcomd plugins enable|disable <name>` (§5.4, §6.5, §10.2). It records `plugins.<name>.enabled` in the user's config,
+ * which the daemon reads at each start, and asks the running daemon, if one runs, to act now: `enable` starts a
+ * disabled, disposed or failed plugin again and resets an active one's breaker, `disable` stops it. A built-in can't be
+ * disabled (the kernel runs on its places, agents, forges and front doors), except one a person turns on (the watchdog).
+ */
+async function toggleCommand(action: "enable" | "disable", args: string[], values: Values): Promise<number> {
+  const name = args[0];
+  if (!name || args.length > 1) throw new RelayError("usage", `${action} takes a plugin's name`, USAGE);
+  const P = await import("../../plugins/host");
+  const { OPT_IN } = await import("../../plugins/builtins");
+  // A plugin the daemon runs (its project's too) or would load from here.
+  const p = [...(P.readSnapshot()?.plugins ?? []), ...P.kernelHost({ log: false }).plan(P.builtinCandidates())].find((x) => x.name === name);
+  if (!p) throw new RelayError("not_found", `no plugin ${name}`, "capcomd plugins list names them.");
+  if (action === "disable" && p.source === "builtin" && !OPT_IN.has(name)) {
+    throw new RelayError("conflict", `${name} is built into capcomd: it can't be disabled`, "The kernel runs on its built-in places, agents, forges and front doors. A setting of the plugin's may turn off what you don't want (capcomd plugins show " + name + ").");
+  }
+  const on = action === "enable";
+  const { userConfigPath, writeConfig } = await import("../../config/store");
+  const path = userConfigPath();
+  writeConfig(path, { plugins: { [name]: { enabled: on } } });
+  const { envName } = await import("../../plugins/config");
+  const env = process.env[envName(name, "enabled")];
+  const notes = [
+    ...(process.env.CAPCOMD_NO_CONFIG ? ["CAPCOMD_NO_CONFIG is set here: a daemon started with it doesn't read your config."] : []),
+    ...(env !== undefined && env !== "" ? [`${envName(name, "enabled")}=${env} in the environment wins over your config where it is set.`] : []),
+  ];
+  const { callDaemon } = await import("../daemon");
+  const call = await callDaemon("POST", `/v1/plugins/${encodeURIComponent(name)}/${action}`, { scope: "configure" });
+  // The daemon refused it (not that it doesn't have the plugin, or couldn't be reached): the config holds it anyway.
+  if (call.kind === "answered" && call.status !== 200 && call.status !== 404) {
+    throw new RelayError(call.status === 409 ? "conflict" : "run_failed", `the running daemon (pid ${call.pid}) didn't ${action} ${name}: ${String(call.body.message ?? `HTTP ${call.status}`)}`,
+      `Your config says plugins.${name}.enabled = ${on} (${path}): the daemon applies it at its next start (capcomd service restart).`);
+  }
+  const daemon = call.kind === "none" ? null
+    : call.kind === "unreachable" ? { pid: call.pid, applied: false as const, reason: call.reason }
+    : call.status === 200 ? { pid: call.pid, applied: true as const, plugin: call.body as unknown as PluginSummary }
+    : { pid: call.pid, applied: false as const, reason: `it has no plugin ${name} (one installed since it started, or another project's)` };
+  if (values.json) {
+    out({ plugin: name, enabled: on, config: path, daemon, notes });
+    return EXIT.ok;
+  }
+  console.log(`${on ? "Enabled" : "Disabled"} ${name} in your config (${path}: plugins.${name}.enabled = ${on}).`);
+  if (!daemon) console.log("No daemon is running: the config is all that changed, and a daemon applies it when it starts.");
+  else if (daemon.applied) {
+    const s = daemon.plugin;
+    console.log(`The running daemon (pid ${daemon.pid}) ${on ? "enabled" : "disabled"} it: ${s.state}${s.cause ? ` (${s.cause})` : ""}.${on && s.state === "failed" ? ` capcomd plugins show ${name} says why.` : ""}`);
+  } else console.log(`The running daemon (pid ${daemon.pid}) didn't ${action} it: ${daemon.reason}. A daemon applies your config when it starts (capcomd service restart).`);
+  for (const n of notes) console.log(`  ${n}`);
   return EXIT.ok;
 }
 

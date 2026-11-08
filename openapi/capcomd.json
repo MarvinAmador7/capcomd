@@ -9106,6 +9106,13 @@
                               "p95Ms",
                               "lastFailureAt"
                             ]
+                          },
+                          "commands": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
                           }
                         },
                         "required": [
@@ -9343,6 +9350,13 @@
                         "lastFailureAt"
                       ]
                     },
+                    "commands": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
+                    },
                     "manifest": {
                       "description": "The validated manifest (capcomd.plugin/v1); null when it couldn't be read. Its strings are the plugin author's: render them as plain text",
                       "type": [
@@ -9509,7 +9523,7 @@
     "/v1/plugins/{name}/enable": {
       "post": {
         "operationId": "plugins.enable",
-        "description": "Capability plugins. Run the plugin's lifecycle again from validated (spec §5.4): resolved, loaded, active; for an active plugin, reset a tripped breaker (plugin.resumed). A failed out-of-process plugin (restart_limit) gets a new process. Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. 404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. For this daemon's life: config doesn't record it yet.",
+        "description": "Capability plugins. Run the plugin's lifecycle again from validated (spec §5.4): resolved, loaded, active; for an active plugin, reset a tripped breaker (plugin.resumed). A failed out-of-process plugin (restart_limit) gets a new process. Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. 404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. It acts on this daemon and doesn't write config: `capcomd plugins enable|disable <name>` records `plugins.<name>.enabled` in the user's config, which a daemon reads at its start, and then calls this.",
         "parameters": [
           {
             "name": "name",
@@ -9682,6 +9696,13 @@
                         "p95Ms",
                         "lastFailureAt"
                       ]
+                    },
+                    "commands": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
                     }
                   },
                   "required": [
@@ -9758,7 +9779,7 @@
     "/v1/plugins/{name}/disable": {
       "post": {
         "operationId": "plugins.disable",
-        "description": "Capability plugins. Dispose the plugin (spec §5.4: disposing, then disposed with cause disabled); an out-of-process plugin's process gets session.closing, then SIGTERM, then SIGKILL. A built-in can't be: 409 `conflict`. Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. 404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. For this daemon's life: config doesn't record it yet.",
+        "description": "Capability plugins. Dispose the plugin (spec §5.4: disposing, then disposed with cause disabled); an out-of-process plugin's process gets session.closing, then SIGTERM, then SIGKILL. A built-in can't be (409 `conflict`), except the watchdog, which a person turns on. Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. 404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. It acts on this daemon and doesn't write config: `capcomd plugins enable|disable <name>` records `plugins.<name>.enabled` in the user's config, which a daemon reads at its start, and then calls this.",
         "parameters": [
           {
             "name": "name",
@@ -9931,6 +9952,13 @@
                         "p95Ms",
                         "lastFailureAt"
                       ]
+                    },
+                    "commands": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
                     }
                   },
                   "required": [

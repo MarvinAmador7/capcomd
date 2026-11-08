@@ -666,6 +666,7 @@ export const PluginSummary = z.object({
 		p95Ms: z.number().nullable(),
 		lastFailureAt: Timestamp.nullable(),
 	}),
+	commands: z.array(z.string()).optional().describe("The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"),
 });
 export const Plugins = z.object({ plugins: z.array(PluginSummary).describe("In load order, then the plugins that didn't load, in the order they were discovered") });
 export const PLUGINS_DOC = "Capability plugins. Every plugin the daemon discovered, in load order, with its lifecycle state, why it failed or was disabled, the hooks and seams it contributes and its hook call statistics. Needs the `read` scope. Local reads only, so poll it freely. Never contains config values or secrets. " +
@@ -691,7 +692,7 @@ export const PluginDetail = PluginSummary.extend({
 });
 export const PLUGIN_DETAIL_DOC = "Capability plugins. One plugin as GET /v1/plugins lists it, with its validated manifest, its config without any secret, and (capability plugins.routes) its API routes and feature flags. Needs the `read` scope. 404 `not_found` for a name the daemon didn't discover.";
 const PLUGIN_CONTROL_DOC = (what: string) => `Capability plugins. ${what} Needs the configure scope and an Idempotency-Key (8-200 chars; scoped to the client, kept 24 h). Answers with the plugin's summary once it is active, failed or disposed. ` +
-	"404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. For this daemon's life: config doesn't record it yet.";
+	"404 `not_found` for a name the daemon didn't discover; 409 `conflict` while it is loading or disposing. It acts on this daemon and doesn't write config: `capcomd plugins enable|disable <name>` records `plugins.<name>.enabled` in the user's config, which a daemon reads at its start, and then calls this.";
 
 /** The out-of-process protocol (capability plugins.protocol): spec §9, packages/plugin/src/protocol.ts. */
 const PROTOCOL = "Capability plugins.protocol. Only the token the daemon minted for this plugin's running process (CAPCOMD_PLUGIN_TOKEN), whatever its scopes: 403 `forbidden` for any other; 409 `conflict` when the plugin has no process running.";
@@ -1309,7 +1310,7 @@ export const contract = {
 		get: oc.route({ method: "GET", path: "/v1/plugins/{name}", description: PLUGIN_DETAIL_DOC }).input(z.object({ name: PluginName })).output(PluginDetail),
 		enable: oc.route({ method: "POST", path: "/v1/plugins/{name}/enable", inputStructure: "detailed", description: PLUGIN_CONTROL_DOC("Run the plugin's lifecycle again from validated (spec §5.4): resolved, loaded, active; for an active plugin, reset a tripped breaker (plugin.resumed). A failed out-of-process plugin (restart_limit) gets a new process.") })
 			.input(z.object({ params: z.object({ name: PluginName }), headers: IdempotencyHeaders })).output(PluginSummary),
-		disable: oc.route({ method: "POST", path: "/v1/plugins/{name}/disable", inputStructure: "detailed", description: PLUGIN_CONTROL_DOC("Dispose the plugin (spec §5.4: disposing, then disposed with cause disabled); an out-of-process plugin's process gets session.closing, then SIGTERM, then SIGKILL. A built-in can't be: 409 `conflict`.") })
+		disable: oc.route({ method: "POST", path: "/v1/plugins/{name}/disable", inputStructure: "detailed", description: PLUGIN_CONTROL_DOC("Dispose the plugin (spec §5.4: disposing, then disposed with cause disabled); an out-of-process plugin's process gets session.closing, then SIGTERM, then SIGKILL. A built-in can't be (409 `conflict`), except the watchdog, which a person turns on.") })
 			.input(z.object({ params: z.object({ name: PluginName }), headers: IdempotencyHeaders })).output(PluginSummary),
 		openSession: oc.route({
 			method: "POST", path: "/v1/plugins/{name}/sessions", inputStructure: "detailed",
