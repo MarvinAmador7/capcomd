@@ -28,7 +28,8 @@ afterAll(async () => {
 
 test("run fails with kind=config, retryable=false; status shows failed", async () => {
   const runId = `run-authfail-${Date.now()}`;
-  const env = { CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}` };
+  // capcomd run without a planner agent is the recipe-hierarchical plugin's, off unless turned on.
+  const env = { CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}`, CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" };
   const r = await capcomd(["run", "--json", "--run-id", runId, "anything"], env);
   expect(r.code).toBe(1);
   const evs = r.stdout.trim().split("\n").map((l) => JSON.parse(l));

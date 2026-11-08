@@ -93,11 +93,6 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   // made before the run is created or detached: a run whose planner can't start is refused with the reason here,
   // instead of starting and then sitting with no agent.
   if (plannerRef) (await import("../../primitives/ops")).spawnChecks(plannerRef);
-  // Without a planner agent the run is recipe-hierarchical's (--recipe, --legacy, CAPCOMD_RUN_PATH): refused now, before
-  // the run is created or detached, while that plugin is off.
-  const recipe = planner ? null : await (await import("../../plugins/recipe-hierarchical")).hierarchicalRecipe();
-  // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
-  if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
   // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
   // the planner/worker/preflight read. Overrides may only narrow the profile unless --operator.
   const agentFlag = (values.profile ?? values.agent) as string | undefined;
@@ -116,6 +111,11 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     try { P.resolveAgent(ref); } catch (e) { throw new RelayError("config", (e as Error).message, "Overrides may only narrow the profile (fewer turns/budget/tools/egress, stricter sandbox, smaller children limits); pass --operator to widen deliberately."); }
     if (!/^\s*\[agent:/i.test(rawGoal)) goal = `[agent:${ref}] ${rawGoal}`;
   }
+  // Without a planner agent the run is recipe-hierarchical's (--recipe, --legacy, CAPCOMD_RUN_PATH): once its flags are
+  // checked, refused while that plugin is off, before the run is created or detached.
+  const recipe = planner ? null : await (await import("../../plugins/recipe-hierarchical")).hierarchicalRecipe();
+  // Humans only (scripts and --json callers read stdout; stderr isn't a terminal for them).
+  if (!planner && process.stderr.isTTY) console.error(`capcomd run ${realVms ? "--recipe" : "without a planner agent"} plans with a placeholder model (the same generic tasks for any goal) and judges nothing. For real work: --planner <profile> (capcomd setup writes one named "planner"), or the primitives (run new, spawn, verify, merge).`);
   const runId = (values["run-id"] as string | undefined) ?? generateRunId();
   let targetBranch = values["target-branch"] as string | undefined;
   await assertEngine();

@@ -44,7 +44,8 @@ afterAll(async () => {
 
 test("capcomd run with CAPCOMD_AGENT=claude-code: one task, agent commit, verified, merged; key never in trace", async () => {
   const runId = `run-agent-e2e-${Date.now()}`;
-  const cenv = { ...env, CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}` };
+  // capcomd run without a planner agent is the recipe-hierarchical plugin's, off unless turned on.
+  const cenv = { ...env, CAPCOMD_ENDPOINT: `http://127.0.0.1:${PORT}`, CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" };
   const running = capcomd(["run", "--json", "--run-id", runId, "make the failing test pass"], cenv);
   // main is protected: the task parks in awaiting_approval after verification; approve it.
   let approved = false;
