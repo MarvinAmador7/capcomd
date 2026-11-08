@@ -22,7 +22,9 @@ import { checkpointRef, stoppedAt } from "../agents/runner";
 import type { ScopeAgent } from "../actors/scope";
 import { skillBlock, type AttachedSkill } from "../agents/skills";
 import { ORCHESTRATION_SKILL_NAME, pinnedSkills } from "../profiles/skills";
-import { untrustedSkillsHint, untrustedSkillsProblem } from "../profiles/trust";
+import { pinnedPersona, type PersonaPin } from "../profiles/persona";
+import { untrustedProfileHint, untrustedProfileProblem } from "../profiles/trust";
+import { CLI_VERSION_HINT, cliVersionProblem } from "../env/cli-version";
 import { attachmentId } from "../api/inline-cap";
 import { runScripted, ScriptFailed, withVmRpc } from "../subagents/driver";
 import { hasVmCapcomd } from "../subagents/skill";
@@ -448,9 +450,9 @@ function resolveProfile(ref: string | null): ResolvedAgent {
 }
 function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string | undefined>) {
   const spec = resolved.spec ? (resolved.spec as unknown as Record<string, unknown>) : null;
-  // A project's profile skills reach an agent only once the operator has trusted each (ADR-024 decision 4).
-  const untrustedSkills = resolved.name ? untrustedSkillsProblem(resolved.name, resolved.skills ?? []) : null;
-  if (untrustedSkills) throw new RelayError("config", untrustedSkills, untrustedSkillsHint(resolved.name!), { code: "untrusted" });
+  // A project's profile skills and persona reach an agent only once the operator has trusted each (ADR-024 decision 4).
+  const untrusted = resolved.name ? untrustedProfileProblem(resolved.name, resolved.skills ?? [], resolved.persona) : null;
+  if (untrusted) throw new RelayError("config", untrusted, untrustedProfileHint(resolved.name!), { code: "untrusted" });
   // Its machine's sandbox: its profile's (ADR-024 `sandbox.provider`), else the run's, else this process's.
   const rt = resolved.runtime ?? {};
   // What its profile was checked for, again on the spec as overridden: an override or a profile.resolved patch that
@@ -463,6 +465,9 @@ function checkResolved(resolved: ResolvedAgent, runSource: Record<string, string
   const envProblem = envSnapshotProblem(spec?.provider, source, rt.environment);
   if (envProblem) throw new RelayError("config", envProblem, "Run `capcomd env build` (idempotent; skips the VM when the snapshot is current), then retry the spawn.");
   if (rt.environment) environmentCheck(resolved, source);
+  // ADR-024 `harness.cliVersion`: the CLI its environment recorded satisfies the profile's range.
+  const cli = resolved.spec ? cliVersionProblem({ name: resolved.name ?? resolved.kind, provider: resolved.spec.provider, auth: resolved.spec.auth, range: rt.cliVersion, environment: rt.environment }, source) : null;
+  if (cli) throw new RelayError("config", cli, CLI_VERSION_HINT, { code: "environment" });
   const unkept = egressProblem(resolved.name, spec?.egress as string[] | undefined, source);
   if (unkept) throw new RelayError("config", unkept, "Remove the profile's egress (agents get open egress by default), or use a provider that enforces it (boxd).");
   return { resolved, spec };
@@ -567,14 +572,17 @@ export async function spawnAgent(o: SpawnOpts) {
   const effort = isRealAgent(resolved.kind) ? agentEffort(resolved.spec) : undefined;
   const ph = paramsHash({ parent: o.parent ?? null, ref, task: o.task, contract: o.contract ?? null, budget: requested, operator: !!o.operator, ...(hasGrant ? { grant } : {}), ...(o.review ? { review: true } : {}) });
   // Its profile's skills (ADR-024 §7 step 5), pinned by hash on its spec; their text is kept with the run, so whoever
-  // prepares the agent (the daemon, a run's driver) gives it what was resolved here (agentPreparing).
-  const skills = resolved.skills ?? [];
+  // prepares the agent (the daemon, a run's driver) gives it what was resolved here (agentPreparing). Its persona
+  // (`identity.persona`) the same way.
+  const skills = resolved.skills ?? [], persona = resolved.persona;
   const res = await client().scope.getOrCreate([o.runId]).spawn({
     runId: o.runId, agentId, key: o.key, paramsHash: ph, parent: o.parent ?? null,
     profile: resolved.name, ref: ref ?? resolved.name,
-    // Its runtime blocks (ADR-024 §7 step 8: MCP servers, sandbox, environment, size, lifecycle) beside the flat spec.
-    spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(skills.length ? { skills: skills.map(({ name, source, hash }) => ({ name, source, hash })) } : {}), ...(resolved.runtime ?? {}) },
+    // Its runtime blocks (ADR-024 §7 step 8: MCP servers, sandbox, environment, size, lifecycle, CLI range) beside the flat spec.
+    spec: { ...(spec ?? {}), kind: resolved.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(skills.length ? { skills: skills.map(({ name, source, hash }) => ({ name, source, hash })) } : {}),
+      ...(persona ? { persona: { source: persona.source, hash: persona.hash } satisfies PersonaPin } : {}), ...(resolved.runtime ?? {}) },
     ...(skills.length ? { skillTexts: skills.map((s) => s.text) } : {}),
+    ...(persona ? { personaText: persona.text } : {}),
     // ADR-024 §2.4: the version of the profile it runs with and where it came from, beside the spec they pinned.
     profileVersion: resolved.profile?.version ?? null, profileSource: resolved.profile?.source ?? null,
     task: o.task, contract: o.contract ?? null, ...(Object.keys(requested).length ? { budget: requested } : {}), operator: o.operator,
@@ -1199,17 +1207,18 @@ export async function ensureMachine(runId: string, agentId: string, epoch: numbe
 }
 
 /**
- * Whether agent `a` is prepared here: its profile pinned skills, or a plugin prepares agents. The built-in orchestration
+ * Whether agent `a` is prepared here: its profile pinned skills or a persona, or a plugin prepares agents. The built-in orchestration
  * skill does in every process (src/plugins/skill-orchestration.ts): an attempt prepared here waits for this process's
  * plugins (the daemon's host, else a local one, src/plugins/hooks.ts `gates`), so an agent that may spawn always gets
  * it, even one resumed before they loaded.
  */
 async function preparing(a: ScopeAgent): Promise<boolean> {
   await gates();
-  return hooks.listening("agent.preparing") || pinnedSkills(a.spec).length > 0;
+  return hooks.listening("agent.preparing") || pinnedSkills(a.spec).length > 0 || pinnedPersona(a.spec) !== null;
 }
 
-/** The spec an attempt runs with when agent.preparing's plugins or its profile's skills changed it; null: the agent's own. */
+/** The spec an attempt runs with when agent.preparing's plugins or its profile's skills or persona changed it; null: the
+ *  agent's own. */
 export type PreparedSpec = Record<string, unknown> | null;
 
 /**
@@ -1229,11 +1238,22 @@ async function pinnedSkillTexts(runId: string, a: ScopeAgent): Promise<AgentPrep
   return out;
 }
 
+/** The persona agent `a` was pinned with at spawn (its profile's `identity.persona`), with the text the run keeps for it
+ *  (scope `spawn`'s `personaText`), checked against its pin as its skills are (pinnedSkillTexts); null: it has none. */
+async function pinnedPersonaText(runId: string, a: ScopeAgent): Promise<AgentPreparing["prompt"]["persona"]> {
+  const p = pinnedPersona(a.spec);
+  if (!p) return null;
+  const att = await client().scope.getOrCreate([runId]).getAttachment({ id: attachmentId(p.hash) });
+  if (!att || skillHash(att.body) !== p.hash)
+    throw new RelayError("config", `${a.agentId}'s profile persona (sha256 ${p.hash.slice(0, 12)}…) isn't in run ${runId}'s records as it was pinned at spawn`, "Spawn the agent again: its profile's persona is read and pinned when it is spawned.");
+  return { hash: p.hash, source: p.source, text: att.body };
+}
+
 /**
  * agent.preparing (plugin API §6.6.7): once per attempt, before its machine is ensured. The payload has the profile's
- * own prompt and skills (pinned at spawn); a plugin may append to the agent's system prompt, add skills or variables,
- * remove egress hosts, or refuse the attempt (it fails, naming the plugin). Returns the spec the attempt's machine and
- * run get, or null when neither a plugin nor the profile's skills changed it.
+ * own prompt, persona and skills (pinned at spawn); a plugin may append to the agent's system prompt, add skills or
+ * variables, remove egress hosts, or refuse the attempt (it fails, naming the plugin). Returns the spec the attempt's
+ * machine and run get, or null when neither a plugin nor the profile's skills or persona changed it.
  */
 export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1): Promise<PreparedSpec> {
   const spec = pinnedOf(a);
@@ -1251,8 +1271,8 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
   }
   let provider = "fake";
   try { provider = (await RS.agentSandbox(runId, machine.sandbox)) ?? sandboxName(); } catch { /* an unknown CAPCOMD_SANDBOX: the run reports it */ }
-  const skills = await pinnedSkillTexts(runId, a);
-  const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, skills }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: machine.environment ?? null } };
+  const skills = await pinnedSkillTexts(runId, a), persona = await pinnedPersonaText(runId, a);
+  const payload = { agent: agentOf(a), spec, prompt: { system: spec.systemPrompt ?? null, append: spec.appendSystemPrompt ?? null, persona, skills }, env: agentEnvNames(spec.provider), egress, credentialMode, sandbox: { provider, environment: machine.environment ?? null } };
   let n: AgentPreparing = payload, patches: Array<{ patch: PreparePatch }> = [];
   // The kernel's own listeners read the agent's record from here, not the engine again (the orchestration skill); the
   // context router leaves the bundles its brief cites here, for the attempt's runner to place (ADR-025 §6.2).
@@ -1265,7 +1285,7 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
     n = out.payload;
     patches = out.patches;
   }
-  if (!patches.length && !skills.length) return null;
+  if (!patches.length && !skills.length && !persona) return null;
   // Skills go after the profile's text and the plugins' appends: the profile's first, then the plugins' in the order
   // they added them, each in a block named for it as a message's are (src/agents/skills.ts `skillBlock`). The agent
   // reads them as its instructions (Claude Code's appended system prompt, Codex's prompt); the spec records which, by hash.
@@ -1276,6 +1296,9 @@ export async function agentPreparing(runId: string, a: ScopeAgent, attempt = 1):
     ...(n.prompt.skills.length ? { skills: n.prompt.skills.map(({ name, hash, source }) => ({ name, hash, source })) } : {}),
     ...(Object.keys(env).length ? { pluginEnv: env } : {}),
     ...(kernel.bundles?.length ? { contextBundles: kernel.bundles } : {}),
+    // The persona goes before all of that: the runner makes it the first text of the agent's instructions
+    // (src/agents/runner.ts), which no plugin can patch (agent.preparing's `prompt.persona` is read-only).
+    ...(persona ? { personaPrompt: persona.text } : {}),
   };
 }
 

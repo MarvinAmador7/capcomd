@@ -1,7 +1,7 @@
 // The hook catalog (spec §6): every hook name, its mode, payload, patch and result types, in one typed registry. A
 // misspelled hook name, a wrong payload or a result of the wrong shape is a type error. The kernel fires these and
 // nothing else; a plugin cannot fire a kernel hook (§6.1).
-import type { Agent, AgentNotice, AgentResult, AgentStep, Approval, AttachedSkill, Budget, Decision, Job, Merge, PinnedSpec, Principal, Run, ThreadItem, Timestamp, Trigger, TriggerDecision, Untrusted, Verification, VmSpec } from "./shapes";
+import type { Agent, AgentNotice, AgentResult, AgentStep, Approval, AttachedPersona, AttachedSkill, Budget, Decision, Job, Merge, PinnedSpec, Principal, Run, ThreadItem, Timestamp, Trigger, TriggerDecision, Untrusted, Verification, VmSpec } from "./shapes";
 
 export type HookMode = "observe" | "veto" | "modify";
 
@@ -102,7 +102,9 @@ export type SpawnPatch = { budget?: Budget; grant?: Grant; contract?: Record<str
 export interface AgentPreparing {
   agent: Agent;
   spec: PinnedSpec;
-  prompt: { system: string | null; append: string | null; skills: AttachedSkill[] };
+  /** `persona` (additive: the kernel always sends it, null when there is none): its profile's `identity.persona`
+   *  (ADR-024), pinned at spawn, the first text the agent reads; no patch changes it. */
+  prompt: { system: string | null; append: string | null; persona?: AttachedPersona | null; skills: AttachedSkill[] };
   /** Names of the environment variables the agent gets (never values: they may be secrets). */
   env: string[];
   egress: string[];

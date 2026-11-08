@@ -111,8 +111,17 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `permissions: { report: false }` keeps a profile from being spawned with `report` (read-only work whose answer is
   its result): such a spawn is refused (`reason: "report_not_allowed"`). Unset or `true`, it may be, as before.
 - `skills` gives every agent of the profile skills at its start (below).
-- `identity.persona` is checked but doesn't change what an agent does yet; `capcomd profiles validate` lists it when a
-  profile sets it. `context` (with `memory` read as its old name) does: see "Project memory" below. `jobs`
+- `identity.persona: SOUL.md` names a text file in the profile's directory (at most 32 KiB) that says who its agents
+  are. Each agent reads it first, before the profile's prompt and its skills, with the text it had when the agent was
+  spawned (a later edit reaches only agents spawned after it). A profile that extends one has its persona. A project's
+  persona (`.capcomd/profiles/<name>/`) is used only once you trust it, as a project's skills are: `capcomd profiles
+  trust <name>` shows it and asks, a spawn before that is refused (`reason: "untrusted"`), and a changed file needs
+  trusting again. Your own profiles' personas need no trust.
+- `harness.cliVersion: ">=2.1"` is a semver range the agent's CLI must satisfy: the version the environment its
+  agents boot from recorded when it was built (`capcomd env build`; its `sandbox.environment`, else the current
+  build). A spawn is refused (`reason: "environment"`) when that version is outside the range, or when the environment
+  recorded none (the sandbox's plain image, or no build yet); `capcomd profiles validate` warns about both.
+- `context` (with `memory` read as its old name): see "Project memory" below. `jobs`
   (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
   field does in `agents.json`. They are limits like `limits`: an override (`--set jobs.max=2`, which keeps the
   block's other values) may lower one but not raise or unset one the profile sets (without `--operator`), and a

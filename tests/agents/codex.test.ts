@@ -64,6 +64,15 @@ describe("codex adapter (fake codex exec --json)", () => {
     expect(await s.r.sha(`refs/heads/${s.task.branch}`)).toBeNull();
   }, 30_000);
 
+  test("a persona (ADR-024 identity.persona) is the first text of its prompt: codex has no system prompt flags", async () => {
+    const s = await setup("make the failing test pass");
+    await runAgent(codexAdapter, s.provider, s.id, s.task, { ...s.cfg, persona: "# You are Vera", systemPrompt: "You review code.", appendSystemPrompt: "Review the diff." }, { apiKey: KEY });
+    const prompt = readFileSync(join(s.W, "prompt.txt"), "utf8");
+    expect(prompt.startsWith("# You are Vera\n\nYou review code.\n\n")).toBe(true);
+    expect(prompt.split("# You are Vera").length - 1).toBe(1);
+    expect(prompt.trimEnd().endsWith("Review the diff.")).toBe(true);
+  }, 30_000);
+
   test("budget guard from token-estimated cost", async () => {
     const s = await setup("make it pass", { CAPCOMD_AGENT_MAX_BUDGET_USD: "0.01", CAPCOMD_AGENT_POLL_MS: "50" });
     // Fake exits right after turn.completed; outcome still ok unless guard fires first, so check the guard function directly too.

@@ -615,7 +615,7 @@ spawn (`usage`) as the spawner's would. A plugin lowers the budget and narrows t
 not through the contract's `budget` or `children`, which are read before this hook.
 
 #### 6.6.7 `agent.preparing` · modify · workflow `prepare` (`agent-workflow.ts`), before the machine is ensured
-`AgentPreparing {agent, spec, prompt: {system, append, skills[]}, env: names[], egress[], credentialMode, sandbox}`.
+`AgentPreparing {agent, spec, prompt: {system, append, persona, skills[]}, env: names[], egress[], credentialMode, sandbox}`.
 `spec` is the agent's pinned spec with `profile: {name, version, source}` when the agent recorded one at spawn (as
 `profile.resolved` had it; `agent.profileVersion` and `agent.profileSource` say the same), and its profile's runtime
 blocks when it has them (ADR-024 §7 step 8: `mcp`, `sandboxProvider`, `environment`, `size`, `lifecycle`; additive).
@@ -662,6 +662,21 @@ attempt reads the text there and checks it against the pin; one that isn't there
 reaches only agents spawned after it. The orchestration skill (`capcomd-orchestration`) is never pinned: a profile that
 may spawn may name it, and `skill-orchestration` attaches it, written for the agent, so the agent gets it once; a
 profile that can't spawn, or that pins its hash, is refused when it resolves.
+
+The profile's persona (ADR-024 `identity.persona`; since 1.0.56): `prompt.persona` is `{hash, source, text}` or null
+(additive; `source` `project` or `user`, the layer of the manifest that named the file). It is read when the profile
+resolves (`src/profiles/persona.ts`: the file in the directory of the manifest that set `identity.persona`, its own, an
+ancestor's or an override's; at most 32 KiB, not empty), pinned on the agent at spawn by `{hash, source}`
+(`PinnedSpec.persona`, additive), and its text kept with the run as a skill's is (an attachment, never in an event);
+each attempt reads it there and checks it against the pin, and one that isn't there as pinned fails the attempt for good
+(code `config`). No patch changes it. The kernel makes it the first text of the agent's instructions, once, ahead of
+everything else this hook composes: the first text of Claude Code's appended system prompt (before the profile's
+`append`, the plugins' appends and every skill), or of the profile's replacement system prompt when it has
+`prompt.system`; the first text of the prompt for a CLI without system prompt flags (Codex). A project's persona is
+gated like a project's skills (ADR-024 decision 4): trust kind `profile`, per file (made real) and sha256, so a spawn
+before `capcomd profiles trust`, or after the file changed, is refused in the spawn checks (`config`, reason
+`untrusted`), as `capcomd run` refuses such a planner and GET /v1/run-options `planners` says it isn't ready; an agent
+already spawned keeps the text it was pinned with. The user's own persona needs no trust.
 
 The kernel's context router (ADR-025 §6.1) is the one listener that composes context providers into `prompt.append`: the
 built-in `context` plugin (`src/plugins/context.ts`, failure open), for an agent whose pinned spec has a `context` block
@@ -2253,7 +2268,7 @@ manifest declares a notifier-shaped plugin (`run.changed` + `agent.changed` obse
 | `src/recipes/hierarchical.ts` | `recipe-hierarchical`, **disabled by default**, kept for the parity eval (decision 5) | front door | |
 | `plugins/capcomd/` (Claude Code / Codex plugin) | unchanged: a plugin *for* the agent (ADR-018) | | |
 | `src/api/sandboxes.ts` settings/info rows | each sandbox plugin's `ui` descriptors | UI | §4.7.5 |
-| ADR-024 profiles: `harness.provider`, `sandbox.provider`, `skills`, `identity.persona`, `lifecycle.onStart/onEnd`, `tools.mcp`, `sandbox.environment/size` | seam names (`sandbox.provider` selects the agent's machine's sandbox); `agent.preparing`; `onStart/onEnd` → plugins listening to `agent.changed` filtered by profile (the `lifecycle` block names plugins that must be active; the change carries them); `tools.mcp` → the agent provider's `AgentCommandCtx.mcp`; `environment`/`size` → the machine's `VmSpec` | | §7, §6.6.7, §6.6.8 |
+| ADR-024 profiles: `harness.provider`, `sandbox.provider`, `skills`, `identity.persona`, `lifecycle.onStart/onEnd`, `tools.mcp`, `sandbox.environment/size`, `harness.cliVersion` | seam names (`sandbox.provider` selects the agent's machine's sandbox); `agent.preparing` (`skills`, `identity.persona`); `harness.cliVersion` → the spawn checks, against the CLI version the agent's environment recorded (`src/env/cli-version.ts`); `onStart/onEnd` → plugins listening to `agent.changed` filtered by profile (the `lifecycle` block names plugins that must be active; the change carries them); `tools.mcp` → the agent provider's `AgentCommandCtx.mcp`; `environment`/`size` → the machine's `VmSpec` | | §7, §6.6.7, §6.6.8 |
 | `plannerBrief`'s "don't change files" | `tools.mode: orchestrate` on `planner` and `lead` | profile | §16.1 |
 
 ### 17.2 Steps
@@ -2342,6 +2357,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.53 | 2026-11-08 | `context-memory`'s judge and gate, after a second review of ADR-025 step 3 (§6.6.13, §6.6.15): a path a checkout on a case-insensitive file system reads as the memory (`.Capcomd/Context/…`, with HFS+-ignored characters or Windows' trailing dots and spaces) is a change to it, so an agent's branch can't put files in a macOS checkout's `.capcomd/context/` unjudged, and a consolidator's branch changes items by their exact names only; the agent judged is the one whose work the ref lands (an agent id's result branch, so a handed-off agent's successor), and a branch `capcomd/<run>/<agt>` of another run is judged as that run's agent instead of let through as a person's (an agent the engine has no record of fails it closed). No hook, seam, route or contract shape changes. |
 | 1.0.54 | 2026-11-08 | The API route gateway (§4.7.3) is served: `ctx.api.route` registrations answer at `METHOD /v1/x/<name>/<path>` and `ctx.api.capability` flags join `GET /v1/health` (capability `plugins.routes`, additive). How it serves: `{param}` segments and literal-first matching; the route's declared scope checked after the route is found, unranked; a read-only client's principal is `viewer`; JSON parsed for `POST`/`PUT`/`PATCH` only, 422 when it isn't JSON; a mapped `PluginError` carries its `hint`; `undefined` is 204; a `Response`, a stream or an answer that isn't JSON is the 500 "plugin error", so no route streams; a disposed plugin's routes 404. `GET /v1/plugins/{name}` gains `routes` and `capabilities` (§13.2; optional in the contract, always sent; additive); the routes themselves stay out of `openapi/capcomd.json`. Webhook trigger sources (§16.3.1) can now take their events on a route, from a sender that holds a capcomd client token: every route needs one, so a signed webhook that can't send one (GitHub's, Slack's) isn't served yet. |
 | 1.0.55 | 2026-11-08 | `capcomd plugins enable\|disable <name>` (§5.4, §6.5, §9.9): they record `plugins.<name>.enabled` in the user's config and call `POST /v1/plugins/{name}/enable\|disable` on the running daemon (at the harness socket it now records in `state/plugins.json`, with a token made for the call and deleted after), so a toggle lasts past a restart; with no daemon only the config changes. A built-in is still refused (409, the CLI's `conflict`), except the watchdog, which a person turns on and may turn off. `GET /v1/plugins` lists each plugin's declared CLI `commands` (§13.2, additive), and a command whose plugin isn't running is refused naming the plugin and its cause instead of as an unknown command (§4.7.1), with the next step: `capcomd plugins enable`, or the environment variable that turns it off. |
+| 1.0.56 | 2026-11-08 | ADR-024 `identity.persona` and `harness.cliVersion` get their runtime (they were read but not applied): `AgentPreparing.prompt.persona` (`{hash, source, text}` or null) and `PinnedSpec.persona` (`{hash, source}`), `PinnedSpec.cliVersion` (all additive); the persona is pinned at spawn like the profile's skills (content-addressed with the run), checked against its pin per attempt, made the first text of the agent's instructions once, and a project's persona is gated on trust per file hash (reason `untrusted`), §6.6.7. A `harness.cliVersion` the CLI version recorded by the agent's environment (its build in the sandbox's ledger, or the one its plan login's image was made from) doesn't satisfy, or that no version was recorded for, refuses the spawn (`config`, reason `environment`), a planner's run, and makes GET /v1/run-options say the planner isn't ready; `capcomd profiles validate` warns. The range is checked as a semver range when the profile is read (§17.1). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

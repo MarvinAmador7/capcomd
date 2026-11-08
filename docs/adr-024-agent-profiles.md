@@ -412,8 +412,8 @@ Made while building the loader (§7 step 1, 2026-11-05; `src/profiles/load.ts`, 
   asked for a spawn, and the file may be a link to anything on the host).
 - **`default: true`**: the highest layer's wins, two in that layer are an error, and it beats `agents.json`'s `default`
   in the same layer.
-- **Blocks with no runtime yet** (`identity.persona`, `harness.cliVersion`; `permissions.report` until step 4, `skills`
-  until step 5, `context` until ADR-025 step 1, below, `tools.mcp`, `sandbox.provider|environment|size` and
+- **Blocks with no runtime yet** (`identity.persona` and `harness.cliVersion` until 2026-11-08, below;
+  `permissions.report` until step 4, `skills` until step 5, `context` until ADR-025 step 1, below, `tools.mcp`, `sandbox.provider|environment|size` and
   `lifecycle.onStart|onEnd` until step 8) are checked and kept on the resolved profile, not pinned (`jobs` is pinned as
   is since the jobs service, spec §17.2 step 7); `capcomd profiles validate` names the ones a profile sets.
   `sandbox.provider` is checked against the active sandbox seams.
@@ -666,8 +666,8 @@ Made while building install, export and update (§7 step 7, 2026-11-06; `src/pro
   the project layer's skills need it: the user's own profiles, installed or written, and `~/.claude/skills` are the
   user's. The kernel refuses a spawn of a profile with an untrusted project skill (`config`, reason `untrusted`) in its
   spawn checks, which `capcomd run` also runs for its planner before starting; an agent already spawned keeps the text
-  it was pinned with. `identity.persona` isn't gated yet (it has no runtime) and gets the same rule when it does;
-  prompt files stay as `agents.json` prompts are, the project's text.
+  it was pinned with. `identity.persona` gets the same rule since it has a runtime (2026-11-08, below); prompt files
+  stay as `agents.json` prompts are, the project's text.
 - **`export` keeps `extends` by default**; `--flat` writes what the profile resolves to (its ancestors and overrides
   laid in, a prompt of more than a line as a file, every skill it is pinned with from a package copied into
   `skills/`, a `source: user` skill still by name). `default` is never exported, nor a `LOCK`.
@@ -730,6 +730,44 @@ Made while building migrate and the templates (§7 step 9, 2026-11-06; `src/prof
   (the write is refused, saying so).
 - **The deprecation is a notice in this release**: the changelog says `agents.json` is read for the next two minor
   releases, then `validate` warns, then it isn't read. Nothing warns yet.
+
+Made while giving `identity.persona` and `harness.cliVersion` their runtime (2026-11-08; `src/profiles/persona.ts`,
+`src/env/cli-version.ts`, spec §6.6.7, 1.0.56):
+
+- **The persona is pinned like a skill**: read when the profile resolves, from the directory of the manifest that set
+  `identity.persona` (its own, an ancestor's, since a persona is inherited, or an override's), at most 32 KiB and not
+  empty; pinned on the agent at spawn by `{hash, source}` with its text kept with the run (content-addressed, never in
+  an event); each attempt's `agent.preparing` reads it and checks the pin (a missing or different text fails the
+  attempt for good). A retried or resumed agent gets exactly the persona it was spawned with.
+- **"First in the system prompt" is the first text of the agent's instructions, once**: Claude Code keeps its own
+  system prompt (replacing it would drop its tools' instructions), so the persona is the first text of what is appended
+  to it, before the profile's `prompt.append`, the plugins' appends and every skill; with a profile's `prompt.system`
+  (which replaces Claude Code's) it is the first text of that. A CLI without system prompt flags (Codex) reads the
+  system prompt first in its prompt, so the persona leads it there. The runner places it (the prepared spec carries the
+  text), so the order holds whatever the plugins append; `agent.preparing`'s `prompt.persona` shows it to plugins and
+  no patch changes it.
+- **A project's persona is trusted per file and hash, like its skills** (decision 4): trust kind `profile`, the file
+  made real, the sha256 the agent is pinned with. A spawn before `capcomd profiles trust <name>`, or after the file
+  changed, is refused (`untrusted`); a profile that extends one shares its file, so one trust covers both. The user's
+  own persona needs none. `capcomd profiles trust` shows the persona's file, first line, size and hash before asking;
+  `show` and `validate` name it; `rm` of an installed package revokes the trust given to its persona too.
+- **`harness.cliVersion` is a semver range checked when the profile is read** (Bun's `semver.satisfies` accepts any
+  text and says yes to some it can't read, so the range's shape is checked first) **and at spawn against the version
+  the agent's environment recorded** (`capcomd env build` records each CLI's version per build): the profile's
+  `sandbox.environment`, else the sandbox's current build, or, for a plan login kept in an image, the environment that
+  image was made from. Not satisfied: the spawn is refused (`config`, reason `environment`), `capcomd run` refuses
+  such a planner, GET /v1/run-options says it isn't ready, and `validate` warns. **An environment that recorded no
+  version of the CLI** (the sandbox's plain image, no build yet, a version that couldn't be read) **can't be shown to
+  satisfy the range, so the spawn is refused too** (the conservative reading of "a pin the environment must have"). The
+  range is checked against the CLI the agent runs, so an operator's provider swap on a pinned profile is held to it.
+  A project template is matched by name when it is what the agent boots from; the spawn check, like the environment
+  check, doesn't know the run's repository, so it reads the current build's versions (a template is built on the same
+  CLI pins).
+- **Nothing is left "read but not used"**: `notApplied` is empty, and `validate` and `show` say nothing of it until a
+  block is added before its runtime.
+- **Not in this step**: `GET /v1/profiles` rows and `capcomd_profiles` don't list the persona or its trust (the run
+  options' planner readiness does), and `capcomd profiles update` lists a changed persona among the changed files, not
+  on a line of its own as a changed skill is.
 
 Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons in ADR-023 §10):
 

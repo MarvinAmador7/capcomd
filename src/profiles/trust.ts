@@ -5,7 +5,10 @@
 // write. A changed SKILL.md, or the same one in another checkout, needs trusting again. The hash is the sha256 the
 // agent is pinned with (./skills.ts), so what was trusted is exactly what the agent gets. The user's own profiles
 // (written or installed into ~/.capcomd/profiles) and their ~/.claude/skills need no trust: the user put them there.
+// A project's persona (`identity.persona`, ./persona.ts) is prompt text too, the first the agent reads, and is trusted
+// the same way (decision 4): its file made real, the sha256 it is pinned with.
 import { recordTrust, trustState } from "../install/trust";
+import type { ProfilePersona } from "./persona";
 import type { ProfileSkill } from "./skills";
 
 type Env = Record<string, string | undefined>;
@@ -31,23 +34,51 @@ export function projectSkillTrust(skills: readonly ProfileSkill[], env: Env = pr
   });
 }
 
-/** Why an agent of profile `name` isn't spawned with these skills, or null when every project skill is trusted. */
-export function untrustedSkillsProblem(name: string, skills: readonly ProfileSkill[], env: Env = process.env): string | null {
-  const bad = projectSkillTrust(skills, env).filter((s) => s.trust !== "trusted");
-  if (!bad.length) return null;
-  const said = bad.map((s) => `${s.name}${s.trust === "changed" ? " (changed since you trusted it)" : ""}`).join(", ");
-  return `profile ${name} can't be spawned: its project skill${bad.length > 1 ? "s" : ""} ${said} ${bad.length > 1 ? "aren't" : "isn't"} trusted`;
+/** A profile's persona from the project's profiles, and whether the operator trusts it as it is. */
+export interface PersonaTrust {
+  /** As the manifest names it (`SOUL.md`). */
+  file: string;
+  path: string;
+  /** `sha256:<hex>`. */
+  hash: string;
+  trust: "trusted" | "changed" | "untrusted";
+  trustedHash: string | null;
 }
 
-export const untrustedSkillsHint = (name: string) => `A project's profile skills go into its agents' instructions only once you have looked at them: capcomd profiles trust ${name} shows each and asks.`;
+/** A resolved profile's persona with its trust when it is the project's; null for none, or the user's (no trust needed). */
+export function projectPersonaTrust(persona: ProfilePersona | null | undefined, env: Env = process.env): PersonaTrust | null {
+  if (!persona || persona.source !== "project") return null;
+  const hash = `sha256:${persona.hash}`;
+  const t = trustState(PROFILE_TRUST_KIND, persona.path, hash, env);
+  return { file: persona.file, path: persona.path, hash, trust: t.state, trustedHash: t.entry?.hash ?? null };
+}
 
-/** Trust each of the project's skills of a profile as it is now (`capcomd profiles trust <name>`). */
-export function trustProfileSkills(skills: readonly ProfileSkill[], o: { by?: string; env?: Env } = {}): SkillTrust[] {
-  const env = o.env ?? process.env;
-  return projectSkillTrust(skills, env).map((s) => {
-    if (s.trust !== "trusted") recordTrust({ kind: PROFILE_TRUST_KIND, name: s.name, dir: s.path, hash: s.hash, by: o.by ?? "operator" }, env);
+/** Why an agent of profile `name` isn't spawned with these skills and persona, or null when every one of the project's
+ *  is trusted as it is. */
+export function untrustedProfileProblem(name: string, skills: readonly ProfileSkill[], persona: ProfilePersona | null | undefined, env: Env = process.env): string | null {
+  const bad = projectSkillTrust(skills, env).filter((s) => s.trust !== "trusted");
+  const p = projectPersonaTrust(persona, env), badPersona = p && p.trust !== "trusted" ? p : null;
+  if (!bad.length && !badPersona) return null;
+  const changed = (t: SkillTrust["trust"]) => (t === "changed" ? " (changed since you trusted it)" : "");
+  const said = [
+    ...(bad.length ? [`its project skill${bad.length > 1 ? "s" : ""} ${bad.map((s) => `${s.name}${changed(s.trust)}`).join(", ")}`] : []),
+    ...(badPersona ? [`its project persona ${badPersona.file}${changed(badPersona.trust)}`] : []),
+  ];
+  return `profile ${name} can't be spawned: ${said.join(" and ")} ${bad.length + (badPersona ? 1 : 0) > 1 ? "aren't" : "isn't"} trusted`;
+}
+
+export const untrustedProfileHint = (name: string) => `A project's profile skills and persona go into its agents' instructions only once you have looked at them: capcomd profiles trust ${name} shows each and asks.`;
+
+/** Trust each of the project's skills of a profile, and its persona, as they are now (`capcomd profiles trust <name>`). */
+export function trustProfile(skills: readonly ProfileSkill[], persona: ProfilePersona | null | undefined, o: { by?: string; env?: Env } = {}): { skills: SkillTrust[]; persona: PersonaTrust | null } {
+  const env = o.env ?? process.env, by = o.by ?? "operator";
+  const out = projectSkillTrust(skills, env).map((s): SkillTrust => {
+    if (s.trust !== "trusted") recordTrust({ kind: PROFILE_TRUST_KIND, name: s.name, dir: s.path, hash: s.hash, by }, env);
     return { ...s, trust: "trusted", trustedHash: s.hash };
   });
+  const p = projectPersonaTrust(persona, env);
+  if (p && p.trust !== "trusted") recordTrust({ kind: PROFILE_TRUST_KIND, name: p.file, dir: p.path, hash: p.hash, by }, env);
+  return { skills: out, persona: p ? { ...p, trust: "trusted", trustedHash: p.hash } : null };
 }
 
 /** One skill a profile's agents are pinned with, as a profile's row lists it (GET /v1/profiles, capcomd_profiles,

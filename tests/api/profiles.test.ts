@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { addClient, loadClients } from "../../src/api/clients";
 import { Profiles } from "../../src/api/contract";
 import { profileFor, profilesFor, profilesOf } from "../../src/api/profiles";
-import { readProfiles, trustProfileSkills } from "../../src/profiles";
+import { readProfiles, trustProfile } from "../../src/profiles";
 import { harnessApp } from "../../src/api/server";
 import { CreateRunError, memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
@@ -106,7 +106,7 @@ describe("GET /v1/profiles (capability profiles)", () => {
 		const one = await profileFor("rev", w.repo, w.env);
 		expect(one.ok && one.detail.profile.untrustedSkills).toEqual(["house-rules"]);
 		// Trusted as it is (`capcomd profiles trust rev`): no longer held against it.
-		trustProfileSkills(readProfiles(w.agentsFile, w.project).profiles.rev!.skills, { env: w.project });
+		trustProfile(readProfiles(w.agentsFile, w.project).profiles.rev!.skills, null, { env: w.project });
 		by = rows();
 		expect(by.rev).toMatchObject({ skills: [{ name: "house-rules", trusted: true, changed: false }], untrustedSkills: [] });
 		// Its SKILL.md changed since: untrusted again, and said so.
