@@ -93,6 +93,10 @@ describe("setup steps (non-interactive)", () => {
   test("project: detects the repo, writes the project config and worker/reviewer/lead/planner profiles", () => {
     const r = run(["setup", "project", "--yes", "--agents", "claude,codex", "--mode", "direct", "--target", "capcomd/staging", "--json"], { cwd: join(repo, "src"), env });
     expect(r.code).toBe(0);
+    // Every project gets the context consolidator, and its planner may spawn it (ADR-025 D17): nothing to advise.
+    const steps = json(r.out).steps as any[];
+    expect(steps.find((s) => s.step === "profiles").detail).toStartWith("added worker, codex-worker, reviewer, lead, context-consolidator, planner (");
+    expect(steps.find((s) => s.step === "consolidator")).toBeUndefined();
     const cfg = JSON.parse(readFileSync(join(repo, ".capcomd", "config.json"), "utf8"));
     expect(cfg).toEqual({
       env: { CAPCOMD_REPO: "https://github.com/acme/app.git", CAPCOMD_MERGE_MODE: "direct", CAPCOMD_MERGE_TARGET: "capcomd/staging", CAPCOMD_GITHUB_REPO: "acme/app" },
@@ -132,9 +136,14 @@ describe("setup steps (non-interactive)", () => {
     Bun.spawnSync(["git", "remote", "add", "origin", "git@github.com:acme/app.git"], { cwd: r3 });
     mkdirSync(join(r3, ".capcomd"));
     const mine = { provider: "claude", auth: "subscription", model: "opus", allowedTools: ["Read"] };
-    const v1 = JSON.stringify({ schema: "capcomd.agents/v1", default: "worker", agents: { worker: mine, reviewer: mine, planner: { ...mine, children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } } });
+    const v1 = JSON.stringify({ schema: "capcomd.agents/v1", default: "worker", agents: { worker: mine, reviewer: mine, planner: { provider: "claude", auth: "subscription", toolMode: "orchestrate", children: { allowSpawn: true, allowedChildProfiles: ["worker"] } } } });
     writeFileSync(join(r3, ".capcomd", "agents.json"), v1);
-    expect(json(run(["setup", "project", "--yes", "--mode", "direct", "--json"], { cwd: r3, env }).out).ok).toBe(true);
+    const out = json(run(["setup", "project", "--yes", "--mode", "direct", "--json"], { cwd: r3, env }).out);
+    expect(out.ok).toBe(true);
+    // The consolidator is added (ADR-025 D17), but the planner is the project's and can't spawn it: setup says so, with
+    // the command that lets it, and changes nothing of the planner.
+    const fix = "capcomd profiles set planner --set children.allowedChildProfiles=worker,context-consolidator";
+    expect(out.steps.find((s: any) => s.step === "consolidator")).toMatchObject({ ok: true, advice: true, command: fix, detail: expect.stringContaining("may spawn worker but not context-consolidator") });
     // agents.json is as it was; the missing lead and consolidator are profile files, and the default stays agents.json's.
     expect(readFileSync(join(r3, ".capcomd", "agents.json"), "utf8")).toBe(v1);
     expect(readdirSync(join(r3, ".capcomd", "profiles")).sort()).toEqual(["context-consolidator.yaml", "lead.yaml"]);
@@ -144,6 +153,10 @@ describe("setup steps (non-interactive)", () => {
     expect(set.agents.lead).toMatchObject({ model: "opus", allowedTools: ["Read"], toolMode: "orchestrate", children: { allowSpawn: true, maxChildren: 3, maxDepth: 1 } });
     expect(set.profiles.lead!.applied.map((a) => [a.name, a.path])).toEqual([["worker", join(r3, ".capcomd", "agents.json")], ["lead", join(r3, ".capcomd", "profiles", "lead.yaml")]]);
     expect(set.profiles.lead!.manifest.default).toBeUndefined();
+    // The command it gave lets the planner spawn it; setup then has nothing to say.
+    expect(run(fix.split(" ").slice(1), { cwd: r3, env }).code).toBe(0);
+    expect(readProfiles(join(r3, ".capcomd", "agents.json"), env).agents.planner!.children!.allowedChildProfiles).toEqual(["worker", "context-consolidator"]);
+    expect(json(run(["setup", "project", "--yes", "--mode", "direct", "--json"], { cwd: r3, env }).out).steps.find((s: any) => s.step === "consolidator")).toBeUndefined();
   });
 
   test("project: an API-key login gets the spend cap per run it asks for (--budget), saved as driver.maxRunBudget", () => {

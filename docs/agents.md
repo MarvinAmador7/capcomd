@@ -346,6 +346,10 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
 - Each line is plain text: a description is cut to `descriptionChars`, secrets are redacted and anything that looks
   like a fence marker (`<<<…>>>`, or a lone `<<<` or `>>>`) is neutralised. A provider that fails or takes over 10 s is named in the header
   (`memory: skipped (timeout)`) rather than leaving an empty brief.
+- A project with no memory yet (nothing under `.capcomd/context/` on that branch but, say, a `.gitkeep`: no lesson,
+  fact or index file) costs nothing: its agents start with no brief and none of the skills below, exactly as without
+  a `context` block, and the run records `plugin.context.skipped` (`reason: empty`). They can still propose lessons;
+  the first one that is approved and lands turns the brief on for the agents after it.
 - Reviewers and report agents get no memory lines (they judge the tree, not remembered opinions), only facts.
 - After the brief, the agent gets two of capcomd's skills, each in a `<skill name="…">` block like a profile's:
   `capcomd-context-doctrine` (read the file before relying on a line; say which item an answer rests on; a matching

@@ -310,7 +310,12 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
             : `${m.file} ${m.dryRun ? "would stay" : "stays"}, without them, with a note saying where they went; capcomd still reads it.`,
           m.dryRun ? "Nothing was written (--dry-run)." : "Agents already running keep the spec they were spawned with. Commit the new files to share them.",
         ].join("\n");
-      out({ migration: m }, text);
+      // Migrate moves profiles as they are; a project's planner that can't spawn the consolidator is said, with the
+      // command that lets it (ADR-025 D17: every project gets one).
+      const consolidator = profileLayers(path)[0]!.layer === "project" ? await (async () => {
+        try { return (await import("../../config/project-setup")).consolidatorAdvice(readProfiles(path)); } catch { return null; }
+      })() : null;
+      out({ migration: m, ...(consolidator ? { consolidator } : {}) }, consolidator ? `${text}\nNote: ${consolidator.detail}. Run \`${consolidator.command}\` in the project's checkout.` : text);
       return 0;
     }
     case "install": return installCommand(pos.slice(2), values, cmd, path);

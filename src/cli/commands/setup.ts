@@ -299,7 +299,7 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd(), l
   }
   const plan = planProject({ dir, repo, mode, target, check, agents, authOf, cap });
   if (sandbox) plan.patch.env = { ...plan.patch.env, CAPCOMD_SANDBOX: sandbox };
-  const { made, kept } = writeProject(plan);
+  const { made, kept, consolidator } = writeProject(plan);
   // On the projects list the MCP server reads, so an agent's capcomd_projects (and capcomd_setup {project}) sees it now.
   const P = await import("../../config/projects");
   const listed = P.registerProject(dir, { makeDefault: v["default-project"] === true });
@@ -307,6 +307,8 @@ export async function projectStep(p: Prompter, v: Values, cwd = process.cwd(), l
   return [
     { step: "project", ok: true, detail: `${repo} → ${target ?? "no target branch (each run asks for its base; --target B sets one)"} (${mode})${check ? `, check unit='${check}'` : ""}, reviewer on${cap ? `, spend capped at ${cap} per run` : ""}; saved to ${plan.configPath}` },
     { step: "profiles", ok: true, detail: `${made.length ? `added ${made.join(", ")}` : "none added"}${kept.length ? `; kept existing ${kept.join(", ")}` : ""} (${plan.profilesDir})` },
+    // Every project gets the consolidator (ADR-025 D17); a planner the project kept that can't spawn it is advice.
+    ...(consolidator?.missing === "planner" ? [{ step: "consolidator", ok: true, advice: true, detail: consolidator.detail, command: consolidator.command, hint: `Run \`${consolidator.command}\` in ${tildePath(dir)} so the planner can spawn it.` }] : []),
     { step: "project list", ok: true, detail: P.registeredLine(listed, userConfigPath()) },
     ...env,
   ];

@@ -43,7 +43,8 @@ export interface Item {
   /** OKF's handling hint, as the file says it (groundray: public, internal, confidential, restricted). */
   sensitivity?: string;
 }
-export interface Parsed { revision: string; modified: string | null; items: Item[] }
+/** `empty`: the tree keeps no memory at all (no item file and no index, hasMemory), as the memory provider reads it. */
+export interface Parsed { revision: string; modified: string | null; items: Item[]; empty?: boolean }
 /** `index`: the index file the profile names (`memory.files`, ADR-025 §10), whose items alone are read; null: every item. */
 interface Handle { remote: string; sha: string; project: boolean; projectId: string | null; index?: string | null }
 
@@ -135,7 +136,7 @@ export function indexedPaths(text: string): Set<string> {
  *  without an index. An index that isn't there is `not_found`, one too large to read `invalid`: never every item
  *  instead, which would show an agent what its profile left out. */
 export function parseMemory(files: Array<{ path: string; text: string | null }>, o: { revision: string; date: string }, index: string | null): Parsed {
-  if (index === null) return parseItems(files, o);
+  if (index === null) return { ...parseItems(files, o), empty: !hasMemory(files) };
   const f = files.find((x) => x.path === `${CONTEXT_DIR}${index}`);
   if (!f) throw new PluginError("not_found", `no index ${CONTEXT_DIR}${index} at ${o.revision.slice(0, 12)}`);
   if (f.text === null) throw new PluginError("invalid", `the index ${CONTEXT_DIR}${index} is over ${MEMORY_MAX_BYTES / 1024} KB`);
@@ -144,7 +145,22 @@ export function parseMemory(files: Array<{ path: string; text: string | null }>,
   const ids = new Set(all.items.map((i) => i.line.ref.id));
   const items = all.items.filter((i) => named.has(i.line.path) && !(i.authority.supersededBy ?? []).some((s) => ids.has(s)));
   const modified = items.reduce<string | null>((m, i) => (m === null || i.line.modified > m ? i.line.modified : m), null);
-  return { revision: all.revision, modified, items };
+  return { revision: all.revision, modified, items, empty: false };
+}
+
+/** Whether a tree keeps any memory (ADR-025 D17, the owner's decision of 2026-11-08): at least one item file (a
+ *  Markdown file under `memory/` or `facts/` other than OKF's index.md and log.md, read or too large to be) or the index
+ *  (`index.md`, or the one a profile names, which parseMemory requires). A missing or empty `.capcomd/context/`, or one
+ *  holding only other files (a `.gitkeep`), keeps none: its agents get no brief and no context skills, so a project
+ *  with no memory pays nothing in its prompts. */
+export function hasMemory(files: ReadonlyArray<{ path: string }>): boolean {
+  return files.some((f) => {
+    if (!f.path.startsWith(CONTEXT_DIR) || !f.path.endsWith(".md")) return false;
+    const rel = f.path.slice(CONTEXT_DIR.length);
+    if (rel === "index.md") return true;
+    const base = rel.slice(rel.lastIndexOf("/") + 1);
+    return MEMORY_SHAPE.kindOf(rel) !== null && base !== "index.md" && base !== "log.md";
+  });
 }
 
 /** The items of one OKF bundle's tree (parseItems' rules for any shape): the Markdown files under `shape.root` whose
@@ -308,7 +324,8 @@ export function memoryProvider(o: { read?: TreeReader } = {}): ContextProvider {
       const h = handleOf(handle);
       if (!h.project) return { revision: h.sha, modified: null, lines: [] };
       const p = await parsed(h, null);
-      return { revision: p.revision, modified: p.modified, lines: p.items.map((i) => structuredClone(i.line)) };
+      // Nothing under .capcomd/context/ at all: the router sends no brief for it (ADR-025 D17).
+      return { revision: p.revision, modified: p.modified, lines: p.items.map((i) => structuredClone(i.line)), ...(p.empty ? { empty: true } : {}) };
     },
     async search(handle: string, q: ContextSearch, c: SeamCall): Promise<ContextHit[]> {
       return searchItems(await items(handle, c), q);
