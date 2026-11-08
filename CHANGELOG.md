@@ -8,8 +8,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: an in-process plugin's `ctx.events.subscribe` now delivers events, and `ctx.events.replay` works. In the daemon
   a subscription to `daemon` or a run id gets that stream's events (the ones `GET /v1/events` lists) in order, one at a
   time, filtered by `types` if you give them, from `after` or else from now; a handler that throws is logged and that
-  event skipped. Outside the daemon, and in the test kit's `fakeContext`, both now fail with `unsupported` instead of
-  `subscribe` quietly never calling your handler.
+  event skipped. Outside the daemon both now fail with `unsupported` instead of `subscribe` quietly never calling your
+  handler. In the test kit, `fakeContext(...).publish(event)` puts an event on the fake's streams: your subscriptions
+  hear it by the same rules and `replay` returns it.
 - Fix: a lesson an agent proposes, or an item `capcomd context lint` checks, can no longer slip a secret past the
   check with an invisible character (a variation selector, a combining mark, a Hangul filler) or by wrapping it over
   two lines or spacing it out. Secrets you give your own or a project's plugins (`plugins` in

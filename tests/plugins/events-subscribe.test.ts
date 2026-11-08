@@ -14,6 +14,7 @@ import { envelopes, type RawEvent } from "../../src/api/source";
 import { HarnessEvent } from "../../src/api/envelope";
 import { daemonEnvelope, harnessState } from "../../src/api/state";
 import { kernelHost, type RunEventSink } from "../../src/plugins/host";
+import { testkit } from "../../packages/plugin/src/testkit";
 import { heard, listener, recorder } from "./fixtures/event-listener/index";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "event-listener");
@@ -198,5 +199,51 @@ describe("refusals", () => {
     expect(() => c.events.subscribe("daemon", {}, () => {})).toThrow(expect.objectContaining({ code: "unsupported" }));
     await expect(c.events.replay("daemon", 0)).rejects.toMatchObject({ code: "unsupported" });
     await local.stop();
+  });
+});
+
+describe("the test kit's fake context", () => {
+  // A plugin that subscribes at activate still loads and disposes in the kit (§14.1), and the test puts events on its
+  // streams with `publish`: delivered as the daemon delivers them, and replayed.
+  const reader = manifest("kit-reader", { scopes: ["read"] });
+  const env = (stream: string, seq: number, type: string): HarnessEventEnvelope => ({ ...envelopes(stream === "daemon" ? "run-x" : stream, [{ seq, at: 1, type, agentId: null, data: {} }])[0]!, scope: stream, id: `evt_${stream}_${seq}` });
+
+  test("a plugin that subscribes at activate loads and disposes, nothing left registered", async () => {
+    await testkit.loadDispose(reader, { activate(c) { c.events.subscribe("daemon", {}, () => {}); } } as PluginModule<never>);
+  });
+
+  test("publish delivers by stream, filter and `after`, one at a time, logs and skips a throw, stops on dispose; replay reads it back", async () => {
+    const fake = testkit.fakeContext(reader);
+    const got: string[] = [];
+    let running = 0, most = 0;
+    let sub!: { dispose(): void };
+    await testkit.load(fake, { activate(c) {
+      sub = c.events.subscribe("run-kit", { types: ["agent.spawned", "agent.started"], after: 1 }, async (e) => {
+        running++; most = Math.max(most, running);
+        await new Promise((r) => setTimeout(r, 5));
+        running--;
+        if (e.seq === 3) throw new Error("boom");
+        got.push(`${e.type}:${e.seq}`);
+      });
+    } } as PluginModule<never>);
+    await Promise.all([
+      fake.publish(env("run-kit", 1, "agent.spawned")),   // not after 1
+      fake.publish(env("run-kit", 2, "agent.spawned")),
+      fake.publish(env("run-kit", 3, "agent.started")),   // throws: logged, skipped
+      fake.publish(env("run-kit", 4, "agent.ended")),     // not in the filter
+      fake.publish(env("run-other", 5, "agent.spawned")), // another stream
+      fake.publish(env("run-kit", 6, "agent.started")),
+    ]);
+    expect(got).toEqual(["agent.spawned:2", "agent.started:6"]);
+    expect(most).toBe(1);
+    expect(fake.logs()).toContainEqual(expect.objectContaining({ level: "warn", fields: expect.objectContaining({ stream: "run-kit", seq: 3, error: "boom" }) }));
+    expect((await fake.ctx.events.replay("run-kit", 2)).map((e) => e.seq)).toEqual([3, 4, 6]);
+    expect(await fake.ctx.events.replay("daemon", 0)).toEqual([]);
+    await expect(fake.ctx.events.replay("run-none", 0)).rejects.toMatchObject({ code: "not_found" });
+    expect(() => fake.ctx.events.subscribe("prj-abc", {}, () => {})).toThrow(expect.objectContaining({ code: "invalid" }));
+    sub.dispose();
+    await fake.publish(env("run-kit", 7, "agent.started"));
+    expect(got).toEqual(["agent.spawned:2", "agent.started:6"]);
+    expect(await fake.dispose()).toEqual([]);
   });
 });
