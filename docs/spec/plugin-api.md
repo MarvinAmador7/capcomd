@@ -1886,9 +1886,16 @@ Rules:
    `CAPCOMD_JOBS_AFTER_TURN_MS`, settable in config `env`): `max` running jobs per owner (8), `foregroundMs` (60 000;
    5 000 for `orchestrate`), `afterTurnMs` (1 800 000): an agent's `exec` jobs are killed when the agent ends;
    `timeoutMs` per job (default `afterTurnMs`, counted from the job's start; counting it from the agent's last step
-   is a later refinement). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
-   to 64 KB of each from the machine while it runs). A `timer`'s `everyMs` ≥ 1 000; `at` with `everyMs` is the first
-   fire.
+   is a later refinement), never longer than an `afterTurnMs` the owner's profile sets (a longer one asked for gets
+   that; with none set, a job may ask for longer than the default). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
+   to 64 KB of each from the machine while it runs), and is stored within a kv value's 64 KB: when the JSON of the
+   whole record is over, the longer tail loses its oldest part first, then the other, and `truncated` is set (the
+   rest of it is bounded: `cmd` ≤ 16 KB, `cwd` ≤ 4 KB, `env` ≤ 16 KB as JSON, else the start is `invalid`). A
+   `timer`'s `everyMs` ≥ 1 000; `at` with `everyMs` is the first fire. The `jobs` block is limits like `limits`
+   (`widenings()`): an override or a `profile.resolved` patch may lower `max`, `foregroundMs` or `afterTurnMs`, never
+   raise one the profile sets or unset it (unset in the profile: not checked); a profile in `allowedChildProfiles`
+   is held to its spawner's `max` and `afterTurnMs` the same way, while `foregroundMs` is the child's own, as its tool
+   mode is (an orchestrator's 5 000 isn't its workers').
 3. **Slots.** An agent with a running `exec` job keeps its slot (`src/providers/capacity.ts`): it is not `idle` and the
    kernel's idle notice is not raised while jobs run. Its supervisor keeps the agent CLI's input open while one of its
    jobs runs or a result message is on its way (so the CLI is there to read it), and says in each heartbeat how many
@@ -1898,7 +1905,9 @@ Rules:
 4. **Handoff** (`capcomd spawn --continue`): the agent's `exec` jobs are **killed** with its machine when it ends
    (today its machine is destroyed after its push, `ops.ts` → `worker.ts`); a job meant to outlive the agent (a server
    kept for review) is started `owner: {run: true}` and lives until the run ends or its `timeoutMs`. Timers owned by an
-   agent end with it; run-owned and plugin-owned timers do not.
+   agent end with it; run-owned and plugin-owned timers do not. An agent that ends failed or cancelled has its jobs
+   settled when it does, before its machine goes: killed while its machine is attached, else (its last attempt let go
+   of the machine, which a retry would have used) `lost`; none stays `running` on record until someone reads it.
 5. **Cancel**: `jobs.cancel` and an agent's cancel kill its jobs (SIGTERM, SIGKILL after 5 s; state `killed`).
 6. **Daemon restart**: job records are durable. `exec` jobs keep running inside their machine (their runner holds the
    process, in a session of its own); on restart the kernel re-attaches when the agent's spool pump starts again, by
@@ -1906,9 +1915,15 @@ Rules:
    or runner is gone settles `lost`, as does one whose agent ended while nobody watched (when it is next read). Timers
    are re-armed from their records once the daemon's plugins have loaded; a missed `at` (or interval) fires once on
    restart. A plugin's timer is a file in the daemon's state (`state/jobs/<id>.json`); a run's job is kv `_jobs/<id>`,
-   with a pointer there for `get` by id and re-arming.
+   with a pointer there (`state/jobs/<id>.run`) for `get` by id and re-arming. A settled job's pointer records when
+   it settled and is pruned a day later (at the daemon's start, then at most hourly as jobs settle); after that the
+   job is read with its run. A pointer left unmarked is checked at the daemon's start without making its run again.
 7. **Events**: results arrive as `job.changed` hook calls and `job.started`/`job.ended` events; nobody polls. `wait` is
    a convenience bounded by its deadline.
+8. **One owner**: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach the jobs it started (`by: plugin:<name>`) and
+   the jobs of a run that no other plugin started (an agent's, the operator's), as `ctx.agents` reaches a run's
+   agents. Another plugin's job, in a run or the daemon's, is `not_found`, the same answer as an id nobody made, and
+   `list` leaves it out. An agent reaches only its own jobs (in-VM `job.*`).
 
 Why one primitive: the watchdog's clock (§16.4), a source's poll loop (§16.3), the Docker sweep (§15.1, `sandbox-docker`'s
 own timer) and background shell are all "work that reports back later"; one durable record, one owner rule, one event
@@ -2214,6 +2229,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.43 | 2026-11-07 | `ctx.events.subscribe` delivers and `ctx.events.replay` answers, in the daemon's host (§8.4, `src/plugins/events.ts`): the envelopes `GET /v1/events` gives, on `daemon` (its own events, not the SSE stream's `run.created` frames) or a run's stream (through the engine); a stream that is neither is `invalid`, a run that doesn't exist `not_found` on replay; `subscribe` from `filter.after` or else the head, `filter.types` exact, polled, one handler call at a time; a host that isn't the daemon's, or has no sink for them, refuses both `unsupported` instead of registering a subscription that never delivers; the test kit's fake context has streams of its own, `FakeContext.publish(event)` delivering and replaying by the same rules, so a plugin that subscribes at activate still loads there (additive). No contract shape changes. |
 | 1.0.44 | 2026-11-07 | The kernel's own variables and keychain items are out of reach of every plugin but a shipped built-in (§10.3): a fixed list (`BOXD_*`, the GitHub tokens, `CAPCOMD_*` and its deprecated alias `RELAY_*`, `GIT_*`, `RIVET*`, the agent providers' families, in any case; `keychain:capcomd…`) that a secret reference of a user's, a project's or a test's plugin may not name, from any layer, its schema's default included (never followed for such a plugin, per 1.0.37, but refused so the operator sees it); refused at `resolved` as `config_invalid` (the default's on a new value of `plugin.config_refused`'s `layer`, `default`; additive), `forbidden` if resolved anyway, the variable never read; `capcomd plugins validate <dir>` reports such a default and the trust prompt marks the reference or the default refused (§10.3, §10.4). |
 | 1.0.45 | 2026-11-07 | A profile package's `update` keeps every file in its directory that its `LOCK` doesn't list (the user's, as an `override.yaml` is), reports them as `kept` (additive) and refuses (`conflict`) when the new package needs the place of one (an `override.yaml` too), as the file system holding them compares names (on macOS's, case and Unicode form folded; on a case-sensitive one, `Readme.md` beside `README.md` is no conflict); before, it replaced the whole directory but the override (§4.8; ADR-024 §2.5). `trust.json` is changed under `trust.json.lock` by the CLI and the daemon alike, so two changes at once both persist; a lock that isn't a plain file, or a left-over one that can't be moved aside, is refused at once, and `capcomd profiles rm` refused that way puts the package back (§4.8). The temporary files beside `trust.json` and a profile file are created exclusively under a name no one can guess, so a link a checkout put there is never written through. No hook, seam, route or contract shape changes. |
+| 1.0.46 | 2026-11-08 | Jobs, after review of step 7 (§16.2): rule 8, one owner: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach its own jobs and a run's jobs no other plugin started; another plugin's job is `not_found` and `list` leaves it out. Rule 2: the `jobs` block is limits in `widenings()` (an override, a patch or a spawned profile may lower `max` and `afterTurnMs`, never raise or unset one; `foregroundMs` the same for an override and a patch, and a spawned profile's own); a job's `timeoutMs` is at most an `afterTurnMs` its owner's profile sets, so a start can't lift that limit; a settled record is stored within a kv value's 64 KB, its tails cut oldest first, with `cwd` (≤ 4 KB) and `env` (≤ 16 KB) bounded as `cmd` is. Rule 4: an agent that ends failed or cancelled has its jobs settled at once (killed, else `lost`). Rule 6: a settled job's pointer is pruned a day after it settled. No hook, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
