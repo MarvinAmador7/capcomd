@@ -61,6 +61,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   lessons are cut before facts. The brief's header no longer says that a brain's files are "in your checkout": it
   says they are in the read-only copy of the bundle in the agent's sandbox, at the path each line gives, and so does
   the `capcomd-context-doctrine` skill agents get with the brief.
+- New: an app can send a run's proposals to a company's brain. `GET /v1/runs/{runId}/brain-proposals` lists what the
+  run's consolidators proposed and whether each was sent; `POST /v1/runs/{runId}/brain-proposals/send` (a token with
+  the `configure` scope and an `Idempotency-Key`) sends those waiting as you, like `capcomd context brain propose
+  --run <runId> --yes`: each draft in the brain names your client (`human:<client id>`) as its author. A retry with the
+  same key doesn't send twice; when one can't be sent the answer is 503 with what happened to each, and sending again
+  sends the rest. Clients check for the `context.brain_proposals` capability.
+- Fixed: a consolidator whose profile names a brain the project doesn't map now has its proposals for that brain
+  refused when it finishes, with the brain's name and how to map it (`capcomd context brain add <name> <repository>`),
+  instead of keeping them to fail later when you send them.
+- Fixed: sending a brain proposal again after its pull request was merged (and its branch deleted) no longer opens a
+  second draft and pull request: capcomd finds the item on the brain's main branch and says it is there.
 - New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at
   most 32 KiB) is now the first thing each of its agents reads, once, before the profile's prompt and its skills. The
   agent keeps the text it was spawned with; a later edit reaches only agents spawned after it. A persona from the

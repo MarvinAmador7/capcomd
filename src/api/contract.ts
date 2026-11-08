@@ -532,6 +532,7 @@ export const CAPABILITIES = {
 	"profiles.facts": "GET /v1/profiles rows (and GET /v1/profiles/{name}'s `profile`) carry what a planner chooses by: `title` (untrusted), `fit` (a daemon-written sentence), `cost`, `canReport`, the `skills` its agents are pinned with (names and hashes, never their text) `untrustedSkills`, the project skills a spawn of it waits on the operator's trust for, `untrustedPersona`, its project persona when a spawn of it waits on the same, and `untrustedSandbox`, the project's profile files that set its `sandbox.provider` when a spawn of it on a run without a sandbox of its own waits on the same",
 	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, an untrusted project file that sets its sandbox.provider (a run started with a `sandbox` of its own doesn't wait on it), a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
 	"plugins.routes": "Plugin API routes (plugin API §4.7.3): METHOD /v1/x/{plugin}/… serves a plugin's own routes, JSON in and out, with the caller's token, which needs the scope the route declares (403 `forbidden` otherwise; 404 `not_found` for a route no active plugin serves; a plugin's failure is 500 `internal` with the message \"plugin error\"). GET /v1/plugins/{name} lists its `routes` and the `capabilities` it adds here, named x.<plugin>.<flag>",
+	"context.brain_proposals": "A run's proposals to a company's brain (ADR-025 step 5): GET /v1/runs/{runId}/brain-proposals lists them and whether each was sent; POST /v1/runs/{runId}/brain-proposals/send (the `configure` scope, an Idempotency-Key) sends those waiting for a person as the caller (groundray's actor human:<client id>), as `capcomd context brain propose --run <runId> --yes` does",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -1170,6 +1171,42 @@ export const PULL_REQUEST_DOC = "Capability runs.goal_branch. Open a GitHub pull
 	"Needs the steer scope: it lands nothing (the base changes only when someone merges the pull request on GitHub), like starting a run, which pushes branches. " + WRITE_DOC;
 export const KEEP_BRANCH_DOC = "Capability runs.goal_branch. Keep the goal branch without a pull request (no body): recorded so clients stop asking (Run.goalBranch.state kept; run.branch_kept on the run stream). Opening a pull request later is still allowed. 409 `conflict` while the planner works, or once a pull request was opened. Needs the steer scope. " + WRITE_DOC;
 
+/** A run's proposals to a company's brain (capability context.brain_proposals; ADR-025 step 5). */
+const BrainProposalSentTo = z.object({
+	actor: z.string().describe("groundray's actor the draft was written as: human:<client id> (a person sent it), else capcomd/<version> (the kernel, under a consolidator's `review: lint`)"),
+	at: z.string(), item: z.string().describe("The draft item's id in the brain (urn:uuid:…)"),
+	where: z.string().describe("The pull request on the brain's repository (its URL), else the repository and the branch that holds the draft"),
+});
+export const BrainProposal = z.object({
+	id: z.string().describe("<agentId>.<n>: the consolidator that proposed it and its place in its answer"),
+	agentId: z.string(), brain: z.string().describe("The brain's name, as the project maps it"),
+	type: z.string().describe("One of groundray's item types (concept, decision, procedure, policy, system, source-summary, question)"),
+	title: z.string().describe("The agent's title for it: untrusted text, render it as plain text"),
+	from: z.array(z.string()).describe("The run's lesson candidates it was made from"), at: z.string(),
+	sent: BrainProposalSentTo.nullable().describe("null: not sent yet"),
+	error: z.string().optional().describe("Why the last send failed, while it isn't sent"),
+});
+export const BrainProposals = z.object({ runId: z.string(), proposals: z.array(BrainProposal).describe("In the order they were proposed") });
+export const BrainProposalsSendBody = z.object({
+	agentId: z.string().regex(/^agt-[A-Za-z0-9_-]{1,64}$/).optional().describe("Only this consolidator's proposals (default: every consolidator of the run)"),
+});
+export const BrainProposalOutcome = z.object({
+	id: z.string(), brain: z.string(), title: z.string(),
+	ok: z.boolean(), already: z.boolean().describe("It was sent before (this call didn't send it again)"),
+	item: z.string().optional(), where: z.string().optional(), error: z.string().optional().describe("Why it couldn't be sent (ok false)"),
+});
+export const BrainProposalsSent = z.object({
+	runId: z.string(), actor: z.string().describe("Whom the drafts were written as: human:<your client id>"),
+	sent: z.array(BrainProposalOutcome).describe("Every proposal of the run (or of `agentId`), in order: sent now, or sent already. Empty: it proposed nothing to a brain"),
+});
+export const BRAIN_PROPOSALS_DOC = "Capability context.brain_proposals. A run's proposals to a company's brain (ADR-025 step 5): the new facts its consolidators proposed for the brain their profile names, with whether each was sent. " +
+	"A proposal waits for a person (its consolidator's `review: human`, the default) until one sends it with POST …/brain-proposals/send or `capcomd context brain propose --run <runId> --yes`; under `review: lint` the kernel sends it as capcomd. Needs the `read` scope. 404 `not_found` for an unknown run. " +
+	"Refetch on plugin.context.brain_staged and plugin.context.brain_proposed.";
+export const BRAIN_PROPOSALS_SEND_DOC = "Capability context.brain_proposals. Send the run's proposals not sent yet to their brains as you (body optional: `{\"agentId\": \"agt-…\"}`), as `capcomd context brain propose --run <runId> --yes` does: each becomes a draft on the run's proposal branch of the brain's repository (written by groundray with the actor human:<your client id>) and a pull request there for the brain's owners; what agents read doesn't change. " +
+	"Those sent already stay as they were (`already`), whoever sent them; a proposal the brain already holds (its pull request merged) isn't drafted again. Each one sent is a plugin.context.brain_proposed event on the run stream. " +
+	"200 once every proposal is sent (`sent` empty: the run proposed nothing). 503 `unavailable` when one or more couldn't be sent (the brain or groundray didn't answer, or refused): the body adds `sent`, each with its `error`; those sent stay sent, so send again (with the same Idempotency-Key or a new one) for the rest. " +
+	"Needs the `configure` scope: the drafts are written in your name in another repository. A plugin's token is 403 `forbidden`: a plugin never sends a proposal in a person's name. `Idempotency-Key` (8-200 chars) is scoped to the calling client and kept 24h: the same key and body answer the first 200 again without sending; the same key with another run or body is 409 `idempotency_conflict`. 404 `not_found` for an unknown run.";
+
 /** PUT /v1/runs/{runId}/agents/{agentId}/title (capability agents.title). */
 export const AgentTitleBody = z.object({
 	title: z.string().max(200).describe(`The user's title for the agent: 1 to ${TITLE_WORDS_MAX} words, at most ${TITLE_MAX_CHARS} characters. Trimmed, whitespace collapsed, lowercased, control and format characters dropped; refused (422 \`invalid\`, field title) when that leaves no words, or more words or characters than that`),
@@ -1224,6 +1261,9 @@ export const contract = {
 			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders, body: PullRequestBody.optional() })).output(GoalPullRequestResult),
 		keepBranch: oc.route({ method: "POST", path: "/v1/runs/{runId}/keep-branch", inputStructure: "detailed", description: KEEP_BRANCH_DOC })
 			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders })).output(z.object({ runId: z.string(), branch: z.string(), base: z.string(), kept: z.literal(true), changed: z.boolean().describe("This call recorded it (false: it was kept already)") })),
+		brainProposals: oc.route({ method: "GET", path: "/v1/runs/{runId}/brain-proposals", description: BRAIN_PROPOSALS_DOC }).input(z.object({ runId: z.string() })).output(BrainProposals),
+		sendBrainProposals: oc.route({ method: "POST", path: "/v1/runs/{runId}/brain-proposals/send", inputStructure: "detailed", description: BRAIN_PROPOSALS_SEND_DOC })
+			.input(z.object({ params: z.object({ runId: z.string() }), headers: IdempotencyHeaders, body: BrainProposalsSendBody.optional() })).output(BrainProposalsSent),
 		pause: oc.route({
 			method: "POST", path: "/v1/runs/{runId}/pause", inputStructure: "detailed",
 			description: `Pause every pending or running agent of the run (no body). An agent that hasn't started is paused now (\`changed\`); a running one is asked to stop (\`pending\`): ` +

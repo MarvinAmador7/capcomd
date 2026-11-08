@@ -23,8 +23,9 @@
 //
 // The actor is the person who approved the proposal (`human:<id>`, from an operator's or driver's principal), else
 // capcomd itself (`capcomd/<version>`): an agent can't name a person (ADR-025 §7). Idempotent by a marker in the item's
-// source (`capcomd://runs/<run>/agents/<agent>/proposals/<key>`): a proposal the branch already holds is found, not
-// made again, and its pull request is found too.
+// source (`capcomd://runs/<run>/agents/<agent>/proposals/<key>`): a proposal the brain's branch already holds (its pull
+// request merged, the proposal branch perhaps deleted) is found there and nothing is made or opened again; one the
+// proposal branch holds is found, not made again, and its pull request is found too.
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -90,7 +91,8 @@ export interface BrainWritten {
   branch: string;
   /** The pull request on the brain's repository, or null when no forge there opens one (the branch is pushed). */
   pullRequest: { number: number; url: string | null } | null;
-  /** The branch held it already (a replay): nothing was created. */
+  /** The branch held it already (a replay): nothing was created. When the brain's own branch holds it (its pull request
+   *  was merged), `branch` is that branch and `pullRequest` null. */
   already: boolean;
 }
 
@@ -217,17 +219,22 @@ export async function writeToBrain(brain: BrainTarget, draft: BrainDraft, actor:
     if (fetched.code !== 0) throw fail(`can't fetch brain ${brain.name} from ${brain.repo}`, fetched);
     const base = proposed ?? brainTip;
 
-    // Already there (a replay, or the same proposal sent twice): the item that carries this proposal's marker.
-    if (proposed) {
-      const found = await host.run(["grep", "-l", "-F", source.resource, proposed, "--", `${brain.bundle}/`]);
+    // Already there (a replay, or the same proposal sent twice): the item that carries this proposal's marker. On the
+    // brain's branch first: its pull request was merged (and the proposal branch perhaps deleted), so nothing is drafted
+    // or opened again; then on the proposal branch, whose pull request is found.
+    const holding = async (tip: string) => {
+      const found = await host.run(["grep", "-l", "-F", source.resource, tip, "--", `${brain.bundle}/`]);
       const path = found.code === 0 ? found.stdout.split("\n")[0]!.replace(/^[0-9a-f]+:/, "") : null;
-      if (path) {
-        const text = (await host.run(["show", `${proposed}:${path}`])).stdout;
-        const itemId = /^id:\s*["']?([^"'\s]+)["']?\s*$/m.exec(text)?.[1] ?? "";
-        const commit = (await host.run(["log", "-1", "--format=%H", proposed, "--", path])).stdout.trim() || proposed;
-        return { itemId, path, commit, branch, pullRequest: await pr(), already: true };
-      }
-    }
+      if (!path) return null;
+      const text = (await host.run(["show", `${tip}:${path}`])).stdout;
+      const itemId = /^id:\s*["']?([^"'\s]+)["']?\s*$/m.exec(text)?.[1] ?? "";
+      const commit = (await host.run(["log", "-1", "--format=%H", tip, "--", path])).stdout.trim() || tip;
+      return { itemId, path, commit };
+    };
+    const merged = await holding(brainTip);
+    if (merged) return { ...merged, branch: brain.branch, pullRequest: null, already: true };
+    const held = proposed ? await holding(proposed) : null;
+    if (held) return { ...held, branch, pullRequest: await pr(), already: true };
 
     // The authoring clone: on main at the base, as groundray wants it, its origin the bare repo (a local path).
     await host.ok(["update-ref", "refs/heads/main", base]);
