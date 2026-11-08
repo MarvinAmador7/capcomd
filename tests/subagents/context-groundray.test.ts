@@ -119,8 +119,10 @@ test("an agent is briefed from the brain the run started with and finds its file
   // The brain is in the sandbox at that commit, read-only, without history.
   expect(readFileSync(join(placed, "knowledge", "policies", "refunds.md"), "utf8")).toContain("THE-BODY-OF-THE-POLICY");
   expect(statSync(join(placed, "knowledge", "policies", "refunds.md")).mode & 0o222).toBe(0);
-  expect(readFileSync(join(placed, ".capcomd-bundle"), "utf8")).toBe(pinned);
+  expect(readFileSync(join(placed, ".capcomd-bundle"), "utf8")).toBe(`${pinned} knowledge`);
   expect(existsSync(join(placed, ".git"))).toBe(false);
+  // Only the bundle's directory: the rest of the brain's repository stays on the host.
+  expect(existsSync(join(placed, "brain.yaml"))).toBe(false);
 
   // The brain moves on and the project maps its new tip: the run keeps the commit it started with.
   await brainRepo.pushToMain("knowledge/policies/returns.md", fm(["type: policy", "id: returns", "description: Returns ship back free of charge", "status: stable"], "Returns."));

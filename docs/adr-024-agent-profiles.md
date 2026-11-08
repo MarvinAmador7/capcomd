@@ -401,7 +401,7 @@ Docker to boxd and spend the user's boxd credit there):
    project's skills and persona (decision 4): trust kind `profile`, per file hash, refusal reason `untrusted`,
    `capcomd profiles trust`. A user-layer profile needs no trust.
 
-How it is built (spec 1.0.61; `src/providers/run-sandbox.ts`, `src/profiles/trust.ts`, `src/primitives/ops.ts`
+How it is built (spec 1.0.63; `src/providers/run-sandbox.ts`, `src/profiles/trust.ts`, `src/primitives/ops.ts`
 `checkResolved`):
 
 - **"Explicit" is recorded with the run**: `run new` writes `explicit: true` in the run's `_sandbox` record (reserved

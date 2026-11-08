@@ -63,6 +63,16 @@ export function fakeGitHub(bare: string, opts: { requireChecks?: boolean; mergeQ
 
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const view = (p: FakePr) => ({ ...p });
+  // Comments, oldest first; the token's own login is VIEWER (the user's: what capcomd posts is theirs too).
+  const VIEWER = "you";
+  const comments: Array<{ repo: string; id: number; body: string; user: { login: string; type: string }; html_url: string; issue_url: string; created_at: string; updated_at: string }> = [];
+  function addComment(repo: string, number: number, login: string, body: string) {
+    const id = 1000 + comments.length, at = new Date().toISOString();
+    const c = { repo, id, body, user: { login, type: login.endsWith("[bot]") ? "Bot" : "User" }, html_url: `https://github.com/${repo}/pull/${number}#issuecomment-${id}`, issue_url: `https://api.github.com/repos/${repo}/issues/${number}`, created_at: at, updated_at: at };
+    comments.push(c);
+    const { repo: _, ...shown } = c;
+    return shown;
+  }
 
   const server = Bun.serve({
     port: 0,
@@ -94,6 +104,15 @@ export function fakeGitHub(bare: string, opts: { requireChecks?: boolean; mergeQ
         pulls.push(pr);
         return json(201, view(pr));
       }
+      // Issue and pull-request conversation comments (the github trigger source reads them; its replies post one).
+      if (req.method === "GET" && (m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/comments$/))) {
+        const since = Date.parse(url.searchParams.get("since") ?? "1970-01-01T00:00:00Z");
+        return json(200, comments.filter((c) => c.repo === m![1] && Date.parse(c.updated_at) >= since).map(({ repo: _, ...c }) => c));
+      }
+      if (req.method === "POST" && (m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/))) {
+        const b: any = await req.json();
+        return json(201, addComment(m[1]!, Number(m[2]), VIEWER, String(b.body ?? "")));
+      }
       if ((m = url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)(\/merge)?$/))) {
         const pr = pulls.find((p) => p.number === Number(m![1]));
         if (!pr) return json(404, { message: "Not Found" });
@@ -113,7 +132,9 @@ export function fakeGitHub(bare: string, opts: { requireChecks?: boolean; mergeQ
 
   return {
     url: `http://127.0.0.1:${server.port}`,
-    pulls, calls,
+    pulls, calls, comments,
+    /** Someone writes on an issue or a pull request's conversation. */
+    comment: (repo: string, number: number, login: string, body: string) => addComment(repo, number, login, body),
     /** Required checks go green; auto-merge / the queue then merges. */
     async passChecks() {
       checksPassing = true;

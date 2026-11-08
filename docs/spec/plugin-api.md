@@ -200,7 +200,7 @@ under some settings is registered anyway and does nothing without them, as the b
 |---|---|---|
 | `hooks` | `{ [hook]: { timeoutMs?, failure?, changes? } }` (§6); `changes`, for `job.changed` only, lists the change kinds the listener is called for (§6.6.19) | `ctx.hooks.on` |
 | `seams` | `{ kind, name }`, at most one per kind (§7) | `ctx.seams.sandbox/agent/forge` |
-| `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source) |
+| `sources` | `{ name, summary }` (§16.3) | `ctx.triggers.emit` (no registration call: emitting names the source); its reply path, optional, `ctx.triggers.onReply(source, reply)` (§16.3.7; in process only in protocol v1, like the seams) |
 | `context` | `{ name, kinds: ("fact" \| "memory")[] }`, each also in `provides` as `context:<name>` (ADR-025 §3.1) | `ctx.context.register(impl)`: `impl.describe().name` is the declared name; in process only in protocol v1, like the seams |
 | `cli` | `{ name, summary }` (§4.7.1) | `ctx.cli.command` |
 | `mcp` | `{ name, summary }` (§4.7.2) | `ctx.mcp.tool` |
@@ -703,14 +703,23 @@ the kernel's: a profile can't name them, and a profile with a context block keep
 two when it may spawn, and their bytes), as one that may spawn does for the orchestration skill. Each provider is asked once per brief, for the profile's first entry naming it (a second is
 `skipped (named twice)`: two brains are never in one brief), with that entry's own settings as `ContextScope.settings`
 (groundray's `brain`). A provider that declares `caps.bundle` may name, from `resolve`, the one repository at a commit its
-lines point into (`ContextBundle {remote, branch, commit, name}`, ADR-025 §6.2); the router keeps it only when the
-provider loaded, the remote is a URL or path without a credential in it and the commit is full, and leaves it in the
-kernel's record of the call (`preparingAgent`, not the patch, so no plugin can place files), from which the attempt's spec
-records it (`contextBundles`, with its directory `<workdir>/context/<provider>/<name>`, `ContextScope.bundleRoot`). The
-attempt's runner places each before the agent starts: the tree at that commit from the host's mirror of the repository
-(§11.7, `sendTreeAt`), its files read-only, a `.capcomd-bundle` marker naming the commit (one the sandbox already has at
-that commit, an earlier attempt's or an environment image's, is kept). A bundle that can't be placed leaves the agent
-to start without it and its log says so.
+lines point into (`ContextBundle {remote, branch, commit, name, path?}`, ADR-025 §6.2); the router keeps it only when the
+provider loaded, the remote is a URL or path without a credential in it, the commit is full and `path`, when given, is a
+plain directory (names separated by `/`, no `.` or `..`), and leaves it in the kernel's record of the call
+(`preparingAgent`, not the patch, so no plugin can place files), from which the attempt's spec records it
+(`contextBundles`, with its directory `<workdir>/context/<provider>/<name>`, `ContextScope.bundleRoot`). The attempt's
+runner places each before the agent starts: the tree at that commit from the host's mirror of the repository (§11.7,
+`sendTreeAt`), only the directory `path` of it when the bundle names one (at the same path under its directory; groundray
+names its bundle's, so nothing else of a brain's repository reaches the sandbox), its files read-only, a `.capcomd-bundle`
+marker naming the commit and the path (one the sandbox already has as that bundle, an earlier attempt's or an environment
+image's, is kept). It first removes every other bundle under `<workdir>/context/`: an agent's sandbox holds only the
+bundles its brief cites, and one that can't be cleaned doesn't start the agent. A checks VM (`capcomd verify` running a
+run's checks in a VM) removes `<workdir>/context/` before the tree under test runs. A bundle that can't be placed leaves
+the agent to start without it and its log says so.
+`capcomd env build` (and `env build --project`) places the brains the checkout's project maps, each checked as `resolve`
+checks it, in the image the same way, so an agent's runner keeps them and sends nothing at start; they are part of the
+image's name (EnvManifest `bundles`), and one with credential-shaped text or a local key value in it is left out of the
+image.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
 `AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|worked{files, command, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
@@ -1066,7 +1075,7 @@ fetch and integrate (`src/merge/integrate.ts`), the checks (`src/merge/verify.ts
 | `matches(remote)` | pure; the default selection rule (§7.1) |
 | `classifyError(e)` | §7.2.3 |
 | `land(req, c)` | Called **under the kernel's target lock**. `mode: "direct"`: push `req.sha` to `req.target` as a compare-and-swap on `req.targetSha` (with `req.leaseBranch`, the branch leased at `req.branchSha` in the same atomic push; a remote that refuses atomic pushes is `{status: "failed", retryable: true}`); a moved target is `{status: "conflict", targetSha}` (`""` when the forge doesn't know it) and the kernel fetches and re-integrates. `mode: "pr"`: the branch is pushed already; find or open the pull request and merge it with `req.strategy` at exactly `req.branchSha`, the head the kernel integrated as `req.sha` and checked (the hosting service makes the merge commit, so the outcome's `sha` is the service's); a pull request the service can't merge is `conflict`, a wait past the deadline `{status: "failed", retryable: true}`. **Idempotent by `req.mrgId`**: a replay after a crash finds the existing PR or the pushed commit and reports `already: true`. MUST reject `unsupported` for `pr` when `pullRequests` is false. |
-| `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)`. A merged pull request carries `mergeSha`, so a pr-mode merge that finds one records it without integrating again |
+| `openPullRequest`, `findPullRequest` | `POST /v1/runs/{runId}/pull-request`, `capcomd_pr_open`, `capcomd pr` (goal branches); idempotent by `(remote, head, base)`. A merged pull request carries `mergeSha`, so a pr-mode merge that finds one records it without integrating again. `thread` (optional, additive): the pull request's conversation as a trigger source names it (`{source, thread}`; forge-github: `{source: "github", thread: "owner/name#N"}`), which the run then follows (§16.3.6) |
 | `publishRepository` | `POST /v1/projects/publish`, asked of the first active forge whose `describe().publish` (forge-github: `gh repo create`); the event names where it went by the returned `url`. A name the service has already is `conflict` |
 | `listBranches({remote, cwd, max}, c)` | `POST /v1/runs` base resolution (`capcomd run`, `capcomd_run_new`) and `GET /v1/projects/branches`: `{defaultBranch, branches, source, note}`, from the service's API (`source: "service"`; the kernel reports the forge's name, `describe().name`: `github`, or a forge plugin's own, so the route's `source` is a string) when it can, else from the remote itself (`"git"`: `git ls-remote`, its `HEAD` the default branch, never guessed), with `note` saying why the service wasn't used. Rejects, saying why, when the remote can't be read at all; the kernel then reads the checkout's own refs (`local`) |
 | `login({use, accounts?}, c)` | Whether the user's own login at the service is on this machine for `use`: `pullRequests` (the goal branch's `openPullRequest.available`, the setup wizard's suggestion; forge-github: a token, `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`) or `publish` (`GET /v1/projects/inspect` and `publish-options` `ghReady`, publishing; forge-github: `gh auth status`); with `accounts`, as whom (`publish-options` `accounts`: the user, then its organizations; forge-github: `gh api user`, `gh api user/orgs`). Shaped like `available`: `{ok: true, accounts}` or `{ok: false, reason, fix}`, sentences the kernel puts in its own ("capcomd opens pull requests with your GitHub login, and there is none on this machine: <fix>, then try again"). Cheap (the forge may cache it; forge-github asks at most every 30 s) and never rejects |
@@ -2076,7 +2085,8 @@ zero-width spaces) or line and paragraph separators in `id`, `thread` or the act
 the planner's message show them; the display name loses its: control characters and line breaks become spaces, format
 characters go, but a zero-width joiner inside an emoji), text and data ≤ 64 KB each) and refuses a malformed trigger
 `invalid` before recording anything; `ctx.triggers.subscribe` checks its `thread` the same way. `capcomd triggers log`
-and `subscriptions` print any such character they find in the records as `\u{…}`. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4).
+and `subscriptions` print any such character they find in the records as `\u{…}`. A source keeps its read position in `ctx.storage`'s daemon scope (§8.4). A source MAY give the daemon a reply path (`ctx.triggers.onReply`, §16.3.7); what it
+posts there MUST carry the source's own mark, so its next read drops it as its bot's words.
 
 Two built-in sources ship with step 10, each on its plugin's own `timer` job (§16.2), in the daemon only:
 
@@ -2087,13 +2097,15 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   {id: schedule:<name>, bot: true}, addressed: direct, text}`. Every fire is its own thread, so one night's run never
   gets the next night's fire as a message. The operator allows the actor (or opens `schedule:*`) like any other.
 - `github` (`forge-github`, `src/plugins/forges/github-source.ts`; no GitHub code in the kernel): the issue and pull
-  request comments of its config's `sourceRepos` (`owner/name`), and of the repositories of the `github` threads runs
-  follow, read every `sourceEveryMs` (60 s) with the user's GitHub login; thread `owner/name#<number>`, id
+  request comments of its config's `sourceRepos` (`owner/name`), and the comments on the `github` threads runs follow
+  (in a repository `sourceRepos` doesn't name, only those threads: a goal branch's pull request is no reason to read the
+  rest of its repository), read every `sourceEveryMs` (60 s) with the user's GitHub login; thread `owner/name#<number>`, id
   `comment-<id>`, actor the author (`bot` from GitHub's user type), `addressed: mention` when a line starts with the
   command word (`sourceCommand`, `/capcomd`), or, with `sourceMentions: true` (off by default), when someone else
   @-mentions the login; `replyTo` the comment's URL. The login is usually the user's own: a mention of it addresses
   the user, not capcomd, and their comments are theirs, not the bot's: what the source drops as its own is what
-  capcomd wrote (a comment carrying `<!-- capcomd -->`; capcomd posts none yet, replies are a later step's). Its read
+  capcomd wrote (a comment carrying `<!-- capcomd -->`, as its replies do: its reply path posts one comment on the
+  thread, §16.3.7). Its read
   position is per repository in `ctx.storage`; the first poll of a repository only marks where it starts, and a
   comment whose emit was refused retryably (`unavailable`: the trigger may come again, §16.3.2) waits for another
   try, after one poll interval, then twice the wait before each time (at most an hour), and is given up after 8 tries
@@ -2103,9 +2115,10 @@ Two built-in sources ship with step 10, each on its plugin's own `timer` job (§
   includes its own second, so this also covers the comments read at that second (else each poll would emit them
   again, a `deduped` decision a minute). A read returns at most 100 comments: past that many handled after a
   waiting comment, newer ones wait until it is handled or given up. The source's `job.changed` listener is registered whatever its settings, as its
-  manifest declares it (§4.7), and polls only when `sourceRepos` names a repository (as `source-schedule` schedules
-  nothing without a schedule); it declares `changes: ["fired"]`, so its listening never makes the daemon read a
-  running job's output (§6.6.19).
+  manifest declares it (§4.7), and its timer runs in the daemon whatever its settings (a run follows its goal branch's
+  pull request once it is open, §16.3.6); a fire calls GitHub only when `sourceRepos` names a repository or a run
+  follows a `github` thread (nothing configured and nothing followed: no call, not even for the login). It declares
+  `changes: ["fired"]`, so its listening never makes the daemon read a running job's output (§6.6.19).
 
 #### 16.3.2 The intake
 
@@ -2121,9 +2134,26 @@ with the `TriggerDecision`:
    (the prototype's rule). The planner is the run's `_planner` record, else its top-level agent spawned with the key
    `planner`; a run with neither (a run driven from outside, or the built-in recipe's) has no one to read it, and the
    trigger goes on to the gate. The message is `from: trigger:<source>`, its body who wrote on which thread and what
-   (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. A person's trigger
-   on an ended run's thread lands in its planner's inbox; starting the planner again on it is a later step's. When the
-   engine doesn't say where a run subscribed to the thread stands (an error, or no answer within
+   (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. On a run that
+   **ended**, a person's trigger is asked steps 3 to 5 (once per trigger; `trigger.admitting`'s `gate.subscribed` names
+   the run), since starting its planner again spends as a start does: when they would act (allowed and addressed, or
+   allowed in `auto`), the planner **starts again** on it: a new top-level planner (the last one's profile ref, brief and
+   contract without `from`, the key `planner-<hash of the message key>`, so a trigger starts at most one), with the
+   message in its inbox before it starts and its brief saying why it works again (`restartBrief`), and the run's
+   `_planner` once it is started (`restartPlanner`: a restart that fails part way is done again by the same trigger, the
+   same key and agent, and never leaves the run's planner one that doesn't start) → `continued {runId, seq, restarted:
+   <its agent id>}`; a planner that works again already only gets the message (`continued` without `restarted`, unless
+   it is the one this trigger started: a restart the engine finished after the intake gave up on it, sent again). One
+   restart of a run at a time: a second trigger on it finds the planner the first started; a restart the engine doesn't
+   finish within `CAPCOMD_TRIGGERS_ENGINE_MS` fails for now (`unavailable`), and sent again, the same trigger finds or
+   finishes the same planner. In `observe`, inferred: the message lands in the ended planner's inbox
+   → `recorded {wouldHave: "continue", runId}`. Refused (not allowed, a plugin's denial, `off`): it lands in the inbox
+   only → `continued {runId, seq}`, the log's `gate` saying why nothing started. A planner that can't start (its
+   profile, the run's budget or sandbox: a `RelayError` other than an unreachable engine) is a start that fails, refused
+   for good (`invalid`), and the message still lands in the ended planner's inbox (as a refusal by the gate leaves it);
+   anything else fails for now (`unavailable`, the source sends it again). The new planner is
+   spawned as the operator's (§3.2: no source principal reaches `agent.spawning`; the trigger's gate decided).
+   When the engine doesn't say where a run subscribed to the thread stands (an error, or no answer within
    `CAPCOMD_TRIGGERS_ENGINE_MS`, 15 s), and no other subscribed run took the message, the trigger doesn't go on to the
    gate (a new request there could start a second run on the thread): it is a start that fails, `unavailable`
    (retryable), and the subscription holds. A delivery the engine doesn't confirm in time is the same; sent again, it is
@@ -2145,9 +2175,9 @@ with the `TriggerDecision`:
    with the source plugin as the principal; harness.v1's additive `Run.trigger {source, id, thread, actor, at}`, under
    the capability `triggers`) → `started`, and subscribe the run to the thread. The goal is checked as `POST /v1/runs`
    checks one (`CreateRunBody.goal`: not empty, ≤ 16 KB, no NUL, no leading `[agent:NAME]`, so a source's words never
-   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start` in
-   this version: continuing a goal branch's run that a thread names comes with the pull-request subscriptions of
-   §16.3.6. A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
+   pick the run's agent profile); a text that fails is a start that fails, `invalid`. `recorded.wouldHave` is `start`
+   here (`continue` is step 2's, for an ended run). A started run answers on the thread when it ends, if the source's
+   replies are on (§16.3.7). A start that fails (no repository, a `run.creating` refusal) is no decision: the log says `failed` with the
    reason, `trigger.received` has `decision: "failed"`, no `trigger.changed` is told, the dedupe mark is dropped (the
    trigger may come again) and `emit` rejects: `invalid` for the operator's settings, else `unavailable`. A run that
    started is never undone: when its records can't be written after it (the log's line, `Run.trigger`'s record, its
@@ -2180,7 +2210,7 @@ threads runs follow, from the daemon's state on this machine (the daemon need no
 #### 16.3.5 Subscriptions and lifetimes
 
 `ctx.triggers.subscribe {runId, source, thread, until?}`; the intake subscribes a started run to its thread
-automatically. Default `until` = 14 days after the run ends; the host expires them (`trigger.unsubscribed {cause:
+automatically, and a goal branch's run follows its pull request's thread once it is opened (§16.3.6). Default `until` = 14 days after the run ends; the host expires them (`trigger.unsubscribed {cause:
 expired}`). A stopped run (`run.ended {state: cancelled}` by a person) unsubscribes at once (`stopped`). Sources poll
 subscribed threads while a subscription is live. `TriggerSubscription.until` is null while the run works and nobody set
 one (the run's end is not known yet); a subscriber's own `until` ends it then, whatever the run does. "Stopped" is a
@@ -2196,7 +2226,39 @@ second call may change `until`. A subscription's run must exist (`not_found`).
 | `POST /v1/runs` from the app, `capcomd run`, `capcomd_run_new` | an **explicit** trigger from source `operator`/`driver` that skips the gate: the same `runNew` path; `run.creating` fires either way (step 10 leaves these paths as they are: they don't pass through the intake yet) |
 | a person replying in the app (messages) | source `app`, always allowed (likewise unchanged in step 10) |
 | GitHub comments, CI, Slack, schedules | source plugins (`github`, `slack`, `schedule`: a timer job that emits) |
-| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread, so review comments reach the planner (a later step: step 10's `github` source already reads the threads runs follow) |
+| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread when the pull request is opened or found (`src/primitives/goal.ts` `openGoalPullRequest`, from whichever process opens it; the forge names the thread, `PullRequestRef.thread`, so the kernel has no GitHub code; a failed subscription is logged, never the opening's failure), so comments on it reach the planner: as a message while the run works, and, since a pull request is opened once the planner finished, mostly by starting the planner again (§16.3.2 step 2) on an allowed person's comment. The `github` source reads the pull request's conversation (issue comments); review comments on lines of the diff are not read yet |
+
+#### 16.3.7 Replies
+
+A run a trigger started (step 6), or whose planner a trigger started again (step 2), answers that request **once**, on
+the request's thread, when it ends, through the source's **reply path**; only when the operator turned the source's
+replies on (`triggers.sources.<source>.reply: true`; off by default, §16.5 rule 3: capcomd says nothing where people
+talk unless asked to). The rules, from §16.5:
+
+- **Only a result.** It answers when the run ended `completed` (its planner's summary) or `failed` (that it stopped
+  before it finished, and why); a person's stop (§16.3.5) needs no answer, and progress is never posted.
+- **Short.** The words are the daemon's: the planner's summary (its error, when it failed), redacted, cut to 90 words
+  (and 1,500 characters) with ` …`, then `— capcomd (<runId>)` (`replyText`), under 100 words in all.
+- **Where it was asked.** `TriggerReply {source, thread, replyTo, triggerId, runId, text, key}` goes to the source's
+  reply path, which posts it where `thread` (and `replyTo`) say. forge-github posts one comment on the issue or pull
+  request (`POST /repos/{repo}/issues/{n}/comments`, the user's login), the text then `<!-- capcomd -->`, which the
+  source drops when it reads it back (§16.3.1); an `@name` in the text is posted as code (`` `@name` ``), which GitHub
+  doesn't notify (the words are a planner's, which a comment on a followed thread can steer, and a reply pages no one);
+  its own retryable failures are GitHub's rate limit and 5xx.
+- **Once.** The intake keeps one pending request per run (`state/triggers/replies/<runId>.json`; a newer request, its
+  planner started again, replaces one not answered yet). The daemon's sweep (§16.3.5) posts it once the run has ended
+  after the request (the time it was taken, before the run or its planner started; a run that ended before it, its
+  planner starting again, is not answering it yet), reading how it ended and then claiming it, so an engine that
+  doesn't answer loses no reply and a crash while posting never posts twice. A rejection that is `retryable`, or no
+  reply path for the source at the time (its plugin loading or restarting), is tried at the next sweep, at most three
+  times in all (unless a newer request for the run came meanwhile: that one is kept); any other, or no answer within 30 s (it may have been posted), is given up. `key` is the same for
+  every attempt.
+
+`ctx.triggers.onReply(source, reply)` registers a source's reply path: `source` is one the plugin contributes
+(`forbidden` otherwise), one per source (`conflict`), disposed with the plugin; in process only in protocol v1
+(`unsupported` for a process plugin), like the seams. The daemon's host holds them (the host whose plugins have
+`ctx.triggers`); a reply for a source with none is tried again as above, then dropped (logged). Each posted reply is a `trigger.replied {source,
+thread, runId, id, url}` on the daemon stream (`entity` `run:<runId>`).
 
 ### 16.4 A watchdog
 
@@ -2406,7 +2468,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.58 | 2026-11-08 | Consolidation reachable in a default team (ADR-025 D6, its proposed amendment D6a; the live run's L2): a spawn's check of a child against its parent leaves out the child's `context` block (the planner `capcomd setup project` writes was refused its consolidator, "context changed"); the `context` plugin collects, as a consolidator starts (`agent.preparing`), the lessons the run's agents declared that capture hasn't (the planner's own); in-VM `status` of an agent that may spawn the consolidator carries `lessons` (additive); the built-in `context-memory` listens to `agent.changed` `ended` (scope `steer`, events `consolidator_started`, `merge_requested`, `consolidator_skipped`, config `autoConsolidate`, default true, `x-per-run`) and, once every agent that may spawn the consolidator has ended, starts one for a run with lessons and none, or verifies and asks to merge a consolidator's branch nobody merged (held by its own gate); a consolidator reads the run's goal first, fenced, and keeps what it asks the project to remember (§6.6.8). `capcomd merge --request-approval` parks a merge into a protected target for `capcomd approve`, every plugin's gate still asked (additive). |
 | 1.0.59 | 2026-11-08 | ADR-024 `identity.persona` and `harness.cliVersion` get their runtime (they were read but not applied): `AgentPreparing.prompt.persona` (`{hash, source, text}` or null) and `PinnedSpec.persona` (`{hash, source}`), `PinnedSpec.cliVersion` (all additive); the persona is pinned at spawn like the profile's skills (content-addressed with the run), checked against its pin per attempt, made the first text of the agent's instructions once, and a project's persona is gated on trust per file hash (reason `untrusted`), §6.6.7. A `harness.cliVersion` the CLI version recorded by the agent's environment (its build in the sandbox's ledger, or the one its plan login's image was made from) doesn't satisfy, or that no version was recorded for, refuses the spawn (`config`, reason `environment`), a planner's run, and makes GET /v1/run-options say the planner isn't ready; `capcomd profiles validate` warns. The range is checked as a semver range when the profile is read (§17.1). `GET /v1/profiles` rows (and `capcomd_profiles`) gain `untrustedPersona` (capability `profiles.facts`; optional in the contract, always sent; additive): the file of a project persona a spawn of the profile waits on the operator's trust for, else null. |
 | 1.0.60 | 2026-11-08 | The context router and the memory provider (§6.6.7; ADR-025 §6.1, §10): the built-in memory provider honours its entry's `index` setting (a profile's `memory.files: [NOTES.md]`): its items are the ones that file, directly under `.capcomd/context/`, links to (Markdown links and the `→ path` lines lint writes), less any another item of the tree supersedes; an index that isn't at the revision skips the provider (`not found`), a name with a directory or of another shape is refused (`not configured`), and the profile check (and the profile JSON Schema's pattern) refuses such a `memory.files` too. `capcomd context lint` accepts such a file beside `index.md`, held to an item's rules for text and secrets. The brief orders every provider's lines together, facts first (by authority, then newest; memory newest first; ties by the provider's place in the profile, then id), not each provider's in turn, so a budget cuts memory before any fact; a provider's `shown` in `plugin.context.loaded` counts its own lines that made it. The header says where the lines' files are: the checkout (unchanged words, for memory alone), a read-only bundle in the sandbox, or either; the `capcomd-context-doctrine` skill says the same (a new pinned hash). No hook, seam, route or contract shape changes. |
-| 1.0.61 | 2026-11-08 | Where an agent's machine goes, decided by the owner (ADR-024 §9 decisions 5 and 6, 2026-11-08; §7.1, §6.6.3, §6.6.7): a run's sandbox it asked for (`POST /v1/runs` `sandbox`, `capcomd run [new] --sandbox`, `capcomd_run_new`'s, a `run.creating` patch) beats every agent profile's `sandbox.provider` for every agent of the run (the agent is pinned without `sandboxProvider`; its `environment` and `size` apply on the run's sandbox); the run's `RUN_SANDBOX_KV` record gains `explicit: true` for such a place (additive; a record without it, or a place from the settings, isn't explicit, and a profile's provider still wins over it). Otherwise a project-layer profile file that sets the resolved `sandbox.provider`, `sandbox.environment` or `sandbox.size` of a profile naming a provider is honoured only once the operator trusts that file as it is (trust kind `profile`, per file sha256 at its real path, `capcomd profiles trust`); before that, or after it changes, the spawn is refused (`config`, reason `untrusted`), as is a planner's `capcomd run`, and GET /v1/run-options says the planner isn't ready. A user-layer profile needs no trust. `GET /v1/profiles` rows (and `capcomd_profiles`, `capcomd profiles list --json`) gain `untrustedSandbox` (capability `profiles.facts`; optional in the contract, always sent; additive): the project's files a spawn of the profile on a run without its own sandbox waits on the operator's trust for, else empty; `capcomd profiles show` gains `machine` (additive). |
+| 1.0.61 | 2026-11-08 | Trigger continuations (the steps §16.3.1, §16.3.2 step 2, §16.3.6 left to later): a goal branch's run follows its pull request's thread once it is opened, the forge naming it (`PullRequestRef.thread`, additive; forge-github `owner/name#N`), and the `github` source reads the threads runs follow on its timer whatever its settings (in a repository `sourceRepos` doesn't name, only those threads); on an ended run's thread a person's trigger is asked steps 3 to 5, and when they would act its planner starts again (a new planner continuing the last, with the message in its inbox: `continued {restarted}`, additive), `observe` records `wouldHave: "continue"`, and a refusal leaves it in the inbox only; replies (§16.3.7, new): `ctx.triggers.onReply(source, reply)` (in process only), `TriggerReply`, `triggers.sources.<source>.reply` (off by default), one short answer per request when the run ends completed or failed, posted by the sweep with a claim and at most three tries, forge-github's a marked comment the source drops (a reply waits for its source's reply path, and an engine that doesn't answer loses none); a restart's planner is the run's `_planner` once started, one restart of a run at a time, under 1.0.57's engine timeout (the same trigger sent again finds the planner it started and is still its restart), and a restart refused for good still leaves the message in the ended planner's inbox; forge-github posts a reply's `@name` as code (no one is paged); `trigger.replied` on the daemon stream and `trigger.received.restarted` (both additive). Owner questions taken conservatively: replies are opt-in, and a restart needs what a start needs (the gate), not just a person. |
+| 1.0.62 | 2026-11-08 | Brains in the environment image, and only a brain's bundle in a sandbox (ADR-025 step 4's follow-up, §6.6.7): `ContextBundle` gains an optional `path`, the directory of the repository that is placed (at the same path under the bundle's directory; additive, absent is the whole tree as before); groundray names its bundle's (`knowledge`), so brain.yaml and every other file of the brain's repository stay out of sandboxes, and every file under the bundle, Markdown or not, is checked for a restricted marking (a file that isn't Markdown is read whole, at any depth, and also matched as text: `sensitivity` then `restricted` with a `:` or `=` between, anywhere; one over 4 MiB, or more than 2000 files, is refused as unchecked). The marker names the commit and the path. Text too long (over 64 KiB) or nested too deep (flow collections past 32 levels) for the YAML parser is matched without it, more broadly (`sensitivity` then `restricted` with a `:` or `=` between, anywhere). The runner first removes the bundles under `<workdir>/context/` the brief doesn't cite, and an agent whose sandbox can't be cleaned doesn't start; a checks VM removes them all before the tree under test runs. `capcomd env build` (and `--project`) places the project's mapped brains, checked, in the image (EnvManifest `bundles`, part of its name), so the runner keeps them and sends nothing at start. |
+| 1.0.63 | 2026-11-08 | Where an agent's machine goes, decided by the owner (ADR-024 §9 decisions 5 and 6, 2026-11-08; §7.1, §6.6.3, §6.6.7): a run's sandbox it asked for (`POST /v1/runs` `sandbox`, `capcomd run [new] --sandbox`, `capcomd_run_new`'s, a `run.creating` patch) beats every agent profile's `sandbox.provider` for every agent of the run (the agent is pinned without `sandboxProvider`; its `environment` and `size` apply on the run's sandbox); the run's `RUN_SANDBOX_KV` record gains `explicit: true` for such a place (additive; a record without it, or a place from the settings, isn't explicit, and a profile's provider still wins over it). Otherwise a project-layer profile file that sets the resolved `sandbox.provider`, `sandbox.environment` or `sandbox.size` of a profile naming a provider is honoured only once the operator trusts that file as it is (trust kind `profile`, per file sha256 at its real path, `capcomd profiles trust`); before that, or after it changes, the spawn is refused (`config`, reason `untrusted`), as is a planner's `capcomd run`, and GET /v1/run-options says the planner isn't ready. A user-layer profile needs no trust. `GET /v1/profiles` rows (and `capcomd_profiles`, `capcomd profiles list --json`) gain `untrustedSandbox` (capability `profiles.facts`; optional in the contract, always sent; additive): the project's files a spawn of the profile on a run without its own sandbox waits on the operator's trust for, else empty; `capcomd profiles show` gains `machine` (additive). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

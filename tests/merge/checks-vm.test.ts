@@ -58,6 +58,18 @@ describe("checks in a VM", () => {
     expect(log.every((l) => !l.envKeys.includes("CAPCOMD_CHECKS_HOST_SECRET"))).toBe(true);
   }, 30_000);
 
+  test("the env image's context bundles (another project's brains) are gone before the tree under test runs", async () => {
+    const { mkdirSync } = await import("fs");
+    const ctx = join(process.env.CAPCOMD_AGENT_WORKDIR!, "context");
+    mkdirSync(join(ctx, "groundray", "acme", "knowledge"), { recursive: true });
+    writeFileSync(join(ctx, "groundray", "acme", "knowledge", "pay.md"), "ACME-ONLY\n");
+    const ids = { CAPCOMD_RUN_ID: "run-c", CAPCOMD_TASK_ID: "agt-c", CAPCOMD_TARGET: "main" };
+    const r = await runTests(git, `if [ -e '${ctx}' ]; then cat '${ctx}/groundray/acme/knowledge/pay.md'; exit 1; fi; echo no-bundles`, ids);
+    expect(r.output).not.toContain("ACME-ONLY");
+    expect(r).toMatchObject({ passed: true, where: "vm" });
+    expect(r.output).toContain("no-bundles");
+  }, 30_000);
+
   test("a bun project on an image without bun: the pinned bun is installed first; when it can't be, a setup failure says what to run", async () => {
     const repo = mkdtempSync(join(tmpdir(), "capcomd-checks-bun-"));
     const g = new Git(repo);

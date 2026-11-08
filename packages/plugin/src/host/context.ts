@@ -6,18 +6,21 @@ import { pluginEventType } from "../event-type";
 import { HOOKS, type HookName } from "../hooks";
 import type { PluginManifest, PluginScope } from "../manifest";
 import type { Registration } from "../testkit";
-import type { ApiRouteSpec, CliCommandSpec, Disposable, EmittedEvent, HarnessEventEnvelope, LogLevel, McpToolSpec, PluginContext, Span, UiDescriptor } from "../context";
+import type { ApiRouteSpec, CallOptions, CliCommandSpec, Disposable, EmittedEvent, HarnessEventEnvelope, LogLevel, McpToolSpec, PluginContext, Span, UiDescriptor } from "../context";
+import type { TriggerReply } from "../shapes";
 import type { AgentProvider, Forge, SandboxProvider } from "../seams";
 import type { ContextProvider } from "../context-layer";
 import type { HookRegistry } from "./registry";
 
 /** Named contributions every plugin shares one namespace of (§4.2): a second registration of a key is `conflict`. */
-export type ContributionKind = "seam" | "context" | "cli" | "mcp" | "instructions" | "api" | "capability" | "ui";
+export type ContributionKind = "seam" | "context" | "cli" | "mcp" | "instructions" | "api" | "capability" | "ui" | "reply";
 export type Contribution =
   | { kind: "seam"; seam: "sandbox" | "agent" | "forge"; impl: SandboxProvider | AgentProvider | Forge }
   | { kind: "context"; kinds: readonly ("fact" | "memory")[]; impl: ContextProvider }
   | { kind: "cli"; spec: CliCommandSpec } | { kind: "mcp"; spec: McpToolSpec } | { kind: "instructions"; text: string }
-  | { kind: "api"; spec: ApiRouteSpec } | { kind: "capability"; doc: string } | { kind: "ui"; descriptor: UiDescriptor };
+  | { kind: "api"; spec: ApiRouteSpec } | { kind: "capability"; doc: string } | { kind: "ui"; descriptor: UiDescriptor }
+  /** A trigger source's reply path (§16.3.7), keyed by the source's name. */
+  | { kind: "reply"; source: string; reply: (r: TriggerReply, o: CallOptions) => Promise<{ url: string | null }> };
 
 export class ContributionStore {
   private readonly items = new Map<string, { kind: ContributionKind; key: string; plugin: string; value: Contribution }>();
@@ -166,6 +169,15 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     return out as unknown as PluginContext[S];
   };
   const auth = guarded("auth");
+  const triggers = guarded("triggers");
+  // A source's reply path (§16.3.7): a registration, disposed with the plugin, for a source it contributes.
+  triggers.onReply = (source, reply) => {
+    live();
+    if (!(declared.sources ?? []).some((s) => s.name === source)) throw new PluginError("forbidden", `${name} does not contribute the source ${String(source)} (§16.3)`);
+    if (typeof reply !== "function") throw new PluginError("invalid", `triggers.onReply(${source}): reply is a function`);
+    if (o.runtime === "process") throw new PluginError("unsupported", "triggers.onReply is in process only in protocol v1 (§16.3.7)");
+    return contribute({ kind: "reply", source }, source, { kind: "reply", source, reply });
+  };
   if (!o.services?.auth?.redact) (auth as { redact: (t: string) => string }).redact = (t: string) => { live(); return redact(t); };
 
   const log = (level: LogLevel, message: string, fields: Record<string, unknown> = {}) => {
@@ -297,7 +309,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     profiles: guarded("profiles"),
     auth,
     jobs: guarded("jobs"),
-    triggers: guarded("triggers"),
+    triggers,
     onDispose(fn) {
       live();
       return register({ kind: "onDispose" }, () => {}, fn);

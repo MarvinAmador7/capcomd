@@ -233,7 +233,26 @@ export type TriggerDecision =
   | { kind: "denied"; by: "allowlist" | "mode" | "plugin"; reason: string }
   | { kind: "recorded"; wouldHave: "start" | "continue"; runId: string | null }
   | { kind: "started"; runId: string }
-  | { kind: "continued"; runId: string; seq: number };
+  /** A run following the thread got it as a message (`seq`, in its planner's inbox). `restarted`: the run had ended and
+   *  its planner was started again on it (the new planner's agent id, §16.3.2 step 2). */
+  | { kind: "continued"; runId: string; seq: number; restarted?: string };
+
+/** What a source's reply path is handed (§16.3.7): a short result for the person who asked, to post where they asked.
+ *  The source marks what it posts as capcomd's own, so its next read drops it (§16.3.1). */
+export interface TriggerReply {
+  source: string;
+  /** The thread the request came from, in the source's terms. */
+  thread: string;
+  /** The request's own `replyTo` (a comment's URL, a message's id), or null. */
+  replyTo: string | null;
+  /** The trigger it answers. */
+  triggerId: string;
+  runId: string;
+  /** The words, redacted and short (under 100 words: §16.5); the daemon's, from the run's result. */
+  text: string;
+  /** The same for every attempt at this reply (a source that can dedupe uses it). */
+  key: string;
+}
 
 /** A run that follows a thread (§16.3.5). `until`: when it ends; null while its run works and nobody set one (it then
  *  ends 14 days after the run does, or at once when a person stops the run). */

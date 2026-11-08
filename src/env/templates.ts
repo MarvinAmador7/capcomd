@@ -14,7 +14,7 @@
 import { rmSync } from "node:fs";
 import type { SandboxProvider } from "../providers/sandbox";
 import type { SnapshotPlatform, SnapshotInfo } from "./platform";
-import type { AgentConfig } from "../agents/config";
+import type { AgentConfig, ContextBundleSpec } from "../agents/config";
 import { isSecretPlatform } from "./platform";
 import { env as envVar } from "../utils/env";
 import { sandboxCaps } from "../providers/registry";
@@ -92,6 +92,8 @@ export interface TemplateBuildRequest {
   setup?: string;
   /** Hosts the setup step needs beyond capcomd's base list (CAPCOMD_SETUP_EGRESS). */
   egress?: string[];
+  /** The project's mapped brains the template carries (BuildOptions.bundles; `capcomd env build --project`). */
+  bundles?: ContextBundleSpec[];
   source?: Source;
   force?: boolean;
   log?: (line: string) => void;
@@ -111,7 +113,7 @@ export async function buildProjectTemplate(r: TemplateBuildRequest) {
   const { activeAdapters } = await import("../agents/adapters");
   const forbidden = activeAdapters().map((a) => source[a.secretName]).filter((v): v is string => !!v);
   return envBuild(r.provider, {
-    repoUrl: r.repo, cfg: r.cfg, force: !!r.force, ...(r.log ? { log: r.log } : {}), ...(r.hostGit ? { hostGit: r.hostGit } : {}), warm: true, forbidden,
+    repoUrl: r.repo, cfg: r.cfg, force: !!r.force, ...(r.log ? { log: r.log } : {}), ...(r.hostGit ? { hostGit: r.hostGit } : {}), warm: true, forbidden, ...(r.bundles?.length ? { bundles: r.bundles } : {}),
     project: { setup: r.setup ?? null, egress: r.egress ?? [], maxBytes: maxTemplateBytes(source), marker: templateMarkerPath(r.repo, source), ledger: templateLedgerPath(source) },
   });
 }

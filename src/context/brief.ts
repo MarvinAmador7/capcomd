@@ -69,7 +69,8 @@ export type PlacedBundle = ContextBundle & { provider: string; dir: string };
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 const BUNDLE_BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]+$/;
 /** A bundle the kernel fetches and places: of a provider that declares `caps.bundle`, from a repository URL or path with
- *  no credential in it, at a full commit, under a plain name. Anything else isn't placed (its lines point nowhere). */
+ *  no credential in it, at a full commit, under a plain name, of a plain directory in it when it names one (only that is
+ *  placed). Anything else isn't placed (its lines point nowhere). */
 function bundleOf(p: ActiveProvider, b: unknown, root: string | null | undefined): PlacedBundle | null {
   if (!root || !b || typeof b !== "object") return null;
   let declared = false;
@@ -77,10 +78,12 @@ function bundleOf(p: ActiveProvider, b: unknown, root: string | null | undefined
   const x = b as Partial<ContextBundle>;
   if (!declared || typeof x.remote !== "string" || typeof x.commit !== "string" || !COMMIT.test(x.commit) || typeof x.name !== "string" || !PROVIDER_NAME.test(x.name)) return null;
   if (x.branch != null && (typeof x.branch !== "string" || !BUNDLE_BRANCH.test(x.branch))) return null;
+  const { BUNDLE_PATH } = require("../agents/config") as typeof import("../agents/config");
+  if (x.path != null && (typeof x.path !== "string" || !BUNDLE_PATH.test(x.path))) return null;
   const G = require("../merge/host-git") as typeof import("../merge/host-git");
   try { G.assertRemoteUrl(x.remote); } catch { return null; }
   if (G.inlineCredential(x.remote)) return null;
-  return { provider: p.name, remote: x.remote, branch: x.branch ?? null, commit: x.commit, name: x.name, dir: bundleDir(root, p.name, x.name) };
+  return { provider: p.name, remote: x.remote, branch: x.branch ?? null, commit: x.commit, name: x.name, ...(x.path != null ? { path: x.path } : {}), dir: bundleDir(root, p.name, x.name) };
 }
 
 /** A provider entry's own settings: everything but its name and layers, as the pinned spec has them. */
