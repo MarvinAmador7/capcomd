@@ -102,8 +102,9 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   the profile is for: `[review, security]`), `sharing` (`source`, `license`: where the profile is published; an
   installed one's `LOCK` says where it was installed from) and
   `canReport` from `permissions.report`. capcomd adds `fit`, one line it writes from the profile's settings, never
-  from its text ("read-only; Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn"), and
-  `cost`, its model's list price (`low`: Haiku, `-mini`/`-nano`; `medium`: Sonnet, GPT; `high`: Opus, `-pro`; null
+  from its text ("read-only; Claude Code, claude-opus-5-5, high effort, high cost; up to 40 turns; can't spawn";
+  read-only is what the provider applies: a Claude Code profile whose `tools.allowed` has no edit tool and no plain
+  `Bash`, a Codex profile with `sandbox.codex: read-only`), and `cost`, its model's list price (`low`: Haiku, `-mini`/`-nano`; `medium`: Sonnet, GPT; `high`: Opus, `-pro`; null
   when the profile leaves the model to the CLI). `capcomd_profiles` also gives each profile's `capacity`: how many of
   it can start now (the sandbox's slots, which every profile shares, or 0 with `waitsUntil` while its login is at a
   usage limit).

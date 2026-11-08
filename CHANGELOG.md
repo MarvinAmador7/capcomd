@@ -5,13 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
-- Fix: `capcomd_profiles` and `capcomd profiles list` call a profile read-only (`fit`, `does`) only when its agent
-  really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by `sandbox.codex: read-only`.
-  A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a Claude Code profile with a
-  read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only.
+- Fix: `capcomd_profiles`, `capcomd profiles list` and `GET /v1/profiles` call a profile read-only (`fit`, `does`)
+  only when its agent really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by
+  `sandbox.codex: read-only`. A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a
+  Claude Code profile with a read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only,
+  nor is one allowed a shell rule that starts with a wildcard (`Bash(* *)`), which lets it run any program.
 - Fix: `capcomd profiles list` and `capcomd profiles show` show control characters in a profile's `identity.title`
-  (and `show` in any text value it lists) as `\u{…}` instead of printing them, so an installed profile can't redraw or
-  hide lines in your terminal.
+  and `harness.model` (and `show` in any text value it lists) as `\u{…}` instead of printing them, so an installed
+  profile can't redraw or hide lines in your terminal.
 - New: `GET /v1/profiles` (and `GET /v1/profiles/{name}`) rows say what a planner chooses a profile by: its `title`,
   `fit` (one sentence capcomd writes from its settings, never from its description), `cost` (low, medium or high),
   `canReport`, the `skills` its agents get (names and hashes, never their text), and `untrustedSkills`, the project

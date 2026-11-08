@@ -307,11 +307,11 @@ export const ORCHESTRATE_TEXT = "It orchestrates: it sees everything (the code, 
 
 /**
  * Whether an allow-list leaves the agent read-only: it names tools, none of them edits files, and its shell, if any,
- * is limited to commands (`Bash(bun test:*)`, as `capcomd setup` gives a reviewer). A plain `Bash` (or `Bash(*)`)
- * can write any file.
+ * is limited to commands (`Bash(bun test:*)`, as `capcomd setup` gives a reviewer). A plain `Bash` (or `Bash(*)`),
+ * and a rule that starts with a wildcard (`Bash(* *)`: the agent picks the program), can write any file.
  */
 export function readOnlyTools(allowed: readonly string[] | undefined): boolean {
-  return !!allowed?.length && !allowed.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\((:?\*)?\))?$/.test(t.trim()));
+  return !!allowed?.length && !allowed.some((r) => { const t = r.trim(); return /^(Edit|Write|MultiEdit|NotebookEdit)\b/.test(t) || /^Bash(\(\s*(:?\*.*)?\))?$/.test(t); });
 }
 
 /**
