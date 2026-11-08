@@ -70,6 +70,18 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   lessons are cut before facts. The brief's header no longer says that a brain's files are "in your checkout": it
   says they are in the read-only copy of the bundle in the agent's sandbox, at the path each line gives, and so does
   the `capcomd-context-doctrine` skill agents get with the brief.
+- **Breaking:** a plugin must be self-contained. Everything it runs has to be inside its own directory, because that
+  is what its LOCK records and what you trust; code it loaded from elsewhere could change without anyone being asked
+  again. `capcomd plugins install`, `update` and `trust` now refuse a plugin whose command or any module it imports
+  lies outside its directory (`../lib`, a `node_modules` above it, a link that points out, its data directory), and
+  name each path; the daemon fails such a plugin (`untrusted`) and won't start its process if one appears while it
+  runs. `capcomd plugins validate <dir>` lists each import that reaches out, with the file that makes it and where it
+  leads (`--json`: `outside`). Its own `node_modules` (`@capcomd/plugin` installed there, or bundled) and `node:` and
+  Bun built-ins are fine; a copy of `@capcomd/plugin` above the plugin's directory is refused like anything else. A
+  plugin running on Bun or Node, and each worker it starts, is also stopped from loading a module outside its directory
+  while it runs. To fix a
+  plugin that is refused: bundle it into one file (`bun build index.ts --target=node --outfile dist/index.js`), or move
+  the code and dependencies it needs into its directory, and name its runtime by name (`bun`, not `/usr/bin/env bun`).
 - New: an app can send a run's proposals to a company's brain. `GET /v1/runs/{runId}/brain-proposals` lists what the
   run's consolidators proposed and whether each was sent; `POST /v1/runs/{runId}/brain-proposals/send` (a token with
   the `configure` scope and an `Idempotency-Key`) sends those waiting as you, like `capcomd context brain propose
