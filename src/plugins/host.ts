@@ -174,7 +174,7 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
       ...(o.jobs ? { jobs: pluginJobs(m.name), agents: pluginAgents(m.name), storage: storageService(pluginStore(m.name, dataDir(m.name))) } : {}),
       ...(o.triggers ? { triggers: pluginTriggers(m.name, m.scopes ?? []) } : {}),
     }) } : {}),
-    secret: async (m, key, dir) => resolveSecret(m, key, process.env, dir),
+    secret: async (m, key, dir, source) => resolveSecret(m, key, process.env, dir, { builtin: source === "builtin" }),
     exempt: (name, version) => isExempt(name, version),
     // A project's plugin runs only with its content as the operator trusted it (§4.8). The daemon audits each trust
     // the first time it acts on it (`plugin.trusted`; the CLI that recorded it can't write the daemon's stream).

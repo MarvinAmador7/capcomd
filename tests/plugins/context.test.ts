@@ -21,6 +21,7 @@ import * as memoryPlugin from "../../src/plugins/context-memory";
 import { BUILTINS } from "../../src/plugins/builtins";
 import { applyPreparePatch } from "../../src/plugins/hooks";
 import { CONTEXT_SKILLS, DOCTRINE_SKILL, ROUTING_SKILL } from "../../src/context/skills";
+import { CONSOLIDATOR_PROFILE } from "../../src/context/consolidate";
 import { profileSkills } from "../../src/profiles/skills";
 import { frontmatter as skillFrontmatter } from "../../src/agents/skills";
 import { createHash } from "node:crypto";
@@ -276,7 +277,7 @@ describe("the router at agent.preparing (ADR-025 §6.1; spec §6.6.7, §14.4)", 
   type Patch = { prompt: { append: string; skills?: Array<{ name: string; hash: string; source: string; text: string }> } };
 
   test("a profile with a context block: the brief is appended with the doctrine skill, loaded and skipped events on the run", async () => {
-    await withRouter(async () => ({ contract: null }), async (fake) => {
+    await withRouter(async () => ({ contract: null, profile: CONSOLIDATOR_PROFILE }), async (fake) => {
       const payload = briefed();
       const first = await fake.fire("agent.preparing", payload, { runId: "run-test1" });
       const again = await fake.fire("agent.preparing", structuredClone(payload), { runId: "run-test1" });
@@ -286,7 +287,8 @@ describe("the router at agent.preparing (ADR-025 §6.1; spec §6.6.7, §14.4)", 
       expect(Object.keys(patch.prompt)).toEqual(["append", "skills"]);
       expect(patch.prompt.append).toStartWith("Context: loaded 5 of 5 lines");
       expect(patch.prompt.append).toContain("groundray: skipped (not active)");
-      // An agent that may not spawn has no in-VM capcomd to write notes with: the doctrine only.
+      // An agent without the in-VM capcomd (the consolidator, whose result's data is its answer) writes no notes or
+      // lessons: the doctrine only.
       expect(patch.prompt.skills).toEqual([{ name: DOCTRINE_SKILL.name, hash: DOCTRINE_SKILL.hash, source: "builtin", text: DOCTRINE_SKILL.text }]);
       expect((again.result as { patch: Patch }).patch).toEqual(patch);
       // The kernel's own rules take the patch (a skill pinned by its text's sha256).
@@ -300,10 +302,13 @@ describe("the router at agent.preparing (ADR-025 §6.1; spec §6.6.7, §14.4)", 
     });
   });
 
-  test("the routing paragraph goes to an agent that may spawn and does work; a reviewer gets the doctrine only; none twice", async () => {
+  test("the routing paragraph goes to an agent with the in-VM capcomd that does work; a reviewer, a report agent and the consolidator get the doctrine only; none twice", async () => {
     const names = async (record: unknown, payload = briefed()) => withRouter(async () => record, async (fake) =>
       ((await fake.fire("agent.preparing", payload, { runId: "run-test1" })).result as { patch: Patch }).patch.prompt.skills?.map((s) => s.name) ?? []);
     expect(await names({ contract: null, limits: { allowSpawn: true } })).toEqual([DOCTRINE_SKILL.name, ROUTING_SKILL.name]);
+    // A worker that may not spawn has the in-VM capcomd too (kv notes, `capcomd result --data`).
+    expect(await names({ contract: null, limits: { allowSpawn: false }, profile: "worker" })).toEqual([DOCTRINE_SKILL.name, ROUTING_SKILL.name]);
+    expect(await names({ contract: null, limits: { allowSpawn: false }, profile: CONSOLIDATOR_PROFILE })).toEqual([DOCTRINE_SKILL.name]);
     expect(await names({ contract: { review: { verifyId: "vfy-1" } }, limits: { allowSpawn: true } })).toEqual([DOCTRINE_SKILL.name]);
     expect(await names({ contract: { report: true }, limits: { allowSpawn: true } })).toEqual([DOCTRINE_SKILL.name]);
     // A skill of that name the agent already has (attached by an earlier listener) isn't attached again: the patch stays valid.
