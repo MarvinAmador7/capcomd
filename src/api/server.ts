@@ -6,7 +6,7 @@ import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
-import { CAPABILITY_NAMES, contract, CreateRunBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, pluginClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -41,6 +41,8 @@ export function servedType(bytes: Uint8Array, hint: string | null): { type: stri
 const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "already_decided", 422: "invalid" };
 /** POST routes that need the configure scope (projects.setup, projects.git). */
 const CONFIGURE_POSTS = new Set(["/v1/projects", "/v1/projects/git-init", "/v1/projects/publish"]);
+/** POST …/brain-proposals/send (capability context.brain_proposals): the configure scope too (drafts in the caller's name). */
+const BRAIN_SEND = /^\/v1\/runs\/[^/]+\/brain-proposals\/send$/;
 const err = (c: Context, status: 401 | 403 | 404 | 409 | 422 | 503, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
 /** agent.activity_changed: at most one frame per agent per this many ms (ACTIVITY_DOC). */
@@ -158,6 +160,9 @@ export function harnessApp(o: ServerOptions) {
 			// Served natively below (Idempotency-Key, the steer scope): never reached.
 			pullRequest: os.runs.pullRequest.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 			keepBranch: os.runs.keepBranch.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			brainProposals: os.runs.brainProposals.handler(async ({ input }) => (await src.brainProposals(input.runId)) ?? (() => { throw nf(`run ${input.runId}`); })()),
+			// Served natively below (Idempotency-Key, the configure scope): never reached.
+			sendBrainProposals: os.runs.sendBrainProposals.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
 		agents: {
 			tree: os.agents.tree.handler(async ({ input }) => (await src.agents(input.runId)) ?? (() => { throw nf(input.runId); })()),
@@ -291,9 +296,10 @@ export function harnessApp(o: ServerOptions) {
 		if (PROTOCOL_ROUTE.test(c.req.path) || c.req.path.startsWith(PLUGIN_ROUTES)) return next();
 		// PATCH changes settings (capability sandboxes.settings), POST /v1/projects sets a folder up (projects.setup) and
 		// …/git-init and …/publish start and publish its repository (projects.git), a plugin's enable and disable
-		// (plugins), and PUT /v1/profiles/{name} changes a profile (profiles.edit): the configure scope, which steering a
-		// run doesn't give.
-		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && (CONFIGURE_POSTS.has(c.req.path) || PLUGIN_CONTROL.test(c.req.path))) || (c.req.method !== "GET" && c.req.path.startsWith("/v1/profiles/"));
+		// (plugins), PUT /v1/profiles/{name} changes a profile (profiles.edit), and POST …/brain-proposals/send writes
+		// drafts in a company's brain in the caller's name (context.brain_proposals): the configure scope, which steering
+		// a run doesn't give.
+		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && (CONFIGURE_POSTS.has(c.req.path) || PLUGIN_CONTROL.test(c.req.path) || BRAIN_SEND.test(c.req.path))) || (c.req.method !== "GET" && c.req.path.startsWith("/v1/profiles/"));
 		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
 		return next();
@@ -568,6 +574,26 @@ export function harnessApp(o: ServerOptions) {
 		return idempotent(c, ["runs.keepBranch", runId], async (client) => {
 			const r = await src.keepBranch(runId, `client:${client.clientId}`);
 			return r.ok ? { status: 200, body: r.body } : { status: r.status, body: { code: r.code, message: r.message } };
+		});
+	});
+
+	// A run's proposals to a company's brain (capability context.brain_proposals; the configure scope, checked above):
+	// send those waiting for a person as the caller, as `capcomd context brain propose --run <runId> --yes` does. The
+	// write-route Idempotency-Key rules: a replay answers the first 200 and sends nothing again; a 503 (one couldn't be
+	// sent) isn't kept, so the same key sends the rest. A plugin's token never sends in a person's name (ADR-025 §7).
+	app.post("/v1/runs/:runId/brain-proposals/send", async (c) => {
+		const runId = c.req.param("runId");
+		if (c.get("client").plugin) return err(c, 403, "forbidden", "a plugin can't send a run's proposals to a brain: a person sends them, as themselves");
+		const raw = await c.req.text().catch(() => "");
+		let body: unknown = null;
+		if (raw.trim()) { try { body = JSON.parse(raw); } catch { return err(c, 422, "invalid", "the body must be JSON: {\"agentId\": \"agt-…\"}, or none"); } }
+		const parsed = BrainProposalsSendBody.safeParse(body ?? {});
+		if (!parsed.success) return err(c, 422, "invalid", "the body must be {\"agentId\": \"agt-…\"}, or none", { field: "agentId" });
+		const agentId = parsed.data.agentId;
+		return idempotent(c, ["runs.sendBrainProposals", runId, agentId ?? null], async (client) => {
+			const r = await src.sendBrainProposals(runId, callerPrincipal(client), agentId ? { agentId } : {});
+			if (r.ok) return { status: 200, body: r.body };
+			return { status: r.status, body: { code: r.code, message: r.message, ...(r.sent ? { sent: r.sent } : {}) } };
 		});
 	});
 

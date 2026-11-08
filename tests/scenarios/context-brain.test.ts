@@ -139,10 +139,65 @@ test("review: human: the fact waits for a person, who sends it as themselves; th
   expect((await w.cj(["context", "brain", "propose", "--run", "run-nosuchrun"])).code).not.toBe(0);
 }, 240_000);
 
+test("a client sends them over the API as itself (capability context.brain_proposals); a replay with the same key sends once", async () => {
+  const run = await runWithBrain();
+  const worker = await proposer(run, [{ title: "Returns", text: "Returns need the original box." }]);
+  const c = await consolidator(run, [{ brain: "acme", type: "procedure", title: "Returns need the box", text: "Returns are accepted only in the original box, per the warehouse lead.", from: [`${worker}.1`] }]);
+  expect(c.result.context.brain).toMatchObject({ name: "acme", awaits: "person" });
+  const { addClient, loadClients } = await import("../../src/api/clients");
+  const { harnessApp } = await import("../../src/api/server");
+  const { rivetSource } = await import("../../src/api/rivet-source");
+  const { harnessState } = await import("../../src/api/state");
+  const cpath = join(dir, "clients.json");
+  const app = addClient("app", ["read", "steer", "configure"], cpath);
+  const api = harnessApp({ source: rivetSource(), clients: () => loadClients(cpath), state: harnessState(null) });
+  const send = async (key: string) => {
+    const r = await api.request(`/v1/runs/${run}/brain-proposals/send`, { method: "POST", headers: { authorization: `Bearer ${app.token}`, "idempotency-key": key } });
+    return { status: r.status, body: (await r.json()) as any };
+  };
+  const listed = await (await api.request(`/v1/runs/${run}/brain-proposals`, { headers: { authorization: `Bearer ${app.token}` } })).json() as any;
+  expect(listed.proposals).toEqual([expect.objectContaining({ id: `${c.agentId}.1`, agentId: c.agentId, brain: "acme", type: "procedure", sent: null })]);
+  const applied = () => groundrayCalls().filter((x) => x.argv.includes("--apply")).length;
+  const before = applied();
+
+  const first = await send("api-send-key-1");
+  expect(first.status).toBe(200);
+  const branch = proposalBranch({ runId: run, agentId: c.agentId });
+  expect(first.body).toEqual({ runId: run, actor: `human:${app.client.id}`, sent: [expect.objectContaining({ id: `${c.agentId}.1`, ok: true, already: false, where: `${brain.bare}, branch ${branch}` })] });
+  // The draft in the brain is the caller's: groundray's actor is the client's id.
+  const tip = (await brain.sha(branch))!;
+  await brain.seed.ok(["fetch", "-q", "origin"]);
+  const files = (await brain.seed.ok(["diff", "--name-only", brainTip, tip])).split("\n").filter(Boolean);
+  expect(await brain.show(tip, files.find((f) => f.includes("/inbox/"))!)).toContain(`"by":"human:${app.client.id}"`);
+  expect(applied()).toBe(before + 1);
+  expect(await events(run, "plugin.context.brain_proposed")).toEqual([expect.objectContaining({ proposal: `${c.agentId}.1`, by: `human:${app.client.id}` })]);
+  // The same key again: the first answer, nothing sent.
+  expect(await send("api-send-key-1")).toEqual(first);
+  expect(applied()).toBe(before + 1);
+  expect(await brain.sha(branch)).toBe(tip);
+  expect(await brain.sha("main")).toBe(brainTip);
+}, 240_000);
+
+test("a brain the run's project doesn't map is refused as the consolidator's answer is staged, by its name", async () => {
+  // A run started without the project's mapping (none recorded with it).
+  const run = await newRun(w);
+  const worker = await proposer(run, [{ title: "Damaged goods", text: FACT }]);
+  const c = await consolidator(run, [{ brain: "acme", type: "policy", title: "Refunds for damaged goods", text: FACT, from: [`${worker}.1`] }]);
+  expect(c.result.context.refused).toEqual([{ n: 1, reason: "no_brain" }]);
+  expect(c.result.context.brain).toEqual({ name: "acme", proposals: [], awaits: null, sent: [], error: expect.stringContaining("doesn't map brain acme") });
+  // Nothing kept for a person to send, nothing in the brain.
+  const { brainProposals } = await import("../../src/context/brain-proposals");
+  expect(await brainProposals(run)).toEqual([]);
+  expect((await w.cj(["context", "brain", "propose", "--run", run])).j.text).toContain("proposed nothing to a brain");
+  expect(await brain.sha(proposalBranch({ runId: run, agentId: c.agentId }))).toBeNull();
+  expect(await events(run, "plugin.context.brain_staged", 0)).toEqual([]);
+}, 240_000);
+
 test("review: lint: the kernel sends the fact as the staging ends, as capcomd", async () => {
   writeFileSync(agentsFile, JSON.stringify({ ...PROFILES, agents: { ...PROFILES.agents, [CONSOLIDATOR_PROFILE]: consolidatorProfile("lint") } }));
   const run = await runWithBrain();
   const worker = await proposer(run, [{ title: "Invoices", text: "Invoices are due 30 days after issue." }]);
+  const appliedBefore = groundrayCalls().filter((x) => x.argv.includes("--apply")).length;
   const c = await consolidator(run, [{ brain: "acme", type: "decision", title: "Invoice terms", text: "Invoices are due 30 days after issue, per the finance lead.", from: [`${worker}.1`] }]);
   const branch = proposalBranch({ runId: run, agentId: c.agentId });
   // Only a fact: no memory branch; sent at once.
@@ -153,6 +208,6 @@ test("review: lint: the kernel sends the fact as the staging ends, as capcomd", 
   const files = (await brain.seed.ok(["diff", "--name-only", brainTip, tip])).split("\n").filter(Boolean);
   expect(await brain.show(tip, files.find((f) => f.includes("/inbox/"))!)).toContain(`"by":"capcomd/${VERSION}"`);
   expect(await brain.sha("main")).toBe(brainTip);
-  expect(groundrayCalls().filter((x) => x.argv.includes("--apply")).length).toBe(2);
+  expect(groundrayCalls().filter((x) => x.argv.includes("--apply")).length).toBe(appliedBefore + 1);
   expect(await events(run, "plugin.context.brain_proposed")).toEqual([expect.objectContaining({ proposal: `${c.agentId}.1`, by: "capcomd" })]);
 }, 240_000);

@@ -370,11 +370,13 @@ function listSkills(dir: string): string[] {
   try { return readdirSync(join(dir, "skills")).map((n) => join(dir, "skills", n, "SKILL.md")).filter((p) => existsSync(p)).map((p) => realpathSync(p)); } catch { return []; }
 }
 
-/** The files of the package at `dir` that trust is given to: its skills' SKILL.md and the persona its manifest names. */
+/** The files of the package at `dir` that trust is given to: its skills' SKILL.md, the persona its manifest names, and
+ *  the manifest itself (a project's that sets its sandbox, ADR-024 §9 decision 6). */
 function trustedFiles(dir: string): string[] {
   const out = listSkills(dir);
   try {
     const manifest = readdirSync(dir).find((f) => /^profile\.(?:ya?ml|json)$/.test(f));
+    if (manifest) out.push(realpathSync(join(dir, manifest)));
     const doc = manifest ? parseYaml(readFileSync(join(dir, manifest), "utf8")) : null;
     const persona = isMap(doc) && isMap(doc.identity) ? doc.identity.persona : undefined;
     if (typeof persona === "string" && FILE_REF.test(persona) && existsSync(join(dir, persona))) out.push(realpathSync(join(dir, persona)));

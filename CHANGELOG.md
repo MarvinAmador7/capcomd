@@ -14,6 +14,19 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Changed: an agent's background job is now stopped once it has run `afterTurnMs` (30 minutes by default) past the
   agent's last step, not 30 minutes after the job started, so a long build keeps running while its agent is still
   working. A job started with `--timeout-ms` still stops at that timeout (at most the profile's `afterTurnMs`).
+- **Breaking:** a run you start on a sandbox stays there. `capcomd run --sandbox docker` (and `run new --sandbox`, the
+  API's `sandbox`, `capcomd_run_new`'s) now keeps every agent of the run on Docker, even when a profile's
+  `sandbox.provider` names boxd, so a profile can no longer spend your boxd credit on a run you put on Docker. A
+  profile's `sandbox.provider` still wins over a sandbox the run took from your settings (`CAPCOMD_SANDBOX`, the
+  project's or your config). To use a profile's sandbox, start the run without `--sandbox`.
+- **Breaking:** a project's profile that moves its agents to another sandbox needs your trust first. A file in the
+  project's `.capcomd/profiles/` that sets `sandbox.provider` (or the `environment` or `size` of a profile that names
+  one) is honoured only after `capcomd profiles trust <name>`, which shows the file and asks, as for the project's
+  skills; until then, and again after the file changes, a spawn of it on a run without its own sandbox is refused
+  (`untrusted`). `capcomd profiles show` says where the profile's agents go and whether the file is trusted,
+  `validate` warns, and the profile lists (`capcomd profiles list --json`, `capcomd_profiles`, `GET /v1/profiles`)
+  name the untrusted files in `untrustedSandbox`. Your own profiles (`~/.capcomd/profiles/`) need no trust. If you
+  use such a project profile, run `capcomd profiles trust <name>` once, or start the run with `--sandbox`.
 - Faster: `capcomd env build` (and `env build --project`) now puts the brains your project maps (`capcomd context
   brain add`) into the environment image, each at the commit it is pinned to, so agents start with them instead of
   copying the brain in at every start. Map a brain at a newer commit and the next `capcomd env build` builds a new image.
@@ -57,6 +70,17 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   lessons are cut before facts. The brief's header no longer says that a brain's files are "in your checkout": it
   says they are in the read-only copy of the bundle in the agent's sandbox, at the path each line gives, and so does
   the `capcomd-context-doctrine` skill agents get with the brief.
+- New: an app can send a run's proposals to a company's brain. `GET /v1/runs/{runId}/brain-proposals` lists what the
+  run's consolidators proposed and whether each was sent; `POST /v1/runs/{runId}/brain-proposals/send` (a token with
+  the `configure` scope and an `Idempotency-Key`) sends those waiting as you, like `capcomd context brain propose
+  --run <runId> --yes`: each draft in the brain names your client (`human:<client id>`) as its author. A retry with the
+  same key doesn't send twice; when one can't be sent the answer is 503 with what happened to each, and sending again
+  sends the rest. Clients check for the `context.brain_proposals` capability.
+- Fixed: a consolidator whose profile names a brain the project doesn't map now has its proposals for that brain
+  refused when it finishes, with the brain's name and how to map it (`capcomd context brain add <name> <repository>`),
+  instead of keeping them to fail later when you send them.
+- Fixed: sending a brain proposal again after its pull request was merged (and its branch deleted) no longer opens a
+  second draft and pull request: capcomd finds the item on the brain's main branch and says it is there.
 - New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at
   most 32 KiB) is now the first thing each of its agents reads, once, before the profile's prompt and its skills. The
   agent keeps the text it was spawned with; a later edit reaches only agents spawned after it. A persona from the

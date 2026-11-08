@@ -572,6 +572,8 @@ describe("profiles v2: loader and resolution", () => {
       const w = world(profile("modal"));
       const env = { ...w.source, ANTHROPIC_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
       const validate = () => { const r = cli(["agents", "validate", "--json"], env); return { code: r.code, ...JSON.parse(r.out) }; };
+      // The project's file sends its agents elsewhere: trusted, so validate has only the seam to say (trust: profile-sandbox tests).
+      expect(cli(["profiles", "trust", "w", "--yes", "--json"], env).code).toBe(0);
       expect(validate()).toMatchObject({ code: 0, ok: true, warnings: [`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`] });
       listing(w, [{ kind: "sandbox", name: "modal" }]);
       const list = cli(["agents", "list", "--json"], env);
@@ -601,12 +603,67 @@ describe("profiles v2: loader and resolution", () => {
       const w = world({ "P/w.yaml": yaml(["name: w", "harness: { provider: claude, auth: apikey }", "sandbox: { provider: modal, environment: gpu }"]) });
       const env = { ...w.source, ANTHROPIC_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json") };
       const validate = () => { const r = cli(["agents", "validate", "--json"], env); return { code: r.code, ...JSON.parse(r.out) }; };
+      // The project's file sends its agents elsewhere: trusted, so validate has only the seam to say (trust: profile-sandbox tests).
+      expect(cli(["profiles", "trust", "w", "--yes", "--json"], env).code).toBe(0);
       expect(validate()).toMatchObject({ code: 0, ok: true, warnings: [`profiles.w: sandbox.provider "modal" ${noDaemon("sandbox")}`] });
       listing(w, [{ kind: "sandbox", name: "modal" }]);
       const ok = validate();
       expect(ok).toMatchObject({ code: 0, ok: true });
       expect(ok.warnings).toBeUndefined();
     }, 30_000);
+  });
+
+  describe("a project's file that moves its agents to another sandbox waits on trust (ADR-024 §9, 2026-11-08)", () => {
+    const harness = "harness: { provider: claude, auth: apikey }";
+    test("machineFiles: each file that set sandbox.provider, environment or size, with its layer and the sha256 it was read with", () => {
+      const own = yaml(["name: mine", harness, "sandbox: { provider: boxd }"]), over = yaml(["sandbox: { size: { vcpu: 4 } }"]);
+      const w = world({ "U/mine/profile.yaml": own, "P/mine/override.yaml": over, "P/env.yaml": yaml(["name: env", harness, "sandbox: { environment: image }"]), "P/none.yaml": yaml(["name: none", harness]) });
+      const sha = (t: string) => new Bun.CryptoHasher("sha256").update(t).digest("hex");
+      const set = w.load();
+      expect(set.profiles.mine!.machineFiles).toEqual([
+        { path: w.at("U/mine/profile.yaml"), layer: "user", hash: sha(own), keys: ["sandbox.provider"] },
+        { path: w.at("P/mine/override.yaml"), layer: "project", hash: sha(over), keys: ["sandbox.size"] },
+      ]);
+      expect(set.profiles.env!.machineFiles).toEqual([{ path: w.at("P/env.yaml"), layer: "project", hash: expect.any(String), keys: ["sandbox.environment"] }]);
+      expect(set.profiles.none!.machineFiles).toEqual([]);
+      // Resolved by name for a spawn (src/primitives/ops.ts checkResolved), never pinned.
+      expect(resolveAgent("mine", w.source).machineFiles).toEqual(set.profiles.mine!.machineFiles);
+    });
+
+    test("the CLI: validate warns, `trust` lists and trusts it, `show` says where its agents go and that --sandbox wins", () => {
+      const w = world({ "P/far/profile.yaml": yaml(["name: far", harness, "sandbox: { provider: boxd, size: { vcpu: 8 } }"]), "P/env.yaml": yaml(["name: env", harness, "sandbox: { environment: image }"]) });
+      const env = { ...w.source, ANTHROPIC_API_KEY: "", CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
+      const json = (args: string[]) => JSON.parse(cli([...args, "--json"], env).out);
+      expect(json(["profiles", "validate"]).warnings).toContain("profiles.far: the project's far/profile.yaml, which sends its agents to the boxd sandbox, isn't trusted: capcomd profiles trust far (a spawn of it on a run without --sandbox is refused until then)");
+      // An environment alone keeps its agents on the run's sandbox: nothing to trust.
+      expect(json(["profiles", "trust"]).profiles).toEqual([{ name: "far", skills: [], sandbox: [{ file: "far/profile.yaml", path: w.at("P/far/profile.yaml"), keys: ["sandbox.provider", "sandbox.size"], hash: expect.stringMatching(/^sha256:/), trust: "untrusted", trustedHash: null }] }]);
+      const text = cli(["profiles", "show", "far"], env).out;
+      expect(text).toContain("Sandbox: its agents' machines go to boxd (sandbox.provider), unless the run was started with its own sandbox (--sandbox), which wins");
+      expect(text).toContain("NOT TRUSTED: the project's far/profile.yaml sets sandbox.provider, sandbox.size; a run without --sandbox refuses its agents until capcomd profiles trust far");
+      // Without a terminal to ask in, trusting needs --yes.
+      expect(JSON.parse(cli(["profiles", "trust", "far", "--json"], env).out).error).toMatchObject({ code: "usage", message: "trusting far's sandbox needs your confirmation" });
+      expect(json(["profiles", "trust", "far", "--yes"]).trusted).toMatchObject({ name: "far", already: false, sandbox: [{ file: "far/profile.yaml", trust: "trusted" }] });
+      expect(json(["profiles", "trust", "far", "--yes"]).trusted).toMatchObject({ already: true });
+      expect(json(["profiles", "validate"]).warnings ?? []).not.toContainEqual(expect.stringContaining("profiles.far"));
+      expect(cli(["profiles", "show", "far"], env).out).not.toContain("NOT TRUSTED");
+    }, 30_000);
+
+    test("spawnChecks (what `capcomd run` asks of its planner): refused untrusted, unless the run's sandbox was asked for, which drops the profile's", async () => {
+      const w = world({ "P/far/profile.yaml": yaml(["name: far", harness, "sandbox: { provider: boxd, environment: image }"]) });
+      const { spawnChecks } = await import("../../src/primitives/ops");
+      const saved = { ...process.env };
+      Object.assign(process.env, w.source);
+      try {
+        let refused: any = null;
+        try { spawnChecks("far"); } catch (e) { refused = e; }
+        expect(refused).toMatchObject({ code: "config", reason: "untrusted", message: "profile far can't be spawned: it sends its agents to the boxd sandbox, and the project's profile file that sets that, far/profile.yaml (sandbox.provider, sandbox.environment), isn't trusted" });
+        // The run's own sandbox wins: no boxd on the agent, its environment kept for the run's sandbox, no trust asked.
+        expect(spawnChecks("far", process.env, { runChose: true }).resolved.runtime).toEqual({ environment: "image" });
+      } finally {
+        for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+        Object.assign(process.env, saved);
+      }
+    });
   });
 
   test("overrides take v2 paths (v1 names stay aliases) and still only narrow", () => {
