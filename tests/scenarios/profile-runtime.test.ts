@@ -38,6 +38,10 @@ beforeAll(async () => {
   put("watched", ["extends: worker", "lifecycle: { onEnd: [hook-recorder] }"]);
   put("unwatched", ["extends: worker", "lifecycle: { onStart: [not-loaded] }"]);
   put("boss", ["extends: planner", "children: { allowedChildProfiles: [watched, unwatched] }"]);
+  // The project's file that sends placed's agents to another sandbox is honoured once the operator trusts it (ADR-024
+  // §9, 2026-11-08; tests/scenarios/profile-sandbox-trust.test.ts).
+  const trusted = await w.cj(["profiles", "trust", "placed", "--yes"]);
+  if (trusted.code !== 0) throw new Error(`profiles trust placed: ${trusted.stdout} ${trusted.stderr}`);
   for (let i = 0; i < 300 && !calls().some((c) => c.hook === "daemon.started"); i++) await sleep(100);
 }, 120_000);
 afterAll(async () => {
@@ -82,10 +86,13 @@ test("sandbox: the machine is made on the profile's sandbox, from its environmen
 }, 120_000);
 
 test("sandbox: a profile can't take its agents out of isolation onto this host when the run's sandbox isolates them", async () => {
-  // The run is recorded on Docker (nothing is made there: the spawn is refused first); the profile names fake-host,
-  // which runs the agent, and its MCP servers, on this host.
-  const { runNew } = await import("../../src/primitives/ops");
-  const { runId } = await runNew({ budget: { usd: 10 }, label: "isolated", key: `scn-iso-${Date.now()}`, sandbox: "docker" });
+  // The run is recorded on Docker from its settings (CAPCOMD_SANDBOX, not --sandbox, which would beat the profile's;
+  // nothing is made there: the spawn is refused first); the profile names fake-host, which runs the agent, and its MCP
+  // servers, on this host.
+  const { capcomd } = await import("../helpers/engine");
+  const made = await capcomd(["run", "new", "--label", "isolated", "--key", `scn-iso-${Date.now()}`, "--json"], { ...w.env, CAPCOMD_SANDBOX: "docker" });
+  const { runId, sandbox } = JSON.parse(made.stdout.trim().split("\n").pop()!);
+  expect(sandbox).toEqual({ name: "docker", source: "environment" });
   const r = await w.cj(["spawn", runId, "--profile", "placed", "--task", "t", "--no-start", "--contract", JSON.stringify({ script: w.script("escape", WORKER) })]);
   expect(r.code).not.toBe(0);
   expect(r.j?.error).toMatchObject({ code: "config", reason: "sandbox_isolation", message: expect.stringContaining("sandbox.provider fake-host runs its agents on this host") });

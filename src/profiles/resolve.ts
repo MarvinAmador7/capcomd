@@ -3,7 +3,7 @@
 // agent ref that carries them from goal to planner to worker (`name;ov=…[;op=1]`).
 import { agentProviderNames, agentSeam, kindOf, unknownProviderText } from "../plugins/agents";
 import { env as envVar } from "../utils/env";
-import { agentsFilePath, readProfiles, type ProfileLayer } from "./load";
+import { agentsFilePath, readProfiles, type MachineFile, type ProfileLayer } from "./load";
 import type { ProfileRuntime } from "./runtime";
 import type { ProfileSkill } from "./skills";
 import type { ProfilePersona } from "./persona";
@@ -24,6 +24,9 @@ export interface ResolvedAgent {
   skills?: ProfileSkill[];
   /** Its profile's persona (./persona.ts), resolved by name: pinned on the agent at spawn, its spec's `persona` then. */
   persona?: ProfilePersona;
+  /** The files that set its `sandbox.provider|environment|size` (./load.ts), resolved by name: a project's needs the
+   *  operator's trust before the spawn honours its sandbox (src/primitives/ops.ts `checkResolved`). Not pinned. */
+  machineFiles?: MachineFile[];
 }
 
 /**
@@ -39,7 +42,7 @@ export function resolveAgent(name?: string | null, source: Record<string, string
     if (!r) return null;
     const pm = r.manifest.permissions as { report?: unknown } | undefined;
     const permissions = pm && typeof pm === "object" && typeof pm.report === "boolean" ? { permissions: { report: pm.report } } : {};
-    return { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...permissions, ...(r.skills.length ? { skills: r.skills } : {}), ...(r.persona ? { persona: r.persona } : {}), ...(Object.keys(r.runtime).length ? { runtime: r.runtime } : {}) };
+    return { name: n, kind: kindOf(r.spec.provider), spec: r.spec, profile: { name: n, version: r.version, source: r.source }, ...permissions, ...(r.skills.length ? { skills: r.skills } : {}), ...(r.persona ? { persona: r.persona } : {}), ...(Object.keys(r.runtime).length ? { runtime: r.runtime } : {}), ...(r.machineFiles.length ? { machineFiles: r.machineFiles } : {}) };
   };
   if (name) {
     const ref = decodeAgentRef(name);

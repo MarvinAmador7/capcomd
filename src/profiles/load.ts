@@ -4,7 +4,7 @@
 // layer over it. `agents.json` (v1) is still read: its entries are profiles of the layer it sits in, and a v2 profile
 // of the same name in that layer wins. Every profile resolves to the flat v1 spec (./v1.ts AgentSpec, the pin), and
 // the parent → child narrowing is checked on those, never on the files.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -16,6 +16,8 @@ import { FILE_REF, checkManifest, fromFlat, inheritable, inheritableSetBy, layer
 import { runtimeOf, runtimeProblems, type ProfileRuntime } from "./runtime";
 import { profileSkills, type ProfileSkill } from "./skills";
 import { profilePersona, type ProfilePersona } from "./persona";
+
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /** A JSON parse error as a profile file's error says it: where it went wrong, never what is there (readDoc). */
 const jsonError = (e: unknown) => (e as Error).message.replace(/\s*["'`][^]*$/, "");
@@ -124,7 +126,15 @@ export interface ResolvedProfile {
   skills: ProfileSkill[];
   /** Its `identity.persona`, read and hashed (./persona.ts), which an agent of it is pinned with too; null: it has none. */
   persona: ProfilePersona | null;
+  /** The files that set its machine's `sandbox.provider`, `sandbox.environment` or `sandbox.size` (the values it
+   *  resolved to), each once, first to last. A project's needs the operator's trust before its agents go to the
+   *  sandbox it names (./trust.ts `projectMachineTrust`; ADR-024 §9, the owner's decision of 2026-11-08). */
+  machineFiles: MachineFile[];
 }
+/** The sandbox keys a project's file can move its agents' machines with (ADR-024 §2.2 `sandbox.provider|environment|size`). */
+export const MACHINE_KEYS = ["sandbox.provider", "sandbox.environment", "sandbox.size"] as const;
+/** One file that set some of a profile's MACHINE_KEYS: where it is, its layer, its sha256 (hex) as read, and which keys. */
+export interface MachineFile { path: string; layer: "project" | "user"; hash: string; keys: string[] }
 /** Every profile a project sees, resolved: `agents` and `default` read as a v1 file's do, so every reader of
  *  `readAgentsFile(…).agents[name]` reads v2 profiles the same way. */
 export interface ProfileSet extends AgentsFile { profiles: Record<string, ResolvedProfile>; warnings: string[] }
@@ -145,7 +155,7 @@ export function profileLayers(path = agentsFilePath(), source: Record<string, st
 }
 
 /** `dir`: the package directory (`<name>/`) its file is in, where its `skills/` are; null for a single file. */
-interface Entry { name: string; layer: ProfileLayer; path: string | null; dir: string | null; format: "v1" | "v2"; doc: ProfileDoc; spec?: AgentSpec }
+interface Entry { name: string; layer: ProfileLayer; path: string | null; dir: string | null; format: "v1" | "v2"; doc: ProfileDoc; spec?: AgentSpec; /** A profile file's sha256 (hex), as read. */ hash?: string }
 interface Layer { layer: ProfileLayer; profiles: Map<string, Entry>; overrides: Map<string, Entry> }
 
 const MANIFEST = /^(.+)\.(ya?ml|json)$/;
@@ -154,8 +164,7 @@ const MANIFEST = /^(.+)\.(ya?ml|json)$/;
  * error says where, never what is there: the message can reach an agent (a spawn it asked for), and the file may be a
  * link to anything on the host.
  */
-function readDoc(path: string, fs: View): unknown {
-  const text = fs.text(path);
+function readDoc(path: string, text: string): unknown {
   if (path.endsWith(".json")) {
     try { return JSON.parse(text); } catch (e) { throw new Error(`invalid JSON: ${jsonError(e)}`); }
   }
@@ -237,12 +246,13 @@ function scanLayer(layer: "project" | "user", dir: string, errs: string[], fs: V
     add(found, m[1]!, { path: p, dir: null });
   }
   const load = (name: string, path: string, pdir: string | null, as: "profile" | "override"): Entry | null => {
-    let raw: unknown;
-    try { raw = readDoc(path, fs); } catch (e) { errs.push(`${path}: can't be read (${(e as Error).message})`); return null; }
+    let raw: unknown, hash: string;
+    // Read once: what is parsed is what is hashed (a project's file that sets its sandbox is trusted by this hash).
+    try { const text = fs.text(path); hash = sha256(text); raw = readDoc(path, text); } catch (e) { errs.push(`${path}: can't be read (${(e as Error).message})`); return null; }
     const e = checkManifest(raw, as, name);
     if (e.length) { errs.push(...e.map((x) => `${path}: ${x}`)); return null; }
     const doc = readFiles(withContext(raw as ProfileDoc), pdir, errs, path);
-    return { name, layer, path, dir: pdir, format: "v2", doc };
+    return { name, layer, path, dir: pdir, format: "v2", doc, hash };
   };
   for (const [name, list] of found) {
     if (list.length > 1) { errs.push(`profile ${name} is defined more than once in ${dir} (${list.map((x) => x.path).join(", ")}): keep one`); continue; }
@@ -283,7 +293,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     if (bad.length) throw new AgentConfigError(bad.join("; "));
     const profiles = Object.fromEntries(Object.entries(f.agents).map(([name, spec]): [string, ResolvedProfile] => {
       const manifest = fromFlat(name, spec);
-      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [], persona: null, runtime: {} }];
+      return [name, { name, version: 1, source: v1Layer, path, format: "v1", applied: [{ as: "profile", name, layer: v1Layer, path }], manifest, setBy: setByOver({}, {}, manifest, 0), spec, skills: [], persona: null, runtime: {}, machineFiles: [] }];
     }));
     const { $comment: _, ...file } = f;
     return { ...file, profiles, warnings };
@@ -305,6 +315,23 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
     const v2 = layers.find((l) => l.layer === v1Layer)!.profiles.get(name);
     if (v2) warnings.push(`${path}: agents.${name} is hidden by ${v2.path} (a v2 profile wins over agents.json)`);
   }
+
+  // Each profile file's hash as it was read, by path: what a project's file that sets a sandbox is trusted by.
+  const hashes = new Map<string, string>();
+  for (const l of layers) for (const e of [...l.profiles.values(), ...l.overrides.values()]) if (e.path && e.hash) hashes.set(e.path, e.hash);
+  const machineFiles = (setBy: SetBy, applied: AppliedFile[]): MachineFile[] => {
+    const out = new Map<number, MachineFile>();
+    for (const key of MACHINE_KEYS) {
+      const at = setBy[key], a = at === undefined ? undefined : applied[at];
+      if (!a?.path || a.layer === "bundled") continue;
+      const hash = hashes.get(a.path);
+      if (!hash) continue; // an agents.json entry: v1 has no sandbox provider, environment or size
+      const f = out.get(at!) ?? { path: a.path, layer: a.layer, hash, keys: [] };
+      f.keys.push(key);
+      out.set(at!, f);
+    }
+    return [...out.entries()].sort(([x], [y]) => x - y).map(([, f]) => f);
+  };
 
   /** The profile a name is, highest layer first; in the agents file's layer a v2 profile before its v1 entry. */
   const sourceOf = (name: string): { entry: Entry; at: number } | null => {
@@ -384,7 +411,7 @@ export function readProfiles(path = agentsFilePath(), source: Record<string, str
       if (def?.on) defaults.push({ name, at: def.at, v1: false });
       const notYet = notApplied(doc);
       if (notYet.length) warnings.push(`profiles.${name}: ${notYet.join(", ")} ${notYet.length > 1 ? "are" : "is"} read but not used yet by this capcomd`);
-      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec, skills: sk.skills, persona: pe.persona, runtime };
+      const r: ResolvedProfile = { name, version: typeof doc.version === "number" ? doc.version : 1, source: entry.layer, path: entry.path, format: entry.format, applied, manifest: { ...doc, name }, setBy: { ...setBy, name: applied.findIndex((a) => a.as === "profile") }, spec, skills: sk.skills, persona: pe.persona, runtime, machineFiles: machineFiles(setBy, applied) };
       done.set(name, r);
       return r;
     } finally { resolving.pop(); }

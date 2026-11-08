@@ -92,7 +92,8 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
   // The checks the planner's spawn makes (its profile, the env snapshot its CLI needs on this run's sandbox, egress),
   // made before the run is created or detached: a run whose planner can't start is refused with the reason here,
   // instead of starting and then sitting with no agent.
-  if (plannerRef) (await import("../../primitives/ops")).spawnChecks(plannerRef);
+  // A --sandbox beats the planner profile's sandbox.provider, as it does at the spawn.
+  if (plannerRef) (await import("../../primitives/ops")).spawnChecks(plannerRef, process.env, { runChose: !!runSandbox });
   // --profile/--agent NAME [--set k=v …] [--overrides JSON] [--operator] becomes the goal directive
   // the planner/worker/preflight read. Overrides may only narrow the profile unless --operator.
   const agentFlag = (values.profile ?? values.agent) as string | undefined;
