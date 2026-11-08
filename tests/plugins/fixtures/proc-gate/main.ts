@@ -1,5 +1,6 @@
 // Test plugin, out of process (plugin API §9; the tests/agents/fake-claude.sh pattern: a real program the host starts,
-// driven by a file). It records what it sees in its data directory (CAPCOMD_PLUGIN_DATA):
+// driven by a file). It imports the client library from this checkout, so it runs bundled into the plugin's directory
+// (tests/plugins/fixtures/proc-gate.ts: a plugin is self-contained, §4.9). It records what it sees in its data directory (CAPCOMD_PLUGIN_DATA):
 //   env.json       its environment's names (and the values of those not capcomd's own), at each start;
 //   opened.json    what its handshake answered (the secrets as their names only);
 //   frames.ndjson  one line per frame: frame, hook, callId, idempotencyKey, mode, subject (the merge, agent or run id).
