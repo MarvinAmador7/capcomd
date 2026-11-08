@@ -3,7 +3,8 @@
 // would load, worked out the same way without running any plugin code (discovered, validated, resolved).
 // `capcomd plugins show <name>`: one plugin as GET /v1/plugins/{name} has it, with where it was installed from.
 // `capcomd plugins validate [<dir>|<name>] [--conformance]` (§4.9, §14): a plugin directory's manifest, or a built-in's
-// (all of them with no argument), checked as the host checks it; with --conformance its code is loaded, disposed and
+// (all of them with no argument), checked as the host checks it (a directory's for being self-contained too: each path it
+// would run from outside its folder, src/plugins/contained.ts); with --conformance its code is loaded, disposed and
 // loaded again (§14.1), and its seams run their conformance suites (§14.2) against the real backend.
 // `capcomd plugins install|update|remove|trust|allow-version` (§4.4, §4.8, §17.2 step 12): src/plugins/install.ts. They
 // change files the daemon reads at its next start or a plugin's `enable`.
@@ -169,13 +170,15 @@ async function trustCommand(args: string[], values: Values): Promise<number> {
   if (!args.length) {
     if (values.json) { out({ project: dir, plugins: list.map(({ manifest, ...p }) => ({ ...p, version: manifest?.version ?? null })) }); return EXIT.ok; }
     if (!list.length) { console.log("This project has no plugins (.capcomd/plugins/<name>/, or plugins.use fetched with capcomd plugins install --project)."); return EXIT.ok; }
-    for (const p of list) console.log(`  ${p.name}  ${p.manifest?.version ?? "?"}  ${p.trust}${p.trust === "changed" ? " (its content changed since you trusted it)" : ""}  ${p.dir}`);
+    for (const p of list) console.log(`  ${p.name}  ${p.manifest?.version ?? "?"}  ${p.trust}${p.trust === "changed" ? " (its content changed since you trusted it)" : ""}${p.outside.length ? " (not self-contained: it can't be trusted)" : ""}  ${p.dir}`);
     return EXIT.ok;
   }
   const name = args[0]!;
   const p = list.find((x) => x.name === name);
   if (!p) throw new RelayError("not_found", `this project has no plugin ${name}`, "capcomd plugins trust lists them.");
   if (!p.hash || !p.manifest) throw new RelayError("config", `${name} can't be trusted: ${p.issues.join("; ")}`, "Fix the plugin's files first (capcomd plugins validate <dir>).");
+  // §4.9, §11.6: its hash would cover only its folder, not what it runs from elsewhere. Refused before anything is asked.
+  I.refuseOutside(name, p.outside);
   if (p.trust === "trusted") {
     if (values.json) out({ trusted: { name, hash: p.hash, dir: p.dir, already: true } }); else console.log(`${name} is trusted as it is (${p.hash}).`);
     return EXIT.ok;
@@ -300,7 +303,11 @@ async function showCommand(args: string[], values: Values): Promise<number> {
 }
 
 /** One plugin's validation, as `--json` prints it. */
-interface Validated { name: string; version: string | null; source: "builtin" | "dir"; path: string | null; ok: boolean; issues: ManifestIssue[]; warnings: ManifestIssue[]; conformance: ConformanceResult[] }
+interface Validated {
+  name: string; version: string | null; source: "builtin" | "dir"; path: string | null; ok: boolean; issues: ManifestIssue[]; warnings: ManifestIssue[]; conformance: ConformanceResult[];
+  /** A plugin directory's references to code outside its folder (each also an issue): where, what, and the real path. */
+  outside?: Array<{ from: string; specifier: string; resolved: string }>;
+}
 type Target = { label: string; dir: string | null; manifest: unknown; module: PluginModule<never> | null; conformance?: SandboxConformanceOptions; kernelSurface?: boolean };
 
 async function validateCommand(args: string[], values: { json?: boolean; conformance?: boolean }): Promise<number> {
@@ -344,6 +351,17 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
       const ref = p?.["x-secret"] === true ? secretRefOf((p as { default?: unknown }).default) : null;
       const owned = ref ? kernelSecretRef(ref) : null;
       if (owned) v.issues.push({ path: `config.properties.${k}.default`, message: `names ${owned}` });
+    }
+    // §4.9, §11.6: a plugin from a directory runs out of process, and only from its own folder. Each path it would run
+    // from elsewhere is an issue (a copy of the client library outside, not capcomd's own, among them); a bare import that
+    // resolves nowhere, a warning.
+    if (loaded.manifest.entry.runtime === "process") {
+      const { selfContained, containedIssues } = await import("../../plugins/contained");
+      const r = selfContained(t.dir, loaded.manifest);
+      const c = containedIssues(r, t.dir);
+      v.outside = r.outside;
+      v.issues.push(...c.issues);
+      v.warnings.push(...c.warnings);
     }
     if (v.issues.length) v.ok = false;
   }

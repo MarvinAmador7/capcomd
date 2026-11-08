@@ -12,7 +12,7 @@ import { Engine } from "../helpers/test-engine";
 import { readConfig } from "../../src/config/store";
 import { loadClients } from "../../src/api/clients";
 
-const MAIN = join(import.meta.dir, "..", "plugins", "fixtures", "proc-gate", "main.ts");
+import { PROC_GATE_COMMAND, putProcGate } from "../plugins/fixtures/proc-gate";
 const home = process.env.CAPCOMD_HOME!;
 const pluginDir = join(home, "plugins", "proc-gate");
 // The daemon and the CLI read the user's config here (the preload's CAPCOMD_NO_CONFIG would skip it).
@@ -42,11 +42,12 @@ const start = async () => {
   await engine.start(null);
 };
 
-beforeAll(() => {
+beforeAll(async () => {
   mkdirSync(pluginDir, { recursive: true });
+  await putProcGate(pluginDir);
   writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({
     schema: "capcomd.plugin/v1", name: "proc-gate", version: "1.0.0", description: "proc-gate, as a user's plugin", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
-    entry: { runtime: "process", command: ["bun", MAIN] }, scopes: ["read"], contributes: { hooks: { "run.changed": {} } },
+    entry: { runtime: "process", command: PROC_GATE_COMMAND }, scopes: ["read"], contributes: { hooks: { "run.changed": {} } },
   }));
   // Its data directory: it records what it sees there (and allows every observe call without a control file).
   mkdirSync(join(home, "state", "plugins", "proc-gate"), { recursive: true });
@@ -124,10 +125,11 @@ describe("against a running daemon", () => {
   test("a plugin the running daemon doesn't have (installed since it started): the config records it, the daemon is left as it is", async () => {
     const late = join(home, "plugins", "late-gate");
     mkdirSync(late, { recursive: true });
+    await putProcGate(late);
     try {
       writeFileSync(join(late, "plugin.json"), JSON.stringify({
         schema: "capcomd.plugin/v1", name: "late-gate", version: "1.0.0", description: "installed after the daemon started", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
-        entry: { runtime: "process", command: ["bun", MAIN] }, scopes: ["read"], contributes: { hooks: { "run.changed": {} } },
+        entry: { runtime: "process", command: PROC_GATE_COMMAND }, scopes: ["read"], contributes: { hooks: { "run.changed": {} } },
       }));
       const r = await cli("plugins", "disable", "late-gate", "--json");
       expect(r.code).toBe(0);
