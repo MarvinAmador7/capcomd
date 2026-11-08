@@ -137,4 +137,14 @@ test("capcomd run refuses a planner whose untrusted project profile moves its ag
   const r = await w.cj(["run", "--planner", "boss", "--detach", "build the thing"]);
   expect(r.code).not.toBe(0);
   expect(r.j?.error).toMatchObject({ code: "config", reason: "untrusted", message: expect.stringContaining("profile boss can't be spawned: it sends its agents to the fake-host sandbox") });
-}, 60_000);
+  // With --sandbox the run's own place wins, at the pre-check and at the spawn: no trust asked, and the planner's
+  // machine is made on the run's sandbox, not the one its untrusted profile names.
+  const planner = w.script("sbt-boss", `capcomd result --summary ok >/dev/null`);
+  const ran = await capcomd(["run", "plan nothing", "--planner", "boss", "--sandbox", "fake", "--no-goal-branch", "--json"], { ...w.env, CAPCOMD_SCRIPT_PLANNER: planner, PWD: w.dir });
+  if (ran.code !== 0) console.log(ran.stdout.slice(-3000), ran.stderr.slice(-2000));
+  expect(ran.code).toBe(0);
+  const lines = ran.stdout.trim().split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
+  const root = lines.find((l) => l.type === "planner.spawned")?.agentId as string;
+  expect(await machineOf(lines[0].runId, root)).toBe("fake");
+  expect(await pinned(lines[0].runId, root)).not.toHaveProperty("sandboxProvider");
+}, 120_000);
