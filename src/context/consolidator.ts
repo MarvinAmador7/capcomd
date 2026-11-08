@@ -198,8 +198,19 @@ export interface StagedBranch {
   refused: StageRefusal[];
   ignored: string[];
   lint: { errors: LintProblem[]; warnings: LintProblem[] };
-  /** Its proposals to the brain its profile names (null: none named), kept in kv `_context/brain/`, and those refused. */
-  brain: { name: string | null; proposals: BrainProposal[]; refused: StageRefusal[] };
+  /** Its proposals to the brain its profile names (null: none named), kept in kv `_context/brain/`, and those refused;
+   *  `mapped`: whether the run's project maps that brain (when it doesn't, every delta for it is refused). */
+  brain: { name: string | null; mapped: boolean; proposals: BrainProposal[]; refused: StageRefusal[] };
+}
+
+/** Whether run `runId` was started with a mapping for brain `name` (kv `_context`, src/context/project.ts, checked as
+ *  the groundray provider checks it). The engine not answering is thrown: the staging fails, it doesn't refuse. */
+async function runMapsBrain(runId: string, name: string): Promise<boolean> {
+  const { RUN_CONTEXT_KV } = await import("./project");
+  const { mappingOf } = await import("./groundray");
+  const e = await (await import("../primitives/state")).kvGet(runId, RUN_CONTEXT_KV) as { value?: unknown; deleted?: boolean };
+  const v = !e.deleted && e.value && typeof e.value === "object" && !Array.isArray(e.value) ? e.value as import("./project").ContextSettings : {};
+  return !!mappingOf(v, name);
 }
 
 /** Write `text` at `rel` under `root`, refusing a path any part of which is a link (a repository could make
@@ -237,10 +248,13 @@ export async function stageOnBranch(runId: string, a: { agentId: string; profile
   const origin = { runId, agentId: a.agentId, profile: a.profile ?? CONSOLIDATOR_PROFILE, model: spec.model ?? null, image: null };
   // Its proposals to the brain first (they need no repository), kept once; they take their share of the run's room.
   const name = brainOf(spec.context);
-  const forBrain = brainDeltas({ raw, brain: name, candidates, agentId: a.agentId, scan, itemBytes: limits.itemBytes, room: limits.proposalsPerRun });
+  // A brain the run's project doesn't map (as `run new` recorded it) could never take them: refused now, by its name,
+  // not kept to fail when a person sends them.
+  const mapped = name ? await runMapsBrain(runId, name) : true;
+  const forBrain = brainDeltas({ raw, brain: name, mapped, candidates, agentId: a.agentId, scan, itemBytes: limits.itemBytes, room: limits.proposalsPerRun });
   const proposals: BrainProposal[] = forBrain.accepted.map((d) => ({ ...d, id: `${a.agentId}.${d.n}`, origin, at, sent: null }));
   if (proposals.length) await (await import("./brain-proposals")).keepBrainProposals(runId, proposals);
-  const brain = { name, proposals, refused: forBrain.refused };
+  const brain = { name, mapped, proposals, refused: forBrain.refused };
   const none = (applied: Applied[] = [], refused: StageRefusal[] = []): StagedBranch => ({ sha: null, branch, applied, refused, ignored: [], lint: { errors: [], warnings: [] }, brain });
   if (!cfg) return none();
   const { openClone, withCloneLock } = await import("../merge/repo");
