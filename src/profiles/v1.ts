@@ -141,7 +141,7 @@ export const AGENTS_JSON_SCHEMA = {
       properties: {
         foregroundMs: { type: "integer", minimum: 0, description: "How long a start waits for the result before answering running (default 60000; 5000 for orchestrate)" },
         max: { type: "integer", minimum: 1, description: "Jobs running at once (default 8)" },
-        afterTurnMs: { type: "integer", minimum: 1000, description: "How long a job may run before it is stopped (default 1800000)" },
+        afterTurnMs: { type: "integer", minimum: 1000, description: "How long a job may run past the agent's last step before it is stopped, and the longest timeout a start may ask for (default 1800000)" },
       },
     },
     context: {

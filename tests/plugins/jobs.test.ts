@@ -224,7 +224,7 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     rmSync(recent);
   });
 
-  test("checked: a timer fires at most once a second, an exec job is an agent's, a run-owned one isn't made yet", async () => {
+  test("checked: a timer fires at most once a second, an exec job is an agent's or the run's, never the plugin's", async () => {
     let ctx!: PluginContext;
     const host = kernelHost({ log: false, jobs: true });
     useHooks(host.hooks);
@@ -232,7 +232,8 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: "fast", everyMs: 10 })).rejects.toMatchObject({ code: "invalid", message: "everyMs is at least 1000" });
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: "never" })).rejects.toMatchObject({ code: "invalid" });
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { run: true }, label: "x", everyMs: 1000 })).rejects.toMatchObject({ code: "invalid", message: "only a plugin's timer lives outside a run" });
-    await expect(ctx.jobs.start({ kind: "exec", runId: "run-x", owner: { run: true }, cmd: ["true"], label: "x" })).rejects.toMatchObject({ code: "unsupported" });
+    // A run-owned exec job is made (in the run's job machine, tests/scenarios/jobs.test.ts); a plugin-owned one isn't.
+    await expect(ctx.jobs.start({ kind: "exec", runId: "run-x", owner: { plugin: true }, cmd: ["true"], label: "x" } as unknown as Parameters<typeof ctx.jobs.start>[0])).rejects.toMatchObject({ code: "invalid", message: "an exec job is owned by an agent or the run" });
     // What a record keeps besides its output is bounded, so its output's tails always make it fit 64 KB (§16.2 rule 2).
     const exec = { kind: "exec" as const, runId: "run-x", owner: { agentId: "agt-x" }, cmd: ["true"], label: "x" };
     await expect(ctx.jobs.start({ ...exec, cwd: `/${"d".repeat(5000)}` })).rejects.toMatchObject({ code: "invalid", message: "cwd is over 4 KB" });

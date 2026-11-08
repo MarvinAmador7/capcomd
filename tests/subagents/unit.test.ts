@@ -170,6 +170,10 @@ test("in-VM CLI argv → op mapping (incl. parent-set children grants)", async (
   expect(toCall(["kv", "cas", "k", '{"n":1}', "--expect", "3"])).toMatchObject({ op: "kv", args: { action: "cas", k: "k", value: { n: 1 }, expect: 3 } });
   expect(toCall(["task", "done", "tsk-1", "--epoch", "2"])).toMatchObject({ op: "task", args: { action: "done", task: "tsk-1", epoch: 2 } });
   expect(() => toCall(["spawn"])).toThrow(/--task/);
+  // `job start --run`: the run's job (plugin API §16.2); the flag takes no value, so a word after it is the command's.
+  expect(toCall(["job", "start", "--run", "--label", "server", "--", "npm", "start"])).toMatchObject({ op: "job.start", args: { cmd: ["npm", "start"], label: "server", run: true } });
+  expect(toCall(["job", "start", "--run", "npm", "start"])).toMatchObject({ op: "job.start", args: { cmd: ["npm", "start"], run: true } });
+  expect(toCall(["job", "start", "--", "npm", "test"]).args.run).toBeUndefined();
 });
 
 /** A pump that answers every request with its own op + args (no engine). */

@@ -87,10 +87,13 @@ export function activityOf(ev: AgentEvent): ActivityStep[] {
  * steps): when a step of another kind starts the next one, and the last one at `finish()`. Streaks of "think" are never
  * reported. Calls are serialized (one at a time, in order), so the steps land in the order the agent took them, and
  * each step's startedAt is later than the one before (by 1 ms when they came in one batch).
+ *
+ * `onSeen` hears when the agent was last seen taking a step (not "think"), unthrottled and as each comes, inside a
+ * streak too: its background jobs' `afterTurnMs` counts from there (src/jobs/service.ts noteStep).
  */
 export function activityReporter(
 	write: (a: StoredActivity) => unknown,
-	o: { minMs?: number; now?: () => number; onStep?: (s: FinishedStep) => unknown } = {},
+	o: { minMs?: number; now?: () => number; onStep?: (s: FinishedStep) => unknown; onSeen?: (at: number) => unknown } = {},
 ) {
 	const minMs = o.minMs ?? 1000, now = o.now ?? Date.now;
 	let kind: ActivityKind | null = null, targets = new Set<string>(), startedAt = 0;
@@ -120,6 +123,7 @@ export function activityReporter(
 	};
 	const observe = (list: ActivityStep[]) => {
 		if (stopped) return;
+		if (o.onSeen && list.some((s) => s.kind !== "think")) { try { o.onSeen(now()); } catch { /* best effort */ } }
 		let changed = false;
 		for (const s of list) {
 			if (s.kind === "think" && kind) continue;
