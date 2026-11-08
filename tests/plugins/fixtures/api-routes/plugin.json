@@ -19,7 +19,8 @@
       { "method": "POST", "path": "/fail/{code}", "scope": "steer" },
       { "method": "GET", "path": "/boom", "scope": "read" },
       { "method": "GET", "path": "/stream", "scope": "read" },
-      { "method": "DELETE", "path": "/items/{id}", "scope": "configure" }
+      { "method": "DELETE", "path": "/items/{id}", "scope": "configure" },
+      { "method": "GET", "path": "/symbol", "scope": "read" }
     ]
   }
 }

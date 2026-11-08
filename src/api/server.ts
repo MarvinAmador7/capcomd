@@ -1038,7 +1038,9 @@ export function harnessApp(o: ServerOptions) {
 			return failed("a route answers with a JSON value, never a Response or a stream (plugin API §4.7.3)");
 		let json: string | undefined;
 		try { json = JSON.stringify(out); } catch (e) { return failed(`its answer isn't JSON: ${(e as Error).message}`); }
-		return c.body(json ?? "null", 200, { "content-type": "application/json" });
+		// A symbol is refused too: JSON.stringify answers undefined rather than throwing.
+		if (json === undefined) return failed(`its answer isn't JSON: a ${typeof out}`);
+		return c.body(json, 200, { "content-type": "application/json" });
 	});
 
 	// A thrown error (engine down, an actor's not_found/conflict) is still an ApiError body.

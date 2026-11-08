@@ -113,6 +113,17 @@ describe("the gateway (§4.7.3)", () => {
     expect(await json(r)).toEqual({ code: "internal", message: "plugin error" });
   });
 
+  test("an answer JSON.stringify refuses without throwing (a symbol) is 500 \"plugin error\", not a 200 null", async () => {
+    const log = console.log;
+    const lines: string[] = [];
+    console.log = (...a: unknown[]) => { lines.push(a.map(String).join(" ")); };
+    let r: Response;
+    try { r = await call(`/v1/x/${NAME}/symbol`, "reader"); } finally { console.log = log; }
+    expect(r.status).toBe(500);
+    expect(await json(r)).toEqual({ code: "internal", message: "plugin error" });
+    expect(lines.map((l) => JSON.parse(l).message)).toEqual(["GET /v1/x/api-routes/symbol: its answer isn't JSON: a symbol"]);
+  });
+
   test("what no active plugin serves is 404: another path, another method, another plugin", async () => {
     for (const [path, method] of [[`/v1/x/${NAME}/nothing`, "GET"], [`/v1/x/${NAME}/items`, "GET"], [`/v1/x/${NAME}/echo/1/more`, "GET"], ["/v1/x/nobody/echo/1", "GET"], [`/v1/x/${NAME}`, "GET"]] as const) {
       const r = await call(path, "configurer", { method });
@@ -135,6 +146,7 @@ describe("listing (§4.7.3, §13.2)", () => {
       { method: "GET", path: `/v1/x/${NAME}/boom`, scope: "read" },
       { method: "GET", path: `/v1/x/${NAME}/stream`, scope: "read" },
       { method: "DELETE", path: `/v1/x/${NAME}/items/{id}`, scope: "configure" },
+      { method: "GET", path: `/v1/x/${NAME}/symbol`, scope: "read" },
     ]);
     expect(d.capabilities).toEqual([{ name: `x.${NAME}.digest`, doc: "GET /v1/x/api-routes/echo/{id}: an echo of what it was given." }]);
     const health = await json(await app.request("/v1/health"));
@@ -150,7 +162,7 @@ describe("listing (§4.7.3, §13.2)", () => {
     expect((await json(r)).code).toBe("not_found");
     expect((await json(await app.request("/v1/health"))).capabilities).not.toContain(`x.${NAME}.digest`);
     const d = PluginDetail.parse(await (await call(`/v1/plugins/${NAME}`, "reader")).json());
-    expect(d.routes?.length).toBe(7);
+    expect(d.routes?.length).toBe(8);
     expect(d.capabilities).toEqual([]);
     await host.enable(NAME);
     expect((await call(`/v1/x/${NAME}/echo/1`, "reader")).status).toBe(200);

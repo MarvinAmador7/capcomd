@@ -8,8 +8,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: plugins built into the daemon can serve their own API routes at `/v1/x/<plugin>/…` on the harness API, called
   with your client token. A route needs the scope it declares (`read`, `steer` or `configure`), takes and answers JSON,
   and runs as you; a plugin's own failure answers 500 "plugin error" with the details only in the daemon log.
-  `GET /v1/plugins/{name}` (and `capcomd plugins show --json`) now lists a plugin's `routes` and the feature flags it
-  adds to `GET /v1/health` (`x.<plugin>.<flag>`). Clients can check for the `plugins.routes` capability.
+  `GET /v1/plugins/{name}` now lists a plugin's `routes` and the feature flags it adds to `GET /v1/health`
+  (`x.<plugin>.<flag>`) while it is active; `capcomd plugins show --json` lists the routes its manifest declares.
+  Clients can check for the `plugins.routes` capability.
 - Fixed: `capcomd plugins install` and `capcomd profiles install` refuse a package with a link that leaves it only by
   going through another of its links (each target looked inside on its own), and a project plugin holding one can't
   be trusted. Before, such a link was installed, and what it pointed to outside the package wasn't part of the hash
