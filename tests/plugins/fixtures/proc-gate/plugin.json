@@ -5,7 +5,7 @@
   "description": "Test plugin run out of process: a merge.landing gate (deny by default) that records every frame it gets; control.json in its data directory says what to answer.",
   "apiVersion": 1,
   "engines": { "capcomd": ">=0.0.0" },
-  "entry": { "runtime": "process", "command": ["bun", "${PLUGIN_ROOT}/main.ts"], "env": { "PROC_GATE_MARK": "from the manifest" } },
+  "entry": { "runtime": "process", "command": ["bun", "${PLUGIN_ROOT}/main.js"], "env": { "PROC_GATE_MARK": "from the manifest" } },
   "scopes": ["read", "steer"],
   "contributes": {
     "hooks": { "merge.landing": {}, "run.changed": {} },
