@@ -90,7 +90,7 @@ export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceC
       // An edit of a comment from before the position isn't a new request.
       const got = Date.parse(c.created_at) < Date.parse(pos.since) && c.id !== pos.retry ? null : commentTrigger(repo, c, me, cfg.sourceCommand);
       // A comment on a thread nobody follows, in a repository only followed threads bring in, is read and passed over.
-      const t =got && (!threads || threads.has(got.thread)) ? got : null;
+      const t = got &&(!threads || threads.has(got.thread)) ? got : null;
       if (t) {
         const again = await ctx.triggers.emit(t).then(() => { n++; return false; }, (e) => {
           ctx.log.warn(`github source: ${repo} comment ${c.id} was not taken`, { error: String((e as Error)?.message ?? e) });
