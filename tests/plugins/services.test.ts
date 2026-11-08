@@ -84,6 +84,14 @@ describe("refused before any run is looked up (§8.4)", () => {
     expect(await code(ctx.kv.put(RUN, "k", undefined))).toBe("invalid");
     expect(await code(ctx.kv.put(RUN, "k", "x".repeat(64 * 1024)))).toBe("invalid");
     expect(await code(ctx.kv.put(RUN, "k", 1, { key: "" }))).toBe("invalid");
+    // No JSON, or none that can be written: invalid, not a TypeError.
+    for (const v of [() => 1, Symbol("s"), 1n]) expect(await code(ctx.kv.put(RUN, "k", v))).toBe("invalid");
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(await code(ctx.kv.put(RUN, "k", cycle))).toBe("invalid");
+    // A key is refused past 200 characters, never cut (two keys that differ after the cut would be one).
+    expect(await code(ctx.kv.put(RUN, "k", 1, { key: "a".repeat(201) }))).toBe("invalid");
+    expect(await code(ctx.board.add(RUN, { id: "t1", goal: "g" }, { key: "a".repeat(201) }))).toBe("invalid");
   });
 
   test("runs, messages, board and profiles check what they're given", async () => {
@@ -92,6 +100,9 @@ describe("refused before any run is looked up (§8.4)", () => {
     expect(await code(ctx.runs.new({ budget: { usd: -1 } }))).toBe("invalid");
     expect(await code(ctx.runs.new({ budget: { dollars: 1 } as never }))).toBe("invalid");
     expect(await code(ctx.runs.new({ budget: { usd: 1 }, label: "" }))).toBe("invalid");
+    // A goal is checked as POST /v1/runs checks one.
+    for (const goal of [" ", "x".repeat(16 * 1024 + 1), "a\u0000b", "[agent:planner] fix it", 7 as never])
+      expect([String(goal).slice(0, 20), await code(ctx.runs.new({ budget: { usd: 1 }, goal }))]).toEqual([String(goal).slice(0, 20), "invalid"]);
     expect(await code(ctx.runs.list({ limit: 0 }))).toBe("invalid");
     expect(await code(ctx.messages.send(RUN, { to: "operator", body: "hi" }))).toBe("invalid");
     expect(await code(ctx.board.add(RUN, { id: "bad id", goal: "g" }))).toBe("invalid");
@@ -130,6 +141,10 @@ describe("sandboxes (§7.1, §8.4)", () => {
     ac.abort();
     expect(await code(p.list("", { ...gone.call, signal: ac.signal }))).toBe("timeout");
     gone.done();
+    // The deadline holds even when the signal never fires; a deadline that isn't a time is refused.
+    const live = new AbortController().signal;
+    expect(await code(p.list("", { ...call(), signal: live, deadline: new Date(Date.now() - 1000).toISOString() }))).toBe("timeout");
+    expect(await code(p.list("", { ...call(), signal: live, deadline: "tomorrow" }))).toBe("invalid");
   });
 });
 

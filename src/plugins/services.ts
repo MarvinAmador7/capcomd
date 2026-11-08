@@ -132,6 +132,8 @@ export function pluginAgents(plugin: string): Partial<AgentsService> {
 const ops = () => import("../primitives/ops");
 /** An actor's error (its UserError code, src/primitives/ops.ts asRelay) or the kernel's, as a plugin sees it. */
 async function kernelError(e: unknown): Promise<never> {
+  // The kernel's own errors as they are: through asRelay, a plugin's refusal (refusedError) would lose its reason.
+  if (e instanceof RelayError || e instanceof PluginError) return asPluginError(e);
   const { asRelay } = await ops();
   try { return asRelay(e); } catch (x) { return asPluginError(x); }
 }
@@ -139,13 +141,18 @@ const invalid = (message: string) => new PluginError("invalid", message);
 /** A mutating call's idempotency key (§8.2), the plugin's own: a run's scope keeps one table of keys for every caller. */
 function keyOf(plugin: string, o?: CallOptions): { key?: string } {
   if (o?.key === undefined) return {};
-  if (typeof o.key !== "string" || !o.key) throw invalid("a call's key is a non-empty string");
-  return { key: `plugin:${plugin}:${o.key.slice(0, 200)}` };
+  // Refused, not cut: two keys that differ past the cut would be one key.
+  if (typeof o.key !== "string" || !o.key || o.key.length > KEY_MAX) throw invalid(`a call's key is a non-empty string of at most ${KEY_MAX} characters`);
+  return { key: `plugin:${plugin}:${o.key}` };
 }
+const KEY_MAX = 200;
 const VALUE_MAX = 64 * 1024;
 function checkValue(value: unknown, what: string): void {
-  if (value === undefined) throw invalid(`a ${what} value is JSON (not undefined)`);
-  if (Buffer.byteLength(JSON.stringify(value)) > VALUE_MAX) throw invalid(`a ${what} value is at most 64 KB of JSON (§8.4)`);
+  let json: string | undefined;
+  try { json = JSON.stringify(value); } catch { json = undefined; }
+  // undefined, a function or a symbol has no JSON; a BigInt or a cycle throws.
+  if (json === undefined) throw invalid(`a ${what} value is JSON (not undefined, a function, a BigInt or a cycle)`);
+  if (Buffer.byteLength(json) > VALUE_MAX) throw invalid(`a ${what} value is at most 64 KB of JSON (§8.4)`);
 }
 
 /** The run as harness.v1 shows it (GET /v1/runs/{id}): its row of the runs index, else what its scope recorded. */
@@ -172,6 +179,16 @@ function named<K extends string>(name: K, v: unknown): { [k in K]?: string } {
   return { [name]: v } as { [k in K]?: string };
 }
 
+/** A run's goal, checked as POST /v1/runs checks one (src/api/contract.ts `CreateRunBody`): at most 16 KB, no NUL, no
+ *  leading `[agent:…]` directive. */
+async function goalOf(goal: unknown): Promise<{ goal?: string }> {
+  if (goal === undefined || goal === null) return {};
+  if (typeof goal !== "string") throw invalid("goal is a non-empty string");
+  const checked = (await import("../api/contract")).CreateRunBody.shape.goal.safeParse(goal);
+  if (!checked.success) throw invalid(`goal: ${checked.error.issues.map((i) => i.message).join("; ")}`);
+  return { goal };
+}
+
 /** `ctx.runs` (§8.1): what `capcomd run new`, `pause`, `resume`, `cancel` and `title --run` do, as the plugin. */
 export function pluginRuns(plugin: string, principal: Principal): RunsService {
   const by = `plugin:${plugin}`;
@@ -181,7 +198,7 @@ export function pluginRuns(plugin: string, principal: Principal): RunsService {
       if (!input || typeof input !== "object") throw invalid("runs.new takes {budget, label?, goal?, checks?, reviewer?, target?, sandbox?}");
       if (input.checks !== undefined && (!input.checks || typeof input.checks !== "object" || Object.values(input.checks).some((c) => typeof c !== "string" || !c.trim()))) throw invalid("checks name commands: {name: command}");
       const r = await (await ops()).runNew({
-        budget: budgetOf(input.budget), ...named("label", input.label), ...named("goal", input.goal), ...named("reviewer", input.reviewer), ...named("target", input.target), ...named("sandbox", input.sandbox),
+        budget: budgetOf(input.budget), ...named("label", input.label), ...(await goalOf(input.goal)), ...named("reviewer", input.reviewer), ...named("target", input.target), ...named("sandbox", input.sandbox),
         ...(input.checks && Object.keys(input.checks).length ? { checks: input.checks } : {}), ...keyOf(plugin, o), principal,
       }).catch(kernelError);
       return runOf(r.runId);
@@ -343,7 +360,8 @@ export function pluginBoard(plugin: string): BoardService {
       if (typeof input.goal !== "string" || !input.goal.trim()) throw invalid("a task has a goal");
       if (input.after !== undefined && (!Array.isArray(input.after) || input.after.some((a) => typeof a !== "string" || !TASK_ID.test(a)))) throw invalid("after names task ids");
       const after = input.after?.length ? [...new Set(input.after)].sort() : undefined;
-      const r = await (await scopeOf(runId)).taskAdd({ taskId: id, title: input.goal, ...(after ? { after } : {}), ...keyOf(plugin, o), paramsHash: paramsHash({ title: input.goal, data: null, ...(after ? { after } : {}) }) }).catch(kernelError);
+      const idem = keyOf(plugin, o);
+      const r = await (await scopeOf(runId)).taskAdd({ taskId: id, title: input.goal, ...(after ? { after } : {}), ...idem, paramsHash: paramsHash({ title: input.goal, data: null, ...(after ? { after } : {}) }) }).catch(kernelError);
       return taskOf(r.task as ScopeTask);
     },
     /** The named task, or the next ready one; null when none is free. */
@@ -441,12 +459,17 @@ function sandboxFor(name: string, seam: SandboxSeam): SandboxSeam {
   const left = (c: SeamCall) => Math.max(1, Date.parse(c.deadline) - Date.now());
   const go = async <T>(c: SeamCall, f: (p: SandboxProvider) => Promise<T>): Promise<T> => {
     if (c?.signal?.aborted) throw new PluginError("timeout", `the call to the ${name} sandbox was cancelled`);
+    const ms = Date.parse(c?.deadline) - Date.now();
+    if (Number.isNaN(ms)) throw new PluginError("invalid", "a seam call's deadline is an ISO 8601 time (§7.1 SeamCall)");
+    if (ms <= 0) throw new PluginError("timeout", `the call to the ${name} sandbox passed its deadline`);
     kernel ??= (await import("../dependencies")).providerNamed(name);
     let off = () => {};
+    // The call's signal, or its deadline when the signal never fires (§8.4: a call waits until its deadline at most).
     const stopped = new Promise<never>((_, reject) => {
       const on = () => reject(new PluginError("timeout", `the call to the ${name} sandbox passed its deadline`));
+      const timer = setTimeout(on, ms);
       c?.signal?.addEventListener("abort", on, { once: true });
-      off = () => c?.signal?.removeEventListener("abort", on);
+      off = () => { clearTimeout(timer); c?.signal?.removeEventListener("abort", on); };
     });
     try { return await Promise.race([f(kernel), stopped]); } catch (e) { return sandboxError(e); } finally { off(); }
   };

@@ -37,6 +37,11 @@ beforeAll(async () => {
     manifest: { schema: "capcomd.plugin/v1", name: "services-reader", version: "1.0.0", description: "Reads the run's state and never steers.", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
       entry: { runtime: "in-process", module: "./index.ts" }, scopes: ["read"], contributes: { hooks: { "run.changed": {} } } },
     module: { activate(c) { reader = c as PluginContext; c.hooks.on("run.changed", () => {}); } } as PluginModule<never>,
+  }, {
+    source: "builtin",
+    manifest: { schema: "capcomd.plugin/v1", name: "services-denier", version: "1.0.0", description: "Refuses the runs labelled to be refused.", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
+      entry: { runtime: "in-process", module: "./index.ts" }, scopes: ["read"], contributes: { hooks: { "run.creating": {} } } },
+    module: { activate(c) { c.hooks.on("run.creating", ({ payload }) => payload.options.label === "refuse me" ? { decision: "deny", reason: "no run may be labelled refuse me" } : { decision: "allow" }); } } as PluginModule<never>,
   }]);
   ctx = probe.ctx!;
   // This process's hooks are this host's: run.creating and profile.resolved reach the probe.
@@ -73,6 +78,13 @@ describe("runs", () => {
     expect(await ctx.runs.get(r.id)).toEqual(r);
     expect((await ctx.runs.list({ limit: 50 })).map((x) => x.id)).toContain(r.id);
     expect((await reader.runs.list({})).map((x) => x.id)).toContain(r.id);
+  }, 60_000);
+
+  test("another plugin's refusal of the run reaches the caller with its reason, and no run is made", async () => {
+    const before = (await ctx.runs.list({ limit: 500 })).length;
+    const e = await ctx.runs.new({ budget: { usd: 1 }, label: "refuse me" }).then(() => null, (x: unknown) => x);
+    expect(e).toMatchObject({ code: "conflict", message: "run.creating: refused by the services-denier plugin", hint: "no run may be labelled refuse me" });
+    expect((await ctx.runs.list({ limit: 500 })).length).toBe(before);
   }, 60_000);
 
   test("a run's title, pause, resume and end, as the plugin", async () => {
