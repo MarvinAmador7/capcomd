@@ -475,7 +475,10 @@ Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src
   otherwise show as "Worker" with worker's face. `identity.persona` and `tags` are inherited (a child of `reviewer` is
   a reviewer until it says otherwise).
 - **`fit` is built from the resolved spec and `permissions` only**: what the tools allow (orchestrate, read-only,
-  edits; a plain `Bash` isn't read-only, `Bash(<cmd>:*)` rules are, as `does` says), report, provider label, model,
+  edits; a plain `Bash`, or a rule starting with a wildcard (`Bash(* *)`), isn't read-only, `Bash(<cmd>:*)` rules
+  are, as `does` says; read-only is what the provider
+  applies, `src/profiles/v1.ts` `readOnlySpec`: Claude Code's tool allow-list, Codex's `sandbox.codex: read-only`
+  since it has no per-tool allow-list, never for a provider capcomd doesn't know), report, provider label, model,
   effort, cost, limits, an egress allowlist's size, whether it leads (`leadText`). No `description`,
   `tags`, `title` or `sharing` goes into it, so a shared package can't word it.
 - **`cost` is a tier by model family** (Haiku, `-mini`, `-nano`: low; Sonnet, GPT, `o<N>`: medium; Opus, `-pro`:

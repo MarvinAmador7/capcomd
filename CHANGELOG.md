@@ -10,6 +10,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   in other read-only rows (an `x-` field, `sharing.source`), hides token-shaped text, a value under a key such as
   `password`, `apiKey` or `token`, and a URL's password. `PUT` refuses a number too large to store exactly instead
   of writing it as `1e+23`.
+- Fix: `capcomd_profiles`, `capcomd profiles list` and `GET /v1/profiles` call a profile read-only (`fit`, `does`)
+  only when its agent really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by
+  `sandbox.codex: read-only`. A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a
+  Claude Code profile with a read-only Codex sandbox (Claude Code ignores it) are no longer described as read-only,
+  nor is one allowed a shell rule that starts with a wildcard (`Bash(* *)`), which lets it run any program.
+- Fix: `capcomd profiles list` and `capcomd profiles show` show control characters in a profile's `identity.title`
+  and `harness.model` (and `show` in any text value it lists) as `\u{…}` instead of printing them, so an installed
+  profile can't redraw or hide lines in your terminal.
 - Fixed: a run started with `capcomd run new` in a project whose `.capcomd/config.json` names one check (`run.checks`,
   as `capcomd setup project` writes it) now verifies with that check when the repository has no test command and the
   agent wasn't pinned to one. Before, `capcomd verify` passed with "(no test command configured)" without running it.
