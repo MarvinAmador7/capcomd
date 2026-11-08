@@ -4,6 +4,7 @@
 // value is a string in one encoding both ways (a list is a JSON array). Labels, help and `display` are written here,
 // except for the free text a profile's file holds (`description`, `identity.title`, a value outside the catalog). No
 // prompt text is ever served: a prompt row says only whether it is set.
+import { REDACTED, Redactor, SECRET_KEY } from "../agents/redact";
 import { agentSeams } from "../plugins/agents";
 import { profileValues } from "./describe";
 import type { ResolvedProfile } from "./load";
@@ -84,6 +85,8 @@ export const PROFILE_FIELDS: readonly ProfileFieldSpec[] = [
   { id: "jobs.afterTurnMs", type: "number", label: "A job's time limit", unit: "ms", help: "In milliseconds", unset: "capcomd's default" },
 ];
 const BY_ID = new Map(PROFILE_FIELDS.map((f) => [f.id, f]));
+/** Lists of named things a row outside the catalog shows by their names only. */
+const BY_NAME = new Set(["tools.mcp", "context.providers"]);
 /** Said by the profile's summary row, not as a field. */
 const NOT_A_ROW = new Set(["name", "version", "default"]);
 
@@ -121,6 +124,17 @@ function encode(f: ProfileFieldSpec, v: unknown): string | null {
 }
 
 /** A value outside the catalog, shown as the file has it: one line, at most 80 characters. */
+/**
+ * A value of the file as a reading client may see it: the token shapes the redactor knows taken out, a value under a
+ * key named like a secret (`password`, `apiKey`, `token`, …; the row's own last key too) replaced whole, and a URL's
+ * password. It is still text from the file: a secret with no such shape or key shows.
+ */
+function withoutSecrets(path: string, v: unknown): string {
+  if (SECRET_KEY.test(path.slice(path.lastIndexOf(".") + 1)) && v !== null && v !== undefined) return REDACTED;
+  const r = new Redactor().value(v);
+  return (typeof r === "string" ? r : JSON.stringify(r)).replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]*:)[^\s/?#@]+@/gi, `$1${REDACTED}@`);
+}
+
 function shown(v: unknown): string {
   const t = typeof v === "string" ? v : JSON.stringify(v);
   const line = t.split("\n")[0]!;
@@ -159,8 +173,10 @@ export function profileFields(p: ResolvedProfile): ProfileField[] {
   for (const v of profileValues(p)) {
     if (BY_ID.has(v.path) || NOT_A_ROW.has(v.path)) continue;
     const r = row({ id: v.path, type: "info", label: v.path, help: "capcomd shows it as the profile's file has it; change it there", unset: "Not set", untrusted: true }, v.value);
-    // An MCP server by its name: its command line may carry a token, and the rows are served to any reading client.
-    const value = v.path === "tools.mcp" && Array.isArray(v.value) ? v.value.map((s) => (s && typeof s === "object" && typeof (s as { name?: unknown }).name === "string" ? (s as { name: string }).name : "?")).join(", ") : v.value;
+    // An MCP server or a context provider by its name: a server's command line, or a provider's own settings, may
+    // carry a token, and the rows are served to any reading client. Any other value (an `x-` field, `sharing.source`)
+    // is shown without what looks secret, before it is cut to one line.
+    const value = BY_NAME.has(v.path) && Array.isArray(v.value) ? v.value.map((s) => (s && typeof s === "object" && typeof (s as { name?: unknown }).name === "string" ? (s as { name: string }).name : "?")).join(", ") : withoutSecrets(v.path, v.value);
     rows.push({ ...r, value: null, display: shown(value) });
   }
   return rows;
@@ -182,6 +198,8 @@ export function editOf(p: ResolvedProfile, values: Record<string, string | null>
     switch (f.type) {
       case "number": {
         if (!/^-?\d+(\.\d+)?$/.test(raw.trim())) return { field: id, message: `${id}: must be a number` };
+        // Past 2^53 a number isn't the one sent (it would be written as 1e+23).
+        if (Math.abs(Number(raw)) > Number.MAX_SAFE_INTEGER) return { field: id, message: `${id}: must be at most ${Number.MAX_SAFE_INTEGER}` };
         edit[id] = Number(raw);
         break;
       }
