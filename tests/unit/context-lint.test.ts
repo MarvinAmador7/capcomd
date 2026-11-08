@@ -87,6 +87,14 @@ describe("lint (ADR-025 §5.3)", () => {
     expect(r.errors.find((p) => p.file.endsWith("zz-dup.md"))!.message).toBe("id money-rounding is already memory/money-rounding.md's");
   });
 
+  test("the index file a profile names (memory.files) sits beside index.md: text with no secret, not an item; nothing else does", () => {
+    const ok = lint({ ...GOOD, "index.md": INDEX, "NOTES.md": "- [Rounding](memory/money-rounding.md)\n", "MEMORY.txt": "memory/old-rounding.md\n" });
+    expect(ok.errors).toEqual([]);
+    expect(ok.items).toBe(3);
+    const r = lint({ ...GOOD, "index.md": INDEX, "NOTES.md": `- [Rounding](memory/money-rounding.md) ${RUN_SECRET}\n`, "BIG.md": null, "notes/NOTES.md": "x", "memory/README.txt": "x", "NOTES.json": "{}" });
+    expect(rules(r)).toEqual(["BIG.md unreadable", "NOTES.json not-an-item", "NOTES.md secret", "memory/README.txt not-an-item", "notes/NOTES.md not-an-item"]);
+  });
+
   test("supersession: reciprocal, between items that are here, acyclic", () => {
     const r = lint({
       "memory/a.md": item({ id: "a", type: "lesson", supersedes: ["b"] }),
