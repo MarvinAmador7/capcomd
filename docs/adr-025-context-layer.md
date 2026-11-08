@@ -758,13 +758,17 @@ says why):
   `add` only: supersession, deprecation and verification are not exposed by groundray's CLI ("Creation never
   authorizes promotion") and belong to the brain's owners. It is never staged on the consolidator's branch: the kernel
   keeps it in kv `_context/brain/<agentId>.<n>` (reserved) and the consolidator's result says so (`context.brain`).
+  A brain the run's project doesn't map (the mapping `run new` recorded) is refused there and then, by its name
+  (`no_brain`, `context.brain.error`), not kept to fail when a person sends it (spec 1.0.60).
   The prompt tells a consolidator whose profile names a brain how to propose to it.
 - **The approver as actor, without a hold.** §7 forwards "the approver of the hold"; a brain proposal has no branch in
   the project's repository, so no merge and no hold of its own, and tying it to the memory branch's hold would drop it
   when the run proposed facts and no lessons (no branch, no hold). So the rule is the profile's `context.review`, as for
   memory: under `review: human` (the default) the proposals wait for a person, who sends them with `capcomd context brain
-  propose --run <runId> --yes` and is their actor (`human:<id>` from the operator's or a driver's principal; the local
-  CLI's is `human:operator`); under `review: lint` the kernel sends them as the staging ends, as `capcomd/<version>`,
+  propose --run <runId> --yes`, or from a client with `POST /v1/runs/{runId}/brain-proposals/send` (capability
+  `context.brain_proposals`, the `configure` scope: drafts written in the caller's name in another repository; never a
+  plugin's token), and is their actor (`human:<id>` from the operator's, a driver's or the client's principal; the local
+  CLI's is `human:operator`, a client's `human:<client id>`); under `review: lint` the kernel sends them as the staging ends, as `capcomd/<version>`,
   within 4 minutes for all of them (the settle step that stages them has 10), leaving the rest for the command.
   An agent never names a person. Either way the brain's owners review the pull request, and a draft never raises
   authority there.
@@ -785,7 +789,9 @@ says why):
   request into the brain's branch; a run's later proposals join that branch and that pull request (one review per run,
   not one per fact, and their `index.md` and `log.md` changes never conflict with each other). A forge without pull
   requests (plain git) leaves the pushed branch. Idempotent by a marker in the item's source
-  (`capcomd://runs/<run>/agents/<agent>/proposals/<key>`): a replay finds the draft and the pull request.
+  (`capcomd://runs/<run>/agents/<agent>/proposals/<key>`): a replay finds the draft and the pull request, and one after
+  the pull request was merged (its proposal branch perhaps deleted) finds the item on the brain's branch and makes no
+  second draft or pull request.
 - **`x-capcomd` is a source, not an extension field.** `knowledge create` takes no extension fields (an `x-` field would
   need a second saved version through `knowledge update --metadata-file`, and warns `KB-W104` unless the bundle documents
   it), so the machine origin is the item's source (the run and agent) and its confidence basis; the model stays in

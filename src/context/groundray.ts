@@ -155,8 +155,9 @@ function marksRestricted(text: string): boolean {
   return valuesOf(m[1]!, "sensitivity").some((v) => v.toLowerCase() === "restricted") || /^sensitivity[ \t]*:[ \t]*(["']?)restricted\1[ \t]*(?:#.*)?$/im.test(m[1]!);
 }
 
-/** A project's mapping, as `run new` recorded it (or the file has it): checked, since the file is hand-editable. */
-function mappingOf(settings: ContextSettings, name: string): ContextBrain | null {
+/** A project's mapping, as `run new` recorded it (or the file has it): checked, since the file is hand-editable. A
+ *  consolidator's proposals to a brain without one are refused when they are staged (./consolidator.ts). */
+export function mappingOf(settings: ContextSettings, name: string): ContextBrain | null {
   const b = (settings.brains as Record<string, unknown> | undefined)?.[name];
   if (!isMap(b) || typeof b.repo !== "string" || !b.repo || typeof b.commit !== "string" || !COMMIT.test(b.commit)) return null;
   if (typeof b.branch !== "string" || !BRANCH.test(b.branch) || typeof b.slug !== "string" || typeof b.id !== "string") return null;
