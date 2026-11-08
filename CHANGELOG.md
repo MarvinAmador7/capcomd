@@ -11,8 +11,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   daemon running, only the config changes and the command says so. Built-in plugins can't be disabled, except the
   watchdog, which you turn on yourself. Before, only the API could do this, and only until the daemon restarted.
 - Changed: a command whose plugin isn't running (`capcomd <command>` from a plugin that is disabled or failed to
-  start) now names the plugin and why it isn't running, with the next step (`capcomd plugins enable <name>`), instead
-  of "unknown command". `GET /v1/plugins` lists the CLI commands each plugin declares (`commands`).
+  start) now names the plugin and why it isn't running, with the next step (`capcomd plugins enable <name>`, or the
+  `CAPCOMD_PLUGIN_<NAME>_ENABLED` variable that turns it off), instead of "unknown command". `GET /v1/plugins` lists the CLI commands each plugin declares (`commands`).
 - Fixed: `capcomd plugins install` and `capcomd profiles install` refuse a package with a link that leaves it only by
   going through another of its links (each target looked inside on its own), and a project plugin holding one can't
   be trusted. Before, such a link was installed, and what it pointed to outside the package wasn't part of the hash

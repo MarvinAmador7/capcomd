@@ -69,6 +69,19 @@ describe("with no daemon running", () => {
     expect(enabled()).toBe(true);
   });
 
+  test("a daemon that runs but doesn't answer at its socket: the config is written, the output says the daemon didn't apply it", async () => {
+    // A listing whose pid is alive (this test's) and whose socket nothing serves.
+    const snapshot = join(home, "state", "plugins.json");
+    writeFileSync(snapshot, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), plugins: [], socket: join(home, "nobody.sock") }));
+    try {
+      const r = await cli("plugins", "disable", "proc-gate", "--json");
+      expect(r.code).toBe(0);
+      expect(r.j).toMatchObject({ ok: true, enabled: false, daemon: { pid: process.pid, applied: false, reason: expect.stringContaining(`${join(home, "nobody.sock")} didn't answer`) } });
+      expect(enabled()).toBe(false);
+      expect(loadClients()).toEqual([]);
+    } finally { rmSync(snapshot, { force: true }); rmSync(join(home, "config.json"), { force: true }); }
+  });
+
   test("a built-in is refused (conflict) and nothing is written; an unknown plugin is not_found", async () => {
     const r = await cli("plugins", "disable", "forge-git", "--json");
     expect(r.code).toBe(1);
@@ -107,6 +120,22 @@ describe("against a running daemon", () => {
     expect(await listed((p, daemon) => !!daemon && daemon.pid !== pid && p.state === "active")).toMatchObject({ enabled: true, cause: null });
     expect(loadClients()).toEqual([]);
   }, 300_000);
+
+  test("a plugin the running daemon doesn't have (installed since it started): the config records it, the daemon is left as it is", async () => {
+    const late = join(home, "plugins", "late-gate");
+    mkdirSync(late, { recursive: true });
+    try {
+      writeFileSync(join(late, "plugin.json"), JSON.stringify({
+        schema: "capcomd.plugin/v1", name: "late-gate", version: "1.0.0", description: "installed after the daemon started", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
+        entry: { runtime: "process", command: ["bun", MAIN] }, scopes: ["read"], contributes: { hooks: { "run.changed": {} } },
+      }));
+      const r = await cli("plugins", "disable", "late-gate", "--json");
+      expect(r.code).toBe(0);
+      expect(r.j).toMatchObject({ ok: true, plugin: "late-gate", enabled: false, daemon: { applied: false, reason: "it has no plugin late-gate (one installed since it started, or another project's)" } });
+      expect(readConfig(join(home, "config.json")).plugins?.["late-gate"]).toEqual({ enabled: false });
+      expect(loadClients()).toEqual([]);
+    } finally { rmSync(late, { recursive: true, force: true }); }
+  }, 60_000);
 
   test("a built-in is refused with conflict and keeps running", async () => {
     const r = await cli("plugins", "disable", "forge-git");

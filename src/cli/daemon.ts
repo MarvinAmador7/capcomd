@@ -17,7 +17,7 @@ export async function callDaemon(method: "POST", path: string, o: { scope: Clien
   const { readSnapshot } = await import("../plugins/host");
   const snap = readSnapshot();
   if (!snap) return { kind: "none" };
-  const socket = snap.socket ?? (await (await import("./commands/serve")).harnessSocket());
+  const socket = typeof snap.socket === "string" && snap.socket ? snap.socket : await (await import("./commands/serve")).harnessSocket();
   const C = await import("../api/clients");
   let made: ReturnType<typeof C.oneCallClient>;
   try { made = C.oneCallClient("capcomd CLI (one call)", [o.scope]); } catch (e) { return { kind: "unreachable", pid: snap.pid, reason: `no token for the call: ${(e as Error).message}` }; }

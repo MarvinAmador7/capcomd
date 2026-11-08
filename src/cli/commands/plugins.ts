@@ -262,7 +262,7 @@ async function toggleCommand(action: "enable" | "disable", args: string[], value
   const daemon = call.kind === "none" ? null
     : call.kind === "unreachable" ? { pid: call.pid, applied: false as const, reason: call.reason }
     : call.status === 200 ? { pid: call.pid, applied: true as const, plugin: call.body as unknown as PluginSummary }
-    : { pid: call.pid, applied: false as const, reason: `it has no plugin ${name} (it serves another project)` };
+    : { pid: call.pid, applied: false as const, reason: `it has no plugin ${name} (one installed since it started, or another project's)` };
   if (values.json) {
     out({ plugin: name, enabled: on, config: path, daemon, notes });
     return EXIT.ok;

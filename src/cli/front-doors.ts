@@ -43,8 +43,13 @@ export async function noCommand(name: string): Promise<RelayError> {
   if (!p) return new RelayError("usage", `unknown command: ${name}`, "Run `capcomd --help` for usage.");
   const why = host.message(p.name);
   const off = !p.enabled && (p.cause === "disabled" || p.state === "validated");
+  // The environment's `enabled` wins over the config `capcomd plugins enable` writes (§10.2): name the variable instead.
+  const { envName } = await import("../plugins/config");
+  const variable = envName(p.name, "enabled");
+  const byEnv = off && (() => { try { return JSON.parse(process.env[variable] ?? "") === false; } catch { return false; } })();
   return new RelayError("config", `capcomd ${name} is the ${p.name} plugin's command, and ${p.name} isn't running: ${p.state}${p.cause ? ` (${p.cause})` : ""}${why ? `: ${why}` : ""}`,
-    off ? `Turn it on: capcomd plugins enable ${p.name}` : `capcomd plugins show ${p.name} says more.`, { code: `plugin:${p.name}` });
+    byEnv ? `${variable}=${process.env[variable]} in the environment turns it off, over your config: unset it to turn ${p.name} on.`
+      : off ? `Turn it on: capcomd plugins enable ${p.name}` : `capcomd plugins show ${p.name} says more.`, { code: `plugin:${p.name}` });
 }
 
 /** `--help` for a plugin's command (its usage lines), or with null a list of every plugin's command; "" when none. */

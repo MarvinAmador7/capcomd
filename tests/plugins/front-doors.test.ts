@@ -4,7 +4,7 @@
 // CAPCOMD_TEST_PLUGINS) answer with the relay.v1 envelope and the caller's principal. The orchestration skill is an
 // agent.preparing patch (src/plugins/skill-orchestration.ts). The kernel's tools listed exactly as before: tests/mcp.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -154,9 +154,17 @@ describe("a plugin's command answers with the envelope and the caller's principa
       return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
     };
     expect(JSON.parse(cli("plugins", "list", "--json").out).plugins.find((p: { name: string }) => p.name === "echo")).toMatchObject({ commands: ["echo"] });
-    const off = run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "hi", "--json");
+    // Turned off in the user's config: `capcomd plugins enable` turns it on.
+    const config = join(home, "config.json");
+    writeFileSync(config, JSON.stringify({ plugins: { echo: { enabled: false } } }));
+    let off: ReturnType<typeof run>;
+    try { off = run({ CAPCOMD_NO_CONFIG: "" }, "echo", "hi", "--json"); } finally { rmSync(config, { force: true }); }
     expect(off.code).toBe(2);
     expect(JSON.parse(off.out)).toEqual({ schema: "relay.v1", ok: false, error: { code: "config", message: "capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)", hint: "Turn it on: capcomd plugins enable echo", reason: "plugin:echo" } });
+    // Turned off in the environment, which wins over the config `enable` writes: the hint names the variable.
+    off = run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "hi", "--json");
+    expect(off.code).toBe(2);
+    expect(JSON.parse(off.out)).toEqual({ schema: "relay.v1", ok: false, error: { code: "config", message: "capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)", hint: "CAPCOMD_PLUGIN_ECHO_ENABLED=false in the environment turns it off, over your config: unset it to turn echo on.", reason: "plugin:echo" } });
     // With a flag the kernel's table doesn't know, too.
     expect(run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "--channel", "x").err).toContain("capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)");
     const broken = run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "maybe" }, "echo", "hi");
