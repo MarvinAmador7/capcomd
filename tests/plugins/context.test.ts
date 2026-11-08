@@ -173,6 +173,17 @@ describe("the memory provider's index: a profile's memory.files (ADR-025 §10)",
     expect((await p.index(h, call)).lines.length).toBe(3);
   });
 
+  test("an index narrows what is shown, never what is current: an item the tree supersedes stays out though the index names it", async () => {
+    // rounding-v2 supersedes old-rounding (old-rounding doesn't say so); an index that names old-rounding alone
+    // doesn't bring back what the memory corrected.
+    const stale = "- [Rounding](memory/old-rounding.md)\n- [Fee](facts/fee.md)\n";
+    const b = await buildBrief(input({ context: contextOf({ files: ["NOTES.md"] }) }, { ...FILES, "NOTES.md": stale }));
+    expect(b.text.split("\n").slice(1)).toEqual(["- [policy] Shipping fee → .capcomd/context/facts/fee.md (stable; 2026-08-01)"]);
+    expect(b).toMatchObject({ loaded: 1, total: 1 });
+    // The header's date is of the items shown, not of the one that superseded them.
+    expect(b.text.split("\n")[0]).toContain("modified 2026-08-01");
+  });
+
   test("index.md as lint writes it is an index too: its → lines name the items", async () => {
     const lintIndex = "# Context index\n\n## Memory\n\n- [lesson] Flaky → memory/flaky-scenarios.md (id flaky-scenarios; draft; 2026-11-02)\n";
     const b = await buildBrief(input({ context: contextOf({ files: ["index.md"] }) }, { ...FILES, "index.md": lintIndex }));
@@ -426,9 +437,11 @@ describe("the router at agent.preparing (ADR-025 §6.1; spec §6.6.7, §14.4)", 
 describe("the context skills (ADR-025 §5.1, §6.1, step 6)", () => {
   test("pinned: their text is fixed, so a change is a new hash this test makes you write down", () => {
     expect(CONTEXT_SKILLS.map((s) => [s.name, s.hash])).toEqual([
-      ["capcomd-context-doctrine", "3ac446432e4b0cc9c96b8d717c46d2f3d9a589dde200db3b717e9281bfab115b"],
+      ["capcomd-context-doctrine", "ec49b0af0a7373e83c444ced94bf7147b17e318bc994b7585e2b103271dd69e8"],
       ["capcomd-context-routing", "de52814243fe090128e13df4faab316efa4c961874e895f9d4b64d20414114ca"],
     ]);
+    // A brain's file isn't in the checkout: the doctrine says where a line's file is as the brief's header does.
+    expect(DOCTRINE_SKILL.text.replace(/\s+/g, " ")).toContain("the file that holds it (in your checkout, or in a bundle placed read-only in your sandbox at the path the line gives)");
   });
 
   test("each is a SKILL.md with its name, carries no marker and no line the brief's own lines could be confused with", () => {

@@ -908,7 +908,8 @@ Four things stood between D6 and a held memory change, each fixed:
   and lint checks, so what an agent's brief holds still changes only through a reviewed change. The profile check
   (and its JSON Schema) refuses another name, and the provider refuses one from a spec (`not configured` in the header). An index that isn't
   at the revision is `memory: skipped (not found)`, never every item: that would show agents what the profile left
-  out. `search` and `get` read the same items as the index. Lint accepts such a file beside `index.md` (it doesn't
+  out. The index narrows what is shown, never what is current: an item another item of the tree supersedes stays out
+  though the index names it. `search` and `get` read the same items as the index. Lint accepts such a file beside `index.md` (it doesn't
   know which name a profile uses) and holds it to an item's rules for text and secrets; anything else at that level is
   still not an item.
 - §6.1's "memory newest-first, facts by authority" holds across providers, not within each: the router orders every
@@ -918,8 +919,9 @@ Four things stood between D6 and a held memory change, each fixed:
   that made it.
 - The header said every line's file is "in your checkout", which a brain's file isn't (it is in the bundle the kernel
   places, §6.2). It now says where: the checkout (memory only: the words are unchanged), a read-only bundle in the
-  sandbox at the path the line gives (a bundle provider only), or either (both). `capcomd-context-doctrine` still
-  says "the file in your checkout": changing a pinned skill's text is left to its own change.
+  sandbox at the path the line gives (a bundle provider only), or either (both). `capcomd-context-doctrine`, which
+  said the same, now says the file is in the checkout or in a bundle placed read-only in the sandbox (a new pinned
+  hash).
 
 ## 14. What the review changed
 

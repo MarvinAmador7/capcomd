@@ -130,15 +130,21 @@ export function indexedPaths(text: string): Set<string> {
 }
 
 /** The memory provider's items of a tree: every item, or with `index` the items that index file names (indexedPaths).
- *  An index that isn't there is `not_found`, one too large to read `invalid`: never every item instead, which would
- *  show an agent what its profile left out. */
+ *  The index narrows what is shown, never what is current: the items are read from the whole tree (ids, supersession)
+ *  and one another item of the tree supersedes is left out though the index names it, as the brief leaves it out
+ *  without an index. An index that isn't there is `not_found`, one too large to read `invalid`: never every item
+ *  instead, which would show an agent what its profile left out. */
 export function parseMemory(files: Array<{ path: string; text: string | null }>, o: { revision: string; date: string }, index: string | null): Parsed {
   if (index === null) return parseItems(files, o);
   const f = files.find((x) => x.path === `${CONTEXT_DIR}${index}`);
   if (!f) throw new PluginError("not_found", `no index ${CONTEXT_DIR}${index} at ${o.revision.slice(0, 12)}`);
   if (f.text === null) throw new PluginError("invalid", `the index ${CONTEXT_DIR}${index} is over ${MEMORY_MAX_BYTES / 1024} KB`);
   const named = indexedPaths(f.text);
-  return parseItems(files.filter((x) => x.path !== f.path && named.has(x.path)), o);
+  const all = parseItems(files, o);
+  const ids = new Set(all.items.map((i) => i.line.ref.id));
+  const items = all.items.filter((i) => named.has(i.line.path) && !(i.authority.supersededBy ?? []).some((s) => ids.has(s)));
+  const modified = items.reduce<string | null>((m, i) => (m === null || i.line.modified > m ? i.line.modified : m), null);
+  return { revision: all.revision, modified, items };
 }
 
 /** The items of one OKF bundle's tree (parseItems' rules for any shape): the Markdown files under `shape.root` whose
