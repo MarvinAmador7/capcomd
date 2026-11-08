@@ -17,6 +17,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `.capcomd/config.json` could hand any of your plugins such a setting although its schema allowed none, and a
   `__proto__` key carried values past the checks (a secret reference among them). A project's are set aside with a
   warning, as its other refused settings for your plugins are.
+- Fixed: `capcomd profiles set` and `PUT /v1/profiles/{name}` keep an edited profile file's permissions (a file
+  you made readable only by you stays so). `GET /v1/profiles/{name}` shows a context provider by its name only and,
+  in other read-only rows (an `x-` field, `sharing.source`), hides token-shaped text, a value under a key such as
+  `password`, `apiKey` or `token`, and a URL's password. `PUT` refuses a number too large to store exactly instead
+  of writing it as `1e+23`.
 - Fix: `capcomd_profiles`, `capcomd profiles list` and `GET /v1/profiles` call a profile read-only (`fit`, `does`)
   only when its agent really can't edit files: a Claude Code profile by its allowed tools, a Codex profile by
   `sandbox.codex: read-only`. A Codex profile with only read tools allowed (Codex has no per-tool allow-list) and a
