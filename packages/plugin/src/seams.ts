@@ -123,7 +123,9 @@ export interface AgentCommandCtx {
   stdinPrompt?: boolean;
 }
 
-export interface AgentEvent { type: string; subtype?: string; tool?: string; text?: string; calls?: string[]; results?: Array<{ call: string; error?: string }>; raw: Record<string, unknown> }
+/** `commands` (optional, §16.4): the foreground shell commands the event starts (`started`, by the CLI's call id) and
+ *  the calls it ends (`ended`), so the kernel knows while the agent waits on one. */
+export interface AgentEvent { type: string; subtype?: string; tool?: string; text?: string; calls?: string[]; results?: Array<{ call: string; error?: string }>; commands?: { started?: string[]; ended?: string[] }; raw: Record<string, unknown> }
 /** One run's accumulated state. The kernel keeps the same object for the whole run, so a provider may keep fields of
  *  its own on it between `parse` calls (Claude Code's per-message usage, its tool-use ids). */
 export interface AgentRunState {
