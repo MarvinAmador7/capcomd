@@ -137,6 +137,11 @@ export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceC
 /** The words of a reply as a comment: the daemon's short result and the mark that makes it capcomd's own. */
 export const replyBody = (text: string) => `${text}\n\n${CAPCOMD_MARK}`;
 
+/** A reply's @-mentions as code (`@name`), which GitHub doesn't notify: the words are a planner's, which people outside
+ *  capcomd can steer (a comment on a followed thread reaches it), and a reply posted with the user's login never pages
+ *  anyone (§16.5 rule 1). An e-mail address is no mention. */
+export const quietMentions = (text: string) => text.replace(/(^|[^A-Za-z0-9_`])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9_.-]+)?)/g, "$1`@$2`");
+
 /** The source's reply path (§16.3.7): one comment on the thread the request came from (an issue's or a pull request's
  *  conversation; GitHub's comments have no replies of their own), marked so the next poll drops it. A refusal GitHub may
  *  take back (its rate limit, its own errors) is retryable; any other (no access, no such thread) is not. */
@@ -147,7 +152,7 @@ export async function replyOnGitHub(cfg: Pick<GitHubSourceConfig, "api">, r: Tri
   try { gh = api ?? (await githubAt(cfg.api)); } catch (e) { throw new PluginError("unavailable", `no GitHub login to reply on ${r.thread}: ${(e as Error).message}`, "Log in (`gh auth login`, or GITHUB_TOKEN).", true); }
   if (!gh.createIssueComment) throw new PluginError("unsupported", "this GitHub adapter posts no comments");
   try {
-    const c = await gh.createIssueComment(m[1]!, Number(m[2]), replyBody(r.text));
+    const c = await gh.createIssueComment(m[1]!, Number(m[2]), replyBody(quietMentions(r.text)));
     return { url: typeof c?.html_url === "string" ? c.html_url : null };
   } catch (e) {
     const again = e instanceof GitHubHttpError && (e.rateLimited || e.status >= 500);

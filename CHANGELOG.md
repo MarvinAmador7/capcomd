@@ -17,7 +17,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - New: a run started (or started again) by a trigger can answer where it was asked when it ends: one short reply, under
   100 words, with the planner's summary, or why it stopped if it failed. Turn it on per source with
   `triggers.sources.<source>.reply: true` (off by default). On GitHub it is one comment on the issue or pull request,
-  posted with your login and marked so capcomd never reads it back as a request. Each reply is a `trigger.replied`
+  posted with your login and marked so capcomd never reads it back as a request; an `@name` in it is posted as code,
+  so a reply never pings anyone. Each reply is a `trigger.replied`
   event on the daemon stream. Plugins that feed triggers can offer the same with `ctx.triggers.onReply`.
 - New: a profile's persona works. `identity.persona: SOUL.md` (a text file next to the profile's `profile.yaml`, at
   most 32 KiB) is now the first thing each of its agents reads, once, before the profile's prompt and its skills. The

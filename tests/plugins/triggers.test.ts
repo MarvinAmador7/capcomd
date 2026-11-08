@@ -350,18 +350,22 @@ describe("an ended run's planner starts again (§16.3.2 step 2)", () => {
     useIntakeDeps({ restart: async () => ({ agentId: "agt-p2", seq: 7, started: false }), standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
     expect(await admit(trigger({ thread: "pr/3" }), SOURCE)).toEqual({ kind: "continued", runId: "run-e", seq: 7 });
     const { RelayError } = await import("../../src/core/errors");
-    useIntakeDeps({ restart: async () => { throw new RelayError("config", "budget exhausted", "Grant more budget."); }, standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
+    const deliver = async (runId: string, m: { from: string; body: string; key: string }) => { delivered.push({ runId, ...m }); return { seq: delivered.length }; };
+    useIntakeDeps({ deliver, restart: async () => { throw new RelayError("config", "budget exhausted", "Grant more budget."); }, standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
     const t = trigger({ thread: "pr/3" });
-    // Refused for good (the run's settings): the source moves on.
+    // Refused for good (the run's settings): the source moves on, and the words are still in the ended planner's inbox.
+    const before = delivered.length;
     const refused = await admit(t, SOURCE).catch((e) => e);
     expect(refused).toMatchObject({ code: "invalid", message: expect.stringContaining("couldn't start run-e's planner again: budget exhausted") });
     expect(refused.retryable).toBe(false);
     expect(readTriggerLog().at(-1)!.decision).toMatchObject({ kind: "failed" });
-    useIntakeDeps({ restart: async () => { throw new Error("socket hang up"); }, standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
-    // Anything else may pass: it comes again.
+    expect(delivered.slice(before)).toEqual([{ runId: "run-e", from: "trigger:test", body: expect.stringContaining("Alice (alice) wrote on pr/3"), key: expect.stringMatching(/^trigger-test-/) }]);
+    useIntakeDeps({ deliver, restart: async () => { throw new Error("socket hang up"); }, standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
+    // Anything else may pass: it comes again (and is delivered then, by the planner it starts).
     const later = await admit(t, SOURCE).catch((e) => e);
     expect(later).toMatchObject({ code: "unavailable", message: expect.stringContaining("socket hang up") });
     expect(later.retryable).toBe(true);
+    expect(delivered.length).toBe(before + 1);
   });
 
   test("a restart that fails part way never leaves the run's planner one that doesn't start; the same trigger again finishes it", async () => {
@@ -402,6 +406,11 @@ describe("an ended run's planner starts again (§16.3.2 step 2)", () => {
     expect(new Set(spawned.map((s) => s.key))).toEqual(new Set([again!.agentId.slice(4)]));
     expect(spawned.at(-1)).toEqual({ key: again!.agentId.slice(4), profile: "planner;ov=x", contract: { report: true } });
     expect(new Set(inbox.map((x) => `${x.to} ${x.key}`))).toEqual(new Set([`${again!.agentId} trigger-test-1`]));
+    // The same trigger again (the intake gave up on the engine before it finished): the planner at work is the one it
+    // started, so it is still its restart (the run answers it), and nothing is spawned again.
+    const spawns = spawned.length;
+    expect(await restartPlanner(k, m)).toEqual({ agentId: again!.agentId, seq: inbox.length, started: true });
+    expect(spawned).toHaveLength(spawns);
     // Working again: a later trigger only messages it.
     expect(await restartPlanner(k, { ...m, key: "trigger-test-2" })).toEqual({ agentId: again!.agentId, seq: inbox.length, started: false });
     expect(spawned.filter((s) => s.key !== again!.agentId.slice(4))).toEqual([]);
@@ -547,6 +556,25 @@ describe("replies (§16.3.7)", () => {
     await sweepTriggers();
     expect(posted.map((r) => r.runId)).toEqual(["run-r3"]);
     expect(readdirSync(join(home, "state", "triggers", "replies"))).toEqual([]);
+  });
+
+  test("a reply tried again never replaces a newer request for its run (its planner started again while it was posting)", async () => {
+    setGate({ test: { allowed: ["alice"], reply: true } });
+    await admit(trigger({ thread: "issue/40" }), SOURCE);
+    outcomes["run-r1"] = { state: "completed", summary: "first answer" };
+    endNow("run-r1");
+    const replies = join(home, "state", "triggers", "replies");
+    const newer = { runId: "run-r1", source: "test", thread: "issue/41", replyTo: null, triggerId: "newer", at: new Date(Date.now() + 60_000).toISOString(), attempts: 0 };
+    useIntakeDeps({
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+      outcome: async (runId) => outcomes[runId] ?? null,
+      // While the first is posting, a person's trigger starts the run's planner again (a newer request), and the post
+      // fails for now.
+      reply: async () => { writeFileSync(join(replies, "run-r1.json"), JSON.stringify(newer)); throw new PluginError("unavailable", "rate limited", undefined, true); },
+    });
+    await sleep(10);
+    await sweepTriggers();
+    expect(JSON.parse(readFileSync(join(replies, "run-r1.json"), "utf8"))).toEqual(newer);
   });
 
   test("a run that ends as soon as it starts is answered; an engine that doesn't answer, or no reply path yet, loses no reply", async () => {
@@ -956,6 +984,10 @@ describe("the GitHub source (forge-github)", () => {
     expect(await replyOnGitHub({ api: "https://api.github.com" }, r, api).catch((e) => [e.code, e.retryable])).toEqual(["unavailable", true]);
     fail = new GitHubHttpError(404, "Not Found", false);
     expect(await replyOnGitHub({ api: "https://api.github.com" }, r, api).catch((e) => [e.code, e.retryable])).toEqual(["invalid", false]);
+    // Words people outside capcomd can steer never page anyone from the user's login: a mention is posted as code.
+    fail = null;
+    await replyOnGitHub({ api: "https://api.github.com" }, { ...r, text: "@alice asked; cc @acme/reviewers, @x. Mail ops@acme.dev or `@bob`." }, api);
+    expect(made.at(-1)!.body).toBe(replyBody("`@alice` asked; cc `@acme/reviewers`, `@x`. Mail ops@acme.dev or `@bob`."));
   });
 
   test("GitHub's since includes its own second: a comment already read isn't handed to the intake again at the next poll", async () => {

@@ -243,8 +243,10 @@ export interface PlannerKernel {
 export async function restartPlanner(k: PlannerKernel, m: Message): Promise<{ agentId: string; seq: number; started: boolean } | null> {
   const was = await k.planner();
   if (!was) return null;
-  if (!TERMINAL.has(was.status)) { const r = await k.send(was.agentId, m); return { agentId: was.agentId, seq: r.seq, started: false }; }
   const key = `planner-${sha(m.key).slice(0, 16)}`;
+  // The planner at work may be the one this trigger started (a restart the engine finished after the intake gave up on
+  // it, sent again): it is still this trigger's restart, so the run answers it when it ends (§16.3.7).
+  if (!TERMINAL.has(was.status)) { const r = await k.send(was.agentId, m); return { agentId: was.agentId, seq: r.seq, started: was.agentId === k.idFor(key) }; }
   const { from: _from, ...contract } = (was.contract ?? {}) as Record<string, unknown>;
   const r = await k.send(k.idFor(key), m);
   const profile = was.ref ?? was.profile;
@@ -508,7 +510,13 @@ async function decide(t: Trigger, principal: Principal): Promise<{ decision: Tri
       // One restart of a run at a time: a second trigger finds the planner the first started, and only messages it. One
       // the engine doesn't finish in time fails for now; sent again, the same trigger finishes it (the same planner).
       const asked = iso();
-      const again = await engine(`starting ${runId}'s planner again`, oneAtATime(runId, () => deps.restart(runId, m))).catch((e) => { throw restartRefused(t, runId, e); });
+      const again = await engine(`starting ${runId}'s planner again`, oneAtATime(runId, () => deps.restart(runId, m))).catch(async (e) => {
+        const refused = restartRefused(t, runId, e);
+        // Refused for good (the source won't send it again): it still lands in the ended planner's inbox, as a trigger
+        // the gate refuses does; idempotent by its key.
+        if (!refused.retryable) await deliver().catch(() => null);
+        throw refused;
+      });
       if (again) {
         if (again.started) awaitReply(runId, t, asked);
         return { decision: { kind: "continued", runId, seq: again.seq, ...(again.started ? { restarted: again.agentId } : {}) }, gate: j.gate };
@@ -633,7 +641,7 @@ export function listSubscriptionRecords(): TriggerSubscription[] { return allSub
 
 /** A planner that couldn't start again: refused for good (the operator's or the run's settings: its profile, budget,
  *  sandbox) unless the engine was out of reach, which may pass (the source sends the trigger again). */
-function restartRefused(t: Trigger, runId: string, e: unknown): Error {
+function restartRefused(t: Trigger, runId: string, e: unknown): PluginError {
   if (e instanceof PluginError) return e;
   const message = `trigger ${t.source}/${t.id} couldn't start ${runId}'s planner again: ${String((e as Error)?.message ?? e).slice(0, 400)}`;
   if (e instanceof RelayError && e.code !== "engine_unreachable" && !e.retryable) return new PluginError("invalid", message, e.hint);
@@ -706,7 +714,8 @@ export async function sendReplies(): Promise<void> {
     } catch (e) {
       // A reply that may have been posted (no answer in time) is not posted again.
       const again = e instanceof PluginError && e.retryable && e.code !== "timeout" && r.attempts + 1 < REPLY_ATTEMPTS;
-      if (again) writeAtomic(path, JSON.stringify({ ...r, attempts: r.attempts + 1 }));
+      // A newer request for the run (its planner started again meanwhile) is the one it answers: never overwritten.
+      if (again && !existsSync(path)) writeAtomic(path, JSON.stringify({ ...r, attempts: r.attempts + 1 }));
       done();
       console.error(`[triggers] ${r.runId}: replying on ${r.thread} through ${r.source}${again ? " (tried again at the next sweep)" : ""}: ${(e as Error)?.message ?? e}`);
     }
