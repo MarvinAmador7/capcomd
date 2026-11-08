@@ -119,8 +119,10 @@ export interface Overrides { set: Record<string, unknown>; operator?: boolean }
 
 /** Merge overrides (v2 paths or v1 names, ./v2.ts flatOverrides) onto a profile; they may only narrow it unless `operator` is set. */
 export function applyOverrides(name: string, base: AgentSpec, ov: Overrides): AgentSpec {
-  const { children: ch, ...rest } = flatOverrides(ov.set) as Record<string, any>;
-  const next = { ...base, ...rest, ...(ch !== undefined ? { children: { ...(base.children ?? {}), ...ch } } : {}) } as AgentSpec;
+  const { children: ch, jobs: jb, ...rest } = flatOverrides(ov.set) as Record<string, any>;
+  // `jobs.max=2` sets one limit and keeps the block's others (a `null` in it removes one; `jobs: null` all of them).
+  const jobs = jb && typeof jb === "object" && !Array.isArray(jb) ? Object.fromEntries(Object.entries({ ...(base.jobs ?? {}), ...jb }).filter(([, v]) => v !== null)) : jb;
+  const next = { ...base, ...rest, ...(ch !== undefined ? { children: { ...(base.children ?? {}), ...ch } } : {}), ...(jb !== undefined ? { jobs } : {}) } as AgentSpec;
   for (const [k, v] of Object.entries(next)) if (v === null) delete (next as any)[k];
   const errs = validateSpec(name, next);
   if (errs.length) throw new AgentConfigError(`override invalid: ${errs.join("; ")}`);

@@ -11,7 +11,7 @@
 // Changes reach plugins as `job.changed` hook calls (started, output, fired, ended) and the run's stream as events.
 // Nobody polls a job; `wait` is a convenience bounded by its deadline. A run-owned job machine (`owner: {run: true}`
 // for exec) is a later step's: refused as unsupported here.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Job, JobSpec, JobState, Principal } from "../../packages/plugin/src/shapes";
 import type { JobChange } from "../../packages/plugin/src/hooks";
@@ -114,7 +114,36 @@ async function writeRecord(rec: JobRecord, event?: "started" | "ended"): Promise
   }
   const r = await client().scope.getOrCreate([runId]).jobWrite({ job: rec, ...(event ? { event: event === "started" ? "JOB_STARTED" : "JOB_ENDED", agentId: ownerAgent(rec), data } : {}) });
   if (event === "started") try { writeFileAtomic(join(jobsDir(), `${rec.jobId}.run`), JSON.stringify({ runId, kind: rec.spec.kind })); } catch { /* get by id needs the run then */ }
+  if (r.ended || !live(rec.state)) pointerSettled(rec.jobId);
   return { ended: !!r.ended };
+}
+
+/** A run's job pointer: its run, for `get` by id and re-arming; `endedAt` once the job settled. */
+type Pointer = { runId: string; kind: string; endedAt?: number };
+/** How long a settled job's pointer stays (`get` by id answers for a day), and how often they are pruned. */
+const POINTER_KEEP_MS = 24 * 3_600_000, PRUNE_EVERY_MS = 3_600_000;
+let prunedAt = 0;
+
+/** The job settled (§16.2 rule 6): its pointer says when, and goes a day later; nothing re-arms it, its run's kv keeps the record. */
+function pointerSettled(jobId: string) {
+  const path = join(jobsDir(), `${jobId}.run`);
+  const p = readJson<Pointer>(path);
+  try {
+    if (!p) rmSync(path, { force: true }); // none, or one that can't be read: nothing to keep
+    else if (p.endedAt === undefined) writeFileAtomic(path, JSON.stringify({ ...p, endedAt: Date.now() }));
+  } catch { /* looked at again at the next daemon start */ }
+  if (Date.now() - prunedAt >= PRUNE_EVERY_MS) prunePointers();
+}
+
+/** The pointers of jobs that settled more than a day ago go (at a daemon's start, then at most hourly as jobs settle). */
+function prunePointers(now = Date.now()) {
+  prunedAt = now;
+  if (!existsSync(jobsDir())) return;
+  for (const f of readdirSync(jobsDir())) {
+    if (!f.endsWith(".run")) continue;
+    const at = readJson<Pointer>(join(jobsDir(), f))?.endedAt;
+    if (typeof at === "number" && now - at > POINTER_KEEP_MS) try { rmSync(join(jobsDir(), f), { force: true }); } catch { /* next time */ }
+  }
 }
 
 /** The run a job belongs to (null: the daemon's), from its pointer; undefined when capcomd doesn't know the job. */
@@ -298,6 +327,20 @@ export function jobMessage(r: JobRecord): string {
   return `Your background job ${r.jobId} (${r.spec.label}) ${how} after ${took}.${out ? `\n\n${out}` : " It printed nothing."}\n\nAll of its output: capcomd job output ${r.jobId}`;
 }
 
+/**
+ * The agent ended for good (it failed, or was cancelled after its attempt stopped): its jobs settle now, not when next
+ * read (§16.2 rule 4). While its machine is attached here they are killed in it; otherwise (its attempt let go of the
+ * machine, which goes with the agent) an exec job settles `lost`. Its timers end.
+ */
+export async function endAgentJobs(runId: string, agentId: string, reason: string): Promise<void> {
+  const key = machineKey(runId, agentId);
+  if (machines.has(key)) return detach(key, { ended: true });
+  await endAgentTimers(runId, agentId);
+  for (const r of await listRecords(runId)) {
+    if (r.spec.kind === "exec" && live(r.state) && ownerAgent(r) === agentId) await settleLost(r, reason).catch((e) => console.error(`[jobs] ${r.jobId}: settling: ${(e as Error)?.message ?? e}`));
+  }
+}
+
 async function detach(key: string, o: { ended: boolean }) {
   const at = machines.get(key);
   if (!at) return;
@@ -374,19 +417,37 @@ async function fire(runId: string | null, jobId: string) {
 
 /**
  * `capcomd serve`, once its plugins are loaded: the timers of the daemon and of its runs are armed again from their
- * records (§16.2 rule 6); one that should have fired while the daemon was down fires once now.
+ * records (§16.2 rule 6); one that should have fired while the daemon was down fires once now. A run's pointer whose
+ * job settled unmarked (or whose run is gone) is marked settled, without making the run again to look, and old ones go.
  */
 export async function resumeTimers(): Promise<number> {
   if (!existsSync(jobsDir())) return 0;
+  prunePointers();
   let n = 0;
   for (const f of readdirSync(jobsDir())) {
     const id = f.replace(/\.(json|run)$/, "");
     if (armed.has(id) || !JOB_ID.test(id)) continue;
-    const r = f.endsWith(".json") ? readJson<JobRecord>(join(jobsDir(), f))
-      : f.endsWith(".run") && readJson<{ kind?: string }>(join(jobsDir(), f))?.kind === "timer" ? await readRecord(readJson<{ runId: string }>(join(jobsDir(), f))!.runId, id).catch(() => null) : null;
+    let r: JobRecord | null = null;
+    if (f.endsWith(".json")) r = readJson<JobRecord>(join(jobsDir(), f));
+    else if (f.endsWith(".run")) {
+      const p = readJson<Pointer>(join(jobsDir(), f));
+      if (p?.endedAt !== undefined) continue;
+      const got = typeof p?.runId === "string" ? await existingRecord(p.runId, id).catch(() => undefined) : null;
+      if (got === undefined) continue; // the engine didn't answer: looked at again at the next start
+      if (!got || !live(got.state)) { pointerSettled(id); continue; }
+      r = got;
+    }
     if (r && r.spec.kind === "timer" && live(r.state)) { arm(r); n++; }
   }
   return n;
+}
+
+/** A run's job record, without making the run when it is gone (null then). */
+async function existingRecord(runId: string, jobId: string): Promise<JobRecord | null> {
+  const { existingActor } = await import("../core/relay");
+  const s = await existingActor("scope", [runId]);
+  const v = s ? await s.kvGet({ k: `_jobs/${jobId}` }) : null;
+  return v && !v.deleted && v.value ? (v.value as JobRecord) : null;
 }
 
 // ---- the primitives -------------------------------------------------------------------------------------------------
@@ -416,7 +477,10 @@ function checkSpec(spec: JobSpec) {
     if (!Array.isArray(spec.cmd) || !spec.cmd.length || spec.cmd.length > 256 || spec.cmd.some((x) => typeof x !== "string")) usage("cmd is a non-empty list of strings", "One string runs with sh -c; more are argv.");
     if (Buffer.byteLength(JSON.stringify(spec.cmd)) > 16 * 1024) usage("cmd is over 16 KB", "Put a long script in a file and run that.");
     if (spec.cwd !== undefined && (typeof spec.cwd !== "string" || !spec.cwd.startsWith("/") || spec.cwd.split("/").includes(".."))) usage("cwd is an absolute path", "Where the command runs, e.g. your checkout.");
+    // With the cmd's 16 KB, what a record keeps besides its output stays well under a kv value's 64 KB (src/jobs/record.ts).
+    if (spec.cwd !== undefined && Buffer.byteLength(spec.cwd) > 4096) usage("cwd is over 4 KB", "Where the command runs, e.g. your checkout.");
     if (spec.env !== undefined && (!spec.env || typeof spec.env !== "object" || Object.entries(spec.env).some(([k, v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || typeof v !== "string"))) usage("env is an object of strings", "Names are letters, digits and _.");
+    if (spec.env !== undefined && Buffer.byteLength(JSON.stringify(spec.env)) > 16 * 1024) usage("env is over 16 KB", "Put long values in a file the command reads.");
     for (const k of ["foregroundMs", "timeoutMs"] as const) if (spec[k] !== undefined && !(Number.isInteger(spec[k]) && spec[k]! >= 0)) usage(`${k} is a whole number of milliseconds`, "e.g. 60000.");
     if (spec.timeoutMs !== undefined && spec.timeoutMs < 1000) usage("timeoutMs is at least 1000", "A job gets at least a second.");
   } else {
@@ -470,8 +534,10 @@ export async function startJob(spec: JobSpec, o: StartOptions): Promise<Job> {
   const m = o.machine ?? at?.m;
   if (!m) throw new RelayError("engine_unreachable", `agent ${owner}'s machine isn't reachable from here: its jobs run where its spool is pumped`, "Start it from the agent (capcomd job start), or while the agent runs in this daemon.", { code: "unavailable", retryable: true });
   const att = machines.get(machineKey(m.runId, m.agentId)) ?? (await attachMachine(m), machines.get(machineKey(m.runId, m.agentId))!);
-  // §16.2 rule 2: a job's own timeout, by default the owner's afterTurnMs.
-  const rec: JobRecord = { ...base, timeoutMs: spec.timeoutMs ?? limits.afterTurnMs };
+  // §16.2 rule 2: a job's own timeout, by default the owner's afterTurnMs, and never longer than an afterTurnMs its
+  // profile sets: that is a limit (a child or an override may only lower it), which a start's timeoutMs can't lift.
+  const cap = (a?.spec as { jobs?: { afterTurnMs?: number } } | null | undefined)?.jobs?.afterTurnMs;
+  const rec: JobRecord = { ...base, timeoutMs: Math.min(spec.timeoutMs ?? limits.afterTurnMs, cap ?? Infinity) };
   await writeRecord(rec, "started");
   try {
     await launch(m, jobId, { cmd: spec.cmd, cwd: spec.cwd ?? m.cwd, ...(spec.env ? { env: spec.env } : {}) });
@@ -506,7 +572,12 @@ async function orphaned(r: JobRecord): Promise<JobRecord> {
   if (r.spec.kind !== "exec" || !live(r.state) || !agentId || machines.get(machineKey(r.spec.runId!, agentId))?.watches.has(r.jobId)) return r;
   const a = await client().scope.getOrCreate([r.spec.runId!]).getAgent({ agentId }).catch(() => null);
   if (a && !TERMINAL_AGENT.has(a.status)) return r;
-  const rec: JobRecord = { ...r, state: "lost", endedAt: iso(), reason: "its agent ended while capcomd wasn't watching the job" };
+  return settleLost(r, "its agent ended while capcomd wasn't watching the job");
+}
+
+/** An exec job nobody here watches settles `lost`: its machine goes, or went, with its agent. */
+async function settleLost(r: JobRecord, reason: string): Promise<JobRecord> {
+  const rec: JobRecord = { ...r, state: "lost", endedAt: iso(), reason };
   const { ended } = await writeRecord(rec, "ended");
   if (ended) return (await readRecord(r.spec.runId, r.jobId)) ?? rec;
   tell(rec, { kind: "ended", state: "lost" });
@@ -546,15 +617,25 @@ export async function waitJob(jobId: string, o: { runId?: string | null; timeout
 
 // ---- ctx.jobs ---------------------------------------------------------------------------------------------------------
 
-/** `ctx.jobs` for one plugin (§8.1): its jobs are `plugin:<name>`'s; only the daemon has it. */
+/**
+ * `ctx.jobs` for one plugin (§8.1): its jobs are `plugin:<name>`'s; only the daemon has it. One owner (§16.2 rule 8):
+ * it reaches its own jobs and a run's jobs no other plugin started (an agent's, the operator's); another plugin's job
+ * is `not_found`, as one that doesn't exist, and its lists leave it out.
+ */
 export function pluginJobs(plugin: string): JobsService {
   const by = `plugin:${plugin}`;
+  const mine = (j: Job) => (j.plugin === null ? j.spec.runId !== null : j.plugin === plugin);
+  const reach = async (jobId: string) => {
+    const j = await getJob(jobId);
+    if (!mine(j)) throw new RelayError("not_found", `job ${jobId} not found`, "List jobs with capcomd job list.");
+    return j;
+  };
   return {
     start: (spec, o) => startJob(spec, { by, plugin, ...(o?.key ? { key: o.key } : {}) }).catch(asPluginError),
-    get: (jobId) => getJob(jobId).catch(asPluginError),
-    list: (f) => (f.runId ? listJobs({ runId: f.runId, ...(f.agentId ? { agentId: f.agentId } : {}), ...(f.state ? { state: f.state } : {}) }) : listJobs({ runId: null, plugin, ...(f.state ? { state: f.state } : {}) })).catch(asPluginError),
-    cancel: (jobId, reason) => cancelJob(jobId, `by the ${plugin} plugin: ${reason}`).catch(asPluginError),
-    wait: (jobId, o) => waitJob(jobId, { ...(o?.timeoutMs !== undefined ? { timeoutMs: o.timeoutMs } : {}) }).catch(asPluginError),
+    get: (jobId) => reach(jobId).catch(asPluginError),
+    list: (f) => (f.runId ? listJobs({ runId: f.runId, ...(f.agentId ? { agentId: f.agentId } : {}), ...(f.state ? { state: f.state } : {}) }) : listJobs({ runId: null, plugin, ...(f.state ? { state: f.state } : {}) })).then((js) => js.filter(mine)).catch(asPluginError),
+    cancel: (jobId, reason) => reach(jobId).then((j) => cancelJob(j.jobId, `by the ${plugin} plugin: ${reason}`, { runId: j.spec.runId })).catch(asPluginError),
+    wait: (jobId, o) => reach(jobId).then((j) => waitJob(j.jobId, { runId: j.spec.runId, ...(o?.timeoutMs !== undefined ? { timeoutMs: o.timeoutMs } : {}) })).catch(asPluginError),
   };
 }
 

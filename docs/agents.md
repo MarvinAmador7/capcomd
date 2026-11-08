@@ -96,7 +96,8 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   /v1/profiles/{name}` changes them (a token with the `configure` scope, an `Idempotency-Key` and the `rev` it read).
   Every change made through the API is a `profile.changed` event on the daemon stream; a change made with `capcomd
   profiles set` or by editing the file isn't (capability `profiles.edit`).
-- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`): `identity.title` (the
+- What a planner reads to choose a profile (`capcomd_profiles`, `capcomd profiles list --json` and `show`, and the
+  app in `GET /v1/profiles`): `identity.title` (the
   name to show; not passed to a profile that `extends` it, nor is `identity.avatar`), `tags` (lowercase words, what
   the profile is for: `[review, security]`), `sharing` (`source`, `license`: where the profile is published; an
   installed one's `LOCK` says where it was installed from) and
@@ -112,7 +113,10 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
 - `identity.persona` is checked but doesn't change what an agent does yet; `capcomd profiles validate` lists it when a
   profile sets it. `context` (with `memory` read as its old name) does: see "Project memory" below. `jobs`
   (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
-  field does in `agents.json`.
+  field does in `agents.json`. They are limits like `limits`: an override (`--set jobs.max=2`, which keeps the
+  block's other values) may lower one but not raise or unset one the profile sets (without `--operator`), and a
+  profile in `children.allowedChildProfiles` may not either. A job started with a longer `--timeout-ms` than the
+  profile's `afterTurnMs` gets `afterTurnMs`.
 - `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
   untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
   (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says
@@ -231,7 +235,9 @@ system prompt, Codex's prompt), after the profile's `prompt.append`, each in a `
   else may have written, so its agents get it only once you have looked at it: `capcomd profiles trust <name>` shows
   each of the profile's project skills that you haven't trusted as it is (its description, file, size and sha256) and
   asks (`--yes` for scripts; without a terminal it is required). Until then a spawn of the profile is refused
-  (`reason: "untrusted"`), and `capcomd profiles validate` and `show` say so. Trust is kept per `SKILL.md` content and
+  (`reason: "untrusted"`), and `capcomd profiles validate` and `show` say so, as do `untrustedSkills` in `capcomd
+  profiles list --json`, `capcomd_profiles` and `GET /v1/profiles`, and a planner's `reason` in `GET /v1/run-options`
+  `planners`. Trust is kept per `SKILL.md` content and
   place in `~/.capcomd/trust.json`: an edited skill, or the same one in another checkout, needs trusting again. Your
   own profiles' skills (`~/.capcomd/profiles/`) and your `~/.claude/skills` need no trust. `capcomd profiles trust`
   with no name lists the project's skills and whether each is trusted.
@@ -263,7 +269,9 @@ capcomd profiles export lead --flat --out ./shared
   changed before replacing it: the files changed, added and removed, each skill whose `SKILL.md` hash changes, the old
   and new commit and hash, and any file you edited since it was installed (which the update replaces; `capcomd
   profiles show` and `validate` say when a package was edited). `--dry-run` stops there. An `override.yaml` you put
-  beside the package stays; an update the profiles wouldn't resolve with is put back. A name installed in both places
+  beside the package stays, and so does any other file you added there (it is listed as "added by you, kept"); when
+  the new package has a file of its own in the place of one of yours, the update is refused until you move yours. An
+  update the profiles wouldn't resolve with is put back. A name installed in both places
   is the project's, as it resolves (`--project` looks only there).
 - `export <name>` writes the profile as a package to `./<name>/` (`--out DIR` for another place): its own files as
   they are, `extends` kept (whoever installs it needs a profile of that name), or with `--flat` what it resolves to:
@@ -525,6 +533,6 @@ Auth is exactly one of `apikey` (the provider's API key, from local env or a box
 
 `children` (policy only for now): `{allowSpawn, maxDepth, maxChildren, maxTotalDescendants, allowedChildProfiles, budgetShare}`. Children may only narrow their parent.
 
-`provider` is the name of an active agent provider: `claude` and `codex` are built-in plugins (`agent-claude`, `agent-codex` in `capcomd plugins list`), and another plugin may add one. A profile naming one that isn't active is refused when it's validated.
+`provider` is the name of an active agent provider: `claude` and `codex` are built-in plugins (`agent-claude`, `agent-codex` in `capcomd plugins list`), and another plugin may add one. A profile naming one that isn't active is refused when it's validated. Outside the daemon (the CLI, the MCP server) "active" means built in or listed by the running daemon (`capcomd plugins list`), since a plugin may be loaded only there; with no daemon running, a name that isn't built in is a warning (`capcomd profiles validate` lists it) and the daemon checks it when an agent uses the profile. The same goes for `sandbox.provider`. `capcomd profiles add`, `set` and `rm` still refuse a change that brings in such a name unless the running daemon lists it.
 
 `toolMode: "orchestrate"` (default `"execute"`) makes an agent that plans, spawns, verifies and merges but never changes a file itself (docs/spec/plugin-api.md §16.1): Claude Code gets only `Read, Glob, Grep, LS, Bash(capcomd:*)` with the edit tools denied, Codex runs with `--sandbox read-only` (its capcomd MCP tools still work), nothing it does is committed or pushed, and capcomd refuses to verify or merge its own ref. It needs `children.allowSpawn`; its children run in their own mode, and an override can't lift it without `--operator`. `capcomd setup project` gives it to `planner` and `lead`.

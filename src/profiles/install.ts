@@ -11,16 +11,18 @@
 //    out again when they don't. A project's package is text from the repository like any profile there: its skills
 //    wait for `capcomd profiles trust` (./trust.ts).
 //  - `update <name>` fetches again from the LOCK's source and reports what changed (files, each skill's hash, commit,
-//    content hash) before replacing the package's files; an override.yaml beside them is the user's and stays.
+//    content hash) before replacing the package's files; an override.yaml beside them, and any file the user added
+//    there (one the LOCK doesn't list), is the user's and stays.
 //  - `export <name>` writes a profile as a package directory: its own files with `extends` kept, or `flat`, resolved
 //    into one manifest with the skills it is pinned with. Nothing of capcomd's state goes in it, and no LOCK.
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { parse as parseYaml, parseDocument, stringify as toYaml } from "yaml";
 import { RelayError } from "../core/errors";
 import { stateDir, userProfilesDir } from "../utils/home";
 import { fetchPackage, FetchError } from "../install/fetch";
-import { diffTrees, hashTree, readLock, treeHash, writeLock, LOCK_SCHEMA, TreeError, type Lock, type TreeFile } from "../install/lock";
+import { diffTrees, hashTree, readLock, treeHash, writeLock, LOCK_FILE, LOCK_SCHEMA, TreeError, type Lock, type TreeFile } from "../install/lock";
 import { parseSource, SourceError, type PackageSource } from "../install/source";
 import { revokeTrust } from "../install/trust";
 import { agentsFilePath, BUNDLED_PROFILES, LOOKS_LIKE_FILE, profileLayers, readProfiles, type ProfileSet, type ResolvedProfile } from "./load";
@@ -222,7 +224,7 @@ export function packageWarnings(set: ProfileSet): string[] {
   for (const [n, r] of Object.entries(set.profiles)) {
     const f = installedFacts(r);
     if (f?.error) out.push(`profiles.${n}: its package can't be hashed against its LOCK (${f.error})`);
-    else if (f?.modified) out.push(`profiles.${n}: edited since it was installed (${f.modified.join(", ")}); capcomd profiles update ${n} would replace the edits (an override.yaml beside it is kept)`);
+    else if (f?.modified) out.push(`profiles.${n}: edited since it was installed (${f.modified.join(", ")}); capcomd profiles update ${n} would replace the edits (an override.yaml beside it, and files you added, are kept)`);
   }
   return out;
 }
@@ -234,15 +236,65 @@ export interface ProfileUpdate {
   added: string[]; removed: string[]; changed: string[];
   /** Each skill whose SKILL.md the update adds, changes or removes, with its sha256 before and after (null: none). */
   skills: Array<{ name: string; from: string | null; to: string | null }>;
-  /** The package's files edited since it was installed (the update replaces them), or null. */
+  /** The package's files edited since it was installed (the update replaces those it changed or removed), or null. */
   modified: ReturnType<typeof diffTrees> | null;
+  /** The files you added to the package's directory (not in its LOCK, not an override.yaml): the update keeps them. */
+  kept: string[];
   updated: boolean;
+}
+
+/**
+ * The files under an installed package's directory that its LOCK doesn't list, an override.yaml aside: the user's, kept
+ * by an update. Walked without hashTree's refusals (a link out, a big file), so whatever can't be hashed is still kept.
+ */
+function userFiles(dir: string, lock: Lock): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const e of readdirSync(rel ? join(dir, rel) : dir).sort()) {
+      const r = rel ? `${rel}/${e}` : e;
+      if (!rel && (e === LOCK_FILE || OVERRIDE_FILE.test(e))) continue;
+      if (lstatSync(join(dir, r)).isDirectory()) walk(r);
+      else if (!Object.hasOwn(lock.files, r)) out.push(r);
+    }
+  };
+  walk("");
+  return out;
+}
+
+/** The file at `abs` is `f` as a LOCK hashes it (same content or link target, same mode). */
+function sameFile(abs: string, f: TreeFile): boolean {
+  try {
+    const st = lstatSync(abs);
+    if (st.isSymbolicLink()) return f.mode === "120000" && createHash("sha256").update(readlinkSync(abs)).digest("hex") === f.sha256;
+    return f.mode === (st.mode & 0o111 ? "100755" : "100644") && createHash("sha256").update(readFileSync(abs)).digest("hex") === f.sha256;
+  } catch { return false; }
+}
+
+/**
+ * Of the user's files `kept`, those the new package (its files at `staging`, beside the package's directory) needs the
+ * place of: it has a file or a directory at that name, or a file or a link where one of them needs a directory. The file
+ * system that will hold them is asked, never a guess at how it compares names: on macOS's, which folds case and Unicode
+ * form (fully: STRASSE.md is straße.md), a Notes.md of yours never lands on the package's notes.md, and on one that
+ * tells them apart both stay.
+ */
+function clashes(kept: string[], staging: string): string[] {
+  const at = (p: string) => { try { return lstatSync(join(staging, p)); } catch { return null; } };
+  return kept.filter((k) => {
+    const parts = k.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const st = at(parts.slice(0, i).join("/"));
+      if (!st) return false;
+      if (!st.isDirectory()) return true;
+    }
+    return !!at(k);
+  });
 }
 
 /**
  * `capcomd profiles update <name>`: fetch again from the LOCK's source (its ref: a branch moves, a tag or commit
  * doesn't) and report every changed file, each skill's hash and the new content hash; `dryRun` stops there. The
- * package's files are replaced together, an override.yaml beside them stays; the profiles must still resolve.
+ * package's files are replaced together; an override.yaml and every file the user added beside them (one its LOCK
+ * doesn't list) stay, and a new package file in the place of one of those is a conflict. The profiles must still resolve.
  */
 export async function updateProfile(name: string, o: { project?: boolean; path?: string; env?: Env; dryRun?: boolean } = {}): Promise<ProfileUpdate> {
   const env = o.env ?? process.env, path = o.path ?? agentsFilePath(env);
@@ -257,22 +309,37 @@ export async function updateProfile(name: string, o: { project?: boolean; path?:
     const diff = diffTrees(lock.files, next.files);
     const skills = [...new Set([...diff.added, ...diff.removed, ...diff.changed].filter((p) => SKILL_FILE.test(p)))].sort()
       .map((p) => ({ name: SKILL_FILE.exec(p)![1]!, from: lock.files[p] ? `sha256:${lock.files[p]!.sha256}` : null, to: next.files[p] ? `sha256:${next.files[p]!.sha256}` : null }));
-    const out: ProfileUpdate = { name, dir, layer, from: { version: lock.version, commit: lock.commit, hash: lock.hash }, to: { version: next.version, commit: next.commit, hash: next.hash }, ...diff, skills, modified, updated: false };
-    if (o.dryRun || (next.hash === lock.hash && !modified && next.commit === lock.commit)) return out;
-    writeLock(staging, next);
-    // The user's override comes along into the new directory once it is in place (never through the staging directory,
-    // which goes whatever happens); the old one goes once the profiles resolve with the new.
+    // Files the user added beside the package's are theirs: kept where they are (one the new package ships as it is
+    // becomes the package's). One the new package needs the place of is a conflict, before anything changes.
+    const kept = userFiles(dir, lock).filter((p) => !(Object.hasOwn(next.files, p) && sameFile(join(dir, p), next.files[p]!)));
     const overrides = readdirSync(dir).filter((f) => OVERRIDE_FILE.test(f));
+    const clash = clashes([...overrides, ...kept], staging);
+    if (clash.length) throw new RelayError("conflict", `the update of ${name} needs the place of ${clash.length === 1 ? "a file" : "files"} you added to ${dir}: ${clash.join(", ")}`, "Move them out of the profile's directory (or delete them), then update again; nothing was changed.");
+    const out: ProfileUpdate = { name, dir, layer, from: { version: lock.version, commit: lock.commit, hash: lock.hash }, to: { version: next.version, commit: next.commit, hash: next.hash }, ...diff, skills, modified, kept, updated: false };
+    const replaces = !!modified && (modified.changed.length > 0 || modified.removed.length > 0);
+    if (o.dryRun || (next.hash === lock.hash && !replaces && next.commit === lock.commit)) return out;
+    writeLock(staging, next);
+    // The user's override and files come along into the new directory once it is in place (never through the staging
+    // directory, which goes whatever happens); the old one goes once the profiles resolve with the new.
+    const theirs = [...overrides, ...kept];
     const old = join(dirname(dir), `.old-${name}-${process.pid}-${Date.now()}`);
+    const back = (moved: string[]) => {
+      for (const f of moved) renameSync(join(dir, f), join(old, f));
+      renameSync(dir, staging);
+      renameSync(old, dir);
+    };
     checkedChange(views(path, env, layer), env, `updating ${name}`, () => {
       renameSync(dir, old);
       try { renameSync(staging, dir); } catch (e) { renameSync(old, dir); throw e; }
-      for (const f of overrides) renameSync(join(old, f), join(dir, f));
-    }, () => {
-      for (const f of overrides) renameSync(join(dir, f), join(old, f));
-      renameSync(dir, staging);
-      renameSync(old, dir);
-    });
+      const moved: string[] = [];
+      try {
+        for (const f of theirs) {
+          mkdirSync(dirname(join(dir, f)), { recursive: true });
+          renameSync(join(old, f), join(dir, f));
+          moved.push(f);
+        }
+      } catch (e) { back(moved.reverse()); throw e; }
+    }, () => back([...theirs].reverse()));
     rmSync(old, { recursive: true, force: true });
     return { ...out, updated: true };
   } finally { rmSync(staging, { recursive: true, force: true }); }
@@ -291,7 +358,8 @@ export function removeInstalledProfile(name: string, o: { project?: boolean; pat
   const skills = listSkills(dir);
   const gone = join(dirname(dir), `.removed-${name}-${process.pid}-${Date.now()}`);
   checkedChange(views(path, env, layer), env, `removing ${name}`, () => renameSync(dir, gone), () => renameSync(gone, dir));
-  for (const s of skills) revokeTrust(PROFILE_TRUST_KIND, s, env);
+  // trust.json held by another change past its wait: the package goes back, so the refusal's "nothing was changed" holds.
+  try { for (const s of skills) revokeTrust(PROFILE_TRUST_KIND, s, env); } catch (e) { renameSync(gone, dir); throw e; }
   rmSync(gone, { recursive: true, force: true });
   return { name, dir, layer };
 }
