@@ -2125,7 +2125,8 @@ and, through §16.5, one message to the person only when the watchdog stops an a
 
 The built-in (`src/plugins/watchdog.ts`, §17.2 step 11) is in the daemon only and off until `plugins.watchdog.enabled:
 true` (§4.8), which `capcomd setup` (its `service` part) writes in the user's config unless the user set it false or
-passed `--no-watchdog`; `capcomd setup check` says whether it is on. Its config: `stalledAfterMs` (default 900 000),
+passed `--no-watchdog`; `capcomd setup check` says whether it is on, and `capcomd plugins disable|enable watchdog`
+turns it off or on (the one built-in that may be disabled, §9.9). Its config: `stalledAfterMs` (default 900 000),
 `stopAfterMs` (default 2 700 000; 0 never stops; otherwise more than `stalledAfterMs`, else the plugin fails to
 activate), both counted from the agent's last progress, and `everyMs` (default 60 000), how often it looks. Its
 definition of progress:
