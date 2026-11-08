@@ -223,7 +223,7 @@ treats a distribution-owned `SOUL.md` that way).
 - `capcomd profiles update <name>` re-fetches at the locked source and replaces only the **package-owned** files
   (`profile.yaml`, `SOUL.md`, `prompt.md`, `skills/`); a project's `override.yaml` and the profile's memory (§2.2
   `memory`) are user-owned and never touched. So is any file the user added in the package's directory (one its `LOCK`
-  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.47; before, the
+  doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.45; before, the
   update replaced the whole directory but the override). A changed hash on a pinned skill or persona is shown before
   it is applied.
   **From the research:** Hermes's `distribution_owned` list is exactly this split; adopted as is.
@@ -296,7 +296,7 @@ model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it 
   and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
   setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
   profile that can plan, not only the one named `planner` (`planners`, each with its readiness; done 2026-11-07, spec
-  1.0.45). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
+  1.0.47). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
   skills each is pinned with and their trust (`untrustedSkills`), so the app and a planner see that a spawn would wait
   on the operator's trust before it is refused.
 - **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
