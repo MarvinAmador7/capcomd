@@ -60,6 +60,7 @@
     "tests/scenarios/run-start-failures.test.ts": 19280,
     "tests/scenarios/sandbox-resources.test.ts": 8070,
     "tests/scenarios/smoke.test.ts": 14390,
+    "tests/scenarios/watchdog-progress.test.ts": 165000,
     "tests/scenarios/worker-capcomd.test.ts": 14320,
     "tests/subagents/limits.test.ts": 204326,
     "tests/subagents/liveness.test.ts": 147881,
@@ -70,6 +71,7 @@
     "tests/subagents/thread.test.ts": 27519,
     "tests/subagents/titles.test.ts": 21480,
     "tests/subagents/unit.test.ts": 6125,
+    "tests/subagents/watchdog-progress.test.ts": 30000,
     "tests/subagents/workflow-mode.test.ts": 26277,
     "tests/subagents/workflow-upgrade.test.ts": 140763,
     "tests/subagents/workflow.test.ts": 245537

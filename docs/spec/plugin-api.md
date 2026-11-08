@@ -676,14 +676,18 @@ that commit, an earlier attempt's or an environment image's, is kept). A bundle 
 to start without it and its log says so.
 
 #### 6.6.8 `agent.changed` · observe · after the agent's event is committed
-`AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
+`AgentChanged {agent, change: spawned|started{machine, attempt}|step{step}|checkpointed{files, commit, at}|worked{files, command, at}|notice{notice}|paused|resumed|titled|ended{status, result}, lifecycle?}`.
+`worked` (additive) is what the agent's runner saw it doing between checkpoints (§16.4): its files changed, a
+foreground command running `{since}` (null: none). It is the one change with no event in the run's log (one every
+heartbeat for each working agent would crowd it): told by the scope's `worked` while the agent's record says it runs,
+so it is never replayed (§6.7), and its `principal` is the agent.
 `lifecycle: {onStart[], onEnd[]}` is present when the agent's profile names plugins (ADR-024 `lifecycle.onStart|onEnd`,
 pinned at spawn; additive): there is no per-profile hook, so a plugin a profile names listens here and filters on its own
 name. The kernel refuses a spawn of such a profile (`config`, reason `lifecycle_inactive`), and the agent's start (its
 claim, before its machine is ensured), while a named plugin isn't active and listening to this hook: the daemon asks its
 own host, another process the running daemon's listing (§13.2; with no daemon running, nothing is refused there and the
 daemon asks at the start). `capcomd profiles validate` reports it the same way (§7.1).
-`checkpointed` is the progress signal (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
+`checkpointed` and `worked` are the progress signals (§16.4). Notifiers, the watchdog, cost and runs-index observers. `started` is
 recorded when the agent is claimed, before its machine is ensured, so its `machine` is null (`sandbox.changed`
 `ready` names the machine); it is told once, at the agent's first claim, which is always attempt 1 (a retried attempt
 prepares again, `agent.preparing`; a resumed agent is `resumed`). Each change's `principal` is who caused it: the agent
@@ -785,10 +789,14 @@ without a review (no reviewer gate active) fails closed. Review-mode agents a ju
 
 The built-in `context-memory` is a judge too (ADR-025 §5.3, "lint as a check"): for an agent's branch whose
 `tested.commit` changes `.capcomd/context/` (against its merge base with `tested.targetSha`; a file under it, or the
-directory or `.capcomd` made a file or a link), it denies when the agent isn't a consolidator (`memory lands only from a
-consolidator or a person`), when a consolidator's branch changes a file outside that directory or makes it a file or a
-link, and when `capcomd context lint` fails on the directory at `tested.commit` against the merge
-base (`src/context/promotion.ts`); a branch that touches nothing there, or isn't an agent's, is allowed unread. It is
+directory or `.capcomd` made a file or a link, by any name a checkout on a case-insensitive file system reads as one of
+those, such as `.Capcomd/Context/…`), it denies when the agent isn't a consolidator (`memory lands only from a
+consolidator or a person`), when a consolidator's branch changes a file outside that directory, makes it a file or a
+link or uses such another name, and when `capcomd context lint` fails on the directory at `tested.commit` against the
+merge base (`src/context/promotion.ts`); a branch that touches nothing there, or isn't an agent's, is allowed unread.
+The agent judged is the one whose work the ref lands: for an agent id, the agent whose branch its result names (an agent
+that handed off has its successor's); for a branch `capcomd/<run>/<agt>`, that agent, in that run, whichever run it
+is (another run's agent is no person); one the engine has no record of fails the judge (fail-closed). It is
 built in and loaded in every process (§6.1), and it judges before the reviewer gate (§6.3, by name), so a memory change
 that can't land costs no review. It reads the branch in a clone of the run's repository it keeps (a host repo,
 §11.7).
@@ -822,7 +830,8 @@ no `merge.landing`.
 
 Promotion is a merge (ADR-025 §5.3): the built-in `context-memory` listens here, fail-closed, judging the agent's commit
 (its result's `commit`, from its merge base with `target.sha` when the payload has one, else with the target's tip) as
-its `verify.judging` judge does (§6.6.13), and denies what that judge would. A consolidator's
+its `verify.judging` judge does (§6.6.13; the same agent, the one whose work the ref lands), and denies what that judge
+would. A consolidator's
 branch that passes is held for a person under its profile's `context.review: human` (the default), with what changes
 and what lint flags for a reader (an item that reads like an instruction, a stale or large one) in the reason and
 `holdId` `memory@<commit, 12 characters>`, so an approval holds for that commit only; under `review: lint` it is allowed
@@ -967,7 +976,10 @@ returning it (today `Redactor.text`); `redactJson` (`packages/plugin/src/seams.t
 kernel's own rule, a credential-named key's string replaced whole. The kernel keeps one `AgentRunState` object per run,
 so a provider may keep fields of its own on it between lines. A provider whose CLI reports them sets the optional
 `cacheReadTokens` (of `inputTokens`) and `model` (the model the CLI says it ran); the kernel puts them on the agent's
-span as `gen_ai.usage.cache_read.input_tokens` and `gen_ai.response.model`. The `AgentConfig` a provider reads has the kernel's
+span as `gen_ai.usage.cache_read.input_tokens` and `gen_ai.response.model`. A parsed `AgentEvent` may carry the
+optional `commands {started?, ended?}` (additive): the CLI call ids of the foreground shell commands the event starts
+and of the calls it ends, from which the runner reports a command the agent waits on (§16.4); a provider that sets none
+has none reported. The `AgentConfig` a provider reads has the kernel's
 `credentialMode` values (`auto` included) and `usdPerMtok`, the operator's token rates for a CLI that reports tokens and
 not cost, and `denyCommands`, the command prefixes an orchestrate agent's CLI must refuse (§16.1). The optional, pure
 `refusal(line, redact)` reads a tool call the CLI refused from one line of its stderr, for a CLI that reports refusals
@@ -2114,7 +2126,8 @@ Essay: a "separate, scheduled" session judges "whether each Worker is making rea
 its clock, `ctx.agents.notice` to raise `stalled` (a new `AgentNotice.kind`, raised only by plugins), and
 `ctx.agents.cancel` to stop. Progress signals the kernel provides in `agent.changed`: `step {kind, n}` (tool kinds and
 counts), `checkpointed {files, commit}` (the supervisor's checkpoints, ADR-019 §3: files changed is the hardest signal
-that something landed), `notice`, and the agent's `activity` line in `Agent`. The kernel does not define "progress";
+that something landed), `worked {files, command}` (what the agent's runner saw between checkpoints, below), `notice`,
+and the agent's `activity` line in `Agent`. The kernel does not define "progress";
 the plugin does, and `capcomd setup` enables the built-in `watchdog` with conservative defaults (15 min to `stalled`,
 45 min to cancel). Raising an ask is the `stalled` notice (the app shows the amber hand; a planner sees it on its child)
 and, through §16.5, one message to the person only when the watchdog stops an agent.
@@ -2123,35 +2136,53 @@ The built-in (`src/plugins/watchdog.ts`, §17.2 step 11) is in the daemon only a
 true` (§4.8), which `capcomd setup` (its `service` part) writes in the user's config unless the user set it false or
 passed `--no-watchdog`; `capcomd setup check` says whether it is on. Its config: `stalledAfterMs` (default 900 000),
 `stopAfterMs` (default 2 700 000; 0 never stops; otherwise more than `stalledAfterMs`, else the plugin fails to
-activate), both counted from the agent's last progress, and `everyMs` (default 60 000), how often it looks. Its
-definition of progress:
+activate), both counted from the agent's last progress, and `everyMs` (default 60 000), how often it looks. A
+`stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`, how long a working agent's progress may take to show) is accepted
+but warned about, by `capcomd setup` (its `service` step and `check`, as advice) and in the plugin's log when it
+starts: it flags agents that are working. Its definition of progress:
 
-- the agent's files changed (`checkpointed`: the supervisor reports a checkpoint only for a new tree), or an agent
-  under it did;
+- the agent's files changed, or an agent under it did: `worked {files: true}`, or `checkpointed` (the supervisor
+  reports a checkpoint only for a new tree, by default every 10 minutes, so it is not what shows work in between);
 - an agent under it was spawned or ended (delegating, a hand-back), or it resumed;
-- a background job (`job.changed`), a verification it asked for (`verify.changed`, its principal) or an approval it
-  waits on (`approval.changed`) ended.
+- a verification it asked for (`verify.changed`, its principal) or an approval it waits on (`approval.changed`) ended.
 
-Files changing show only at the agent's next checkpoint, every `checkpointEveryMs` of its profile (default 10 min), so
-an agent's windows are at least its interval's: `stalled` no sooner than one and a half of the interval, and the stop
-(when it isn't 0) as much later as `stalled` moved. At the defaults nothing moves (1.5 × 10 min is 15 min); an agent
-checkpointed hourly is stalled at 90 min and stopped at 120. The built-in asks the kernel for the interval when it asks
-whether the agent's work shows (`src/plugins/services.ts` `checkpointEvery`, as the agent's worker reads it; none for
-an agent no supervisor runs under, which keeps the configured windows).
+`worked` (§6.6.8) comes from the agent's runner, at most once per supervisor heartbeat (30 s) and only when there is
+something to say: `files`, the checkout's working tree has a new fingerprint since the last heartbeat that had one
+(the supervisor takes it at each heartbeat for an agent whose work is checkpointed, `reportTree: "progress"`: HEAD and
+each path `git status` sees differ from it, untracked files included, with its size and modification time, so editing
+a file that already differs counts too; it writes nothing to the repository, no object and no index; it skips
+heartbeats while taking it would use more than a twentieth of the time, so a slow checkout reports less often);
+`command`, a foreground shell command of the agent's CLI is running, and since when (Claude Code's `Bash` call that
+isn't `run_in_background` until its `tool_result`, Codex's `command_execution` from `item.started` to
+`item.completed`: the provider's `AgentEvent.commands`, §7.3; a turn that ends or fails ends every command of it).
+Files changing therefore show within a heartbeat whatever the agent's checkpoint interval (`checkpointEveryMs`), so the
+configured windows hold for every agent: the longer windows 1.0.38 gave an agent checkpointed less often than every 10
+minutes (at least 1.5 × its interval) are gone.
 
-Tool calls (`step`) and the activity line are not progress. While it, or an agent under it, waits on a job, a
-verification or an approval, or is paused, its clock doesn't run. An agent with agents of its own running is judged
-through them: they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and
-the planner can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it
-confirms the agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in
-`detail`) or cancels (`agents.cancel`, then `plugin.watchdog.stopped {agentId, quietMs, stalledAt}` on the run's
-stream: the one message). Progress clears its notice; a notice that went some other way is raised again while the agent
-stays quiet, but never over a notice of the kernel's (`idle`, `spinning`, `failing`, …) while that one shows: the stop
-still comes. An agent whose work never shows as files changing isn't judged at all: a reviewer (`contract.review`), a
-report-only agent (`contract.report`) and an orchestrate agent (`toolMode: orchestrate`) are never checkpointed, so the
-watchdog can't see their progress (the kernel's own notices still watch their process); the built-in asks the kernel
-once per agent, when the agent is first due (`src/plugins/services.ts` `showsFileChanges`, a kernel helper outside
-`ctx`, as `skill-orchestration` reads the kernel's record). What it knows of each agent is in its daemon storage
+Tool calls (`step`), the activity line, a job's output and a job's end are not progress: a job, in the foreground or the
+background, is a command like any other, and what it leads to (files changing, a hand-back) is. While it waits on
+something its clock doesn't run, and the time it waited doesn't count when the wait ends: a job (`job.changed` `started`
+to `ended`), a verification, an approval, being paused, or a foreground command (from its start, while `worked` keeps
+saying it runs; once it isn't said for `PROGRESS_SIGNAL_MS` it has ended), the last for at most `stalledAfterMs` in all
+between two signs of progress, however many commands, so a command that hangs, or one run again and again (a poll), is
+still judged. Waits that overlap (a foreground job and the command that waits on it) count once. Its notice and its
+stop's reason say what it saw rather than what it assumed: `no progress for <time>: no file change seen, no agent of its
+own started or ended, no check or approval it waited on finished; <n> tool steps seen meanwhile` (or `no tool step
+seen`: the `step`s it heard, which come when a streak of one kind ends and stop at the kernel's 500 per agent, so none
+seen is not none taken), and `; it has been waiting on one command for <time>` when a command still running has used up the time that
+doesn't count. Whether a job that ends counts as progress was an open question; the built-in says no, as above (a quick
+foreground job is no different from a shell tool call). An agent with agents of its own running is judged through them:
+they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and the planner
+can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it confirms the
+agent is running (`agents.get`) before it raises `stalled` (once, with the time and the stop to come in `detail`) or
+cancels (`agents.cancel`, then `plugin.watchdog.stopped {agentId, quietMs, stalledAt}` on the run's stream: the one
+message). Progress clears its notice; a notice that went some other way is raised again while the agent stays quiet, but
+never over a notice of the kernel's (`idle`, `spinning`, `failing`, …) while that one shows: the stop still comes. An
+agent whose work never shows as files changing isn't judged at all: a reviewer (`contract.review`), a report-only agent
+(`contract.report`) and an orchestrate agent (`toolMode: orchestrate`) are never checkpointed, so the watchdog can't see
+their progress (the kernel's own notices still watch their process); the built-in asks the kernel once per agent, when
+the agent is first due (`src/plugins/services.ts` `showsFileChanges`, a kernel helper outside `ctx`, as
+`skill-orchestration` reads the kernel's record). What it knows of each agent is in its daemon storage
 (`agents/<runId>/<agentId>`), with the time of its last look (`clock`): after a restart the time the daemon was down is
 added to every agent's clock, so downtime never counts as an agent's quiet.
 
@@ -2283,7 +2314,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.49 | 2026-11-07 | A profile's `harness.provider` and `sandbox.provider` outside the daemon (§7.1): a built-in or a seam the running daemon's listing has from an active, enabled plugin; any other name is refused while a daemon runs and a warning when none does (the daemon checks it at resolution), as `lifecycle` already was (§6.6.8). Reading profiles in the CLI no longer fails for a seam only the daemon loads. A candidate before a write, a write that brings in such a name (`profiles add|set|rm`) and an override still need one. No hook, seam, route or contract shape changes. |
 | 1.0.50 | 2026-11-08 | Small items from a live run: the built-ins register every hook they declare whatever their settings (forge-github's, source-schedule's and sandbox-boxd's `job.changed` listeners, which do nothing without repositories, schedules or the template refresh), so the host no longer logs `declared but never registered` at every start (§4.7, §16.3.1); a verify with no check named, given or pinned and no repository command takes the run's one named check (the project's `run.checks`), as `check` does, and keeps the repository's with several (§16.1); a merge's record adds a plugin's hold to `approvedHolds` when a person approves it, so it no longer reads `[]` after the approval (§6.6.15). No hook, seam, route or contract shape changes. |
 | 1.0.51 | 2026-11-08 | From the review of ADR-024's writes (its §7 step 6; ADR-024 §9, "Made while building the writes"): `GET /v1/profiles/{name}` shows `context.providers` by name only, as `tools.mcp`, and, in other rows outside the catalog, redacts token shapes, a value under a key named like a secret (the redactor's key rule, `SECRET_KEY`) and a URL's password (the route's "Never contains a credential"); a profile file a write replaces keeps its mode (the unguessable, exclusively created temporary file is 1.0.45's); `PUT` refuses a number past 2^53. No contract change. |
-| 1.0.52 | 2026-11-08 | A `job.changed` listener may declare `changes` (§4.7, §6.6.19): the change kinds it is called for (`started`, `output`, `fired`, `ended`; default all, so an existing manifest is unchanged); the registry doesn't call it for another, and the jobs service reads a running job's new output (one exec in its machine a second) only while a listener wants `output`. The built-ins declare what they use (sandbox-docker, sandbox-boxd, forge-github and source-schedule `fired`; the watchdog `started`, `fired`, `ended`), so with no other plugin a running job costs one look a second, not two. `changes` on another hook is `invalid`. Manifest schema additive; no hook payload, seam, route or contract shape changes. |
+| 1.0.52 | 2026-11-08 | The watchdog's progress from real activity (§16.4, the live run's L3; supersedes 1.0.38's windows from the checkpoint interval, since files changing no longer wait for a checkpoint): `agent.changed` `worked {files, command, at}` (additive; no event in the run's log, never replayed, §6.6.8) from the agent's runner at most once a supervisor heartbeat: its checkout's files changed (the supervisor fingerprints the working tree from `git status` and each changed path's size and time at each heartbeat for an agent whose work is checkpointed, writing nothing to the repository, less often in a slow checkout), a foreground shell command running since when (`AgentEvent.commands`, additive, §7.3); the built-in counts `worked {files}` as progress, holds its clock while a foreground command runs (at most `stalledAfterMs` of commands between two signs of progress, so a hung or repeated command is still judged; a turn's end ends its commands) and while a job runs (overlapping waits count once), and no longer counts a job's end as progress (the time it ran doesn't count instead; the open question decided); its notice and stop say what it saw (`no file change seen`, the tool steps it heard of, a command it waits on); a `stalledAfterMs` below 60 000 (`PROGRESS_SIGNAL_MS`) is warned about by `capcomd setup` and in its log, not refused. |
+| 1.0.53 | 2026-11-08 | `context-memory`'s judge and gate, after a second review of ADR-025 step 3 (§6.6.13, §6.6.15): a path a checkout on a case-insensitive file system reads as the memory (`.Capcomd/Context/…`, with HFS+-ignored characters or Windows' trailing dots and spaces) is a change to it, so an agent's branch can't put files in a macOS checkout's `.capcomd/context/` unjudged, and a consolidator's branch changes items by their exact names only; the agent judged is the one whose work the ref lands (an agent id's result branch, so a handed-off agent's successor), and a branch `capcomd/<run>/<agt>` of another run is judged as that run's agent instead of let through as a person's (an agent the engine has no record of fails it closed). No hook, seam, route or contract shape changes. |
+| 1.0.54 | 2026-11-08 | A `job.changed` listener may declare `changes` (§4.7, §6.6.19): the change kinds it is called for (`started`, `output`, `fired`, `ended`; default all, so an existing manifest is unchanged); the registry doesn't call it for another, and the jobs service reads a running job's new output (one exec in its machine a second) only while a listener wants `output`. The built-ins declare what they use (sandbox-docker, sandbox-boxd, forge-github and source-schedule `fired`; the watchdog `started`, `fired`, `ended`), so with no other plugin a running job costs one look a second, not two. `changes` on another hook is `invalid`. Manifest schema additive; no hook payload, seam, route or contract shape changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

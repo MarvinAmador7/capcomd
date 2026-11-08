@@ -10,6 +10,9 @@ export interface AgentEvent {
   calls?: string[];
   /** The tool results it carries: the call they answer, and the error text when the call failed. */
   results?: Array<{ call: string; error?: string }>;
+  /** Plugin API §16.4: the foreground shell commands this event starts (`started`, by the CLI's call id) and the calls it
+   *  ends (`ended`), so the runner knows while the agent waits on one. */
+  commands?: { started?: string[]; ended?: string[] };
   raw: Record<string, unknown>;
 }
 
