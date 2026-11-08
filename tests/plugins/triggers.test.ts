@@ -11,7 +11,7 @@ import { join } from "node:path";
 import type { Candidate } from "../../packages/plugin/src/host/host";
 import type { PluginContext, PluginModule } from "../../packages/plugin/src/context";
 import type { HookCall } from "../../packages/plugin/src/hooks";
-import type { Principal, Trigger } from "../../packages/plugin/src/shapes";
+import type { Principal, Trigger, TriggerReply } from "../../packages/plugin/src/shapes";
 import { PluginError } from "../../packages/plugin/src/errors";
 import { CreateRunError } from "../../src/api/source";
 import { resetJobs, useDaemonEvents } from "../../src/jobs/service";
@@ -21,7 +21,7 @@ import { pluginStore, storageService } from "../../src/plugins/storage";
 import { checkSchedule, fireTrigger, manifest as scheduleManifest, plugin as schedulePlugin } from "../../src/plugins/sources/schedule";
 import { commentTrigger, pollGitHub, RETRY_TRIES } from "../../src/plugins/forges/github-source";
 import type { IssueComment } from "../../src/plugins/forges/github-rest";
-import { admit, gateOf, listSubscriptionRecords, readTriggerLog, resetTriggers, subscribe, subscriptions, sweepTriggers, threadMatches, triggerMessage, triggerOfRun, triggersConfig, useIntakeDeps, useTriggerEvents, type RunStanding } from "../../src/triggers/intake";
+import { admit, gateOf, listSubscriptionRecords, readTriggerLog, resetTriggers, subscribe, subscriptions, sweepTriggers, threadMatches, triggerMessage, triggerOfRun, triggersConfig, useIntakeDeps, useTriggerEvents, type RunOutcome, type RunStanding } from "../../src/triggers/intake";
 import { capcomd } from "../helpers/engine";
 import * as relay from "../../src/core/relay";
 
@@ -91,8 +91,8 @@ describe("the gate's settings", () => {
   });
 
   test("a source with no settings records (observe), allows nobody; a bad mode is observe; CAPCOMD_TRIGGERS_FILE wins", () => {
-    expect(gateOf({}, "github")).toEqual({ allowed: [], opened: [], mode: "observe", project: null });
-    expect(gateOf({ sources: { github: { allowed: ["alice", 3] as never, mode: "yolo" as never, project: " /src/app " } } }, "github")).toEqual({ allowed: ["alice"], opened: [], mode: "observe", project: "/src/app" });
+    expect(gateOf({}, "github")).toEqual({ allowed: [], opened: [], mode: "observe", project: null, reply: false });
+    expect(gateOf({ sources: { github: { allowed: ["alice", 3] as never, mode: "yolo" as never, project: " /src/app " } } }, "github")).toEqual({ allowed: ["alice"], opened: [], mode: "observe", project: "/src/app", reply: false });
     setGate({ test: { mode: "auto" } });
     expect(triggersConfig()).toEqual({ sources: { test: { mode: "auto" } } });
     expect(triggersConfig({ CAPCOMD_NO_CONFIG: "1", CAPCOMD_HOME: home })).toEqual({});
@@ -290,6 +290,355 @@ describe("the intake decides in order and records each decision", () => {
     expect(triggerMessage(trigger({ actor: { id: "ci", display: "ci", bot: true } }))).toBe("ci, a bot, wrote on issue/1:\n\nplease fix the flaky test");
     await admit(trigger({ actor: { id: "mallory" }, text: { text: "token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 here", untrusted: true, by: "x" } }), SOURCE);
     expect(readTriggerLog()[0]!.text).not.toContain("abcdefghijklmnopqrstuvwxyz");
+  });
+});
+
+describe("an ended run's planner starts again (§16.3.2 step 2)", () => {
+  let restarted: Array<{ runId: string; key: string; body: string }>;
+  const ended = (runId: string) => { standing[runId] = { exists: true, live: false, endedAt: Date.now() - 60_000, stopped: false }; };
+  beforeEach(() => {
+    restarted = [];
+    useIntakeDeps({
+      deliver: async (runId, m) => { delivered.push({ runId, ...m }); return { seq: delivered.length }; },
+      restart: async (runId, m) => { restarted.push({ runId, key: m.key, body: m.body }); return { agentId: `agt-again${restarted.length}`, seq: 40 + restarted.length, started: true }; },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+    });
+  });
+
+  test("a person the gate would let start a run starts its planner again; a bot never; observe records that it would have", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    await subscribe({ runId: "run-pr", source: "test", thread: "pr/12" }, "pull-request");
+    ended("run-pr");
+    // A bot on an ended run's thread is gated like any trigger (it isn't allowed): nothing starts.
+    expect(await admit(trigger({ thread: "pr/12", actor: { id: "ci", bot: true } }), SOURCE)).toMatchObject({ kind: "denied", by: "allowlist" });
+    expect(restarted).toEqual([]);
+    // Alice, allowed and addressing capcomd: the planner works again on it, with her words in its inbox.
+    const d = await admit(trigger({ thread: "pr/12", text: { text: "/capcomd also handle the empty list", untrusted: true, by: "x" } }), SOURCE);
+    expect(d).toEqual({ kind: "continued", runId: "run-pr", seq: 41, restarted: "agt-again1" });
+    expect(restarted).toEqual([{ runId: "run-pr", key: expect.stringMatching(/^trigger-test-/), body: "Alice (alice) wrote on pr/12:\n\n/capcomd also handle the empty list" }]);
+    expect(delivered).toEqual([]);
+    expect(events.find((e) => e.type === "trigger.received" && e.data.decision === "continued")).toMatchObject({ text: "A trigger from test started run-pr's planner again; the run follows its thread.", data: { runId: "run-pr", restarted: "agt-again1" } });
+    expect(readTriggerLog().at(-1)).toMatchObject({ decision: { kind: "continued", restarted: "agt-again1" }, gate: { allowed: true, strength: "explicit", mode: "observe" } });
+    // Alice not addressing it, in observe: it lands in the inbox, and the log says the planner would have started again.
+    expect(await admit(trigger({ thread: "pr/12", addressed: null }), SOURCE)).toEqual({ kind: "recorded", wouldHave: "continue", runId: "run-pr" });
+    expect(delivered.map((m) => m.runId)).toEqual(["run-pr"]);
+    // In auto it starts the planner again.
+    setGate({ test: { allowed: ["alice"], mode: "auto" } });
+    expect(await admit(trigger({ thread: "pr/12", addressed: null }), SOURCE)).toMatchObject({ kind: "continued", restarted: "agt-again2" });
+    // Someone the gate doesn't allow: in the inbox only, as before (no planner starts on a stranger's word).
+    expect(await admit(trigger({ thread: "pr/12", actor: { id: "dave" } }), SOURCE)).toEqual({ kind: "continued", runId: "run-pr", seq: 2 });
+    expect(restarted).toHaveLength(2);
+    // A live run's planner just reads it, whoever wrote it.
+    standing["run-pr"] = { exists: true, live: true, endedAt: null, stopped: false };
+    expect(await admit(trigger({ thread: "pr/12", actor: { id: "dave" } }), SOURCE)).toEqual({ kind: "continued", runId: "run-pr", seq: 3 });
+    expect(restarted).toHaveLength(2);
+  });
+
+  test("trigger.admitting can refuse the restart; a planner already at it again only gets the message; one that can't start fails the trigger", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    await subscribe({ runId: "run-e", source: "test", thread: "pr/3" }, "pull-request");
+    ended("run-e");
+    const heard: HookCall[] = [];
+    const host = kernelHost({ log: false, jobs: true, triggers: true });
+    useHooks(host.hooks);
+    await host.start([sourcePlugin(heard, () => {})]);
+    expect(await admit(trigger({ thread: "pr/3", data: { deny: true } }), SOURCE)).toEqual({ kind: "continued", runId: "run-e", seq: 1 });
+    expect(restarted).toEqual([]);
+    expect((heard.find((c) => c.hook === "trigger.admitting")!.payload as { gate: unknown }).gate).toEqual({ allowed: true, strength: "explicit", mode: "observe", subscribed: { runId: "run-e" } });
+    await host.stop();
+    useHooks(null);
+    useIntakeDeps({ restart: async () => ({ agentId: "agt-p2", seq: 7, started: false }), standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
+    expect(await admit(trigger({ thread: "pr/3" }), SOURCE)).toEqual({ kind: "continued", runId: "run-e", seq: 7 });
+    const { RelayError } = await import("../../src/core/errors");
+    const deliver = async (runId: string, m: { from: string; body: string; key: string }) => { delivered.push({ runId, ...m }); return { seq: delivered.length }; };
+    useIntakeDeps({ deliver, restart: async () => { throw new RelayError("config", "budget exhausted", "Grant more budget."); }, standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
+    const t = trigger({ thread: "pr/3" });
+    // Refused for good (the run's settings): the source moves on, and the words are still in the ended planner's inbox.
+    const before = delivered.length;
+    const refused = await admit(t, SOURCE).catch((e) => e);
+    expect(refused).toMatchObject({ code: "invalid", message: expect.stringContaining("couldn't start run-e's planner again: budget exhausted") });
+    expect(refused.retryable).toBe(false);
+    expect(readTriggerLog().at(-1)!.decision).toMatchObject({ kind: "failed" });
+    expect(delivered.slice(before)).toEqual([{ runId: "run-e", from: "trigger:test", body: expect.stringContaining("Alice (alice) wrote on pr/3"), key: expect.stringMatching(/^trigger-test-/) }]);
+    useIntakeDeps({ deliver, restart: async () => { throw new Error("socket hang up"); }, standing: async (r) => standing[r] ?? { exists: true, live: true, endedAt: null, stopped: false } });
+    // Anything else may pass: it comes again (and is delivered then, by the planner it starts).
+    const later = await admit(t, SOURCE).catch((e) => e);
+    expect(later).toMatchObject({ code: "unavailable", message: expect.stringContaining("socket hang up") });
+    expect(later.retryable).toBe(true);
+    expect(delivered.length).toBe(before + 1);
+  });
+
+  test("a restart that fails part way never leaves the run's planner one that doesn't start; the same trigger again finishes it", async () => {
+    const { restartPlanner } = await import("../../src/triggers/intake");
+    // A run whose planner finished; the engine fails as told.
+    const agents: Record<string, { agentId: string; status: string; ref: string; task: string; contract: Record<string, unknown> | null }> = {
+      "agt-p1": { agentId: "agt-p1", status: "done", ref: "planner;ov=x", task: "Goal: add a", contract: { from: "agt-w", report: true } },
+    };
+    let planner = "agt-p1";
+    const inbox: Array<{ to: string; key: string }> = [], spawned: Array<{ key: string; profile?: string; contract?: unknown }> = [];
+    const fail = { send: 0, spawn: 0, becomes: 0 };
+    const k = {
+      planner: async () => agents[planner] ?? null,
+      idFor: (key: string) => `agt-${key}`,
+      send: async (to: string, m: { key: string }) => { if (fail.send && fail.send--) throw new Error("engine went away"); inbox.push({ to, key: m.key }); return { seq: inbox.length }; },
+      spawn: async (o: { key: string; profile?: string; task: string; contract?: Record<string, unknown> }) => {
+        if (fail.spawn && fail.spawn--) throw new Error("engine went away");
+        spawned.push({ key: o.key, profile: o.profile, contract: o.contract });
+        const id = `agt-${o.key}`;
+        agents[id] = { agentId: id, status: "running", ref: o.profile ?? "", task: o.task, contract: o.contract ?? null };
+        return { agentId: id };
+      },
+      becomes: async (id: string) => { if (fail.becomes && fail.becomes--) throw new Error("engine went away"); planner = id; },
+    };
+    const m = { from: "trigger:test", body: "Alice wrote", key: "trigger-test-1" };
+    for (const at of ["send", "spawn", "becomes"] as const) {
+      fail[at] = 1;
+      await expect(restartPlanner(k, m)).rejects.toThrow("engine went away");
+      // Still the planner that finished: the trigger again starts one, never just messages one that may not run.
+      expect(planner).toBe("agt-p1");
+    }
+    const again = await restartPlanner(k, m);
+    expect(again).toEqual({ agentId: expect.stringMatching(/^agt-planner-/), seq: inbox.length, started: true });
+    expect(planner).toBe(again!.agentId);
+    expect(agents[again!.agentId]!.status).toBe("running");
+    // One planner for the trigger (one key), with its profile ref and contract (without a worker's `from`), and its message
+    // addressed to it before it was spawned (the same key: the engine keeps it once).
+    expect(new Set(spawned.map((s) => s.key))).toEqual(new Set([again!.agentId.slice(4)]));
+    expect(spawned.at(-1)).toEqual({ key: again!.agentId.slice(4), profile: "planner;ov=x", contract: { report: true } });
+    expect(new Set(inbox.map((x) => `${x.to} ${x.key}`))).toEqual(new Set([`${again!.agentId} trigger-test-1`]));
+    // The same trigger again (the intake gave up on the engine before it finished): the planner at work is the one it
+    // started, so it is still its restart (the run answers it), and nothing is spawned again.
+    const spawns = spawned.length;
+    expect(await restartPlanner(k, m)).toEqual({ agentId: again!.agentId, seq: inbox.length, started: true });
+    expect(spawned).toHaveLength(spawns);
+    // Working again: a later trigger only messages it.
+    expect(await restartPlanner(k, { ...m, key: "trigger-test-2" })).toEqual({ agentId: again!.agentId, seq: inbox.length, started: false });
+    expect(spawned.filter((s) => s.key !== again!.agentId.slice(4))).toEqual([]);
+  });
+
+  test("two triggers on one ended run at once start one planner: the second only messages it", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    await subscribe({ runId: "run-two", source: "test", thread: "pr/5" }, "pull-request");
+    ended("run-two");
+    let inFlight = 0, most = 0, planner: string | null = null;
+    useIntakeDeps({
+      restart: async (_runId, m) => {
+        // It reads the run's planner, then takes a while to start one (as the engine does).
+        most = Math.max(most, ++inFlight);
+        const had = planner;
+        await sleep(20);
+        inFlight--;
+        if (had) return { agentId: had, seq: 2, started: false };
+        planner = `agt-for-${m.key}`;
+        return { agentId: planner, seq: 1, started: true };
+      },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+    });
+    const [a, b] = await Promise.all([admit(trigger({ thread: "pr/5" }), SOURCE), admit(trigger({ thread: "pr/5" }), SOURCE)]);
+    expect(most).toBe(1);
+    expect([a, b].filter((d) => d.kind === "continued" && d.restarted)).toHaveLength(1);
+    expect([a, b].map((d) => d.kind)).toEqual(["continued", "continued"]);
+  });
+
+  test("a restart the engine doesn't finish in time fails for now; the same trigger again finds the planner it started", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    await subscribe({ runId: "run-slow", source: "test", thread: "pr/6" }, "pull-request");
+    ended("run-slow");
+    let planner: string | null = null;
+    useIntakeDeps({
+      restart: async () => { const had = planner; await sleep(150); if (had) return { agentId: had, seq: 2, started: false }; planner = "agt-slow"; return { agentId: planner, seq: 1, started: true }; },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+    });
+    process.env.CAPCOMD_TRIGGERS_ENGINE_MS = "50";
+    try {
+      const t = trigger({ thread: "pr/6" });
+      const late = await admit(t, SOURCE).catch((e) => e);
+      expect(late).toMatchObject({ code: "unavailable", retryable: true, message: expect.stringContaining("starting run-slow's planner again") });
+      // Sent again while the first is still at it: it waits its turn and finds that planner.
+      process.env.CAPCOMD_TRIGGERS_ENGINE_MS = "1000";
+      expect(await admit(t, SOURCE)).toEqual({ kind: "continued", runId: "run-slow", seq: 2 });
+      expect(planner as string | null).toBe("agt-slow");
+    } finally { delete process.env.CAPCOMD_TRIGGERS_ENGINE_MS; }
+  });
+
+  test("the planner started again is told why, on top of its first brief (never twice)", async () => {
+    const { restartBrief } = await import("../../src/triggers/intake");
+    const once = restartBrief("Goal: add a\n\nYou are the planner.", { agentId: "agt-p1", status: "done" });
+    expect(once).toStartWith("Goal: add a\n\nYou are the planner.\n\nThis run had ended: its planner agt-p1 finished (done;");
+    expect(once).toContain("their message is in your inbox (`capcomd inbox`), in their words, not the operator's");
+    const twice = restartBrief(once, { agentId: "agt-p2", status: "failed" });
+    expect(twice.match(/This run had ended/g)).toHaveLength(1);
+    expect(twice).toContain("its planner agt-p2 finished (failed;");
+  });
+});
+
+/** A plugin contributing the `test` source with a reply path that records what it posts (and fails as told). */
+function replyingSource(posted: TriggerReply[], fail: { next: Error | null }, got: (ctx: PluginContext) => void = () => {}): Candidate {
+  return {
+    source: "builtin",
+    manifest: { schema: "capcomd.plugin/v1", name: "test-source", version: "1.0.0", description: "A test source that replies.", apiVersion: 1, engines: { capcomd: ">=0.0.0" }, entry: { runtime: "in-process", module: "./index.ts" },
+      provides: ["source:test"], scopes: ["read", "steer"], contributes: { sources: [{ name: "test", summary: "tests" }] } },
+    module: { activate(ctx) {
+      got(ctx);
+      ctx.triggers.onReply("test", async (r) => { if (fail.next) { const e = fail.next; fail.next = null; throw e; } posted.push(r); return { url: `https://example.test/${r.thread}#reply${posted.length}` }; });
+    } } as PluginModule<never>,
+  };
+}
+
+describe("replies (§16.3.7)", () => {
+  let posted: TriggerReply[], fail: { next: Error | null }, host: ReturnType<typeof kernelHost>;
+  const outcomes: Record<string, RunOutcome> = {};
+  beforeEach(async () => {
+    posted = []; fail = { next: null };
+    host = kernelHost({ log: false, jobs: true, triggers: true });
+    await host.start([replyingSource(posted, fail)]);
+    let n = 0;
+    useIntakeDeps({
+      startRun: async (input, principal) => { started.push({ ...input, principal }); return { runId: `run-r${++n}` }; },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+      outcome: async (runId) => outcomes[runId] ?? null,
+    });
+  });
+  afterEach(async () => { await host.stop(); });
+  const endNow = (runId: string, o: Partial<RunStanding> = {}) => { standing[runId] = { exists: true, live: false, endedAt: Date.now() + 5, stopped: false, ...o }; };
+
+  test("a run a trigger started answers once on its thread when it ends, under 100 words, redacted", async () => {
+    setGate({ test: { allowed: ["alice"], reply: true } });
+    const t = trigger({ thread: "issue/4", replyTo: "https://example.test/issue/4#c9" });
+    expect(await admit(t, SOURCE)).toEqual({ kind: "started", runId: "run-r1" });
+    // Working: nothing yet.
+    await sweepTriggers();
+    expect(posted).toEqual([]);
+    outcomes["run-r1"] = { state: "completed", summary: `Fixed the flaky test (token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789). ${"word ".repeat(200)}` };
+    endNow("run-r1");
+    await sleep(10);
+    await sweepTriggers();
+    await sweepTriggers();
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ source: "test", thread: "issue/4", replyTo: "https://example.test/issue/4#c9", triggerId: t.id, runId: "run-r1", key: expect.stringMatching(/^reply-run-r1-/) });
+    expect(posted[0]!.text).toStartWith("Fixed the flaky test");
+    expect(posted[0]!.text).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(posted[0]!.text).toEndWith(" …\n\n— capcomd (run-r1)");
+    expect(posted[0]!.text.split(/\s+/).length).toBeLessThan(100);
+    expect(events.filter((e) => e.type === "trigger.replied").map((e) => [e.entity, e.text, e.data])).toEqual([
+      ["run:run-r1", "run-r1 answered on its thread at test.", { source: "test", thread: "issue/4", runId: "run-r1", id: t.id, url: "https://example.test/issue/4#reply1" }],
+    ]);
+  });
+
+  test("off by default; a person's stop needs no answer; a failed run says so; a retryable failure is tried again, at most three times", async () => {
+    setGate({ test: { allowed: ["alice"] } });
+    await admit(trigger({ thread: "issue/21" }), SOURCE);
+    outcomes["run-r1"] = { state: "completed", summary: "done" };
+    endNow("run-r1");
+    await sleep(10);
+    await sweepTriggers();
+    expect(posted).toEqual([]);
+    setGate({ test: { allowed: ["alice"], reply: true } });
+    await admit(trigger({ thread: "issue/22" }), SOURCE);
+    outcomes["run-r2"] = { state: "cancelled", summary: null };
+    endNow("run-r2", { stopped: true });
+    await admit(trigger({ thread: "issue/23" }), SOURCE);
+    outcomes["run-r3"] = { state: "failed", summary: "the planner couldn't reach the checks" };
+    endNow("run-r3");
+    fail.next = new PluginError("unavailable", "rate limited", undefined, true);
+    await sleep(10);
+    await sweepTriggers();
+    expect(posted).toEqual([]);
+    await sweepTriggers();
+    expect(posted.map((r) => [r.runId, r.text])).toEqual([["run-r3", "The run stopped before it finished: the planner couldn't reach the checks\n\n— capcomd (run-r3)"]]);
+    // Refused for good, or with no answer in time (it may have been posted): never again.
+    await admit(trigger({ thread: "issue/24" }), SOURCE);
+    outcomes["run-r4"] = { state: "completed", summary: null };
+    endNow("run-r4");
+    fail.next = new PluginError("invalid", "no access to the repository");
+    await sleep(10);
+    await sweepTriggers();
+    await sweepTriggers();
+    expect(posted.map((r) => r.runId)).toEqual(["run-r3"]);
+    expect(readdirSync(join(home, "state", "triggers", "replies"))).toEqual([]);
+  });
+
+  test("a reply tried again never replaces a newer request for its run (its planner started again while it was posting)", async () => {
+    setGate({ test: { allowed: ["alice"], reply: true } });
+    await admit(trigger({ thread: "issue/40" }), SOURCE);
+    outcomes["run-r1"] = { state: "completed", summary: "first answer" };
+    endNow("run-r1");
+    const replies = join(home, "state", "triggers", "replies");
+    const newer = { runId: "run-r1", source: "test", thread: "issue/41", replyTo: null, triggerId: "newer", at: new Date(Date.now() + 60_000).toISOString(), attempts: 0 };
+    useIntakeDeps({
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+      outcome: async (runId) => outcomes[runId] ?? null,
+      // While the first is posting, a person's trigger starts the run's planner again (a newer request), and the post
+      // fails for now.
+      reply: async () => { writeFileSync(join(replies, "run-r1.json"), JSON.stringify(newer)); throw new PluginError("unavailable", "rate limited", undefined, true); },
+    });
+    await sleep(10);
+    await sweepTriggers();
+    expect(JSON.parse(readFileSync(join(replies, "run-r1.json"), "utf8"))).toEqual(newer);
+  });
+
+  test("a run that ends as soon as it starts is answered; an engine that doesn't answer, or no reply path yet, loses no reply", async () => {
+    setGate({ test: { allowed: ["alice"], reply: true } });
+    const { useTriggerReplies } = await import("../../src/triggers/intake");
+    let outcomeFails = 1;
+    useIntakeDeps({
+      // It ends while it starts (a planner that has nothing to do), before the intake has returned.
+      startRun: async () => { standing["run-quick"] = { exists: true, live: false, endedAt: Date.now(), stopped: false }; await sleep(10); return { runId: "run-quick" }; },
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+      outcome: async (runId) => { if (outcomeFails && outcomeFails--) throw new Error("engine went away"); return outcomes[runId] ?? null; },
+    });
+    outcomes["run-quick"] = { state: "completed", summary: "Nothing to change: it was fixed already." };
+    expect(await admit(trigger({ thread: "issue/30" }), SOURCE)).toEqual({ kind: "started", runId: "run-quick" });
+    // The engine doesn't say how it ended, then the source's plugin isn't there to post it: each is tried again.
+    await sweepTriggers();
+    useTriggerReplies(null);
+    await sweepTriggers();
+    expect(posted).toEqual([]);
+    useTriggerReplies(host.contributions);
+    await sweepTriggers();
+    await sweepTriggers();
+    expect(posted.map((r) => [r.runId, r.text])).toEqual([["run-quick", "Nothing to change: it was fixed already.\n\n— capcomd (run-quick)"]]);
+  });
+
+  test("a run started again answers the request that started it, once it ends again", async () => {
+    setGate({ test: { allowed: ["alice"], reply: true } });
+    await subscribe({ runId: "run-goal", source: "test", thread: "pr/1" }, "pull-request");
+    standing["run-goal"] = { exists: true, live: false, endedAt: Date.now() - 60_000, stopped: false };
+    useIntakeDeps({
+      restart: async () => ({ agentId: "agt-again", seq: 2, started: true }),
+      standing: async (runId) => standing[runId] ?? { exists: true, live: true, endedAt: null, stopped: false },
+      outcome: async (runId) => outcomes[runId] ?? null,
+    });
+    outcomes["run-goal"] = { state: "completed", summary: "first answer" };
+    const t = trigger({ thread: "pr/1" });
+    expect(await admit(t, SOURCE)).toMatchObject({ kind: "continued", restarted: "agt-again" });
+    // It ended before the request: not its answer.
+    await sweepTriggers();
+    expect(posted).toEqual([]);
+    standing["run-goal"] = { exists: true, live: true, endedAt: null, stopped: false };
+    await sweepTriggers();
+    outcomes["run-goal"] = { state: "completed", summary: "Handled the empty list too." };
+    endNow("run-goal");
+    await sleep(10);
+    await sweepTriggers();
+    expect(posted.map((r) => [r.thread, r.triggerId, r.text])).toEqual([["pr/1", t.id, "Handled the empty list too.\n\n— capcomd (run-goal)"]]);
+  });
+
+  test("onReply: for a source the plugin contributes, one per source, gone with the plugin", async () => {
+    let ctx!: PluginContext;
+    const other = kernelHost({ log: false });
+    await other.start([sourcePlugin([], (c) => { ctx = c; })]);
+    expect(() => ctx.triggers.onReply("slack", async () => ({ url: null }))).toThrow(expect.objectContaining({ code: "forbidden" }));
+    const d = ctx.triggers.onReply("test", async () => ({ url: null }));
+    expect(other.contributions.get("reply", "test")?.plugin).toBe("test-source");
+    expect(() => ctx.triggers.onReply("test", async () => ({ url: null }))).toThrow(expect.objectContaining({ code: "conflict" }));
+    d.dispose();
+    expect(other.contributions.get("reply", "test")).toBeUndefined();
+    await other.stop();
+    // The daemon's host holds the reply paths the intake posts through: once its plugin stops, a reply has nowhere to go.
+    expect(host.contributions.get("reply", "test")?.plugin).toBe("test-source");
+    await host.stop();
+    expect(host.contributions.get("reply", "test")).toBeUndefined();
   });
 });
 
@@ -594,6 +943,51 @@ describe("the GitHub source (forge-github)", () => {
       expect(await pollGitHub(ctx, cfg, api)).toBe(0);
       expect(tried.filter((id) => id === "comment-1")).toHaveLength(RETRY_TRIES);
     } finally { setSystemTime(); }
+  });
+
+  test("a repository only a followed thread brings in: just that thread's comments are triggers", async () => {
+    const emitted: Trigger[] = [];
+    const store = storageService(pluginStore("forge-github", join(home, "plugins", "forge-github")));
+    const ctx = { storage: store, log: { warn: () => {} }, triggers: { emit: async (t: Trigger) => { emitted.push(t); return { kind: "recorded" }; }, subscriptions: async () => [{ runId: "run-1", source: "github", thread: "acme/app#12", until: null }] } } as unknown as PluginContext<unknown>;
+    const since = new Date(Date.now() - 60_000).toISOString(), at = new Date().toISOString();
+    await store.put("daemon", "github/acme/app", { since });
+    const page = [comment(1, { created_at: at, updated_at: at }), comment(2, { issue_url: "https://api.github.com/repos/acme/app/issues/40", created_at: at, updated_at: at })];
+    const api = { listIssueComments: async () => page } as never;
+    const cfg = { api: "https://api.github.com", sourceRepos: [] as string[], sourceEveryMs: 60_000, sourceCommand: "/capcomd" };
+    expect(await pollGitHub(ctx, cfg, api)).toBe(1);
+    expect(emitted.map((t) => `${t.thread} ${t.id}`)).toEqual(["acme/app#12 comment-1"]);
+    // Both were read: the next poll hands nothing again.
+    expect(await store.get("daemon", "github/acme/app")).toEqual({ since: at, read: [1, 2] });
+    // Configured, the whole repository is read.
+    await store.put("daemon", "github/acme/app", { since });
+    expect(await pollGitHub(ctx, { ...cfg, sourceRepos: ["acme/app"] }, api)).toBe(2);
+  });
+
+  test("its reply path: one marked comment on the thread, which its next read drops; GitHub's own trouble is retryable", async () => {
+    const made: Array<{ repo: string; number: number; body: string }> = [];
+    let fail: Error | null = null;
+    const { replyOnGitHub, replyBody } = await import("../../src/plugins/forges/github-source");
+    const { GitHubHttpError } = await import("../../src/plugins/forges/github-rest");
+    const api = { createIssueComment: async (repo: string, number: number, body: string) => {
+      if (fail) throw fail;
+      made.push({ repo, number, body });
+      return comment(900, { body, user: { login: "marvin", type: "User" }, html_url: `https://github.com/${repo}/pull/${number}#issuecomment-900` });
+    } } as never;
+    const r: TriggerReply = { source: "github", thread: "acme/app#12", replyTo: "https://github.com/acme/app/pull/12#issuecomment-5", triggerId: "comment-5", runId: "run-1", text: "Handled the empty list.\n\n— capcomd (run-1)", key: "reply-run-1-x" };
+    expect(await replyOnGitHub({ api: "https://api.github.com" }, r, api)).toEqual({ url: "https://github.com/acme/app/pull/12#issuecomment-900" });
+    expect(made).toEqual([{ repo: "acme/app", number: 12, body: replyBody(r.text) }]);
+    expect(made[0]!.body).toEndWith("\n\n<!-- capcomd -->");
+    // The login is the user's own: what marks it as capcomd's is the mark, and the source drops it.
+    expect(commentTrigger("acme/app", comment(900, { body: made[0]!.body, user: { login: "marvin", type: "User" } }), "marvin")).toBeNull();
+    await expect(replyOnGitHub({ api: "https://api.github.com" }, { ...r, thread: "schedule:nightly" }, api)).rejects.toMatchObject({ code: "invalid" });
+    fail = new GitHubHttpError(502, "bad gateway", false);
+    expect(await replyOnGitHub({ api: "https://api.github.com" }, r, api).catch((e) => [e.code, e.retryable])).toEqual(["unavailable", true]);
+    fail = new GitHubHttpError(404, "Not Found", false);
+    expect(await replyOnGitHub({ api: "https://api.github.com" }, r, api).catch((e) => [e.code, e.retryable])).toEqual(["invalid", false]);
+    // Words people outside capcomd can steer never page anyone from the user's login: a mention is posted as code.
+    fail = null;
+    await replyOnGitHub({ api: "https://api.github.com" }, { ...r, text: "@alice asked; cc @acme/reviewers, @x. Mail ops@acme.dev or `@bob`." }, api);
+    expect(made.at(-1)!.body).toBe(replyBody("`@alice` asked; cc `@acme/reviewers`, `@x`. Mail ops@acme.dev or `@bob`."));
   });
 
   test("GitHub's since includes its own second: a comment already read isn't handed to the intake again at the next poll", async () => {
