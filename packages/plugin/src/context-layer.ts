@@ -48,6 +48,10 @@ export interface ContextBundle {
   commit: string;
   /** Its directory under the provider's, `^[a-z0-9][a-z0-9_-]{0,62}$`. */
   name: string;
+  /** The directory in the repository that holds the bundle (groundray's `knowledge`): only it is placed, at the same
+   *  path under the bundle's directory, so nothing else in the repository reaches the sandbox. Plain names separated by
+   *  `/`, no `.` or `..`. Absent: the whole repository's tree. */
+  path?: string;
 }
 /** The directory a provider's bundle `name` is placed at under `root` (ContextScope.bundleRoot). */
 export const bundleDir = (root: string, provider: string, name: string): string => `${root.replace(/\/+$/, "")}/${provider}/${name}`;

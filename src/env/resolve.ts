@@ -23,6 +23,12 @@ export interface EnvManifest {
    * use in place (src/agents/workspace.ts). Absent for a shallow template (boxd) or when it couldn't be kept.
    */
   template?: { commit: string; target: string };
+  /**
+   * The context bundles the image carries (ADR-025 step 4: the project's mapped brains, src/context/groundray.ts
+   * `mappedBundles`), each at the commit it was pinned to: the runner keeps one it finds there and sends nothing. Absent
+   * when none.
+   */
+  bundles?: Array<{ provider: string; name: string; commit: string; path?: string }>;
 }
 export interface EnvRecord {
   name: string;
@@ -38,8 +44,9 @@ export interface EnvLedger { current?: EnvRecord; history: EnvRecord[] }
 /** Content hash of pins + lockfile; same inputs → same snapshot name → build is skipped. */
 export function envName(m: EnvManifest): string {
   // Repo is informational only: any repo with the same lockfile (or none) shares the snapshot. A warm template holds
-  // the repo itself, so its repo and commit are content too (a rebuild at a newer commit is a new image).
-  const canon = JSON.stringify({ schema: m.schema, pins: m.pins, lockHash: m.lockHash, ...(m.template ? { repo: m.repo, template: m.template.commit } : {}) });
+  // the repo itself, so its repo and commit are content too (a rebuild at a newer commit is a new image). So are the
+  // context bundles it carries (a brain mapped again at a newer commit is a new image); none leaves the name as it was.
+  const canon = JSON.stringify({ schema: m.schema, pins: m.pins, lockHash: m.lockHash, ...(m.template ? { repo: m.repo, template: m.template.commit } : {}), ...(m.bundles?.length ? { bundles: m.bundles } : {}) });
   return ENV_PREFIX + createHash("sha256").update(canon).digest("hex").slice(0, 16);
 }
 

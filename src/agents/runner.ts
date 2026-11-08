@@ -490,41 +490,71 @@ for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 -"$p" 2>/dev/null || exit 0; sleep 0.5
 kill -KILL -"$p" 2>/dev/null; true`;
 }
 
-/** The file a placed context bundle keeps its commit in: one the sandbox has at that commit (the env image's, an
- *  earlier attempt's) is used as it is. */
+/** The file a placed context bundle keeps what it is in (bundleMarker): one the sandbox has as the attempt's bundle is
+ *  (the env image's, placed by `capcomd env build`; an earlier attempt's) is used as it is. */
 export const BUNDLE_MARKER = ".capcomd-bundle";
+/** What BUNDLE_MARKER says of a bundle: its commit, and the directory of the repository placed when only that is (a
+ *  bundle of the whole tree at that commit, as an older capcomd placed it, isn't the same bundle). */
+export const bundleMarker = (b: Pick<ContextBundleSpec, "commit" | "path">): string => (b.path !== undefined ? `${b.commit} ${b.path}` : b.commit);
 
 /**
- * A context bundle (ADR-025 §6.2: a brain at the commit the brief cites) at `b.dir` in the sandbox: its tree from the
- * host's mirror of its repository (src/merge/transfer.ts `sendTreeAt`: no credential enters the sandbox, no history
- * either), its files made read-only (a convention: the sandbox is the agent's, so a citation is checked host-side), and
- * the marker. A bundle that can't be placed leaves the agent to start without it, which its log says: the brief's lines
- * for it then name files that aren't there. True when it is there.
+ * A context bundle (ADR-025 §6.2: a brain at the commit the brief cites) at `b.dir` in the sandbox: its tree, or only
+ * the directory `b.path` of it, from the host's mirror of its repository (src/merge/transfer.ts `sendTreeAt`: no
+ * credential enters the sandbox, no history either), its files made read-only (a convention: the sandbox is the agent's,
+ * so a citation is checked host-side), and the marker. A bundle that can't be placed leaves the agent to start without
+ * it, which its log says: the brief's lines for it then name files that aren't there. True when it is there. `span`
+ * null: no trace (an env build).
  */
-export async function placeBundle(b: ContextBundleSpec, h: HostRemote, box: SandboxGit, span: Parameters<typeof addSpanEvent>[0], r: Redactor, onLog?: (lines: string[]) => void): Promise<boolean> {
+export async function placeBundle(b: ContextBundleSpec, h: HostRemote, box: SandboxGit, span: Parameters<typeof addSpanEvent>[0] | null, r: Redactor, onLog?: (lines: string[]) => void): Promise<boolean> {
   const marker = `${b.dir}/${BUNDLE_MARKER}`;
-  const what = `${b.provider} ${b.name} at ${b.commit.slice(0, 12)}`;
+  const what = `${b.provider} ${b.name}${b.path !== undefined ? ` (${b.path}/)` : ""} at ${b.commit.slice(0, 12)}`;
   const attrs = { "context.provider": b.provider, "context.bundle": b.name, "git.sha": b.commit };
+  const event = (a: Record<string, unknown>) => { if (span) addSpanEvent(span, "agent.context_bundle", { ...attrs, ...a }); };
   const had = await box.exec(["sh", "-c", `cat ${sq(marker)} 2>/dev/null; true`]).catch(() => ({ code: 1, stdout: "", stderr: "" }));
-  if (had.stdout.trim() === b.commit) {
-    addSpanEvent(span, "agent.context_bundle", { ...attrs, "context.placed": "kept" });
+  if (had.stdout.trim() === bundleMarker(b)) {
+    event({ "context.placed": "kept" });
     onLog?.([`[capcomd] context: ${what} is already in ${b.dir}`]);
     return true;
   }
   const t0 = Date.now();
   try {
-    await gitSpan("archive", b.commit, () => sendTreeAt(h, box, b.dir, b.commit, { branch: b.branch }));
-    const done = await box.exec(["sh", "-c", `cd ${sq(b.dir)} && find . -type f -exec chmod a-w {} + && printf %s ${sq(b.commit)} > ${sq(marker)}`]);
+    await gitSpan("archive", b.commit, () => sendTreeAt(h, box, b.dir, b.commit, { branch: b.branch, ...(b.path !== undefined ? { path: b.path } : {}) }));
+    const done = await box.exec(["sh", "-c", `cd ${sq(b.dir)} && find . -type f -exec chmod a-w {} + && printf %s ${sq(bundleMarker(b))} > ${sq(marker)}`]);
     if (done.code !== 0) throw new Error(`marking it read-only failed: ${(done.stderr || done.stdout).trim().slice(-300)}`);
-    addSpanEvent(span, "agent.context_bundle", { ...attrs, "context.placed": "placed", "context.ms": Date.now() - t0 });
+    event({ "context.placed": "placed", "context.ms": Date.now() - t0 });
     onLog?.([`[capcomd] context: placed ${what} in ${b.dir} (${Date.now() - t0} ms)`]);
     return true;
   } catch (e) {
     const why = r.text(String((e as Error)?.message ?? e)).slice(-400);
-    addSpanEvent(span, "agent.context_bundle", { ...attrs, "context.placed": "failed", "context.error": why });
+    event({ "context.placed": "failed", "context.error": why });
     onLog?.([`[capcomd] context: couldn't place ${what} in ${b.dir}, so the agent starts without it: ${why}`]);
     return false;
   }
+}
+
+/**
+ * Every bundle under `<workdir>/context/` but `cited` removed from the sandbox before the agent starts: an env image
+ * carries the brains of the project it was built for (`capcomd env build`), and a brain is given only to the agents whose
+ * brief cites it (a mapping per project keeps one company's brain out of another's agents, ADR-025 step 4). A sandbox
+ * without that directory costs one exec. One that can't be cleaned throws: the agent doesn't start beside a brain it
+ * wasn't given.
+ */
+export async function dropUncitedBundles(workdir: string, cited: ContextBundleSpec[], box: SandboxGit, onLog?: (lines: string[]) => void): Promise<void> {
+  // Plain names (the attempt's spec checks them), so they are safe in the script.
+  const keep = cited.map((b) => `${b.provider}/${b.name}`).join(" ");
+  const providers = [...new Set(cited.map((b) => b.provider))].join(" ");
+  const res = await box.exec(["sh", "-c", `cd ${sq(`${workdir}/context`)} 2>/dev/null || exit 0
+rc=0
+for p in * .[!.]* ..?*; do [ -e "$p" ] || [ -L "$p" ] || continue
+  case " ${providers} " in *" $p "*) ;; *) if rm -rf -- "$p"; then echo "$p"; else rc=1; fi; continue;; esac
+  for n in "$p"/* "$p"/.[!.]* "$p"/..?*; do [ -e "$n" ] || [ -L "$n" ] || continue
+    case " ${keep} " in *" $n "*) ;; *) if rm -rf -- "$n"; then echo "$n"; else rc=1; fi;; esac
+  done
+done
+exit $rc`]).catch((e) => ({ code: 1, stdout: "", stderr: String((e as Error)?.message ?? e) }));
+  const gone = res.stdout.split("\n").filter(Boolean);
+  if (gone.length) onLog?.([`[capcomd] context: removed ${gone.length} bundle${gone.length === 1 ? "" : "s"} this agent's brief doesn't cite (${gone.slice(0, 5).join(", ")})`]);
+  if (res.code !== 0) throw new AgentError("failed", `couldn't remove the context bundles this agent's brief doesn't cite from ${workdir}/context, so it doesn't start: ${(res.stderr || res.stdout).trim().slice(-300)}`);
 }
 
 export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider, vmId: VmId, task: AgentTask, cfg: AgentConfig, opts: AgentRunOptions): Promise<AgentResult> {
@@ -688,7 +718,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       opts.onLog?.([workspace.path === "in_place" ? `[capcomd] workspace: the ${opts.warmTemplate === "vm" ? "project template" : "env image"}'s warm checkout, in place${sent}` : `[capcomd] workspace: a fresh clone, ${workspace.reason}${sent}`]);
       opts.onWorkspace?.({ path: workspace.path, ...(workspace.path === "clone" ? { reason: workspace.reason } : {}), bytes: wsBytes, ms });
     }
-    // The context bundles its brief cites (ADR-025 §6.2: a brain at the commit its lines name), beside the checkout.
+    // The context bundles its brief cites (ADR-025 §6.2: a brain at the commit its lines name), beside the checkout, and
+    // only those: the others an env image carries (another project's brains, one this agent's profile doesn't name) go.
+    await dropUncitedBundles(cfg.workdir, cfg.contextBundles ?? [], box, opts.onLog);
     for (const b of cfg.contextBundles ?? []) await placeBundle(b, { remote: b.remote, workdir: host.workdir }, box, span, r, opts.onLog);
 
     // 2. Detect the CLI (image or snapshot may already have it); install the pin only if absent.

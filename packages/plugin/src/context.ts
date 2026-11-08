@@ -3,7 +3,7 @@ import type { PluginManifest } from "./manifest";
 import type { HookListener, HookName, Grant } from "./hooks";
 import type { AgentProvider, Forge, SandboxProvider } from "./seams";
 import type { ContextProvider } from "./context-layer";
-import type { Agent, AgentNotice, Approval, AttachedSkill, Budget, Job, JobSpec, Merge, PinnedSpec, Principal, Run, Timestamp, Trigger, TriggerDecision, TriggerSubscription, Untrusted, Verification } from "./shapes";
+import type { Agent, AgentNotice, Approval, AttachedSkill, Budget, Job, JobSpec, Merge, PinnedSpec, Principal, Run, Timestamp, Trigger, TriggerDecision, TriggerReply, TriggerSubscription, Untrusted, Verification } from "./shapes";
 
 /** Every registration returns one. Disposing twice is a no-op. The host disposes every outstanding one on unload, in
  *  reverse registration order (§5.3). */
@@ -206,6 +206,12 @@ export interface TriggersService {
   subscribe(sub: Omit<TriggerSubscription, "until"> & { until?: Timestamp }, o?: CallOptions): Promise<TriggerSubscription>;
   unsubscribe(sub: Pick<TriggerSubscription, "runId" | "source" | "thread">, o?: CallOptions): Promise<void>;
   subscriptions(filter: { runId?: string; source?: string }, o?: CallOptions): Promise<TriggerSubscription[]>;
+  /** A source's reply path (§16.3.7): how the daemon posts a short result where a request came from, when the operator
+   *  turned replies on for the source (`triggers.sources.<source>.reply`). `source` must be one of this plugin's
+   *  `contributes.sources`; one reply path per source. What it posts must carry the source's own mark, so its next read
+   *  drops it (§16.3.1). Resolves with where the reply is (a URL, or null); a rejection that is `retryable` is tried again
+   *  (at most three times), any other is given up. In process only in protocol v1, like the seams. */
+  onReply(source: string, reply: (r: TriggerReply, o: CallOptions) => Promise<{ url: string | null }>): Disposable;
 }
 
 export interface MessagesService {

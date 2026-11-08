@@ -245,6 +245,9 @@ export interface PullRequestRef {
   number: number; url: string | null; state: "open" | "closed" | "merged"; head: string; base: string;
   /** The commit the merge made on the base, once merged: a replay records it without merging again. */
   mergeSha?: string | null;
+  /** The pull request's conversation as a trigger source names it (§16.3.6): a goal branch's run follows it once the
+   *  pull request is open, so what people write there reaches the run's planner. Absent or null: no source reads it. */
+  thread?: { source: string; thread: string } | null;
 }
 
 /** A remote's branches and default branch, as a forge read them (§7.4 `listBranches`). */
