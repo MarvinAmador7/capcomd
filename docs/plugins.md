@@ -306,7 +306,8 @@ trusting again.
 
 capcomd is meant to be quiet (§16.5). A notifier should speak on failures, on what needs a person, and on landed work,
 and offer a `quiet` setting (`x-per-run`) for the rest: `capcomd plugins validate --strict ./my-plugin` warns when a
-plugin that listens to both `run.changed` and `agent.changed` has none. A gate should explain a deny in one sentence a person can act on.
+plugin that listens to both `run.changed` and `agent.changed` has none. A gate should explain a deny in one sentence a
+person can act on.
 Keep secrets in `x-secret` settings, never in `entry.env` or the manifest.
 
 ## Versions

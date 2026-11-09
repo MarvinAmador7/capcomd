@@ -366,9 +366,9 @@ plugin contributes hooks and events only: `seams`, `sources`, `context`, `cli`, 
 carries none of them, §9.6), for a plugin directory whose entry is a `process`, that it is **self-contained** (below)
 and, with `--conformance`, the seam suites (§14.2). Output is a list of `{path, message}` (`--json` adds `outside`:
 `{from, specifier, resolved}` per reference); the exit code is 1 on any error.
-`--strict` adds review guidance as warnings (`warnings`, printed `!`), never errors, so the exit code stays what it was: today the attention-budget check (`attentionWarnings` in
-`packages/plugin/src/load.ts`, §16.5). A plugin's config schema the CLI can't read (a built-in's `$ref`) isn't held
-against it.
+`--strict` adds review guidance as warnings (`warnings`, printed `!`), never errors, so the exit code stays what it
+was: today the attention-budget check (`attentionWarnings` in `packages/plugin/src/load.ts`, §16.5). A plugin's config
+schema the CLI can't read (a built-in's `$ref`, a `$ref` file that isn't JSON) isn't held against it.
 
 **Self-contained** (the owner's decision of 2026-11-08, ADR-023 §9 decision 7; `src/plugins/contained.ts`). A
 third-party plugin runs only code inside its own directory, where its `LOCK` and its trust hash see it: what it ran from
