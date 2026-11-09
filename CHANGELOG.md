@@ -23,6 +23,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   finishes it.
 - The settings and info rows of a place's details screen (`GET /v1/sandboxes/{name}`) now come from that place's
   sandbox plugin. They read exactly as before.
+- Fixed: a docker CLI that hangs no longer hangs capcomd with it. `capcomd setup`, the run options the apps show and
+  starting a run on Docker now say "Docker isn't running" after 3 seconds, even when the CLI (or something it started)
+  never lets go.
 - New: an agent can start a background job that keeps running after it finishes, such as a server kept up for
   review: `capcomd job start --run -- <command>` (MCP `capcomd_job_start` with `run: true`). It runs in a machine of
   the run's own, made from the run's agent environment the way the checks machine is (no checkout, no credentials,

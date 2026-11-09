@@ -18,7 +18,7 @@ import { jobLimits, jobMessage, resetJobs, resumeTimers, startJob, useDaemonEven
 import * as relay from "../../src/core/relay";
 import { kernelHost } from "../../src/plugins/host";
 import { hooks, useHooks } from "../../src/plugins/hooks";
-import { useSandboxHost } from "../../src/plugins/sandboxes";
+import { sweepPlace, useSandboxHost } from "../../src/plugins/sandboxes";
 import { sandboxDocker, SWEEP_EVERY_MS } from "../../src/plugins/builtin/sandbox-docker";
 import { stateDir } from "../../src/utils/home";
 import { ensureRunMachine } from "../../src/jobs/run-machine";
@@ -31,6 +31,9 @@ import { liveJobMachines, machineNameFor } from "../../src/providers/machines";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 afterEach(() => { resetJobs(); useHooks(null); useSandboxHost(null); useDaemonEvents(null); });
 
+// A test that starts real processes waits for them with `until` (15 s each); bun's 5 s default would cut it short on a
+// loaded machine (seen running this file 5 at a time).
+const PROCESS_MS = 30_000;
 function hostMachine(): JobMachine {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-jobs-m-"));
   return {
@@ -46,9 +49,11 @@ async function until<T>(f: () => Promise<T | null | undefined | false>, ms = 15_
 describe("a job's process in its machine (src/jobs/machine.ts)", () => {
   test("it runs detached, its output and exit code land in its directory, and a look reports each", async () => {
     const m = hostMachine();
-    await launch(m, "job-aaaaaa1", { cmd: ["echo out-1; echo err-1 >&2; sleep 0.5; echo out-2; exit 3"], cwd: m.cwd });
+    // It waits for the test's go, so the first look sees it running however slow this machine is.
+    await launch(m, "job-aaaaaa1", { cmd: ["echo out-1; echo err-1 >&2; while [ ! -e go ]; do sleep 0.05; done; echo out-2; exit 3"], cwd: m.cwd });
     await launch(m, "job-aaaaaa2", { cmd: ["printf", "%s|", "a b", "$HOME"], cwd: m.cwd, env: { CAPCOMD_X: "1" } });
     expect((await look(m, ["job-aaaaaa1"])).get("job-aaaaaa1")?.state).toBe("running");
+    writeFileSync(join(m.cwd, "go"), "");
     const s = await until(async () => { const x = (await look(m, ["job-aaaaaa1", "job-aaaaaa2", "job-nothere"])); return x.get("job-aaaaaa1")?.state === "exited" && x.get("job-aaaaaa2")?.state === "exited" ? x : null; });
     expect(s.get("job-aaaaaa1")).toMatchObject({ state: "exited", code: 3, out: 12, err: 6, killed: null });
     expect((s.get("job-aaaaaa1") as { at: number }).at).toBeGreaterThan(Date.now() - 10_000);
@@ -57,6 +62,24 @@ describe("a job's process in its machine (src/jobs/machine.ts)", () => {
     expect(await tails(m, "job-aaaaaa1", 6, 1000)).toEqual({ stdout: "out-2\n", stderr: "err-1\n", truncated: true });
     // argv runs without a shell: nothing is expanded.
     expect((await tails(m, "job-aaaaaa2", 100, 100)).stdout).toBe("a b|$HOME|");
+  }, PROCESS_MS);
+
+  test("a job that ends while a look is at it is reported with all of its output (its sizes are read after its exit)", async () => {
+    // The job ends exactly between the look's reads: a `cat` that, on the look's first read of its exit file, writes
+    // the job's last output and its exit code before reading it. A look that read the sizes first would say out: 6.
+    const m = hostMachine(), bin = join(m.cwd, "bin"), j = join(m.dir, "job-dddddd1"), cat = Bun.which("cat") ?? "/bin/cat";
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(j, { recursive: true });
+    const ends = `if [ ! -e "$1.ended" ]; then : > "$1.ended"; printf 'out-2\\n' >> "$(dirname "$1")/out"; printf 3:1793966671326 > "$1"; fi`;
+    writeFileSync(join(bin, "cat"), `#!/bin/sh\ncase "$1" in */exit) ${ends};; esac\nexec ${cat} "$@"\n`);
+    chmodSync(join(bin, "cat"), 0o755);
+    writeFileSync(join(j, "out"), "out-1\n");
+    writeFileSync(join(j, "err"), "");
+    writeFileSync(join(j, "rpid"), String(process.pid));
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` };
+    const ending: JobMachine = { ...m, exec: (cmd, o) => new Promise((done) => execFile(cmd[0]!, cmd.slice(1), { cwd: o.cwd, env, timeout: o.timeoutMs, encoding: "utf8" }, (e, stdout, stderr) => done({ code: e ? 1 : 0, stdout, stderr }))) };
+    expect((await look(ending, ["job-dddddd1"])).get("job-dddddd1")).toEqual({ state: "exited", code: 3, at: 1793966671326, out: 12, err: 0, killed: null });
+    expect(readFileSync(join(j, "out"), "utf8")).toBe("out-1\nout-2\n");
   });
 
   test("a signal stops its whole process group, noting why; a runner that died without an exit code is gone", async () => {
@@ -77,7 +100,7 @@ describe("a job's process in its machine (src/jobs/machine.ts)", () => {
     process.kill(rpid, "SIGKILL");
     expect(await until(async () => { const x = (await look(m, ["job-bbbbbb2"])).get("job-bbbbbb2"); return x?.state === "gone" ? x : null; })).toEqual({ state: "gone", why: "its process is gone, with no exit code (its machine restarted?)" });
     try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
-  });
+  }, PROCESS_MS);
 
   test("a machine without the node it names refuses to start one", async () => {
     const m = { ...hostMachine(), node: "/nonexistent/node" };
@@ -441,12 +464,16 @@ describe("the Docker sweep is sandbox-docker's own timer (§15.1, §16.2)", () =
     const dir = mkdtempSync(join(tmpdir(), "capcomd-jobs-docker-"));
     const calls = join(dir, "calls");
     const bin = join(dir, "docker");
-    writeFileSync(bin, `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\nexit 0\n`);
+    // Its `ps` takes a while, as on a loaded machine: a sweep's line is there before its round is over.
+    writeFileSync(bin, `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\n[ "$1" = ps ] && sleep 0.5\nexit 0\n`);
     chmodSync(bin, 0o755);
     const saved = { bin: process.env.CAPCOMD_DOCKER_BIN, sandbox: process.env.CAPCOMD_SANDBOX };
     process.env.CAPCOMD_DOCKER_BIN = bin;
     process.env.CAPCOMD_SANDBOX = "docker";
     const sweeps = () => (existsSync(calls) ? readFileSync(calls, "utf8").split("\n").filter((l) => l.startsWith("ps ")).length : 0);
+    // A round still going is not started twice, so the next sweep the test waits for would be skipped while the last one
+    // is still going: the test runs a round of its own to its end (one starts once none is going), and counts from there.
+    const settled = async () => { await until(async () => { const n = sweeps(); await sweepPlace("docker"); return sweeps() > n; }); return sweeps(); };
     try {
       const start = async () => {
         const host = kernelHost({ log: false, jobs: true });
@@ -462,17 +489,20 @@ describe("the Docker sweep is sandbox-docker's own timer (§15.1, §16.2)", () =
       expect(timers()).toHaveLength(1);
       const t = timers()[0]!;
       expect(t).toMatchObject({ state: "running", by: "plugin:sandbox-docker", spec: { kind: "timer", runId: null, owner: { plugin: true }, label: "sweep idle containers", everyMs: SWEEP_EVERY_MS } });
-      // The daemon restarts: the same timer (its key), not a second one; its fire sweeps again.
+      // The daemon restarts (with no round going, as a new process): the same timer (its key), not a second one; its fire
+      // sweeps again.
+      let n = await settled();
       await host.stop();
       resetJobs();
       host = await start();
-      await until(async () => sweeps() >= 2);
+      await until(async () => sweeps() >= n + 1);
       expect(timers().map((r) => r.jobId)).toEqual([t.jobId]);
+      n = await settled();
       const file = join(stateDir(), "jobs", `${t.jobId}.json`);
       writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), nextAt: Date.now() - 1 }));
       resetJobs();
       await resumeTimers();
-      await until(async () => sweeps() >= 3);
+      await until(async () => sweeps() >= n + 1);
       expect(timers()[0]!.fired).toBe(1);
       await host.stop();
     } finally {
