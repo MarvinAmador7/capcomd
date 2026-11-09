@@ -2074,10 +2074,15 @@ Rules:
    that no result message comes for it (its caller had the result in the foreground, or a plugin started it).
 2. **Limits** (profile `jobs` block, ADR-024; daemon defaults `CAPCOMD_JOBS_MAX`, `CAPCOMD_JOBS_FOREGROUND_MS`,
    `CAPCOMD_JOBS_AFTER_TURN_MS`, settable in config `env`): `max` running jobs per owner (8), `foregroundMs` (60 000;
-   5 000 for `orchestrate`), `afterTurnMs` (1 800 000): an agent's `exec` jobs are killed when the agent ends;
-   `timeoutMs` per job (default `afterTurnMs`, counted from the job's start; counting it from the agent's last step
-   is a later refinement), never longer than an `afterTurnMs` the owner's profile sets (a longer one asked for gets
-   that; with none set, a job may ask for longer than the default). A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
+   5 000 for `orchestrate`), `afterTurnMs` (1 800 000): an agent's `exec` jobs are killed when the agent ends, and
+   one still running `afterTurnMs` after the agent's last step (a tool call or a capcomd op it was seen taking,
+   `src/agents/activity.ts`; never earlier than the job's start, nor than when this daemon began watching it) is
+   stopped (`killed`, reason "its agent took no step for …"), so a busy agent's long job runs on while an idle one's
+   doesn't linger. `timeoutMs` per job is its own limit, counted from its start: what the start asked for, never
+   longer than an `afterTurnMs` the owner's profile sets (a longer one asked for gets that; with none set, a job may
+   ask for longer than the default); an agent's job that asked for none has none (`timeoutMs: null` on its record,
+   which keeps `afterTurnMs`), a run-owned one gets `afterTurnMs`. A run-owned job started by an agent is held to that
+   agent's `max`, `afterTurnMs` and `foregroundMs`; the run's `exec` jobs count together as one owner. A settled record keeps the last 48 KB of stdout and 16 KB of stderr (`job output` reads up
    to 64 KB of each from the machine while it runs), and is stored within a kv value's 64 KB: when the JSON of the
    whole record is over, the longer tail loses its oldest part first, then the other, and `truncated` is set (the
    rest of it is bounded: `cmd` ≤ 16 KB, `cwd` ≤ 4 KB, `env` ≤ 16 KB as JSON, else the start is `invalid`). A
@@ -2090,11 +2095,29 @@ Rules:
    kernel's idle notice is not raised while jobs run. Its supervisor keeps the agent CLI's input open while one of its
    jobs runs or a result message is on its way (so the CLI is there to read it), and says in each heartbeat how many
    run; the runner's stuck watch starts again on each. A run-owned job holds no agent slot but counts against the run's
-   machine count (run-owned job machines are a later step: `owner: {run: true}` for `exec` is refused
-   `unsupported` until then).
+   machine count: it runs in the **run's job machine** (`src/jobs/run-machine.ts`), made on the run's sandbox for the
+   run's first running run-owned job, the way the checks machine is: through `sandbox.ensuring` with `purpose: "job"`
+   (labels `{purpose: "job", run}`), from the run's environment image (never an auth snapshot; the context bundles
+   the image may carry, `<workdir>/context`, removed before any job runs) with only the package registries as egress
+   and no credential, its folder (`<workdir>/jobs`) as a job's default `cwd`. It is in the
+   machines ledger as the run's (kind `job`, role `jobs`, ADR-021 §3) and holds a machine slot of its place, its own
+   (one per job machine), while it lives (`holdSlot`, as a check does; a start that finds none free within 30 s is
+   refused `unavailable`, retryable). Its delete deadline is the run's idle lifetime, and never sooner than its job's
+   `timeoutMs` and 10 minutes after. The run's later run-owned jobs run in the same machine, its deadline (and its
+   ledger record) moved where the provider can (`extendTtl`) to cover each one's `timeoutMs` the same way; it is
+   destroyed when the run ends, or once no job runs in it any more (a later start makes a new one). A run-owned start
+   on a run that is over (rule 4) is refused `not_running` before any machine is made. The agent's CLI starts one with `capcomd job start --run`
+   (MCP `capcomd_job_start` `run: true`): the job is the agent's own for `job list`, `job output` and `job kill`
+   (rule 8), its result reaches the agent as a message while it runs, and the agent's supervisor doesn't hold the
+   CLI's input open for it. Its record keeps where the machine is (kernel-only), so a restarted daemon finds it again
+   (rule 6).
 4. **Handoff** (`capcomd spawn --continue`): the agent's `exec` jobs are **killed** with its machine when it ends
    (today its machine is destroyed after its push, `ops.ts` → `worker.ts`); a job meant to outlive the agent (a server
-   kept for review) is started `owner: {run: true}` and lives until the run ends or its `timeoutMs`. Timers owned by an
+   kept for review) is started `owner: {run: true}` and lives until the run ends or its `timeoutMs`: the run ends when
+   it ends itself (a cancel, `scope.endRun`), when its last agent ends (the lifecycle feed's `run.completed`, `failed`
+   or `cancelled`), or when it is gone; its run-owned jobs are then killed (`killed`, reason "its run ended"; TERM,
+   SIGKILL after 5 s) and its job machine destroyed. A run-owned job still `running` on record whose run ended while
+   nobody watched it settles `lost` when it is next read. Timers owned by an
    agent end with it; run-owned and plugin-owned timers do not. An agent that ends failed or cancelled has its jobs
    settled when it does, before its machine goes: killed while its machine is attached, else (its last attempt let go
    of the machine, which a retry would have used) `lost`; none stays `running` on record until someone reads it.
@@ -2102,7 +2125,10 @@ Rules:
 6. **Daemon restart**: job records are durable. `exec` jobs keep running inside their machine (their runner holds the
    process, in a session of its own); on restart the kernel re-attaches when the agent's spool pump starts again, by
    reading the job's files through the same exec, and settles it (its end time is the runner's); a job whose machine
-   or runner is gone settles `lost`, as does one whose agent ended while nobody watched (when it is next read). Timers
+   or runner is gone settles `lost`, as does one whose agent ended while nobody watched (when it is next read). A
+   run-owned job's machine is found again from its record (`machine`) once the daemon's plugins have loaded, recorded
+   in the ledger again as this daemon's, and its jobs watched and settled the same way (with no job running in it,
+   it is destroyed). Timers
    are re-armed from their records once the daemon's plugins have loaded; a missed `at` (or interval) fires once on
    restart. A plugin's timer is a file in the daemon's state (`state/jobs/<id>.json`); a run's job is kv `_jobs/<id>`,
    with a pointer there (`state/jobs/<id>.run`) for `get` by id and re-arming. A settled job's pointer records when
@@ -2113,7 +2139,8 @@ Rules:
 8. **One owner**: a plugin's `ctx.jobs.get`, `wait` and `cancel` reach the jobs it started (`by: plugin:<name>`) and
    the jobs of a run that no other plugin started (an agent's, the operator's), as `ctx.agents` reaches a run's
    agents. Another plugin's job, in a run or the daemon's, is `not_found`, the same answer as an id nobody made, and
-   `list` leaves it out. An agent reaches only its own jobs (in-VM `job.*`).
+   `list` leaves it out. An agent reaches only its own jobs (in-VM `job.*`): the ones it owns, and the run-owned ones
+   it started (each listed with `run: true`, additive).
 
 Why one primitive: the watchdog's clock (§16.4), a source's poll loop (§16.3), the Docker sweep (§15.1, `sandbox-docker`'s
 own timer) and background shell are all "work that reports back later"; one durable record, one owner rule, one event
@@ -2531,6 +2558,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.63 | 2026-11-08 | Brain proposals (ADR-025 step 5, §6.6.8): a consolidator's change for the brain its profile names is refused `no_brain` when it is staged if the run's project doesn't map that brain (kv `_context`, as `run new` recorded it; the engine not answering fails the staging rather than refusing), so it is never kept to fail when sent; the result's `context.brain` then has the brain's `name`, no proposals and an `error` (additive). groundray's write path looks for the proposal's marker on the brain's branch first: a replay after the pull request was merged (its branch perhaps deleted) finds the item there and drafts, pushes and opens nothing (receipt `where` names the brain's branch). `GET /v1/runs/{runId}/brain-proposals` (read) and `POST /v1/runs/{runId}/brain-proposals/send` (configure scope, Idempotency-Key, body `{agentId?}`; a plugin's token `forbidden`; 503 `unavailable` with each outcome when one couldn't be sent, not kept for the key) send a run's pending proposals as the caller (`human:<client id>`), mirroring `capcomd context brain propose --run <runId> --yes` (capability `context.brain_proposals`, additive). `plugin.context.brain_proposed` for a person's send is recorded by the `context` plugin's listener in the sending process (its `by` the person); the kernel's lint sends stay recorded from the consolidator's result (`by: capcomd`). |
 | 1.0.64 | 2026-11-08 | Where an agent's machine goes, decided by the owner (ADR-024 §9 decisions 5 and 6, 2026-11-08; §7.1, §6.6.3, §6.6.7): a run's sandbox it asked for (`POST /v1/runs` `sandbox`, `capcomd run [new] --sandbox`, `capcomd_run_new`'s, a `run.creating` patch) beats every agent profile's `sandbox.provider` for every agent of the run (the agent is pinned without `sandboxProvider`; its `environment` and `size` apply on the run's sandbox); the run's `RUN_SANDBOX_KV` record gains `explicit: true` for such a place (additive; a record without it, or a place from the settings, isn't explicit, and a profile's provider still wins over it). Otherwise a project-layer profile file that sets the resolved `sandbox.provider`, `sandbox.environment` or `sandbox.size` of a profile naming a provider is honoured only once the operator trusts that file as it is (trust kind `profile`, per file sha256 at its real path, `capcomd profiles trust`); before that, or after it changes, the spawn is refused (`config`, reason `untrusted`), as is a planner's `capcomd run`, and GET /v1/run-options says the planner isn't ready. A user-layer profile needs no trust. `GET /v1/profiles` rows (and `capcomd_profiles`, `capcomd profiles list --json`) gain `untrustedSandbox` (capability `profiles.facts`; optional in the contract, always sent; additive): the project's files a spawn of the profile on a run without its own sandbox waits on the operator's trust for, else empty; `capcomd profiles show` gains `machine` (additive). |
 | 1.0.65 | 2026-11-08 | A third-party plugin is **self-contained** (§4.9, the owner's decision of 2026-11-08, ADR-023 §9 decision 7; the critic's C12: the trust hash covers the plugin's directory only, not code it loads from elsewhere): `src/plugins/contained.ts` reads, without running anything, the paths `entry.command` names, `entry.env`'s `NODE_PATH`, `NODE_OPTIONS` and `BUN_OPTIONS`, `bunfig.toml`'s `preload` and every module they reach (imports, `require()`, `import()` of a literal, resolved as Bun does and made real: a link that points out is outside; the directory's own `node_modules` is inside; an entry named as a directory or without its extension is followed to its module; `node:`, Node and Bun built-ins are allowed, and `@capcomd/plugin` from outside the directory only as capcomd's own copy); `install`, `update` and `trust` refuse a plugin with any reference outside (`config`, code `not_self_contained`, naming each path), `validate` lists each as an issue `{path: <file>, message}` (`--json` adds `outside`), and the host fails it `untrusted` when it validates it and doesn't start its process when one has appeared since (`HostOptions.contained`, §12.5). The process gets the runtime guard (§9.2, `src/plugins/guard.ts`): `BUN_OPTIONS=--preload` and `NODE_OPTIONS=--require` of a preload that refuses a module outside the directory as it loads, in each worker it starts too; §11.6 says what is and isn't enforced. `ProjectPlugin.outside` (the `trust --json` listing) and `Validated.outside` are additive. Built-ins are exempt. |
+| 1.0.66 | 2026-11-08 | Run-owned exec jobs and `afterTurnMs` from the last step (the steps §16.2 rules 2-4 left to later): `owner: {run: true}` for `exec` is no longer refused `unsupported`; it runs in the run's job machine, ensured through `sandbox.ensuring` with `purpose: "job"` (labels `{purpose: "job", run}`) the way the checks machine is (the run's sandbox and environment image without its context bundles, registries-only egress, no credential), recorded in the machines ledger as the run's (kind `job`, role `jobs`; `ResourceOwner.kind` gains `job`, additive) and holding a machine slot of its place while it lives; it is destroyed when the run ends (itself, or with its last agent) or once no job runs in it, and the jobs in it are killed when the run ends (reason "its run ended"). The in-VM `job start --run` (MCP `capcomd_job_start` `run: true`) starts one; it is the starting agent's own for `job.list`/`job.output`/`job.kill` (listed with `run: true`, additive), held to that agent's limits, and its result reaches the agent as a message while it runs. A plugin-owned `exec` stays `invalid`. Rule 2: an agent's job is stopped `afterTurnMs` after its agent's last step (a tool call or capcomd op seen by the daemon), not after its own start; a job's `timeoutMs` is now only what its start asked for (capped as before), null on the record of an agent's job that asked for none, which keeps `afterTurnMs`. A run-owned start on a run that is over is refused `not_running` before a machine is made; each job machine holds a slot of its own, and a later job's `timeoutMs` moves the shared machine's delete deadline (`extendTtl`) and ledger record. Rule 6: a restarted daemon finds a run's job machine again from its jobs' records. No hook or seam changes; the harness contract changes only in descriptions. Owner questions taken conservatively: the job machine has no checkout and no credential, and is destroyed as soon as no job runs in it. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

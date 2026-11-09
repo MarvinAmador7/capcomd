@@ -329,25 +329,28 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
 }
 
 /**
- * `capcomd job start -- <cmd>` and its siblings (plugin API §16.2): background work in the caller's own machine. A start
- * waits `--foreground-ms` (else the agent's jobs.foregroundMs) and answers `done`/`failed` with the result, or
- * `running`: its result then arrives as a message. An agent sees and stops only its own jobs. An orchestrate agent runs
- * nothing (§16.1), so it starts none.
+ * `capcomd job start -- <cmd>` and its siblings (plugin API §16.2): background work in the caller's own machine, or with
+ * `--run` in the run's job machine (it outlives the agent, until the run ends). A start waits `--foreground-ms` (else
+ * the agent's jobs.foregroundMs) and answers `done`/`failed` with the result, or `running`: its result then arrives as a
+ * message. An agent sees and stops only its own jobs (and the run's it started). An orchestrate agent runs nothing
+ * (§16.1), so it starts none.
  */
 async function jobOp(c: Claims, op: Op, args: Record<string, any>, ctx: RpcContext) {
   const J = await import("../jobs/service");
+  // Its own: the jobs it owns, and the run-owned ones it started (`--run`).
   const own = async (id: unknown) => {
     const jobId = String(id ?? "");
-    const j = await J.getJob(jobId, c.run).catch(() => null);
-    if (!j || !("agentId" in j.spec.owner) || j.spec.owner.agentId !== c.sub) throw new RelayError("not_found", `job ${jobId.slice(0, 80)} isn't one of yours`, "capcomd job list shows your jobs.");
+    const j = await J.ownJobOf(jobId, c.run, c.sub);
+    if (!j) throw new RelayError("not_found", `job ${jobId.slice(0, 80)} isn't one of yours`, "capcomd job list shows your jobs.");
     return j;
   };
-  if (op === "job.list") return { jobs: (await J.listJobs({ runId: c.run, agentId: c.sub })).map(jobView) };
+  if (op === "job.list") return { jobs: (await J.listJobs({ runId: c.run, of: c.sub })).map(jobView) };
   if (op === "job.kill") { const j = await own(args.job); return jobView(await J.cancelJob(j.jobId, `by ${c.sub}${args.reason ? `: ${String(args.reason).slice(0, 200)}` : ""}`, { runId: c.run, byOwner: true })); }
   if (op === "job.output") {
     const j = await own(args.job);
     const tail = Math.min(Math.max(Number(args.tail ?? 16_384) || 16_384, 1), 64 * 1024);
-    const live = ctx.jobs && (j.state === "running" || j.state === "stopping") ? await (await import("../jobs/machine")).tails(ctx.jobs, j.jobId, tail, tail).catch(() => null) : null;
+    const running = j.state === "running" || j.state === "stopping";
+    const live = !running ? null : (await J.liveOutput(j, tail)) ?? (ctx.jobs && "agentId" in j.spec.owner ? await (await import("../jobs/machine")).tails(ctx.jobs, j.jobId, tail, tail).catch(() => null) : null);
     const res = j.result && "code" in j.result ? j.result : null;
     const cut = (s: string) => (Buffer.byteLength(s) <= tail ? s : Buffer.from(s).subarray(-tail).toString("utf8"));
     return { jobId: j.jobId, state: j.state, ...(res ? { code: res.code } : {}), stdout: live?.stdout ?? cut(res?.stdout ?? ""), stderr: live?.stderr ?? cut(res?.stderr ?? ""), truncated: live?.truncated ?? res?.truncated ?? false };
@@ -359,16 +362,21 @@ async function jobOp(c: Claims, op: Op, args: Record<string, any>, ctx: RpcConte
   const cmd = Array.isArray(args.cmd) ? args.cmd.map(String) : typeof args.cmd === "string" ? [args.cmd] : [];
   if (!cmd.length) throw new RelayError("usage", "job start needs a command", "capcomd job start -- npm test");
   const label = String(args.label ?? cmd.join(" ")).replace(/\s+/g, " ").trim().slice(0, 200);
-  const cwd = typeof args.cwd === "string" && args.cwd.startsWith("/") ? args.cwd : undefined;
+  // `--run`: the run's job, in the run's job machine: it outlives this agent. Its own folder and PATH there, not this
+  // shell's (the agent's checkout isn't in that machine).
+  const ofRun = args.run === true;
+  const cwd = !ofRun && typeof args.cwd === "string" && args.cwd.startsWith("/") ? args.cwd : undefined;
   // The agent's PATH, so the job finds what its shell does (its npm, its tools).
-  const env = typeof args.path === "string" && args.path.length < 4096 ? { PATH: args.path } : undefined;
+  const env = !ofRun && typeof args.path === "string" && args.path.length < 4096 ? { PATH: args.path } : undefined;
   const fg = args.foregroundMs !== undefined ? Number(args.foregroundMs) : undefined;
   if (fg !== undefined && !(Number.isInteger(fg) && fg >= 0)) throw new RelayError("usage", "--foreground-ms is a whole number of milliseconds", "e.g. --foreground-ms 1000.");
   const timeoutMs = args.timeoutMs !== undefined ? Number(args.timeoutMs) : undefined;
-  const j = await J.startJob({ kind: "exec", runId: c.run, owner: { agentId: c.sub }, cmd, label: label || "job", ...(cwd ? { cwd } : {}), ...(env ? { env } : {}), ...(fg !== undefined ? { foregroundMs: fg } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+  const j = await J.startJob({ kind: "exec", runId: c.run, owner: ofRun ? { run: true } : { agentId: c.sub }, cmd, label: label || "job", ...(cwd ? { cwd } : {}), ...(env ? { env } : {}), ...(fg !== undefined ? { foregroundMs: fg } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
     { by: c.sub, machine: ctx.jobs, ...(args.key ? { key: `${c.sub}:${args.key}` } : {}), ...(Number(args.maxForegroundMs) > 0 ? { foregroundCapMs: Number(args.maxForegroundMs) } : {}) });
   const v = jobView(j);
-  return j.state === "running" ? { ...v, hint: `Still running: its result arrives as a message (capcomd inbox). capcomd job output ${j.jobId} shows its output so far; capcomd job kill ${j.jobId} stops it.` } : v;
+  if (j.state !== "running") return v;
+  const more = `capcomd job output ${j.jobId} shows its output so far; capcomd job kill ${j.jobId} stops it.`;
+  return { ...v, hint: ofRun ? `Still running, in the run's job machine: it keeps running after you finish, until the run ends (or its timeout). Its result reaches you as a message while you run. ${more}` : `Still running: its result arrives as a message (capcomd inbox). ${more}` };
 }
 
 /** A job as the agent that owns it reads it: its own words are its own (not fenced). */
@@ -376,7 +384,7 @@ function jobView(j: import("../../packages/plugin/src/shapes").Job) {
   const res = j.result && "code" in j.result ? j.result : null;
   return {
     jobId: j.jobId, state: j.state, label: j.spec.label, startedAt: j.startedAt, endedAt: j.endedAt, reason: j.reason,
-    ...(j.spec.kind === "exec" ? { cmd: j.spec.cmd } : {}), ...(res ? { code: res.code, stdout: res.stdout, stderr: res.stderr, truncated: res.truncated } : {}),
+    ...("run" in j.spec.owner ? { run: true } : {}), ...(j.spec.kind === "exec" ? { cmd: j.spec.cmd } : {}), ...(res ? { code: res.code, stdout: res.stdout, stderr: res.stderr, truncated: res.truncated } : {}),
   };
 }
 

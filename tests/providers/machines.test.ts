@@ -66,8 +66,9 @@ describe("the machines ledger", () => {
 			recordJobMachine({ idemKey: "build-1", sandbox: "boxd", kind: "env_build", purpose: "env-build", ttlSeconds: 3600 }, env),
 			recordJobMachine({ idemKey: "doctor-1", sandbox: "boxd", kind: "doctor", purpose: "doctor", ttlSeconds: 900 }, env),
 			recordJobMachine({ idemKey: "docker-check", sandbox: "docker", kind: "check", purpose: "checks", runId: "run-x", ttlSeconds: 3600 }, env),
+			recordJobMachine({ idemKey: "jobs-1", sandbox: "boxd", kind: "job", purpose: "job", runId: "run-8kq2", ttlSeconds: 3600 }, env),
 		];
-		const keys = ["check-1", "login-1", "status-1", "build-1", "doctor-1", "docker-check", "left-behind"];
+		const keys = ["check-1", "login-1", "status-1", "build-1", "doctor-1", "docker-check", "left-behind", "jobs-1"];
 		const rows: VmInfo[] = keys.map((k, i) => ({ id: `m_${i}`, name: machineNameFor(k), state: "running" }));
 		const res = joinResources("boxd", rows, jobOwners(env), recordedMachines(env));
 		const by = (k: string) => res.find((r) => r.id === machineNameFor(k));
@@ -76,15 +77,17 @@ describe("the machines ledger", () => {
 		expect(by("status-1")!.owner).toMatchObject({ kind: "login", label: "Checking the Codex login" });
 		expect(by("build-1")).toMatchObject({ state: "running", actions: [], owner: { kind: "env_build", role: "environment", label: "Building the agent environment" } });
 		expect(by("doctor-1")!.owner).toMatchObject({ kind: "doctor", label: "Checking the agent environment" });
+		// A run's job machine (plugin API §16.2, `owner: {run: true}`): the run's, while its jobs run.
+		expect(by("jobs-1")).toMatchObject({ state: "running", actions: [], owner: { kind: "job", runId: "run-8kq2", agentId: null, role: "jobs", task: null, label: "Background jobs for run-8kq2" } });
 		// Another place's record doesn't make this place's machine capcomd's, and nothing records this one: another
 		// capcomd's machines (a boxd org lists everyone's), not listed at all.
 		expect(by("docker-check")).toBeUndefined();
 		expect(by("left-behind")).toBeUndefined();
-		expect(res).toHaveLength(5);
+		expect(res).toHaveLength(6);
 		for (const r of res.filter((x) => x.owner)) expect(r).toMatchObject({ actions: [], destructive: false, confirm: null });
 		for (const r of res.filter((x) => x.owner)) expect(terminalCommandFor("boxd", r)).toBeNull();
 		// A job whose process is gone: its machine is still capcomd's, left behind (deletable). Released: not capcomd's any more.
-		expect(joinResources("boxd", rows, [], recordedMachines(env)).map((r) => r.state)).toEqual(["orphaned", "orphaned", "orphaned", "orphaned", "orphaned"]);
+		expect(joinResources("boxd", rows, [], recordedMachines(env)).map((r) => r.state)).toEqual(["orphaned", "orphaned", "orphaned", "orphaned", "orphaned", "orphaned"]);
 		for (const release of jobs) release();
 		expect(joinResources("boxd", rows, jobOwners(env), recordedMachines(env))).toEqual([]);
 		expect(jobOwnerText({ kind: "check", purpose: "checks", runId: "run-$(x)", agent: null }).label).toBe("Checks");
