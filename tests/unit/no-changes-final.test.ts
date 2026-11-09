@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { UserError } from "rivetkit";
 import { classify, NO_CHANGES_HINT } from "../../src/actors/agent-workflow";
+import { pushError } from "../../src/actors/worker";
 import { AgentError } from "../../src/agents/runner";
 import { orchestrationSkill } from "../../src/subagents/skill";
 
@@ -21,6 +22,19 @@ describe("classify", () => {
     expect(e.message).toContain(NO_CHANGES_HINT);
     expect(e.resultText).toContain("found it");
     expect(e.resultText).not.toContain("cct1.AAAA");
+  });
+
+  test("the whole way from the runner: the worker's push passes its final words on, redacted, and classify keeps them", async () => {
+    const pushed = pushError(new AgentError("no_changes", "agt-1 made no changes for r1/agt-1 (end_turn)", "parse() drops the last token; key cct1.AAAAAAAAAAAA.BBBBBBBBBBBB"));
+    expect(pushed).toBeInstanceOf(UserError);
+    expect(pushed.code).toBe("no_changes");
+    const e = await classify(pushed);
+    expect(e).toMatchObject({ kind: "no_changes", final: true });
+    expect(e.message).toBe(`agt-1 made no changes for r1/agt-1 (end_turn); ${NO_CHANGES_HINT}`);
+    expect(e.resultText).toStartWith("parse() drops the last token");
+    expect(e.resultText).not.toContain("cct1.AAAA");
+    // Any other failure: classify keeps no words and adds no hint, whatever the push carried.
+    expect(await classify(pushError(new AgentError("git", "git push failed", "words")))).toEqual({ kind: "git", message: "git push failed", final: false });
   });
 
   test("other failures are unchanged: retried, no hint, no final words", async () => {

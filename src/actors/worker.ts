@@ -148,6 +148,16 @@ export function configError(e: unknown): UserError {
   return new UserError(redactShapes(String((e as Error)?.message ?? e)).slice(0, 2000), { code: "config", metadata: { kind: "config", retryable: false } });
 }
 
+/** A failed push as an error rivetkit passes on (it masks plain errors as "An internal error occurred"): the redacted
+ *  cause, its kind as the code, and, for an agent that changed nothing, its final words, so its parent reads what it found. */
+export function pushError(error: unknown): UserError {
+  if (error instanceof UserError) return error;
+  const kind = String((error as any)?.kind ?? (error as any)?.code ?? "push_failed");
+  const retryable = isTransientSandboxError(error) || isSandboxUnreachable(error);
+  const words = (error as { resultText?: unknown })?.resultText;
+  const said = typeof words === "string" && words.trim() ? { resultText: redactShapes(words).slice(0, 4000) } : {};
+  return new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind, ...(retryable ? { retryable: true } : {}), ...said } });
+}
 
 /** The notice an agent shows while it waits for its sandbox provider to answer again (cleared when it does). */
 export const OUTAGE_NOTICE = "sandbox_outage";
@@ -556,13 +566,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     // Release so a retry can take over at once (the attempt count records the retry).
     await c.db.execute("UPDATE push_locks SET until = 0, updated_at = ? WHERE idem_key = ? AND holder = ?", Date.now(), idemKey, holder).catch(() => {});
     // rivetkit masks plain errors as "An internal error occurred": surface the (redacted) cause.
-    if (error instanceof UserError) throw error;
-    const kind = String((error as any)?.kind ?? (error as any)?.code ?? "push_failed");
-    const retryable = isTransientSandboxError(error) || isSandboxUnreachable(error);
-    // An agent that changed nothing: its final words go with the failure, so its parent reads what it found.
-    const words = (error as { resultText?: unknown })?.resultText;
-    const said = typeof words === "string" && words.trim() ? { resultText: redactShapes(words).slice(0, 4000) } : {};
-    throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind, ...(retryable ? { retryable: true } : {}), ...said } });
+    throw pushError(error);
   } finally {
     clearInterval(renew);
   }
