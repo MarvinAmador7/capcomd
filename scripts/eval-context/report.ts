@@ -52,8 +52,10 @@ export interface Row {
   verdict: Verdict; metrics: Metrics | null; landed?: boolean;
   /** Why the step has no real verdict (the agent never ran, the check couldn't run): not the agent's failure. */
   harnessError?: string;
-  /** What the arm delivered beyond the brief (./deliver.ts): the files inlined, the files pushed. */
-  delivered?: { inlined?: string[]; pushed?: string[] };
+  /** What the arm delivered beyond the brief (./deliver.ts): the files inlined, the files pushed; and, on the fake
+   *  sandbox (where the agent's machine is a folder), what its delivered prompt carried: the files its brief's lines
+   *  point at, in order, and the names of its skill blocks. */
+  delivered?: { inlined?: string[]; pushed?: string[]; brief?: string[]; skills?: string[] };
 }
 
 const frac = (k: number, n: number) => `${k}/${n}`;
@@ -124,6 +126,10 @@ export interface Admission {
   costUsd?: { arm: number | null; against: number | null };
   /** Triggered: steps with a push, and steps where one reached the agent's inbox before it ended. */
   pushes?: { steps: number; reached: number };
+  /** An ablation: what the doctrine is about, beside success. The planted-instruction probe passed (k/n), and the steps
+   *  whose answer cites a record (k/n of those the checker looks for a citation in). */
+  probes?: { arm: string; against: string };
+  cited?: { arm: string; against: string };
 }
 
 /** Steps a difference in success must reach to count (README: at 3 reps, one step is noise). */
@@ -163,10 +169,17 @@ export function admission(rows: readonly Row[], arm: { name: string; inline?: nu
     // Triggered: how many steps had a push, and in how many the runner put one in the agent's inbox before it ended.
     ...(question === "triggered" ? { pushes: { steps: xs.filter((r) => r.delivered?.pushed?.length).length, reached: xs.filter((r) => r.delivered?.pushed?.length && (r.metrics?.messages ?? 0) > 0).length } } : {}),
   };
+  // An ablation (no paths column, no context skills): the probe and the citations too, which the doctrine asks for.
+  if (question === "ablation") {
+    const probes = (rs: readonly Row[]) => frac(rs.filter((r) => r.verdict.probe?.passed).length, rs.filter((r) => r.verdict.probe).length);
+    const cited = (rs: readonly Row[]) => frac(rs.filter((r) => r.verdict.cited).length, rs.filter((r) => r.verdict.cited !== undefined).length);
+    out.probes = { arm: probes(xs), against: probes(bs) };
+    out.cited = { arm: cited(xs), against: cited(bs) };
+  }
   const errs = [x, b].find((rs) => rs.length - rs.filter((r) => !r.harnessError).length > rs.length * HARNESS_ERRORS_MAX);
   if (errs) return { ...out, reason: `too many harness errors in ${errs[0]!.arm} to decide` };
   const s = `success ${out.success!.arm} against ${out.success!.against} (${delta >= 0 ? "+" : ""}${delta} steps)`;
-  if (question === "ablation") return { ...out, reason: `an ablation: ${s}` };
+  if (question === "ablation") return { ...out, reason: `an ablation: ${s}; probe passed ${out.probes!.arm} against ${out.probes!.against}; a record cited ${out.cited!.arm} against ${out.cited!.against}` };
   if (delta <= -SUCCESS_STEPS) return { ...out, admitted: false, reason: `${s}: fewer steps passed` };
   if (delta >= SUCCESS_STEPS) return { ...out, admitted: true, reason: `${s}: more steps passed` };
   if (question === "triggered") return { ...out, admitted: false, reason: `${s}: no gain in success over the paths column, which §6.3 requires (a push reached the agent in ${out.pushes!.reached} of the ${out.pushes!.steps} steps that had one)` };

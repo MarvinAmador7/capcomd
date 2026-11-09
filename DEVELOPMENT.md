@@ -288,12 +288,18 @@ two lessons the tasks need and, with `--memory project`, the default, the rest o
 (`scripts/eval-context/deliver.ts`): `index-paths` (no `paths` column), `index-k1` and `index-k3` (the brief's first
 k items, whole and fenced, in the agent's first message) and `index-triggered` (an item pushed as a fenced message
 the first time the agent touches a path it applies to; Claude Code only, a Codex agent can't read a message while it
-runs). `report.ts` `admission` answers each against `index` by fixed rules, and a run on a project's memory writes the
-answers into the model's `limits.json` (`inlineItems`, `triggeredInjection`, `decisions`); `--memory small` (only
+runs), and `index-noskills` (§12's "each doctrine skill present vs absent": the router's brief, where the router
+puts it, without `capcomd-context-doctrine` and `capcomd-context-routing`; the harness appends the brief itself and
+removes the profile's context block for that agent, so the router attaches nothing). On the fake sandbox `--expect`
+also reads each agent's delivered prompt: the brief in every index arm, the skills in each but `index-noskills`,
+whose brief must point at the same files as `index`'s for that step.
+`report.ts` `admission` answers each against `index` by fixed rules (an ablation, `index-paths` and
+`index-noskills`, decides nothing: it reports success, work, cost, the probe and the citations), and a run on a
+project's memory writes the answers into the model's `limits.json` (`inlineItems`, `triggeredInjection`, `decisions`); `--memory small` (only
 what the tasks need) is reported, never decides.
 
 ```bash
-bun scripts/eval-context.ts --seed 1 --expect --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered   # fake (CI, ~1 min)
+bun scripts/eval-context.ts --seed 1 --expect --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered,index-noskills   # fake (CI, ~1 min)
 bun scripts/eval-context.ts --list                     # the arms, chains and pending probes, and which are runnable
 CAPCOMD_HOME=<a home with your logins> BOXD_API_KEY=… \
   bun scripts/eval-context.ts --agents live --models claude-opus-5-5,gpt-6.1-sol --reps 3 --port 6571 --evidence docs/evidence/context

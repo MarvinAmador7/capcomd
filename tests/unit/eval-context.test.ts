@@ -9,11 +9,17 @@ import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { ARMS, armNamed } from "../../scripts/eval-context/arms";
 import { actionsFromLogs, admission, decidedLimits, spendFromSpans, startingLimits, summarize, type Row } from "../../scripts/eval-context/report";
-import { briefItems, inlineTask, pushText, triggered } from "../../scripts/eval-context/deliver";
+import { briefItems, briefWithoutSkills, inlineTask, pushText, skillBlocks, triggered } from "../../scripts/eval-context/deliver";
 import { checkCommand, FAKE_EXPECTED, parseVerdict, suite, type Step } from "../../scripts/eval-context/tasks";
 import { agentsMd, brainFiles, contextFiles, facts, generateWorld, memoryFiles, otherRecords, repoFiles, worldHash, type MemorySize } from "../../scripts/eval-context/world";
+import { samplePayload, testkit } from "../../packages/plugin/src/testkit";
+import { skillBlock } from "../../src/agents/skills";
 import { buildBrief } from "../../src/context/brief";
 import { memoryProvider } from "../../src/context/memory";
+import { DOCTRINE_SKILL, ROUTING_SKILL } from "../../src/context/skills";
+import * as contextPlugin from "../../src/plugins/context";
+import { applyPreparePatch } from "../../src/plugins/hooks";
+import { applyOverrides, type AgentSpec } from "../../src/profiles";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 const FAKE = join(ROOT, "scripts", "eval-context", "fake-agent.ts");
@@ -81,6 +87,9 @@ describe("the world", () => {
     expect(otherRecords(generateWorld(3))).toEqual(rest);
     expect(new Set([...facts(w), ...rest.facts].map((f) => f.id)).size).toBe(facts(w).length + rest.facts.length);
     expect(armNamed("index")!.context).toEqual({ providers: [{ name: "memory" }] });
+    // Without the skills: the index arm's files and profile, judged against it.
+    expect(armNamed("index-noskills")).toMatchObject({ context: armNamed("index")!.context, noSkills: true, against: "index" });
+    expect(armNamed("index-noskills")!.files!(w)).toEqual(ctx);
     // The arms later steps add are listed, not runnable.
     expect(ARMS.filter((a) => !a.files).every((a) => /ADR-025 step/.test(a.needs ?? ""))).toBe(true);
   });
@@ -111,7 +120,7 @@ describe("the checkers", () => {
   };
 
   test("the fake agent scores what --expect requires, in every runnable arm", async () => {
-    for (const arm of ["none", "agents-md", "index", "index-paths", "index-k1", "index-k3"]) {
+    for (const arm of ["none", "agents-md", "index", "index-paths", "index-k1", "index-k3", "index-noskills"]) {
       for (const chain of suite(w).chains) {
         const files = { ...base, ...armNamed(arm)!.files!(w) };
         const dir = checkout(files);
@@ -306,5 +315,82 @@ describe("step 6's questions: delivery and admission (ADR-025 §6.1, §6.3)", ()
     expect(decidedLimits(startingLimits("m"), [k("index-k1", true), k("index-k3", true)], "x.json").inlineItems).toBe(3);
     const was = { ...startingLimits("m"), inlineItems: 1 };
     expect(decidedLimits(was, [k("index-k1", null)], "x.json")).toEqual({ ...was });
+  });
+});
+
+describe("§12's \"each doctrine skill present vs absent\": index-noskills", () => {
+  const w = generateWorld(11);
+  const arm = armNamed("index-noskills")!;
+  const files = arm.files!(w);
+  const PROFILE = "eval-fake-index-noskills";
+  const profileSpec = { provider: "claude", auth: "apikey", maxTurns: 80, context: arm.context } as AgentSpec;
+
+  /**
+   * What an agent of `spec` is delivered as its appended system prompt: the router (the `context` plugin) at
+   * agent.preparing over the arm's memory, then the kernel's composition (src/primitives/ops.ts `agentPreparing`: the
+   * spec's own appended prompt with the plugins' appends, then each skill in its `<skill name="…">` block).
+   */
+  async function delivered(spec: AgentSpec, role: "work" | "review") {
+    const saved = { ...contextPlugin.contextKernel };
+    const read = async () => ({ sha: "f".repeat(40), date: "2026-11-06T00:00:00.000Z", truncated: false, files: Object.entries(files).map(([path, text]) => ({ path, text })) });
+    Object.assign(contextPlugin.contextKernel, {
+      agent: async () => ({ contract: role === "review" ? { report: true } : null, limits: { allowSpawn: false }, profile: PROFILE }),
+      scope: async (runId: string | null, a: { id: string | null }) => ({ projectId: null, repo: "/srv/eval.git", ref: "main", profile: { name: PROFILE, version: 1 }, runId, agentId: a.id }),
+      providers: async () => new Map([["memory", { name: "memory", plugin: "context-memory", kinds: ["memory", "fact"], provider: memoryProvider({ read }) }]]),
+      secrets: async () => [],
+    });
+    const fake = testkit.fakeContext(contextPlugin.manifest);
+    try {
+      await testkit.load(fake, contextPlugin.plugin as never);
+      const payload = samplePayload("agent.preparing");
+      payload.spec = spec as never;
+      payload.prompt = { system: null, append: spec.appendSystemPrompt ?? null, skills: [] };
+      const out = await fake.fire("agent.preparing", payload, { runId: payload.agent.runId });
+      expect(out.failure).toBeNull();
+      const patch = (out.result as { patch?: { prompt?: { append?: string } } }).patch;
+      const n = patch ? applyPreparePatch(payload, patch as never) : payload;
+      const prompt = [n.prompt.append, ...n.prompt.skills.map((s) => skillBlock(s.name, s.text))].filter(Boolean).join("\n\n");
+      return { prompt, brief: patch?.prompt?.append ?? null, loaded: fake.emitted().filter((e) => e.type === "plugin.context.loaded").length };
+    } finally { await fake.dispose(); Object.assign(contextPlugin.contextKernel, saved); }
+  }
+
+  test("the arm's delivered prompt has the router's brief, as the index arm's has it, and no <skill> block for either context skill", async () => {
+    for (const role of ["work", "review"] as const) {
+      // The index arm (the arm's profile as it is): the router appends its brief and attaches its skills.
+      const index = await delivered(profileSpec, role);
+      const brief = index.brief!;
+      expect(briefItems(brief).length).toBeGreaterThan(0);
+      expect(index.prompt).toStartWith(`${brief}\n\n<skill name="${DOCTRINE_SKILL.name}">`);
+      expect(skillBlocks(index.prompt)).toEqual(role === "work" ? [DOCTRINE_SKILL.name, ROUTING_SKILL.name] : [DOCTRINE_SKILL.name]);
+      // index-noskills: the same profile with the harness's overrides, which only narrow it (no --operator), so the
+      // router does nothing and the agent's prompt is that brief, whole, with neither skill.
+      const spec = applyOverrides(PROFILE, profileSpec, { set: briefWithoutSkills(brief) });
+      expect(spec.context).toBeUndefined();
+      const none = await delivered(spec, role);
+      expect(none.prompt).toBe(brief);
+      expect(skillBlocks(none.prompt)).toEqual([]);
+      for (const s of [DOCTRINE_SKILL, ROUTING_SKILL]) expect(none.prompt).not.toContain(s.name);
+      expect(briefItems(none.prompt)).toEqual(briefItems(brief));
+      expect([index.loaded, none.loaded]).toEqual([1, 0]);
+    }
+  });
+
+  test("skillBlocks reads the kernel's blocks only: a skill's name in the brief or in prose isn't one", () => {
+    const prompt = ["Context: loaded 1 of 1 lines.", "- [lesson] capcomd-context-doctrine says <skill name=\"x\"> → a.md (stable)", skillBlock("a-skill", "---\nname: a-skill\n---\nBody.\n"), "after"].join("\n\n");
+    expect(skillBlocks(prompt)).toEqual(["a-skill"]);
+    expect(briefWithoutSkills("  Context: x\n- [a] b → c (d)\n\n")).toEqual({ context: null, appendSystemPrompt: "Context: x\n- [a] b → c (d)" });
+  });
+
+  test("an ablation's report: success, work and cost against index, with the probe and the citations; it decides nothing", () => {
+    const row = (a: string, ok: boolean, v: Partial<Row["verdict"]> = {}): Row => ({ arm: a, rep: 1, chain: "c", family: "c", step: "s", runId: "run-1", agentId: "agt-1", status: "done", verdict: { success: ok, ...v }, metrics: { toolCalls: 3, costUsd: 0.1 } as Row["metrics"] });
+    const rows = [
+      row("index", true, { cited: "P-1" }), row("index", true, { probe: { passed: true, detail: "" } }), row("index", true),
+      row("index-noskills", true, { cited: null }), row("index-noskills", false, { probe: { passed: false, detail: "obeyed" } }), row("index-noskills", true),
+    ];
+    expect(admission(rows, arm)).toMatchObject({
+      arm: "index-noskills", against: "index", question: "ablation", admitted: null,
+      success: { arm: "2/3", against: "3/3" }, probes: { arm: "0/1", against: "1/1" }, cited: { arm: "0/1", against: "1/1" },
+      reason: "an ablation: success 2/3 against 3/3 (-1 steps); probe passed 0/1 against 1/1; a record cited 0/1 against 1/1",
+    });
   });
 });

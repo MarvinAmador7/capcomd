@@ -112,7 +112,7 @@ jobs:
       # task chain, the hidden checkers through `capcomd check`, the metrics); --expect fails on any verdict the fake
       # agent's policy doesn't produce. The live baselines per model are in docs/evidence/context/.
       - name: Context eval (fake sandbox and agent)
-        run: bun scripts/eval-context.ts --seed 1 --expect --port 6571 --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered
+        run: bun scripts/eval-context.ts --seed 1 --expect --port 6571 --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered,index-noskills
 
   # @capcomd/plugin as it would be published (packages/plugin/scripts/pack.ts): installed from its tarball into a fresh
   # project and used from Node 20, the oldest it supports (no Bun at run time: every entry point, the test kit, connect()
