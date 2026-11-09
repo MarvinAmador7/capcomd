@@ -81,6 +81,7 @@ export const CONTEXT_CASES: readonly Case[] = [
     equal(b, a, "a second index of the same handle");
     equal(a.revision, r.revision, "index().revision");
     if (!a.lines.length) fail("the fixture scope has no items: bring one with at least one");
+    if (a.empty !== undefined && a.empty !== false) fail("index().empty is true only when there is nothing at all, so never with lines");
     for (const l of a.lines) {
       const at = `line ${JSON.stringify(l.ref?.id)}`;
       if (l.ref?.provider !== d.name || typeof l.ref.id !== "string" || !l.ref.id || typeof l.ref.version !== "string") fail(`${at}: ref is {provider: ${d.name}, id, version}`);

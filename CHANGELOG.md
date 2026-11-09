@@ -5,6 +5,16 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- A project with no memory yet no longer pays for it in every prompt: when the run's branch has nothing under
+  `.capcomd/context/` (no lesson, fact or index file; an empty folder or a `.gitkeep` counts as nothing), agents start
+  without the context brief and without the context skills, exactly as if their profile had no `context` block, and the
+  run records `plugin.context.skipped` with reason `empty`. Agents can still propose lessons (`capcomd result --data
+  '{"context": […]}'`); once the first one is approved and lands, the agents after it get the brief and the skills.
+  `capcomd context brief <profile>` says when a profile's agents start with nothing.
+- `capcomd setup project` gives every project the context consolidator. When your project already has a planner that
+  can't spawn it (set up before the consolidator existed, or moved from agents.json), setup leaves your planner alone
+  and prints the command that lets it (`capcomd profiles set planner --set children.allowedChildProfiles=…`);
+  `capcomd profiles migrate` prints the same note. Memory changes still wait for your approval before they land.
 - **Breaking:** `capcomd run` without a planner agent (the built-in placeholder recipe: `capcomd run <goal>` on a place
   without real machines, `--recipe`, `--legacy`, `CAPCOMD_RUN_PATH`) is off by default. It plans the same generic
   tasks for any goal and judges nothing, so it's kept for comparisons and tests only. Such a run is now refused before

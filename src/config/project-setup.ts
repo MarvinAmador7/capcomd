@@ -203,7 +203,33 @@ export function planProject(a: ProjectAnswers): ProjectPlan {
 /** A plan that can't be written as asked (a .capcomd that leads out of the checkout, profiles that can't be read). */
 export class ProjectWriteError extends Error {}
 
-export interface ProjectWrite { config: CapcomdConfig; configChanged: boolean; made: string[]; kept: string[] }
+/** `consolidator`: what stops the project's planner from spawning the consolidator, when something does (consolidatorAdvice). */
+export interface ProjectWrite { config: CapcomdConfig; configChanged: boolean; made: string[]; kept: string[]; consolidator: ConsolidatorAdvice | null }
+
+/** Why a project's planner can't spawn the consolidator, and the command that lets it. */
+export interface ConsolidatorAdvice { missing: "profile" | "planner"; detail: string; command: string }
+
+/**
+ * Every project gets the context consolidator, so its planner can spawn it (ADR-025 D17, the owner's decision of
+ * 2026-11-08): `capcomd setup project` writes it. A project set up before it existed, or whose profiles were moved
+ * from agents.json (`capcomd profiles migrate`), may lack it, or keep a planner that doesn't list it: the planner it
+ * writes lists it, but one the project has is yours and setup never changes it. This says which, and the command that
+ * fixes it: `profile` (no context-consolidator: setup adds it) or `planner` (the project's `planner` may spawn, but not
+ * it). Null when the planner can spawn it, or the project has no `planner` that may spawn (a driver leads its runs).
+ */
+export function consolidatorAdvice(set: ProfileSet): ConsolidatorAdvice | null {
+  const planner = set.profiles.planner;
+  const children = planner?.spec.children;
+  const allowed = children?.allowedChildProfiles ?? [];
+  if (!children?.allowSpawn || !allowed.length || allowed.includes(CONSOLIDATOR_PROFILE)) return null;
+  if (!Object.hasOwn(set.profiles, CONSOLIDATOR_PROFILE)) {
+    return { missing: "profile", command: "capcomd setup project", detail: `the project has no ${CONSOLIDATOR_PROFILE} profile, so its planner can't turn a run's lessons into memory` };
+  }
+  return {
+    missing: "planner", command: `capcomd profiles set planner --set children.allowedChildProfiles=${[...allowed, CONSOLIDATOR_PROFILE].join(",")}`,
+    detail: `the project's planner may spawn ${allowed.join(", ")} but not ${CONSOLIDATOR_PROFILE}, so a run's lessons don't reach the project's memory (its changes still wait for a person)`,
+  };
+}
 
 /** Whether the project's own layer names a default: its agents.json's `default`, or a profile file's `default: true`. */
 function projectDefault(set: ProfileSet, agentsPath: string): boolean {
@@ -254,7 +280,10 @@ export function writeProject(plan: ProjectPlan, o: { strict?: boolean; env?: Env
   mkdirSync(dirname(plan.configPath), { recursive: true });
   atomicWrite(plan.configPath, text, 0o600);
   for (const [file, body] of overlay) writeAtomic(file, body);
-  return { config, configChanged: before !== text, made, kept };
+  // A kept planner is the project's: said, never changed (ADR-025 D17).
+  let consolidator: ConsolidatorAdvice | null = null;
+  if (set) { try { consolidator = consolidatorAdvice(readProfiles(plan.agentsPath, env)); } catch (e) { if (!(e instanceof AgentConfigError)) throw e; } }
+  return { config, configChanged: before !== text, made, kept, consolidator };
 }
 
 function atomicWrite(path: string, text: string, mode: number) {

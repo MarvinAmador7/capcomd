@@ -155,4 +155,21 @@ describe("capcomd profiles migrate", () => {
     expect([extra.code, extra.stdout + extra.stderr]).toEqual([expect.any(Number), expect.stringContaining("migrate moves every profile of the agents file")]);
     expect(extra.code).not.toBe(0);
   });
+
+  test("a project whose planner can't spawn the context consolidator: migrate moves it as it is and says what adds it (ADR-025 D17)", async () => {
+    // As `capcomd setup project` wrote it before the consolidator existed: a planner that spawns workers and leads.
+    const w = world({}, V1, "worker");
+    const env = { CAPCOMD_HOME: w.source.CAPCOMD_HOME, CAPCOMD_AGENTS_FILE: w.agentsFile, CAPCOMD_AUTH_LEDGER: join(w.root, "auths.json"), CAPCOMD_ENV_LEDGER: join(w.root, "envs.json") };
+    const r = await capcomd(["profiles", "migrate", "--json"], env);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: true, migration: { agentsFile: "updated" }, consolidator: { missing: "profile", command: "capcomd setup project" } });
+    expect(w.load().agents.planner!.children!.allowedChildProfiles).toEqual(["worker", "lead"]);
+    // With the profile there and the planner still without it, the note is the command that lets the planner spawn it.
+    const v = world({ "P/context-consolidator.yaml": "name: context-consolidator\nharness: { provider: codex, auth: apikey }\n" }, { worker: V1.worker, lead: V1.lead, planner: V1.planner }, "worker");
+    const text = (await capcomd(["profiles", "migrate", "--dry-run"], { ...env, CAPCOMD_HOME: v.source.CAPCOMD_HOME, CAPCOMD_AGENTS_FILE: v.agentsFile })).stdout;
+    expect(text).toContain("Note: the project's planner may spawn worker, lead but not context-consolidator, so a run's lessons don't reach the project's memory (its changes still wait for a person). Run `capcomd profiles set planner --set children.allowedChildProfiles=worker,lead,context-consolidator` in the project's checkout.");
+    // A project whose planner lists it (as setup writes it now): nothing to say.
+    const ok = world({ "P/context-consolidator.yaml": "name: context-consolidator\nharness: { provider: codex, auth: apikey }\n" }, { worker: V1.worker, planner: { ...V1.planner, children: { allowSpawn: true, allowedChildProfiles: ["worker", "context-consolidator"] } } }, "worker");
+    expect((await capcomd(["profiles", "migrate", "--dry-run"], { ...env, CAPCOMD_HOME: ok.source.CAPCOMD_HOME, CAPCOMD_AGENTS_FILE: ok.agentsFile })).stdout).not.toContain("Note:");
+  });
 });

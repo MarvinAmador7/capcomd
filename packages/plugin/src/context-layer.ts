@@ -152,8 +152,11 @@ export interface ContextProvider {
   /** Bind a scope to the provider's handle (a bundle path at a commit, a brain slug); refuses a scope it cannot isolate.
    *  A provider with `caps.bundle` names the one bundle the handle reads (placed for the agent when the brief holds it). */
   resolve(scope: ContextScope, c: SeamCall): Promise<{ handle: string; revision: string; bundle?: ContextBundle }>;
-  /** Everything the brief needs, deterministic for `(handle, revision)`. */
-  index(handle: string, c: SeamCall): Promise<{ revision: string; modified: string | null; lines: readonly IndexLine[] }>;
+  /** Everything the brief needs, deterministic for `(handle, revision)`. `empty: true` (optional): the provider has
+   *  nothing at all for this scope (the project keeps no memory yet), not merely nothing to show; the router leaves it
+   *  out of the brief, and an agent whose every provider is empty gets no brief and no context skills (ADR-025 D17).
+   *  Read only with no lines; a provider that can't tell (a read that failed) throws instead. */
+  index(handle: string, c: SeamCall): Promise<{ revision: string; modified: string | null; lines: readonly IndexLine[]; empty?: boolean }>;
   search(handle: string, q: ContextSearch, c: SeamCall): Promise<ContextHit[]>;
   get(handle: string, ref: ContextRef, c: SeamCall): Promise<ContextItem>;
   /** Stage only: a file on a branch, a brain draft. Never publishes. `unsupported` unless `caps.writable`. */
