@@ -113,11 +113,13 @@ export const iso = (ms: number = Date.now()): Timestamp => new Date(ms).toISOStr
 export const untrusted = (text: string, by: string): Untrusted => ({ text, untrusted: true, by });
 
 /** Who caused an operation (§3.2), from what the kernel records as its `by`: an agent id, `client:<id>` (an app or
- *  harness client), `driver` or the MCP server's elicitation (a driving harness), else the operator. */
+ *  harness client), `driver` or the MCP server's elicitation (a driving harness), `plugin:<name>`, else the operator. */
 export function principalOf(by: string | null | undefined, runId: string | null = null): Principal {
   if (by && by.startsWith("agt-") && runId) return { kind: "agent", agentId: by, runId };
   if (by && by.startsWith("client:")) return { kind: "operator", clientId: by.slice("client:".length) };
   if (by === "driver" || by?.startsWith("driver:")) return { kind: "driver", clientId: null };
+  // A plugin's own call (its ctx primitives write `plugin:<name>`): the scopes it had aren't recorded with it.
+  if (by?.startsWith("plugin:") && by.length > "plugin:".length) return { kind: "plugin", name: by.slice("plugin:".length), scopes: [] };
   return { kind: "operator", clientId: null };
 }
 

@@ -9,10 +9,13 @@ rules an agent must follow in this repository; `CLAUDE.md` imports it.
   push to `main`. Never force-push `main`.
 - Before you say a change is done: `bun run typecheck`, `bun run test:fast`, and the suites for what you touched
   (`bun run test:scenarios` for anything under `src/`; see DEVELOPMENT.md → Testing). Report failures as failures.
-- Anything a user would notice (a command, a flag, output, behavior, a fix, a removal) gets a line under
-  `## Unreleased` in [CHANGELOG.md](CHANGELOG.md), in the same commit or PR. Write it for users: what changed and
-  how to use it, not how it was implemented. Mark breaking changes with **Breaking:** and say what to do instead.
-  Internal refactors and test-only changes don't need an entry.
+- Anything a user would notice (a command, a flag, output, behavior, a fix, a removal) gets a change note: a new
+  file `changes/<slug>.md` with a `# CHANGELOG` list, in the same commit or PR ([changes/README.md](changes/README.md)).
+  Don't edit `CHANGELOG.md` itself; the notes are folded into it at release, so parallel PRs never conflict over it.
+  Write it for users: what changed and how to use it, not how it was implemented. Mark breaking changes with
+  **Breaking:** and say what to do instead. Internal refactors and test-only changes don't need an entry.
+- A change to the plugin spec (docs/spec/plugin-api.md) puts its §18 row in the same note's `# Spec` section, never
+  in the §18 table: rows are numbered when folded, so refer to a change by what it does, not by a row number.
 - Don't touch `version` in `package.json` outside a release (CI checks it against the changelog).
 - Never commit secrets, keys, logins or anything under `.relay/`, `.traces/` or `~/.capcomd`.
 
@@ -27,8 +30,11 @@ only bump the patch (0.3.0 → 0.3.1). Release candidates are `X.Y.Z-rc.N` and p
 
 Procedure:
 
-1. Start from an up-to-date `main` with green CI. Read the `## Unreleased` entries and pick the version from them.
-2. In one PR (or commit, if asked to push to `main`) titled `release: vX.Y.Z`, change only:
+1. Start from an up-to-date `main` with green CI. Read the `## Unreleased` entries and the pending notes in
+   `changes/` (`bun scripts/changes.ts`) and pick the version from them.
+2. In one PR (or commit, if asked to push to `main`) titled `release: vX.Y.Z`, first run
+   `bun scripts/changes.ts fold` (it moves every note into `CHANGELOG.md` and the spec's §18 and deletes them), then
+   change only:
    - `version` to `X.Y.Z` in `package.json`, both plugin manifests (`plugins/capcomd/.claude-plugin/plugin.json`,
      `plugins/capcomd/.codex-plugin/plugin.json`) and the plugin API package (`packages/plugin/package.json`:
      `@capcomd/plugin` is released at capcomd's version); CI checks they agree;

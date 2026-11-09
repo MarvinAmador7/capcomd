@@ -3,7 +3,9 @@
 // runs (a key replays, run.creating names the plugin, an unknown run is not_found and never created), kv (the reserved
 // keys read-only, a key replays, compare-and-swap), the board, messages to a scripted agent and its inbox, the gates'
 // pending approvals, profiles (profile.resolved names the plugin, overrides only narrow) and the run's sandbox; a
-// read-only plugin reads and never writes. In the daemon (CAPCOMD_TEST_PLUGINS): the same fixture messages an agent
+// read-only plugin reads and never writes. Agents (a spawn refused by agent.spawning with its reason, a key replays it,
+// spawn, grant and title recorded as the plugin's, await) and gates (a verify and merge as the plugin, never the
+// operator: a gate's veto in the daemon, test-gate's, stays a veto). In the daemon (CAPCOMD_TEST_PLUGINS): the same fixture messages an agent
 // that asks for it and reads back the kv key the agent wrote. The checks that need no engine: tests/plugins/services.test.ts.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
@@ -15,10 +17,14 @@ import { existingActor } from "../../src/core/relay";
 import { useHooks } from "../../src/plugins/hooks";
 import { kernelHost } from "../../src/plugins/host";
 import { probe } from "../plugins/fixtures/services-probe/index";
-import { spawnRoot, trajectory, waitAll, world, type World } from "./harness";
+import { agentsOf, spawnRoot, trajectory, waitAll, world, WORKER, type World } from "./harness";
 
 const PROBE = join(import.meta.dir, "..", "plugins", "fixtures", "services-probe");
+// In the daemon, where a merge lands: a gate that denies every merge (tests/plugins/fixtures/test-gate).
+const TEST_GATE = join(import.meta.dir, "..", "plugins", "fixtures", "test-gate");
 const PRINCIPAL = { kind: "plugin", name: "services-probe", scopes: ["read", "steer"] };
+/** Who agent.spawning said asked, each time it was asked here. */
+const spawning: unknown[] = [];
 let w: World;
 let host: PluginHost;
 let ctx: PluginContext;
@@ -30,7 +36,7 @@ const runs: string[] = [];
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-scn-plugin-services-"));
   log = join(dir, "services.ndjson");
-  w = await world("plugin-services", { CAPCOMD_TEST_PLUGINS: PROBE, CAPCOMD_TEST_SERVICES_LOG: log, NODE_ENV: "test" });
+  w = await world("plugin-services", { CAPCOMD_TEST_PLUGINS: `${PROBE}:${TEST_GATE}`, CAPCOMD_TEST_SERVICES_LOG: log, NODE_ENV: "test" });
   host = kernelHost({ log: false, jobs: true });
   await host.start([{ source: "builtin", dir: PROBE }, {
     source: "builtin",
@@ -42,6 +48,11 @@ beforeAll(async () => {
     manifest: { schema: "capcomd.plugin/v1", name: "services-denier", version: "1.0.0", description: "Refuses the runs labelled to be refused.", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
       entry: { runtime: "in-process", module: "./index.ts" }, scopes: ["read"], contributes: { hooks: { "run.creating": {} } } },
     module: { activate(c) { c.hooks.on("run.creating", ({ payload }) => payload.options.label === "refuse me" ? { decision: "deny", reason: "no run may be labelled refuse me" } : { decision: "allow" }); } } as PluginModule<never>,
+  }, {
+    source: "builtin",
+    manifest: { schema: "capcomd.plugin/v1", name: "services-spawn-denier", version: "1.0.0", description: "Refuses the spawns whose task asks to be refused.", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
+      entry: { runtime: "in-process", module: "./index.ts" }, scopes: ["read"], contributes: { hooks: { "agent.spawning": {} } } },
+    module: { activate(c) { c.hooks.on("agent.spawning", ({ payload, principal }) => { spawning.push(principal); return payload.spawn.task.text.includes("refuse me") ? { decision: "deny", reason: "no agent may be asked to be refused" } : { decision: "allow" }; }); } } as PluginModule<never>,
   }]);
   ctx = probe.ctx!;
   // This process's hooks are this host's: run.creating and profile.resolved reach the probe.
@@ -189,6 +200,100 @@ capcomd result --summary "read it" >/dev/null`));
     expect((await ctx.agents.get(run, agent)).status).toBe("done");
     expect(await ctx.gates.pending(run)).toEqual([]);
   }, 120_000);
+});
+
+describe("agents: spawn, await, grant and title as the plugin", () => {
+  test("a spawn refused by agent.spawning carries the refusing plugin's reason; a key gives the same agent, other arguments a conflict; the spawn and its title are the plugin's", async () => {
+    const run = await newRun();
+    const before = spawning.length;
+    const e = await ctx.agents.spawn({ runId: run, profile: "worker", task: "refuse me, please" }).then(() => null, (x: unknown) => x);
+    expect(e).toMatchObject({ code: "conflict", message: "agent.spawning: refused by the services-spawn-denier plugin", hint: "no agent may be asked to be refused" });
+    // agent.spawning was told the plugin asked, and nothing was recorded.
+    expect(spawning.slice(before)).toEqual([PRINCIPAL]);
+    expect(await agentsOf(run)).toEqual([]);
+
+    const script = w.script("services-spawned", WORKER);
+    const input = { runId: run, profile: "worker", task: "write the plugin's file", contract: { script: `FILE=src/plugin.txt CONTENT=plugin ${script}` }, budget: { turns: 10 }, title: "plugin work" };
+    const a = await ctx.agents.spawn(input, { key: "s1" });
+    expect(a).toMatchObject({ runId: run, parent: null, depth: 0, profile: "worker", task: "write the plugin's file" });
+    expect((await ctx.agents.spawn(input, { key: "s1" })).id).toBe(a.id);
+    expect(await code(ctx.agents.spawn({ ...input, task: "write another file" }, { key: "s1" }))).toBe("conflict");
+    // The CLI's key of the same name is another spawn's, never this one.
+    const cli = (await w.cj(["spawn", run, "--profile", "worker", "--task", "the CLI's own", "--key", "s1", "--contract", JSON.stringify({ script: `FILE=src/cli.txt ${script}` })])).j;
+    expect(cli.agentId).not.toBe(a.id);
+
+    const { ended, pending } = await ctx.agents.await(run, [a.id, cli.agentId], {}, { timeoutMs: 90_000 });
+    expect(ended.map((x) => [x.id, x.status])).toEqual([[a.id, "done"], [cli.agentId, "done"]]);
+    expect(pending).toEqual([]);
+    const [spawned] = await trajectory(w, run, (x) => x.type === "AGENT_SPAWNED" && x.agentId === a.id);
+    expect(spawned!.data).toMatchObject({ parent: null, operator: false, by: "plugin:services-probe", key: "plugin:services-probe:s1", title: "plugin work" });
+    const [cliSpawned] = await trajectory(w, run, (x) => x.type === "AGENT_SPAWNED" && x.agentId === cli.agentId);
+    expect(cliSpawned!.data.by).toBeUndefined();
+    const [titled] = await trajectory(w, run, (x) => x.type === "AGENT_TITLED" && x.agentId === a.id);
+    expect(titled!.data).toMatchObject({ title: "plugin work", by: "driver", setBy: "plugin:services-probe" });
+  }, 120_000);
+
+  test("a live agent: await answers what hasn't ended at its deadline; a grant carves from the run, once per key; a title is the plugin's; an ended agent gets no grant", async () => {
+    const run = await newRun();
+    const agent = await spawnRoot(w, run, "worker", w.script("services-waiting", `i=0; while [ $i -lt 450 ]; do m=$(capcomd inbox); case "$m" in *"you may finish"*) break;; esac; i=$((i+1)); sleep 0.2; done
+capcomd result --summary "finished" >/dev/null`), { args: ["--budget", "turns=10"] });
+    expect(await ctx.agents.await(run, [agent], {}, { timeoutMs: 200 })).toEqual({ ended: [], pending: [agent] });
+    // Under a parent, the parent's limits hold as for its own spawn: a worker spawns no children, so neither does a plugin under it.
+    const under = await ctx.agents.spawn({ runId: run, parent: agent, profile: "worker", task: "a child of a worker" }).then(() => null, (x: unknown) => x as { code?: string; message?: string });
+    expect([under?.code, under?.message]).toEqual(["invalid", expect.stringContaining("allowSpawn=false")]);
+    await ctx.agents.grant(run, agent, { turns: 5 }, { key: "g1" });
+    await ctx.agents.grant(run, agent, { turns: 5 }, { key: "g1" });
+    expect(await code(ctx.agents.grant(run, agent, { turns: 6 }, { key: "g1" }))).toBe("conflict");
+    const granted = await trajectory(w, run, (x) => x.type === "AGENT_GRANTED" && x.agentId === agent);
+    expect(granted.map((x) => x.data)).toEqual([expect.objectContaining({ add: { turns: 5 }, by: "plugin:services-probe", budget: expect.objectContaining({ turns: 15 }) })]);
+    // More than the run has left is refused, as any caller's grant is.
+    expect(await code(ctx.agents.grant(run, agent, { turns: 100_000 }))).toBe("conflict");
+    await ctx.agents.title(run, agent, "plugin named");
+    const titled = await trajectory(w, run, (x) => x.type === "AGENT_TITLED" && x.agentId === agent);
+    expect(titled.at(-1)!.data).toMatchObject({ title: "plugin named", by: "driver", setBy: "plugin:services-probe", shown: true });
+    expect(await code(ctx.agents.title(run, agent, "Not A Title Of Four Words Or Less At All"))).toBe("invalid");
+    await ctx.messages.send(run, { to: agent, body: "you may finish" });
+    const { ended } = await ctx.agents.await(run, [agent], { any: true }, { timeoutMs: 90_000 });
+    expect(ended.map((x) => [x.id, x.status])).toEqual([[agent, "done"]]);
+    expect(await code(ctx.agents.grant(run, agent, { turns: 1 }))).toBe("conflict");
+    expect(await code(ctx.agents.await(run, ["agt-nowhere"], {}))).toBe("not_found");
+  }, 120_000);
+});
+
+describe("gates: verify and merge as the plugin", () => {
+  test("a verified ref's merge is never the operator's: a gate's veto stays a veto, replayed by its key; what the plugin asked is recorded as its", async () => {
+    const run = (await ctx.runs.new({ budget: { usd: 10, turns: 400, wallSeconds: 3600 }, checks: { exists: "test -f src/landing.txt" } })).id;
+    runs.push(run);
+    const agent = (await ctx.agents.spawn({ runId: run, profile: "worker", task: "write the landing file", contract: { script: `FILE=src/landing.txt CONTENT=landing ${w.script("services-landing", WORKER)}` } })).id;
+    expect((await ctx.agents.await(run, [agent], {}, { timeoutMs: 90_000 })).ended.map((x) => x.status)).toEqual(["done"]);
+
+    const v = await ctx.gates.verify(run, { ref: agent, check: "exists" }, { key: "v1" });
+    expect(v).toMatchObject({ runId: run, ref: agent, target: "trunk", check: "exists", state: "passed", passed: true, tested: { sha: expect.any(String), targetSha: expect.any(String) } });
+    expect((await ctx.gates.verify(run, { ref: agent, check: "exists" }, { key: "v1" })).vfyId).toBe(v.vfyId);
+
+    // As the operator: refused before anything is recorded.
+    expect(await code(ctx.gates.merge(run, { ref: agent, require: v.vfyId, operator: true } as never, { key: "m1" }))).toBe("forbidden");
+    // test-gate, in the daemon where merges land, denies every merge: the plugin's merge fails naming it, nothing lands.
+    const m = await ctx.gates.merge(run, { ref: agent, require: v.vfyId }, { key: "m1" });
+    expect(m).toMatchObject({ runId: run, ref: agent, target: "trunk", state: "failed", sha: null });
+    expect(m.reason).toContain("plugin:test-gate");
+    expect(await ctx.gates.merge(run, { ref: agent, require: v.vfyId }, { key: "m1" })).toEqual(m);
+    expect((await ctx.gates.merge(run, { ref: agent, require: v.vfyId }, { key: "m2" })).state).toBe("failed");
+    const trunk = Bun.spawnSync(["git", "-C", w.repo.bare, "ls-tree", "-r", "--name-only", "trunk"]).stdout.toString();
+    expect(trunk).not.toContain("src/landing.txt");
+    expect(await trajectory(w, run, (x) => x.type === "PLUGIN_GATE_BYPASSED" || x.type === "MERGED")).toEqual([]);
+
+    // Who asked: the plugin, on the verification's and the merge's records, never as an agent nor as the operator.
+    const [verifyStarted] = await trajectory(w, run, (x) => x.type === "VERIFY_STARTED" && x.data.id === v.vfyId);
+    expect(verifyStarted!.data).toMatchObject({ requester: "plugin:services-probe" });
+    expect(verifyStarted!.data.askedBy).toBeUndefined();
+    const [mergeStarted] = await trajectory(w, run, (x) => x.type === "MERGE_STARTED" && x.data.id === m.mrgId);
+    expect(mergeStarted!.data).toMatchObject({ require: v.vfyId, operator: false, requester: "plugin:services-probe" });
+    expect(mergeStarted!.data.askedBy).toBeUndefined();
+    expect(await ctx.gates.pending(run)).toEqual([]);
+    // A merge of a verification that doesn't cover the ref is refused, as for any caller.
+    expect(await code(ctx.gates.merge(run, { ref: "capcomd/elsewhere", require: v.vfyId }))).toBe("conflict");
+  }, 180_000);
 });
 
 describe("profiles and sandboxes", () => {

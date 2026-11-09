@@ -102,7 +102,7 @@ describe("the context-groundray built-in (ADR-025 §11.2)", () => {
     expect(t.restricted).toBeNull();
     const by = Object.fromEntries(t.parsed.items.map((i) => [i.title, i]));
     expect(Object.keys(by).sort()).toEqual(["Contribution margin", "Old refund window", "acme refund window"]);
-    expect(by["acme refund window"]!.line).toMatchObject({ kind: "fact", type: "policy", path: "knowledge/policies/refunds.md", authority: { status: "stable", staleAfter: "2027-04-01T00:00:00.000Z" }, modified: "2026-10-01T00:00:00.000Z" });
+    expect(by["acme refund window"]!.line).toMatchObject({ kind: "fact", type: "policy", path: "knowledge/policies/refunds.md", authority: { status: "stable", validFrom: "2026-10-01T00:00:00.000Z", staleAfter: "2027-04-01T00:00:00.000Z" }, modified: "2026-10-01T00:00:00.000Z" });
     expect(by["acme refund window"]!.authority.verified).toEqual([{ by: "human:fixture-reviewer", at: "2026-10-02T00:00:00.000Z" }]);
     expect(by["Contribution margin"]).toMatchObject({ method: "agent-generated", by: "openai/codex", confidence: { level: "medium" } });
     for (const [o, why] of [[{ sensitivity: "restricted" }, "its bundle's default sensitivity is restricted"], [{ restrictedItem: true }, "1 of its files is marked restricted"]] as const) {

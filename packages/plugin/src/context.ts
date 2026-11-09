@@ -170,7 +170,9 @@ export interface RunsService {
   title(runId: string, title: string, o?: CallOptions): Promise<void>;
 }
 
-export interface SpawnInput { runId: string; parent?: string; profile: string; task: string; contract?: Record<string, unknown>; budget?: Budget; grant?: Grant; review?: boolean }
+/** A plugin's spawn (§8.4). `review` is refused (`forbidden`): a reviewer is a verification's. `title` names its tab, set
+ *  by the plugin (as `capcomd spawn --title`). */
+export interface SpawnInput { runId: string; parent?: string; profile: string; task: string; contract?: Record<string, unknown>; budget?: Budget; grant?: Grant; review?: boolean; title?: string }
 export interface AgentsService {
   spawn(input: SpawnInput, o?: CallOptions): Promise<Agent>;
   get(runId: string, agentId: string, o?: CallOptions): Promise<Agent>;

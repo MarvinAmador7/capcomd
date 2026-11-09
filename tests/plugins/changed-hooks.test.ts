@@ -90,6 +90,17 @@ describe("who caused a change (§3.2)", () => {
     expect(causeOf(ev("MERGE_APPROVED", { id: "mrg-1", by: "driver" }), "run-1", asked)).toEqual({ kind: "driver", clientId: null });
     expect(causeOf(ev("MERGE_DENIED", { id: "mrg-1", by: "client:mac" }), "run-1", asked)).toEqual({ kind: "operator", clientId: "mac" });
   });
+  test("what a plugin did through its primitives is the plugin's (§8.4): its spawn, its verification and merge, its title, its grant", () => {
+    const plugin: Principal = { kind: "plugin", name: "context-memory", scopes: [] };
+    expect(causeOf(ev("AGENT_SPAWNED", { parent: null, by: "plugin:context-memory" }), "run-1")).toEqual(plugin);
+    expect(causeOf(ev("AGENT_SPAWNED", { parent: "agt-p", by: "plugin:context-memory" }), "run-1")).toEqual(plugin);
+    const requested = { data: { requester: "plugin:context-memory" } };
+    for (const t of ["VERIFY_STARTED", "VERIFY_PASSED", "MERGE_STARTED", "MERGE_FAILED", "MERGE_AWAITING_APPROVAL"]) expect(causeOf(ev(t, { id: "x" }), "run-1", requested)).toEqual(plugin);
+    expect(causeOf(ev("AGENT_TITLED", { setBy: "plugin:context-memory" }), "run-1")).toEqual(plugin);
+    expect(causeOf(ev("RUN_ENDED", { by: "plugin:context-memory" }, null), "run-1")).toEqual(plugin);
+    // Not a plugin's name: the operator, as before.
+    expect(causeOf(ev("AGENT_CANCELLED", { by: "plugin:" }), "run-1")).toEqual(operator);
+  });
 });
 
 describe("run.creating's sandbox (§6.6.3)", () => {

@@ -626,6 +626,9 @@ export const scopeActor = actor({
         skillTexts?: string[];
         /** Its profile's persona text (ADR-024 `identity.persona`), pinned by hash in `spec.persona`: kept the same way. */
         personaText?: string;
+        /** Who asked, when it isn't the parent or the operator: a plugin (`plugin:<name>`, ctx.agents.spawn). Not part of
+         *  the params hash: a plugin's key is its own already. */
+        by?: string;
       }
     ) {
       const existing = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
@@ -706,7 +709,7 @@ export const scopeActor = actor({
           profileVersion: params.profileVersion ?? null, profileSource: params.profileSource ?? null, budget: d.budget, limits: d.limits,
           agent: params.spec, task: taskInl.text, ...(taskInl.attachment ? { taskAttachment: taskInl.attachment } : {}), key: params.key ?? null, operator: !!params.operator, ...(params.review ? { review: true } : {}),
           ...(params.grant && Object.keys(params.grant).length ? { grant: params.grant } : {}), workspace,
-          ...(shown.title ? { title: shown.title, titleSource: shown.titleSource } : {}),
+          ...(shown.title ? { title: shown.title, titleSource: shown.titleSource } : {}), ...(params.by ? { by: params.by } : {}),
         }, `spawn-${params.agentId}`);
         if (titled) await addEvent(tx, "AGENT_TITLED", params.agentId, titledEvent(params.agentId, titled.title, params.title!.by, params.title!.setBy, titled), `title-${params.agentId}-spawn`);
         out = await get(params.agentId);
