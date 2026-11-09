@@ -745,7 +745,10 @@ failed, timed out or isn't active is still named. Its append is the brief: a ker
 (how many index lines of how many it loaded, the budget and where it came from, each provider's revision or the reason
 it was skipped, in the kernel's words, and where the lines' files are: the checkout, a bundle placed in the sandbox, or
 either) and one line per item (`IndexLine`, its description made one line, redacted, neutralised with `fence()`'s rule
-and capped), every provider's lines in one order, facts first, never an item's body. The brief is a function of the providers' indexes,
+and capped), every provider's lines in one order, facts first, never an item's body. A deprecated line, one superseded
+by a line of the same index, a stale one (`authority.staleAfter` on or before the brief's UTC day) and one not in effect
+yet (`authority.validFrom` after that day; optional on `IndexLine`) are left out, the header counting the
+stale and the not-yet ones. The brief is a function of the providers' indexes,
 the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
 and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
 out) on the run's stream. With the brief it attaches the context layer's skills (ADR-025 step 6, `src/context/skills.ts`;

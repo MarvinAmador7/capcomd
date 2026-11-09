@@ -329,6 +329,7 @@ status: stable                     # draft (the default), stable or deprecated (
 description: Money is rounded half-even (src/money.js), never with Math.round
 paths: [src/**]                    # the files it applies to, shown on its line
 stale_after: 2027-05-01T00:00:00Z  # optional: past it, the item leaves the brief
+# valid_from: 2027-01-01           # optional: the brief leaves it out until that day
 supersedes: [old-rounding]         # optional: the item it replaces leaves the brief
 ---
 
@@ -508,8 +509,9 @@ Context: loaded 2 of 2 lines (…); groundray at 9f8e7d6c5b4a, modified 2026-10-
   `sensitivity: restricted`) is refused by `brain add`, and an agent is never briefed from one: keep restricted knowledge
   outside capcomd. So is a brain capcomd can't check whole (a Markdown file over 4 MiB, more than 2000 of them).
 - A repository given as a path is recorded as an absolute path.
-- Reviewers get the brain's facts too (only memory is left out for them). Deprecated and superseded facts, and those
-  past their `stale_after`, leave the brief; a fact without `status` counts as a draft.
+- Reviewers get the brain's facts too (only memory is left out for them). Deprecated and superseded facts, those past
+  their `stale_after` and those not in effect yet (a `valid_from` after today) leave the brief, and the header counts
+  the stale and the not-yet ones; a not-yet fact comes back on its day. A fact without `status` counts as a draft.
 - Proposals to the brain go through its own pull requests (below); what agents read never changes until the brain's
   owners merge one and the project maps the brain again.
 
