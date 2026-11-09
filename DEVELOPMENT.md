@@ -346,7 +346,8 @@ and workflow tests use to check that a crashed step resumes. Named killpoints:
 CI builds releases (`.github/workflows/release.yml`); [AGENTS.md](AGENTS.md) has the rules (Semantic Versioning,
 the changelog, what never to do by hand). By hand, before tagging:
 
-1. In a `release: vX.Y.Z` commit, bump `version` in `package.json`, in both plugin manifests under
+1. In a `release: vX.Y.Z` commit, run `bun scripts/changes.ts fold` (pending change notes in `changes/` go into
+   `CHANGELOG.md` and the spec's §18), bump `version` in `package.json`, in both plugin manifests under
    `plugins/capcomd/` and in `packages/plugin/package.json` (`@capcomd/plugin` is released with capcomd); in
    `CHANGELOG.md`, rename `## Unreleased` to `## X.Y.Z (YYYY-MM-DD)` and add a new empty `## Unreleased` above it
    (CI checks both stay in step: `bun scripts/release-notes.ts --check`). `bun scripts/release-notes.ts vX.Y.Z`

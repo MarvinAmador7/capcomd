@@ -7,6 +7,7 @@
 // and package.json's version (and the plugin manifests' and packages/plugin's) is the newest released section (it only changes in a release commit).
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readNotes } from "./changes";
 
 const root = join(import.meta.dir, "..");
 const fail = (m: string): never => { console.error(`release-notes: ${m}`); process.exit(1); };
@@ -32,6 +33,7 @@ if (tag === "--check") {
   console.log(`CHANGELOG.md, package.json, the plugin manifests and @capcomd/plugin agree (${pkg.version}; ${released.length} releases)`);
   process.exit(0);
 }
+if (readNotes(join(root, "changes")).length) fail("changes/ still has notes: run `bun scripts/changes.ts fold` in the release commit");
 if (tag !== `v${pkg.version}`) fail(`tag ${tag} doesn't match package.json version ${pkg.version} (expected v${pkg.version})`);
 
 const esc = pkg.version.replace(/\./g, "\\.");
