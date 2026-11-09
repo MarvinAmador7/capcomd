@@ -60,4 +60,21 @@ describe("a worker that changes nothing", () => {
     expect(df[0].event.message).toContain("--report");
     expect(ev.filter((e) => e.type === "AGENT_FAILED" && e.agentId === root).length).toBe(1);
   }, 90_000);
+
+  test("one that declared no summary: its final words are its summary on the failure", async () => {
+    const run = await newRun(w);
+    const agent = (await w.cj(["spawn", run, "--profile", "worker", "--task", "look around", "--no-start", "--contract", JSON.stringify({ script: w.script("quiet", "exit 0") })])).j.agentId as string;
+    const s = (await import("../../src/core/relay")).client().scope.getOrCreate([run]);
+    const a = await s.getAgent({ agentId: agent });
+    const { finishFailed } = await import("../../src/primitives/ops");
+    const fin = await finishFailed(run, agent, a!.epoch, { kind: "no_changes", message: "made no changes; spawn it with --report for work that changes no files", resultText: "  the flaky test is the clock one  " });
+    expect(fin.status).toBe("failed");
+    expect((await s.getAgent({ agentId: agent }))!.result).toMatchObject({ errorKind: "no_changes", summary: "the flaky test is the clock one" });
+    // Any other failure: no errorKind, its words aren't a summary.
+    const other = (await w.cj(["spawn", run, "--profile", "worker", "--task", "look around", "--no-start", "--contract", JSON.stringify({ script: w.script("quiet2", "exit 0") })])).j.agentId as string;
+    await finishFailed(run, other, (await s.getAgent({ agentId: other }))!.epoch, { kind: "git", message: "git push failed", resultText: "words" });
+    const r2 = (await s.getAgent({ agentId: other }))!.result;
+    expect(r2.errorKind).toBeUndefined();
+    expect(r2.summary ?? null).toBeNull();
+  }, 60_000);
 });
