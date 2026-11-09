@@ -3,7 +3,8 @@
 // prompt after its profile's own, with the context layer's skills (src/context/skills.ts: the doctrine, and the
 // routing paragraph for an agent that writes run notes), each pinned by the sha256 of its text, and leaves the bundles
 // the brief cites (a brain at its commit) for the attempt's runner to place in the sandbox; an agent whose profile has
-// no `context` block gets nothing and costs nothing. As an agent.changed
+// no `context` block gets nothing and costs nothing, and neither does one whose providers all have nothing for the
+// project (a project with no memory yet: ADR-025 D17, the owner's decision of 2026-11-08). As an agent.changed
 // listener it collects the lessons an agent proposed in its result (`result.data.context`) when it ends: attributed to
 // the token that wrote the result, checked by the seeded secret scan, kept as candidates of the run in kv
 // `_context/<agentId>` (src/context/capture.ts), and, before a consolidator starts, those an agent still working declared
@@ -368,6 +369,17 @@ export const plugin = definePlugin({
       const { roleOf } = await import("../context/brief");
       const role = roleOf(a);
       const b = await briefFor({ runId: agent.runId, agentId: agent.id, profile: agent.profile, spec, role });
+      const emit = emitter(ctx, agent.runId, agent.id);
+      // A provider with nothing at all (the project keeps no memory yet) is left out, and said so on the run (ADR-025
+      // D17); when every one is, the agent gets nothing: no brief, no context skill, its prompt as without a context
+      // block. Proposing a lesson stays open to it (its own capcomd skill says how), so the first one can still land.
+      const skipped = async () => {
+        for (const p of b.providers) {
+          if (p.state === "skipped") await emit("skipped", `${agent.id} starts without the ${p.name} context provider (${p.reason}).`, { agentId: agent.id, profile: agent.profile, provider: p.name, reason: p.reason });
+          else if (p.empty) await emit("skipped", `${agent.id} starts without the ${p.name} context provider (empty: nothing for this project yet).`, { agentId: agent.id, profile: agent.profile, provider: p.name, reason: "empty" });
+        }
+      };
+      if (b.empty) { await skipped(); return { decision: "allow" }; }
       // The skills it reads the brief with, so the patch stays one the kernel takes: one the payload already has by name
       // (an earlier listener's) isn't attached twice, and only those that fit the room the agent's other skills leave
       // (a profile with a context block keeps room for them, but a plugin's skills or an agent pinned before it did may
@@ -385,15 +397,14 @@ export const plugin = definePlugin({
         return true;
       });
       if (skills.length < wanted.length) ctx.log.warn("an agent's other skills leave no room for a context skill: it starts without it", { agentId: agent.id, left: wanted.filter((s) => !skills.includes(s)).map((s) => s.name) });
-      const loaded = b.providers.filter((p) => p.state === "loaded").map((p) => `${p.name} at ${sha(p.revision)}`);
-      const emit = emitter(ctx, agent.runId, agent.id);
+      const loaded = b.providers.flatMap((p) => (p.state === "loaded" && !p.empty ? [`${p.name} at ${sha(p.revision)}`] : []));
       await emit("loaded", `${agent.id} starts with ${b.loaded} of ${b.total} context lines${loaded.length ? ` (${loaded.join(", ")})` : ""}.`, {
         agentId: agent.id, profile: agent.profile, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes,
         budget: { briefBytes: b.limits.briefBytes, indexLines: b.limits.indexLines, source: b.source }, providers: b.providers,
         skills: skills.map(({ name, hash }) => ({ name, hash })),
         ...(b.bundles.length ? { bundles: b.bundles.map((x) => ({ provider: x.provider, name: x.name, commit: x.commit })) } : {}),
       });
-      for (const p of b.providers) if (p.state === "skipped") await emit("skipped", `${agent.id} starts without the ${p.name} context provider (${p.reason}).`, { agentId: agent.id, profile: agent.profile, provider: p.name, reason: p.reason });
+      await skipped();
       // The bundles the brief's lines point at, for the attempt's runner to place (ADR-025 §6.2): the kernel's own
       // record of this call, left with the patch it answers.
       const kernel = preparingAgent.getStore();
@@ -441,6 +452,14 @@ export const plugin = definePlugin({
         }
         const role = flags.review === true ? "review" : "work";
         const b = await briefFor({ runId, agentId: null, profile: name, spec: { ...spec, ...(resolved.profile ? { profile: resolved.profile } : {}) }, role });
+        if (b.empty) {
+          const at = b.providers.map((p) => (p.state === "loaded" ? `${p.name} at ${sha(p.revision)}` : p.name)).join(", ");
+          return {
+            schema: SCHEMA, ok: true, profile: name, brief: null, empty: true, loaded: 0, total: 0, providers: b.providers, skills: [],
+            text: `Profile ${name}'s context has nothing for this project yet (${at}; the project's memory is .capcomd/context/), so its agents start with no brief and no context skills. ` +
+              "Agents still propose lessons in their results; the first one a reviewed change lands turns the brief on.",
+          };
+        }
         const { contextSkills } = await import("../context/skills");
         const { hasVmCapcomd } = await import("../subagents/skill");
         const capcomd = hasVmCapcomd({ limits: { allowSpawn: spec.children?.allowSpawn === true }, profile: name });

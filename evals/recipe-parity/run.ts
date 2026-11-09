@@ -70,7 +70,8 @@ function contract(env: NodeJS.ProcessEnv, runId: string, approvals: Record<strin
 async function runPath(engineE: NodeJS.ProcessEnv, bare: string, c: Case, path: "legacy" | "recipe", runId: string): Promise<Outcome> {
   const before = new Set(git(bare, ["rev-list", "trunk"]).trim().split("\n"));
   const t = Date.now();
-  const env = { ...process.env, ...engineE, CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_AWAIT_POLL_MS: "100", ...(c.env ?? {}) };
+  // Both paths are the recipe-hierarchical plugin's, off unless turned on (plugin API §17.1).
+  const env = { ...process.env, ...engineE, CAPCOMD_SPAWN_EXEC: "fake", CAPCOMD_SKIP_PREFLIGHT: "1", CAPCOMD_AWAIT_POLL_MS: "100", CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true", ...(c.env ?? {}) };
   const child = spawn(process.execPath, ["src/cli/index.ts", "run", c.goal, `--${path}`, "--json", "--run-id", runId, ...(c.args ?? [])], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.on("data", (d) => (stdout += d)); child.stderr.on("data", (d) => (stderr += d));

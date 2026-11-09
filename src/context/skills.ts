@@ -4,7 +4,8 @@
 // are skills, not prompt prose, so each is pinned by the sha256 of its text on the attempt's spec and an agent's
 // instructions say which text it read; their text is fixed (no agent's or run's detail in it), so every agent of a
 // profile gets the same bytes and shares one cached prefix. The context router attaches them at agent.preparing
-// (src/plugins/context.ts) to an agent whose profile has a context block: the doctrine to every one, the routing
+// (src/plugins/context.ts) to an agent whose profile has a context block and whose brief has something (none when
+// the project keeps no memory yet, ADR-025 D17): the doctrine to every one, the routing
 // paragraph to one that can write notes and a result's data (an agent with the in-VM capcomd: every one that may spawn
 // or does work of its own, but the consolidator) and isn't a reviewer or a report agent (D11).
 import { createHash } from "node:crypto";

@@ -23,35 +23,15 @@ import { descriptorOf, isListedProvider, LISTED_PROVIDERS, POSTED_ACTIONS, PROVI
 import { SandboxNotFoundError } from "../providers/boxd-errors";
 import { beginMachineAction } from "../providers/machine-audit";
 import { MACHINE_PREFIX, type VmInfo } from "../providers/sandbox";
-import { agentSlots, gb } from "../providers/capacity";
-import { AGENT_MEMORY_DEFAULT_MB, AGENT_MEMORY_ENV, AGENT_MEMORY_PRESETS, ConfigFileError, currentAgentMemory, currentIdleLifetime, IDLE_LIFETIME_DEFAULT, IDLE_LIFETIME_PRESETS, IDLE_LIFETIME_ENV, IDLE_LIFETIME_MIN, type AgentMemory, type IdleLifetime, type SettingsStore, type StoredSettingId } from "../providers/settings";
-/** What the Logins row reads of GET /v1/logins. */
-export type LoginLike = { provider: "claude" | "codex"; sandbox: string; loggedIn: boolean; hostBound: boolean };
+import { AGENT_MEMORY_ENV, ConfigFileError, currentIdleLifetime, fileSettingsStore, IDLE_LIFETIME_ENV, IDLE_LIFETIME_MIN, settingsPath, type IdleLifetime, type SettingsStore, type StoredSettingId } from "../providers/settings";
+import type { UiDescriptor, UiRowValue } from "../../packages/plugin/src/context";
+import { sandboxUi } from "../plugins/sandboxes";
+import { durationLabel, fieldOf, loginsRow, type Field, type LoginLike, type RowFacts, type SlotsLike } from "../plugins/builtin/sandbox-rows";
+// The rows' fields, as the sandbox plugins contribute them (src/plugins/builtin/sandbox-rows.ts, plugin API §4.7.5).
+export { agentMemoryField, agentSlotsField, AGENT_MEMORY_CHOICES, checkpointsField, durationLabel, IDLE_LIFETIME_CHOICES, idleLifetimeField, memoryLabel, type Field, type FieldType, type LoginLike, type SlotsLike } from "../plugins/builtin/sandbox-rows";
 
 type Env = Record<string, string | undefined>;
 
-// ---- Fields (ADR-021 §2): choice, toggle, info, status; every one has a daemon-written `display` ----
-export type FieldType = "choice" | "toggle" | "info" | "status";
-export interface Field {
-	id: string;
-	type: FieldType;
-	label: string;
-	help: string | null;
-	value: string | null;
-	display: string;
-	default: string | null;
-	choices: Array<{ value: string; label: string }>;
-	/** Where the value comes from: default (the descriptor's), env (an environment variable wins), config (the user
-	 *  config), daemon (an info row the daemon works out). */
-	source: "default" | "env" | "config" | "daemon";
-	editable: boolean;
-	/** new_runs: a change applies to runs started after it; new_agents: to agents that start after it (those waiting
-	 *  for a slot too); null for info rows. */
-	appliesTo: "new_runs" | "new_agents" | null;
-	needsRestart: boolean;
-	/** A status row's dot: ok, warn, bad or none; null on every other type. */
-	state: "ok" | "warn" | "bad" | "none" | null;
-}
 export interface Descriptor {
 	name: string; descriptorVersion: number; label: string; kind: string; vendor: string; title: string; mark: string; listed: boolean;
 	caps: ProviderDescriptor["caps"]; settings: string[]; info: string[]; resourceKinds: string[]; actions: string[];
@@ -68,125 +48,37 @@ export function servedDescriptor(d: ProviderDescriptor): Descriptor {
 	};
 }
 
-/** The idle lifetime presets, the same on every provider (ADR-021, decided 2026-10-27). */
-export const IDLE_LIFETIME_CHOICES: ReadonlyArray<{ value: string; label: string }> = IDLE_LIFETIME_PRESETS.map((n) => ({ value: String(n), label: durationLabel(n) }));
-
-/** "15 minutes", "1 hour", "90 seconds". */
-export function durationLabel(seconds: number): string {
-	const unit = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-	if (seconds > 0 && seconds % 3600 === 0) return unit(seconds / 3600, "hour");
-	if (seconds > 0 && seconds % 60 === 0) return unit(seconds / 60, "minute");
-	return unit(seconds, "second");
-}
-
-/**
- * The idle machine lifetime (ADR-021 §2): a lease a running agent renews every 10 minutes, so a machine left behind is
- * deleted this long after its last renewal. `life`: what applies now and where it comes from; `writable`: whether the
- * daemon can store a change (false while settings are off). An environment variable wins and makes it read-only.
- */
-export function idleLifetimeField(d: ProviderDescriptor, life: IdleLifetime, writable = true): Field {
-	const sweep = d.caps.idleLifetime === "sweep";
-	const env = life.source === "env";
-	return {
-		id: "idleLifetime", type: "choice", label: "Delete idle machines after",
-		help: sweep
-			? "A container left behind (a crash, a stopped run) is deleted after this. capcomd checks every 5 minutes, so one can run up to 5 minutes over."
-			: "A machine left behind (a crash, a stopped run) is deleted after this, so it stops billing.",
-		value: String(life.seconds), display: env ? `Set by ${IDLE_LIFETIME_ENV} in capcomd's environment` : durationLabel(life.seconds),
-		default: String(IDLE_LIFETIME_DEFAULT), choices: IDLE_LIFETIME_CHOICES.map((c) => ({ ...c })),
-		source: life.source, editable: !env && writable, appliesTo: "new_runs", needsRestart: false, state: null,
-	};
-}
-
-/** "512 MB", "1 GB", "1.5 GB". */
-export function memoryLabel(mb: number): string {
-	return mb >= 1024 && (mb * 10) % 1024 === 0 ? `${mb / 1024} GB` : `${mb} MB`;
-}
-/** The memory per agent presets (Docker, decided 2026-11-03). */
-export const AGENT_MEMORY_CHOICES: ReadonlyArray<{ value: string; label: string }> = AGENT_MEMORY_PRESETS.map((n) => ({ value: String(n), label: memoryLabel(n) }));
-
-/**
- * Memory per agent (Docker, src/providers/capacity.ts): how much of Docker's memory each agent gets, so how many run at
- * once (the Agents at once row). An environment variable wins and makes it read-only. A change applies to the next
- * agent that starts, those waiting for a slot included.
- */
-export function agentMemoryField(memory: AgentMemory, writable = true): Field {
-	const env = memory.source === "env";
-	return {
-		id: "agentMemory", type: "choice", label: "Memory per agent",
-		help: "Agents here share Docker's memory: each gets this much, so a smaller amount runs more at once. An agent CLI uses about 0.3-0.6 GB; builds and tests need more.",
-		value: String(memory.mb), display: env ? `Set by ${AGENT_MEMORY_ENV} in capcomd's environment` : memoryLabel(memory.mb),
-		default: String(AGENT_MEMORY_DEFAULT_MB), choices: AGENT_MEMORY_CHOICES.map((c) => ({ ...c })),
-		source: memory.source, editable: !env && writable, appliesTo: "new_agents", needsRestart: false, state: null,
-	};
-}
-
 /** The environment variable that sets each setting (and makes it read-only). */
 const SETTING_ENV: Record<string, string> = { idleLifetime: IDLE_LIFETIME_ENV, agentMemory: AGENT_MEMORY_ENV };
 
-const AI_NAME: Record<LoginLike["provider"], string> = { claude: "Claude Code", codex: "Codex" };
 /** The Logins row: a summary of GET /v1/logins?sandbox=name. "Bound" only when every logged-in login is bound to its
  *  AI's API host; otherwise it names the ones that aren't. */
 export function loginsField(name: string, all: LoginLike[]): Field {
-	const here = all.filter((l) => l.sandbox === name && l.loggedIn);
-	const loose = here.filter((l) => !l.hostBound).map((l) => AI_NAME[l.provider]);
-	const value = !here.length ? "none" : !loose.length ? "bound" : loose.length === here.length ? "unbound" : "partial";
-	const display = value === "none" ? "No logins yet"
-		: value === "bound" ? "Bound"
-		: `${loose.join(" and ")} ${loose.length === 1 ? "isn't" : "aren't"} bound to ${loose.length === 1 ? "its" : "their"} API host`;
-	const hostBound = descriptorOf(name)?.caps.hostBoundSecrets ?? false;
-	return {
-		id: "logins", type: "info", label: "Logins",
-		help: hostBound
-			? "A bound login is swapped in on the way to its AI's API, so agents only ever see a placeholder. Plan logins kept in the agent environment aren't bound."
-			: "Logins here are kept in the agent environment or passed to the agent, so agents can read them.",
-		value, display, default: null, choices: [], source: "daemon", editable: false, appliesTo: null, needsRestart: false, state: null,
-	};
+	return loginsRow(name, all, descriptorOf(name)?.caps.hostBoundSecrets ?? false);
 }
 
-/** The Checkpoints row: git checkpoints by the in-VM supervisor (ADR-019 §3), the same on every provider. */
-export function checkpointsField(source: Env = process.env): Field {
-	const set = envVar("AGENT_CHECKPOINT_MS", source);
-	const n = set === undefined || set.trim() === "" ? NaN : Number(set);
-	const ms = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 10 * 60_000;
-	const secs = Math.round(ms / 1000);
-	const every = secs <= 0 ? null : `every ${durationLabel(secs).replace(/^1 /, "")}`;
-	return {
-		id: "checkpoints", type: "info", label: "Checkpoints",
-		help: "Agents save their work to a git checkpoint as they go, so a machine that's lost costs at most the work since the last one.",
-		value: String(ms), display: every ? `After each commit and ${every}` : "After each commit", default: null, choices: [], source: "daemon",
-		editable: false, appliesTo: null, needsRestart: false, state: null,
-	};
-}
-
-/** What the Agents at once row reads of Docker: its memory (null while unknown). */
-export type SlotsLike = { memTotal: number | null };
 /**
- * The Agents at once row (src/providers/capacity.ts): agents here share Docker's memory, so at most its memory over the
- * per-agent budget (the Memory per agent setting, as it is now) run at once; more wait as pending and start as others
- * finish.
+ * GET /v1/sandboxes/{name}: null for a provider clients don't see. Its rows are its sandbox plugin's UI descriptors
+ * (plugin API §4.7.5, src/plugins/builtin/sandbox-rows.ts), in the order its descriptor lists them; a row the plugin
+ * doesn't register isn't shown. A built-in's rows read the facts gathered here; another plugin's read their own.
  */
-export function agentSlotsField(s: SlotsLike & { memory: AgentMemory }): Field {
-	const budget = memoryLabel(s.memory.mb);
-	const n = s.memTotal ? agentSlots(s.memTotal, s.memory.mb) : null;
-	const env = s.memory.source === "env";
-	return {
-		id: "agentSlots", type: "info", label: "Agents at once",
-		help: `Agents here share Docker's memory, ${budget} each. More wait (pending) and start as others finish. ${env ? `Set by ${AGENT_MEMORY_ENV} in capcomd's environment.` : "Change it with Memory per agent."}`,
-		value: n !== null ? String(n) : null,
-		display: n !== null ? `${n} (${gb(s.memTotal!)} ÷ ${budget} per agent)` : `${budget} per agent (Docker's memory isn't known yet)`,
-		default: null, choices: [], source: env ? "env" : "daemon", editable: false, appliesTo: null, needsRestart: false, state: null,
-	};
-}
-
-/** GET /v1/sandboxes/{name}: null for a provider clients don't see. */
-export function sandboxDetail(name: string, o: { env?: Env; logins: LoginLike[]; idleLifetime: IdleLifetime; writable?: boolean; slots?: SlotsLike | null; store?: SettingsStore }): SandboxDetail | null {
+export async function sandboxDetail(name: string, o: { env?: Env; logins: LoginLike[]; idleLifetime: IdleLifetime; writable?: boolean; slots?: SlotsLike | null; store?: SettingsStore }): Promise<SandboxDetail | null> {
 	if (!isListedProvider(name)) return null;
 	const d: ProviderDescriptor = PROVIDERS[name];
-	// Memory per agent as it is now (read from the store each time): the setting and the Agents at once row agree.
-	const memory = () => currentAgentMemory(name, { env: o.env, ...(o.store ? { store: o.store } : {}) });
-	const settings = d.settings.map((id) => (id === "idleLifetime" && d.caps.idleLifetime !== "none" ? idleLifetimeField(d, o.idleLifetime, o.writable ?? true) : id === "agentMemory" ? agentMemoryField(memory(), o.writable ?? true) : null)).filter((f): f is Field => !!f);
-	const info = d.info.map((id) => (id === "logins" ? loginsField(name, o.logins) : id === "agentSlots" ? agentSlotsField({ memTotal: o.slots?.memTotal ?? null, memory: memory() }) : checkpointsField(o.env))).filter((f): f is Field => !!f);
+	const env = o.env ?? process.env;
+	const facts: RowFacts = { env, logins: o.logins, idleLifetime: o.idleLifetime, writable: o.writable ?? true, slots: o.slots ?? null, store: o.store ?? fileSettingsStore(settingsPath(env)) };
+	const ui = sandboxUi(name);
+	const rows = async (kind: "settings" | "info", ids: readonly string[]): Promise<Field[]> => {
+		const mine = ui.descriptors.filter((x): x is Extract<UiDescriptor, { kind: "settings" | "info" }> => x.kind === kind);
+		const out: Field[] = [];
+		for (const id of ids) {
+			const u = mine.find((x) => x.id === id);
+			if (u) out.push(fieldOf(u, await (ui.builtin ? (u.read as (f: RowFacts) => Promise<UiRowValue>)(facts) : u.read())));
+		}
+		return out;
+	};
+	const settings = await rows("settings", d.settings);
+	const info = await rows("info", d.info);
 	// rev: changes whenever a setting's value, source or editability does (PATCH …/settings checks it).
 	const rev = createHash("sha256").update(JSON.stringify([d.descriptorVersion, settings.map((f) => [f.id, f.value, f.source, f.editable])])).digest("hex").slice(0, 16);
 	return { descriptor: servedDescriptor(d), settings, info, rev };
@@ -648,39 +540,49 @@ export function sandboxSurface(deps: SurfaceDeps) {
 	const catalog = resourceCatalog(deps);
 	const env = () => deps.env ?? process.env;
 	const slots = async (name: ListedProvider) => (deps.agentSlots ? await deps.agentSlots(name).catch(() => null) : null);
-	const detail = async (name: ListedProvider) => sandboxDetail(name, { env: env(), logins: await deps.logins(), idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable(), slots: await slots(name), store: deps.settings })!;
+	/** The settings change in progress (updateSandboxSettings: one at a time). */
+	let changing: Promise<void> = Promise.resolve();
+	const detail = async (name: ListedProvider) => (await sandboxDetail(name, { env: env(), logins: await deps.logins(), idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable(), slots: await slots(name), store: deps.settings }))!;
 	return {
 		sandboxes: async (): Promise<SandboxSummary[]> => Promise.all(LISTED_PROVIDERS.map(async (n) => ({ ...servedDescriptor(PROVIDERS[n]), ...(await deps.availability(n)) }))),
 		sandbox: async (name: string): Promise<SandboxDetail | null> => (isListedProvider(name) ? detail(name) : null),
 		/**
 		 * PATCH /v1/sandboxes/{name}/settings: checks the change against the fields as they are now and stores it in the
-		 * user config. The check and the write run with no await between them, so two requests with the same rev can't
-		 * both pass. `changes` lists what really changed (a value sent as it already was isn't a change).
+		 * user config. One change at a time: the fields are read (their rows' `read`, which awaits), checked and written
+		 * before the next change reads them, so two requests with the same rev can't both pass. `changes` lists what
+		 * really changed (a value sent as it already was isn't a change).
 		 */
 		updateSandboxSettings: async (name: string, patch: SettingsPatch): Promise<SettingsOutcome> => {
 			if (!isListedProvider(name)) return { ok: false, status: 404, code: "not_found", message: `sandbox ${name.slice(0, 64)} not found` };
 			const logins = await deps.logins();
 			const placeSlots = await slots(name);
-			// Docker's memory is asked once; the settings (memory per agent too) are read again after the write.
-			const build = () => sandboxDetail(name, { env: env(), logins, idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable(), slots: placeSlots, store: deps.settings })!;
-			const before = build();
-			const checked = checkSettingsPatch(before, patch);
-			if (!checked.ok) return checked;
-			const changes: SettingChange[] = [];
-			for (const w of checked.writes) {
-				// A value stored as the field shows it now (from the default or the config) is still written, so the
-				// choice is the user's from now on; it's a change only when the value differs.
-				try { deps.settings.write(name, w.field.id as StoredSettingId, Number(w.value)); } catch (e) {
-					if (e instanceof ConfigFileError) return { ok: false, status: 422, code: "invalid", message: e.message };
-					throw e;
-				}
-				if (w.field.value !== w.value) changes.push({ id: w.field.id, from: w.field.value, to: w.value });
-			}
-			return { ok: true, detail: build(), changes };
+			const turn = changing;
+			let done!: () => void;
+			changing = new Promise<void>((r) => { done = r; });
+			await turn;
+			try { return await change(name, patch, logins, placeSlots); } finally { done(); }
 		},
 		sandboxResources: (name: string, o: { limit?: number; cursor?: string } = {}) => catalog.page(name, o),
 		sandboxResource: (name: string, id: string) => catalog.get(name, id),
 		sandboxAction: (name: string, id: string, action: string, by: string) => catalog.act(name, id, action, by),
 	};
+	async function change(name: ListedProvider, patch: SettingsPatch, logins: LoginLike[], placeSlots: SlotsLike | null): Promise<SettingsOutcome> {
+		// Docker's memory is asked once; the settings (memory per agent too) are read again after the write.
+		const build = async () => (await sandboxDetail(name, { env: env(), logins, idleLifetime: currentIdleLifetime(name, { env: env(), store: deps.settings }), writable: deps.settings.writable(), slots: placeSlots, store: deps.settings }))!;
+		const before = await build();
+		const checked = checkSettingsPatch(before, patch);
+		if (!checked.ok) return checked;
+		const changes: SettingChange[] = [];
+		for (const w of checked.writes) {
+			// A value stored as the field shows it now (from the default or the config) is still written, so the
+			// choice is the user's from now on; it's a change only when the value differs.
+			try { deps.settings.write(name, w.field.id as StoredSettingId, Number(w.value)); } catch (e) {
+				if (e instanceof ConfigFileError) return { ok: false, status: 422, code: "invalid", message: e.message };
+				throw e;
+			}
+			if (w.field.value !== w.value) changes.push({ id: w.field.id, from: w.field.value, to: w.value });
+		}
+		return { ok: true, detail: await build(), changes };
+	}
 }
 export type SandboxSurface = ReturnType<typeof sandboxSurface>;
