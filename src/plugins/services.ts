@@ -1,13 +1,13 @@
 // The kernel's primitives for a plugin (docs/spec/plugin-api.md §8.1, §8.4), beyond `ctx.jobs` (src/jobs/service.ts),
 // `ctx.storage` (src/plugins/storage.ts) and `ctx.triggers` (src/triggers/intake.ts). In the daemon only (`daemonServices`):
-// `ctx.runs`, `ctx.agents` (`get`, `tree`, `cancel`, `notice`), `ctx.messages`, `ctx.kv`, `ctx.board`, `ctx.gates.pending`
-// and `ctx.profiles`, which act on the engine or resolve as a spawn does. In every process (`localServices`), like the
-// gates: `ctx.sandboxes` and `ctx.auth`, facts about this process's places and logins. Each is the kernel's own path
-// (src/primitives/ops.ts, the scope actor), with the plugin as the caller; the host has already checked the plugin's
-// scopes (packages/plugin/src/host/context.ts). A call never creates a run: an unknown one is `not_found`. A mutating
-// call's `key` (§8.2) is the plugin's own, kept apart from the CLI's and every other plugin's. Errors reach the plugin as
-// PluginErrors (§8.3). What isn't here (`agents.spawn`, `await`, `grant`, `title`, `gates.verify`, `merge`) answers
-// `unsupported` until a later step implements it.
+// `ctx.runs`, `ctx.agents`, `ctx.messages`, `ctx.kv`, `ctx.board`, `ctx.gates` and `ctx.profiles`, which act on the engine
+// or resolve as a spawn does. In every process (`localServices`), like the gates: `ctx.sandboxes` and `ctx.auth`, facts
+// about this process's places and logins. Each is the kernel's own path (src/primitives/ops.ts, the scope actor), with
+// the plugin as the caller; the host has already checked the plugin's scopes (packages/plugin/src/host/context.ts). A
+// call never creates a run: an unknown one is `not_found`. A mutating call's `key` (§8.2) is the plugin's own, kept apart
+// from the CLI's and every other plugin's. A plugin is never the operator: its spawn passes the spawn checks as any
+// caller's, and its merge needs a passing verification and every plugin's gate (§11.3). Errors reach the plugin as
+// PluginErrors (§8.3).
 import type { AgentsService, AuthService, BoardService, BoardTask, CallOptions, GatesService, KvService, MessagesService, ProfilesService, RunsService, SandboxesService } from "../../packages/plugin/src/context";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
@@ -20,9 +20,9 @@ import type { SandboxProvider } from "../providers/sandbox";
 import { checkKey, leaseMs } from "../primitives/board";
 import { paramsHash } from "../primitives/policy";
 import { agentSeam, kindOf } from "./agents";
-import { iso, skillHash, SKILL_BYTES_MAX, SKILLS_MAX, untrusted } from "./hooks";
+import { HOST_CONTRACT_KEYS, iso, skillHash, SKILL_BYTES_MAX, SKILLS_MAX, untrusted } from "./hooks";
 import { describedSandboxes, sandboxSeam } from "./sandboxes";
-import { agentOf, approvalOf } from "./shapes";
+import { agentOf, approvalOf, mergeOf, verificationOf } from "./shapes";
 
 /** A kernel error as a plugin sees it (§8.3). */
 export function asPluginError(e: unknown): never {
@@ -65,9 +65,46 @@ export async function showsFileChanges(runId: string, agentId: string): Promise<
   return !contract.review && contract.report !== true && (a.spec as { toolMode?: string } | null)?.toolMode !== "orchestrate";
 }
 
+const ENDED = new Set(["done", "failed", "cancelled"]);
+/** How long `agents.await` waits by default, and at most (§8.2 `timeoutMs`); how many agents it waits for. */
+const AWAIT_MS = 30_000, AWAIT_MAX_MS = 60 * 60_000, AWAIT_IDS_MAX = 100;
+
 /** `ctx.agents` for one plugin (§8.1, §8.4). */
-export function pluginAgents(plugin: string): Partial<AgentsService> {
+export function pluginAgents(plugin: string, principal: Principal): AgentsService {
+  const by = `plugin:${plugin}`;
   return {
+    /**
+     * `capcomd spawn` as the plugin: the spawn checks, checkSpawn (the parent's limits, or the run's, and the budget
+     * share it carves from) and agent.spawning (told the plugin asked) as for any caller, never as the operator. The
+     * spawn's `by` and its title's `setBy` are `plugin:<name>`; a key gives the same agent again.
+     */
+    async spawn(input, o) {
+      if (!input || typeof input !== "object") throw invalid("agents.spawn takes {runId, profile, task, parent?, contract?, budget?, grant?, title?}");
+      const extra = input as { operator?: unknown; review?: unknown };
+      if (extra.operator !== undefined && extra.operator !== false) throw new PluginError("forbidden", "a plugin's spawn is never the operator's: it passes the spawn checks as any caller's (§8.4)");
+      if (extra.review !== undefined && extra.review !== false) throw new PluginError("forbidden", "a reviewer is a verification's (its reviewer gate spawns it), never a plugin's spawn (§8.4)");
+      if (typeof input.profile !== "string" || !PROFILE_NAME.test(input.profile)) throw invalid(`not a profile name: ${String(input.profile).slice(0, 80)}`);
+      if (typeof input.task !== "string" || !input.task.trim()) throw invalid("a spawn has a task");
+      if (input.contract !== undefined) {
+        if (!input.contract || typeof input.contract !== "object" || Array.isArray(input.contract)) throw invalid("a contract is {key: value}");
+        checkValue(input.contract, "contract");
+        // Own keys only: `in` would also find Object.prototype's (a contract key `constructor` is the plugin's to set).
+        const host = Object.keys(input.contract).find((k) => Object.hasOwn(HOST_CONTRACT_KEYS, k));
+        if (host) throw new PluginError("forbidden", `contract.${host} isn't a plugin's to set: ${HOST_CONTRACT_KEYS[host]}`);
+      }
+      if (input.grant !== undefined && (!input.grant || typeof input.grant !== "object" || Array.isArray(input.grant))) throw invalid("a grant is {maxChildren?, maxDepth?, maxTotalDescendants?, allowedChildProfiles?, budgetShare?}");
+      if (input.title !== undefined && typeof input.title !== "string") throw invalid("a title is a string");
+      const budget = input.budget === undefined ? undefined : budgetOf(input.budget, "a spawn");
+      const idem = keyOf(plugin, o);
+      const { runId, parent } = input;
+      if (parent !== undefined) await agentRecord(runId, parent); else await scopeOf(runId);
+      const a = await (await ops()).spawnAgent({
+        runId, profile: input.profile, task: input.task, ...(parent !== undefined ? { parent } : {}), ...(input.contract ? { contract: input.contract } : {}),
+        ...(budget ? { budget } : {}), ...(input.grant ? { grant: input.grant } : {}), ...(input.title !== undefined ? { title: input.title } : {}),
+        operator: false, principal, ...idem,
+      }).catch(kernelError);
+      return agentOf(await agentRecord(runId, a.agentId));
+    },
     get: async (runId, agentId) => agentOf(await agentRecord(runId, agentId)),
     async tree(runId, root) {
       const all = await (await scopeOf(runId)).listAgents({});
@@ -98,6 +135,35 @@ export function pluginAgents(plugin: string): Partial<AgentsService> {
       const detail = String(notice.detail ?? "").trim();
       if (!detail) throw new PluginError("invalid", "a notice says what is wrong (detail)");
       await s.notice({ agentId, notice: { kind: notice.kind, detail: detail.slice(0, 300) } });
+    },
+    /** `capcomd await` (with `any`: `wait-any`) for at most `o.timeoutMs` (default 30 s): what ended, and what hasn't. */
+    async await(runId, ids, input, o) {
+      if (!Array.isArray(ids) || !ids.length || ids.length > AWAIT_IDS_MAX || ids.some((id) => typeof id !== "string" || !AGENT_ID.test(id))) throw invalid(`ids are 1 to ${AWAIT_IDS_MAX} agent ids`);
+      if (input?.any !== undefined && typeof input.any !== "boolean") throw invalid("any is true or false");
+      const ms = o?.timeoutMs ?? AWAIT_MS;
+      if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0 || ms > AWAIT_MAX_MS) throw invalid(`timeoutMs is a number of milliseconds, at most ${AWAIT_MAX_MS} (an hour)`);
+      const unique = [...new Set(ids)];
+      for (const id of unique) await agentRecord(runId, id);
+      await (await ops()).awaitAgents(runId, unique, { timeoutMs: ms, any: !!input?.any }).catch(kernelError);
+      const s = await scopeOf(runId);
+      const now = await Promise.all(unique.map(async (agentId) => (await s.getAgent({ agentId })) as ScopeAgent));
+      return { ended: now.filter((a) => ENDED.has(a.status)).map(agentOf), pending: now.filter((a) => !ENDED.has(a.status)).map((a) => a.agentId) };
+    },
+    /** `capcomd grant <run> <agent>` as the plugin: more budget for a live agent, carved from what its parent (or the
+     *  run) has left. Never the run's own budget: only the operator raises that. */
+    async grant(runId, agentId, add, o) {
+      const b = budgetOf(add, "a grant");
+      if (!Object.keys(b).length) throw invalid("a grant adds some usd, turns or wallSeconds");
+      const idem = keyOf(plugin, o);
+      await agentRecord(runId, agentId);
+      await (await ops()).grantBudget(runId, { agentId, add: b, by, ...idem }).catch(kernelError);
+    },
+    /** Names the agent's tab from the host, as a driver does, `setBy` the plugin; a user's own title still holds the tab. */
+    async title(runId, agentId, title, o) {
+      if (typeof title !== "string") throw invalid("a title is a string");
+      const idem = keyOf(plugin, o);
+      await agentRecord(runId, agentId);
+      await (await ops()).setAgentTitle(runId, agentId, title, { by: "driver", setBy: by, ...idem }).catch(kernelError);
     },
   };
 }
@@ -143,8 +209,8 @@ async function runOf(runId: string): Promise<Run> {
 const runShape = (r: Run): Run => ({ id: r.id, projectId: r.projectId, label: r.label, state: r.state, goal: r.goal, title: r.title, repo: r.repo, createdAt: r.createdAt });
 
 const UNITS = new Set(["usd", "turns", "wallSeconds"]);
-function budgetOf(b: unknown): Budget {
-  if (!b || typeof b !== "object" || Array.isArray(b)) throw invalid("a run has a budget: {usd?, turns?, wallSeconds?}");
+function budgetOf(b: unknown, of = "a run"): Budget {
+  if (!b || typeof b !== "object" || Array.isArray(b)) throw invalid(`${of} has a budget: {usd?, turns?, wallSeconds?}`);
   for (const [k, v] of Object.entries(b)) if (!UNITS.has(k) || typeof v !== "number" || !Number.isFinite(v) || v <= 0) throw invalid(`budget ${k}: a positive number of usd, turns or wallSeconds`);
   return b as Budget;
 }
@@ -352,9 +418,51 @@ export function pluginBoard(plugin: string): BoardService {
   };
 }
 
-/** `ctx.gates.pending` (§8.1): the run's merges parked for a person's approval, oldest first. */
-export function pluginGates(): Partial<GatesService> {
+const VFY_ID = /^vfy-[A-Za-z0-9]+$/;
+const REF_MAX = 200;
+function refOf(ref: unknown): string {
+  if (typeof ref !== "string" || !ref.trim() || ref.length > REF_MAX) throw invalid(`a ref is an agent id or a branch (at most ${REF_MAX} characters)`);
+  return ref;
+}
+/** A verification's or a merge's record, as the scope keeps it. */
+async function opOf(runId: string, opId: string): Promise<ScopeOp> {
+  const op = await (await scopeOf(runId)).getOp({ opId }) as ScopeOp | null;
+  if (!op) throw new PluginError("not_found", `${opId} not found in ${runId}`);
+  return op;
+}
+
+/** `ctx.gates` (§8.1): `capcomd verify` and `capcomd merge` as the plugin, and the merges parked for a person. */
+export function pluginGates(plugin: string): GatesService {
+  const requester = `plugin:${plugin}`;
   return {
+    /** The checks and every judge on the ref, as `capcomd verify` runs them; the run pays for its reviewer. Only a named
+     *  check (`check`): check commands are the operator's. Resolves once it has passed or failed. */
+    async verify(runId, input, o) {
+      if (!input || typeof input !== "object") throw invalid("gates.verify takes {ref, check?, acceptance?, target?, reviewer?}");
+      if ((input as { checks?: unknown }).checks !== undefined) throw new PluginError("forbidden", "check commands come only from the operator: name one of the run's checks (check)");
+      const ref = refOf(input.ref);
+      if (input.acceptance !== undefined) checkValue(input.acceptance, "acceptance");
+      if (input.reviewer !== undefined && (typeof input.reviewer !== "string" || !PROFILE_NAME.test(input.reviewer))) throw invalid(`not a profile name: ${String(input.reviewer).slice(0, 80)}`);
+      const picked = { ...named("check", input.check), ...named("target", input.target), ...keyOf(plugin, o) };
+      await scopeOf(runId);
+      const v = await (await ops()).verifyRef({
+        runId, ref, ...picked, ...(input.acceptance !== undefined ? { acceptance: input.acceptance } : {}), ...(input.reviewer !== undefined ? { reviewProfile: input.reviewer } : {}), requester,
+      }).catch(kernelError) as { id: string };
+      return verificationOf(runId, await opOf(runId, v.id));
+    },
+    /** A verified ref landed as `capcomd merge --require` lands it: never as the operator, so every plugin's gate is
+     *  asked and none is bypassed (§11.3). A protected target, or a gate's hold, parks it for a person (`parked`). */
+    async merge(runId, input, o) {
+      if (!input || typeof input !== "object") throw invalid("gates.merge takes {ref, require, target?}");
+      const operator = (input as { operator?: unknown }).operator;
+      if (operator !== undefined && operator !== false) throw new PluginError("forbidden", "a plugin can't merge as the operator: its merge needs a passing verification and every plugin's gate (§11.3)");
+      const ref = refOf(input.ref);
+      if (typeof input.require !== "string" || !VFY_ID.test(input.require)) throw invalid("require is the id of a passing verification (vfy-…)");
+      const picked = { ...named("target", input.target), ...keyOf(plugin, o) };
+      await scopeOf(runId);
+      const m = await (await ops()).mergeRef({ runId, ref, require: input.require, ...picked, operator: false, requestApproval: true, requester }).catch(kernelError) as { id: string };
+      return mergeOf(runId, await opOf(runId, m.id));
+    },
     async pending(runId) {
       const parked = await (await scopeOf(runId)).listOps({ state: "awaiting_approval", kind: "merge" }) as ScopeOp[];
       const { approvalIdFor } = await import("../api/source");
@@ -405,8 +513,8 @@ export function pluginProfiles(plugin: string, principal: Principal): ProfilesSe
 export function daemonServices(m: PluginManifest) {
   const principal: Principal = { kind: "plugin", name: m.name, scopes: [...(m.scopes ?? [])] };
   return {
-    runs: pluginRuns(m.name, principal), agents: pluginAgents(m.name), messages: pluginMessages(m.name), kv: pluginKv(m.name),
-    board: pluginBoard(m.name), gates: pluginGates(), profiles: pluginProfiles(m.name, principal),
+    runs: pluginRuns(m.name, principal), agents: pluginAgents(m.name, principal), messages: pluginMessages(m.name), kv: pluginKv(m.name),
+    board: pluginBoard(m.name), gates: pluginGates(m.name), profiles: pluginProfiles(m.name, principal),
   };
 }
 

@@ -850,7 +850,9 @@ it verifies that commit (a passed verify of it is used again) and asks to merge 
 (`requestApproval`: parked on a protected target; its own `merge.landing` hold applies), in the background, then looks
 again; and when a consolidator ended done and the run has `late` lessons (proposed, or declared, after it started), it
 starts one follow-up at the run's top (key `consolidator-late`, at most one per run), given only those, whose branch
-lands as any consolidator's. Each is idempotent by its key, and its events are keyed:
+lands as any consolidator's. It spawns, verifies and merges with its own primitives (§8.4), so each is
+`plugin:context-memory`'s and idempotent by its key, the plugin's own (an agent's recorded `key` is
+`plugin:context-memory:consolidate`, `…:consolidator-late`), and its events are keyed:
 `plugin.context-memory.consolidator_started` (with `late: true, consolidator` for the follow-up), `merge_requested`
 (`{agentId, commit, verify, merge, state}`), and `consolidator_skipped` (`reason`: `off`, `late_lessons` for the
 follow-up when it is off, `cancelled`, `consolidator_failed`, `spawn_refused`, `verify_failed`, `merge_failed`) when
@@ -1225,9 +1227,10 @@ composed with `ctx.signal`. `timeoutMs` defaults to 30 000; past it the call rej
 either completed or did not (the caller re-reads). **Not built yet:** the kernel's services apply a mutating call's
 `key` (§8.4), but the host applies neither `signal` nor `timeoutMs` as a bound on a primitive
 (`packages/plugin/src/host/context.ts` `guarded` passes the options on unchanged), so a call runs to its own end:
-`jobs.wait` reads `timeoutMs` as how long to wait (30 000 by default, then it answers the job as it is, not
-`timeout`), and a seam call through `sandboxes.provider` is bounded by its `SeamCall` deadline (§8.4); no other
-service reads either.
+`jobs.wait` and `agents.await` read `timeoutMs` as how long to wait (30 000 by default, then they answer what is so
+now, not `timeout`; `agents.await` at most an hour), and a seam call through `sandboxes.provider` is bounded by its
+`SeamCall` deadline (§8.4); no other service reads either, so a `gates.verify` resolves when its checks and judges have
+answered, however long that takes.
 
 ### 8.3 Errors
 
@@ -1260,22 +1263,33 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
   read-only (`forbidden`). Values ≤ 64 KB. A write's writer is `plugin:<name>`; `cas` compares the JSON of the current
   value (`expect` undefined: the key must not exist) and answers `false` on a mismatch; `list` leaves out the run's `_`
   settings unless the prefix starts with `_`, as `capcomd kv list` does.
-- `agents.spawn`: subject to `spawnChecks`, `checkSpawn` and the plugin's budget share as any caller; a plugin cannot
-  pass `operator`. `agents.notice`: a plugin may raise kinds the kernel does not (`stalled`) and clear only notices it
+- `agents.spawn`: `capcomd spawn` as the plugin, subject to `spawnChecks`, `checkSpawn` (the parent's limits, or the
+  run's, and the budget share it carves from) and `agent.spawning` (§6.6.6, its principal the plugin's) as any caller;
+  a refusal reaches the plugin with the refusing plugin's reason as the hint. A plugin cannot pass `operator`, nor
+  `review` (a reviewer is a verification's), nor a contract key only the host sets (`checks`, `orphansPolicyOverride`,
+  `review`, `from`): each is `forbidden`. Without `parent` the agent is at the run's top, with one, that agent's child
+  (its limits apply, and a widening of its spec is refused). The spawn's `agent.spawned` carries `by: plugin:<name>`;
+  `title` names its tab as the plugin (`setBy`, as `agents.title`). The answer is the agent; a replayed key answers the
+  same agent, and the same key with other arguments is `conflict`. `agents.await`: `capcomd await` (`any`: the first to
+  end) on at most 100 of the run's agents, for at most `timeoutMs` (§8.2), answering which ended (`ended`, as
+  `agents.get` shows them) and which didn't (`pending`). `agents.grant`: `capcomd grant <run> <agent>` as the plugin,
+  more budget for a live agent carved from what its parent (or the run) has left, recorded `by: plugin:<name>`; never
+  the run's own budget (only the operator raises that), and an ended agent's is `conflict`. `agents.title`: names the
+  agent's tab from the host as a driver does (`by: driver`, `setBy: plugin:<name>`); a user's own title still holds the
+  tab. `agents.notice`: a plugin may raise kinds the kernel does not (`stalled`) and clear only notices it
   raised: raising a kernel kind is `forbidden`; a clear (`null`) takes away only a plugin kind, and the kernel's own
   clear takes away only the kind it raised (the runner's stuck notices, its sandbox outage), so a plugin's notice stays
   until progress or the plugin clears it. A notice needs a running agent (a later one replaces an earlier one of another
   kind, as the kernel's do). `agents.cancel` cancels the agent and its descendants as `capcomd cancel` does, the reason
   recorded as `by the <plugin> plugin: <reason>`. A call never creates a run (an unknown run is `not_found`).
 - Which process has which (`src/plugins/services.ts`). The daemon's host only, beside `jobs`, `storage` and `triggers`:
-  `runs`, `agents.get`, `agents.tree`, `agents.cancel`, `agents.notice`, `messages`, `kv`, `board`, `gates.pending` and
-  `profiles` (they act on the engine, or resolve as the daemon's spawns do, through its `profile.resolved` listeners).
-  Every process's host, as the gates are: `sandboxes` and `auth` (facts about that process's places and logins). A CLI's
-  local host answers `unsupported` for the daemon's; the rest of `agents` and `gates.verify`, `gates.merge` answer
-  `unsupported` everywhere until a later step.
+  `runs`, `agents`, `messages`, `kv`, `board`, `gates` and `profiles` (they act on the engine, or resolve as the
+  daemon's spawns do, through its `profile.resolved` listeners). Every process's host, as the gates are: `sandboxes` and
+  `auth` (facts about that process's places and logins). A CLI's local host answers `unsupported` for the daemon's.
 - A primitive's caller is the plugin (§11.2): what it writes is `plugin:<name>`'s (a message's sender, a kv writer, a
-  board holder, a run's or title's `setBy`), and a mutating call's `key` (§8.2) is the plugin's own, kept apart from the
-  CLI's and every other plugin's; a key over 200 characters is `invalid` (never cut short). A call never creates a run:
+  board holder, a run's or title's `setBy`, a spawn's or grant's `by`, a verification's or merge's `requester`), the
+  hooks its calls fire are told the plugin's principal (§3.2), and a mutating call's `key` (§8.2) is the plugin's own,
+  kept apart from the CLI's and every other plugin's; a key over 200 characters is `invalid` (never cut short). A call never creates a run:
   an unknown run is `not_found` for every service. A refusal (a hook's `deny`) reaches the plugin with the refusing
   plugin's reason as the error's `hint`.
 - `runs.new`: `ops.runNew`, with `run.creating` (§6.6.3) naming the plugin's principal; the answer is the run as
@@ -1289,7 +1303,14 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 - `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task is `pending`, `leased`
   while held, `released` once open again after a lease, or `done`; `running` is unused today. The plugin holds what it
   claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds (`conflict` otherwise).
-- `gates.merge`: no `operator`; a plugin that wants to bypass vetoes cannot (§11.3).
+- `gates.verify`: `capcomd verify` as the plugin: the checks and every judge (§6.6.13) on the ref, its reviewer paid
+  by the run as for the operator's verify; only a named check (`check`): a check command (`checks`) is `forbidden`, as
+  it is the operator's. It resolves once the verification has passed or failed, with its record. `gates.merge`:
+  `capcomd merge --require` as the plugin, never as the operator: `operator` is `forbidden`, `require` names a passing
+  verification of the same ref and target, and every `merge.landing` gate is asked, so a veto stays a veto and none is
+  bypassed (§11.3). A protected target parks the merge for a person (`parked`), as an agent's merge is, and so does a
+  gate's `hold`. Each record keeps who asked as `requester: plugin:<name>` (on `verify.started`, `merge.started`), and
+  `verify.starting`, `verify.judging` and `merge.landing` are told the plugin asked (`requestedBy`).
 - `sandboxes.provider(name)`: the kernel's wrapped object (§7.1), never a raw plugin object; a provider plugin asking
   for itself gets the wrapper too. It is the seam's shape over the kernel's provider for the place
   (`src/dependencies.ts` `providerNamed`: traced, riding out outages, `sandbox.ensuring` and `sandbox.changed` fired),
@@ -1419,12 +1440,12 @@ table; a primitive without a route in protocol v1 has no out-of-process form. Th
 `PluginClient` (`open`, `hooks`, `answer`, `emit`, `storage`, `fetch`), **not** a `PluginContext`: today it wraps only
 `events.emit` and `storage`, and a process plugin makes the table's other read and write calls itself with `fetch`
 (the token and socket already set); whether it grows a `ctx`-shaped wrapper over this table is open. In process, the
-services of §8.4's last rules answer: in the daemon's host `runs`, `agents.get`, `tree`, `cancel` and `notice`,
-`messages`, `kv`, `board`, `gates.pending`, `profiles`, `jobs`, `storage`, `triggers` and `events.subscribe`/`replay`;
-in every host `sandboxes`, `auth`, `config`, `log`, `trace`, `hooks`, `seams`, `context.register`, `cli`, `mcp`,
-`api`, `ui` and `events.emit` (onto a run's stream; an event for the `daemon` stream is written only by the daemon's
-host, and another host answers it `seq: 0`); `agents.spawn`, `await`, `grant`, `title` and `gates.verify`, `merge`
-answer `unsupported` in every host until a later step:
+services of §8.4's last rules answer: in the daemon's host `runs`, `agents`, `messages`, `kv`, `board`, `gates`,
+`profiles`, `jobs`, `storage`, `triggers` and `events.subscribe`/`replay`; in every host `sandboxes`, `auth`, `config`,
+`log`, `trace`, `hooks`, `seams`, `context.register`, `cli`, `mcp`, `api`, `ui` and `events.emit` (onto a run's stream;
+an event for the `daemon` stream is written only by the daemon's host, and another host answers it `seq: 0`). Out of
+process, `agents.spawn`, `await`, `grant` and `gates.verify`, `merge` stay in process only in protocol v1, as the
+table says:
 
 | `ctx` | Route (existing harness.v1 unless marked) |
 |---|---|

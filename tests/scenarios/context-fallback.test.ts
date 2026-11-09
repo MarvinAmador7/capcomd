@@ -103,9 +103,12 @@ capcomd result --summary "done" --data ${sq(JSON.stringify({ context: [{ title: 
   // A replay: the same follow-up, and nothing more to do (at most one per run).
   const fb = await import("../../src/plugins/context-memory");
   const planned = (await agentsIn(run)).find((a) => a.agentId === root);
-  expect(await fb.fallbackKernel.spawn(run, planned.driveEnv, fb.LATE_KEY)).toEqual({ agentId: lateId, created: false });
+  const services = (await import("../../src/plugins/services")).daemonServices(fb.manifest);
+  expect(await fb.fallbackKernel.spawn(run, planned.driveEnv, services, fb.LATE_KEY)).toEqual({ agentId: lateId });
+  // Spawned as the plugin, its recorded key is the plugin's own: still known as the follow-up, so none is started again.
+  expect(late.key).toBe(`plugin:context-memory:${fb.LATE_KEY}`);
   const emitted: string[] = [];
-  expect(await fb.fallback(run, planned, { enabled: true, emit: async (t) => { emitted.push(t); }, log: () => {} })).toBeNull();
+  expect(await fb.fallback(run, planned, { enabled: true, emit: async (t) => { emitted.push(t); }, log: () => {}, ctx: services })).toBeNull();
   expect(emitted).toEqual([]);
   expect((await agentsIn(run)).filter((a) => a.profile === CONSOLIDATOR_PROFILE).length).toBe(2);
 }, 240_000);
@@ -179,12 +182,27 @@ capcomd result --summary "done, no memory" >/dev/null`);
   expect(m).toMatchObject({ state: "awaiting_approval", heldBy: { plugin: "context-memory", holdId: `memory@${String(requested!.data.commit).slice(0, 12)}` } });
   expect((await memoryAt("trunk")).some((f) => f.path.includes("build-cache-"))).toBe(false);
 
+  // The fallback acted as the plugin, never as the operator: the consolidator's spawn, its verify and its merge request
+  // name plugin:context-memory, and the merge's gates were told the plugin asked.
+  const asPlugin = "plugin:context-memory";
+  const [spawned] = await trajectory(w, run, (e) => e.type === "AGENT_SPAWNED" && e.agentId === consId);
+  expect(spawned!.data).toMatchObject({ parent: null, operator: false, by: asPlugin, key: `${asPlugin}:consolidate` });
+  const [verifyStarted] = await trajectory(w, run, (e) => e.type === "VERIFY_STARTED" && e.data.id === requested!.data.verify);
+  expect(verifyStarted!.data).toMatchObject({ ref: consId, requester: asPlugin });
+  expect(verifyStarted!.data.askedBy).toBeUndefined();
+  const [mergeStarted] = await trajectory(w, run, (e) => e.type === "MERGE_STARTED" && e.data.id === requested!.data.merge);
+  expect(mergeStarted!.data).toMatchObject({ ref: consId, require: requested!.data.verify, operator: false, requester: asPlugin });
+  expect(mergeStarted!.data.askedBy).toBeUndefined();
+  const [titled] = await trajectory(w, run, (e) => e.type === "AGENT_TITLED" && e.agentId === consId);
+  expect(titled!.data).toMatchObject({ title: "memory lessons", by: "driver", setBy: asPlugin });
+
   // A replay: the same spawn is the same agent, and the fallback asked again finds nothing to do.
   const fb = await import("../../src/plugins/context-memory");
+  const services = (await import("../../src/plugins/services")).daemonServices(fb.manifest);
   const planned = (await agentsIn(run)).find((a) => a.agentId === root);
-  expect(await fb.fallbackKernel.spawn(run, planned.driveEnv)).toEqual({ agentId: consId, created: false });
+  expect(await fb.fallbackKernel.spawn(run, planned.driveEnv, services)).toEqual({ agentId: consId });
   const emitted: string[] = [];
-  expect(await fb.fallback(run, planned, { enabled: true, emit: async (t) => { emitted.push(t); }, log: () => {} })).toBeNull();
+  expect(await fb.fallback(run, planned, { enabled: true, emit: async (t) => { emitted.push(t); }, log: () => {}, ctx: services })).toBeNull();
   expect(emitted).toEqual([]);
   expect((await eventsOf(run, "plugin.context-memory.consolidator_started", 2, 1500)).length).toBe(1);
 

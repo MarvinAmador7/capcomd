@@ -136,16 +136,17 @@ const OP_EVENTS = new Set(["VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "
 
 /**
  * Who caused a committed change (plugin API §3.2), from what the kernel records with it: an agent's own work (its
- * steps, checkpoints, notices, result) is the agent's; its spawn and start are its spawner's (the parent agent, else the
- * operator); a pause, resume, cancel or title names who did it (`by`, `setBy`); a verification's and a merge's changes
- * are their asker's (an agent's in-VM call), and an approval's decision its approver's. What the kernel did on its own
- * or nobody recorded is the operator's (§3.2 has no kernel principal; principalOf's default).
+ * steps, checkpoints, notices, result) is the agent's; its spawn is its spawner's (a plugin, its `by`, else the parent
+ * agent, else the operator) and its start its parent's (else the operator's); a pause, resume, cancel or title names
+ * who did it (`by`, `setBy`); a verification's and a merge's changes are their asker's (an agent's in-VM call, else a
+ * plugin's `requester`), and an approval's decision its approver's. What the kernel did on its own or nobody recorded
+ * is the operator's (§3.2 has no kernel principal; principalOf's default).
  */
 export function causeOf(e: Ev, runId: string, op: { data: Record<string, unknown> } | null = null, agent: { parent: string | null } | null = null): Principal {
   const d = e.data;
   const by = (v: unknown) => principalOf(typeof v === "string" ? v : null, runId);
   switch (e.type) {
-    case "AGENT_SPAWNED": return by(d.parent);
+    case "AGENT_SPAWNED": return by(d.by ?? d.parent);
     case "AGENT_STARTED": return by(agent?.parent);
     case "AGENT_RESUMED": case "AGENT_CANCELLED": case "RUN_ENDED": return by(d.by);
     case "AGENT_PAUSED": return by(d.result?.by);
@@ -153,7 +154,7 @@ export function causeOf(e: Ev, runId: string, op: { data: Record<string, unknown
     case "AGENT_TITLED": case "RUN_TITLED": return by(d.setBy);
     case "MERGE_APPROVED": case "MERGE_DENIED": return by(d.by);
     default:
-      if (OP_EVENTS.has(e.type)) return by(op?.data.askedBy);
+      if (OP_EVENTS.has(e.type)) return by(op?.data.askedBy ?? op?.data.requester);
       return e.agentId && e.type.startsWith("AGENT_") ? principalOf(e.agentId, runId) : principalOf(null);
   }
 }
