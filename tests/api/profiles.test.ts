@@ -10,6 +10,7 @@ import { Profiles } from "../../src/api/contract";
 import { profileFor, profilesFor, profilesOf } from "../../src/api/profiles";
 import { readProfiles, trustProfile } from "../../src/profiles";
 import { harnessApp } from "../../src/api/server";
+import { withoutUrlCredentials } from "../../src/agents/redact";
 import { CreateRunError, memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
 
@@ -157,6 +158,50 @@ describe("GET /v1/profiles (capability profiles)", () => {
 		// The file changed since: trusted no more.
 		writeFileSync(w.at("P/far/profile.yaml"), SANDBOXED.replace("vcpu: 8", "vcpu: 4"));
 		expect(rows().far).toMatchObject({ untrustedSandbox: ["far/profile.yaml"] });
+	});
+
+	test("sharing.source without its URL's credentials wherever it is shown: GET /v1/profiles(/{name}), capcomd_profiles, profiles list|show --json", async () => {
+		const w = world({ "P/shared.yaml": "name: shared\nharness: { provider: claude, auth: subscription }\nsharing: { source: \"https://u:secret@host/repo\", license: MIT }\n" });
+		const leaks = (o: unknown) => /secret|u:/.test(JSON.stringify(o));
+		// GET /v1/profiles and /{name}: the row shows where it points, never who logged in with what.
+		const app = harnessApp({ source: { ...memorySource(), profiles: (repo?: string) => profilesFor(repo, w.env), profile: (n: string, repo?: string) => profileFor(n, repo, w.env) }, clients: () => loadClients(cpath), state: harnessState(null) });
+		const get = async (path: string) => (await app.request(`${path}?repo=${encodeURIComponent(w.repo)}`, { headers: { authorization: `Bearer ${reader}` } })).json() as Promise<any>;
+		const list = await get("/v1/profiles"), one = await get("/v1/profiles/shared");
+		expect(list.profiles.map((p: { name: string }) => p.name)).toEqual(["shared"]);
+		expect(one.fields.find((f: { id: string }) => f.id === "sharing.source")).toMatchObject({ value: null, display: "https://host/repo" });
+		expect([leaks(list), leaks(one)]).toEqual([false, false]);
+		// capcomd_profiles: what a driver agent reads.
+		const saved = { ...process.env };
+		Object.assign(process.env, w.project);
+		let driver: any;
+		try { driver = await (await import("../../src/mcp/driver")).profiles(); } finally {
+			for (const k of Object.keys(w.project)) if (!(k in saved)) delete process.env[k];
+			Object.assign(process.env, saved);
+		}
+		expect(driver.profiles.find((p: { name: string }) => p.name === "shared").sharing).toEqual({ source: "https://host/repo", license: "MIT" });
+		expect(leaks(driver)).toBe(false);
+		// `capcomd profiles list --json` and `show --json` (its facts and its values).
+		const cli = (...args: string[]) => {
+			const p = Bun.spawnSync(["bun", new URL("../../src/cli/index.ts", import.meta.url).pathname, "profiles", ...args, "--json"], { cwd: w.repo, env: { ...process.env, ...w.project } });
+			return JSON.parse(p.stdout.toString());
+		};
+		const listed = cli("list"), shown = cli("show", "shared");
+		expect(listed.profiles[0].sharing).toEqual({ source: "https://host/repo", license: "MIT" });
+		expect(shown.sharing).toEqual({ source: "https://host/repo", license: "MIT" });
+		expect(shown.values.find((v: { path: string }) => v.path === "sharing.source").value).toBe("https://host/repo");
+		expect([leaks(listed), leaks(shown)]).toEqual([false, false]);
+	}, 30_000);
+
+	test("a URL's credentials: its userinfo and a query or fragment parameter named like one, the rest kept", () => {
+		expect([
+			"https://u:secret@host/repo", "https://ghp_tok@github.com/acme/p.git#reviewer@v2", "ssh://deploy@host:22/acme/p.git",
+			"https://host/repo?token=abc&ref=main", "https://host/p?access_token=a&X-Amz-Signature=b&sig=c&key=d", "https://host/p?api_key=a#frag",
+			"https://host/p#access_token=a", "github:acme/profiles#reviewer", "see https://a:b@x.io/y and postgres://app:pw@db:5432/x", "https://host/p.git@v1",
+		].map(withoutUrlCredentials)).toEqual([
+			"https://host/repo", "https://github.com/acme/p.git#reviewer@v2", "ssh://host:22/acme/p.git",
+			"https://host/repo?ref=main", "https://host/p", "https://host/p#frag",
+			"https://host/p", "github:acme/profiles#reviewer", "see https://x.io/y and postgres://db:5432/x", "https://host/p.git@v1",
+		]);
 	});
 
 	test("profiles that can't be read: a 200 with `error`, naming the file, and no profiles", () => {

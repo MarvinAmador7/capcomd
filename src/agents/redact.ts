@@ -22,6 +22,33 @@ export const REDACTED = "[REDACTED]";
 /** The keys whose string value `Redactor.value` replaces whole, whatever its shape. */
 export const SECRET_KEY = /api[_-]?key|token|secret|password|authorization/i;
 
+/** A URL in text: its scheme, then up to whitespace, a quote or a bracket. */
+const URL_IN_TEXT = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s"'`<>]*)/gi;
+/** A URL's query (or fragment) parameter that carries a credential: a SECRET_KEY name, or a signature's or key's. */
+const SECRET_PARAM = new RegExp(`${SECRET_KEY.source}|signature|credential|^(?:key|sig|auth|pass|passwd|pwd)$`, "i");
+
+/**
+ * Text with each URL's credentials taken out, for a URL a client is shown (a profile's `sharing.source`): its userinfo
+ * (`user:password@`, or a token standing as the user) and each `name=value` of its query or fragment whose name says it
+ * is a credential (`token`, `access_token`, `api_key`, `sig`, …), with a `?` or `#` left empty dropped. What is left
+ * still says where it points; a credential with no such place or name shows.
+ */
+export function withoutUrlCredentials(text: string): string {
+  const params = (part: string) => part.split("&").filter((kv) => !(kv.includes("=") && SECRET_PARAM.test(kv.slice(0, kv.indexOf("="))))).join("&");
+  return text.replace(URL_IN_TEXT, (_m, scheme: string, rest: string) => {
+    const end = rest.search(/[/?#]/);
+    const authority = end < 0 ? rest : rest.slice(0, end);
+    let tail = end < 0 ? "" : rest.slice(end);
+    const hash = tail.indexOf("#");
+    const fragment = hash < 0 ? "" : params(tail.slice(hash + 1));
+    if (hash >= 0) tail = tail.slice(0, hash);
+    const q = tail.indexOf("?");
+    const query = q < 0 ? "" : params(tail.slice(q + 1));
+    if (q >= 0) tail = tail.slice(0, q);
+    return `${scheme}${authority.slice(authority.lastIndexOf("@") + 1)}${tail}${query ? `?${query}` : ""}${fragment ? `#${fragment}` : ""}`;
+  });
+}
+
 export class Redactor {
   private secrets: string[];
   constructor(secrets: Array<string | undefined | null> = []) {

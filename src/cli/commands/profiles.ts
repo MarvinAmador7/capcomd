@@ -11,7 +11,7 @@
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
 import { existsSync } from "node:fs";
-import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfile, untrustedPersona, untrustedSandbox, projectMachineTrust, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
+import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, sharedSource, skillRows, trustProfile, untrustedPersona, untrustedSandbox, projectMachineTrust, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -193,7 +193,8 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
         const c = loadAgentConfig(process.env, n);
         effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
-      const facts = profileFacts(r), vals = profileValues(r), unused = notApplied(r.manifest), ready = readiness(n, spec), isDefault = f.default === n;
+      // sharing.source as everywhere else: without a URL's credentials (profileFacts' too).
+      const facts = profileFacts(r), vals = profileValues(r).map((v) => v.path === "sharing.source" && typeof v.value === "string" ? { ...v, value: sharedSource(v.value) } : v), unused = notApplied(r.manifest), ready = readiness(n, spec), isDefault = f.default === n;
       // Its skills as an agent of it is pinned with them: where each came from and the sha256 of its SKILL.md; a
       // project's, whether you trust it (ADR-024 decision 4).
       const trust = new Map(projectSkillTrust(r.skills).map((t) => [t.name, t.trust]));
