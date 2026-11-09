@@ -541,7 +541,11 @@ within the call's `waitMs` (at most 45 s, under the socket's idle timeout) with 
 id while it runs on; the front door asks again by that id (a decision: with the same body and its own `key`, which joins
 it, and gets its record if it ended in between, never a second decision past a hold). Who caused it is as before: the
 operator (a decision's `by` as the front door records it: `cli` or `--by`, `driver`, `driver:elicited`). A refusal is
-the operation's own (`ApiError.relay`), so the command fails exactly as it did running it itself.
+the operation's own (`ApiError.relay`), so the command fails exactly as it did running it itself. What the front door's
+own environment decided stays its say where it can only narrow: a merge carries its protected-branch patterns
+(`protectedBranches`, when `CAPCOMD_PROTECTED_BRANCHES` is set where it runs), which protect a target in the daemon too
+and never unprotect one. The daemon answers a merge, or a decision that lands one, once the merged agent's checkpoint
+refs are deleted, as the front door waited for them when it ran the merge itself.
 
 With no daemon for its engine (none runs, the one that runs hosts another engine, its socket doesn't answer, or it
 predates these routes) the front door runs the operation itself, as before, but first asks which plugins only the daemon

@@ -14133,6 +14133,16 @@
                     "type": "boolean",
                     "description": "A protected target parks the merge for a person's approval"
                   },
+                  "protectedBranches": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "description": "The front door's own protected-branch patterns (CAPCOMD_PROTECTED_BRANCHES where it runs): a target they match is protected too. They only add protection; the daemon's own still apply"
+                  },
                   "key": {
                     "type": "string",
                     "minLength": 1,

@@ -2166,6 +2166,9 @@ export interface MergeOpts {
   requestApproval?: boolean;
   /** The agent that asked for the merge (in-VM merges): it waits on the decision, so the approval shows on its column. */
   askedBy?: string;
+  /** A front door's own protected-branch patterns (CAPCOMD_PROTECTED_BRANCHES where it runs, plugin API §6.1), for a
+   *  merge it sent to the daemon: a target they match is protected too. They only add protection, never remove it. */
+  alsoProtected?: string[];
 }
 
 /** The merge target a call means: its own, else the run's, else the repository's, else "main" (a dry run's label). */
@@ -2223,7 +2226,8 @@ async function startMerge(o: MergeOpts, mrgId: string) {
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
   // The run's goal branch takes reviewed work with no human step: the person decides once, on the pull request into the
   // base, when the planner is done (it can't be a protected branch: `run new` refuses that).
-  const needsApproval = !!cfg && !goal && isProtectedBranch(target, runEnv) && !o.operator;
+  const callerProtects = !!o.alsoProtected?.length && isProtectedBranch(target, { CAPCOMD_PROTECTED_BRANCHES: o.alsoProtected.join(",") });
+  const needsApproval = !!cfg && !goal && (isProtectedBranch(target, runEnv) || callerProtects) && !o.operator;
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need a person: pass --request-approval to park the merge for `capcomd approve` (every plugin's gate is still asked), or --operator to land it past their vetoes.");
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
   // Who asked is not a parameter of the merge: a retry by another caller is the same merge.

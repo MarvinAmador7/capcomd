@@ -489,6 +489,8 @@ export const FrontMergeBody = z.object({
 	target: z.string().min(1).max(255).optional(),
 	operator: z.boolean().optional().describe("`capcomd merge --operator`: land without a passing verify and past plugin vetoes (each is asked and recorded, plugin API §6.5)"),
 	requestApproval: z.boolean().optional().describe("A protected target parks the merge for a person's approval"),
+	protectedBranches: z.array(z.string().min(1).max(255)).max(100).optional()
+		.describe("The front door's own protected-branch patterns (CAPCOMD_PROTECTED_BRANCHES where it runs): a target they match is protected too. They only add protection; the daemon's own still apply"),
 	key: FrontKey,
 	waitMs: FrontWait,
 }).strict();

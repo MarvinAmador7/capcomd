@@ -40,12 +40,22 @@ export async function frontVerify(o: VerifyOpts, w: Wait): Promise<FrontAnswer> 
   });
 }
 
+/** The protected-branch patterns this process sets itself (CAPCOMD_PROTECTED_BRANCHES), for a merge it sends to the
+ *  daemon: they protect a target there too (never unprotect one), as they did when the merge ran here. */
+async function ownProtected(): Promise<{ protectedBranches?: string[] }> {
+  const { env } = await import("../utils/env");
+  if (env("PROTECTED_BRANCHES") === undefined) return {};
+  const patterns = (await import("../utils/protected")).protectedPatterns();
+  return patterns.length ? { protectedBranches: patterns } : {};
+}
+
 /** `capcomd merge`, `capcomd_merge`: mergeRef, in the daemon when one hosts the engine. */
 export async function frontMerge(o: MergeOpts, w: Wait): Promise<FrontAnswer> {
   if (o.askedBy !== undefined) throw new RelayError("usage", "askedBy is an agent's merge (its RPC), never a front door's", "Leave askedBy out.");
   const body = {
     ...(o.ref ? { ref: o.ref } : {}), ...(o.id ? { id: o.id } : {}), ...(o.require !== undefined ? { require: o.require } : {}), ...(o.target !== undefined ? { target: o.target } : {}),
     ...(o.operator ? { operator: true } : {}), ...(o.requestApproval ? { requestApproval: true } : {}), ...(o.key !== undefined ? { key: o.key } : {}),
+    ...(await ownProtected()),
   };
   return front(`/v1/runs/${encodeURIComponent(o.runId)}/merges`, "steer", body, (id) => ({ id }), FRONT_HOOKS.merge, w, async () => {
     const O = await import("./ops");

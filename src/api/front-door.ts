@@ -17,6 +17,14 @@ export interface FrontDoorOps {
   decide(runId: string, mergeId: string, b: z.infer<typeof FrontDecisionBody>): Promise<FrontOp>;
 }
 
+/** A merge's record once the merged agent's cleanups (its checkpoint refs, deleted after the record) are done, as the
+ *  CLI waited for them when it ran the merge itself: what the front door answers has happened. */
+const settled = async (O: typeof import("../primitives/ops"), p: Promise<Record<string, unknown>>) => {
+  const v = await p;
+  await O.settleCleanups();
+  return v;
+};
+
 /** How long a keyed decision's end is kept for its front door's next poll (that poll comes at once after a 202). */
 export const DECIDED_KEPT_MS = 10 * 60_000;
 
@@ -45,10 +53,11 @@ export function kernelFrontDoor(): FrontDoorOps {
       const O = await ops();
       if (!b.ref && !b.id) throw new RelayError("usage", "ref or id required", "Pass the ref and require (the id of a passing verify of it), or the mrg-… id of a merge to ask for.");
       const id = b.id ?? (await O.mergeIdFor(runId, b.ref!, b.key, b.target));
-      const done = O.mergeRef({
+      const done = settled(O, O.mergeRef({
         runId, ref: b.ref ?? "", id, ...(b.require !== undefined ? { require: b.require } : {}), ...(b.target !== undefined ? { target: b.target } : {}),
         operator: b.operator === true, ...(b.requestApproval ? { requestApproval: true } : {}), ...(b.key !== undefined ? { key: b.key } : {}),
-      }) as Promise<Record<string, unknown>>;
+        ...(b.protectedBranches?.length ? { alsoProtected: b.protectedBranches } : {}),
+      }) as Promise<Record<string, unknown>>);
       return { id, done };
     },
     async decide(runId, mergeId, b) {
@@ -56,7 +65,7 @@ export function kernelFrontDoor(): FrontDoorOps {
       let done = deciding.get(k);
       if (!done) {
         const O = await ops();
-        done = O.decideMerge(runId, mergeId, { approve: b.approve, by: b.by ?? "cli", ...(b.reason ? { reason: b.reason } : {}) }) as Promise<Record<string, unknown>>;
+        done = settled(O, O.decideMerge(runId, mergeId, { approve: b.approve, by: b.by ?? "cli", ...(b.reason ? { reason: b.reason } : {}) }) as Promise<Record<string, unknown>>);
         const d = done;
         deciding.set(k, d);
         const forget = () => {

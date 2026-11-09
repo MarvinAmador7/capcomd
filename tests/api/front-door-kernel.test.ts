@@ -7,6 +7,7 @@ import { expect, mock, test } from "bun:test";
 const decided: Array<{ runId: string; mergeId: string; approve: boolean }> = [];
 let finish: (v: Record<string, unknown>) => void = () => {};
 mock.module("../../src/primitives/ops", () => ({
+  settleCleanups: async () => {},
   decideMerge: (runId: string, mergeId: string, o: { approve: boolean }) => {
     decided.push({ runId, mergeId, approve: o.approve });
     return new Promise<Record<string, unknown>>((res) => { finish = res; });
