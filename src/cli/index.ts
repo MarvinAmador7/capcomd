@@ -55,7 +55,7 @@ async function main(argv: string[]): Promise<number> {
     }
     if (command === "plugins") {
       const { pluginsCommand } = await import("./commands/plugins");
-      return await pluginsCommand(positionals, { json, conformance: !!values.conformance, project: !!values.project, yes: !!values.yes, acceptRisk: !!values["accept-risk"], dryRun: !!values["dry-run"] });
+      return await pluginsCommand(positionals, { json, conformance: !!values.conformance, strict: !!values.strict, project: !!values.project, yes: !!values.yes, acceptRisk: !!values["accept-risk"], dryRun: !!values["dry-run"] });
     }
     const door = await frontDoor(command);
     // A command whose plugin isn't running names that plugin and why, not "unknown command" (src/cli/front-doors.ts).
