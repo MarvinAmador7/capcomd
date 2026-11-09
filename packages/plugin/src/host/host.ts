@@ -9,7 +9,7 @@ import { HOOKS, type HookCall, type HookName } from "../hooks";
 import { loadManifest, readManifest, type LoadedManifest, type ManifestIssue } from "../load";
 import { PLUGIN_NAME_PATTERN, type PluginManifest } from "../manifest";
 import type { PluginModule } from "../context";
-import { createContext, ContributionStore, type ContextOptions, type PluginRuntime } from "./context";
+import { createContext, ContributionStore, mcpToolName, type ContextOptions, type PluginRuntime } from "./context";
 import { provided, resolveOrder } from "./order";
 import { HookRegistry, type HookStats, type HostEvent } from "./registry";
 import { ProcessPlugin, ProtocolError, type FrameSink, type ProcessLauncher, type ProcessTimings, type ProtocolCaller } from "./process";
@@ -61,6 +61,9 @@ export interface PluginSummary {
   /** The CLI commands its manifest declares (`capcomd <command>`, §4.7.1); absent when it adds none. A front door that
    *  isn't active is listed with them, so `capcomd <command>` can say which plugin it needs and why it isn't running. */
   commands?: string[];
+  /** Its MCP tools (§4.7.2) as the `capcomd mcp` server lists them (`capcomd_<plugin>_<tool>`, a kernel front door's
+   *  `capcomd_<tool>`): those it registered while active, those its manifest declares otherwise; absent when it adds none. */
+  tools?: string[];
 }
 
 type HostSinks = Pick<ContextOptions<unknown>, "emit" | "subscribe" | "replay" | "log" | "span" | "redact" | "secret">;
@@ -567,6 +570,9 @@ export class PluginHost {
     const m = r.manifest;
     const regs = r.runtime?.registrations() ?? [];
     const declaredHooks = Object.keys(m?.contributes?.hooks ?? {}) as HookName[];
+    const tools = r.state === "active"
+      ? regs.flatMap((x) => x.kind === "mcp" ? [x.name] : [])
+      : (m?.contributes?.mcp ?? []).map((t) => mcpToolName(r.name, t.name, kernelSurfaceOf(r.candidate)));
     return {
       name: r.name, version: m?.version ?? "0.0.0", apiVersion: 1, runtime: m?.entry.runtime ?? "in-process", source: r.source, state: r.state,
       enabled: r.enabled && r.cause !== "untrusted", cause: r.cause,
@@ -575,6 +581,7 @@ export class PluginHost {
       hooksSuspended: r.state === "active" && this.hooks.suspended(r.name),
       stats: this.hooks.stats(r.name),
       ...(m?.contributes?.cli?.length ? { commands: m.contributes.cli.map((c) => c.name) } : {}),
+      ...(tools.length ? { tools } : {}),
     };
   }
 }
