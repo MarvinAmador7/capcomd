@@ -923,6 +923,11 @@ Four things stood between D6 and a held memory change, each fixed:
   keys, its events keyed). It says why when it doesn't (`consolidator_skipped`: `off`, `cancelled` when the planner
   was, `consolidator_failed` when one ran and failed or was cancelled, `spawn_refused`, `verify_failed`,
   `merge_failed`), never throws, and lands in the background, so the observe listener never waits on a verify.
+  `autoConsolidate` (the plugin's config, default `true`, `x-per-run`) turns it off. Why on by default: it spends a
+  consolidator's tokens only when the run's agents proposed lessons and its planner didn't consolidate them, which is
+  the case D6 meant to be consolidated (§12's rule decides whether consolidation stays on at all, not who starts it);
+  nothing it starts lands without the gate (lint, and a person under the default `review: human`); and it is a
+  convenience, so it fails open (a refusal is an event, never a stopped run).
 - **Lessons after the consolidator started were never consolidated** (D6a, live re-check). The planner that states
   its lessons only after its consolidator ran (in its final result) had them captured at its end, and the fallback
   did nothing once any consolidator was done: the done one's prompt never had them. The kernel now records, as each
@@ -935,12 +940,8 @@ Four things stood between D6 and a held memory change, each fixed:
   `review: human`. With `autoConsolidate` off it says so (`consolidator_skipped` `late_lessons`). The planner is told
   first: its skill says to declare its own lessons before it spawns the consolidator, and `capcomd status` says how
   many came late. A consolidator done before this record existed (an older run) has no record of what it read, so its
-  run has no late lessons (nothing is guessed).
-  `autoConsolidate` (the plugin's config, default `true`, `x-per-run`) turns it off. Why on by default: it spends a
-  consolidator's tokens only when the run's agents proposed lessons and its planner didn't consolidate them, which is
-  the case D6 meant to be consolidated (§12's rule decides whether consolidation stays on at all, not who starts it);
-  nothing it starts lands without the gate (lint, and a person under the default `review: human`); and it is a
-  convenience, so it fails open (a refusal is an event, never a stopped run).
+  run has no late lessons (nothing is guessed). Open: the follow-up's branch is cut from the target while the first
+  one's merge usually still waits for a person, so both rewrite `index.md` and the second merge can conflict.
 - **The consolidator didn't know what was asked.** In the live re-run the planner declared the lesson the goal asked
   for and spawned the consolidator, which dropped it: `package.json` implied it, and the prompt's rule is "keep a
   lesson only when the repository doesn't say it already". Its inputs now start with the run's goal (fenced as data,
