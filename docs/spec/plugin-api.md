@@ -1212,11 +1212,12 @@ Every async primitive takes `CallOptions {key?, signal?, timeoutMs?}` last. `key
 call, with the semantics of the CLI's `--key` and the API's `Idempotency-Key`: the same key with the same arguments does
 the thing once and returns the recorded result; the same key with different arguments is `conflict`. `signal` is
 composed with `ctx.signal`. `timeoutMs` defaults to 30 000; past it the call rejects `timeout` and the kernel's side
-either completed or did not (the caller re-reads). **Not built yet:** the host applies `key` (§8.4) but neither
-`signal` nor `timeoutMs` as a bound on a primitive (`packages/plugin/src/host/context.ts` `guarded` passes the options
-on unchanged), so a call runs to its own end: `jobs.wait` reads `timeoutMs` as how long to wait (30 000 by default,
-then it answers the job as it is, not `timeout`), and a seam call through `sandboxes.provider` is bounded by its
-`SeamCall` deadline (§8.4); no other service reads either.
+either completed or did not (the caller re-reads). **Not built yet:** the kernel's services apply a mutating call's
+`key` (§8.4), but the host applies neither `signal` nor `timeoutMs` as a bound on a primitive
+(`packages/plugin/src/host/context.ts` `guarded` passes the options on unchanged), so a call runs to its own end:
+`jobs.wait` reads `timeoutMs` as how long to wait (30 000 by default, then it answers the job as it is, not
+`timeout`), and a seam call through `sandboxes.provider` is bounded by its `SeamCall` deadline (§8.4); no other
+service reads either.
 
 ### 8.3 Errors
 
@@ -1405,14 +1406,15 @@ is the registry's own judgement of the answer (its shape for the mode, a modify 
 
 A process plugin reaches the kernel over harness.v1, with its token. The mapping from `ctx` to routes is fixed by this
 table; a primitive without a route in protocol v1 has no out-of-process form. The client library (§9.8) is a
-`PluginClient` (`open`, `hooks`, `answer`, `emit`, `storage`, `fetch`), **not** a `PluginContext`: today it wraps
-only `events.emit` and `storage`, and a process plugin makes the table's other read and write calls itself with
-`fetch` (the token and socket already set). In process, the services of §8.4's last rules answer: in the daemon's host
-`runs`, `agents.get`, `tree`, `cancel` and `notice`, `messages`, `kv`, `board`, `gates.pending`, `profiles`, `jobs`,
-`storage`, `triggers` and `events.subscribe`/`replay`; in every host `sandboxes`, `auth`, `config`, `log`, `trace`,
-`hooks`, `seams`, `context.register`, `cli`, `mcp`, `api`, `ui` and `events.emit` (onto a run's stream; the daemon
-stream is written only by the daemon's host); `agents.spawn`, `await`, `grant`,
-`title` and `gates.verify`, `merge` answer `unsupported` in every host until a later step:
+`PluginClient` (`open`, `hooks`, `answer`, `emit`, `storage`, `fetch`), **not** a `PluginContext`: today it wraps only
+`events.emit` and `storage`, and a process plugin makes the table's other read and write calls itself with `fetch`
+(the token and socket already set); whether it grows a `ctx`-shaped wrapper over this table is open. In process, the
+services of §8.4's last rules answer: in the daemon's host `runs`, `agents.get`, `tree`, `cancel` and `notice`,
+`messages`, `kv`, `board`, `gates.pending`, `profiles`, `jobs`, `storage`, `triggers` and `events.subscribe`/`replay`;
+in every host `sandboxes`, `auth`, `config`, `log`, `trace`, `hooks`, `seams`, `context.register`, `cli`, `mcp`,
+`api`, `ui` and `events.emit` (onto a run's stream; an event for the `daemon` stream is written only by the daemon's
+host, and another host answers it `seq: 0`); `agents.spawn`, `await`, `grant`, `title` and `gates.verify`, `merge`
+answer `unsupported` in every host until a later step:
 
 | `ctx` | Route (existing harness.v1 unless marked) |
 |---|---|
@@ -1936,17 +1938,20 @@ so a CLI's plugins sweep nothing. The example's config: `bin`, `image`, `agentMe
 with a `settings` descriptor), `idleLifetimeSeconds` (`x-per-run`). The built-in (`src/plugins/builtin/sandbox-docker.ts`)
 has no plugin config (`properties: {}`): its docker CLI and image are `CAPCOMD_DOCKER_BIN` and `CAPCOMD_DOCKER_IMAGE`
 (`src/providers/docker.ts`), and `idleLifetime` and `agentMemory` are the place's settings, changed with `PATCH
-/v1/sandboxes/docker/settings` (`CAPCOMD_DOCKER_AGENT_MEMORY_MB` wins), whose rows its `ui` descriptors serve (§4.7.5).
+/v1/sandboxes/docker/settings` (`CAPCOMD_SANDBOX_IDLE_SECONDS` and `CAPCOMD_DOCKER_AGENT_MEMORY_MB` win), whose rows
+its `ui` descriptors serve (§4.7.5). Whether the built-in should take the example's config instead is open.
 Nothing in `worker.ts`, `agent-workflow.ts` or the API changes.
 
 ### 15.2 The GitHub forge (`forge-github`, in-process)
 
 `examples/forge-github`. `HttpGitHub`, `prMerge`'s poll loop and the `gh` calls become `land`, `openPullRequest`,
 `findPullRequest`, `publishRepository`, `listBranches`, `login`, `remoteCredential` (the token for host git over https to
-github.com). The built-in (`src/plugins/forges/github.ts`) has no token setting: its token is the user's own login,
-`GITHUB_TOKEN`, else `GH_TOKEN`, else `gh auth token` (`src/plugins/forges/github-rest.ts`), which are the kernel's own
-variables (§10.3) a built-in may read. The example, a third-party plugin that may not reference those, declares
-`token` as an `x-secret` config property pointing at a variable of its own, with `gh auth token` as the fallback.
+github.com). The example declares `token` as an `x-secret` config property, with `gh auth token` as the fallback; as a
+third-party plugin it may not reference the kernel's own variables (§10.3), so the user points it at a variable of its
+own. **Not built for the built-in:** `src/plugins/forges/github.ts` declares no `token`; it reads the caller's
+`GITHUB_TOKEN`, else `GH_TOKEN`, else `gh auth token` itself (`src/plugins/forges/github-rest.ts`), under §7.4's
+interim rule for the built-in forges rather than §10.3's (a built-in reads only the secrets its schema declares, which
+for a built-in may default to `{"$secret": "env:GITHUB_TOKEN"}`). Moving it to a declared `token` is open.
 `classifyError` maps rate limits to `quota` and 401/403 to `auth`. The kernel keeps the lock, the CAS, integration and
 the checks.
 
@@ -2637,7 +2642,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.68 | 2026-11-08 | §17.1's last rows built. `observe-runs-index` and `observe-traces` (§6.6.4): the daemon's `run.changed` observers write the runs index and each run's `_trace` key, from what `ops.runNew` keeps with the run as its last step (scope `setOrigin`, `getOrigin`); `run new` no longer writes either; a run the index lacks is recorded the next time it changes; the daemon appends to the creator's index only when it is a runs index (`isRunsIndex`: absolute `.jsonl`, existing folder, no link, missing, empty or a row first), else to its own. `run.changed` `created` is told at that last step, no longer at the scope's first event, so a run whose `run new` failed partway is told as created only when a retry finishes it. `recipe-hierarchical` (§4.8, §17.1): `capcomd run` without a planner agent (`--recipe`, `--legacy`, `CAPCOMD_RUN_PATH`) goes through it, off by default and refused while off (`config`, `plugin:recipe-hierarchical`, before the run is created or detached); it contributes a `card`. Sandbox `ui` descriptors (§4.7.5): `UiRowValue` adds `help`, `default`, `appliesTo`, `needsRestart` (optional) to a `settings`/`info` row's `read`; each built-in sandbox plugin registers its rows and `GET /v1/sandboxes/{name}` serves them, byte for byte as before; `PATCH …/settings` changes one at a time. |
 | 1.0.69 | 2026-11-08 | The consolidator in every project, the brief only where there is memory, decided by the owner (ADR-025 D17, 2026-11-08; §6.6.7): `ContextProvider.index` may answer `empty: true` (optional, additive; read only with no lines, and the conformance suite fails `true` with lines): the provider has nothing at all for the scope. The built-in memory provider says so when the run's base holds no item file (`memory/**.md`, `facts/**.md`, but `index.md` and `log.md`) and no index (`index.md`, or the profile's `memory.files`; that index missing beside other memory still skips the provider `not found`) under `.capcomd/context/`. The router leaves such a provider out of the header, records `plugin.context.skipped` with `reason: empty` (a new reason value), and gives a loaded provider's outcome `empty: true` (additive); when every provider of the block is empty it returns no patch: no brief and no context skill, the prompt byte for byte the one without a context block. `capcomd context brief` answers `brief: null`, `empty: true`, `skills: []` then (additive). `capcomd setup project` adds the advice step `consolidator` (with `command`) when the project's own planner may spawn but doesn't list `context-consolidator`, and `capcomd profiles migrate --json` gains `consolidator` (`{missing: profile \| planner, detail, command}`) in a project whose planner can't spawn it; neither changes a profile. No hook, seam, route or harness contract shape changes. |
 | 1.0.70 | 2026-11-09 | SDK polish (the critic's C13 leftovers; §14.3, §14.5, §14.6): `testkit.bootWith` fails the boot at once, with the plugin's state and cause, for a plugin that is `disposed` or disabled (cause `disabled`, or `enabled: false` with no cause), as it already did for `failed` and `validated` with a cause, instead of waiting out `readyMs`; a disabled one's message says `plugins.<name>.enabled` is false. The conformance suites throw `unsupported` ("run these under bun test", naming the suite and the runtime) where `bun:test` can't be loaded, instead of Node's module-not-found error. The release workflow's `npm-plugin` job also needs `prepare`'s `npm` (capcomd itself published to npm) and the `npm` job's success, so `@capcomd/plugin` is never published while capcomd's `package.json` is private. No API, hook or seam changes. |
-| 1.0.71 | 2026-11-09 | Text only, the spec and ADRs brought in line with the code after the wave's fixes (no hook, seam, route, shape or behaviour changes): §8.1's "Today" column names the code a primitive stands on, with `jobs` and `triggers` built, and points to §8.4 for what answers where; §8.2 says the host applies a call's `key` but not yet its `signal` or `timeoutMs` (only `jobs.wait` and a seam call through `sandboxes.provider` are bounded); §9.6 says the client library is a `PluginClient` (`open`, `hooks`, `answer`, `emit`, `storage`, `fetch`), not a `PluginContext`, lists which `ctx` services answer in process today, and its profiles row names `untrustedSandbox`; §9.9, §12.4 and §13.1: `plugin.config_refused`, `plugin.trusted` and `trigger.*` (with `trigger.replied`) are written, and only `plugin.hook_deprecated` isn't (no hook is deprecated); §10.2: a run's plugin settings are checked against the plugins of the run's project (`POST /v1/runs`' `repo`), not the daemon's; §15.1: the built-in `sandbox-docker` has no plugin config (its CLI and image from `CAPCOMD_DOCKER_BIN`/`CAPCOMD_DOCKER_IMAGE`, `idleLifetime` and `agentMemory` the place's settings), the example's config is the example's; §15.2: the built-in `forge-github` takes the user's `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`, and only the example declares an `x-secret` `token`; §17.1: the persona is shown at `agent.preparing` and placed by the runner; §17.2 step 4's "refused at `validate`" holds while a daemon runs (1.0.49), step 13's smoke script is `packages/plugin/scripts/smoke.sh` (also in `release.yml`'s comments). ADR-024: §2.5's "shown before it is applied" is `update`'s report in the same command, and marketplace discovery isn't built; §5 marks what isn't built (`add`'s v2 shorthand flags and `--from`, `PUT` creating a profile, `DELETE /v1/profiles/{name}`, `POST /v1/profiles/install`, the Crew screen and a planner picker, `POST /v1/runs` `planner`, the avatar seed); the step 7 note on trust in the API and the decision table's persona row are corrected; `memory.files`' index is under `.capcomd/context/`. ADR-025 §10: the `files:` index is built (1.0.60). |
+| 1.0.71 | 2026-11-09 | Text only, the spec and ADRs brought in line with the code after the wave's fixes (no hook, seam, route, shape or behaviour changes): §8.1's "Today" column names the code a primitive stands on, with `jobs` and `triggers` built, and points to §8.4 for what answers where; §8.2 says the kernel's services apply a call's `key` but the host doesn't yet apply its `signal` or `timeoutMs` (only `jobs.wait` and a seam call through `sandboxes.provider` are bounded); §9.6 says the client library is a `PluginClient` (`open`, `hooks`, `answer`, `emit`, `storage`, `fetch`), not a `PluginContext` (whether it grows `ctx`-shaped wrappers is open), lists which `ctx` services answer in process today, and its profiles row names `untrustedSandbox`; §9.9, §12.4 and §13.1: `plugin.config_refused`, `plugin.trusted` and `trigger.*` (with `trigger.replied`) are written, and only `plugin.hook_deprecated` isn't (no hook is deprecated); §10.2: a run's plugin settings are checked against the plugins of the run's project (`POST /v1/runs`' `repo`), not the daemon's; §15.1: the built-in `sandbox-docker` has no plugin config (its CLI and image from `CAPCOMD_DOCKER_BIN`/`CAPCOMD_DOCKER_IMAGE`, `idleLifetime` and `agentMemory` the place's settings), the example's config is the example's, and whether the built-in takes it is open; §15.2: the example declares an `x-secret` `token`, and the built-in `forge-github` doesn't yet: it reads the caller's `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token` under §7.4's interim rule, not §10.3's (moving it to a declared `token` is open); §17.1: the persona is shown at `agent.preparing` and placed by the runner; §17.2 step 4's "refused at `validate`" holds while a daemon runs (1.0.49), step 13's smoke script is `packages/plugin/scripts/smoke.sh` (also in `release.yml`'s comments). ADR-024: §2.5's "shown before it is applied" is `update`'s report in the same command, and marketplace discovery isn't built; §5 marks what isn't built (`add`'s v2 shorthand flags and `--from`, `PUT` creating a profile, `DELETE /v1/profiles/{name}`, `POST /v1/profiles/install`, the Crew screen and a planner picker, `POST /v1/runs` `planner`, the avatar seed); the step 7 note on trust in the API and the decision table's persona row are corrected; `memory.files`' index is under `.capcomd/context/`. ADR-025 §10: the `files:` index is built (1.0.60). |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).

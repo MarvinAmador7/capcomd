@@ -291,27 +291,28 @@ model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it 
 
 - **CLI.** `capcomd profiles list|show|add|set|rm|validate|schema` replaces `capcomd agents …` (kept as an alias for one
   minor release, printing the new name). `show` prints the three layers and the resolved spec with the source of every
-  value. `add` takes `--extends`, and any field through `--set path=value` and `--unset` (as `set` does: `--set
-  tags=a,b`, `--set identity.title=…`). **Not built:** `--from <owner/repo#name>` (use `capcomd profiles
+  value. `add` takes `--extends`, the v1 flags (`--provider`, `--model`, `--max-turns`, …) and any field through `--set
+  path=value` and `--unset` (as `set` does: `--set tags=a,b`, `--set identity.title=…`). **Not built:** `--from <owner/repo#name>` (use `capcomd profiles
   install`) and the v2 shorthand flags (`--skill`, `--tag`, `--persona FILE`, `--memory project`, `--sandbox-provider
   docker`). `--json` keeps the `capcomd.cli/v1` envelope.
 - **API.** `GET /v1/profiles`, `GET/PUT/DELETE /v1/profiles/{name}` (the `configure` scope for writes, as project setup
   has), `POST /v1/profiles/install`, each with `Idempotency-Key`. A write is a `profile.changed` event on the `daemon`
   stream (entity `profile:<name>`, text daemon-written: "Profile reviewer changed: limits.maxTurns 20 → 40."). This is
-  capability `profiles` in `/v1/health` (and `profiles.edit` for the writes, §9). **Built:** `GET /v1/profiles`, `GET
-  /v1/profiles/{name}` and `PUT /v1/profiles/{name}` on an existing profile. **Not built:** creating a profile with
+  capability `profiles` in `/v1/health` (and `profiles.edit` for `GET` and `PUT /v1/profiles/{name}`). **Built:** `GET
+  /v1/profiles`, `GET /v1/profiles/{name}` and `PUT /v1/profiles/{name}` on an existing profile (404 for another name). **Not built:** creating a profile with
   `PUT`, `DELETE /v1/profiles/{name}` and `POST /v1/profiles/install` (no client yet; §9, steps 6 and 7).
 - **App.** Settings › Crew (the owner's word for the team) lists profiles grouped by project, each with its avatar,
   title, provider mark, tags and readiness (login present, environment built, sandbox up), with the resolved values
   and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
   setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
   profile that can plan, not only the one named `planner` (`planners`, each with its readiness; done 2026-11-07, spec
-  1.0.47). **Not built:** the app's Crew screen and a picker over `planners` (no approved mockup), and starting a run
-  with another planner from the API: `POST /v1/runs` has no `planner` (only `capcomd run --planner <name>` does), so
-  `planners` is a readout for now. `GET /v1/profiles` `ready` stays the login only; a profile's environment and
-  `lifecycle` readiness are in `planners`, for the profiles that can plan (§8). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
-  skills each is pinned with and their trust (`untrustedSkills`), so the app and a planner see that a spawn would wait
-  on the operator's trust before it is refused.
+  1.0.47). **Not built:** Settings › Crew (the onboarding's Crew step shows logins, not profiles) and a picker over
+  `planners` (no approved mockup for either), and starting a run with another planner from the API: `POST /v1/runs` has
+  no `planner` (only `capcomd run --planner <name>` does), so `planners` is a readout for now. `GET /v1/profiles`
+  `ready` is the login only today (for the daemon's own sandbox); a profile's environment and `lifecycle` readiness are
+  in `planners`, for the profiles that can plan (§8). `GET /v1/profiles` rows carry what §4 gives the planner (`title`,
+  `fit`, `cost`, `canReport`) and the skills each is pinned with and their trust (`untrustedSkills`), so the app and a
+  planner see that a spawn would wait on the operator's trust before it is refused.
 - **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
   across runs of the same profile (bot-avatar memory: "agent id + role + size → SVG"; the seed becomes the profile's
   when it sets one). **Built:** `profile`, `profileVersion` and `profileSource` (spec 1.0.18). **Not built:** the avatar
