@@ -21,6 +21,12 @@ import { hooks, useHooks } from "../../src/plugins/hooks";
 import { sweepPlace, useSandboxHost } from "../../src/plugins/sandboxes";
 import { sandboxDocker, SWEEP_EVERY_MS } from "../../src/plugins/builtin/sandbox-docker";
 import { stateDir } from "../../src/utils/home";
+import { ensureRunMachine } from "../../src/jobs/run-machine";
+import { FakeProvider } from "../../src/providers/fake";
+import type { VmSpec } from "../../src/providers/sandbox";
+import { initDependencies, resetDependencies } from "../../src/dependencies";
+import { BASE_EGRESS } from "../../src/agents/config";
+import { liveJobMachines, machineNameFor } from "../../src/providers/machines";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 afterEach(() => { resetJobs(); useHooks(null); useSandboxHost(null); useDaemonEvents(null); });
@@ -149,6 +155,102 @@ describe("limits and messages", () => {
   });
 });
 
+describe("the run's job machine (src/jobs/run-machine.ts)", () => {
+  test("made like the checks machine: purpose job, the run's, registries only, the image's context bundles gone; recorded while it lives", async () => {
+    const specs: VmSpec[] = [];
+    const log: NonNullable<ConstructorParameters<typeof FakeProvider>[0]>["log"] = [];
+    class Seen extends FakeProvider { override async ensure(spec: VmSpec) { specs.push(spec); return super.ensure(spec); } }
+    const p = new Seen({ log });
+    const ledger = mkdtempSync(join(tmpdir(), "capcomd-jobs-ledger-"));
+    const saved = { ...process.env };
+    // No engine (the run's sandbox record isn't asked for long): the daemon's sandbox, the fake, with no env image.
+    Object.assign(process.env, { CAPCOMD_MACHINES_LEDGER: ledger, CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_ENV: "image" });
+    delete process.env.CAPCOMD_SANDBOX;
+    initDependencies({ provider: p });
+    try {
+      const held = await ensureRunMachine("run-jm1", { lifetimeMs: 7_200_000 });
+      expect(specs).toHaveLength(1);
+      expect(specs[0]).toMatchObject({ isolated: true, labels: { purpose: "job", run: "run-jm1" }, egressAllow: BASE_EGRESS });
+      expect(specs[0]!.fromSnapshot).toBeUndefined();
+      // Its idle lifetime covers the job it is made for.
+      expect(specs[0]!.ttlSeconds).toBeGreaterThanOrEqual(7_200);
+      expect(held.ref).toMatchObject({ sandbox: null, dir: "/tmp/capcomd-jobs", cwd: "/w/jobs", idemKey: specs[0]!.idemKey });
+      expect(held.m).toMatchObject({ runId: "run-jm1", agentId: "run", dir: "/tmp/capcomd-jobs", cwd: "/w/jobs" });
+      const setup = log.find((l) => l.cmd[0] === "sh")!;
+      expect(setup.cmd).toEqual(["sh", "-c", 'rm -rf "$3" && mkdir -p "$1" "$2"', "sh", "/tmp/capcomd-jobs", "/w/jobs", "/w/context"]);
+      expect(setup.env).toEqual({ PATH: expect.stringContaining("/w/home/node/bin"), HOME: "/w/home" });
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toMatchObject([{ kind: "job", purpose: "job", runId: "run-jm1", name: machineNameFor(held.ref.idemKey) }]);
+      await held.release();
+      await expect(p.exec(held.ref.vmId, ["true"])).rejects.toThrow(/not found|not ready/);
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toEqual([]);
+    } finally {
+      resetDependencies();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  });
+
+  /** A run's job machines on the fake place, with `env` set (and its ledger in a temp folder) while `body` runs. */
+  async function onFake(env: Record<string, string>, body: (p: FakeProvider & { extended: Array<[string, number]> }, ledger: string) => Promise<void>) {
+    class Seen extends FakeProvider {
+      extended: Array<[string, number]> = [];
+      override async extendTtl(id: string, seconds: number) { this.extended.push([id, seconds]); return super.extendTtl(id, seconds); }
+    }
+    const p = new Seen();
+    const ledger = mkdtempSync(join(tmpdir(), "capcomd-jobs-ledger-"));
+    const saved = { ...process.env };
+    Object.assign(process.env, { CAPCOMD_MACHINES_LEDGER: ledger, CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_ENV: "image", CAPCOMD_SANDBOX: "fake", ...env });
+    initDependencies({ provider: p });
+    try { await body(p, ledger); } finally {
+      resetDependencies();
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+  }
+
+  test("each job machine holds a slot of its own: one of the run's being destroyed never frees the next one's", async () => {
+    // One slot on the place (1 GB of memory, 1 GB per agent).
+    await onFake({ CAPCOMD_FAKE_MEMORY_MB: "1024", CAPCOMD_JOBS_SLOT_WAIT_MS: "15000" }, async () => {
+      const { slotsFor } = await import("../../src/providers/capacity");
+      const first = await ensureRunMachine("run-slot1", { lifetimeMs: 60_000 });
+      // The run's next machine (the first being destroyed, its last job gone) waits for the slot the first holds...
+      let second: Awaited<ReturnType<typeof ensureRunMachine>> | null = null;
+      const coming = ensureRunMachine("run-slot1", { lifetimeMs: 60_000 }).then((h) => (second = h));
+      await sleep(300);
+      expect(second).toBeNull();
+      // ...and holds it once the first gave it back: nothing else gets it while the second lives.
+      await first.release();
+      await coming;
+      expect((await slotsFor("fake")!.request("capcomd-check-other", Date.now())).admitted).toBe(false);
+      await second!.release();
+      expect((await slotsFor("fake")!.request("capcomd-check-other", Date.now())).admitted).toBe(true);
+      slotsFor("fake")!.release("capcomd-check-other");
+    });
+  }, 30_000);
+
+  test("cover: a later job that may run past the machine's deadline moves it (and its ledger record); one within it doesn't", async () => {
+    await onFake({}, async (p, ledger) => {
+      // Made for a job of an hour: it lives an hour and 10 minutes (the default idle lifetime is shorter).
+      const held = await ensureRunMachine("run-cover1", { lifetimeMs: 3_600_000 });
+      expect(held.ref.ttlSeconds).toBe(4_200);
+      await held.cover(60_000);
+      expect(p.extended).toEqual([]);
+      // A job of 5 hours joins it: its deadline is now 5 hours and 10 minutes away.
+      await held.cover(5 * 3_600_000);
+      expect(p.extended).toEqual([[held.ref.vmId, 18_600]]);
+      expect(held.ref.ttlSeconds).toBe(18_600);
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toMatchObject([{ kind: "job", runId: "run-cover1", ttlSeconds: 18_600 }]);
+      await held.cover(3_600_000);
+      expect(p.extended).toHaveLength(1);
+      await held.release();
+      // Released: nothing to move any more.
+      await held.cover(10 * 3_600_000);
+      expect(p.extended).toHaveLength(1);
+      expect(liveJobMachines({ CAPCOMD_MACHINES_LEDGER: ledger })).toEqual([]);
+    });
+  });
+});
+
 /** A test plugin that listens to job.changed and hands its context out. */
 function recorder(told: HookCall<"job.changed">[], got: (ctx: PluginContext) => void, name = "tick-test"): Candidate {
   return {
@@ -247,7 +349,7 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     rmSync(recent);
   });
 
-  test("checked: a timer fires at most once a second, an exec job is an agent's, a run-owned one isn't made yet", async () => {
+  test("checked: a timer fires at most once a second, an exec job is an agent's or the run's, never the plugin's", async () => {
     let ctx!: PluginContext;
     const host = kernelHost({ log: false, jobs: true });
     useHooks(host.hooks);
@@ -255,7 +357,8 @@ describe("a plugin's timers (ctx.jobs, the daemon's records)", () => {
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: "fast", everyMs: 10 })).rejects.toMatchObject({ code: "invalid", message: "everyMs is at least 1000" });
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: "never" })).rejects.toMatchObject({ code: "invalid" });
     await expect(ctx.jobs.start({ kind: "timer", runId: null, owner: { run: true }, label: "x", everyMs: 1000 })).rejects.toMatchObject({ code: "invalid", message: "only a plugin's timer lives outside a run" });
-    await expect(ctx.jobs.start({ kind: "exec", runId: "run-x", owner: { run: true }, cmd: ["true"], label: "x" })).rejects.toMatchObject({ code: "unsupported" });
+    // A run-owned exec job is made (in the run's job machine, tests/scenarios/jobs.test.ts); a plugin-owned one isn't.
+    await expect(ctx.jobs.start({ kind: "exec", runId: "run-x", owner: { plugin: true }, cmd: ["true"], label: "x" } as unknown as Parameters<typeof ctx.jobs.start>[0])).rejects.toMatchObject({ code: "invalid", message: "an exec job is owned by an agent or the run" });
     // What a record keeps besides its output is bounded, so its output's tails always make it fit 64 KB (§16.2 rule 2).
     const exec = { kind: "exec" as const, runId: "run-x", owner: { agentId: "agt-x" }, cmd: ["true"], label: "x" };
     await expect(ctx.jobs.start({ ...exec, cwd: `/${"d".repeat(5000)}` })).rejects.toMatchObject({ code: "invalid", message: "cwd is over 4 KB" });

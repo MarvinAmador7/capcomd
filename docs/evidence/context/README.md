@@ -76,7 +76,8 @@ that model's price. Claude's cost is Claude Code's own `total_cost_usd`.
 
 Not run yet, and why (`bun scripts/eval-context.ts --list`): the arms `memory` and `memory-groundray`, and the probes
 `poison-candidate`, `poison-secret` and `poison-fact-body`, each until the ADR-025 build step that adds what it
-measures. The `index` arms have live results since step 6 (below); `index-paths` runs on the fake sandbox in CI only.
+measures. The `index` arms have live results since step 6 (below); `index-paths` and `index-noskills` (the brief
+without the context layer's skills, §12's "each doctrine skill present vs absent") run on the fake sandbox in CI only.
 
 Reproduce: `bun scripts/eval-context.ts --agents live --models claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5,gpt-6.1-sol --reps 3 --seed 20261106`
 at the commit above, with a `CAPCOMD_HOME` holding copies of your logins and `BOXD_API_KEY` (about 15 minutes per

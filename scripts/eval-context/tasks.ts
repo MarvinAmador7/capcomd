@@ -42,8 +42,8 @@ export const FAKE_EXPECTED: Record<string, Record<string, string>> = {
   index: { "business-fee": "pass:current", "stale-tier": "pass:current", "poison-data": "pass:correct", "team-handoff.find": "pass:current", "team-handoff.use": "pass:current", "cross-run.fix": "pass:half-even", "cross-run.use": "pass:half-even" },
 };
 // The other index arms brief the fake the same way (inlined items it uses without reading the file; pushes arrive after
-// it has finished): the same verdicts.
-for (const arm of ["index-paths", "index-k1", "index-k3", "index-triggered"]) FAKE_EXPECTED[arm] = { ...FAKE_EXPECTED.index! };
+// it has finished; the context skills, which it doesn't read, or not): the same verdicts.
+for (const arm of ["index-paths", "index-k1", "index-k3", "index-triggered", "index-noskills"]) FAKE_EXPECTED[arm] = { ...FAKE_EXPECTED.index! };
 
 /** Prepended to every checker: load the agent's module from the checkout, print the verdict, exit by it. */
 const PRELUDE = `import { pathToFileURL } from "node:url";
