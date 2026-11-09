@@ -15,6 +15,20 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   can't spawn it (set up before the consolidator existed, or moved from agents.json), setup leaves your planner alone
   and prints the command that lets it (`capcomd profiles set planner --set children.allowedChildProfiles=…`);
   `capcomd profiles migrate` prints the same note. Memory changes still wait for your approval before they land.
+- New: an agent can start a background job that keeps running after it finishes, such as a server kept up for
+  review: `capcomd job start --run -- <command>` (MCP `capcomd_job_start` with `run: true`). It runs in a machine of
+  the run's own, made from the run's agent environment the way the checks machine is (no checkout, no credentials,
+  package registries only), until the run ends or its `--timeout-ms`; then it is stopped and the machine deleted.
+  The Machines list shows that machine as the run's background jobs. Plugins can start one with
+  `ctx.jobs.start({kind: "exec", owner: {run: true}, …})`, which used to be refused as unsupported.
+- Changed: an agent's background job is now stopped once it has run `afterTurnMs` (30 minutes by default) past the
+  agent's last step, not 30 minutes after the job started, so a long build keeps running while its agent is still
+  working. A job started with `--timeout-ms` still stops at that timeout (at most the profile's `afterTurnMs`).
+- For contributors: the context eval has an `index-noskills` arm (`--arms index,index-noskills`): agents get the
+  same context brief as the `index` arm, in the same place, without the `capcomd-context-doctrine` and
+  `capcomd-context-routing` skills, so a run shows what those skills change (success, work, cost, the planted-instruction
+  probe, citations). CI runs it on the fake sandbox, where `--expect` now also checks each agent's delivered prompt:
+  the brief in every index arm, the skills in each but this one, and this one's brief the same as `index`'s.
 - **Breaking:** a run you start on a sandbox stays there. `capcomd run --sandbox docker` (and `run new --sandbox`, the
   API's `sandbox`, `capcomd_run_new`'s) now keeps every agent of the run on Docker, even when a profile's
   `sandbox.provider` names boxd, so a profile can no longer spend your boxd credit on a run you put on Docker. A

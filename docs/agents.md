@@ -126,8 +126,11 @@ children: { allowSpawn: true, allowedChildProfiles: [worker], maxChildren: 3 }
   (`foregroundMs`, `max`, `afterTurnMs`) sets the agent's background jobs (`capcomd job start`), as the flat `jobs`
   field does in `agents.json`. They are limits like `limits`: an override (`--set jobs.max=2`, which keeps the
   block's other values) may lower one but not raise or unset one the profile sets (without `--operator`), and a
-  profile in `children.allowedChildProfiles` may not either. A job started with a longer `--timeout-ms` than the
-  profile's `afterTurnMs` gets `afterTurnMs`.
+  profile in `children.allowedChildProfiles` may not either. An agent's job is stopped once it has run `afterTurnMs`
+  past the agent's last step (a busy agent's long job runs on), and when the agent ends. A job started with a longer
+  `--timeout-ms` than the profile's `afterTurnMs` gets `afterTurnMs`. A job that must outlive its agent (a server
+  kept for review) starts with `capcomd job start --run`: it runs in a machine of the run's own, made from the run's
+  environment image without the agent's checkout or any credential, until the run ends or its `--timeout-ms`.
 - `tools.mcp` gives the profile's agents MCP servers: `- { name: semgrep, command: [semgrep-mcp, --quiet], trust:
   untrusted }`. The agent's CLI starts each one inside its sandbox (never on your machine), beside capcomd's own server
   (so `capcomd` isn't a name you can use), so the program must be in the sandbox's environment (the agent's log says

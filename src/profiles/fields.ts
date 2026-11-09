@@ -82,7 +82,7 @@ export const PROFILE_FIELDS: readonly ProfileFieldSpec[] = [
   { id: "children.budgetShare", type: "number", label: "Budget share per agent", unit: "share", help: "Of its own budget, from 0 to 1", unset: "All of it" },
   { id: "jobs.foregroundMs", type: "number", label: "A job's wait for its result", unit: "ms", help: "In milliseconds", unset: "capcomd's default" },
   { id: "jobs.max", type: "number", label: "Jobs at once", unit: "count", unset: "capcomd's default" },
-  { id: "jobs.afterTurnMs", type: "number", label: "A job's time limit", unit: "ms", help: "In milliseconds", unset: "capcomd's default" },
+  { id: "jobs.afterTurnMs", type: "number", label: "A job's time limit", unit: "ms", help: "In milliseconds, counted from the agent's last step", unset: "capcomd's default" },
 ];
 const BY_ID = new Map(PROFILE_FIELDS.map((f) => [f.id, f]));
 /** Lists of named things a row outside the catalog shows by their names only. */
