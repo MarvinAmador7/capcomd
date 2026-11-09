@@ -44,14 +44,21 @@ async function askDocker(source: Env): Promise<{ ok: boolean; reason: string | n
 	try { p = Bun.spawn([bin, "version", "--format", "{{.Server.Version}}"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: source as Record<string, string> }); }
 	catch { return { ok: false, reason: "Docker isn't installed" }; }
 	// The answer races a timer: a CLI that hangs, or one whose child still holds its stdout after it is killed, would
-	// otherwise keep the read (and whoever awaits this) waiting forever. When the timer wins, the read is dropped.
+	// otherwise keep the read (and whoever awaits this) waiting forever. When the timer wins, the read is dropped; a CLI
+	// that had already exited 0 with a version (a child of its still holds the pipe) answered all the same.
 	const stdout = (p.stdout as ReadableStream<Uint8Array>).getReader();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const late = new Promise<null>((done) => { timer = setTimeout(() => done(null), DOCKER_ASK_MS); });
-	const text = async () => { const dec = new TextDecoder(); let s = ""; for (let r = await stdout.read(); !r.done; r = await stdout.read()) s += dec.decode(r.value, { stream: true }); return s + dec.decode(); };
+	const dec = new TextDecoder();
+	let read = "";
+	const text = async () => { for (let r = await stdout.read(); !r.done; r = await stdout.read()) read += dec.decode(r.value, { stream: true }); return read + dec.decode(); };
 	const answer = Promise.all([text(), p.exited]);
 	const got = await Promise.race([answer, late]).finally(() => clearTimeout(timer));
-	if (!got) { p.kill("SIGKILL"); stdout.cancel().catch(() => {}); answer.catch(() => {}); return { ok: false, reason: "Docker isn't running" }; }
+	if (!got) {
+		const answered = p.exitCode === 0 && read.trim() !== "";
+		p.kill("SIGKILL"); stdout.cancel().catch(() => {}); answer.catch(() => {});
+		return answered ? { ok: true, reason: null } : { ok: false, reason: "Docker isn't running" };
+	}
 	const [out, code] = got;
 	return code === 0 && out.trim() ? { ok: true, reason: null } : { ok: false, reason: "Docker isn't running" };
 }

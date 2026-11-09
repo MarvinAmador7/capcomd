@@ -217,6 +217,16 @@ describe("GET /v1/run-options", () => {
 			resetDockerCheck();
 			try { process.kill(Number(readFileSync(childPid, "utf8")), "SIGKILL"); } catch { /* gone */ }
 		}
+		// A CLI that answered and exited 0, but left a child holding its stdout: it answered, after the same 3 s.
+		const leftPid = join(bins, "left.pid");
+		const answered = fake("answered", `/bin/sleep 600 & echo $! > ${leftPid}; echo 27.3.1; exit 0`);
+		resetDockerCheck();
+		try {
+			expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: answered })).toEqual({ ok: true, reason: null });
+		} finally {
+			resetDockerCheck();
+			try { process.kill(Number(readFileSync(leftPid, "utf8")), "SIGKILL"); } catch { /* gone */ }
+		}
 	}, 15_000);
 
 	test("boxd key: BOXD_API_KEY, or the key capcomd setup stored", () => {
