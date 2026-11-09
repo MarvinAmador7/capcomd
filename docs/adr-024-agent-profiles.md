@@ -117,7 +117,8 @@ tools:
 memory:                           # superseded by ADR-025's `context` block (its D2), and read as an alias of it:
   scope: project                  # project → context.providers: [{name: memory, layers: [project, run]}]; none → [];
                                   # profile | user are refused (ADR-025 D15: those layers wait)
-  files: [MEMORY.md]              # one file: the memory provider's index
+  files: [MEMORY.md]              # one file: the memory provider's index, a .md/.txt name directly under
+                                  # .capcomd/context/ (built: ADR-025 §13, spec 1.0.60)
   retain: 30d                     # every item kind's retention
 
 sandbox:
@@ -225,12 +226,16 @@ treats a distribution-owned `SOUL.md` that way).
   (`profile.yaml`, `SOUL.md`, `prompt.md`, `skills/`); a project's `override.yaml` and the profile's memory (§2.2
   `memory`) are user-owned and never touched. So is any file the user added in the package's directory (one its `LOCK`
   doesn't list): kept and reported as kept, and a new package file in its place is a conflict (spec 1.0.45; before, the
-  update replaced the whole directory but the override). A changed hash on a pinned skill or persona is shown before
-  it is applied.
+  update replaced the whole directory but the override). A changed hash on a pinned skill is shown in `update`'s
+  report, which then applies it without asking (`--dry-run` stops at the report), so "shown before it is applied"
+  means in the same command, not a confirmation; a project's changed skill or persona then waits for trust again before
+  an agent gets it, and a changed persona is listed among the changed files, not on a line of its own (§9, step 7 and
+  the persona's notes).
   **From the research:** Hermes's `distribution_owned` list is exactly this split; adopted as is.
 - Discovery of shareable profiles uses the same marketplace files as the plugin (ADR-018 §1): a repository's
   `.claude-plugin/marketplace.json` may list `profiles` beside `plugins`. **Judgment call:** reuse the marketplace file
-  rather than a new registry; cheap and already indexed by the agent platforms.
+  rather than a new registry; cheap and already indexed by the agent platforms. (Not built: install takes a repository,
+  not a marketplace listing; §9, step 7.)
 
 ### 2.6 Per-project overrides
 
@@ -286,23 +291,32 @@ model, beats a rule engine. `fit` is capcomd's daemon-written equivalent, so it 
 
 - **CLI.** `capcomd profiles list|show|add|set|rm|validate|schema` replaces `capcomd agents …` (kept as an alias for one
   minor release, printing the new name). `show` prints the three layers and the resolved spec with the source of every
-  value. `add` takes `--extends`, `--from <owner/repo#name>` and the v2 flags (`--skill`, `--tag`, `--persona FILE`,
-  `--memory project`, `--sandbox-provider docker`). `--json` keeps the `capcomd.cli/v1` envelope.
+  value. `add` takes `--extends`, and any field through `--set path=value` and `--unset` (as `set` does: `--set
+  tags=a,b`, `--set identity.title=…`). **Not built:** `--from <owner/repo#name>` (use `capcomd profiles
+  install`) and the v2 shorthand flags (`--skill`, `--tag`, `--persona FILE`, `--memory project`, `--sandbox-provider
+  docker`). `--json` keeps the `capcomd.cli/v1` envelope.
 - **API.** `GET /v1/profiles`, `GET/PUT/DELETE /v1/profiles/{name}` (the `configure` scope for writes, as project setup
   has), `POST /v1/profiles/install`, each with `Idempotency-Key`. A write is a `profile.changed` event on the `daemon`
   stream (entity `profile:<name>`, text daemon-written: "Profile reviewer changed: limits.maxTurns 20 → 40."). This is
-  capability `profiles` in `/v1/health`.
+  capability `profiles` in `/v1/health` (and `profiles.edit` for the writes, §9). **Built:** `GET /v1/profiles`, `GET
+  /v1/profiles/{name}` and `PUT /v1/profiles/{name}` on an existing profile. **Not built:** creating a profile with
+  `PUT`, `DELETE /v1/profiles/{name}` and `POST /v1/profiles/install` (no client yet; §9, steps 6 and 7).
 - **App.** Settings › Crew (the owner's word for the team) lists profiles grouped by project, each with its avatar,
   title, provider mark, tags and readiness (login present, environment built, sandbox up), with the resolved values
   and their source on the details screen (the ADR-021 settings-row pattern). Editing writes through `PUT`. The run
   setup sheet's driver picker keeps using `GET /v1/run-options` (`src/api/run-options.ts`), which now also lists every
   profile that can plan, not only the one named `planner` (`planners`, each with its readiness; done 2026-11-07, spec
-  1.0.47). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
+  1.0.47). **Not built:** the app's Crew screen and a picker over `planners` (no approved mockup), and starting a run
+  with another planner from the API: `POST /v1/runs` has no `planner` (only `capcomd run --planner <name>` does), so
+  `planners` is a readout for now. `GET /v1/profiles` `ready` stays the login only; a profile's environment and
+  `lifecycle` readiness are in `planners`, for the profiles that can plan (§8). `GET /v1/profiles` rows carry what §4 gives the planner (`title`, `fit`, `cost`, `canReport`) and the
   skills each is pinned with and their trust (`untrustedSkills`), so the app and a planner see that a spawn would wait
   on the operator's trust before it is refused.
 - **In a run.** `agent.spawned` carries `profile`, `profileVersion` and the avatar seed, so a bot's face is stable
   across runs of the same profile (bot-avatar memory: "agent id + role + size → SVG"; the seed becomes the profile's
-  when it sets one).
+  when it sets one). **Built:** `profile`, `profileVersion` and `profileSource` (spec 1.0.18). **Not built:** the avatar
+  seed: `identity.avatar.seed` is checked and kept on the resolved profile, but no event, `Agent` field or `GET
+  /v1/profiles` row carries it yet.
 
 ## 6. Mapping today's profiles onto v2
 
@@ -715,7 +729,8 @@ Made while building install, export and update (§7 step 7, 2026-11-06; `src/pro
   `skills/`, a `source: user` skill still by name). `default` is never exported, nor a `LOCK`.
 - **Not in this step**: `POST /v1/profiles/install` (§5; no client yet, and the plugins have no install route
   either), the marketplace file's `profiles` (§2.5), `profiles add --from`, and trust in the API (`GET /v1/profiles`
-  rows don't say it yet).
+  rows didn't say it yet; they have since: `untrustedSkills`, spec 1.0.47, `untrustedPersona`, 1.0.59, and
+  `untrustedSandbox`, 1.0.64, under capability `profiles.facts`).
 
 Made while building migrate and the templates (§7 step 9, 2026-11-06; `src/profiles/migrate.ts`,
 `src/config/project-setup.ts`):
@@ -822,5 +837,5 @@ Judgment calls made in the spec on the profile side (spec §16.1–16.2; reasons
 | **A `jobs` block** (`foregroundMs`, `max`, `afterTurnMs`) with `foregroundMs` defaulting to 5 000 for orchestrate agents and 60 000 otherwise | §16.2 |
 | **`lifecycle.onStart`/`onEnd` name plugins that must be active**, which listen to `agent.changed` for that profile; there is no per-profile hook | §6.6.8 |
 | **`harness.provider` and `sandbox.provider` are seam names**, validated against the active plugins at `validate` | §7.1 |
-| **`identity.persona` and `skills` reach the prompt through `agent.preparing`**, the one place a plugin adds prompt text | §6.6.7 |
+| **`identity.persona` and `skills` reach the prompt through `agent.preparing`**, the one place a plugin adds prompt text (skills as `prompt.skills`; the persona is shown there as `prompt.persona`, but the runner places it first and no patch changes it: "Made while giving `identity.persona` … their runtime", above) | §6.6.7 |
 | **`profile.resolved` patches are narrow-only through `widenings()`**, and must be pure (it fires on every resolution) | §6.6.5 |

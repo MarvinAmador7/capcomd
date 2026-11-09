@@ -446,6 +446,10 @@ context:
 
 User-owned on `profiles update` (ADR-024 §2.5); `x-<plugin>` stays the vendor extension; `profile-field` descriptors
 render it. `files:` from the old block is honoured as the index path if it names one file, else refused with a message.
+**Built** (spec 1.0.60; §13, "Made while closing the live gaps"): `memory.files: [NOTES.md]` is the memory entry's
+`index`, a `.md` or `.txt` name directly under `.capcomd/context/` (not the repository's root: there any agent's branch
+could change it unreviewed), whose links pick the items; another name, or more than one, is refused, and an index
+missing at the revision is `memory: skipped (not found)`, never every item.
 
 **Hooks the built-ins use**: `agent.preparing` (the brief), `agent.changed ended{result}` (collect `result.data.context`),
 `verify.changed judged` and `merge.changed landed` (outcome ids for the consolidator to cite), `merge.landing`
