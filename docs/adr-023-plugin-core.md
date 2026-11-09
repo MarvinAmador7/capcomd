@@ -477,7 +477,7 @@ Decided by the owner on 2026-11-08:
    the rest for them exactly as for an agent's. With no daemon the front door keeps running them itself, and refuses
    one that a plugin it can't ask must judge (the conservative choice: a gate it can't ask is a failed gate call,
    fail-closed); listeners of other hooks are named as skipped. Which operations, and which stay in the front door's
-   process for now (`run new`, `spawn`, a run's driver), is in spec §6.1 (spec 1.0.73).
+   process for now (`run new`, `spawn`, a run's driver), is in spec §6.1.
 
 Risks that stay:
 

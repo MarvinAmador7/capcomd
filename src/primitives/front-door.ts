@@ -56,7 +56,8 @@ export async function frontMerge(o: MergeOpts, w: Wait): Promise<FrontAnswer> {
 
 /** `capcomd approve <runId> <mrg-…>`, `capcomd_approve`: decideMerge, in the daemon when one hosts the engine. */
 export async function frontDecide(runId: string, mergeId: string, d: { approve: boolean; by: string; reason?: string }, w: Wait): Promise<FrontAnswer> {
-  const body = { approve: d.approve, by: d.by, ...(d.reason ? { reason: d.reason } : {}) };
+  // Its own key: a poll after the decision ended gets its record, never a second decision (src/api/front-door.ts).
+  const body = { approve: d.approve, by: d.by, ...(d.reason ? { reason: d.reason } : {}), key: `fd-${crypto.randomUUID()}` };
   return front(`/v1/runs/${encodeURIComponent(runId)}/merges/${encodeURIComponent(mergeId)}/decision`, "approve", body, () => body, FRONT_HOOKS.decide, w, async () => {
     const O = await import("./ops");
     return { id: mergeId, done: O.decideMerge(runId, mergeId, d) };

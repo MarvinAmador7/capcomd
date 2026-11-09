@@ -14272,6 +14272,12 @@
                     "type": "string",
                     "maxLength": 4000
                   },
+                  "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "The front door's own id for this decision: asked again with the same key after it ended, the answer is its record, never a second decision"
+                  },
                   "waitMs": {
                     "type": "integer",
                     "minimum": 0,

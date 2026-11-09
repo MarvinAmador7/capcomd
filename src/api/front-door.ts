@@ -17,10 +17,16 @@ export interface FrontDoorOps {
   decide(runId: string, mergeId: string, b: z.infer<typeof FrontDecisionBody>): Promise<FrontOp>;
 }
 
+/** How long a keyed decision's end is kept for its front door's next poll (that poll comes at once after a 202). */
+export const DECIDED_KEPT_MS = 10 * 60_000;
+
 /** The kernel's operations (src/primitives/ops.ts), as the CLI and `capcomd mcp` call them when they run them themselves. */
 export function kernelFrontDoor(): FrontDoorOps {
   // A decision being made, by merge: the same decision asked again (a front door's next poll) joins it, so approval.deciding
-  // isn't asked twice and the poll sees the merge it started; a merge is decided once (decideMerge's CAS) either way.
+  // isn't asked twice and the poll sees the merge it started; a merge is decided once (decideMerge's CAS) either way. A
+  // front door's decision carries a `key` of its own: its record stays here a while after it ends, so a poll that comes
+  // after the end gets that record instead of deciding again (an approval that a plugin then held would otherwise be
+  // approved a second time, past the hold, with nobody asking).
   const deciding = new Map<string, Promise<Record<string, unknown>>>();
   const ops = () => import("../primitives/ops");
   return {
@@ -46,14 +52,18 @@ export function kernelFrontDoor(): FrontDoorOps {
       return { id, done };
     },
     async decide(runId, mergeId, b) {
-      const k = `${runId}\u0000${mergeId}\u0000${b.approve ? "approve" : "deny"}`;
+      const k = `${runId}\u0000${mergeId}\u0000${b.approve ? "approve" : "deny"}\u0000${b.key ?? ""}`;
       let done = deciding.get(k);
       if (!done) {
         const O = await ops();
         done = O.decideMerge(runId, mergeId, { approve: b.approve, by: b.by ?? "cli", ...(b.reason ? { reason: b.reason } : {}) }) as Promise<Record<string, unknown>>;
         const d = done;
         deciding.set(k, d);
-        d.then(() => deciding.delete(k), () => deciding.delete(k));
+        const forget = () => {
+          if (!b.key) return void deciding.delete(k);
+          setTimeout(() => { if (deciding.get(k) === d) deciding.delete(k); }, DECIDED_KEPT_MS).unref?.();
+        };
+        d.then(forget, forget);
       }
       return { id: mergeId, done };
     },

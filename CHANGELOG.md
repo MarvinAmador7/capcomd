@@ -5,18 +5,6 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
-- Your plugins now judge what you do from the CLI and from `capcomd mcp`, not only what agents do. `capcomd verify`,
-  `capcomd merge`, `capcomd approve <runId> <mrg-…>` and the `capcomd_verify`, `capcomd_merge` and `capcomd_approve`
-  tools run in the daemon when one is running for that engine, so a plugin you installed (in `~/.capcomd/plugins`, or a
-  project's you trusted) is asked at `verify.judging`, `merge.landing` and `approval.deciding` as it is for an agent's
-  work. Nothing changes in how you call them or in what they print.
-  With no daemon running they still run in the command itself, but a plugin of yours that judges them can't be asked
-  there, so the command is now refused with a config error (reason `plugins_unconsulted`) naming the plugin: start the
-  daemon (`capcomd serve`) and run it again, or turn the plugin off (`plugins.<name>.enabled: false`). A plugin that
-  only watches is named on stderr instead (`capcomd mcp`: `pluginsNotConsulted` in the answer). `capcomd run new`,
-  `capcomd spawn` and `capcomd run <goal>` still run where you type them, so they follow the same rule even with a
-  daemon: a plugin that must answer them (`failure: closed`) refuses them, any other is named and skipped. For apps
-  and scripts: capability `ops.front_door` lists the daemon's routes for this (they take only the CLI's own tokens).
 - Fixed: the watchdog no longer flags an agent that started a background job and then waits for it in a command
   (a `sleep`, a wait on its inbox). The time that command ran alongside the job used up the command time the watchdog
   allows between two signs of progress (`plugins.watchdog.stalledAfterMs`), so with a short limit the agent was flagged

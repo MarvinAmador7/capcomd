@@ -444,7 +444,9 @@ export function harnessApp(o: ServerOptions) {
 	// Never HTML or svg; nosniff, and a CSP that runs nothing if a browser opens it anyway.
 	const raw = (bytes: Uint8Array, hint: string | null) => {
 		const t = servedType(bytes, hint);
-		return new Response(bytes, { headers: { "content-type": t.type, "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox", "content-disposition": t.inline ? "inline" : "attachment", "cache-control": "private, no-store" } });
+		// The cast: which lib's BodyInit tsc picks (Bun's or the DOM's) isn't stable across runs, and the DOM's wants an
+		// ArrayBuffer-backed view; these bytes always are one.
+		return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": t.type, "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox", "content-disposition": t.inline ? "inline" : "attachment", "cache-control": "private, no-store" } });
 	};
 	app.get("/v1/runs/:runId/attachments/:attachmentId/content", async (c) => {
 		const id = c.req.param("attachmentId");

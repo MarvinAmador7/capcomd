@@ -497,6 +497,7 @@ export const FrontDecisionBody = z.object({
 	approve: z.boolean().describe("true: land it; false: deny it"),
 	by: z.string().min(1).max(128).optional().describe("Who decided, as the front door records it (the CLI's `--by`, `driver`, `driver:elicited`); default `cli`"),
 	reason: z.string().max(4000).optional(),
+	key: z.string().min(1).max(200).optional().describe("The front door's own id for this decision: asked again with the same key after it ended, the answer is its record, never a second decision"),
 	waitMs: FrontWait,
 }).strict();
 /** A front door's operation, ended (200, `done`) or still running in the daemon (202). */
