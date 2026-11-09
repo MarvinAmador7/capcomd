@@ -374,7 +374,8 @@ Context: loaded 1 of 1 lines (budget 25,600 B and 200 lines from eval/claude-opu
   (`[Rounding](memory/money-rounding.md)`, or the `→ memory/money-rounding.md` lines `capcomd context lint --fix` writes
   in `index.md`, so `files: [index.md]` works too). The file sits directly in `.capcomd/context/`, so it changes
   through the same review as the items. Without `files`, every item is read; with it and no such file at the branch's
-  tip, the header says `memory: skipped (not found)`.
+  tip, the header says `memory: skipped (not found)` (in a project with no memory yet at all, agents start with no
+  brief instead, as below).
 
 ### Lessons agents propose
 

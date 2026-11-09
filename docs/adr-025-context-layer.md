@@ -970,7 +970,8 @@ owner's decision of 2026-11-08, §15):
 - **No memory, no brief.** The memory provider's `index` says `empty: true` (an optional field of the answer, so a
   third-party provider is unaffected) when the run's base has no memory under `.capcomd/context/`: no item file
   (`memory/**.md`, `facts/**.md`, but OKF's `index.md` and `log.md`, read or too large to be) and no index (`index.md`,
-  or the profile's `memory.files`, which must exist anyway). A missing folder, or one holding only a `.gitkeep`, is
+  or the profile's `memory.files`; that index missing beside other memory is still `skipped (not found)`, but
+  missing in a project with no memory at all is empty). A missing folder, or one holding only a `.gitkeep`, is
   empty; one item, even one the brief leaves out (deprecated, stale, a reviewer's), or an index alone, is not. The router
   leaves an empty provider out of the header (and records `plugin.context.skipped` `reason: empty`); when every
   provider of the profile is empty it returns no patch at all, so the agent's prompt is byte for byte the one it would

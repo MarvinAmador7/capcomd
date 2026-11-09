@@ -133,11 +133,15 @@ export function indexedPaths(text: string): Set<string> {
 /** The memory provider's items of a tree: every item, or with `index` the items that index file names (indexedPaths).
  *  The index narrows what is shown, never what is current: the items are read from the whole tree (ids, supersession)
  *  and one another item of the tree supersedes is left out though the index names it, as the brief leaves it out
- *  without an index. An index that isn't there is `not_found`, one too large to read `invalid`: never every item
- *  instead, which would show an agent what its profile left out. */
+ *  without an index. An index that isn't there is `not_found` (but `empty` in a tree with no memory at all, ADR-025
+ *  D17), one too large to read `invalid`: never every item instead, which would show an agent what its profile left
+ *  out. */
 export function parseMemory(files: Array<{ path: string; text: string | null }>, o: { revision: string; date: string }, index: string | null): Parsed {
   if (index === null) return { ...parseItems(files, o), empty: !hasMemory(files) };
   const f = files.find((x) => x.path === `${CONTEXT_DIR}${index}`);
+  // A project with no memory at all hasn't written the index its profile names yet either: that is nothing, not a
+  // missing index (ADR-025 D17). With memory there, the missing index is named.
+  if (!f && !hasMemory(files)) return { revision: o.revision, modified: null, items: [], empty: true };
   if (!f) throw new PluginError("not_found", `no index ${CONTEXT_DIR}${index} at ${o.revision.slice(0, 12)}`);
   if (f.text === null) throw new PluginError("invalid", `the index ${CONTEXT_DIR}${index} is over ${MEMORY_MAX_BYTES / 1024} KB`);
   const named = indexedPaths(f.text);
@@ -150,9 +154,9 @@ export function parseMemory(files: Array<{ path: string; text: string | null }>,
 
 /** Whether a tree keeps any memory (ADR-025 D17, the owner's decision of 2026-11-08): at least one item file (a
  *  Markdown file under `memory/` or `facts/` other than OKF's index.md and log.md, read or too large to be) or the index
- *  (`index.md`, or the one a profile names, which parseMemory requires). A missing or empty `.capcomd/context/`, or one
- *  holding only other files (a `.gitkeep`), keeps none: its agents get no brief and no context skills, so a project
- *  with no memory pays nothing in its prompts. */
+ *  (`index.md`; a profile's own index that is there is read by parseMemory). A missing or empty `.capcomd/context/`,
+ *  or one holding only other files (a `.gitkeep`), keeps none: its agents get no brief and no context skills, so a
+ *  project with no memory pays nothing in its prompts, whether or not its profile names an index. */
 export function hasMemory(files: ReadonlyArray<{ path: string }>): boolean {
   return files.some((f) => {
     if (!f.path.startsWith(CONTEXT_DIR) || !f.path.endsWith(".md")) return false;

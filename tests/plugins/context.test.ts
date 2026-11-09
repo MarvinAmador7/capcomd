@@ -214,6 +214,12 @@ describe("the memory provider's index: a profile's memory.files (ADR-025 §10)",
     const missing = await buildBrief(input({ context: contextOf({ files: ["NOTES.md"] }) }));
     expect(missing.providers).toEqual([{ name: "memory", state: "skipped", reason: "not found" }]);
     expect(missing.loaded).toBe(0);
+    // In a project with no memory at all (no folder, or a .gitkeep), the index the profile names isn't there yet
+    // either: that is a project with nothing, not a missing index, so the brief is empty (ADR-025 D17).
+    for (const files of [{}, { ".gitkeep": "" }, { "memory/log.md": "# log" }]) {
+      const none = await buildBrief(input({ context: contextOf({ files: ["NOTES.md"] }) }, files));
+      expect(none).toMatchObject({ empty: true, loaded: 0, providers: [{ name: "memory", state: "loaded", lines: 0, empty: true }] });
+    }
     // A spec is data: a path, a climb or a non-string from one is refused by the provider as well as the profile check.
     for (const index of ["memory/NOTES.md", "../NOTES.md", ".hidden.md", 7]) {
       const b = await buildBrief(input({ context: { providers: [{ name: "memory", index }] } }, { ...FILES, "NOTES.md": NOTES, "memory/NOTES.md": NOTES }));
