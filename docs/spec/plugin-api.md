@@ -2465,16 +2465,19 @@ Tool calls (`step`), the activity line, a job's output and a job's end are not p
 background, is a command like any other, and what it leads to (files changing, a hand-back) is. While it waits on
 something its clock doesn't run, and the time it waited doesn't count when the wait ends: a job (`job.changed` `started`
 to `ended`), a verification, an approval, being paused, or a foreground command (from its start, while `worked` keeps
-saying it runs; once it isn't said for `PROGRESS_SIGNAL_MS` it has ended), the last for at most `stalledAfterMs` in all
-between two signs of progress, however many commands, so a command that hangs, or one run again and again (a poll), is
-still judged. Waits that overlap (a foreground job and the command that waits on it) count once: a command's time while
-another wait holds the clock (a background job it started, a check) is that wait's, and doesn't use up the commands'
-`stalledAfterMs`, so a command still running after the job ended holds the clock as any other. Its notice and its
+saying it runs; once it isn't said for `PROGRESS_SIGNAL_MS` it has ended). Jobs and commands hold the clock for at most
+`stalledAfterMs` in all between two signs of progress, however many there are, so a command that hangs, one run again
+and again (a poll), or a job that never ends (polled or not) is still judged: after that its quiet counts. A
+verification, an approval or a pause holds the clock as long as it lasts, and while one does, a job's or command's time
+is that wait's and doesn't use up the `stalledAfterMs`. Waits that overlap (a foreground job and the command that waits
+on it, a command run while a background job it started runs) count once, so a command still running after a job ended
+holds the clock for what the job left of the `stalledAfterMs`. Its notice and its
 stop's reason say what it saw rather than what it assumed: `no progress for <time>: no file change seen, no agent of its
 own started or ended, no check or approval it waited on finished; <n> tool steps seen meanwhile` (or `no tool step
 seen`: the `step`s it heard, which come when a streak of one kind ends and stop at the kernel's 500 per agent, so none
-seen is not none taken), and `; it has been waiting on one command for <time>` when a command still running has used up the time that
-doesn't count. Whether a job that ends counts as progress was an open question; the built-in says no, as above (a quick
+seen is not none taken), `; it has been waiting on one command for <time>` when a command still running has used up the time that
+doesn't count, and `; it has been waiting on job <id> for <time>` when a job it started is still running (the one
+waited on longest, timed from its start). Whether a job that ends counts as progress was an open question; the built-in says no, as above (a quick
 foreground job is no different from a shell tool call). An agent with agents of its own running is judged through them:
 they stall first, and their end is its progress, so a stuck worker is stopped rather than its planner and the planner
 can re-plan. On a fire of its one timer (key `clock-<everyMs>`; one with another interval is cancelled) it confirms the

@@ -8,8 +8,10 @@
 //  - a verification or approval it waited on ended.
 // Tool calls alone (`step`) are not progress, and neither is a job's end or its output. While it waits on something (a
 // job, a verification, an approval, a foreground command of its CLI, a paused agent under it) its clock doesn't run:
-// that time doesn't count (once, when waits overlap). Commands count so for at most `stalledAfterMs` in all between two
-// signs of progress, however many there are, so one that hangs, or one run again and again, is still caught. An agent
+// that time doesn't count (once, when waits overlap). Jobs and commands count so for at most `stalledAfterMs` in all
+// between two signs of progress, however many there are, so one that hangs, one run again and again, or a job that
+// never ends and is polled, is still caught; a verification, an approval or a pause holds the clock as long as it
+// lasts. An agent
 // with agents of its own running is judged through them: they stall first, and their end is its progress. An agent
 // whose work never shows as files changing (a reviewer, a report-only agent, an orchestrate agent: none is
 // checkpointed) isn't judged at all; the kernel's own notices still watch its process. While the kernel's own notice
@@ -63,11 +65,15 @@ export interface Watched {
   creditedTo?: number;
   /** What it waits on that reports back: `job:<id>`, `verify:<id>`, `approval:<id>`, `paused`. */
   waits: string[];
-  /** Since when its waits hold its clock; null while it waits on nothing. */
+  /** Up to when its waits' time is accounted for (it moves on at every look while they last); null while it waits on
+   *  nothing. */
   heldAt?: number | null;
+  /** When each job it waits on started, as heard (wall time, what the notice says). */
+  jobsAt?: Record<string, number>;
   /** The foreground command it was last seen waiting on: when it started, and when it was last seen running. */
   command?: { since: number; seenAt: number } | null;
-  /** How much of its commands' time was taken off its clock since its last progress (at most stalledAfterMs). */
+  /** How much of its jobs' and commands' time was taken off its clock since its last progress (at most
+   *  stalledAfterMs). */
   commanded?: number;
   /** Steps of its tools that finished since its last progress (what the notice says it did meanwhile). */
   steps?: number;
@@ -92,7 +98,12 @@ export function spoken(ms: number): string {
 }
 
 /** What the watchdog saw an agent do while it made no progress (the notice and the stop say it). */
-export interface Seen { steps: number; commandMs: number | null }
+export interface Seen {
+  steps: number;
+  commandMs: number | null;
+  /** A job it still waits on past the time that doesn't count (the one waited on longest), and for how long. */
+  job?: { id: string; ms: number } | null;
+}
 
 /** Why it is judged stalled, as observed: what didn't happen, and what it was seen doing meanwhile. Its steps as seen,
  *  not as taken: a step is told when its streak ends, and the kernel keeps at most 500 of an agent's (STEPS_MAX), so
@@ -100,7 +111,8 @@ export interface Seen { steps: number; commandMs: number | null }
 export function stalledWhy(quietMs: number, seen: Seen = { steps: 0, commandMs: null }): string {
   const did = seen.steps ? `${seen.steps} tool step${seen.steps === 1 ? "" : "s"} seen meanwhile` : "no tool step seen meanwhile";
   const cmd = seen.commandMs !== null ? `; it has been waiting on one command for ${spoken(seen.commandMs)}` : "";
-  return `no progress for ${spoken(quietMs)}: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; ${did}${cmd}`;
+  const job = seen.job ? `; it has been waiting on job ${seen.job.id} for ${spoken(seen.job.ms)}` : "";
+  return `no progress for ${spoken(quietMs)}: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; ${did}${cmd}${job}`;
 }
 
 /** The notice's text: why, and what comes next. */
@@ -197,17 +209,43 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
     save(w);
     return add;
   };
-  const wait = (w: Watched, on: string) => {
-    if (w.waits.includes(on)) return;
-    if (!w.waits.length) w.heldAt = Date.now();
-    w.waits.push(on);
+  /** Only jobs hold its clock (no check, approval or pause): their time is shared with its commands'. */
+  const onJobsOnly = (w: Watched) => w.waits.length > 0 && w.waits.every((x) => x.startsWith("job:"));
+  /** Its waits still hold its clock: a check, an approval or a pause as long as it lasts; jobs while its jobs' and
+   *  commands' time since its last progress is under stalledAfterMs. */
+  const waiting = (w: Watched) => w.waits.length > 0 && (!onJobsOnly(w) || (w.commanded ?? 0) < cfg.stalledAfterMs);
+  /** The time its waits held its clock, up to `now`, doesn't count: all of it while a check, an approval or a pause is
+   *  among them; while only jobs are, up to what is left of stalledAfterMs for its jobs and commands since its last
+   *  progress (a job that never ends, polled or not, is no more progress than a command that hangs). Taken at every
+   *  look and whenever what it waits on changes, so each stretch counts by what it waited on then. */
+  const hold = (w: Watched, now = Date.now()) => {
+    if (!w.waits.length) return;
+    const from = w.heldAt ?? now;
+    if (now > from) {
+      if (!onJobsOnly(w)) credit(w, from, now);
+      else {
+        const room = cfg.stalledAfterMs - (w.commanded ?? 0);
+        if (room > 0) w.commanded = (w.commanded ?? 0) + credit(w, from, Math.min(now, Math.max(from, accounted(w)) + room));
+      }
+    }
+    w.heldAt = now;
     save(w);
   };
-  /** It no longer waits on `on`: the time it waited doesn't count. */
+  const wait = (w: Watched, on: string) => {
+    if (w.waits.includes(on)) return;
+    if (w.waits.length) hold(w);
+    else w.heldAt = Date.now();
+    w.waits.push(on);
+    if (on.startsWith("job:")) w.jobsAt = { ...w.jobsAt, [on.slice(4)]: Date.now() };
+    save(w);
+  };
+  /** It no longer waits on `on`: the time it waited doesn't count (as `hold` says). */
   const release = (w: Watched, on: string) => {
     if (!w.waits.includes(on)) return;
+    hold(w);
     w.waits = w.waits.filter((x) => x !== on);
-    if (!w.waits.length) { credit(w, w.heldAt ?? Date.now(), Date.now()); w.heldAt = null; }
+    if (!w.waits.length) w.heldAt = null;
+    if (w.jobsAt && on.startsWith("job:")) { const { [on.slice(4)]: _, ...rest } = w.jobsAt; w.jobsAt = rest; }
     save(w);
   };
   const unwait = (runId: string, agentId: string, on: string) => {
@@ -216,10 +254,10 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
     progress(runId, agentId);
   };
   /** A foreground command it waits on, seen running now: the time since it was last seen (or started) doesn't count, up
-   *  to stalledAfterMs for all its commands since its last progress (a command run again and again, polling, is no
-   *  more progress than one that hangs). While a wait holds its clock (a job, a check), that wait takes the time off
-   *  when it ends: the command's time then isn't taken off again and doesn't use up its commands' allowance, so a
-   *  command still running after the job ended holds the clock as any other would. */
+   *  to stalledAfterMs for all its jobs and commands since its last progress (a command run again and again, polling,
+   *  is no more progress than one that hangs). While a wait holds its clock (a job, a check), that wait takes the time
+   *  off (`hold`): the command's time then isn't taken off again and doesn't use up the allowance a second time, so a
+   *  command still running after the job ended holds the clock for what the job left of it. */
   const commanding = (w: Watched, since: number) => {
     const now = Date.now();
     let c = w.command;
@@ -295,7 +333,8 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
     // Its own clock: the look runs on its own, outside this call's deadline (it may cancel agents).
     if (job.plugin === ctx.plugin.name) { if (change.kind === "fired") void tick().catch((e) => ctx.log.warn("the watchdog's look failed", { error: String((e as Error)?.message ?? e) })); return; }
     // An agent's command run as a job, in the foreground or the background: while it runs the agent waits, and that
-    // time doesn't count; its end, like its output, isn't progress (what it leads to is: files changing, a hand-back).
+    // time doesn't count (for up to stalledAfterMs with its commands, `hold`); its end, like its output, isn't progress
+    // (what it leads to is: files changing, a hand-back).
     if (job.spec.kind !== "exec" || !job.spec.runId || !("agentId" in job.spec.owner)) return;
     const { runId } = job.spec, agentId = job.spec.owner.agentId;
     if (change.kind === "started") wait(learn(runId, agentId), `job:${job.jobId}`);
@@ -323,6 +362,7 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
       const now = Date.now();
       await ctx.storage.put("daemon", "clock", { at: now }).catch(() => {});
       const all = [...watched.values()];
+      for (const w of all) hold(w, now);
       const children = new Map<string, Watched[]>();
       for (const w of all) if (w.parent) { const k = keyOf(w.runId, w.parent); children.set(k, [...(children.get(k) ?? []), w]); }
       /** It, or an agent under it, waits on something that reports back. */
@@ -330,7 +370,7 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
         const k = keyOf(w.runId, w.agentId);
         if (seen.has(k)) return false;
         seen.add(k);
-        return w.waits.length > 0 || onCommand(w, now) || (children.get(k) ?? []).some((c) => held(c, seen));
+        return waiting(w) || onCommand(w, now) || (children.get(k) ?? []).some((c) => held(c, seen));
       };
       for (const w of all) {
         if (!watched.has(keyOf(w.runId, w.agentId))) continue;
@@ -363,12 +403,17 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
     } finally { ticking = false; }
   }
 
-  /** What it did while it made no progress: its tools' steps, and a command it still waits on past the time that
-   *  doesn't count. */
-  const seenOf = (w: Watched, now: number): Seen => ({
-    steps: w.steps ?? 0,
-    commandMs: w.command && now - w.command.seenAt <= PROGRESS_SIGNAL_MS ? now - w.command.since : null,
-  });
+  /** What it did while it made no progress: its tools' steps, and a command or a job it still waits on past the time
+   *  that doesn't count. */
+  const seenOf = (w: Watched, now: number): Seen => {
+    const jobs = w.waits.filter((x) => x.startsWith("job:")).map((x) => ({ id: x.slice(4), at: w.jobsAt?.[x.slice(4)] }))
+      .filter((j): j is { id: string; at: number } => typeof j.at === "number").sort((a, b) => a.at - b.at);
+    return {
+      steps: w.steps ?? 0,
+      commandMs: w.command && now - w.command.seenAt <= PROGRESS_SIGNAL_MS ? now - w.command.since : null,
+      job: jobs[0] ? { id: jobs[0].id, ms: now - jobs[0].at } : null,
+    };
+  };
 
   async function stalled(w: Watched, quiet: number) {
     try {
