@@ -12,7 +12,9 @@
 // And the fallback (ADR-025 D6a), on agent.changed `ended`: once every agent of a run that may spawn the consolidator
 // (its planner) has ended, a run whose agents proposed lessons that no consolidator took gets one, started by capcomd at
 // the run's top, and a consolidator's branch nobody asked to merge is verified and its merge asked for (held for a person
-// by the gate above, as the planner's merge would be). `autoConsolidate` (default on, per run too) turns it off;
+// by the gate above, as the planner's merge would be); lessons that came after the run's consolidator started (the
+// planner's own, declared after it spawned it) get one follow-up consolidator, given only those (key `consolidator-late`,
+// at most one per run). `autoConsolidate` (default on, per run too) turns it off;
 // `plugin.context-memory.consolidator_started`, `merge_requested` and `consolidator_skipped` (why not) say what it did.
 import { existsSync, rmSync } from "fs";
 import { join } from "path";
@@ -185,9 +187,10 @@ export interface RunAgent {
   driveEnv?: Record<string, string> | null;
 }
 /** Why the fallback did nothing for a run that had something to consolidate (`plugin.context-memory.consolidator_skipped`). */
-export type SkipReason = "off" | "cancelled" | "consolidator_failed" | "spawn_refused" | "verify_failed" | "merge_failed";
+export type SkipReason = "off" | "late_lessons" | "cancelled" | "consolidator_failed" | "spawn_refused" | "verify_failed" | "merge_failed";
 export type FallbackPlan =
-  | { do: "spawn"; lessons: number }
+  /** `after`: for the follow-up (key `consolidator-late`), the last consolidator that ended done before these lessons. */
+  | { do: "spawn"; lessons: number; key: string; after?: string }
   | { do: "land"; agentId: string; commit: string }
   | { do: "skip"; reason: SkipReason; text: string };
 
@@ -195,6 +198,9 @@ export type FallbackPlan =
 export const FALLBACK_TASK = "Consolidate this run's lessons";
 /** The key it is spawned with, at the run's top: the same agent however often the fallback asks. */
 export const FALLBACK_KEY = "consolidate";
+/** The follow-up's task and key (D6a): one per run, for the lessons proposed after its consolidator started. */
+export const LATE_TASK = "Consolidate the lessons this run's agents proposed after its consolidator started";
+export const LATE_KEY = "consolidator-late";
 
 const ENDED = new Set(["done", "failed", "cancelled"]);
 /** An agent whose orchestration skill tells it to spawn the consolidator (src/subagents/skill.ts consolidatorRule). */
@@ -204,8 +210,10 @@ export const mayConsolidate = (a: Pick<RunAgent, "limits">) => a.limits.allowSpa
  * What the fallback does for a run now (pure): nothing (null) while an agent that may spawn the consolidator still works
  * (it is theirs to do, D6), or a consolidator still runs (its end decides), or the run has nothing to consolidate; else
  * land the branch of a consolidator that ended with one nobody asked to merge; else, with candidates and no consolidator,
- * start one. `skip` says why not, when there was something to do: the setting is off, the run's planner was cancelled
- * (a person stopped it), or the consolidator it had failed or was cancelled (capcomd starts no second one).
+ * start one; else, when a consolidator ended done and lessons came after it started (`lessons.late`: the planner's own,
+ * declared after it spawned it), start one follow-up for those (key `consolidator-late`, at most one per run). `skip`
+ * says why not, when there was something to do: the setting is off (`late_lessons` for the follow-up), the run's planner
+ * was cancelled (a person stopped it), or the consolidator it had failed or was cancelled (capcomd starts no other).
  */
 export function fallbackPlan(o: { agents: ReadonlyArray<RunAgent>; lessons: import("../context/consolidator").RunLessons; merged: ReadonlySet<string>; enabled: boolean }): FallbackPlan | null {
   const owners = o.agents.filter(mayConsolidate);
@@ -215,8 +223,23 @@ export function fallbackPlan(o: { agents: ReadonlyArray<RunAgent>; lessons: impo
   const cancelled = owners.find((a) => a.status === "cancelled");
   const unmerged = cs.find((c) => c.status === "done" && c.commit && !o.merged.has(c.agentId));
   const n = o.lessons.candidates + o.lessons.pending;
-  if (!unmerged && (!n || cs.some((c) => c.status === "done"))) return null;
+  const done = cs.filter((c) => c.status === "done");
+  if (!unmerged && !n) return null;
+  if (!unmerged && done.length) {
+    const late = o.lessons.late;
+    if (!late) return null;
+    // At most one follow-up per run: once it ended done, what came after it is left (it is said in `capcomd status`).
+    const again = cs.find((c) => c.key === LATE_KEY);
+    if (again?.status === "done") return null;
+    const last = done[done.length - 1]!;
+    const what = `the run's agents proposed ${late} lesson${late === 1 ? "" : "s"} after ${last.agentId} (${CONSOLIDATOR_PROFILE}) started`;
+    if (again) return { do: "skip", reason: "consolidator_failed", text: `${what}, and ${again.agentId}, started for them, ended ${again.status}, so capcomd starts no other.` };
+    if (!o.enabled) return { do: "skip", reason: "late_lessons", text: `${what}; autoConsolidate is off, so capcomd leaves them to the planner.` };
+    if (cancelled) return { do: "skip", reason: "cancelled", text: `${what}; ${cancelled.agentId} was cancelled, so capcomd leaves them.` };
+    return { do: "spawn", lessons: late, key: LATE_KEY, after: last.agentId };
+  }
   const lessons = `the run's agents proposed ${n} lesson${n === 1 ? "" : "s"}`;
+  // Every consolidator so far failed or was cancelled: capcomd starts no other.
   const failed = unmerged ? undefined : cs[0];
   const what = unmerged ? `${unmerged.agentId}'s memory change (${unmerged.commit!.slice(0, 12)}) was never merged`
     : failed ? `${lessons} and ${failed.agentId} (${CONSOLIDATOR_PROFILE}) ended ${failed.status}` : `${lessons} and no ${CONSOLIDATOR_PROFILE} ran`;
@@ -224,7 +247,7 @@ export function fallbackPlan(o: { agents: ReadonlyArray<RunAgent>; lessons: impo
   if (cancelled) return { do: "skip", reason: "cancelled", text: `${what}; ${cancelled.agentId} was cancelled, so capcomd leaves it.` };
   if (unmerged) return { do: "land", agentId: unmerged.agentId, commit: unmerged.commit! };
   if (failed) return { do: "skip", reason: "consolidator_failed", text: `${what}, so capcomd starts no other.` };
-  return { do: "spawn", lessons: n };
+  return { do: "spawn", lessons: n, key: FALLBACK_KEY };
 }
 
 /** What the fallback reads and does besides the payload (a test replaces it). */
@@ -240,11 +263,12 @@ export const fallbackKernel = {
     const { runLessons } = await import("../context/consolidator");
     return { agents, lessons: await runLessons(runId), merged: new Set(merges.map((m) => m.data.agentId).filter((x): x is string => typeof x === "string")) };
   },
-  /** Start the run's consolidator at its top, with the drive settings of the agent that ended (its agents file: the
-   *  project's profiles). Idempotent by its key. */
-  spawn: async (runId: string, driveEnv: Record<string, string> | null): Promise<{ agentId: string; created: boolean }> => {
+  /** Start the run's consolidator at its top (`key`: the fallback's, or its follow-up's), with the drive settings of the
+   *  agent that ended (its agents file: the project's profiles). Idempotent by its key. */
+  spawn: async (runId: string, driveEnv: Record<string, string> | null, key: string = FALLBACK_KEY): Promise<{ agentId: string; created: boolean }> => {
     const { spawnAgent } = await import("../primitives/ops");
-    const a = await withDriveEnv(driveEnv, () => spawnAgent({ runId, profile: CONSOLIDATOR_PROFILE, task: FALLBACK_TASK, key: FALLBACK_KEY, title: "memory lessons" }));
+    const late = key === LATE_KEY;
+    const a = await withDriveEnv(driveEnv, () => spawnAgent({ runId, profile: CONSOLIDATOR_PROFILE, task: late ? LATE_TASK : FALLBACK_TASK, key, title: late ? "late memory lessons" : "memory lessons" }));
     return { agentId: a.agentId, created: !!a.created };
   },
   /** Verify consolidator `agentId`'s branch at `commit` (a passed verify of that commit is used again), then ask to
@@ -274,26 +298,48 @@ type Emit = (type: string, text: string, data: Record<string, unknown>, key: str
 /**
  * The fallback for run `runId` after agent `ended` ended (ADR-025 D6a): `fallbackPlan` on the run as it is now, then
  * what it says: a consolidator started (and its end comes back here), a branch verified and its merge asked (in the
- * background: a verify takes minutes, an observe listener must not), or why not. Every event is keyed, so a replayed
- * change records nothing twice; the spawn, the verify and the merge are idempotent by their keys.
+ * background: a verify takes minutes, an observe listener must not), or why not. After a landing it plans again, as
+ * if that branch were merged (another branch nobody merged, or late lessons a follow-up takes). Every event is keyed,
+ * so a replayed change records nothing twice; the spawn, the verify and the merge are idempotent by their keys.
+ * Returns the first plan.
  */
 export async function fallback(runId: string, ended: RunAgent, o: { enabled: boolean; emit: Emit; log: (m: string, f: Record<string, unknown>) => void }): Promise<FallbackPlan | null> {
   const st = await fallbackKernel.state(runId);
-  const plan = fallbackPlan({ ...st, enabled: o.enabled });
-  if (!plan) return null;
+  const merged = new Set(st.merged);
+  let first: FallbackPlan | null = null;
+  // Bounded: each landing marks one more consolidator merged, and any other plan ends it.
+  for (let i = 0; i <= st.lessons.consolidators.length; i++) {
+    const plan = fallbackPlan({ ...st, merged, enabled: o.enabled });
+    if (!plan) break;
+    first ??= plan;
+    await act(runId, ended, st, plan, o);
+    if (plan.do !== "land") break;
+    merged.add(plan.agentId);
+  }
+  return first;
+}
+
+/** Do what `plan` says for run `runId` (`fallback`). */
+async function act(runId: string, ended: RunAgent, st: Awaited<ReturnType<typeof fallbackKernel.state>>, plan: FallbackPlan, o: { emit: Emit; log: (m: string, f: Record<string, unknown>) => void }): Promise<void> {
   const skipped = (reason: SkipReason, text: string, data: Record<string, unknown> = {}) => o.emit("consolidator_skipped", text, { reason, ...data }, `consolidator-skipped:${runId}:${reason}${typeof data.agentId === "string" ? `:${data.agentId}` : ""}`);
-  if (plan.do === "skip") { await skipped(plan.reason, plan.text); return plan; }
+  if (plan.do === "skip") { await skipped(plan.reason, plan.text); return; }
   if (plan.do === "spawn") {
     const owner = st.agents.find((a) => a.agentId === ended.agentId && mayConsolidate(a)) ?? st.agents.find(mayConsolidate);
+    const who = owner?.agentId ?? "The run's planner";
+    const n = `${plan.lessons} candidate lesson${plan.lessons === 1 ? "" : "s"}`;
+    const late = plan.key === LATE_KEY;
     try {
-      const a = await fallbackKernel.spawn(runId, owner?.driveEnv ?? null);
-      await o.emit("consolidator_started", `${owner?.agentId ?? "The run's planner"} ended with ${plan.lessons} candidate lesson${plan.lessons === 1 ? "" : "s"} and no ${CONSOLIDATOR_PROFILE}: capcomd started ${a.agentId} to consolidate them; its change waits for a person before it lands.`,
-        { agentId: a.agentId, after: owner?.agentId ?? null, lessons: plan.lessons }, `consolidator-started:${runId}`);
+      const a = await fallbackKernel.spawn(runId, owner?.driveEnv ?? null, plan.key);
+      const text = late
+        ? `${who} ended with ${n} that came after ${plan.after} (${CONSOLIDATOR_PROFILE}) started, so it never read them: capcomd started ${a.agentId} to consolidate only those; its change waits for a person before it lands.`
+        : `${who} ended with ${n} and no ${CONSOLIDATOR_PROFILE}: capcomd started ${a.agentId} to consolidate them; its change waits for a person before it lands.`;
+      await o.emit("consolidator_started", text, { agentId: a.agentId, after: owner?.agentId ?? null, lessons: plan.lessons, ...(late ? { late: true, consolidator: plan.after ?? null } : {}) },
+        `consolidator-started:${runId}${late ? `:${LATE_KEY}` : ""}`);
     } catch (e) {
       const why = String((e as Error)?.message ?? e).slice(0, 500);
       await skipped("spawn_refused", `capcomd couldn't start ${CONSOLIDATOR_PROFILE} for the run's ${plan.lessons} lesson${plan.lessons === 1 ? "" : "s"}: ${why}`, { error: why });
     }
-    return plan;
+    return;
   }
   // The verify and the merge resolve the run's reviewer and checks from the consolidator's agents file (its drive
   // settings, the project's profiles), as its spawner's in-VM verify would: never the daemon's own file, nor whichever
@@ -311,7 +357,6 @@ export async function fallback(runId: string, ended: RunAgent, o: { enabled: boo
     await skipped("merge_failed", `capcomd couldn't ask to merge ${plan.agentId}'s memory change: ${why}`, { agentId: plan.agentId, error: why }).catch(() => {});
   }).finally(() => landing.delete(p));
   landing.add(p);
-  return plan;
 }
 
 export const plugin = definePlugin<MemoryConfig>({

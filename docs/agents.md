@@ -456,9 +456,11 @@ capcomd spawn --profile context-consolidator --task "Consolidate this run's less
   how many candidates the run has and its consolidators.
 - If the planner ends without it, capcomd does it: once every agent that may spawn the consolidator has ended, a run
   whose agents proposed lessons and had no consolidator gets one, and a consolidator's change nobody asked to merge is
-  verified and its merge asked for. The merge waits for your approval as the planner's would. `capcomd events <runId>`
-  shows `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with the reason
-  (off, the planner was cancelled, a consolidator failed, the spawn or the verify failed). Turn it off with
+  verified and its merge asked for. Lessons that came after the consolidator started (the planner's own, put in its
+  result only after it spawned the consolidator) get one more consolidator, given only those, once per run. The merge
+  waits for your approval as the planner's would. `capcomd events <runId>` shows
+  `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with the reason (off,
+  late lessons left with it off, the planner was cancelled, a consolidator failed, the spawn or the verify failed). Turn it off with
   `plugins.context-memory.autoConsolidate: false` (`~/.capcomd/config.json` or the project's `.capcomd/config.json`), or
   for one run with `capcomd run --plugin-config context-memory.autoConsolidate=false`.
 - A branch of any other agent that changes `.capcomd/context/` fails its verify and is refused at merge (`memory lands
