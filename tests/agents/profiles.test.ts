@@ -562,7 +562,7 @@ describe("profiles v2: loader and resolution", () => {
       expect(v1.load().warnings).toEqual([]);
       for (const w of [v2, v1]) listing(w, [{ kind: "agent", name: "mistral" }]);
       // The error names what this process and the daemon have.
-      expect(errorOf(() => v2.load())).toContain(`profiles.w: provider "gemini" isn't an active agent provider (one of claude, codex, mistral;`);
+      expect(errorOf(() => v2.load())).toContain(`profiles.w: provider "gemini" isn't an active agent provider (one of claude, codex, fx, mistral;`);
       expect(errorOf(() => v1.load())).toContain(`agents.g: provider "gemini" isn't an active agent provider`);
       // Without a place for a warning (a candidate, an override), a provider nobody can confirm is still refused.
       expect(validateSpec("x", { provider: "gemini", auth: "apikey" }).join()).toContain(`provider "gemini" isn't an active agent provider`);
