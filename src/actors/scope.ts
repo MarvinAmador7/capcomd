@@ -427,14 +427,16 @@ export const scopeActor = actor({
     /**
      * `run new` finished creating the run (src/primitives/ops.ts runNew, its last step): what its process knew of where
      * it ran is kept, once, and the daemon's plugins are told the run was created (`run.changed` `created`, plugin API
-     * §6.6.4). A run whose `run new` failed partway never gets here, so it is never told as created (nor listed).
+     * §6.6.4). A run whose `run new` failed partway gets here only when a retry of that call finishes it, so it isn't
+     * told as created (nor listed) before. Every call that finishes a run calls it; only the first is kept and told.
      */
     async setOrigin(c, params: { origin: RunOrigin }) {
       const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
       if (!have.length) fail("not_found", `run ${runIdOf(c)} has no scope`);
-      const prior = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'origin'");
-      if (prior.length) return { recorded: false };
-      await c.db.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('origin', ?)", JSON.stringify(params.origin));
+      // The insert says whether this call kept it: two calls at once (a retry while the first is still finishing) both
+      // get past any read before it, and only one may tell.
+      const kept = await c.db.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('origin', ?) RETURNING k", JSON.stringify(params.origin));
+      if (!kept.length) return { recorded: false };
       const meta = JSON.parse(have[0]!.v as string);
       tellCreated(runIdOf(c), { label: meta.label ?? null, goal: meta.goal ?? null, createdAt: meta.createdAt ?? null });
       return { recorded: true };

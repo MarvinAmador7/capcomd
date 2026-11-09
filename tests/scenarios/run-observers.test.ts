@@ -74,6 +74,51 @@ test("a run whose run new failed partway is never created as far as plugins know
   expect(await rowOf(third)).not.toBeNull();
 }, 120_000);
 
+test("a retry that finishes a run whose run new failed partway records it then: its row, its trace directory", async () => {
+  const G = `capcomd/obs-heal-${Date.now().toString(36)}`;
+  const args = (key: string) => ["--key", key, "--goal", "obs", "--goal-branch", G, "--base", "dev"];
+  await w.repo.seed.ok(["push", "-q", "-f", "origin", "main:dev"]);
+  const first = await runNew(work, args(`obs-h1-${G}`));
+  const healed = `run-obs-healed-${Date.now()}`;
+  await expect(runNew(work, [...args(`obs-h2-${G}`), "--run-id", healed])).rejects.toThrow(/uses it/);
+  expect((await w.cj(["cancel", first, "--reason", "start over"])).code).toBe(0);
+  // The same call again (its key, its run id), now that the branch is free: run new finishes the run it started.
+  expect(await runNew(work, [...args(`obs-h2-${G}`), "--run-id", healed], { CAPCOMD_TRACE_DIR: join(work, "healed-traces") })).toBe(healed);
+  expect(JSON.parse((await rowOf(healed))!)).toMatchObject({ runId: healed, goalBranch: G, cwd: realpathSync(work) });
+  let trace: unknown = null;
+  for (let i = 0; i < 100 && !trace; i++) { trace = (await w.cj(["kv", "get", healed, "_trace"])).j?.value; if (!trace) await Bun.sleep(100); }
+  expect(trace).toEqual({ dir: join(work, "healed-traces") });
+}, 120_000);
+
+test("a run's origin is kept once: of calls at once, one keeps it (and tells it created), the others change nothing", async () => {
+  const runId = await runNew(work, ["--key", `obs-once-${Date.now()}`]);
+  const { client } = await import("../../src/core/relay");
+  const scope = client().scope.getOrCreate([runId]);
+  const kept = await scope.getOrigin({});
+  const origin = { cwd: "/elsewhere", repo: null, traceDir: "/elsewhere/traces", index: join(work, "elsewhere.jsonl") };
+  expect((await Promise.all([1, 2, 3].map(() => scope.setOrigin({ origin })))).map((r) => r.recorded)).toEqual([false, false, false]);
+  expect(await scope.getOrigin({})).toEqual(kept);
+  // A scope with no origin yet: exactly one of the calls keeps it.
+  const fresh = `run-obs-once-${Date.now()}`;
+  const s = client().scope.getOrCreate([fresh]);
+  await s.init({ runId: fresh, budget: {}, paramsHash: "x" });
+  expect((await Promise.all([1, 2, 3, 4].map(() => s.setOrigin({ origin })))).filter((r) => r.recorded)).toHaveLength(1);
+  expect(await s.getOrigin({})).toMatchObject(origin);
+}, 120_000);
+
+test("the daemon appends only to a runs index: a creator's CAPCOMD_RUNS_INDEX that names another kind of file is never written", async () => {
+  // A file that isn't a runs index, and a name that isn't one (a shell profile, say): the row goes to the daemon's own.
+  const other = join(work, "events.jsonl");
+  writeFileSync(other, `${JSON.stringify({ type: "mine" })}\n`);
+  const profile = join(work, "profile-rc");
+  for (const [i, file] of [other, profile].entries()) {
+    const runId = await runNew(work, ["--key", `obs-other-${i}-${Date.now()}`, "--label", "$(touch pwned)"], { CAPCOMD_RUNS_INDEX: file });
+    expect(JSON.parse((await rowOf(runId))!)).toMatchObject({ runId, label: "$(touch pwned)" });
+  }
+  expect(readFileSync(other, "utf8")).toBe(`${JSON.stringify({ type: "mine" })}\n`);
+  expect(existsSync(profile)).toBe(false);
+}, 120_000);
+
 test("a run the index doesn't have is recorded the next time it changes (a run made while the daemon's plugins started)", async () => {
   const runId = await runNew(work, ["--key", `obs-late-${Date.now()}`]);
   expect(await rowOf(runId)).not.toBeNull();

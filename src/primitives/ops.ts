@@ -385,10 +385,14 @@ export async function runNew(o: RunNewOpts) {
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
   // Created: what this process knew of where it ran is kept with the run, and the daemon's observers record it (the runs
-  // index, the run's trace directory: run.changed `created`, src/plugins/observe.ts). Not on a retry: a run is recorded
-  // once, by the call that created it.
-  if (res.created) {
-    const origin = { cwd: process.cwd(), repo: repoEnv.CAPCOMD_REPO ?? null, traceDir: (await import("../utils/tracing-simple")).traceDir(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}), index: resolve(runsIndexPath()) };
+  // index, the run's trace directory: run.changed `created`, src/plugins/observe.ts). setOrigin keeps the first call's
+  // only, so a retry of a finished run changes nothing, and a retry that heals one whose first call failed partway (a
+  // goal branch refused, a crash) finishes it: it is told as created then. The index's folder is made here, as `run new`
+  // always made it: the daemon appends to another process's index only in a folder that exists (isRunsIndex).
+  {
+    const index = resolve(runsIndexPath());
+    try { mkdirSync(dirname(index), { recursive: true }); } catch { /* an index, not state */ }
+    const origin = { cwd: process.cwd(), repo: repoEnv.CAPCOMD_REPO ?? null, traceDir: (await import("../utils/tracing-simple")).traceDir(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}), index };
     await c.scope.getOrCreate([runId]).setOrigin({ origin }).catch(() => {});
   }
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.

@@ -14,9 +14,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   place: it answers 422 with that reason. `capcomd plugins list` shows it as `recipe-hierarchical`.
 - The run list (`state/runs.jsonl`, or the file `CAPCOMD_RUNS_INDEX` names for `capcomd run new`) and each run's
   trace directory are now recorded by capcomd's daemon, as two built-in plugins you can see in `capcomd plugins list`
-  (`observe-runs-index`, `observe-traces`). The rows are the same as before, in the same file.
+  (`observe-runs-index`, `observe-traces`). The rows are the same as before, in the same file, except that
+  `CAPCOMD_RUNS_INDEX` must now name a `.jsonl` file that is a runs index (or doesn't exist yet) and isn't a link:
+  for anything else the run is listed in capcomd's own run list instead. A `run new` that failed partway and is then
+  retried with the same `--key` is now listed once the retry finishes it.
 - Plugins that listen to `run.changed` are now told `created` once `capcomd run new` has finished setting the run up,
-  not when its record is first made. A run whose `run new` failed partway is never told as created.
+  not when its record is first made. A run whose `run new` failed partway is told as created only when a retry
+  finishes it.
 - The settings and info rows of a place's details screen (`GET /v1/sandboxes/{name}`) now come from that place's
   sandbox plugin. They read exactly as before.
 - **Breaking:** a run you start on a sandbox stays there. `capcomd run --sandbox docker` (and `run new --sandbox`, the

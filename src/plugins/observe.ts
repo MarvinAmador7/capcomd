@@ -2,10 +2,11 @@
 // `run.changed`, where `run new` wrote both itself before. `run new`'s last step keeps with the run what its process
 // knew of where it ran (scope `setOrigin`, read back with `getOrigin`: its folder, repository, trace directory and goal
 // branch, src/primitives/ops.ts runNew) and tells the daemon's plugins the run was created (`created`,
-// src/plugins/changes.ts tellCreated); a run whose `run new` failed partway is never told so. Then:
+// src/plugins/changes.ts tellCreated); a run whose `run new` failed partway is told so only when a retry finishes it. Then:
 //  - observe-runs-index appends the run's row to the runs index its creator lists runs from (src/primitives/ops.ts
 //    runsIndexPath, in `run new`'s process; read by `capcomd_runs`, GET /v1/runs, `ctx.runs`), exactly as `run new`
-//    wrote it there. A run it hasn't recorded yet is recorded
+//    wrote it there, when that file is a runs index (isRunsIndex), else to the daemon's own. A run it hasn't recorded
+//    yet is recorded
 //    the first time it hears of it, so a run created while the daemon's plugins were starting is listed once its run
 //    changes again (an agent starts, it ends);
 //  - observe-traces records the run's trace directory (`_trace`: where its spans are written, for `capcomd trace` in
@@ -13,8 +14,8 @@
 //    process ran them (the CLI, the daemon, an agent's capcomd), which needs no plugin host.
 // Both are built-ins the kernel runs on (listed, never disabled), loaded in the daemon only: the `*.changed` hooks fire
 // there (§6.1).
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { definePlugin } from "../../packages/plugin/src/context";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import type { RunRow } from "../primitives/ops";
@@ -51,19 +52,46 @@ function recordedIn(path: string): Set<string> {
 /** Runs this daemon has settled (recorded, found recorded, or with nothing kept), so each is looked up once. */
 const settled = new Set<string>();
 
+/**
+ * Whether `path`, another process's runs index (its CAPCOMD_RUNS_INDEX), is one the daemon appends a row to: an absolute
+ * `.jsonl` path in a folder that exists, not a link, and missing, empty or a runs index already (its first line a row).
+ * Anyone who reaches the engine can say where a run's creator lists runs from (scope `setOrigin`), so the daemon never
+ * appends to another kind of file, nor makes a folder for one: `run new` makes its index's folder itself.
+ */
+export function isRunsIndex(path: string): boolean {
+  if (!isAbsolute(path) || resolve(path) !== path || !path.endsWith(".jsonl")) return false;
+  try {
+    if (!statSync(dirname(path)).isDirectory()) return false;
+    let st;
+    try { st = lstatSync(path); } catch (e) { return (e as NodeJS.ErrnoException).code === "ENOENT"; }
+    if (!st.isFile()) return false;
+    if (st.size === 0) return true;
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(4096);
+      const first = buf.subarray(0, readSync(fd, buf, 0, buf.length, 0)).toString("utf8").split("\n")[0]!;
+      const row = JSON.parse(first) as Partial<RunRow> | null;
+      return !!row && typeof row === "object" && typeof row.runId === "string";
+    } finally { closeSync(fd); }
+  } catch { return false; }
+}
+
 /** Append the run's row unless its index has it: `run new`'s row, from what the run's creator kept with it. A run with
- *  nothing kept (made by an older capcomd, whose `run new` wrote its own row) is left alone. */
-export async function indexRun(runId: string): Promise<boolean> {
+ *  nothing kept (made by an older capcomd, whose `run new` wrote its own row, or not finished yet) is left alone; its
+ *  `created` (`fresh`) looks it up again. */
+export async function indexRun(runId: string, opts: { fresh?: boolean } = {}): Promise<boolean> {
   const O = await import("../primitives/ops");
-  if (settled.has(runId) || recordedIn(O.runsIndexPath()).has(runId)) return false;
+  if (opts.fresh) settled.delete(runId);
+  const own = O.runsIndexPath();
+  if (settled.has(runId) || recordedIn(own).has(runId)) return false;
   const o = await O.runOrigin(runId);
   if (!o) { settled.add(runId); return false; }
-  // The index its creator lists runs from (where its `run new` wrote the row itself), else this daemon's.
-  const path = o.index && isAbsolute(o.index) ? o.index : O.runsIndexPath();
+  // The index its creator lists runs from (where its `run new` wrote the row itself) when it is one, else this daemon's.
+  const path = o.index && o.index !== resolve(own) && isRunsIndex(o.index) ? o.index : own;
   const seen = recordedIn(path);
   if (seen.has(runId)) { settled.add(runId); return false; }
   const row: RunRow = { runId, label: o.label, repo: o.repo, cwd: o.cwd, createdAt: o.createdAt, ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) };
-  try { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, JSON.stringify(row) + "\n"); } catch { return false; /* an index, not state */ }
+  try { if (path === own) mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, JSON.stringify(row) + "\n"); } catch { return false; /* an index, not state */ }
   seen.add(runId);
   settled.add(runId);
   return true;
@@ -72,7 +100,7 @@ export async function indexRun(runId: string): Promise<boolean> {
 export const runsIndex = definePlugin({
   activate(ctx) {
     // One at a time and in order (the host's observe queue), so a run is never appended twice.
-    ctx.hooks.on("run.changed", async ({ payload: { run } }) => { await indexRun(run.id); });
+    ctx.hooks.on("run.changed", async ({ payload: { run, change } }) => { await indexRun(run.id, { fresh: change.kind === "created" }); });
   },
 });
 
