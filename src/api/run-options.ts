@@ -33,16 +33,33 @@ export interface RunOptionsBody { drivers: DriverOption[]; sandboxes: SandboxOpt
 
 // ---- Docker: is a daemon reachable? (`docker version`, cached) ----
 const DOCKER_TTL_MS = 5_000;
+/** How long `docker version` gets to answer before Docker counts as not running. */
+const DOCKER_ASK_MS = 3_000;
 let docker: { at: number; result: Promise<{ ok: boolean; reason: string | null }> } | null = null;
 export function resetDockerCheck() { docker = null; }
 async function askDocker(source: Env): Promise<{ ok: boolean; reason: string | null }> {
 	const { dockerBin } = await import("../providers/docker");
 	const bin = dockerBin(source);
 	let p: ReturnType<typeof Bun.spawn>;
-	try { p = Bun.spawn([bin, "version", "--format", "{{.Server.Version}}"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: source as Record<string, string> }); }
+	try { p = Bun.spawn([bin, "version", "--format", "{{.Server.Version}}"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: source as Record<string, string> }); }
 	catch { return { ok: false, reason: "Docker isn't installed" }; }
-	const timer = setTimeout(() => p.kill(), 3_000);
-	const [out, code] = await Promise.all([new Response(p.stdout as ReadableStream).text(), p.exited]).finally(() => clearTimeout(timer));
+	// The answer races a timer: a CLI that hangs, or one whose child still holds its stdout after it is killed, would
+	// otherwise keep the read (and whoever awaits this) waiting forever. When the timer wins, the read is dropped; a CLI
+	// that had already exited 0 with a version (a child of its still holds the pipe) answered all the same.
+	const stdout = (p.stdout as ReadableStream<Uint8Array>).getReader();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const late = new Promise<null>((done) => { timer = setTimeout(() => done(null), DOCKER_ASK_MS); });
+	const dec = new TextDecoder();
+	let read = "";
+	const text = async () => { for (let r = await stdout.read(); !r.done; r = await stdout.read()) read += dec.decode(r.value, { stream: true }); return read + dec.decode(); };
+	const answer = Promise.all([text(), p.exited]);
+	const got = await Promise.race([answer, late]).finally(() => clearTimeout(timer));
+	if (!got) {
+		const answered = p.exitCode === 0 && read.trim() !== "";
+		p.kill("SIGKILL"); stdout.cancel().catch(() => {}); answer.catch(() => {});
+		return answered ? { ok: true, reason: null } : { ok: false, reason: "Docker isn't running" };
+	}
+	const [out, code] = got;
 	return code === 0 && out.trim() ? { ok: true, reason: null } : { ok: false, reason: "Docker isn't running" };
 }
 /** Is a Docker daemon reachable? Asked at most every few seconds; `ask` (tests) replaces the docker CLI. */

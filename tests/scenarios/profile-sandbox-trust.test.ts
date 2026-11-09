@@ -8,7 +8,7 @@
 // the daemon's in-memory fake, and fake-host (the host-exec fake) as the "other" sandbox; Docker and boxd only as names
 // on agents spawned without a start, so nothing is made there.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { capcomd } from "../helpers/engine";
@@ -23,7 +23,12 @@ const HOSTED = yaml(["name: hosted", "extends: worker", "sandbox: { provider: fa
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "capcomd-scn-sbtrust-home-"));
-  w = await world("sandbox-trust", { CAPCOMD_HOME: home });
+  // `run new --sandbox docker` asks whether Docker is up: a stub answers, so a Docker that is slow to wake (a CI runner's
+  // first `docker version` took over its 3 s once) doesn't decide the test. Nothing is made on Docker here.
+  const docker = join(home, "docker-stub");
+  writeFileSync(docker, `#!/bin/sh\n[ "$1" = version ] && echo 27.0.0\nexit 0\n`);
+  chmodSync(docker, 0o755);
+  w = await world("sandbox-trust", { CAPCOMD_HOME: home, CAPCOMD_DOCKER_BIN: docker });
   // The project's profiles (the profiles/ next to the run's agents file): far names boxd, hosted the other test sandbox.
   mkdirSync(join(w.dir, "profiles"), { recursive: true });
   writeFileSync(join(w.dir, "profiles", "far.yaml"), FAR);

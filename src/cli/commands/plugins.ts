@@ -5,7 +5,8 @@
 // `capcomd plugins validate [<dir>|<name>] [--conformance]` (§4.9, §14): a plugin directory's manifest, or a built-in's
 // (all of them with no argument), checked as the host checks it (a directory's for being self-contained too: each path it
 // would run from outside its folder, src/plugins/contained.ts); with --conformance its code is loaded, disposed and
-// loaded again (§14.1), and its seams run their conformance suites (§14.2) against the real backend.
+// loaded again (§14.1), and its seams run their conformance suites (§14.2) against the real backend; with --strict the
+// review guidance becomes warnings too (§16.5: a notifier-shaped plugin with no quiet option). Warnings never fail it.
 // `capcomd plugins install|update|remove|trust|allow-version` (§4.4, §4.8, §17.2 step 12): src/plugins/install.ts. They
 // change files the daemon reads at its next start or a plugin's `enable`.
 // `capcomd plugins enable|disable <name>` (§5.4, §6.5, §10.2): `plugins.<name>.enabled` in the user's config, and the
@@ -22,7 +23,7 @@ import type { AgentProvider, SandboxProvider } from "../../../packages/plugin/sr
 const USAGE = [
   "usage: capcomd plugins list [--json]",
   "       capcomd plugins show <name> [--json]",
-  "       capcomd plugins validate [<dir>|<name>] [--conformance] [--json]",
+  "       capcomd plugins validate [<dir>|<name>] [--conformance] [--strict] [--json]",
   "       capcomd plugins install <owner/repo>[#<name>][@<ref>] [--project] [--json]   (a git URL or a local repository path works too)",
   "       capcomd plugins install --project [--json]   (the project's plugins.use)",
   "       capcomd plugins update <name> [--project] [--dry-run] [--json]",
@@ -33,7 +34,7 @@ const USAGE = [
   "       capcomd plugins disable <name> [--json]",
 ].join("\n");
 
-type Values = { json?: boolean; conformance?: boolean; project?: boolean; yes?: boolean; acceptRisk?: boolean; dryRun?: boolean };
+type Values = { json?: boolean; conformance?: boolean; strict?: boolean; project?: boolean; yes?: boolean; acceptRisk?: boolean; dryRun?: boolean };
 const out = (body: Record<string, unknown>) => console.log(JSON.stringify({ schema: SCHEMA, ok: true, ...body }));
 const short = (sha: string) => sha.slice(0, 12);
 /** A manifest's text as the trust prompt prints it: control and format characters (escape sequences, carriage returns,
@@ -70,7 +71,8 @@ export async function pluginsCommand(positionals: string[], values: Values): Pro
   const w = Math.max(...plugins.map((p) => p.name.length));
   for (const p of plugins) {
     const state = p.state === "active" && p.hooksSuspended ? "active, hooks suspended" : p.cause ? `${p.state} (${p.cause})` : p.state;
-    const what = [p.hooks.length ? `${p.hooks.length} hook${p.hooks.length > 1 ? "s" : ""}` : "", ...p.seams.map((s) => `${s.kind} ${s.name}`)].filter(Boolean).join(", ");
+    const count = (n: number | undefined, one: string) => n ? `${n} ${one}${n > 1 ? "s" : ""}` : "";
+    const what = [count(p.hooks.length, "hook"), ...p.seams.map((s) => `${s.kind} ${s.name}`), count(p.commands?.length, "command"), count(p.tools?.length, "MCP tool")].filter(Boolean).join(", ");
     const i = installs[p.name];
     const note = i?.modified ? "  files changed since it was installed (capcomd plugins update replaces them)" : i?.trust === "changed" ? "  changed since you trusted it (capcomd plugins trust)" : p.cause === "untrusted" ? `  not trusted yet (capcomd plugins trust ${p.name})` : "";
     console.log(`  ${p.name.padEnd(w)}  ${p.version}  ${p.source}  ${state}${what ? `  ${what}` : ""}${p.stats.failures ? `  ${p.stats.failures}/${p.stats.calls} calls failed` : ""}${note}`);
@@ -298,6 +300,8 @@ async function showCommand(args: string[], values: Values): Promise<number> {
   if (why && plugin.cause) console.log(`  why: ${why}`);
   if (facts?.source) console.log(`  installed from ${facts.source} (commit ${facts.commit ? short(facts.commit) : "?"})${facts.modified ? "; files changed since" : ""}`);
   if (facts?.trust) console.log(`  trust: ${facts.trust}`);
+  if (plugin.commands?.length) console.log(`  commands: ${plugin.commands.map((c) => `capcomd ${c}`).join(", ")}`);
+  if (plugin.tools?.length) console.log(`  MCP tools: ${plugin.tools.join(", ")}`);
   for (const [k, v] of Object.entries(d.config.values)) console.log(`  config ${k} = ${JSON.stringify(v)}  (${d.config.sources[k] ?? "default"})`);
   return EXIT.ok;
 }
@@ -310,7 +314,7 @@ interface Validated {
 }
 type Target = { label: string; dir: string | null; manifest: unknown; module: PluginModule<never> | null; conformance?: SandboxConformanceOptions; kernelSurface?: boolean };
 
-async function validateCommand(args: string[], values: { json?: boolean; conformance?: boolean }): Promise<number> {
+async function validateCommand(args: string[], values: { json?: boolean; conformance?: boolean; strict?: boolean }): Promise<number> {
   const { BUILTINS } = await import("../../plugins/builtins");
   const builtin = (b: (typeof BUILTINS)[number]): Target => ({ label: String((b.manifest as { name?: unknown }).name), dir: null, manifest: b.manifest, module: b.module, conformance: (b as { conformance?: SandboxConformanceOptions }).conformance ?? {}, kernelSurface: !!b.kernelSurface });
   let targets: Target[];
@@ -322,7 +326,7 @@ async function validateCommand(args: string[], values: { json?: boolean; conform
     throw new RelayError("not_found", `no plugin directory or built-in plugin named ${a}`, "Pass a directory holding a plugin.json, or a built-in's name (capcomd plugins list).");
   });
   const out: Validated[] = [];
-  for (const t of targets) out.push(await validateOne(t, !!values.conformance));
+  for (const t of targets) out.push(await validateOne(t, !!values.conformance, !!values.strict));
   const ok = out.every((v) => v.ok);
   if (values.json) {
     console.log(JSON.stringify({ schema: SCHEMA, ok, plugins: out }));
@@ -337,8 +341,8 @@ async function validateCommand(args: string[], values: { json?: boolean; conform
   return ok ? EXIT.ok : EXIT.run_failed;
 }
 
-async function validateOne(t: Target, conformance: boolean): Promise<Validated> {
-  const { loadManifest, readManifest } = await import("../../../packages/plugin/src/load");
+async function validateOne(t: Target, conformance: boolean, strict: boolean): Promise<Validated> {
+  const { attentionWarnings, loadManifest, readManifest } = await import("../../../packages/plugin/src/load");
   const { VERSION } = await import("../../utils/self");
   const loaded = t.dir ? readManifest(t.dir, { capcomd: VERSION }) : loadManifest(t.manifest, { capcomd: VERSION, kernelSurface: !!t.kernelSurface });
   const m = loaded.manifest;
@@ -364,6 +368,12 @@ async function validateOne(t: Target, conformance: boolean): Promise<Validated> 
       v.warnings.push(...c.warnings);
     }
     if (v.issues.length) v.ok = false;
+  }
+  // §16.5, under --strict: a config schema that can't be read (a built-in's `$ref`) isn't held against the plugin.
+  if (loaded.ok && strict) {
+    const { schemaOf } = await import("../../plugins/config");
+    const schema = schemaOf(loaded.manifest, t.dir);
+    if (schema || !loaded.manifest.config) v.warnings.push(...attentionWarnings(loaded.manifest, schema));
   }
   if (!loaded.ok || !v.ok || !conformance) return v;
   const manifest = loaded.manifest;

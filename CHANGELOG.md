@@ -15,6 +15,9 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   can't spawn it (set up before the consolidator existed, or moved from agents.json), setup leaves your planner alone
   and prints the command that lets it (`capcomd profiles set planner --set children.allowedChildProfiles=…`);
   `capcomd profiles migrate` prints the same note. Memory changes still wait for your approval before they land.
+- Fixed: a docker CLI that hangs no longer hangs capcomd with it. `capcomd setup`, the run options the apps show and
+  starting a run on Docker now say "Docker isn't running" after 3 seconds, even when the CLI (or something it started)
+  never lets go.
 - New: an agent can start a background job that keeps running after it finishes, such as a server kept up for
   review: `capcomd job start --run -- <command>` (MCP `capcomd_job_start` with `run: true`). It runs in a machine of
   the run's own, made from the run's agent environment the way the checks machine is (no checkout, no credentials,
@@ -42,6 +45,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   `validate` warns, and the profile lists (`capcomd profiles list --json`, `capcomd_profiles`, `GET /v1/profiles`)
   name the untrusted files in `untrustedSandbox`. Your own profiles (`~/.capcomd/profiles/`) need no trust. If you
   use such a project profile, run `capcomd profiles trust <name>` once, or start the run with `--sandbox`.
+- New: `capcomd plugins validate --strict` also warns when a plugin could take more of your attention than it needs:
+  a notifier (one that listens to every run and agent change) whose config has no `quiet` option, so people can't turn
+  it down short of disabling it. Warnings never fail the check.
+- `capcomd plugins show <name>` now names the commands and MCP tools a plugin adds (by the names `capcomd mcp` serves
+  them, e.g. `capcomd_spawn`), `capcomd plugins list` counts them, and both `--json` outputs (and `GET /v1/plugins`)
+  carry a `tools` list.
 - Faster: `capcomd env build` (and `env build --project`) now puts the brains your project maps (`capcomd context
   brain add`) into the environment image, each at the commit it is pinned to, so agents start with them instead of
   copying the brain in at every start. Map a brain at a newer commit and the next `capcomd env build` builds a new image.
