@@ -216,7 +216,7 @@ describe("the memory provider's index: a profile's memory.files (ADR-025 §10)",
     expect(missing.loaded).toBe(0);
     // In a project with no memory at all (no folder, or a .gitkeep), the index the profile names isn't there yet
     // either: that is a project with nothing, not a missing index, so the brief is empty (ADR-025 D17).
-    for (const files of [{}, { ".gitkeep": "" }, { "memory/log.md": "# log" }]) {
+    for (const files of [{}, { ".gitkeep": "" }, { "memory/log.md": "# log" }] as Array<Record<string, string>>) {
       const none = await buildBrief(input({ context: contextOf({ files: ["NOTES.md"] }) }, files));
       expect(none).toMatchObject({ empty: true, loaded: 0, providers: [{ name: "memory", state: "loaded", lines: 0, empty: true }] });
     }
