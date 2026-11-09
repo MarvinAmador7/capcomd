@@ -155,12 +155,16 @@ Usage:
   capcomd sandbox shell <runId> <agentId>   A shell in the machine an agent runs on (its sandbox: what you change
   capcomd sandbox shell --sandbox docker|boxd --machine <id>   can change its work), or in a machine capcomd left behind
   capcomd plugins list [--json]          The plugins the running daemon has (or would load, when none runs): each
-                                       one's state, why it failed, its hooks and seams (GET /v1/plugins)
-  capcomd plugins validate [<dir>|<name>] [--conformance] [--json]
+                                       one's state, why it failed, its hooks, seams, commands and MCP tools
+                                       (GET /v1/plugins)
+  capcomd plugins validate [<dir>|<name>] [--conformance] [--strict] [--json]
                                        Check a plugin's manifest (a directory, or a built-in by name; all
                                        built-ins with neither); --conformance also loads it and runs its
-                                       seam's conformance suite against the real backend
-  capcomd plugins show <name> [--json]   One plugin: its state, config (and where each value came from), its source
+                                       seam's conformance suite against the real backend; --strict also warns
+                                       where it could take more attention than it needs (a notifier without
+                                       a quiet option)
+  capcomd plugins show <name> [--json]   One plugin: its state, config (and where each value came from), its source,
+                                       the commands and MCP tools it adds
   capcomd plugins install <owner/repo>[#<name>][@<ref>] [--project]
                                        Install a plugin from a git repository (a URL or a local path works too)
                                        with a LOCK of its files; --project adds it to the project's plugins.use

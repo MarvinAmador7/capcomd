@@ -9056,6 +9056,13 @@
                               "type": "string"
                             },
                             "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
+                          },
+                          "tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Its MCP tools (spec §4.7.2) as the `capcomd mcp` server lists them, `capcomd_<plugin>_<tool>` (a kernel front door's `capcomd_<tool>`): those it registered while active, those its manifest declares otherwise; absent when it adds none"
                           }
                         },
                         "required": [
@@ -9299,6 +9306,13 @@
                         "type": "string"
                       },
                       "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Its MCP tools (spec §4.7.2) as the `capcomd mcp` server lists them, `capcomd_<plugin>_<tool>` (a kernel front door's `capcomd_<tool>`): those it registered while active, those its manifest declares otherwise; absent when it adds none"
                     },
                     "manifest": {
                       "description": "The validated manifest (capcomd.plugin/v1); null when it couldn't be read. Its strings are the plugin author's: render them as plain text",
@@ -9588,6 +9602,13 @@
                         "type": "string"
                       },
                       "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Its MCP tools (spec §4.7.2) as the `capcomd mcp` server lists them, `capcomd_<plugin>_<tool>` (a kernel front door's `capcomd_<tool>`): those it registered while active, those its manifest declares otherwise; absent when it adds none"
                     }
                   },
                   "required": [
@@ -9844,6 +9865,13 @@
                         "type": "string"
                       },
                       "description": "The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Its MCP tools (spec §4.7.2) as the `capcomd mcp` server lists them, `capcomd_<plugin>_<tool>` (a kernel front door's `capcomd_<tool>`): those it registered while active, those its manifest declares otherwise; absent when it adds none"
                     }
                   },
                   "required": [

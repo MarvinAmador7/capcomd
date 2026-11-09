@@ -3,7 +3,7 @@
 import { HARNESS_MODELS } from "../../src/config/models";
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -195,6 +195,39 @@ describe("GET /v1/run-options", () => {
 		expect(asked).toBe(1);
 		resetDockerCheck();
 	});
+
+	test("the docker CLI answers within its 3 s even when it hangs with a child holding its stdout", async () => {
+		const bins = mkdtempSync(join(dir, "docker-bin-"));
+		const fake = (name: string, body: string) => { const f = join(bins, name); writeFileSync(f, `#!/bin/sh\n${body}\n`); chmodSync(f, 0o755); return f; };
+		resetDockerCheck();
+		expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: fake("up", "echo 27.3.1") })).toEqual({ ok: true, reason: null });
+		resetDockerCheck();
+		expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: fake("down", "echo 'Cannot connect to the Docker daemon' >&2; exit 1") })).toEqual({ ok: false, reason: "Docker isn't running" });
+		// A CLI that never answers, and leaves a child holding its stdout open after it is killed.
+		const childPid = join(bins, "child.pid");
+		const hung = fake("hung", `/bin/sleep 600 & echo $! > ${childPid}; exec /bin/sleep 600`);
+		resetDockerCheck();
+		const t0 = Date.now();
+		try {
+			expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: hung })).toEqual({ ok: false, reason: "Docker isn't running" });
+			const took = Date.now() - t0;
+			expect(took).toBeGreaterThanOrEqual(2_900);
+			expect(took).toBeLessThan(3_500);
+		} finally {
+			resetDockerCheck();
+			try { process.kill(Number(readFileSync(childPid, "utf8")), "SIGKILL"); } catch { /* gone */ }
+		}
+		// A CLI that answered and exited 0, but left a child holding its stdout: it answered, after the same 3 s.
+		const leftPid = join(bins, "left.pid");
+		const answered = fake("answered", `/bin/sleep 600 & echo $! > ${leftPid}; echo 27.3.1; exit 0`);
+		resetDockerCheck();
+		try {
+			expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: answered })).toEqual({ ok: true, reason: null });
+		} finally {
+			resetDockerCheck();
+			try { process.kill(Number(readFileSync(leftPid, "utf8")), "SIGKILL"); } catch { /* gone */ }
+		}
+	}, 15_000);
 
 	test("boxd key: BOXD_API_KEY, or the key capcomd setup stored", () => {
 		expect(boxdKeyConfigured({ BOXD_API_KEY: "bxd" })).toBe(true);

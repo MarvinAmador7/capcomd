@@ -81,6 +81,24 @@ export function checkManifest(m: PluginManifest, o: CheckOptions = {}): { invali
   return { invalid, incompatible, warnings };
 }
 
+/** The observers that make a plugin notifier-shaped (§16.5): it hears about every run and every agent. */
+const NOTIFIER_HOOKS = ["run.changed", "agent.changed"] as const satisfies readonly HookName[];
+
+/**
+ * The attention-budget warnings of `capcomd plugins validate --strict` (§16.5): a notifier-shaped plugin (it observes
+ * `run.changed` and `agent.changed`) whose config has no `quiet` option leaves the operator no way to turn it down short
+ * of disabling it. `schema` is the plugin's config schema with any `$ref` already read; null when it has none.
+ */
+export function attentionWarnings(m: PluginManifest, schema: { properties?: Record<string, unknown> } | null): ManifestIssue[] {
+  const hooks = m.contributes?.hooks ?? {};
+  if (!NOTIFIER_HOOKS.every((h) => Object.hasOwn(hooks, h))) return [];
+  if (schema?.properties && Object.hasOwn(schema.properties, "quiet")) return [];
+  return [{
+    path: "config.properties.quiet",
+    message: "it observes run.changed and agent.changed, so it can speak about every run and agent, but its config has no quiet option: add a `quiet` property (a boolean; `x-per-run` lets a run set it) so people can turn it down without disabling it (§16.5)",
+  }];
+}
+
 /** Parse and check a manifest value (§4.9). */
 export function loadManifest(raw: unknown, o: CheckOptions = {}): LoadedManifest {
   // A major this host doesn't serve is `incompatible` (§12.5), not a schema error: the schema only knows major 1.
