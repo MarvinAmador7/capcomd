@@ -559,7 +559,10 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     if (error instanceof UserError) throw error;
     const kind = String((error as any)?.kind ?? (error as any)?.code ?? "push_failed");
     const retryable = isTransientSandboxError(error) || isSandboxUnreachable(error);
-    throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind, ...(retryable ? { retryable: true } : {}) } });
+    // An agent that changed nothing: its final words go with the failure, so its parent reads what it found.
+    const words = (error as { resultText?: unknown })?.resultText;
+    const said = typeof words === "string" && words.trim() ? { resultText: redactShapes(words).slice(0, 4000) } : {};
+    throw new UserError(redactShapes(String((error as Error)?.message ?? error)).slice(0, 2000), { code: kind, metadata: { kind, ...(retryable ? { retryable: true } : {}), ...said } });
   } finally {
     clearInterval(renew);
   }

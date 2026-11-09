@@ -2107,6 +2107,13 @@ orchestrator's branch: no special case in the planner recipe. The `planner` and 
 writes get `tools.mode: orchestrate` and a `description` that says what it means; `plannerBrief` explains it (item 4). This is a profile capability, not
 a hook, because it is a property of the agent for its whole life.
 
+The other side of it: an agent that may not spawn and wasn't spawned with `report` has work of its own, files it
+changes. One that ends with no change of its own fails `no_changes` after that one attempt (one `DRIVE_FAILED`, never
+retried: another attempt would change nothing either), with `result.errorKind: "no_changes"`, an `error` that ends
+`spawn it with --report for work that changes no files`, and its final message as its `summary` when it declared none,
+so its parent reads what it found. The orchestration skill tells a spawner to spawn investigation and review-only
+children with `--report`.
+
 ### 16.2 Background jobs
 
 Prototype (`003-execution.md`): a tool call past a threshold "moves foreground shell commands to background jobs after 5
