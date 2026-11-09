@@ -13,7 +13,7 @@ export type DaemonCall =
   | { kind: "unreachable"; pid: number; reason: string };
 
 /** `method path` on the running daemon, with a token of `scope` for this call only. */
-export async function callDaemon(method: "POST", path: string, o: { scope: ClientScope; body?: unknown; timeoutMs?: number }): Promise<DaemonCall> {
+export async function callDaemon(method: "GET" | "POST", path: string, o: { scope: ClientScope; body?: unknown; timeoutMs?: number }): Promise<DaemonCall> {
   const { readSnapshot } = await import("../plugins/host");
   const snap = readSnapshot();
   if (!snap) return { kind: "none" };

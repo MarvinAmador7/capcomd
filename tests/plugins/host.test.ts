@@ -8,7 +8,13 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost, type Candidate, type HostOptions } from "../../packages/plugin/src/host/host";
-import type { HostEvent } from "../../packages/plugin/src/host/registry";
+import type { HookSpan, HostEvent } from "../../packages/plugin/src/host/registry";
+import { createHash } from "node:crypto";
+import { kernelHost } from "../../src/plugins/host";
+import { statsLines } from "../../src/cli/commands/plugins";
+import { kernelSandbox } from "../../src/providers/seam";
+import { getDependencies, resetDependencies } from "../../src/dependencies";
+import { agentSpanId, getFinishedSpans, readTrace, resetSpans, tracePath } from "../../src/utils/tracing-simple";
 import { PluginError } from "../../packages/plugin/src/errors";
 import { readManifest } from "../../packages/plugin/src/load";
 import { satisfies } from "../../packages/plugin/src/semver";
@@ -762,5 +768,132 @@ describe("the mode-consistency script (§14.4)", () => {
     ]);
     const p = Bun.spawnSync([process.execPath, join(ROOT, "scripts", "check-hook-modes.ts"), dir], { stdout: "pipe", stderr: "pipe" });
     expect(p.exitCode).toBe(1);
+  });
+});
+
+describe("observability (§13.3-§13.5)", () => {
+  const runTrace = (runId: string) => createHash("sha256").update(`trace:${runId}`).digest("hex").slice(0, 32);
+  /** A kernel host (src/plugins/host.ts) whose spans go to a fresh trace directory; `lines`: its daemon-log lines. */
+  async function kernel(candidates: Candidate[]) {
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-plugin-trace-"));
+    const was = process.env.CAPCOMD_TRACE_DIR;
+    process.env.CAPCOMD_TRACE_DIR = dir;
+    resetSpans();
+    const lines: Record<string, unknown>[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => { try { lines.push(JSON.parse(String(a[0]))); } catch { log(...a); } };
+    const host = kernelHost({});
+    await host.start(candidates);
+    const done = async () => {
+      await host.stop();
+      console.log = log;
+      if (was === undefined) delete process.env.CAPCOMD_TRACE_DIR; else process.env.CAPCOMD_TRACE_DIR = was;
+    };
+    const trace = (runId: string) => readTrace(readFileSync(tracePath(runId, dir), "utf8"));
+    return { host, lines, trace, done };
+  }
+
+  test("each hook call is a plugin.hook span in the run's trace, with its outcome; call.trace names that span", async () => {
+    const calls: HookCall[] = [];
+    let answer: "deny" | "allow" = "deny";
+    const k = await kernel([builtin(manifest("bouncer", hooks({ "merge.landing": {} })), (ctx) => {
+      ctx.hooks.on("merge.landing", (call) => { calls.push(call as HookCall); return answer === "deny" ? { decision: "deny", reason: "not today" } : { decision: "allow" }; });
+    })]);
+    try {
+      const o = { principal: OPERATOR, entity: "mrg-1", runId: "run-trace-1", agentId: "agt-1" };
+      expect((await k.host.hooks.fire("merge.landing", "veto", samplePayload("merge.landing"), o)).decision).toBe("deny");
+      answer = "allow";
+      expect((await k.host.hooks.fire("merge.landing", "veto", samplePayload("merge.landing"), o)).decision).toBe("allow");
+      const spans = k.trace("run-trace-1").filter((s) => s.name === "plugin.hook");
+      expect(spans.map((s) => s.attributes.outcome)).toEqual(["deny", "allow"]);
+      expect(spans[0]!.attributes).toMatchObject({ plugin: "bouncer", hook: "merge.landing", mode: "veto", callId: calls[0]!.callId, "relay.run_id": "run-trace-1", "relay.agent_id": "agt-1" });
+      expect(spans[0]!.attributes["failure.kind"]).toBeUndefined();
+      expect(spans[0]!.traceId).toBe(runTrace("run-trace-1"));
+      expect(spans[0]!.parentSpanId).toBe(agentSpanId("run-trace-1", "agt-1"));
+      // An out-of-process plugin continues the trace under its call's span.
+      expect(calls.map((c) => c.trace)).toEqual(spans.map((s) => ({ traceId: s.traceId, spanId: s.spanId })));
+    } finally { await k.done(); }
+  });
+
+  test("a failed call's span says failed and why; a suspended plugin's open listener is skipped", async () => {
+    const spans: HookSpan[] = [];
+    const { host } = makeHost({ hookSpan: (s) => { spans.push(s); } });
+    await host.start([builtin(manifest("broken", hooks({ "run.changed": {} })), (ctx) => { ctx.hooks.on("run.changed", () => { throw new Error("boom"); }); })]);
+    for (let i = 0; i < 3; i++) host.hooks.fire("run.changed", "observe", samplePayload("run.changed"), at("run-1"));
+    await host.hooks.idle();
+    host.hooks.fire("run.changed", "observe", samplePayload("run.changed"), at("run-1"));
+    await host.hooks.idle();
+    expect(spans.map((s) => [s.attributes.outcome, s.attributes["failure.kind"] ?? null])).toEqual([["failed", "threw"], ["failed", "threw"], ["failed", "threw"], ["skipped", null]]);
+    expect(spans.every((s) => s.runId === "run-1" && s.attributes.mode === "observe")).toBe(true);
+    await host.stop();
+  });
+
+  test("ctx.trace.span inside a hook call is a child of the call's span; a log line there carries the run and the trace", async () => {
+    const k = await kernel([builtin(manifest("tracer", hooks({ "run.changed": {} })), (ctx) => {
+      ctx.hooks.on("run.changed", async () => {
+        ctx.log.info("before the lookup");
+        await ctx.trace.span("lookup", async (s) => { s.setAttributes({ rows: 3 }); ctx.log.info("inside the lookup"); });
+      });
+    })]);
+    try {
+      k.host.hooks.fire("run.changed", "observe", samplePayload("run.changed"), { principal: OPERATOR, entity: "run-trace-2", runId: "run-trace-2", agentId: "agt-2" });
+      await k.host.hooks.idle();
+      const spans = k.trace("run-trace-2");
+      const call = spans.find((s) => s.name === "plugin.hook")!;
+      const own = spans.find((s) => s.name === "plugin.tracer.lookup")!;
+      expect(call.attributes).toMatchObject({ plugin: "tracer", outcome: "allow" });
+      expect(own).toMatchObject({ traceId: call.traceId, parentSpanId: call.spanId, attributes: { plugin: "tracer", rows: 3, "relay.run_id": "run-trace-2" }, status: { code: 1 } });
+      const mine = k.lines.filter((l) => l.plugin === "tracer");
+      expect(mine.map((l) => l.message)).toEqual(["before the lookup", "inside the lookup"]);
+      expect(mine[0]).toMatchObject({ runId: "run-trace-2", agentId: "agt-2", traceId: runTrace("run-trace-2"), spanId: call.spanId });
+      expect(mine[1]).toMatchObject({ runId: "run-trace-2", traceId: runTrace("run-trace-2"), spanId: own.spanId });
+    } finally { await k.done(); }
+  });
+
+  test("a log line outside a hook call carries no run or trace", async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    const { host } = makeHost({ sinks: { log: (l) => { lines.push(l as unknown as Record<string, unknown>); } } });
+    await host.start([builtin(manifest("quiet"), (ctx) => { ctx.hooks.on("run.changed", () => {}); ctx.log.info("activated"); })]);
+    expect(lines.find((l) => l.message === "activated")).toEqual({ plugin: "quiet", level: "info", message: "activated", fields: {} });
+    await host.stop();
+  });
+
+  test("a sandbox seam call's span names the plugin that provides it", async () => {
+    const was = process.env.CAPCOMD_SANDBOX;
+    delete process.env.CAPCOMD_SANDBOX;
+    resetDependencies();
+    resetSpans();
+    try {
+      await getDependencies().provider.list("nothing-");
+      const span = getFinishedSpans().find((s) => s.name === "sandbox.list")!;
+      expect(span.attributes).toMatchObject({ plugin: "sandbox-fake", "sandbox.operation": "list" });
+    } finally {
+      resetDependencies();
+      if (was !== undefined) process.env.CAPCOMD_SANDBOX = was;
+    }
+  });
+
+  test("stats count each seam's calls and its failed ones by ErrorClass.kind, whether the kernel calls the seam or a built-in's own provider", async () => {
+    const native = { create: () => ({ list: async () => { throw Object.assign(new Error("rate limited"), { code: "quota" }); } }) };
+    const { host } = makeHost();
+    await host.start([builtin(manifest("sandbox-test", { provides: ["seam:sandbox/testbox"], contributes: { seams: [{ kind: "sandbox", name: "testbox" }] } }), (ctx) => {
+      ctx.seams.sandbox({
+        describe: () => ({ name: "testbox" }), classifyError: (e: unknown) => ((e as { code?: string }).code === "quota" ? { kind: "quota", retryable: true, hint: "wait" } : { kind: "unknown", retryable: false }),
+        available: async () => ({ ok: true }), waitReady: async () => {}, ensure: async () => { throw new Error("no machine"); },
+        [Symbol.for("capcomd.sandbox.native")]: native,
+      } as never);
+    })]);
+    const seam = host.contributions.get("seam", "sandbox/testbox")!.value.impl as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    await seam.waitReady!("vm-1", {});
+    await expect(seam.ensure!({}, {})).rejects.toThrow("no machine");
+    await seam.available!();   // describing a seam isn't a call
+    await expect(kernelSandbox(seam as never).list("x")).rejects.toThrow("rate limited");
+    const counted = { sandbox: { calls: 3, errors: { unknown: 1, quota: 1 } } };
+    expect(host.get("sandbox-test")!.stats.seams).toEqual(counted);
+    // The API lists them in the contract's shape, and `capcomd plugins show` prints them.
+    expect(Plugins.parse({ plugins: host.list() }).plugins.find((p) => p.name === "sandbox-test")!.stats.seams).toEqual(counted);
+    expect(CAPABILITY_NAMES).toContain("plugins.seam_stats");
+    expect(statsLines(host.get("sandbox-test")!.stats)).toEqual(["hook calls: 0, 0 failed, 0 dropped", "sandbox seam: 3 calls, failed: 1 unknown, 1 quota"]);
+    await host.stop();
   });
 });

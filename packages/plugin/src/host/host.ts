@@ -11,7 +11,7 @@ import { PLUGIN_NAME_PATTERN, type PluginManifest } from "../manifest";
 import type { PluginModule } from "../context";
 import { createContext, ContributionStore, mcpToolName, type ContextOptions, type PluginRuntime } from "./context";
 import { provided, resolveOrder } from "./order";
-import { HookRegistry, type HookStats, type HostEvent } from "./registry";
+import { HookRegistry, type HookSpan, type HookStats, type HostEvent } from "./registry";
 import { ProcessPlugin, ProtocolError, type FrameSink, type ProcessLauncher, type ProcessTimings, type ProtocolCaller } from "./process";
 import type { PluginContext } from "../context";
 import type { SessionOpened } from "../protocol";
@@ -79,6 +79,8 @@ export interface HostOptions {
   /** The kernel's primitive implementations for a plugin (absent: `unsupported`). */
   services?(manifest: PluginManifest): ContextOptions<unknown>["services"];
   sinks?: HostSinks;
+  /** Each hook call as a `plugin.hook` span (§13.4), for the run's trace. */
+  hookSpan?(s: HookSpan): void;
   /** A plugin's own secret (§10.3): the value its `x-secret` property `key` references, for that plugin only. `source`:
    *  where it came from (only a built-in's schema default names a reference; a plugin from a directory's never does). */
   secret?(manifest: PluginManifest, key: string, dir: string | null, source: PluginSource): Promise<string>;
@@ -187,7 +189,7 @@ export class PluginHost {
 
   constructor(private readonly o: HostOptions) {
     this.kernel = new Set(o.kernel);
-    this.hooks = new HookRegistry({ emit: (e) => o.emit(e), rank: (p) => { const i = this.loadOrder.indexOf(p); return i < 0 ? Number.MAX_SAFE_INTEGER : i; }, ...(o.breakerAt ? { breakerAt: o.breakerAt } : {}) });
+    this.hooks = new HookRegistry({ emit: (e) => o.emit(e), rank: (p) => { const i = this.loadOrder.indexOf(p); return i < 0 ? Number.MAX_SAFE_INTEGER : i; }, ...(o.breakerAt ? { breakerAt: o.breakerAt } : {}), ...(o.hookSpan ? { span: o.hookSpan } : {}) });
   }
 
   /** §5.5 start steps 2-3: discover, validate and resolve every candidate, then load them one at a time in order. */

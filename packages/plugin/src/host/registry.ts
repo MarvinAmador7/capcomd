@@ -1,6 +1,7 @@
 // The hook registry (spec §6): listeners by hook, in the §6.3 order, dispatched by mode with deadlines (§6.4), the
 // failure policy and the per-plugin circuit breaker (§6.5). The kernel fires hooks only through `fire`, with the mode
 // spelled at the call site so `scripts/check-hook-modes.ts` can check it against HOOKS (§14.4).
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { HookFailure, PluginError, type HookFailureKind } from "../errors";
 import { HOOKS, PATCH_KEYS, type HookCall, type HookListener, type HookName, type HookPatch, type HookPayload, type ModifyHook, type ObserveHook, type ReviewReport, type VetoHook } from "../hooks";
@@ -40,8 +41,30 @@ export type VetoExtras = { reviews?: Array<{ plugin: string; review: ReviewRepor
 export type VetoOutcome<N extends VetoHook> = ({ decision: "allow" } & VetoExtras) | Refusal | (N extends "merge.landing" ? Hold : never);
 export type ModifyOutcome<N extends ModifyHook> = { decision: "allow"; payload: HookPayload<N>; patches: Array<{ plugin: string; patch: HookPatch<N> }> } | Refusal;
 
-/** Per-plugin hook statistics (§13.2, §13.5). */
-export interface HookStats { calls: number; failures: number; dropped: number; p50Ms: number | null; p95Ms: number | null; lastFailureAt: string | null }
+/** Per-plugin hook statistics (§13.2, §13.5); `seams`: the kernel's calls to each seam it provides, by seam kind, with
+ *  the failed ones counted by their `ErrorClass.kind` (the seam's own classifyError). */
+export interface HookStats { calls: number; failures: number; dropped: number; p50Ms: number | null; p95Ms: number | null; lastFailureAt: string | null; seams?: Record<string, SeamStats> }
+export interface SeamStats { calls: number; errors: Record<string, number> }
+
+/** What a hook call (§13.4 `plugin.hook`) came to: the answer, or `skipped` (an open listener of a suspended plugin) or
+ *  `failed` (with `failure.kind`). An observe listener that returned is `allow`. */
+export type HookOutcome = "allow" | "deny" | "hold" | "skipped" | "failed";
+/** One settled hook call as a span (§13.4), for the kernel to write into the run's trace. `parentSpanId`: the span the
+ *  kernel fired from when it said (FireOptions.trace), else null (the kernel hangs it off the agent's or the run's span). */
+export interface HookSpan {
+  name: "plugin.hook"; traceId: string; spanId: string; parentSpanId: string | null; runId: string | null; agentId: string | null;
+  startedAt: number; endedAt: number;
+  attributes: { plugin: string; hook: HookName; mode: "observe" | "veto" | "modify"; callId: string; outcome: HookOutcome; "failure.kind"?: HookFailureKind };
+}
+
+/** The hook call, or a plugin's span inside one (`ctx.trace.span`), running now: what a `ctx.log` line and a
+ *  `ctx.trace.span` span are tied to (§13.3, §13.4). `callId` is null in a span opened outside a hook call. */
+export interface ActiveCall { plugin: string; callId: string | null; runId: string | null; agentId: string | null; traceId: string; spanId: string }
+const active = new AsyncLocalStorage<ActiveCall>();
+/** `plugin`'s active call, when its code runs inside one. */
+export const activeCall = (plugin: string): ActiveCall | undefined => { const a = active.getStore(); return a?.plugin === plugin ? a : undefined; };
+/** Run `fn` as part of `a` (a hook call, or a plugin's span). */
+export const withActive = <T>(a: ActiveCall, fn: () => T): T => active.run(a, fn);
 
 export interface RegistryOptions {
   emit(e: HostEvent): void;
@@ -52,6 +75,8 @@ export interface RegistryOptions {
   breakerAt?: number;
   /** Pending observe calls per plugin before the oldest are dropped (§6.2). */
   observeQueue?: number;
+  /** Each hook call as a `plugin.hook` span, once it has settled (§13.4). */
+  span?(s: HookSpan): void;
 }
 
 /** `changes`: the change kinds it is called for (its manifest's `changes`, job.changed only, §4.7); null for every one. */
@@ -72,6 +97,7 @@ type PluginHooks = {
   dropped: number;
   ms: number[];
   lastFailureAt: number | null;
+  seams: Map<string, SeamStats>;
   queue: Array<() => Promise<void>>;
   pump: Promise<void> | null;
   settled: ((callId: string, failure: { kind: HookFailureKind; message: string } | null) => void) | null;
@@ -81,6 +107,14 @@ type PluginHooks = {
  *  checked it (§6.2: its shape, a modify patch's rule): null when it was used, else why not. An out-of-process plugin's
  *  answer route says 422 with it (§9.4). */
 export interface AttachOptions { settled?(callId: string, failure: { kind: HookFailureKind; message: string } | null): void }
+
+/** A call's place in the trace (§13.4) and when it started. */
+type CallTrace = { traceId: string; spanId: string; parentSpanId: string | null; started: number };
+/** A checked answer's outcome: its decision (an observe listener's, which answers nothing, is `allow`). */
+const outcomeOf = (result: unknown): HookOutcome => {
+  const d = (result as { decision?: unknown } | undefined)?.decision;
+  return d === "deny" || d === "hold" ? d : "allow";
+};
 
 const DURATIONS = 256;
 const TIMEOUT = Symbol("timeout");
@@ -112,7 +146,7 @@ export class HookRegistry {
   /** Start tracking a plugin; `signal` is its `ctx.signal`, composed into every call's signal (§5.3). Resets the breaker. */
   attach(plugin: string, signal: AbortSignal, o: AttachOptions = {}): void {
     const prev = this.plugins.get(plugin);
-    this.plugins.set(plugin, { signal, consecutive: 0, suspended: false, calls: prev?.calls ?? 0, failures: prev?.failures ?? 0, dropped: prev?.dropped ?? 0, ms: prev?.ms ?? [], lastFailureAt: prev?.lastFailureAt ?? null, queue: [], pump: null, settled: o.settled ? (id, f) => o.settled!(id, f) : null });
+    this.plugins.set(plugin, { signal, consecutive: 0, suspended: false, calls: prev?.calls ?? 0, failures: prev?.failures ?? 0, dropped: prev?.dropped ?? 0, ms: prev?.ms ?? [], lastFailureAt: prev?.lastFailureAt ?? null, seams: prev?.seams ?? new Map(), queue: [], pump: null, settled: o.settled ? (id, f) => o.settled!(id, f) : null });
   }
 
   /** Observe calls dropped on the way to a plugin (an out-of-process plugin's full frame queue, §9.5): counted in its
@@ -181,8 +215,20 @@ export class HookRegistry {
 
   stats(plugin: string): HookStats {
     const p = this.plugins.get(plugin);
-    if (!p) return { calls: 0, failures: 0, dropped: 0, p50Ms: null, p95Ms: null, lastFailureAt: null };
-    return { calls: p.calls, failures: p.failures, dropped: p.dropped, p50Ms: pct(p.ms, 0.5), p95Ms: pct(p.ms, 0.95), lastFailureAt: p.lastFailureAt === null ? null : iso(p.lastFailureAt) };
+    if (!p) return { calls: 0, failures: 0, dropped: 0, p50Ms: null, p95Ms: null, lastFailureAt: null, seams: {} };
+    const seams = Object.fromEntries([...p.seams].map(([k, v]) => [k, { calls: v.calls, errors: { ...v.errors } }]));
+    return { calls: p.calls, failures: p.failures, dropped: p.dropped, p50Ms: pct(p.ms, 0.5), p95Ms: pct(p.ms, 0.95), lastFailureAt: p.lastFailureAt === null ? null : iso(p.lastFailureAt), seams };
+  }
+
+  /** The kernel called `plugin`'s `seam` (§13.5): `error` is a failed call's `ErrorClass.kind`, null for one that
+   *  succeeded. */
+  seamCall(plugin: string, seam: string, error: string | null): void {
+    const p = this.plugins.get(plugin);
+    if (!p) return;
+    const s = p.seams.get(seam) ?? { calls: 0, errors: {} };
+    s.calls++;
+    if (error !== null) s.errors[error] = (s.errors[error] ?? 0) + 1;
+    p.seams.set(seam, s);
   }
 
   /** Resolves once every queued observe call has run (tests, and the host before it disposes). */
@@ -217,7 +263,9 @@ export class HookRegistry {
     const l = o.timeoutMs === undefined ? found : { ...found, timeoutMs: o.timeoutMs };
     const started = this.now();
     if (p.suspended) {
-      if (l.failure === "closed") { p.calls++; this.failed(l, p, `call_${hex(8)}`, "suspended", "the plugin's hooks are suspended"); }
+      const callId = `call_${hex(8)}`;
+      if (l.failure === "closed") { p.calls++; this.failed(l, p, callId, "suspended", "the plugin's hooks are suspended"); }
+      this.traced(l, o, this.begin(o), callId, l.failure === "closed" ? "failed" : "skipped", l.failure === "closed" ? "suspended" : null);
       return { result: undefined, failure: { kind: "suspended", message: "the plugin's hooks are suspended" }, ms: 0 };
     }
     const r = await this.invoke(l, p, structuredClone(payload), o, started);
@@ -225,6 +273,7 @@ export class HookRegistry {
     const v = !r.ok ? r : mode === "veto" ? checkVeto(hook as VetoHook, r.value) : mode === "modify" ? checkModify(hook as ModifyHook, r.value) : { ok: true as const, result: undefined };
     const ms = this.now() - started;
     p.settled?.(r.callId, v.ok ? null : { kind: v.kind, message: v.message });
+    this.traced(l, o, r.trace, r.callId, v.ok ? outcomeOf(v.result) : "failed", v.ok ? null : v.kind);
     if (!v.ok) { this.failed(l, p, r.callId, v.kind, v.message); return { result: undefined, failure: { kind: v.kind, message: v.message }, ms }; }
     this.succeeded(p);
     return { result: v.result, failure: null, ms };
@@ -237,14 +286,17 @@ export class HookRegistry {
     const at = this.now(), kind = changeKind(payload);
     for (const l of this.ordered(hook)) {
       const p = this.plugins.get(l.plugin);
-      if (!p || p.suspended || !wants(l, kind)) continue;
+      if (!p || !wants(l, kind)) continue;
+      if (p.suspended) { this.traced(l, o, this.begin(o), `call_${hex(8)}`, "skipped"); continue; }
       const value = structuredClone(payload);
       if (p.queue.length >= this.observeQueue) { p.queue.shift(); p.dropped++; }
       p.queue.push(async () => {
         // Disposed, or suspended since it was queued (§6.5: an open listener of a suspended plugin is skipped).
-        if (!l.live || p.suspended) return;
+        if (!l.live) return;
+        if (p.suspended) { this.traced(l, o, this.begin(o), `call_${hex(8)}`, "skipped"); return; }
         const r = await this.invoke(l, p, value, o, at);
         p.settled?.(r.callId, r.ok ? null : { kind: r.kind, message: r.message });
+        this.traced(l, o, r.trace, r.callId, r.ok ? "allow" : "failed", r.ok ? null : r.kind);
         if (r.ok) this.succeeded(p); else this.failed(l, p, r.callId, r.kind, r.message);
       });
       if (!p.pump) p.pump = this.drain(p);
@@ -270,12 +322,13 @@ export class HookRegistry {
     for (const l of this.ordered(hook)) {
       const p = this.plugins.get(l.plugin);
       if (!p) continue;
-      const pre = this.preflight(l, p);
+      const pre = this.preflight(l, p, o);
       if (pre === "skip") continue;
       if (pre) { if (stop(this.refuse(l, o, pre))) break; continue; }
       const r = await this.invoke(l, p, structuredClone(payload), o, at);
       const v = r.ok ? checkVeto(hook, r.value) : r;
       p.settled?.(r.callId, v.ok ? null : { kind: v.kind, message: v.message });
+      this.traced(l, o, r.trace, r.callId, v.ok ? outcomeOf(v.result) : "failed", v.ok ? null : v.kind);
       if (!v.ok) {
         const effect = this.failed(l, p, r.callId, v.kind, v.message);
         if (effect === "denied" && stop(this.refuse(l, o, { kind: v.kind, message: v.message }))) break;
@@ -302,7 +355,7 @@ export class HookRegistry {
     for (const l of this.ordered(hook)) {
       const p = this.plugins.get(l.plugin);
       if (!p) continue;
-      const pre = this.preflight(l, p);
+      const pre = this.preflight(l, p, o);
       if (pre === "skip") continue;
       if (pre) return this.refuse(l, o, pre);
       const r = await this.invoke(l, p, structuredClone(current), o, at);
@@ -315,6 +368,7 @@ export class HookRegistry {
         }
       }
       p.settled?.(r.callId, v.ok ? null : { kind: v.kind, message: v.message });
+      this.traced(l, o, r.trace, r.callId, v.ok ? outcomeOf(v.result) : "failed", v.ok ? null : v.kind);
       if (!v.ok) {
         const effect = this.failed(l, p, r.callId, v.kind, v.message);
         if (effect === "denied") return this.refuse(l, o, { kind: v.kind, message: v.message });
@@ -328,11 +382,13 @@ export class HookRegistry {
   }
 
   /** A suspended plugin's listener (§6.5): a closed one is a failed call that denies, an open one is skipped. */
-  private preflight(l: Listener, p: PluginHooks): { kind: HookFailureKind; message: string } | "skip" | null {
+  private preflight(l: Listener, p: PluginHooks, o: FireOptions): { kind: HookFailureKind; message: string } | "skip" | null {
     if (!p.suspended) return null;
-    if (l.failure === "open") return "skip";
+    const callId = `call_${hex(8)}`;
+    if (l.failure === "open") { this.traced(l, o, this.begin(o), callId, "skipped"); return "skip"; }
     p.calls++;
-    this.failed(l, p, `call_${hex(8)}`, "suspended", "the plugin's hooks are suspended (three failed calls in a row)");
+    this.traced(l, o, this.begin(o), callId, "failed", "suspended");
+    this.failed(l, p, callId, "suspended", "the plugin's hooks are suspended (three failed calls in a row)");
     return { kind: "suspended", message: "the plugin's hooks are suspended" };
   }
 
@@ -348,32 +404,53 @@ export class HookRegistry {
 
   // ---- one call -----------------------------------------------------------------------------------------------------
 
-  private async invoke(l: Listener, p: PluginHooks, payload: unknown, o: FireOptions, at: number): Promise<{ ok: true; value: unknown; callId: string } | { ok: false; kind: HookFailureKind; message: string; callId: string }> {
+  /** A call's span ids (§13.4): the run's trace (`sha256("trace:"+runId)`), or the one the kernel fired from. */
+  private begin(o: FireOptions): CallTrace {
+    const traceId = o.trace?.traceId ?? (o.runId ? createHash("sha256").update(`trace:${o.runId}`).digest("hex").slice(0, 32) : hex(16));
+    return { traceId, spanId: hex(8), parentSpanId: o.trace?.spanId ?? null, started: this.now() };
+  }
+
+  /** Write a call's `plugin.hook` span (§13.4). Tracing never breaks a call. */
+  private traced(l: Listener, o: FireOptions, t: CallTrace, callId: string, outcome: HookOutcome, failure: HookFailureKind | null = null): void {
+    if (!this.o.span) return;
+    try {
+      this.o.span({
+        name: "plugin.hook", traceId: t.traceId, spanId: t.spanId, parentSpanId: t.parentSpanId, runId: o.runId ?? null, agentId: o.agentId ?? null,
+        startedAt: t.started, endedAt: this.now(),
+        attributes: { plugin: l.plugin, hook: l.hook, mode: HOOKS[l.hook].mode, callId, outcome, ...(failure ? { "failure.kind": failure } : {}) },
+      });
+    } catch { /* a sink that throws loses the span, never the call */ }
+  }
+
+  private async invoke(l: Listener, p: PluginHooks, payload: unknown, o: FireOptions, at: number): Promise<({ ok: true; value: unknown } | { ok: false; kind: HookFailureKind; message: string }) & { callId: string; trace: CallTrace }> {
     const callId = `call_${hex(8)}`;
     const deadline = new AbortController();
-    const started = this.now();
+    const trace = this.begin(o);
+    const started = trace.started;
     const call: HookCall = {
       callId, hook: l.hook, mode: HOOKS[l.hook].mode, payloadVersion: 1,
       idempotencyKey: `${l.hook}:${o.entity}:${o.attempt ?? 1}`,
       deadline: iso(started + l.timeoutMs),
       signal: AbortSignal.any([deadline.signal, p.signal]),
-      trace: o.trace ?? { traceId: o.runId ? createHash("sha256").update(`trace:${o.runId}`).digest("hex").slice(0, 32) : hex(16), spanId: hex(8) },
+      // The call's own span, so a plugin's spans continue under it (§13.4).
+      trace: { traceId: trace.traceId, spanId: trace.spanId },
       principal: o.principal, runId: o.runId ?? null, agentId: o.agentId ?? null, at: iso(at),
       payload: payload as never,
     };
+    const frame: ActiveCall = { plugin: l.plugin, callId, runId: call.runId, agentId: call.agentId, traceId: trace.traceId, spanId: trace.spanId };
     p.calls++;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const run = Promise.resolve().then(() => l.fn(call));
+      const run = Promise.resolve().then(() => withActive(frame, () => l.fn(call)));
       run.catch(() => {});   // a listener that rejects after its deadline must not become an unhandled rejection
       const v = await Promise.race([run, new Promise<typeof TIMEOUT>((r) => { timer = setTimeout(() => r(TIMEOUT), l.timeoutMs); })]);
       if (v === TIMEOUT) {
         deadline.abort(new PluginError("timeout", `${l.hook} deadline (${l.timeoutMs} ms) passed`));
-        return { ok: false, kind: "timeout", message: `no answer within ${l.timeoutMs} ms`, callId };
+        return { ok: false, kind: "timeout", message: `no answer within ${l.timeoutMs} ms`, callId, trace };
       }
-      return { ok: true, value: v, callId };
+      return { ok: true, value: v, callId, trace };
     } catch (e) {
-      return { ok: false, kind: e instanceof HookFailure ? e.kind : "threw", message: e instanceof Error ? e.message : String(e), callId };
+      return { ok: false, kind: e instanceof HookFailure ? e.kind : "threw", message: e instanceof Error ? e.message : String(e), callId, trace };
     } finally {
       clearTimeout(timer);
       p.ms.push(this.now() - started);

@@ -1790,7 +1790,7 @@ process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin'
 ### 13.2 `GET /v1/plugins`
 
 Every discovered plugin with `state`, `enabled`, `cause`, `hooks`, `seams`, `hooksSuspended` and `stats {calls, failures,
-dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2), and `commands`, the CLI
+dropped, p50Ms, p95Ms, lastFailureAt, seams}` (`dropped`: observe calls dropped from a full queue, §6.2; `seams`, §13.5), and `commands`, the CLI
 commands its manifest declares, whatever its state (absent when none; §4.7.1), and `tools`, its MCP tools by the names
 the `capcomd mcp` server lists them (`capcomd_<plugin>_<tool>`, a kernel front door's `capcomd_<tool>`, §4.7.2): the
 ones it registered while active, its manifest's otherwise (absent when none; additive); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
@@ -1800,22 +1800,32 @@ same. `/v1/health` gains the feature flag `plugins`.
 ### 13.3 Logs
 
 `ctx.log.<level>(message, fields)` writes one JSON line to the daemon log with `plugin`, `level`, `message`, `fields`
-(redacted), `runId`/`agentId` when inside a hook call, and `traceId`/`spanId`. Out of process, stdout/stderr lines are
+(redacted), `runId`/`agentId` when inside a hook call, and `traceId`/`spanId` inside a hook call or a `ctx.trace.span`
+(the call's span, or the plugin span it runs in; neither outside both). Out of process, stdout/stderr lines are
 parsed as in §9.2. Logs are not events: they never reach clients.
 
 ### 13.4 Tracing
 
 Every hook call is a span `plugin.hook` with attributes `plugin`, `hook`, `mode`, `callId`, `outcome`
-(`allow|deny|hold|skipped|failed`), `failure.kind`, under the run's trace (`tracing-simple.ts`: `traceId =
-sha256("trace:"+runId)`, the agent span `agentSpanId`). `call.trace` carries the ids so an out-of-process plugin can
-continue the trace; `ctx.trace.span(op, fn)` opens `plugin.<name>.<op>` as a child of the active call's span. Seam
-calls are spans already (`tracedProvider`); they gain `plugin` as an attribute.
+(`allow|deny|hold|skipped|failed`; an observe listener that returns is `allow`, an open listener of a suspended plugin
+`skipped`) and, when failed, `failure.kind`, under the run's trace (`tracing-simple.ts`: `traceId =
+sha256("trace:"+runId)`, a child of the agent span `agentSpanId` when the call has an agent, else of the run's root;
+written to the run's trace file by whichever process fired the hook). `call.trace` carries the trace id and the call's
+own span id, so an out-of-process plugin can continue the trace under its call; `ctx.trace.span(op, fn)` opens
+`plugin.<name>.<op>` as a child of the active call's span (or of the plugin span it runs in), with the call's run, and
+what `fn` logs or opens belongs to it. A span outside any hook call starts a trace of its own and, without a run, is
+kept in memory only. Seam calls are spans already (`tracedProvider`); they gain `plugin`, the plugin that provides the
+place, as an attribute.
 
 ### 13.5 Metrics
 
-Derived from events and spans, no new pipeline: per plugin, hook calls and failures, p50/p95 per hook, breaker trips,
-observe drops, process restarts; per seam, calls and errors by `ErrorClass.kind`. Exposed in `GET /v1/plugins` `stats`
-and by `capcomd doctor`.
+Derived from events and spans, no new pipeline: per plugin, hook calls and failures, observe drops and p50/p95 of its
+recent calls (`stats`), breaker trips (`plugin.suspended`) and process restarts (`plugin.process_changed`); per seam,
+the daemon's calls and errors by `ErrorClass.kind`. A seam's calls are those that return a promise, counted when they
+settle (its `describe`, `available` and `classifyError` aren't calls), including the calls the kernel makes to a
+built-in sandbox's own provider; a failure is counted by the seam's own `classifyError`, `unknown` when it throws.
+Exposed in `GET /v1/plugins` `stats` (`seams`: by seam kind, `{calls, errors: {<kind>: n}}`, capability
+`plugins.seam_stats`, additive) and by `capcomd plugins show <name>`, which asks the running daemon for them.
 
 ## 14. Testing
 

@@ -6,7 +6,7 @@ import { traceMethods } from "./utils/tracing-simple";
 import { sandboxName } from "./providers/registry";
 import { resilientProvider } from "./providers/resilient";
 import { hookedProvider } from "./plugins/sandbox";
-import { placeInUse, sandboxProvider } from "./plugins/sandboxes";
+import { placeInUse, sandboxPluginOf, sandboxProvider } from "./plugins/sandboxes";
 
 interface Dependencies {
   model: ModelClient;
@@ -42,9 +42,13 @@ export function gitSpanOf(argv: string[]): { op: string; ref?: string } {
   return { op, ref: positional[1] };
 }
 
-function tracedProvider(provider: SandboxProvider, name: string): SandboxProvider {
+/** Each call a `sandbox.<method>` (or `git.<op>`) span; `place`: the sandbox it is, whose plugin the span names (plugin
+ *  API §13.4), looked up per call as the daemon's plugin host may start after this is made. */
+function tracedProvider(provider: SandboxProvider, name: string, place: string | null): SandboxProvider {
   return traceMethods("sandbox", provider, (method, args, result) => {
     const attributes: Record<string, any> = { "sandbox.provider": name, "sandbox.operation": method };
+    const plugin = place ? sandboxPluginOf(place) : null;
+    if (plugin) attributes.plugin = plugin;
     if (typeof args[0] === "string") attributes["sandbox.vm_id"] = args[0];
     if (result && typeof result === "object" && "id" in result) attributes["sandbox.vm_id"] = result.id;
     if (method === "exec" && Array.isArray(args[1]) && args[1][0] === "git") {
@@ -76,7 +80,7 @@ export function initDependencies(config?: { model?: ModelClient; provider?: Sand
   deps = {
     fakeWork: provider instanceof FakeProvider,
     model: tracedModel(model, model.constructor?.name === "FakeModelClient" ? "fake" : model.constructor?.name ?? "model"),
-    provider: tracedProvider(provider, provider.constructor?.name === "FakeProvider" ? "fake" : provider.constructor?.name ?? "provider"),
+    provider: tracedProvider(provider, provider.constructor?.name === "FakeProvider" ? "fake" : provider.constructor?.name ?? "provider", config?.provider ? null : sandboxName()),
   };
 }
 
@@ -101,7 +105,7 @@ export function providerNamed(name: string | null | undefined): SandboxProvider 
     // A place that doesn't delete idle machines by itself (Docker, ADR-020): its plugin's timer sweeps the daemon's own
     // sandbox; this one's too.
     placeInUse(name);
-    p = tracedProvider(raw, raw.constructor?.name === "FakeProvider" ? "fake" : raw.constructor?.name ?? "provider");
+    p = tracedProvider(raw, raw.constructor?.name === "FakeProvider" ? "fake" : raw.constructor?.name ?? "provider", name);
     bySandbox.set(name, p);
   }
   return p;

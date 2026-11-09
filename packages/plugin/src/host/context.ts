@@ -10,7 +10,8 @@ import type { ApiRouteSpec, CallOptions, CliCommandSpec, Disposable, EmittedEven
 import type { TriggerReply } from "../shapes";
 import type { AgentProvider, Forge, SandboxProvider } from "../seams";
 import type { ContextProvider } from "../context-layer";
-import type { HookRegistry } from "./registry";
+import { activeCall, withActive, type ActiveCall, type HookRegistry } from "./registry";
+import { randomBytes } from "node:crypto";
 
 /** Named contributions every plugin shares one namespace of (§4.2): a second registration of a key is `conflict`. */
 export type ContributionKind = "seam" | "context" | "cli" | "mcp" | "instructions" | "api" | "capability" | "ui" | "reply";
@@ -65,6 +66,45 @@ const SYNC = new Set(["sandboxes.provider", "sandboxes.descriptors", "auth.crede
 export const mcpToolName = (plugin: string, tool: string, kernelSurface: boolean): string =>
   kernelSurface ? `capcomd_${tool}` : `capcomd_${plugin.replace(/-/g, "_")}_${tool}`;
 
+export interface LogLine {
+  plugin: string; level: LogLevel; message: string; fields: Record<string, unknown>;
+  runId?: string | null; agentId?: string | null; traceId?: string; spanId?: string;
+}
+export interface PluginSpan {
+  name: string; attributes: Record<string, string | number | boolean>; events: string[]; ms: number; ok: boolean;
+  traceId: string; spanId: string; parentSpanId: string | null; runId: string | null; agentId: string | null; startedAt: number;
+}
+
+/** How a seam's calls are counted (§13.5): one that settled, and one that failed, by the seam's own classifyError. */
+export interface SeamCounter { ok(): void; failed(e: unknown): void }
+const counters = new WeakMap<object, SeamCounter>();
+/** The counter of a registered seam (what the store holds), for a kernel that calls past its methods (a built-in
+ *  sandbox's own provider, src/providers/seam.ts). */
+export const seamCounter = (seam: object): SeamCounter | undefined => counters.get(seam);
+/** Methods that describe a seam rather than use it: not counted. */
+const UNCOUNTED = new Set(["describe", "available", "classifyError", "constructor"]);
+/** `impl` with each method call that returns a promise counted by `c` when it settles. Methods run on `impl` itself. */
+export function countCalls<T extends object>(impl: T, c: SeamCounter): T {
+  const wrapped = new WeakMap<(...a: unknown[]) => unknown, (...a: unknown[]) => unknown>();
+  return new Proxy(impl, {
+    get(t, k) {
+      const v = Reflect.get(t, k, t) as unknown;
+      if (typeof v !== "function" || typeof k !== "string" || UNCOUNTED.has(k)) return v;
+      const f = v as (...a: unknown[]) => unknown;
+      let w = wrapped.get(f);
+      if (!w) {
+        w = (...args: unknown[]) => {
+          const out = f.apply(t, args);
+          if (!out || typeof (out as { then?: unknown }).then !== "function") return out;
+          return (out as Promise<unknown>).then((x) => { c.ok(); return x; }, (e: unknown) => { c.failed(e); throw e; });
+        };
+        wrapped.set(f, w);
+      }
+      return w;
+    },
+  });
+}
+
 /** The kernel's implementations of the primitives (absent ones are `unsupported`), plus the sinks the context writes to. */
 export interface ContextOptions<C> {
   manifest: PluginManifest;
@@ -83,8 +123,12 @@ export interface ContextOptions<C> {
   emit?(e: EmittedEvent & { type: string }): Promise<{ seq: number }>;
   subscribe?(stream: string, filter: { types?: string[]; after?: number }, handler: (e: HarnessEventEnvelope) => void | Promise<void>): Disposable;
   replay?(stream: string, after: number): Promise<HarnessEventEnvelope[]>;
-  log?(line: { plugin: string; level: LogLevel; message: string; fields: Record<string, unknown> }): void;
-  span?(s: { name: string; attributes: Record<string, string | number | boolean>; events: string[]; ms: number; ok: boolean }): void;
+  /** One `ctx.log` line (§13.3): inside a hook call it carries the call's `runId` and `agentId`, and inside a call or a
+   *  `ctx.trace.span` the `traceId` and `spanId` it belongs to. */
+  log?(line: LogLine): void;
+  /** One finished `ctx.trace.span` (§13.4): `parentSpanId` is the active hook call's span (or the enclosing plugin span),
+   *  null outside one; `traceId` the run's trace inside a call, else a new one. */
+  span?(s: PluginSpan): void;
   redact?(text: string): string;
 }
 
@@ -147,7 +191,21 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     if (!d) refuse(`${kind} seam`);
     const named = (impl as { describe?: () => { name?: string } }).describe?.().name;
     if (named !== undefined && named !== d!.name) throw new PluginError("invalid", `the ${kind} seam describes itself as ${named}, declared as ${d!.name} (§7.1)`);
-    return contribute({ kind: "seam", seam: kind, name: d!.name }, `${kind}/${d!.name}`, { kind: "seam", seam: kind, impl });
+    return contribute({ kind: "seam", seam: kind, name: d!.name }, `${kind}/${d!.name}`, { kind: "seam", seam: kind, impl: counted(kind, impl) });
+  };
+  // §13.5: the kernel's calls to a seam, counted in the plugin's stats by seam kind, a failed one by its ErrorClass.kind.
+  const counted = <T extends object>(seam: string, impl: T): T => {
+    const c: SeamCounter = {
+      ok: () => o.hooks.seamCall(name, seam, null),
+      failed: (e) => {
+        let kind = "unknown";
+        try { kind = String((impl as { classifyError?(e: unknown): { kind?: unknown } }).classifyError?.(e)?.kind ?? "unknown"); } catch { /* unknown */ }
+        o.hooks.seamCall(name, seam, kind);
+      },
+    };
+    const w = countCalls(impl, c);
+    counters.set(w, c);
+    return w;
   };
 
   const guarded = <S extends ServiceName>(service: S): PluginContext[S] => {
@@ -186,7 +244,11 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
   if (!o.services?.auth?.redact) (auth as { redact: (t: string) => string }).redact = (t: string) => { live(); return redact(t); };
 
   const log = (level: LogLevel, message: string, fields: Record<string, unknown> = {}) => {
-    o.log?.({ plugin: name, level, message: redact(String(message)), fields: deep(fields) as Record<string, unknown> });
+    const a = activeCall(name);
+    o.log?.({
+      plugin: name, level, message: redact(String(message)), fields: deep(fields) as Record<string, unknown>,
+      ...(a?.callId ? { runId: a.runId, agentId: a.agentId } : {}), ...(a ? { traceId: a.traceId, spanId: a.spanId } : {}),
+    });
   };
 
   const ctx: PluginContext<C> = {
@@ -199,13 +261,19 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     },
     log: { log, debug: (msg, f) => log("debug", msg, f), info: (msg, f) => log("info", msg, f), warn: (msg, f) => log("warn", msg, f), error: (msg, f) => log("error", msg, f) },
     trace: {
+      // §13.4: a child of the active hook call's span (or of the plugin span it runs in); what runs inside, its log
+      // lines and spans, belongs to this one.
       async span(op, fn) {
         const attributes: Record<string, string | number | boolean> = { plugin: name };
         const events: string[] = [];
         const started = Date.now();
+        const parent = activeCall(name);
+        const frame: ActiveCall = { plugin: name, callId: parent?.callId ?? null, runId: parent?.runId ?? null, agentId: parent?.agentId ?? null, traceId: parent?.traceId ?? randomBytes(16).toString("hex"), spanId: randomBytes(8).toString("hex") };
         const span: Span = { setAttributes: (a) => Object.assign(attributes, a), event: (n) => { events.push(n); }, end: () => {} };
         let ok = false;
-        try { const r = await fn(span); ok = true; return r; } finally { o.span?.({ name: `plugin.${name}.${op}`, attributes, events, ms: Date.now() - started, ok }); }
+        try { const r = await withActive(frame, () => fn(span)); ok = true; return r; } finally {
+          o.span?.({ name: `plugin.${name}.${op}`, attributes, events, ms: Date.now() - started, ok, traceId: frame.traceId, spanId: frame.spanId, parentSpanId: parent?.spanId ?? null, runId: frame.runId, agentId: frame.agentId, startedAt: started });
+        }
       },
     },
     hooks: { on: hooksOn as PluginContext["hooks"]["on"] },
@@ -218,7 +286,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         if (!d) refuse(`context provider ${String(named)}`);
         if (["resolve", "index", "search", "get", "propose", "available", "classifyError"].some((k) => typeof (impl as unknown as Record<string, unknown>)[k] !== "function"))
           throw new PluginError("invalid", `context provider ${d!.name}: describe, available, classifyError, resolve, index, search, get and propose are functions (ADR-025 §3.2)`);
-        return contribute({ kind: "context", name: d!.name }, d!.name, { kind: "context", kinds: d!.kinds, impl });
+        return contribute({ kind: "context", name: d!.name }, d!.name, { kind: "context", kinds: d!.kinds, impl: counted("context", impl) });
       },
     },
     cli: {
