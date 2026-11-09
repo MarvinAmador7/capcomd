@@ -257,7 +257,10 @@ supports; `helpful`/`harmful` counters; dedupe by lexical match. It never rewrit
 never rewrites the bundle wholesale (ACE's 18,282 → 122-token collapse). Its model defaults to the **run's strongest**
 `harness.model` (writer quality is what transfers, Memp; Fable-class 0.025× cache reads make a strong reflector over a
 cached transcript cheap), cheap is opt-in (D6). Its proposals are capped per run and pass the same scan as a worker's
-(§8); it reads `run` and `project` only.
+(§8); it reads `run` and `project` only. A run's first consolidator is given every candidate; a later one only those no
+consolidator that ended done was given (the kernel records what each attempt is given), so lessons declared after the
+consolidator started (the planner's final result) reach D6a's one follow-up and none is read twice (§13, "consolidation
+is reachable").
 
 ### 5.3 Promotion is a merge
 
@@ -929,6 +932,20 @@ Four things stood between D6 and a held memory change, each fixed:
   the case D6 meant to be consolidated (§12's rule decides whether consolidation stays on at all, not who starts it);
   nothing it starts lands without the gate (lint, and a person under the default `review: human`); and it is a
   convenience, so it fails open (a refusal is an event, never a stopped run).
+- **Lessons after the consolidator started were never consolidated** (D6a, live re-check). The planner that states
+  its lessons only after its consolidator ran (in its final result) had them captured at its end, and the fallback
+  did nothing once any consolidator was done: the done one's prompt never had them. The kernel now records, as each
+  consolidator attempt starts, which agents' capture records it is given (kv `_consolidator/<agentId>`): those no
+  consolidator that ended done was given, so a later one never re-reads what an earlier one took. A run's `late`
+  lessons are the candidates (and lessons declared and not collected) no consolidator that ended done was given.
+  Once every agent that may spawn the consolidator has ended and a consolidator ended done, a run with late lessons
+  gets one follow-up consolidator at its top (key `consolidator-late`, at most one per run, so the cost stays bounded),
+  given only those; its branch is verified and its merge asked as any consolidator's, held for a person under
+  `review: human`. With `autoConsolidate` off it says so (`consolidator_skipped` `late_lessons`). The planner is told
+  first: its skill says to declare its own lessons before it spawns the consolidator, and `capcomd status` says how
+  many came late. A consolidator done before this record existed (an older run) has no record of what it read, so its
+  run has no late lessons (nothing is guessed). Open: the follow-up's branch is cut from the target while the first
+  one's merge usually still waits for a person, so both rewrite `index.md` and the second merge can conflict.
 - **The consolidator didn't know what was asked.** In the live re-run the planner declared the lesson the goal asked
   for and spawned the consolidator, which dropped it: `package.json` implied it, and the prompt's rule is "keep a
   lesson only when the repository doesn't say it already". Its inputs now start with the run's goal (fenced as data,
@@ -1076,7 +1093,7 @@ owner (built as recommended, and off with one setting if declined), and D17, whi
 | D4 | Budgets and k | **Eval outputs per model** in `docs/evidence/context/<model>/limits.json`; no inline items in v1; start from 25 KB / 200 lines / k = 1 |
 | D5 | Gate for the consolidator's branch | **`review: human` (a `hold`) for the first release**; `lint` per project once the poisoning probe passes on the current model |
 | D6 | Consolidator: who spawns it, which model | **The planner, as its run's last child; the run's strongest model**; cheap is opt-in |
-| D6a | *Proposed amendment to D6 (2026-11-08, not yet accepted):* when the planner misses it | **A fallback in `context-memory`, on by default (`autoConsolidate`, per run too)**: once every agent that may spawn the consolidator has ended, a run with candidates and no consolidator gets one (spawned by capcomd at the run's top), and a consolidator's branch nobody merged is verified and its merge asked for, held by the gate as the planner's would be; why not is an event. The planner stays the first path (§13, "consolidation is reachable") |
+| D6a | *Proposed amendment to D6 (2026-11-08, not yet accepted):* when the planner misses it | **A fallback in `context-memory`, on by default (`autoConsolidate`, per run too)**: once every agent that may spawn the consolidator has ended, a run with candidates and no consolidator gets one (spawned by capcomd at the run's top), and a consolidator's branch nobody merged is verified and its merge asked for, held by the gate as the planner's would be; lessons no done consolidator was given (declared after it started) get one follow-up consolidator per run, given only those; why not is an event. The planner stays the first path (§13, "consolidation is reachable") |
 | D7 | Keep transcripts for cross-run search | **No**: distilled items only; `agent_items` keep their own retention |
 | D8 | Freshness defaults | **`lesson` 180 d, `feedback` 90 d, `reference` none, facts per brain**, as absolute `stale_after`; stale leaves the brief, is not deleted |
 | D9 | groundray: read through its CLI or the bundle; when `serve --stdio` | **Bundle for reads, CLI for proposals**; `serve --stdio` and the filters filed as asks, a precondition only for a hot write path |
