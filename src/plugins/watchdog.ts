@@ -234,7 +234,12 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
   const wait = (w: Watched, on: string) => {
     if (w.waits.includes(on)) return;
     if (w.waits.length) hold(w);
-    else w.heldAt = Date.now();
+    else {
+      // A command it was last seen waiting on keeps its time up to the wait (a look before its next heartbeat would
+      // take the wait's time off first, and that time would then be lost).
+      if (w.command && Date.now() - w.command.seenAt <= PROGRESS_SIGNAL_MS) commanding(w, w.command.since);
+      w.heldAt = Date.now();
+    }
     w.waits.push(on);
     if (on.startsWith("job:")) w.jobsAt = { ...w.jobsAt, [on.slice(4)]: Date.now() };
     save(w);
