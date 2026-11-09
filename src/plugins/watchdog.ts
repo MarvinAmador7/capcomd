@@ -217,13 +217,16 @@ export function watchdog(ctx: PluginContext<WatchdogConfig>, o: WatchdogOptions 
   };
   /** A foreground command it waits on, seen running now: the time since it was last seen (or started) doesn't count, up
    *  to stalledAfterMs for all its commands since its last progress (a command run again and again, polling, is no
-   *  more progress than one that hangs). */
+   *  more progress than one that hangs). While a wait holds its clock (a job, a check), that wait takes the time off
+   *  when it ends: the command's time then isn't taken off again and doesn't use up its commands' allowance, so a
+   *  command still running after the job ended holds the clock as any other would. */
   const commanding = (w: Watched, since: number) => {
     const now = Date.now();
     let c = w.command;
     if (!c || c.since !== since) c = w.command = { since, seenAt: Math.max(since, c?.seenAt ?? 0) };
+    const until = w.waits.length ? Math.min(now, w.heldAt ?? now) : now;
     const room = cfg.stalledAfterMs - (w.commanded ?? 0);
-    if (room > 0) w.commanded = (w.commanded ?? 0) + credit(w, c.seenAt, Math.min(now, Math.max(c.seenAt, accounted(w)) + room));
+    if (room > 0) w.commanded = (w.commanded ?? 0) + credit(w, c.seenAt, Math.min(until, Math.max(c.seenAt, accounted(w)) + room));
     c.seenAt = Math.max(c.seenAt, now);
     save(w);
   };
