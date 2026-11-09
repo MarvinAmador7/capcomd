@@ -120,6 +120,17 @@ export function tellWorked(runId: string, a: ScopeAgent, w: { files: boolean; co
     { principal: principalOf(a.agentId, runId), entity: `${runId}#worked-${a.agentId}-${w.at}`, runId, agentId: a.agentId });
 }
 
+/**
+ * `run.changed` `created` (§6.6.4): told once the run's `run new` finished (scope `setOrigin`, its last step), not at its
+ * scope's first event, so a run whose creation failed partway is never told as created. Like `worked`, no event in the
+ * run's log of its own, so told when it happens and never replayed.
+ */
+export function tellCreated(runId: string | null, r: { label: string | null; goal: string | null; createdAt: number | null }): void {
+  if (!runId || !hooks.listening("run.changed")) return;
+  const run: Run = { id: runId, projectId: null, label: r.label, state: "new", goal: r.goal, title: null, repo: null, createdAt: r.createdAt ? iso(r.createdAt) : null };
+  hooks.fire("run.changed", "observe", { run, change: { kind: "created" } }, { principal: principalOf(null), entity: `${runId}#created`, runId, agentId: null });
+}
+
 /** The events about a verification or a merge: their asker is the op's (`askedBy`), their approver the event's `by`. */
 const OP_EVENTS = new Set(["VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED", "MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED"]);
 
@@ -216,7 +227,7 @@ async function runChangesOf(db: Db, runId: string, batch: Ev[]): Promise<Array<{
   for (const env of lifecycleEvents(runId, all)) {
     const change = runChange(env.type, env.data as Record<string, any>);
     if (!change) continue;
-    state = change.kind === "ended" ? change.state : change.kind === "paused" ? "paused" : change.kind === "created" ? "new" : change.kind === "titled" ? state : "running";
+    state = change.kind === "ended" ? change.state : change.kind === "paused" ? "paused" : change.kind === "titled" ? state : "running";
     if (env.seq < from) continue;
     out.push({ seq: env.seq, change, run: { id: runId, projectId: null, label: init.label ?? null, state, goal: init.goal ?? null, title, repo: null, createdAt: init.createdAt ? iso(init.createdAt) : null } });
   }
@@ -225,7 +236,7 @@ async function runChangesOf(db: Db, runId: string, batch: Ev[]): Promise<Array<{
 
 function runChange(type: string, d: Record<string, any>): RunChange | null {
   switch (type) {
-    case "run.created": return { kind: "created" };
+    // run.created: `created` is told when `run new` finishes (tellCreated), not at the scope's first event.
     case "run.started": return { kind: "started" };
     case "run.paused": return { kind: "paused", by: str(d.by) ?? "capcomd" };
     case "run.resumed": return { kind: "resumed", by: str(d.by) ?? "capcomd" };

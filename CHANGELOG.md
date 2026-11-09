@@ -15,6 +15,24 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   can't spawn it (set up before the consolidator existed, or moved from agents.json), setup leaves your planner alone
   and prints the command that lets it (`capcomd profiles set planner --set children.allowedChildProfiles=…`);
   `capcomd profiles migrate` prints the same note. Memory changes still wait for your approval before they land.
+- **Breaking:** `capcomd run` without a planner agent (the built-in placeholder recipe: `capcomd run <goal>` on a place
+  without real machines, `--recipe`, `--legacy`, `CAPCOMD_RUN_PATH`) is off by default. It plans the same generic
+  tasks for any goal and judges nothing, so it's kept for comparisons and tests only. Such a run is now refused before
+  it starts, with a config error that says so. Use a planner agent instead (`--planner <profile>`; `capcomd setup`
+  writes one named `planner`), or turn the placeholder back on with `capcomd plugins enable recipe-hierarchical` (or
+  `CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED=true`). The same goes for `POST /v1/runs` without a driver on such a
+  place: it answers 422 with that reason. `capcomd plugins list` shows it as `recipe-hierarchical`.
+- The run list (`state/runs.jsonl`, or the file `CAPCOMD_RUNS_INDEX` names for `capcomd run new`) and each run's
+  trace directory are now recorded by capcomd's daemon, as two built-in plugins you can see in `capcomd plugins list`
+  (`observe-runs-index`, `observe-traces`). The rows are the same as before, in the same file, except that
+  `CAPCOMD_RUNS_INDEX` must now name a `.jsonl` file that is a runs index (or doesn't exist yet) and isn't a link:
+  for anything else the run is listed in capcomd's own run list instead. A `run new` that failed partway and is then
+  retried with the same `--key` is now listed once the retry finishes it.
+- Plugins that listen to `run.changed` are now told `created` once `capcomd run new` has finished setting the run up,
+  not when its record is first made. A run whose `run new` failed partway is told as created only when a retry
+  finishes it.
+- The settings and info rows of a place's details screen (`GET /v1/sandboxes/{name}`) now come from that place's
+  sandbox plugin. They read exactly as before.
 - Fixed: a docker CLI that hangs no longer hangs capcomd with it. `capcomd setup`, the run options the apps show and
   starting a run on Docker now say "Docker isn't running" after 3 seconds, even when the CLI (or something it started)
   never lets go.

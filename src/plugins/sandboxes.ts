@@ -9,6 +9,7 @@ import { ContributionStore, createContext } from "../../packages/plugin/src/host
 import { configDefaults } from "../../packages/plugin/src/host/host";
 import { resolveOrder } from "../../packages/plugin/src/host/order";
 import { HookRegistry } from "../../packages/plugin/src/host/registry";
+import type { UiDescriptor } from "../../packages/plugin/src/context";
 import type { ErrorClass, SandboxDescriptor, SandboxProvider as SandboxSeam } from "../../packages/plugin/src/seams";
 import { RelayError } from "../core/errors";
 import { kernelSandbox, seamCall } from "../providers/seam";
@@ -65,6 +66,18 @@ export function sandboxSeam(name: string): SandboxSeam | null {
 /** Every active sandbox seam's descriptor (§7.2 `describe()`), in load order. */
 export function describedSandboxes(): SandboxDescriptor[] {
   return sandboxSeams().map((s) => s.seam.describe());
+}
+
+/** The UI descriptors (§4.7.5) of the plugin that provides the sandbox `name`, in the order it registered them; `builtin`:
+ *  that plugin is one of capcomd's own (its rows' `read` is given the daemon's facts). Empty when no active plugin
+ *  provides it. */
+export function sandboxUi(name: string): { builtin: boolean; descriptors: UiDescriptor[] } {
+  const seam = store().get("seam", `sandbox/${name}`);
+  if (!seam) return { builtin: false, descriptors: [] };
+  return {
+    builtin: SANDBOX_BUILTINS.some((b) => b.manifest.name === seam.plugin),
+    descriptors: store().list("ui").filter((e) => e.plugin === seam.plugin).map((e) => e.value.descriptor),
+  };
 }
 
 /** The kernel provider for the sandbox `name`, built for `env` (§7.1: the kernel asks the host, by name). A built-in's

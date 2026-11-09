@@ -9,6 +9,7 @@ import type { ErrorClass, SandboxDescriptor } from "../../../packages/plugin/src
 import { BOXD_AUTH_HINT, isBoxdAuthError, mapBoxdError } from "../../providers/boxd-errors";
 import { builtinSandbox, classifySandboxError, type NativeSandbox, type SecretOf } from "../../providers/seam";
 import { VERSION } from "../../utils/self";
+import { contributeRows, rowContributions } from "./sandbox-rows";
 import { env as envVar } from "../../utils/env";
 
 export const DESCRIPTOR = {
@@ -23,7 +24,8 @@ export const manifest = {
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./sandbox-boxd.ts" },
   // After docker: the order clients list places in (docker, then boxd) is the load order (§6.3).
   provides: ["seam:sandbox/boxd"], after: ["sandbox-docker"], scopes: ["steer"],
-  contributes: { seams: [{ kind: "sandbox", name: "boxd" }], hooks: { "job.changed": { changes: ["fired"] } } },
+  // Its details screen's settings and info rows (§4.7.5), served by GET /v1/sandboxes/boxd.
+  contributes: { seams: [{ kind: "sandbox", name: "boxd" }], hooks: { "job.changed": { changes: ["fired"] } }, ui: rowContributions(DESCRIPTOR) },
   config: {
     type: "object", additionalProperties: false,
     properties: {
@@ -84,6 +86,7 @@ export const plugin = definePlugin({
         return native.create(process.env, () => key);
       },
     }));
+    contributeRows(ctx, DESCRIPTOR);
     // The project templates' refresh: its timer fires (daily by default) and the refresh runs on its own (it fetches
     // every templated repository's mirror, longer than an observe call's deadline), starting builds in the background.
     // Its listener is registered with the refresh turned off too, as the manifest declares it (a declaration the code

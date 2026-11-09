@@ -960,7 +960,7 @@ Four things stood between D6 and a held memory change, each fixed:
   said the same, now says the file is in the checkout or in a bundle placed read-only in the sandbox (a new pinned
   hash).
 
-**Changed since: the consolidator in every project, the brief only where there is memory** (spec 1.0.68; D17, the
+**Changed since: the consolidator in every project, the brief only where there is memory** (spec 1.0.69; D17, the
 owner's decision of 2026-11-08, §15):
 
 - **Every project gets the consolidator.** `capcomd setup project` (the CLI and `POST /v1/projects`) already wrote
