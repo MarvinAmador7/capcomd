@@ -238,6 +238,9 @@ describe("agents: spawn, await, grant and title as the plugin", () => {
     const agent = await spawnRoot(w, run, "worker", w.script("services-waiting", `i=0; while [ $i -lt 450 ]; do m=$(capcomd inbox); case "$m" in *"you may finish"*) break;; esac; i=$((i+1)); sleep 0.2; done
 capcomd result --summary "finished" >/dev/null`), { args: ["--budget", "turns=10"] });
     expect(await ctx.agents.await(run, [agent], {}, { timeoutMs: 200 })).toEqual({ ended: [], pending: [agent] });
+    // Under a parent, the parent's limits hold as for its own spawn: a worker spawns no children, so neither does a plugin under it.
+    const under = await ctx.agents.spawn({ runId: run, parent: agent, profile: "worker", task: "a child of a worker" }).then(() => null, (x: unknown) => x as { code?: string; message?: string });
+    expect([under?.code, under?.message]).toEqual(["invalid", expect.stringContaining("allowSpawn=false")]);
     await ctx.agents.grant(run, agent, { turns: 5 }, { key: "g1" });
     await ctx.agents.grant(run, agent, { turns: 5 }, { key: "g1" });
     expect(await code(ctx.agents.grant(run, agent, { turns: 6 }, { key: "g1" }))).toBe("conflict");

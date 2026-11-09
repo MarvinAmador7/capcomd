@@ -91,6 +91,8 @@ describe("agents and gates: never the operator, never past a gate (§8.4, §11.3
       () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", grant: "all" as never }),
       () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", title: 7 as never }),
       () => ctx.agents.spawn({ runId: "not-a-run", profile: "worker", task: "t" }),
+      // A contract key named like an Object.prototype member is the plugin's own, not a host-only key: past it, to the run id.
+      () => ctx.agents.spawn({ runId: "not-a-run", profile: "worker", task: "t", contract: { constructor: 1, toString: "x" } }),
       () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t" }, { key: "a".repeat(201) }),
       () => ctx.agents.await(RUN, [], {}),
       () => ctx.agents.await(RUN, ["not-an-agent"], {}),

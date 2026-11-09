@@ -88,7 +88,8 @@ export function pluginAgents(plugin: string, principal: Principal): AgentsServic
       if (input.contract !== undefined) {
         if (!input.contract || typeof input.contract !== "object" || Array.isArray(input.contract)) throw invalid("a contract is {key: value}");
         checkValue(input.contract, "contract");
-        const host = Object.keys(input.contract).find((k) => k in HOST_CONTRACT_KEYS);
+        // Own keys only: `in` would also find Object.prototype's (a contract key `constructor` is the plugin's to set).
+        const host = Object.keys(input.contract).find((k) => Object.hasOwn(HOST_CONTRACT_KEYS, k));
         if (host) throw new PluginError("forbidden", `contract.${host} isn't a plugin's to set: ${HOST_CONTRACT_KEYS[host]}`);
       }
       if (input.grant !== undefined && (!input.grant || typeof input.grant !== "object" || Array.isArray(input.grant))) throw invalid("a grant is {maxChildren?, maxDepth?, maxTotalDescendants?, allowedChildProfiles?, budgetShare?}");
