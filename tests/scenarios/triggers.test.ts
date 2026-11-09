@@ -30,6 +30,8 @@ beforeAll(async () => {
   settings = join(dir, "triggers.json");
   writeFileSync(settings, JSON.stringify({ sources: { fixture: { allowed: ["alice"], mode: "observe" } } }));
   w = await world("triggers", {
+    // The run a trigger starts has no planner agent on the fake sandbox: the recipe-hierarchical plugin's, off unless on.
+    CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true",
     CAPCOMD_TEST_PLUGINS: FIXTURE, CAPCOMD_TEST_TRIGGER_INBOX: inbox, CAPCOMD_TEST_TRIGGER_LOG: tlog, CAPCOMD_TRIGGERS_FILE: settings, CAPCOMD_TRIGGERS_SWEEP_MS: "300", NODE_ENV: "test",
     // A fake GitHub for the goal branch's pull request; the github source reads it every 10 s (its shortest).
     GITHUB_TOKEN: "fake-token", CAPCOMD_PLUGIN_FORGE_GITHUB_SOURCEEVERYMS: "10000",

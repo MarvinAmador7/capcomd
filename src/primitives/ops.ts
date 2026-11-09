@@ -384,8 +384,17 @@ export async function runNew(o: RunNewOpts) {
     if (o.goalBranch) await (await import("./state")).kvWrite(runId, { k: GOAL_KV, value: { branch: o.goalBranch, base: o.base }, writer: "operator" });
     await (await import("./state")).kvWrite(runId, { k: TARGET_KV, value: { branch: o.target }, writer: "operator" });
   }
-  if (res.created) await (await import("./state")).kvWrite(runId, { k: TRACE_KV, value: { dir: (await import("../utils/tracing-simple")).traceDir() }, writer: "operator" }).catch(() => {});
-  if (res.created) recordRun({ runId, label: o.label ?? null, repo: repoEnv.CAPCOMD_REPO ?? null, cwd: process.cwd(), createdAt: Date.now(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}) });
+  // Created: what this process knew of where it ran is kept with the run, and the daemon's observers record it (the runs
+  // index, the run's trace directory: run.changed `created`, src/plugins/observe.ts). setOrigin keeps the first call's
+  // only, so a retry of a finished run changes nothing, and a retry that heals one whose first call failed partway (a
+  // goal branch refused, a crash) finishes it: it is told as created then. The index's folder is made here, as `run new`
+  // always made it: the daemon appends to another process's index only in a folder that exists (isRunsIndex).
+  {
+    const index = resolve(runsIndexPath());
+    try { mkdirSync(dirname(index), { recursive: true }); } catch { /* an index, not state */ }
+    const origin = { cwd: process.cwd(), repo: repoEnv.CAPCOMD_REPO ?? null, traceDir: (await import("../utils/tracing-simple")).traceDir(), ...(o.goalBranch ? { goalBranch: o.goalBranch } : {}), index };
+    await c.scope.getOrCreate([runId]).setOrigin({ origin }).catch(() => {});
+  }
   // The run actor gives the scope a USD ledger, `capcomd status` and the run event log.
   await c.run.getOrCreate([runId]).createRun({ runId, goal: o.label ?? "(primitives scope)", maxCost: o.budget.usd ?? 0 });
   return { runId, created: res.created, budget: res.budget, sandbox, ...(branchSetup ? { branchSetup } : {}), ...(o.goalBranch ? { goalBranch: o.goalBranch, base: o.base } : {}) };
@@ -407,13 +416,21 @@ async function runCreating(runId: string, o: RunNewOpts): Promise<RunNewOpts> {
 
 /**
  * Runs this machine created, newest last (one JSON line each), so a later session can find them: `capcomd_runs`, and the
- * daemon's run list. CAPCOMD_RUNS_INDEX names another file (the live e2e scripts keep their runs out of the user's list).
+ * daemon's run list. Written by the daemon's observe-runs-index (src/plugins/observe.ts) when a run is created.
+ * CAPCOMD_RUNS_INDEX names another file (the live e2e scripts keep their runs out of the user's list).
  */
 export const runsIndexPath = () => env("RUNS_INDEX") || join(stateDir(), "runs.jsonl");
-function recordRun(r: { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string }) {
-  try { const p = runsIndexPath(); mkdirSync(dirname(p), { recursive: true }); appendFileSync(p, JSON.stringify(r) + "\n"); } catch { /* an index, not state */ }
+/** A row of the runs index. */
+export type RunRow = { runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string };
+
+/** What the run's creator kept with it (scope `getOrigin`); null until its `run new` finished, for a run from before
+ *  capcomd kept it, or for none. */
+export async function runOrigin(runId: string) {
+  const s = await (await import("../core/relay")).existingActor("scope", [runId]);
+  return s ? s.getOrigin({}) : null;
 }
-export function recentRuns(limit = 20): Array<{ runId: string; label: string | null; repo: string | null; cwd: string; createdAt: number; goalBranch?: string }> {
+
+export function recentRuns(limit = 20): RunRow[] {
   if (!existsSync(runsIndexPath())) return [];
   const rows = readFileSync(runsIndexPath(), "utf8").split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
   const seen = new Set<string>();

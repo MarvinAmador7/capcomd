@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ensureEngine, capcomd, sleep } from "../helpers/engine";
 
 const lines = (s: string) => s.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+/** `capcomd run` without a planner agent is the recipe-hierarchical plugin's, which is off unless turned on. */
+const RECIPE = { CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" };
 
 describe("capcomd CLI exit codes without an engine", () => {
   test("usage errors exit 2 with a JSON error", async () => {
@@ -26,8 +28,22 @@ describe("capcomd CLI exit codes without an engine", () => {
     const r = await capcomd(["status", "run-x", "--json"], { CAPCOMD_ENDPOINT: "http://127.0.0.1:6499" });
     expect(r.code).toBe(4);
     expect(JSON.parse(r.stdout).error).toMatchObject({ code: "engine_unreachable" });
-    const run = await capcomd(["run", "goal", "--json"], { CAPCOMD_ENDPOINT: "http://127.0.0.1:6499" });
+    const run = await capcomd(["run", "goal", "--json"], { CAPCOMD_ENDPOINT: "http://127.0.0.1:6499", ...RECIPE });
     expect(run.code).toBe(4);
+  });
+
+  test("with recipe-hierarchical off, a run without a planner agent is refused naming it, before the engine is asked", async () => {
+    const off = { CAPCOMD_ENDPOINT: "http://127.0.0.1:6499", CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "" };
+    for (const [args, env] of [[["run", "goal", "--json"], { ...off, CAPCOMD_RUN_PATH: "legacy" }], [["run", "goal", "--legacy", "--json"], off], [["run", "goal", "--recipe", "--json"], off], [["run", "goal", "--json"], off]] as const) {
+      const r = await capcomd([...args], env);
+      expect(r.code).toBe(2);
+      const body = JSON.parse(r.stdout.trim().split("\n").pop()!);
+      expect(body).toMatchObject({ schema: "relay.v1", ok: false, error: { code: "config", reason: "plugin:recipe-hierarchical", hint: "Turn it on: capcomd plugins enable recipe-hierarchical" } });
+      expect(body.error.message).toContain("recipe-hierarchical isn't running: validated (disabled)");
+    }
+    // Turned off in the environment: that variable is named, since it wins over the config.
+    const env = await capcomd(["run", "goal", "--json"], { ...off, CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "false" });
+    expect(JSON.parse(env.stdout).error.hint).toContain("CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED=false in the environment turns it off");
   });
 
   test("trace for an unknown run exits 3", async () => {
@@ -50,7 +66,7 @@ describe("capcomd CLI against a live engine", () => {
 
   test("run --json streams NDJSON and ends with run.result", async () => {
     runId = `run-clijson-${Date.now()}`;
-    const r = await capcomd(["run", "--json", "--run-id", runId, "Build a thing"]);
+    const r = await capcomd(["run", "--json", "--run-id", runId, "Build a thing"], RECIPE);
     expect(r.code).toBe(0);
     const evs = lines(r.stdout);
     for (const e of evs) {
@@ -126,7 +142,7 @@ describe("capcomd CLI against a live engine", () => {
 
   test("run --json --detach returns {runId}; protected merge waits for approve", async () => {
     const id = `run-approve-${Date.now()}`;
-    const r = await capcomd(["run", "--json", "--detach", "--run-id", id, "--target-branch", "main", "Ship to main"]);
+    const r = await capcomd(["run", "--json", "--detach", "--run-id", id, "--target-branch", "main", "Ship to main"], RECIPE);
     expect(r.code).toBe(0);
     const started = JSON.parse(r.stdout);
     expect(started).toMatchObject({ schema: "relay.v1", ok: true, runId: id, detached: true });

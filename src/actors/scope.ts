@@ -19,7 +19,7 @@ import { killpoint } from "../utils/killpoint";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";
 import { startDriver } from "../primitives/drivers";
 import { agentWorkflowOn } from "../utils/agent-workflow-flag";
-import { changedHooks, tellWorked } from "../plugins/changes";
+import { changedHooks, tellCreated, tellWorked } from "../plugins/changes";
 import { hooks, principalOf } from "../plugins/hooks";
 
 /**
@@ -215,6 +215,15 @@ export type GoalState = {
   decision: GoalDecision | null;
   /** The run's planner agent (null: a driver's run, whose root agents are workers). Absent on records from older daemons. */
   planner?: string | null;
+};
+
+/** What the process that created a run knew of where it ran (`run new`, src/primitives/ops.ts), kept with the run so
+ *  the daemon's observers can record it (observe-runs-index, observe-traces: src/plugins/observe.ts). */
+export type RunOrigin = {
+  cwd: string; repo: string | null; traceDir: string; goalBranch?: string;
+  /** The runs index that process lists runs from (its CAPCOMD_RUNS_INDEX, else its home's), so the run is listed where
+   *  it would have written it itself. */
+  index?: string;
 };
 
 /** The run's title as its planner set it (`capcomd title --run`, scope_meta run_title), with its rename counts. */
@@ -413,6 +422,35 @@ export const scopeActor = actor({
         await addEvent(tx, "RUN_NEW", null, { budget: params.budget, label: params.label ?? null, ...(params.goal ? { goal: params.goal.slice(0, 65536) } : {}) }, `run-new`);
       }, { name: "scopeInit" });
       return { runId: params.runId, created: true, budget: params.budget };
+    },
+
+    /**
+     * `run new` finished creating the run (src/primitives/ops.ts runNew, its last step): what its process knew of where
+     * it ran is kept, once, and the daemon's plugins are told the run was created (`run.changed` `created`, plugin API
+     * §6.6.4). A run whose `run new` failed partway gets here only when a retry of that call finishes it, so it isn't
+     * told as created (nor listed) before. Every call that finishes a run calls it; only the first is kept and told.
+     */
+    async setOrigin(c, params: { origin: RunOrigin }) {
+      const have = await c.db.execute("SELECT v FROM scope_meta WHERE k = 'init'");
+      if (!have.length) fail("not_found", `run ${runIdOf(c)} has no scope`);
+      // The insert says whether this call kept it: two calls at once (a retry while the first is still finishing) both
+      // get past any read before it, and only one may tell.
+      const kept = await c.db.execute("INSERT OR IGNORE INTO scope_meta (k, v) VALUES ('origin', ?) RETURNING k", JSON.stringify(params.origin));
+      if (!kept.length) return { recorded: false };
+      const meta = JSON.parse(have[0]!.v as string);
+      tellCreated(runIdOf(c), { label: meta.label ?? null, goal: meta.goal ?? null, createdAt: meta.createdAt ?? null });
+      return { recorded: true };
+    },
+
+    /** Where and how the run was created (`run new`'s process: its folder, repository, trace directory, goal branch),
+     *  with its label and creation time; null until `run new` finished it (setOrigin), and for a run from before
+     *  capcomd kept it. */
+    async getOrigin(c, _p: Record<string, never>): Promise<(RunOrigin & { label: string | null; createdAt: number }) | null> {
+      const rows = (await c.db.execute("SELECT k, v FROM scope_meta WHERE k IN ('init', 'origin')")) as Array<{ k: string; v: string }>;
+      const init = rows.find((r) => r.k === "init"), origin = rows.find((r) => r.k === "origin");
+      if (!init || !origin) return null;
+      const meta = JSON.parse(init.v);
+      return { ...(JSON.parse(origin.v) as RunOrigin), label: (meta.label as string | null) ?? null, createdAt: meta.createdAt as number };
     },
 
     async getScope(c, _p: Record<string, never>) {

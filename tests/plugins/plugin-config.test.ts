@@ -188,7 +188,10 @@ describe("the host and the built-ins", () => {
     const on = wd({ CAPCOMD_PLUGIN_WATCHDOG_ENABLED: "true", CAPCOMD_PLUGIN_WATCHDOG_STALLEDAFTERMS: "3000" });
     expect(on).toMatchObject({ enabled: true, config: { stalledAfterMs: 3000 } });
     expect(wd({ CAPCOMD_PLUGIN_WATCHDOG_ENABLED: "true", CAPCOMD_PLUGIN_WATCHDOG_EVERYMS: "5" }).configErrors).toEqual([{ path: "everyMs", message: "must be at least 1000", layer: "env" }]);
-    // Every other built-in is on, as before.
-    for (const c of builtinCandidates()) if (c.source === "builtin" && (c.manifest as { name: string }).name !== "watchdog") expect(c.enabled).toBe(true);
+    // So is recipe-hierarchical (`capcomd run` without a planner agent, §17.1); every other built-in is on, as before.
+    const recipe = (env: Record<string, string | undefined>) => builtinCandidates({ ...process.env, ...env }).find((c) => (c.manifest as { name?: string })?.name === "recipe-hierarchical")!;
+    expect(recipe({}).enabled).toBe(false);
+    expect(recipe({ CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" }).enabled).toBe(true);
+    for (const c of builtinCandidates()) if (c.source === "builtin" && !["watchdog", "recipe-hierarchical"].includes((c.manifest as { name: string }).name)) expect(c.enabled).toBe(true);
   });
 });

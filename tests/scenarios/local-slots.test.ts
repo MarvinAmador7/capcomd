@@ -66,7 +66,8 @@ test("capcomd run (the recipe): its agents wait for a slot like any other, then 
     const holder = last((await capcomd(["spawn", other, "--task", "slow push holder", "--key", "h", "--json"], env)).stdout).agentId;
     for (let i = 0; i < 50 && (await tree(other)).find((a) => a.agentId === holder)?.status !== "running"; i++) await sleep(100);
     const runId = `run-slots-recipe-${Date.now()}`;
-    const r = await capcomd(["run", "--recipe", "--json", "--run-id", runId, "Build a thing"], env);
+    // The recipe is the recipe-hierarchical plugin's, off unless turned on.
+    const r = await capcomd(["run", "--recipe", "--json", "--run-id", runId, "Build a thing"], { ...env, CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" });
     expect(r.code).toBe(0);
     const evs = r.stdout.trim().split("\n").map((l) => JSON.parse(l));
     expect(evs.at(-1)).toMatchObject({ type: "run.result", ok: true, state: "completed" });

@@ -20,7 +20,8 @@ const started: string[] = [];
 const home = mkdtempSync(join(tmpdir(), "capcomd-createrun-home-"));
 
 beforeAll(async () => {
-	w = await world("createrun", { CAPCOMD_HOME: home });
+	// The runs it starts have no planner agent (the fake sandbox): the recipe-hierarchical plugin's, off unless turned on.
+	w = await world("createrun", { CAPCOMD_HOME: home, CAPCOMD_PLUGIN_RECIPE_HIERARCHICAL_ENABLED: "true" });
 	const clients = join(home, "harness-clients.json");
 	token = addClient("menubar", ["read", "steer"], clients).token;
 	app = harnessApp({ source: rivetSource(), clients: () => loadClients(clients), state: harnessState(null), pollMs: 100 });
