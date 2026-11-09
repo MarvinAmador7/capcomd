@@ -1215,12 +1215,18 @@ Every async primitive takes `CallOptions {key?, signal?, timeoutMs?}` last. `key
 call, with the semantics of the CLI's `--key` and the API's `Idempotency-Key`: the same key with the same arguments does
 the thing once and returns the recorded result; the same key with different arguments is `conflict`. `signal` is
 composed with `ctx.signal`. `timeoutMs` defaults to 30 000; past it the call rejects `timeout` and the kernel's side
-either completed or did not (the caller re-reads). **Not built yet:** the kernel's services apply a mutating call's
-`key` (§8.4), but the host applies neither `signal` nor `timeoutMs` as a bound on a primitive
-(`packages/plugin/src/host/context.ts` `guarded` passes the options on unchanged), so a call runs to its own end:
-`jobs.wait` reads `timeoutMs` as how long to wait (30 000 by default, then it answers the job as it is, not
-`timeout`), and a seam call through `sandboxes.provider` is bounded by its `SeamCall` deadline (§8.4); no other
-service reads either.
+either completed or did not (the caller re-reads). The kernel's services apply a mutating call's `key` (§8.4); the host
+bounds every async primitive (`packages/plugin/src/host/context.ts` `guarded`), whichever comes first:
+
+- its deadline, `timeoutMs` (a number above 0, else `invalid`): `timeout`, `retryable`. `jobs.start`'s default is
+  120 000, its `exec`'s foreground hold (at most 90 000, §16.2 rule 1) plus the call's 30 000;
+- its `signal` aborting: `timeout`, not retryable (already aborted: at once, and the kernel isn't called);
+- `ctx.signal` aborting, the plugin disposing (§5.3): `disposed`, so dispose rejects the calls still in flight.
+
+The kernel's implementation is passed the options with that composed signal (aborted on whichever came first), so it
+can stop. Two calls keep their own bounds: `jobs.wait` reads `timeoutMs` as how long to wait (30 000 by default, then it
+answers the job as it is, not `timeout`; its `signal` and `ctx.signal` still apply), and a seam call through
+`sandboxes.provider` (a synchronous primitive) is bounded by its `SeamCall` deadline (§8.4).
 
 ### 8.3 Errors
 
