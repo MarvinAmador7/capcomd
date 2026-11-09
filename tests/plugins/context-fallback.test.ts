@@ -16,7 +16,7 @@ import { samplePayload, testkit } from "../../packages/plugin/src/testkit";
 import type { AgentChanged, AgentPreparing } from "../../packages/plugin/src/hooks";
 import type { CaptureRecord } from "../../src/context/capture";
 import { CONSOLIDATOR_PROFILE } from "../../src/context/consolidate";
-import { inputsText, lessonsOf, lessonsText, pendingOf, type LessonAgent, type RunLessons } from "../../src/context/consolidator";
+import { consolidated, inputsText, lessonsOf, lessonsText, pendingOf, type LessonAgent, type RunLessons } from "../../src/context/consolidator";
 import { buildConsolidatePrompt } from "../../src/agents/runner";
 import * as contextPlugin from "../../src/plugins/context";
 import * as memoryPlugin from "../../src/plugins/context-memory";
@@ -36,16 +36,37 @@ describe("what a run holds for its memory (ADR-025 §5.2)", () => {
     const l = lessonsOf(agents, [rec("agt-w1", 1)], declared);
     // agt-w1 is kept already; agt-w2's result isn't its own token's; a cancelled agent, a reviewer, a report and the
     // consolidator are never collected. The planner's two lessons are pending.
-    expect(l).toEqual({ candidates: 1, pending: 2, agents: 2, consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40) }] });
+    expect(l).toEqual({ candidates: 1, pending: 2, agents: 2, consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: null }], late: 0 });
     expect(pendingOf(agents, [rec("agt-w1", 1)], declared).map((p) => [p.agent.agentId, p.lessons])).toEqual([["agt-plan", 2]]);
     // A record with every lesson refused is still one capture has seen.
     expect(pendingOf([ag("agt-w4")], [rec("agt-w4", 0)], [said("agt-w4", 2)])).toEqual([]);
   });
 
   test("said to the planner in a sentence: how many, and whether to spawn the consolidator", () => {
-    expect(lessonsText({ candidates: 0, pending: 0, agents: 0, consolidators: [] })).toBe("No candidate lessons in this run yet: nothing to consolidate.");
-    expect(lessonsText({ candidates: 2, pending: 1, agents: 2, consolidators: [] })).toBe(`3 candidate lessons from 2 agents (1 declared in a result and not collected yet, as your own are until the consolidator starts); no ${CONSOLIDATOR_PROFILE} yet: spawn it as your last child, once every other child has ended.`);
-    expect(lessonsText({ candidates: 1, pending: 0, agents: 1, consolidators: [{ agentId: "agt-c", status: "done", commit: "c".repeat(40) }] })).toBe(`1 candidate lesson from 1 agent; agt-c (${CONSOLIDATOR_PROFILE}) is done, its branch at cccccccccccc.`);
+    expect(lessonsText({ candidates: 0, pending: 0, agents: 0, consolidators: [], late: 0 })).toBe("No candidate lessons in this run yet: nothing to consolidate.");
+    expect(lessonsText({ candidates: 2, pending: 1, agents: 2, consolidators: [], late: 0 })).toBe(`3 candidate lessons from 2 agents (1 declared in a result and not collected yet, as your own are until the consolidator starts); no ${CONSOLIDATOR_PROFILE} yet: spawn it as your last child, once every other child has ended and your own lessons are in your result (capcomd result --data '{"context": […]}'): it reads them as it starts.`);
+    expect(lessonsText({ candidates: 1, pending: 0, agents: 1, consolidators: [{ agentId: "agt-c", status: "done", commit: "c".repeat(40), key: null }], late: 0 })).toBe(`1 candidate lesson from 1 agent; agt-c (${CONSOLIDATOR_PROFILE}) is done, its branch at cccccccccccc.`);
+    // Lessons that came after it started: said, with what to do about it.
+    expect(lessonsText({ candidates: 2, pending: 1, agents: 2, consolidators: [{ agentId: "agt-c", status: "done", commit: null, key: "consolidate" }], late: 1 })).toBe(`3 candidate lessons from 2 agents (1 declared in a result and not collected yet, as your own are until the consolidator starts); agt-c (${CONSOLIDATOR_PROFILE}) is done. 1 of them came after it started, so it never read them: declare your own lessons before you spawn the consolidator; capcomd starts one more for these once you end, unless the run turned autoConsolidate off.`);
+  });
+
+  test("late: what no consolidator that ended done was given, once one did (the planner's own, declared after it started)", () => {
+    const cons = ag("agt-cons", { profile: CONSOLIDATOR_PROFILE, status: "done", key: "consolidate" });
+    const given = (agentId: string, ids: string[]) => ({ agentId, at: "2026-11-08T00:00:01.000Z", given: ids });
+    // The worker's lessons were given to it; the planner's were captured after it started, and a second planner's are
+    // declared and not collected yet: late, both.
+    const agents = [ag("agt-plan", { profile: "planner" }), ag("agt-w1"), ag("agt-plan2", { profile: "planner" }), cons];
+    const records = [rec("agt-w1", 2), rec("agt-plan", 1)];
+    expect(lessonsOf(agents, records, [said("agt-plan2", 2)], [given("agt-cons", ["agt-w1"])]).late).toBe(3);
+    expect(lessonsOf(agents, records, [], [given("agt-cons", ["agt-w1", "agt-plan"])]).late).toBe(0);
+    // None ended done (one running, or failed): nothing is late yet; a done one without a record of what it was given
+    // (a run older than the record): not known, so none.
+    expect(lessonsOf([...agents.slice(0, 3), { ...cons, status: "running" }], records, [], [given("agt-cons", [])]).late).toBe(0);
+    expect(lessonsOf(agents, records, [], []).late).toBe(0);
+    // A follow-up that ended done was given the rest: nothing is late any more.
+    const late = ag("agt-late", { profile: CONSOLIDATOR_PROFILE, status: "done", key: "consolidator-late" });
+    expect(lessonsOf([...agents, late], records, [], [given("agt-cons", ["agt-w1"]), given("agt-late", ["agt-plan"])]).late).toBe(0);
+    expect(consolidated([...agents, late], [given("agt-cons", ["agt-w1"]), given("agt-late", ["agt-plan"])])).toEqual(new Set(["agt-w1", "agt-plan"]));
   });
 });
 
@@ -145,15 +166,15 @@ describe("the checkpoint: a consolidator's start collects what was declared and 
 
 const PLANNER: RunAgent = { agentId: "agt-plan", parent: null, profile: "planner", status: "done", limits: { allowSpawn: true, allowedChildProfiles: ["worker", CONSOLIDATOR_PROFILE] }, driveEnv: { CAPCOMD_AGENTS_FILE: "/p/agents.json" } };
 const WORKER: RunAgent = { agentId: "agt-w1", parent: "agt-plan", profile: "worker", status: "done", limits: { allowSpawn: false, allowedChildProfiles: [] } };
-const L = (o: Partial<RunLessons> = {}): RunLessons => ({ candidates: 2, pending: 0, agents: 1, consolidators: [], ...o });
+const L = (o: Partial<RunLessons> = {}): RunLessons => ({ candidates: 2, pending: 0, agents: 1, consolidators: [], late: 0, ...o });
 
 describe("the fallback's plan (ADR-025 D6a)", () => {
   const plan = (o: { agents?: RunAgent[]; lessons?: RunLessons; merged?: string[]; enabled?: boolean } = {}) =>
     fallbackPlan({ agents: o.agents ?? [PLANNER, WORKER], lessons: o.lessons ?? L(), merged: new Set(o.merged ?? []), enabled: o.enabled ?? true });
 
   test("a run that ended with lessons and no consolidator gets one; nothing while its planner works or with no lessons", () => {
-    expect(plan()).toEqual({ do: "spawn", lessons: 2 });
-    expect(plan({ lessons: L({ candidates: 0, pending: 1 }) })).toEqual({ do: "spawn", lessons: 1 });
+    expect(plan()).toEqual({ do: "spawn", lessons: 2, key: "consolidate" });
+    expect(plan({ lessons: L({ candidates: 0, pending: 1 }) })).toEqual({ do: "spawn", lessons: 1, key: "consolidate" });
     expect(plan({ agents: [{ ...PLANNER, status: "running" }, WORKER] })).toBeNull();
     expect(plan({ agents: [{ ...PLANNER, status: "paused" }, WORKER] })).toBeNull();
     expect(plan({ lessons: L({ candidates: 0 }) })).toBeNull();
@@ -164,7 +185,7 @@ describe("the fallback's plan (ADR-025 D6a)", () => {
   });
 
   test("a consolidator's branch nobody asked to merge is landed; one merged, one still running or one with nothing are left", () => {
-    const c = { agentId: "agt-cons", status: "done", commit: "c".repeat(40) };
+    const c = { agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: null };
     expect(plan({ lessons: L({ consolidators: [c] }) })).toEqual({ do: "land", agentId: "agt-cons", commit: "c".repeat(40) });
     expect(plan({ lessons: L({ consolidators: [c] }), merged: ["agt-cons"] })).toBeNull();
     expect(plan({ lessons: L({ consolidators: [{ ...c, status: "running", commit: null }] }) })).toBeNull();
@@ -174,8 +195,37 @@ describe("the fallback's plan (ADR-025 D6a)", () => {
   test("why not, when there was something to do: off, its planner cancelled, its consolidator failed", () => {
     expect(plan({ enabled: false })).toMatchObject({ do: "skip", reason: "off", text: `the run's agents proposed 2 lessons and no ${CONSOLIDATOR_PROFILE} ran; autoConsolidate is off, so capcomd leaves it to the planner.` });
     expect(plan({ agents: [{ ...PLANNER, status: "cancelled" }, WORKER] })).toMatchObject({ do: "skip", reason: "cancelled" });
-    expect(plan({ lessons: L({ consolidators: [{ agentId: "agt-cons", status: "failed", commit: null }] }) })).toMatchObject({ do: "skip", reason: "consolidator_failed", text: `the run's agents proposed 2 lessons and agt-cons (${CONSOLIDATOR_PROFILE}) ended failed, so capcomd starts no other.` });
-    expect(plan({ enabled: false, lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40) }] }) })).toMatchObject({ do: "skip", reason: "off", text: expect.stringContaining("agt-cons's memory change (cccccccccccc) was never merged") });
+    expect(plan({ lessons: L({ consolidators: [{ agentId: "agt-cons", status: "failed", commit: null, key: null }] }) })).toMatchObject({ do: "skip", reason: "consolidator_failed", text: `the run's agents proposed 2 lessons and agt-cons (${CONSOLIDATOR_PROFILE}) ended failed, so capcomd starts no other.` });
+    expect(plan({ enabled: false, lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: null }] }) })).toMatchObject({ do: "skip", reason: "off", text: expect.stringContaining("agt-cons's memory change (cccccccccccc) was never merged") });
+  });
+
+  test("lessons that came after a done consolidator started get one follow-up (key consolidator-late), once per run", () => {
+    const done = { agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: "consolidate" };
+    const late = (o: Partial<RunLessons> = {}) => L({ candidates: 3, late: 1, consolidators: [done], ...o });
+    // Its branch merged (the planner's merge), and one lesson newer than its start: a follow-up for that one.
+    expect(plan({ lessons: late(), merged: ["agt-cons"] })).toEqual({ do: "spawn", lessons: 1, key: "consolidator-late", after: "agt-cons" });
+    // A replay plans the same spawn, by the same key (the kernel's spawn is idempotent by it).
+    expect(plan({ lessons: late(), merged: ["agt-cons"] })).toEqual(plan({ lessons: late(), merged: ["agt-cons"] }));
+    // Nothing newer: nothing to do. Its planner still working: its own to do.
+    expect(plan({ lessons: late({ late: 0 }), merged: ["agt-cons"] })).toBeNull();
+    expect(plan({ agents: [{ ...PLANNER, status: "running" }, WORKER], lessons: late(), merged: ["agt-cons"] })).toBeNull();
+    // Once the follow-up is there: nothing while it runs, nothing once it ended done (at most one per run, whatever
+    // came after it), and why not when it failed.
+    const f = { agentId: "agt-late", status: "running", commit: null, key: "consolidator-late" };
+    expect(plan({ lessons: late({ consolidators: [done, f] }), merged: ["agt-cons"] })).toBeNull();
+    expect(plan({ lessons: late({ consolidators: [done, { ...f, status: "done" }] }), merged: ["agt-cons"] })).toBeNull();
+    expect(plan({ lessons: late({ consolidators: [done, { ...f, status: "failed" }] }), merged: ["agt-cons"] })).toMatchObject({ do: "skip", reason: "consolidator_failed", text: `the run's agents proposed 1 lesson after agt-cons (${CONSOLIDATOR_PROFILE}) started, and agt-late, started for them, ended failed, so capcomd starts no other.` });
+    // The fallback spawns it as the plugin (ctx.agents.spawn), so its recorded key is the plugin's own: the same follow-up.
+    const own = { ...f, key: "plugin:context-memory:consolidator-late" };
+    expect(plan({ lessons: late({ consolidators: [done, { ...own, status: "done" }] }), merged: ["agt-cons"] })).toBeNull();
+    expect(plan({ lessons: late({ consolidators: [done, { ...own, status: "failed" }] }), merged: ["agt-cons"] })).toMatchObject({ do: "skip", reason: "consolidator_failed" });
+    // Another plugin's key of that name isn't the fallback's.
+    expect(plan({ lessons: late({ consolidators: [done, { ...own, key: "plugin:other:consolidator-late", status: "done" }] }), merged: ["agt-cons"] })).toEqual({ do: "spawn", lessons: 1, key: "consolidator-late", after: "agt-late" });
+    // Its own branch nobody merged comes first (the fallback plans again after landing it).
+    expect(plan({ lessons: late() })).toEqual({ do: "land", agentId: "agt-cons", commit: "c".repeat(40) });
+    // Off: said, as late_lessons. Its planner cancelled: left.
+    expect(plan({ lessons: late(), merged: ["agt-cons"], enabled: false })).toMatchObject({ do: "skip", reason: "late_lessons", text: `the run's agents proposed 1 lesson after agt-cons (${CONSOLIDATOR_PROFILE}) started; autoConsolidate is off, so capcomd leaves them to the planner.` });
+    expect(plan({ agents: [{ ...PLANNER, status: "cancelled" }, WORKER], lessons: late(), merged: ["agt-cons"] })).toMatchObject({ do: "skip", reason: "cancelled" });
   });
 });
 
@@ -188,11 +238,11 @@ describe("context-memory's fallback on agent.changed ended", () => {
   };
   /** The run, kept in memory: its agents, its lessons, and the spawns and landings asked of the kernel. */
   function kernel(o: { agents: RunAgent[]; lessons: RunLessons; merged?: string[] }) {
-    const spawned: Array<{ driveEnv: unknown }> = [], landed: string[] = [];
+    const spawned: Array<{ driveEnv: unknown; key?: string }> = [], landed: string[] = [];
     Object.assign(memoryPlugin.fallbackKernel, {
       agent: async (_r: string, id: string) => o.agents.find((a) => a.agentId === id)!,
       state: async () => ({ agents: o.agents, lessons: o.lessons, merged: new Set(o.merged ?? []) }),
-      spawn: async (_r: string, driveEnv: unknown) => { spawned.push({ driveEnv }); return { agentId: "agt-fallback", created: spawned.length === 1 }; },
+      spawn: async (_r: string, driveEnv: unknown, _ctx: unknown, key?: string) => { spawned.push({ driveEnv, key }); return { agentId: key === "consolidator-late" ? "agt-late" : "agt-fallback", created: spawned.length === 1 }; },
       land: async (_r: string, agentId: string) => { landed.push(agentId); return { verify: { id: "vfy-mem", state: "passed" }, merge: { id: "mrg-mem", state: "awaiting_approval" } }; },
     });
     return { spawned, landed };
@@ -203,7 +253,7 @@ describe("context-memory's fallback on agent.changed ended", () => {
     const fake = testkit.fakeContext(memoryPlugin.manifest);
     await testkit.load(fake, memoryPlugin.plugin as never);
     expect((await fake.fire("agent.changed", ended("agt-plan", "planner"), { runId: RUN })).failure).toBeNull();
-    expect(k.spawned).toEqual([{ driveEnv: { CAPCOMD_AGENTS_FILE: "/p/agents.json" } }]);
+    expect(k.spawned).toEqual([{ driveEnv: { CAPCOMD_AGENTS_FILE: "/p/agents.json" }, key: "consolidate" }]);
     expect(fake.emitted()).toEqual([{ type: "plugin.context-memory.consolidator_started", stream: RUN, data: { agentId: "agt-fallback", after: "agt-plan", lessons: 3 } }]);
     await fake.fire("agent.changed", ended("agt-plan", "planner"), { runId: RUN });
     expect(k.spawned.length).toBe(2); // the kernel's spawn is idempotent by its key: the same agent
@@ -213,9 +263,32 @@ describe("context-memory's fallback on agent.changed ended", () => {
     await fake.dispose();
   });
 
+  test("its planner ended with lessons after its consolidator started: its branch landed, then one follow-up for those only; a replay is the same", async () => {
+    const cons: RunAgent = { agentId: "agt-cons", parent: "agt-plan", profile: CONSOLIDATOR_PROFILE, status: "done", limits: { allowSpawn: false, allowedChildProfiles: [] } };
+    // The planner didn't merge its consolidator's branch, and declared one more lesson after it started.
+    const k = kernel({ agents: [PLANNER, WORKER, cons], lessons: L({ candidates: 2, pending: 1, late: 1, consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: "consolidate" }] }) });
+    const events: Array<[string, Record<string, unknown>, string]> = [];
+    const o = { enabled: true, emit: async (t: string, _x: string, d: Record<string, unknown>, key: string) => { events.push([t, d, key]); }, log: () => {}, ctx: {} as never };
+    expect(await memoryPlugin.fallback(RUN, PLANNER, o)).toEqual({ do: "land", agentId: "agt-cons", commit: "c".repeat(40) });
+    await memoryPlugin.settleFallbacks();
+    expect(k.landed).toEqual(["agt-cons"]);
+    expect(k.spawned).toEqual([{ driveEnv: { CAPCOMD_AGENTS_FILE: "/p/agents.json" }, key: "consolidator-late" }]);
+    expect(events).toContainEqual(["consolidator_started", { agentId: "agt-late", after: "agt-plan", lessons: 1, late: true, consolidator: "agt-cons" }, `consolidator-started:${RUN}:consolidator-late`]);
+    // Replayed: the same spawn key and the same event key (recorded once by the bus).
+    await memoryPlugin.fallback(RUN, PLANNER, o);
+    await memoryPlugin.settleFallbacks();
+    expect(k.spawned.map((s) => s.key)).toEqual(["consolidator-late", "consolidator-late"]);
+    expect(new Set(events.filter((e) => e[0] === "consolidator_started").map((e) => e[2]))).toEqual(new Set([`consolidator-started:${RUN}:consolidator-late`]));
+    // Off: said as late_lessons, nothing started.
+    const off: string[] = [];
+    kernel({ agents: [PLANNER, WORKER, cons], lessons: L({ late: 2, consolidators: [{ agentId: "agt-cons", status: "done", commit: null, key: "consolidate" }] }) });
+    await memoryPlugin.fallback(RUN, PLANNER, { ...o, enabled: false, emit: async (t: string, _x: string, d: Record<string, unknown>, key: string) => { off.push(`${t} ${String(d.reason)} ${key}`); } });
+    expect(off).toEqual([`consolidator_skipped late_lessons consolidator-skipped:${RUN}:late_lessons`]);
+  });
+
   test("a consolidator that ended after its planner with a branch: verified and its merge asked for, which waits for a person", async () => {
     const cons: RunAgent = { agentId: "agt-cons", parent: null, profile: CONSOLIDATOR_PROFILE, status: "done", limits: { allowSpawn: false, allowedChildProfiles: [] } };
-    const k = kernel({ agents: [PLANNER, WORKER, cons], lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40) }] }) });
+    const k = kernel({ agents: [PLANNER, WORKER, cons], lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: null }] }) });
     const fake = testkit.fakeContext(memoryPlugin.manifest);
     await testkit.load(fake, memoryPlugin.plugin as never);
     await fake.fire("agent.changed", ended("agt-cons", CONSOLIDATOR_PROFILE), { runId: RUN });
@@ -228,7 +301,7 @@ describe("context-memory's fallback on agent.changed ended", () => {
   test("its verify and merge resolve profiles from the consolidator's own agents file, whatever context the listener ran in", async () => {
     const { env, withDriveEnv } = await import("../../src/utils/env");
     const cons: RunAgent = { agentId: "agt-cons", parent: null, profile: CONSOLIDATOR_PROFILE, status: "done", limits: { allowSpawn: false, allowedChildProfiles: [] }, driveEnv: { CAPCOMD_AGENTS_FILE: "/project/agents.json" } };
-    const run = (agents: RunAgent[]) => kernel({ agents, lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40) }] }) });
+    const run = (agents: RunAgent[]) => kernel({ agents, lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: null }] }) });
     const seen: Array<string | undefined> = [];
     const watch = () => { const land = memoryPlugin.fallbackKernel.land; memoryPlugin.fallbackKernel.land = async (...a) => { seen.push(env("AGENTS_FILE")); return land(...a); }; };
     const fake = testkit.fakeContext(memoryPlugin.manifest);
@@ -247,7 +320,7 @@ describe("context-memory's fallback on agent.changed ended", () => {
 
   test("its verify failing is said, and nothing is merged; a kernel that fails is logged, never thrown", async () => {
     const cons: RunAgent = { agentId: "agt-cons", parent: null, profile: CONSOLIDATOR_PROFILE, status: "done", limits: { allowSpawn: false, allowedChildProfiles: [] } };
-    kernel({ agents: [PLANNER, cons], lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40) }] }) });
+    kernel({ agents: [PLANNER, cons], lessons: L({ consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: null }] }) });
     memoryPlugin.fallbackKernel.land = async () => ({ verify: { id: "vfy-mem", state: "failed" }, merge: null });
     const fake = testkit.fakeContext(memoryPlugin.manifest);
     await testkit.load(fake, memoryPlugin.plugin as never);

@@ -21,6 +21,9 @@ jobs:
       - name: CHANGELOG.md has an Unreleased section and agrees with package.json's and the plugin's version
         run: bun scripts/release-notes.ts --check
 
+      - name: Change notes in changes/ parse
+        run: bun scripts/changes.ts --check
+
       - name: The Claude Code plugin and marketplace validate
         run: |
           bunx @anthropic-ai/claude-code plugin validate --strict plugins/capcomd

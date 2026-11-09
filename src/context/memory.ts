@@ -188,7 +188,7 @@ export function parseBundle(files: Array<{ path: string; text: string | null }>,
     const generated = isMap(meta.generated) ? meta.generated : {};
     const at = instant(meta.modified) ?? instant(meta.updated) ?? instant(meta.updated_at) ?? instant(generated.at) ?? instant(meta.valid_from) ?? o.date;
     const status = (STATUS.has(String(meta.status)) ? meta.status : "draft") as Authority["status"];
-    const staleAfter = instant(meta.stale_after);
+    const staleAfter = instant(meta.stale_after), validFrom = instant(meta.valid_from);
     const supersedes = strs(meta.supersedes), supersededBy = strs(meta.superseded_by);
     const title = str(meta.title) ?? id;
     const triggers = isMap(meta.triggers) ? meta.triggers : {};
@@ -201,12 +201,12 @@ export function parseBundle(files: Array<{ path: string; text: string | null }>,
     items.push({
       title, body, layer: "project", by, method: METHODS.has(String(generated.method)) ? String(generated.method) : "human-authored", at,
       sources: sourcesOf(meta.sources), ...(confidence ? { confidence } : {}), ...(sensitivity ? { sensitivity } : {}),
-      authority: { status, verified: verifiedOf(meta.verified), ...(staleAfter ? { staleAfter } : {}), ...(instant(meta.valid_from) ? { validFrom: instant(meta.valid_from)! } : {}), ...(supersedes.length ? { supersedes } : {}), ...(supersededBy.length ? { supersededBy } : {}) },
+      authority: { status, verified: verifiedOf(meta.verified), ...(staleAfter ? { staleAfter } : {}), ...(validFrom ? { validFrom } : {}), ...(supersedes.length ? { supersedes } : {}), ...(supersededBy.length ? { supersededBy } : {}) },
       line: {
         ref: { provider: shape.provider, id, version: o.revision }, kind, type,
         description: { text: str(meta.description) ?? title, untrusted: true, by: `context:${shape.provider}` },
         path: shape.shown(f.path), ...(paths.length ? { paths } : {}),
-        authority: { status, ...(staleAfter ? { staleAfter } : {}), ...(supersededBy.length ? { supersededBy } : {}) },
+        authority: { status, ...(validFrom ? { validFrom } : {}), ...(staleAfter ? { staleAfter } : {}), ...(supersededBy.length ? { supersededBy } : {}) },
         modified: at,
       },
     });

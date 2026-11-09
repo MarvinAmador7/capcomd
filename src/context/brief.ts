@@ -8,7 +8,8 @@
 // and the day: identical for every agent of a profile at a revision and across a retry, so parallel workers share one
 // cached prompt prefix. The router owns what a provider would otherwise repeat: the budget and its deterministic
 // truncation (memory newest first, facts by authority), the "loaded N of M" header, supersession (an item superseded by
-// one in the index leaves it), freshness (a line past its stale_after leaves it), the scope (from kernel records, never
+// one in the index leaves it), freshness (a line past its stale_after leaves it, and so does one whose valid_from is
+// still to come: OKF's and groundray's "not yet effective", which a consumer must not treat as applicable), the scope (from kernel records, never
 // from an agent's contract) and one handle per provider per brief. A provider that fails or takes over 10 s is named in
 // the header in the kernel's own words, never its error text, so an empty brief is never mistaken for "no facts". One
 // that says it has nothing at all (`index().empty`: a project with no memory yet) is left out of the header instead,
@@ -61,6 +62,8 @@ export interface Brief {
   loaded: number;
   total: number;
   stale: number;
+  /** Lines left out because their `validFrom` is after the brief's day: not in effect yet. */
+  notYetEffective: number;
   bytes: number;
   limits: ContextLimits;
   source: string;
@@ -180,8 +183,9 @@ const WHERE: Record<Where, string> = {
   both: "Each line is an item's description and the file that holds it: in your checkout, or for a bundle's item, in the bundle placed read-only in your sandbox at the path the line gives.",
 };
 
-function header(o: { loaded: number; total: number; stale: number; reviewer: number; limits: ContextLimits; source: string; providers: ProviderOutcome[]; where: Where }): string {
-  const left = [...(o.stale ? [`${n(o.stale)} stale line${o.stale === 1 ? "" : "s"} left out`] : []), ...(o.reviewer ? [`${n(o.reviewer)} memory line${o.reviewer === 1 ? "" : "s"} left out for a reviewer`] : [])];
+function header(o: { loaded: number; total: number; stale: number; notYet: number; reviewer: number; limits: ContextLimits; source: string; providers: ProviderOutcome[]; where: Where }): string {
+  const left = [...(o.stale ? [`${n(o.stale)} stale line${o.stale === 1 ? "" : "s"} left out`] : []),
+    ...(o.notYet ? [`${n(o.notYet)} line${o.notYet === 1 ? "" : "s"} not in effect yet left out`] : []), ...(o.reviewer ? [`${n(o.reviewer)} memory line${o.reviewer === 1 ? "" : "s"} left out for a reviewer`] : [])];
   // A provider with nothing at all isn't named (ADR-025 D17): the brief is what the others have.
   const where = o.providers.filter((p) => !(p.state === "loaded" && p.empty)).map((p) => [PROVIDER_NAME.test(p.name) ? p.name : "a provider", p] as const).map(([name, p]) => p.state === "skipped" ? `${name}: skipped (${p.reason})`
     : `${name} at ${REVISION.test(p.revision) ? p.revision.slice(0, 12) : "an unknown revision"}${p.modified && DATE.test(p.modified) ? `, modified ${DATE.exec(p.modified)![0]}` : ""}`);
@@ -203,7 +207,7 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
   const outcomes: ProviderOutcome[] = [];
   const bundles: PlacedBundle[] = [];
   const shown: Kept[] = [];
-  let stale = 0, reviewer = 0;
+  let stale = 0, notYet = 0, reviewer = 0;
   // Every provider at once, each within its own deadline (so a slow one costs the brief one deadline, not one each, and
   // the listener's own timeout is never what leaves the brief out); the answers are then taken in the profile's order.
   type Answer = { entry: ContextProviderSpec; reason: SkipReason } | { entry: ContextProviderSpec; p: ActiveProvider; lines: readonly IndexLine[]; revision: string; modified: string | null; bundle: unknown; empty: boolean };
@@ -237,13 +241,22 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
     let isBundle = false;
     try { isBundle = p.provider.describe().caps.bundle === true; } catch { /* not a bundle provider */ }
     const ok = lines.filter((l) => wellFormed(l, p));
-    const ids = new Set(ok.map((l) => l.ref.id));
+    // Not in effect yet: an item valid from a later day than the brief's (OKF's and groundray's "not yet effective",
+    // which a consumer must not treat as applicable). It doesn't supersede anything before its day either.
+    const notInEffect = (l: IndexLine) => {
+      const from = typeof l.authority.validFrom === "string" ? Date.parse(l.authority.validFrom) : NaN;
+      return Number.isFinite(from) && from > today;
+    };
+    const ids = new Set(ok.filter((l) => !notInEffect(l)).map((l) => l.ref.id));
     let count = 0;
     for (const l of ok) {
       if (l.authority.status === "deprecated") continue;
       if ((l.authority.supersededBy ?? []).some((s) => ids.has(s))) continue;
       const until = l.authority.staleAfter ? Date.parse(l.authority.staleAfter) : NaN;
       if (Number.isFinite(until) && until <= today) { stale++; continue; }
+      // Its file stays in the bundle and searchable; the brief's day is a UTC day, so one that starts later today waits
+      // for tomorrow's brief.
+      if (notInEffect(l)) { notYet++; continue; }
       if (i.role === "review" && l.kind === "memory") { reviewer++; continue; }
       shown.push({ l, at, provider: entry.name, bundle: isBundle });
       count++;
@@ -259,7 +272,7 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
   const where: Where = !shown.some((k) => k.bundle) ? "checkout" : shown.every((k) => k.bundle) ? "bundle" : "both";
   const rendered = shown.map((k) => lineText(k.l, limits, r));
   const total = rendered.length;
-  const reserve = Buffer.byteLength(header({ loaded: total, total, stale, reviewer, limits, source, providers: outcomes, where })) + 1;
+  const reserve = Buffer.byteLength(header({ loaded: total, total, stale, notYet, reviewer, limits, source, providers: outcomes, where })) + 1;
   const kept: string[] = [];
   let bytes = reserve;
   for (const line of rendered) {
@@ -273,9 +286,9 @@ export async function buildBrief(i: BriefInput): Promise<Brief> {
   const made = new Map<string, number>();
   for (const k of shown.slice(0, kept.length)) made.set(k.provider, (made.get(k.provider) ?? 0) + 1);
   for (const o of outcomes) if (o.state === "loaded") o.shown = made.get(o.name) ?? 0;
-  const text = [header({ loaded: kept.length, total, stale, reviewer, limits, source, providers: outcomes, where }), ...kept].join("\n");
+  const text = [header({ loaded: kept.length, total, stale, notYet, reviewer, limits, source, providers: outcomes, where }), ...kept].join("\n");
   const empty = outcomes.length > 0 && outcomes.every((o) => o.state === "loaded" && o.empty === true);
-  return { text, empty, loaded: kept.length, total, stale, bytes: Buffer.byteLength(text), limits, source, providers: outcomes, bundles };
+  return { text, empty, loaded: kept.length, total, stale, notYetEffective: notYet, bytes: Buffer.byteLength(text), limits, source, providers: outcomes, bundles };
 }
 
 /** A reviewer or a report agent (ADR-025 D11): a verify's reviewer has `contract.review`, a report agent `report`. */
