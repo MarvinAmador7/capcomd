@@ -171,7 +171,7 @@ export interface ContextProvider {
 The router (kernel) owns everything the first draft asked each provider to repeat: the brief and its budget, deterministic
 truncation, the "loaded N of M" header, fencing, supersession (it follows `supersededBy` in the index to the head and
 hides deprecated items), freshness (a line past `staleAfter` leaves the brief, stays searchable; so does one whose
-`validFrom` is still to come, 1.0.73), one handle per brief,
+`validFrom` is still to come), one handle per brief,
 and the scope. A plugin gets `ctx.context.search/get/propose(scope, …)` only once a consumer exists (spec §18's rule);
 the first candidate is a `verify.judging` gate that checks a worker's citations resolve.
 
@@ -998,7 +998,7 @@ owner's decision of 2026-11-08, §15):
   and a planner that may spawn the consolidator its orchestration rule, so the project's first lesson can still be
   proposed, consolidated and, after a person approves it, turn the brief on for the agents after it.
 
-**Made in the final live checks: a fact not in effect yet** (spec 1.0.73; a live groundray run on 2026-11-09):
+**Made in the final live checks: a fact not in effect yet** (spec §6.6.7, the context router; a live groundray run on 2026-11-09):
 
 - A brain with a policy whose `valid_from` was months ahead (a late-fee cap raised from 10% to 12%, effective next
   March) briefed every agent with both caps as `stable` lines, the future one first (it was the newer), with nothing
