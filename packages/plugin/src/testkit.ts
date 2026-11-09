@@ -231,6 +231,14 @@ class Fake<C> implements FakeContext<C> {
 }
 
 const fail = (message: string): never => { throw new Error(message); };
+/** bun:test, which the conformance suites register their cases with (§14.5). Under anything else (Node, its test runner,
+ *  vitest) it can't be loaded: the suite says so, instead of Node's "Cannot find module 'bun:test'". */
+function bunTest(suite: string): typeof import("bun:test") {
+  try { return require("bun:test") as typeof import("bun:test"); } catch {
+    const where = process.versions.bun ? `Bun ${process.versions.bun}` : `Node ${process.version}`;
+    throw new PluginError("unsupported", `the ${suite} conformance suite registers bun:test tests, which can't be loaded here (${where}): run these under bun test (spec §14.5)`, "run the file with `bun test`");
+  }
+}
 /** A stream is `daemon` or a run id, as in the daemon (§8.4). */
 const streamOf = (stream: string) => {
   if (stream === "daemon" || /^run-[A-Za-z0-9_-]+$/.test(stream)) return stream;
@@ -302,7 +310,7 @@ export const testkit: TestKit = {
   conformance: {
     sandbox(make, opts = {}) {
       // Registered as bun tests (bun:test is loaded only when a suite is): one test per case, one shared run.
-      const { afterAll, describe, test } = require("bun:test") as typeof import("bun:test");
+      const { afterAll, describe, test } = bunTest("sandbox");
       describe(`sandbox seam conformance (§14.2)${opts.name ? `: ${opts.name}` : ""}`, () => {
         const { cases, cleanup } = sandboxCases(make(), opts);
         afterAll(cleanup);
@@ -311,7 +319,7 @@ export const testkit: TestKit = {
     },
     agent(make, fixtures = {}) {
       // Pure methods only: no CLI runs, so every case is a plain test.
-      const { describe, test } = require("bun:test") as typeof import("bun:test");
+      const { describe, test } = bunTest("agent");
       describe(`agent seam conformance (§14.2)${fixtures.name ? `: ${fixtures.name}` : ""}`, () => {
         for (const c of agentCases(make(), fixtures)) test(c.name, c.run);
       });
@@ -320,7 +328,7 @@ export const testkit: TestKit = {
     // the kernel against local bare repositories (tests/plugins/forges.test.ts, tests/merge).
     forge() { throw new PluginError("unsupported", "the forge conformance suite is not in the test kit: forges are built-in plugins (a seam is in process only, spec §9.6); see tests/plugins/forges.test.ts"); },
     context(make, opts = {}) {
-      const { describe, test } = require("bun:test") as typeof import("bun:test");
+      const { describe, test } = bunTest("context");
       describe(`context provider conformance (ADR-025 §3.1)${opts.name ? `: ${opts.name}` : ""}`, () => {
         for (const c of contextCases(make(), opts)) (c.skip ? test.skip : test)(c.name, c.run, 60_000);
       });

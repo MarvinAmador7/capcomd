@@ -2,7 +2,7 @@
 // built code needs no Bun (a plugin process may run on Node), its declarations resolve under `nodenext`, and it carries
 // capcomd's version. Installing it from npm into a fresh project and using it from Node is scripts/smoke.sh (CI).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ENTRIES, pack, publishedManifest, withExtensions } from "../scripts/pack";
@@ -49,6 +49,26 @@ describe("the published package", () => {
     const kit = await import(join(stage, "dist", "testkit.js"));
     expect(typeof kit.testkit.bootWith).toBe("function");
     expect(typeof (await import(join(stage, "dist", "client.js"))).connect).toBe("function");
+  });
+
+  // Node is on every CI runner; a machine without it can't run this one.
+  test.skipIf(!Bun.which("node"))("on Node, a conformance suite says to run it under bun test instead of failing on bun:test", () => {
+    const script = join(out, "conformance-on-node.mjs");
+    writeFileSync(script, `import { testkit } from "./package/dist/testkit.js";
+for (const suite of ["sandbox", "agent", "context"]) {
+  try { testkit.conformance[suite](() => ({})); console.log(\`\${suite}: no error\`); }
+  catch (e) { console.log(\`\${suite}: \${e.code}: \${e.message}\`); }
+}
+testkit.conformance.sandbox(() => ({}));
+`);
+    const p = Bun.spawnSync(["node", script], { cwd: out, stdout: "pipe", stderr: "pipe" });
+    const lines = p.stdout.toString().trim().split("\n");
+    expect(lines).toHaveLength(3);
+    for (const [i, suite] of ["sandbox", "agent", "context"].entries())
+      expect(lines[i]).toMatch(new RegExp(`^${suite}: unsupported: the ${suite} conformance suite registers bun:test tests, which can't be loaded here \\(Node v[0-9.]+\\): run these under bun test`));
+    // Uncaught, as in a plain `node my-test.mjs`: Node prints the same.
+    expect(p.exitCode).toBe(1);
+    expect(p.stderr.toString()).toContain("run these under bun test");
   });
 
   test("every relative import in its declarations names a file it has (nodenext needs the extension)", () => {

@@ -157,8 +157,15 @@ export async function bootWith(plugins: Array<{ dir: string }>, fn: (daemon: Boo
     await until("up (GET /v1/health)", async () => (await request("GET", "/v1/health")).status === 200);
     for (const p of named) {
       await until(`active: the ${p.name} plugin`, async () => {
-        const s = JSON.parse((await request("GET", `/v1/plugins/${encodeURIComponent(p.name)}`)).body) as { state?: string; cause?: string | null };
-        if (s.state === "failed" || (s.state === "validated" && s.cause)) return new PluginError("unavailable", `the ${p.name} plugin is ${s.state} (${s.cause ?? "no cause"}):\n${log().slice(-3000)}`);
+        const s = JSON.parse((await request("GET", `/v1/plugins/${encodeURIComponent(p.name)}`)).body) as { state?: string; enabled?: boolean; cause?: string | null };
+        // One that won't be active without a person's action fails the boot now, not after readyMs (§5.4): failed,
+        // disposed, held at validated with a cause, or disabled (cause `disabled`, or `enabled: false` from a daemon that
+        // gives no cause; `enabled` is false for an untrusted one too, and its cause says so).
+        const disabled = s.state !== "active" && (s.cause === "disabled" || (s.enabled === false && !s.cause));
+        if (s.state === "failed" || disabled || s.state === "disposed" || (s.state === "validated" && s.cause)) {
+          const hint = disabled ? `; it is off (plugins.${p.name}.enabled is false: see opts.config and opts.env)` : "";
+          return new PluginError("unavailable", `the ${p.name} plugin is ${s.state} (${s.cause ?? (disabled ? "disabled" : "no cause")})${hint}:\n${log().slice(-3000)}`);
+        }
         return s.state === "active";
       });
     }

@@ -1852,8 +1852,10 @@ state), `CAPCOMD_NO_CONFIG`, the fake sandbox, scripted agents with the profiles
 git would act on the developer's repository). Each plugin is a directory, validated (§4.9) first and linked as the user's
 (`<home>/plugins/<name>`, §4.8 step 2): a plugin is a program out of process (§5.2), so there is no in-memory form.
 `opts.config` becomes `CAPCOMD_PLUGIN_<NAME>_<KEY>` (§10.2; a secret's value is its reference, its variable in
-`opts.env`). It waits for `GET /v1/health`, then for each plugin to be `active` (a `failed` one, or one held at
-`validated` with a cause, fails the boot with the cause and the daemon's log), within `opts.readyMs` (120 s). `fn` gets
+`opts.env`). It waits for `GET /v1/health`, then for each plugin to be `active` within `opts.readyMs` (120 s); one that
+won't be without a person's action fails the boot at once with its state, cause and the daemon's log: `failed`,
+`disposed`, held at `validated` with a cause, or disabled (cause `disabled`, or `enabled: false` with none; the message
+says `plugins.<name>.enabled` is false). `fn` gets
 `{socket, token, home, env, fetch, cli, log, stop}`: an operator's token (`capcomd clients add`, every scope but none of
 the developer's), `cli(args)` running the CLI against this daemon, `log()` the daemon's output. The daemon is stopped
 (SIGTERM, which stops its engine and plugins; SIGKILL after 30 s) and its home removed (`opts.keep` keeps it).
@@ -1875,7 +1877,8 @@ Implemented with ADR-023 step 1 on the host's own context and hook registry (`pa
 `test:fast` runs on `packages/plugin/examples` (`tests/plugins/host.test.ts`). `bootWith` is §14.3. `conformance.forge`
 rejects `unsupported`: a seam is in process only (§9.6), so only a built-in is a forge, and the kernel tests those against
 local repositories (`tests/plugins/forges.test.ts`, `tests/merge`). The conformance suites register `bun:test` tests;
-everything else runs on Node too.
+everything else runs on Node too. Where `bun:test` can't be loaded (Node, its test runner, vitest), a suite throws
+`unsupported` saying to run it under `bun test`, naming the suite and the runtime.
 
 ### 14.6 The published package
 
@@ -1889,8 +1892,9 @@ API capcomd X.Y.Z serves. `packages/plugin/package.json`'s `version` is bumped w
 tarball into a fresh project with npm and uses it from Node (every entry point, the manifest checks, `loadDispose` and
 `hookContract`, `connect()` speaking the protocol to a stand-in daemon over a Unix socket) and typechecks a TypeScript 5
 consumer under `nodenext`: CI on every change (Node 20), and the release before publishing. The release workflow
-(`.github/workflows/release.yml` `npm-plugin`) publishes it from the release tag after capcomd's own checks, with
-provenance and the same dist-tag, only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true`; an
+(`.github/workflows/release.yml` `npm-plugin`) publishes it from the release tag after capcomd's own checks and its npm
+publish, with provenance and the same dist-tag, only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true`
+and capcomd itself is published to npm (the `prepare` job's `npm`: never while `package.json` is private); an
 already-published version is skipped.
 
 ## 15. Worked examples
@@ -2605,6 +2609,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.67 | 2026-11-08 | `capcomd plugins validate --strict` and a plugin's MCP tools in its listing (§4.9, §13.2, §16.5): `--strict` adds the attention-budget warning, a notifier-shaped manifest (`run.changed` and `agent.changed` observers) whose config has no top-level `quiet` property, at `config.properties.quiet`; warnings never change the exit code. `PluginSummary` gains `tools` (additive), the MCP tools by the names `capcomd mcp` serves them, registered while active and declared otherwise, in `GET /v1/plugins`, `GET /v1/plugins/{name}` and `capcomd plugins list --json`/`show`; the text of `list` counts a plugin's commands and tools and `show` names them. The §4.7 declared-but-never-registered warning stays with `--conformance`. |
 | 1.0.68 | 2026-11-08 | §17.1's last rows built. `observe-runs-index` and `observe-traces` (§6.6.4): the daemon's `run.changed` observers write the runs index and each run's `_trace` key, from what `ops.runNew` keeps with the run as its last step (scope `setOrigin`, `getOrigin`); `run new` no longer writes either; a run the index lacks is recorded the next time it changes; the daemon appends to the creator's index only when it is a runs index (`isRunsIndex`: absolute `.jsonl`, existing folder, no link, missing, empty or a row first), else to its own. `run.changed` `created` is told at that last step, no longer at the scope's first event, so a run whose `run new` failed partway is told as created only when a retry finishes it. `recipe-hierarchical` (§4.8, §17.1): `capcomd run` without a planner agent (`--recipe`, `--legacy`, `CAPCOMD_RUN_PATH`) goes through it, off by default and refused while off (`config`, `plugin:recipe-hierarchical`, before the run is created or detached); it contributes a `card`. Sandbox `ui` descriptors (§4.7.5): `UiRowValue` adds `help`, `default`, `appliesTo`, `needsRestart` (optional) to a `settings`/`info` row's `read`; each built-in sandbox plugin registers its rows and `GET /v1/sandboxes/{name}` serves them, byte for byte as before; `PATCH …/settings` changes one at a time. |
 | 1.0.69 | 2026-11-08 | The consolidator in every project, the brief only where there is memory, decided by the owner (ADR-025 D17, 2026-11-08; §6.6.7): `ContextProvider.index` may answer `empty: true` (optional, additive; read only with no lines, and the conformance suite fails `true` with lines): the provider has nothing at all for the scope. The built-in memory provider says so when the run's base holds no item file (`memory/**.md`, `facts/**.md`, but `index.md` and `log.md`) and no index (`index.md`, or the profile's `memory.files`; that index missing beside other memory still skips the provider `not found`) under `.capcomd/context/`. The router leaves such a provider out of the header, records `plugin.context.skipped` with `reason: empty` (a new reason value), and gives a loaded provider's outcome `empty: true` (additive); when every provider of the block is empty it returns no patch: no brief and no context skill, the prompt byte for byte the one without a context block. `capcomd context brief` answers `brief: null`, `empty: true`, `skills: []` then (additive). `capcomd setup project` adds the advice step `consolidator` (with `command`) when the project's own planner may spawn but doesn't list `context-consolidator`, and `capcomd profiles migrate --json` gains `consolidator` (`{missing: profile \| planner, detail, command}`) in a project whose planner can't spawn it; neither changes a profile. No hook, seam, route or harness contract shape changes. |
+| 1.0.70 | 2026-11-09 | SDK polish (the critic's C13 leftovers; §14.3, §14.5, §14.6): `testkit.bootWith` fails the boot at once, with the plugin's state and cause, for a plugin that is `disposed` or disabled (cause `disabled`, or `enabled: false` with no cause), as it already did for `failed` and `validated` with a cause, instead of waiting out `readyMs`; a disabled one's message says `plugins.<name>.enabled` is false. The conformance suites throw `unsupported` ("run these under bun test", naming the suite and the runtime) where `bun:test` can't be loaded, instead of Node's module-not-found error. The release workflow's `npm-plugin` job also needs `prepare`'s `npm` (capcomd itself published to npm) and the `npm` job's success, so `@capcomd/plugin` is never published while capcomd's `package.json` is private. No API, hook or seam changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and
 ADR-024 (the profile-side ones).
