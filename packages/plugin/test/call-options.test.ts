@@ -1,12 +1,12 @@
 // Spec §8.2, the bounds the host puts on every async primitive (src/host/context.ts `guarded`), through the test kit's
 // fake context: a call that never answers rejects `timeout` (retryable) at its `timeoutMs`, 30 000 by default; its
 // `signal` rejects it at once (`timeout`, not retryable); disposing the plugin rejects the calls in flight (`disposed`);
-// the kernel's side is passed the composed signal; `jobs.wait` still answers the job at its own timeout.
+// the kernel's side is passed the composed signal; `jobs.wait` and `agents.await` still answer at their own timeout.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { PluginError } from "../src/errors";
 import type { CallOptions } from "../src/context";
 import type { PluginManifest } from "../src/manifest";
-import type { Job } from "../src/shapes";
+import type { Agent, Job, Merge, Verification } from "../src/shapes";
 import { testkit } from "../src/testkit";
 
 const manifest = {
@@ -39,16 +39,36 @@ describe("a primitive's deadline (§8.2)", () => {
     expect((seen?.signal?.reason as PluginError).code).toBe("timeout");
   });
 
-  test("without timeoutMs the deadline is 30 000 ms, jobs.start's 120 000 (its exec's foreground hold, then the call's)", async () => {
+  test("without timeoutMs the deadline is 30 000 ms; a primitive that runs a kernel operation to its end has a longer one", async () => {
     const delays: number[] = [];
     const real = globalThis.setTimeout;
     const spy = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => { delays.push(ms ?? 0); return real(fn, ms); }) as typeof setTimeout);
     spies.push(spy);
-    const fake = testkit.fakeContext(manifest, {}, { services: { kv: { get: async () => "v" }, jobs: { start: async () => ({ jobId: "job-1" }) as Job } } });
+    const fake = testkit.fakeContext(manifest, {}, { services: {
+      kv: { get: async () => "v" }, jobs: { start: async () => ({ jobId: "job-1" }) as Job },
+      agents: { spawn: async () => ({ id: "agt-1" }) as Agent }, gates: { verify: async () => ({ vfyId: "vfy-1" }) as Verification, merge: async () => ({ mrgId: "mrg-1" }) as Merge },
+    } });
     expect(await fake.ctx.kv.get("run-1", "k")).toBe("v");
     await fake.ctx.jobs.start({ kind: "timer", runId: null, owner: { plugin: true }, label: "t", everyMs: 1000 } as never);
+    await fake.ctx.agents.spawn({ runId: "run-1", profile: "worker", task: "t" });
+    await fake.ctx.gates.verify("run-1", { ref: "agt-1" });
+    await fake.ctx.gates.merge("run-1", { ref: "agt-1", require: "vfy-1" });
+    expect(await fake.ctx.kv.get("run-1", "k", { timeoutMs: 5 })).toBe("v");
     spy.mockRestore();
-    expect(delays).toEqual([30_000, 120_000]);
+    // jobs.start: an exec's foreground hold (90 s) and the call's; agents.spawn: its two modify hooks (60 s each) and the
+    // call's; gates.verify: its checks (an hour) and verify.judging's longest (60 min); gates.merge: an hour.
+    expect(delays).toEqual([30_000, 120_000, 150_000, 7_200_000, 3_600_000, 5]);
+  });
+
+  test("a gates.verify that outlasts 30 s still answers: its default deadline is its own", async () => {
+    const delays: number[] = [];
+    const real = globalThis.setTimeout;
+    // Every host deadline fires at once unless it is longer than 30 000 ms, so a verify bounded by the call's default
+    // would reject; the kernel's verify answers after a few ms.
+    const spy = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => { delays.push(ms ?? 0); return real(fn, (ms ?? 0) > 30_000 ? ms : (ms ?? 0) >= 1000 ? 0 : ms); }) as typeof setTimeout);
+    spies.push(spy);
+    const fake = testkit.fakeContext(manifest, {}, { services: { gates: { verify: async () => { await sleep(20); return { vfyId: "vfy-1", state: "passed" } as Verification; } } } });
+    expect((await fake.ctx.gates.verify("run-1", { ref: "agt-1" })).vfyId).toBe("vfy-1");
   });
 
   test("a call that answers in time resolves with its answer, and the options reach the kernel with key and the composed signal", async () => {
@@ -102,13 +122,22 @@ describe("a primitive's signal and ctx.signal (§8.2)", () => {
   });
 });
 
-describe("jobs.wait keeps its own timeout (§8.2, §16.2)", () => {
+describe("jobs.wait and agents.await keep their own timeout (§8.2, §8.4, §16.2)", () => {
   test("it answers the job as it is at its timeoutMs, even past it, not timeout", async () => {
     const job = { jobId: "job-1", state: "running" } as Job;
     let seen: CallOptions | undefined;
     const fake = testkit.fakeContext(manifest, {}, { services: { jobs: { wait: async (_id: string, o?: CallOptions) => { seen = o; await sleep((o?.timeoutMs ?? 0) + 40); return job; } } } });
     expect(await fake.ctx.jobs.wait("job-1", { timeoutMs: 30 })).toEqual(job);
     expect(seen?.timeoutMs).toBe(30);
+  });
+
+  test("agents.await answers which ended at its timeoutMs, not timeout, and 0 is a look now", async () => {
+    const answer = { ended: [], pending: ["agt-1"] };
+    const seen: Array<number | undefined> = [];
+    const fake = testkit.fakeContext(manifest, {}, { services: { agents: { await: async (_r: string, _ids: string[], _i: unknown, o?: CallOptions) => { seen.push(o?.timeoutMs); await sleep((o?.timeoutMs ?? 0) + 40); return answer; } } } });
+    expect(await fake.ctx.agents.await("run-1", ["agt-1"], {}, { timeoutMs: 30 })).toEqual(answer);
+    expect(await fake.ctx.agents.await("run-1", ["agt-1"], {}, { timeoutMs: 0 })).toEqual(answer);
+    expect(seen).toEqual([30, 0]);
   });
 
   test("its signal still rejects it", async () => {

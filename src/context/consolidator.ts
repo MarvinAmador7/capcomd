@@ -88,23 +88,69 @@ export function inputsText(records: ReadonlyArray<CaptureRecord>, ops: ReadonlyA
   return [...(asked ? [asked] : []), ...out].join("\n\n");
 }
 
-/** What a consolidator of run `runId` reads of it, now. */
-export async function consolidationInputs(runId: string): Promise<string> {
-  const goal = ((await (await scopeOf(runId)).getScope({}).catch(() => null)) as { goal?: string | null } | null)?.goal ?? null;
-  return inputsText(await runCandidates(runId), await runOps(runId), goal);
+/** Where the kernel keeps, per consolidator, the agents whose candidates its latest attempt was given:
+ *  `_consolidator/<agentId>` (reserved: only the kernel writes it). */
+export const GIVEN_KV = "_consolidator/";
+/** What one consolidator's latest attempt was given: the agents whose capture records its inputs carried, and when. */
+export interface ConsolidatorGiven { agentId: string; at: string; given: string[] }
+
+/** The run's `ConsolidatorGiven` rows (kv `_consolidator/`, the kernel's). */
+export async function runGiven(runId: string): Promise<ConsolidatorGiven[]> {
+  const { kvList } = await import("../primitives/state");
+  const { entries } = await kvList(runId, GIVEN_KV);
+  return (entries as Array<{ k: string; value?: unknown; writer?: string | null }>)
+    .filter((e) => e.writer === "capcomd" && e.value && typeof e.value === "object" && Array.isArray((e.value as { given?: unknown }).given))
+    .map((e) => ({ agentId: e.k.slice(GIVEN_KV.length), at: String((e.value as { at?: unknown }).at ?? ""), given: (e.value as { given: unknown[] }).given.filter((x): x is string => typeof x === "string") }));
+}
+
+/** The agents whose candidates a consolidator of the run that ended done was given (null: one of them has no record of
+ *  it, a run older than the record, so what it read isn't known). */
+export function consolidated(agents: ReadonlyArray<Pick<LessonAgent, "agentId" | "profile" | "status">>, given: ReadonlyArray<ConsolidatorGiven>): Set<string> | null {
+  const by = new Map(given.map((g) => [g.agentId, g.given]));
+  const out = new Set<string>();
+  for (const a of agents) {
+    if (a.profile !== CONSOLIDATOR_PROFILE || a.status !== "done") continue;
+    const g = by.get(a.agentId);
+    if (!g) return null;
+    for (const id of g) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * What consolidator `agentId` of run `runId` reads of it, now (ADR-025 §5.2, D6a): the capture records no consolidator of
+ * the run that ended done was given (all of them for the run's first; for a follow-up, the lessons proposed after the
+ * last one started), recorded as given to it before it reads them, so the fallback knows which lessons a later one
+ * still has to take. `text`: false for a consolidator that reads the run itself (a scripted one), which gets no prompt.
+ */
+export async function consolidationInputs(runId: string, agentId: string, o: { text?: boolean } = {}): Promise<string> {
+  const scope = await scopeOf(runId);
+  const agents = (await scope.listAgents({})) as LessonAgent[];
+  const records = await runCandidates(runId);
+  const taken = consolidated(agents.filter((a) => a.agentId !== agentId), (await runGiven(runId)).filter((g) => g.agentId !== agentId));
+  const given = taken ? records.filter((r) => !taken.has(r.agentId)) : records;
+  const { kvWrite } = await import("../primitives/state");
+  await kvWrite(runId, { k: `${GIVEN_KV}${agentId}`, value: { at: new Date().toISOString(), given: given.map((r) => r.agentId) }, writer: "capcomd" });
+  if (o.text === false) return "";
+  const goal = ((await scope.getScope({}).catch(() => null)) as { goal?: string | null } | null)?.goal ?? null;
+  return inputsText(given, await runOps(runId), goal);
 }
 
 /** An agent of the run as `lessonsOf` reads it. */
-export interface LessonAgent { agentId: string; profile: string | null; status: string; contract?: unknown; result?: Record<string, unknown> | null }
-/** A consolidator of the run: its state, and the commit the kernel staged for it (null: none, or not ended yet). */
-export interface RunConsolidator { agentId: string; status: string; commit: string | null }
+export interface LessonAgent { agentId: string; profile: string | null; status: string; contract?: unknown; result?: Record<string, unknown> | null; key?: string | null }
+/** A consolidator of the run: its state, the commit the kernel staged for it (null: none, or not ended yet) and the key
+ *  it was spawned with (the fallback's are its own, §8.4: `plugin:context-memory:consolidate` and
+ *  `plugin:context-memory:consolidator-late`; bare `consolidate`, `consolidator-late` in a run from before). */
+export interface RunConsolidator { agentId: string; status: string; commit: string | null; key: string | null }
 /**
  * What a run holds for its memory now (ADR-025 §5.2): its candidates (what capture kept), the lessons agents declared in
  * their results that capture hasn't collected yet (`pending`: an agent still working, the planner among them, or one
- * whose end is being collected), and its consolidators. What the orchestration skill and the planner's brief tell the
+ * whose end is being collected), and its consolidators. `late`: once a consolidator ended done, how many of those
+ * lessons none that ended done was given (proposed, or declared, after the last one started; 0 while none ended done,
+ * or when one has no record of what it was given). What the orchestration skill and the planner's brief tell the
  * planner to read before it ends (`capcomd status`), and what the `context-memory` plugin's fallback decides on.
  */
-export interface RunLessons { candidates: number; pending: number; agents: number; consolidators: RunConsolidator[] }
+export interface RunLessons { candidates: number; pending: number; agents: number; consolidators: RunConsolidator[]; late: number }
 
 /** Whether an agent's lessons are capture's to collect: not a consolidator's answer, a reviewer's verdict or a report. */
 export function proposes(a: Pick<LessonAgent, "profile" | "contract">): boolean {
@@ -117,14 +163,18 @@ export function proposes(a: Pick<LessonAgent, "profile" | "contract">): boolean 
  * token that wrote it): a declared lesson counts as pending only while capture has no record of its agent, and only what
  * the agent's own token wrote (as capture takes it). A cancelled agent's lessons are never collected.
  */
-export function lessonsOf(agents: ReadonlyArray<LessonAgent>, records: ReadonlyArray<CaptureRecord>, declared: ReadonlyArray<DeclaredRow>): RunLessons {
+export function lessonsOf(agents: ReadonlyArray<LessonAgent>, records: ReadonlyArray<CaptureRecord>, declared: ReadonlyArray<DeclaredRow>, given: ReadonlyArray<ConsolidatorGiven> = []): RunLessons {
   const waiting = pendingOf(agents, records, declared);
   const from = new Set([...records.filter((r) => r.candidates.length).map((r) => r.agentId), ...waiting.map((w) => w.agent.agentId)]);
   const consolidators = agents.filter((a) => a.profile === CONSOLIDATOR_PROFILE).map((a) => {
     const c = a.result?.commit;
-    return { agentId: a.agentId, status: a.status, commit: typeof c === "string" && c ? c : null };
+    return { agentId: a.agentId, status: a.status, commit: typeof c === "string" && c ? c : null, key: a.key ?? null };
   });
-  return { candidates: records.reduce((n, r) => n + r.candidates.length, 0), pending: waiting.reduce((n, w) => n + w.lessons, 0), agents: from.size, consolidators };
+  const pending = waiting.reduce((n, w) => n + w.lessons, 0);
+  // A declared lesson capture hasn't collected was given to no consolidator: it is late too.
+  const taken = consolidators.some((c) => c.status === "done") ? consolidated(agents, given) : null;
+  const late = taken ? records.filter((r) => !taken.has(r.agentId)).reduce((n, r) => n + r.candidates.length, 0) + pending : 0;
+  return { candidates: records.reduce((n, r) => n + r.candidates.length, 0), pending, agents: from.size, consolidators, late };
 }
 
 /** A row of kv `_result/` as `kvList` gives it. */
@@ -148,7 +198,7 @@ export async function runLessons(runId: string): Promise<RunLessons> {
   const { kvList } = await import("../primitives/state");
   const agents = (await (await scopeOf(runId)).listAgents({})) as LessonAgent[];
   const { entries } = await kvList(runId, "_result/");
-  return lessonsOf(agents, await runCandidates(runId), entries as DeclaredRow[]);
+  return lessonsOf(agents, await runCandidates(runId), entries as DeclaredRow[], await runGiven(runId));
 }
 
 /** `RunLessons` in a sentence, for the agent that may spawn the consolidator (`capcomd status`'s `lessons.text`). */
@@ -157,8 +207,9 @@ export function lessonsText(l: RunLessons): string {
   const ran = l.consolidators.filter((c) => c.status !== "cancelled");
   if (!n) return ran.length ? `No candidate lessons; ${ran[0]!.agentId} (${CONSOLIDATOR_PROFILE}) is ${ran[0]!.status}.` : "No candidate lessons in this run yet: nothing to consolidate.";
   const what = `${n} candidate lesson${n === 1 ? "" : "s"} from ${l.agents} agent${l.agents === 1 ? "" : "s"}${l.pending ? ` (${l.pending} declared in a result and not collected yet, as your own are until the consolidator starts)` : ""}`;
-  if (ran.length) return `${what}; ${ran.map((c) => `${c.agentId} (${CONSOLIDATOR_PROFILE}) is ${c.status}${c.commit ? `, its branch at ${c.commit.slice(0, 12)}` : ""}`).join("; ")}.`;
-  return `${what}; no ${CONSOLIDATOR_PROFILE} yet: spawn it as your last child, once every other child has ended.`;
+  const late = l.late ? ` ${l.late} of them came after it started, so it never read them: declare your own lessons before you spawn the consolidator; capcomd starts one more for these once you end, unless the run turned autoConsolidate off.` : "";
+  if (ran.length) return `${what}; ${ran.map((c) => `${c.agentId} (${CONSOLIDATOR_PROFILE}) is ${c.status}${c.commit ? `, its branch at ${c.commit.slice(0, 12)}` : ""}`).join("; ")}.${late}`;
+  return `${what}; no ${CONSOLIDATOR_PROFILE} yet: spawn it as your last child, once every other child has ended and your own lessons are in your result (capcomd result --data '{"context": […]}'): it reads them as it starts.`;
 }
 
 /**

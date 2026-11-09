@@ -75,12 +75,21 @@ const OPTIONS_AT = {
 } as const satisfies { [S in ServiceName]: Record<keyof (typeof PRIMITIVES)[S], number | null> };
 /** A primitive's deadline when the call sets no `timeoutMs` (§8.2). */
 export const CALL_TIMEOUT_MS = 30_000;
-/** Primitives with a default deadline of their own: `jobs.start` of an `exec` holds up to 90 000 ms for the job to end
- *  (§16.2 rule 1), so its default is that hold plus the call's. */
-const DEFAULT_TIMEOUT_MS: Record<string, number> = { "jobs.start": 90_000 + CALL_TIMEOUT_MS };
+/** Primitives with a default deadline of their own, for the kernel operation they run to its end: `jobs.start` of an
+ *  `exec` holds up to 90 000 ms for the job to end (§16.2 rule 1), so that hold plus the call's; `agents.spawn` fires
+ *  `profile.resolved` and `agent.spawning` (modify hooks, 60 s at most each, §6.4) before it starts the agent; `gates.verify`
+ *  answers once its checks and then its judges have (`verify.judging` at most 60 min, a reviewer agent inside it), so an
+ *  hour for the checks and that; `gates.merge` once its landing gates have and it landed or parked. */
+const DEFAULT_TIMEOUT_MS: Record<string, number> = {
+  "jobs.start": 90_000 + CALL_TIMEOUT_MS,
+  "agents.spawn": 2 * 60_000 + CALL_TIMEOUT_MS,
+  "gates.verify": 2 * 3_600_000,
+  "gates.merge": 3_600_000,
+};
 /** Primitives that read `timeoutMs` as how long to wait and answer at it, not as a deadline (§16.2: `jobs.wait` answers
- *  the job as it is then). Their `signal` and `ctx.signal` still bound them. */
-const WAITS = new Set(["jobs.wait"]);
+ *  the job as it is then; §8.4: `agents.await` answers which agents ended by then). Their `signal` and `ctx.signal` still
+ *  bound them. */
+const WAITS = new Set(["jobs.wait", "agents.await"]);
 /** setTimeout's largest delay: a longer one fires at once. */
 const TIMER_MAX_MS = 2 ** 31 - 1;
 
