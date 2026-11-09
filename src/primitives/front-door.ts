@@ -82,6 +82,7 @@ async function front(path: string, scope: ClientScope, body: Record<string, unkn
       if (r.kind === "done") return { done: true, value: r.value, where: "daemon", skipped: [] };
       if (r.kind === "running") {
         started = r.id;
+        (await import("./ops")).noteStartedInDaemon(r.id); // its record may not be written yet: a wait counts it running
         if (until - Date.now() <= 0) return { done: false, id: r.id };
         next = poll(r.id);
         continue;

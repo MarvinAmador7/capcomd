@@ -1532,10 +1532,11 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     for (const id of opIds) {
       if (opsDone.has(id)) continue;
       const op = await s.getOp({ opId: id });
-      // Started here a moment ago and not recorded yet (a verify answers with its id before it has resolved its ref).
-      if (!op && inflightOps.has(id)) {
+      // Started here (or by this process's front door in the daemon) a moment ago and not recorded yet (a verify answers
+      // with its id before it has resolved its ref).
+      if (!op && (inflightOps.has(id) || justStartedInDaemon(id))) {
         opsLatest.set(id, { id, kind: id.startsWith("vfy-") ? "verify" : id.startsWith("chk-") ? "check" : "merge", state: "running" } as any);
-        if (feed) void inflightOps.get(id)!.then(feed.poke, feed.poke);
+        if (feed && inflightOps.has(id)) void inflightOps.get(id)!.then(feed.poke, feed.poke);
         continue;
       }
       if (!op || (op.kind !== "verify" && op.kind !== "merge" && op.kind !== "check")) throw new RelayError("not_found", `${id} not found in ${runId}`, "Pass the vfy-… / mrg-… / chk-… ids capcomd verify, merge and check returned.");
@@ -1783,6 +1784,16 @@ export async function finishedVerify(runId: string, vfyId: string) {
 }
 /** The verifies and merges this process runs, by id: a second call for one shares its run (never a second run here). */
 const inflightOps = new Map<string, Promise<any>>();
+/** The verifies, merges and decisions a front door of this process started in the daemon (plugin API §6.1,
+ *  src/primitives/front-door.ts), by id, until when: the daemon answers with the id before it has written the record,
+ *  so a wait that comes at once counts such an id as running, as it counts one started here (`inflightOps`). */
+const startedInDaemon = new Map<string, number>();
+export const STARTED_IN_DAEMON_MS = 60_000;
+export function noteStartedInDaemon(id: string, now = Date.now()): void {
+  for (const [k, until] of startedInDaemon) if (until <= now) startedInDaemon.delete(k);
+  startedInDaemon.set(id, now + STARTED_IN_DAEMON_MS);
+}
+const justStartedInDaemon = (id: string) => (startedInDaemon.get(id) ?? 0) > Date.now();
 /** Run `work` as the one run of op `id` in this process (the caller checked there is none). */
 function track<T>(id: string, work: () => Promise<T>): Promise<T> {
   const p = work().finally(() => { if (inflightOps.get(id) === p) inflightOps.delete(id); });
