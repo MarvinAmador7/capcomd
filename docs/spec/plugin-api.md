@@ -2571,6 +2571,9 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 
 ## 18. Changes
 
+A change still on its way to a release has its row in a note under `changes/` (its `# Spec` section); the
+release folds the notes in here with their numbers (`bun scripts/changes.ts fold`, AGENTS.md → Releases).
+
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-11-04 | First normative version: 21 hooks, 3 seams (40 methods), 22 services (77 primitives), protocol 1, manifest `capcomd.plugin/v1`. Includes the super-agent primitives (§16). |
