@@ -283,6 +283,27 @@ describe("context-memory's fallback on agent.changed ended", () => {
     await fake.dispose();
   });
 
+  test("it spawns with the plugin's own primitive, never the kernel's operator path: the fixed task, its key, its title, under the planner's drive settings", async () => {
+    const { env } = await import("../../src/utils/env");
+    const asked: unknown[] = [];
+    const ctx = {
+      agents: { spawn: async (input: unknown, o: unknown) => { asked.push({ input, o, agentsFile: env("AGENTS_FILE") }); return { id: "agt-cons" } as never; } },
+      gates: { verify: async () => { throw new Error("not asked"); }, merge: async () => { throw new Error("not asked"); } },
+    };
+    expect(await memoryPlugin.fallbackKernel.spawn(RUN, { CAPCOMD_AGENTS_FILE: "/p/agents.json" }, ctx)).toEqual({ agentId: "agt-cons" });
+    expect(asked).toEqual([{ input: { runId: RUN, profile: CONSOLIDATOR_PROFILE, task: memoryPlugin.FALLBACK_TASK, title: "memory lessons" }, o: { key: memoryPlugin.FALLBACK_KEY }, agentsFile: "/p/agents.json" }]);
+    // The listener hands the plugin's own context to the kernel's calls.
+    let given: unknown = null;
+    kernel({ agents: [PLANNER, WORKER], lessons: L({ candidates: 1, agents: 1 }) });
+    memoryPlugin.fallbackKernel.spawn = async (_r, _e, c) => { given = c; return { agentId: "agt-fallback" }; };
+    const fake = testkit.fakeContext(memoryPlugin.manifest);
+    await testkit.load(fake, memoryPlugin.plugin as never);
+    await fake.fire("agent.changed", ended("agt-plan", "planner"), { runId: RUN });
+    expect(typeof (given as { agents?: { spawn?: unknown } } | null)?.agents?.spawn).toBe("function");
+    expect(typeof (given as { gates?: { merge?: unknown } } | null)?.gates?.merge).toBe("function");
+    await fake.dispose();
+  });
+
   test("the plugin declares what it does: the hook, its events, the setting (on by default, per run too)", async () => {
     expect(memoryPlugin.manifest.contributes?.hooks?.["agent.changed"]).toBeDefined();
     expect(memoryPlugin.manifest.contributes?.events).toEqual(["consolidator_started", "consolidator_skipped", "merge_requested"]);

@@ -911,11 +911,13 @@ Four things stood between D6 and a held memory change, each fixed:
   but not collected yet, and its consolidators' states, counts only.
 - **Nothing caught a miss** (D6a). `context-memory` listens to `agent.changed` `ended`: once every agent of the run that
   may spawn the consolidator has ended (none still working, so D6's "the planner spawns it" stays the first path), a
-  run whose agents proposed lessons and had no consolidator gets one, spawned by capcomd at the run's top (key
-  `consolidate`, the ended planner's drive settings, so its project's profile); when a consolidator ended with a branch
-  nobody asked to merge (the planner's or this one), capcomd verifies it (a passed verify of that commit is used again)
-  and asks to merge it as an agent's merge is asked (parked on a protected target), so the gate holds it for a person
-  under `review: human`. It does nothing while a consolidator runs (its end decides), for a run with no agent that may
+  run whose agents proposed lessons and had no consolidator gets one, spawned at the run's top (key `consolidate`, the
+  ended planner's drive settings, so its project's profile); when a consolidator ended with a branch nobody asked to
+  merge (the planner's or this one), it is verified (a passed verify of that commit is used again) and its merge asked
+  for as an agent's merge is asked (parked on a protected target), so the gate holds it for a person under `review:
+  human`. The plugin does all three with its own primitives (`ctx.agents.spawn`, `ctx.gates.verify`, `merge`, spec
+  §8.4), so they are recorded as `plugin:context-memory`'s (the spawn's `by`, the verify's and merge's `requester`),
+  held to the spawn checks and every gate as any caller's, never as the operator's. It does nothing while a consolidator runs (its end decides), for a run with no agent that may
   spawn one (a driver's run is its driver's), or twice (the spawn, the verify and the merge are idempotent by their
   keys, its events keyed). It says why when it doesn't (`consolidator_skipped`: `off`, `cancelled` when the planner
   was, `consolidator_failed` when one ran and failed or was cancelled, `spawn_refused`, `verify_failed`,
