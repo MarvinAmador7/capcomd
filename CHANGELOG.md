@@ -5,6 +5,11 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: the watchdog no longer flags an agent that started a background job and then waits for it in a command
+  (a `sleep`, a wait on its inbox). The time that command ran alongside the job used up the command time the watchdog
+  allows between two signs of progress (`plugins.watchdog.stalledAfterMs`), so with a short limit the agent was flagged
+  `stalled` soon after the job ended, while it was still waiting. Now the job's time is taken off once, and a command
+  still running after the job ends holds the clock like any other.
 - A project with no memory yet no longer pays for it in every prompt: when the run's branch has nothing under
   `.capcomd/context/` (no lesson, fact or index file; an empty folder or a `.gitkeep` counts as nothing), agents start
   without the context brief and without the context skills, exactly as if their profile had no `context` block, and the
