@@ -70,6 +70,10 @@ if (cmd === "serve") {
     const disposed = await boot({ state: "disposed", enabled: false, cause: "disabled" });
     expect(disposed.error?.message).toMatch(/^the slack-notifier plugin is disposed \(disabled\); it is off/);
     expect(disposed.afterMs).toBeLessThan(1000);
+    // Disposed with a cause of its own (its dispose timed out): named by that cause, not as disabled.
+    const timedOut = await boot({ state: "disposed", enabled: false, cause: "dispose_timeout" });
+    expect(timedOut.error?.message).toMatch(/^the slack-notifier plugin is disposed \(dispose_timeout\):\n/);
+    expect(timedOut.afterMs).toBeLessThan(1000);
   }, 60_000);
 
   test("an untrusted plugin is named by its cause, not as disabled; an active one runs the test", async () => {
