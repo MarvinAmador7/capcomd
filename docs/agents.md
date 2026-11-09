@@ -329,6 +329,7 @@ status: stable                     # draft (the default), stable or deprecated (
 description: Money is rounded half-even (src/money.js), never with Math.round
 paths: [src/**]                    # the files it applies to, shown on its line
 stale_after: 2027-05-01T00:00:00Z  # optional: past it, the item leaves the brief
+# valid_from: 2027-01-01           # optional: the brief leaves it out until that day
 supersedes: [old-rounding]         # optional: the item it replaces leaves the brief
 ---
 
@@ -456,9 +457,11 @@ capcomd spawn --profile context-consolidator --task "Consolidate this run's less
   how many candidates the run has and its consolidators.
 - If the planner ends without it, capcomd does it: once every agent that may spawn the consolidator has ended, a run
   whose agents proposed lessons and had no consolidator gets one, and a consolidator's change nobody asked to merge is
-  verified and its merge asked for. The merge waits for your approval as the planner's would. `capcomd events <runId>`
-  shows `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with the reason
-  (off, the planner was cancelled, a consolidator failed, the spawn or the verify failed). Turn it off with
+  verified and its merge asked for. Lessons that came after the consolidator started (the planner's own, put in its
+  result only after it spawned the consolidator) get one more consolidator, given only those, once per run. The merge
+  waits for your approval as the planner's would. `capcomd events <runId>` shows
+  `plugin.context-memory.consolidator_started`, `merge_requested`, or `consolidator_skipped` with the reason (off,
+  late lessons left with it off, the planner was cancelled, a consolidator failed, the spawn or the verify failed). Turn it off with
   `plugins.context-memory.autoConsolidate: false` (`~/.capcomd/config.json` or the project's `.capcomd/config.json`), or
   for one run with `capcomd run --plugin-config context-memory.autoConsolidate=false`.
 - A branch of any other agent that changes `.capcomd/context/` fails its verify and is refused at merge (`memory lands
@@ -508,8 +511,9 @@ Context: loaded 2 of 2 lines (…); groundray at 9f8e7d6c5b4a, modified 2026-10-
   `sensitivity: restricted`) is refused by `brain add`, and an agent is never briefed from one: keep restricted knowledge
   outside capcomd. So is a brain capcomd can't check whole (a Markdown file over 4 MiB, more than 2000 of them).
 - A repository given as a path is recorded as an absolute path.
-- Reviewers get the brain's facts too (only memory is left out for them). Deprecated and superseded facts, and those
-  past their `stale_after`, leave the brief; a fact without `status` counts as a draft.
+- Reviewers get the brain's facts too (only memory is left out for them). Deprecated and superseded facts, those past
+  their `stale_after` and those not in effect yet (a `valid_from` after today) leave the brief, and the header counts
+  the stale and the not-yet ones; a not-yet fact comes back on its day. A fact without `status` counts as a draft.
 - Proposals to the brain go through its own pull requests (below); what agents read never changes until the brain's
   owners merge one and the project maps the brain again.
 

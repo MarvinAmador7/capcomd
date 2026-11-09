@@ -745,7 +745,10 @@ failed, timed out or isn't active is still named. Its append is the brief: a ker
 (how many index lines of how many it loaded, the budget and where it came from, each provider's revision or the reason
 it was skipped, in the kernel's words, and where the lines' files are: the checkout, a bundle placed in the sandbox, or
 either) and one line per item (`IndexLine`, its description made one line, redacted, neutralised with `fence()`'s rule
-and capped), every provider's lines in one order, facts first, never an item's body. The brief is a function of the providers' indexes,
+and capped), every provider's lines in one order, facts first, never an item's body. A deprecated line, one superseded
+by a line of the same index, a stale one (`authority.staleAfter` on or before the brief's UTC day) and one not in effect
+yet (`authority.validFrom` after that day; optional on `IndexLine`) are left out, the header counting the
+stale and the not-yet ones. The brief is a function of the providers' indexes,
 the context block, the limits and the UTC day only, so it is byte-identical for every agent of a profile at a revision
 and for each attempt of one agent. It records `plugin.context.loaded` (and `plugin.context.skipped` per provider left
 out) on the run's stream. With the brief it attaches the context layer's skills (ADR-025 step 6, `src/context/skills.ts`;
@@ -834,17 +837,24 @@ own, still running, among them; each agent's still once), so the planner's lesso
 last. A spawn's check of a child's spec against its parent's leaves out the child's `context` block, as its provider,
 auth and tool mode (its own profile's, ADR-025 D12; an override still can't change one). In-VM `status` of an agent
 that may spawn the consolidator carries `lessons {candidates, pending, agents, consolidators[{agentId, status,
-commit}], text}` (additive): counts and states, never a lesson's text.
+commit, key}], late, text}` (additive): counts and states, never a lesson's text; `late` counts, once a consolidator
+ended done, the lessons no consolidator that ended done was given. The kernel records, as a consolidator's attempt
+starts, the agents whose capture records it is given (kv `_consolidator/<agentId>`, reserved): every record no
+consolidator of the run that ended done was given.
 
 The built-in `context-memory` listens here too (ADR-025 D6a), on `ended`: once every agent of the run that may spawn the
 consolidator (`children.allowedChildProfiles` has it) has ended and no consolidator still runs, it starts one at the
 run's top (key `consolidate`, the ended agent's drive settings) when the run's agents proposed lessons (candidates, or
-declared and not collected) and none ran; and for a consolidator that ended done with a branch no merge was asked for,
+declared and not collected) and none ran; for a consolidator that ended done with a branch no merge was asked for,
 it verifies that commit (a passed verify of it is used again) and asks to merge it as an agent's merge is asked
-(`requestApproval`: parked on a protected target; its own `merge.landing` hold applies), in the background. Each is
-idempotent by its key, and its events are keyed: `plugin.context-memory.consolidator_started`, `merge_requested`
-(`{agentId, commit, verify, merge, state}`), and `consolidator_skipped` (`reason`: `off`, `cancelled`,
-`consolidator_failed`, `spawn_refused`, `verify_failed`, `merge_failed`) when there was something to do. Its config
+(`requestApproval`: parked on a protected target; its own `merge.landing` hold applies), in the background, then looks
+again; and when a consolidator ended done and the run has `late` lessons (proposed, or declared, after it started), it
+starts one follow-up at the run's top (key `consolidator-late`, at most one per run), given only those, whose branch
+lands as any consolidator's. Each is idempotent by its key, and its events are keyed:
+`plugin.context-memory.consolidator_started` (with `late: true, consolidator` for the follow-up), `merge_requested`
+(`{agentId, commit, verify, merge, state}`), and `consolidator_skipped` (`reason`: `off`, `late_lessons` for the
+follow-up when it is off, `cancelled`, `consolidator_failed`, `spawn_refused`, `verify_failed`, `merge_failed`) when
+there was something to do. Its config
 `autoConsolidate` (boolean, default `true`, `x-per-run`) turns it off; it never throws.
 
 A consolidator's answer may also propose new facts to a company's brain (ADR-025 step 5): a change with `brain: <name>`

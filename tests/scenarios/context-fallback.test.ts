@@ -4,8 +4,10 @@
 // consolidator's change, merged by the planner, waits for a person. A planner that ends with lessons and no
 // consolidator: capcomd starts one at the run's top, verifies its branch and asks to merge it, which waits for a person;
 // approved, it lands; asked again (a replay), nothing changes; a worker's own change to .capcomd/context/ is still
-// denied. A planner with no lessons: nothing is started. And from the CLI, a person lands a consolidator's change on a
-// protected target through the hold (`merge --request-approval`, then `approve`), never past it.
+// denied. A planner that declares its lesson only after its consolidator ended: capcomd starts one follow-up, given
+// only that lesson, held for a person. A planner with no lessons: nothing is started. And from the CLI, a person lands
+// a consolidator's change on a protected target through the hold (`merge --request-approval`, then `approve`), never
+// past it.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -64,6 +66,49 @@ const agentsIn = (run: string) => agentsOf(run) as Promise<any[]>;
 /** A worker that proposes `lessons` (and, with `file`, writes it). */
 const lessonWorker = (name: string, lessons: unknown[], file?: { path: string; content: string }) =>
   w.script(name, `capcomd result --summary "looked" --data ${sq(JSON.stringify({ context: lessons, ...(file ? { file } : {}) }))} >/dev/null`);
+
+// First: both its consolidators stage the build-cache lesson, which a later test lands on trunk (then nothing to stage).
+test("a planner that declares its own lesson only after its consolidator ended: capcomd starts one follow-up, given only that lesson, and its merge waits for a person", async () => {
+  const run = await newRun(w);
+  const worker = lessonWorker("fb-e-worker", [{ title: "Build cache", text: BUILD_CACHE }]);
+  const cons = w.script("fb-e-cons", `capcomd result --summary "consolidated" --data ${sq(JSON.stringify({ context: [{ title: "Build cache", text: BUILD_CACHE }] }))} >/dev/null`);
+  const planner = w.script("fb-e-planner", `id=$(capcomd spawn --profile worker --task "look at the build cache" --key e --budget turns=10 --children.maxChildren=0 --contract "$($S/json script=${sq(worker)})" | $S/jget agentId)
+capcomd await $id >/dev/null || exit 1
+c=$(capcomd spawn --profile ${CONSOLIDATOR_PROFILE} --task "Consolidate this run's lessons" --key consolidate --contract "$($S/json script=${sq(cons)})" | $S/jget agentId)
+capcomd await $c >/dev/null || exit 1
+v=$(capcomd verify --ref $c --key v-c)
+m=$(capcomd merge --ref $c --require "$(echo "$v" | $S/jget id)" --key m-c)
+capcomd kv put mem "$($S/json cons=$c worker=$id merge=$(echo "$m" | $S/jget id) state=$(echo "$m" | $S/jget state))" >/dev/null
+capcomd result --summary "done" --data ${sq(JSON.stringify({ context: [{ title: "Cache key", text: CACHE_KEY }] }))} >/dev/null`);
+  const root = await spawnRoot(w, run, "planner", planner);
+  expect((await waitAll(w, run, [root])).agents[0].status).toBe("done");
+  const mem = (await w.cj(["kv", "get", run, "mem"])).j.value;
+  expect(mem.state).toBe("awaiting_approval");
+  // Its consolidator was given the worker's lesson only: the planner had declared none when it started.
+  expect((await w.cj(["kv", "get", run, `_consolidator/${mem.cons}`])).j.value.given).toEqual([mem.worker]);
+
+  const [started] = await eventsOf(run, "plugin.context-memory.consolidator_started");
+  expect(started!.data).toMatchObject({ after: root, lessons: 1, late: true, consolidator: mem.cons });
+  const lateId = started!.data.agentId as string;
+  expect(lateId).not.toBe(mem.cons);
+  const [requested] = await eventsOf(run, "plugin.context-memory.merge_requested");
+  expect(requested!.data).toMatchObject({ agentId: lateId, state: "awaiting_approval" });
+  const late = (await agentsIn(run)).find((a) => a.agentId === lateId);
+  expect(late).toMatchObject({ parent: null, profile: CONSOLIDATOR_PROFILE, status: "done", task: "Consolidate the lessons this run's agents proposed after its consolidator started", result: { commit: requested!.data.commit } });
+  // Given only the planner's lesson, the one that came after the first consolidator started.
+  expect((await w.cj(["kv", "get", run, `_consolidator/${lateId}`])).j.value.given).toEqual([root]);
+  const m = await (await import("../../src/primitives/ops")).mergeRef({ runId: run, ref: "", id: requested!.data.merge });
+  expect(m).toMatchObject({ state: "awaiting_approval", heldBy: { plugin: "context-memory" } });
+
+  // A replay: the same follow-up, and nothing more to do (at most one per run).
+  const fb = await import("../../src/plugins/context-memory");
+  const planned = (await agentsIn(run)).find((a) => a.agentId === root);
+  expect(await fb.fallbackKernel.spawn(run, planned.driveEnv, fb.LATE_KEY)).toEqual({ agentId: lateId, created: false });
+  const emitted: string[] = [];
+  expect(await fb.fallback(run, planned, { enabled: true, emit: async (t) => { emitted.push(t); }, log: () => {} })).toBeNull();
+  expect(emitted).toEqual([]);
+  expect((await agentsIn(run)).filter((a) => a.profile === CONSOLIDATOR_PROFILE).length).toBe(2);
+}, 240_000);
 
 test("the planner's own lessons reach the consolidator it spawns last; capcomd status counts them; its merge waits for a person", async () => {
   const run = await newRun(w);

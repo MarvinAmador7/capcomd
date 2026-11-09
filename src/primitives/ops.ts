@@ -1056,11 +1056,14 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const report = (a.contract as any)?.report === true;
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
   // ADR-025 §5.2: a consolidator answers with deltas, which the kernel stages on its branch when it ends (settlePushed);
-  // a real one reads the run's candidates and outcomes in its prompt (a scripted one reads them with its capcomd).
+  // a real one reads the run's candidates and outcomes in its prompt (a scripted one reads them with its capcomd): the
+  // ones no consolidator of the run that ended done was given.
   const { isConsolidator, consolidationInputs } = await import("../context/consolidator");
   // The brain its profile names, which its prompt says it may propose new drafts to (ADR-025 step 5).
   const brain = isConsolidator(a) ? (await import("../context/consolidate")).brainOf((a.spec as { context?: import("../../packages/plugin/src/context-layer").ContextSpec } | null)?.context) : null;
-  const consolidate = isConsolidator(a) && !review && !report ? { inputs: exec && mode !== "script" ? await consolidationInputs(runId) : "", ...(brain ? { brain } : {}) } : null;
+  // What it is given is recorded on every attempt (a scripted one reads the run itself, but is given the same), so the
+  // fallback knows which lessons a later consolidator still has to take (D6a).
+  const consolidate = isConsolidator(a) && !review && !report ? { inputs: await consolidationInputs(runId, agentId, { text: !!exec && mode !== "script" }), ...(brain ? { brain } : {}) } : null;
   // Children branch from the run's target (a staging branch) when the operator set one.
   const target = await runTarget(runId);
   // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
