@@ -1,0 +1,4 @@
+{"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
+{"type":"session","sessionId":"rnFP4KEUEvwy","model":"stub-model","provider":"stub"}
+{"type":"message","role":"agent","messageId":"ddea7de7968d36c42335bca77db000a8","text":"configured provider authentication failed · HTTP 401"}
+{"type":"result","stopReason":"refused","usage":{},"lastText":"configured provider authentication failed · HTTP 401"}

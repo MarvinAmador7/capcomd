@@ -3,6 +3,7 @@ import { OPEN_EGRESS } from "../providers/sandbox";
 import { agentSeam, orchestrateConfig, providerOfKind } from "../plugins/agents";
 import { CLAUDE_CODE_VERSION } from "../plugins/agent-claude";
 import { CODEX_VERSION } from "../plugins/agent-codex";
+import { FX_DEFAULT_USD_PER_MTOK, FX_RELEASE } from "../plugins/agent-fx";
 import { reservedEnvName } from "../plugins/hooks";
 import { pinnedRuntime, type McpServer } from "../profiles/runtime";
 export { CLAUDE_USD_PER_MTOK, claudeCostUsd, type ClaudeUsage } from "../plugins/agent-claude";
@@ -50,10 +51,19 @@ export type EgressAuth = "apikey" | "subscription";
  * Provider + auth egress sets (beyond BASE_EGRESS). One table so runs, doctor and login agree.
  * claude subscription uses a setup-token (long-lived OAuth token) against api.anthropic.com.
  */
-export const PROVIDER_EGRESS: Record<"claude-code" | "codex", Record<EgressAuth, string[]>> = {
+export const PROVIDER_EGRESS: Record<"claude-code" | "codex" | "fx", Record<EgressAuth, string[]>> = {
   "claude-code": { apikey: ["api.anthropic.com"], subscription: ["api.anthropic.com"] },
   codex: { apikey: ["api.openai.com"], subscription: ["api.openai.com", ...CODEX_SUBSCRIPTION_HOSTS] },
+  // fx: the AI Gateway (model calls, its model list), and its release host for the pinned install when the image lacks
+  // it. No plan login (describe().subscription is false).
+  fx: { apikey: ["ai-gateway.vercel.sh", FX_RELEASE.host], subscription: ["ai-gateway.vercel.sh", FX_RELEASE.host] },
 };
+/** The hosts an install of the active providers' CLIs downloads from besides BASE_EGRESS (a release archive's,
+ *  `describe().install`): an env build's VM reaches them too. */
+export function installEgress(): string[] {
+  const { agentSeams } = require("../plugins/agents") as typeof import("../plugins/agents");
+  return [...new Set(agentSeams().flatMap((p) => { const i = p.describe().install; return i ? Object.values(i.assets).map((a) => new URL(a.url).hostname) : []; }))];
+}
 /** Full VM allowlist for one agent and auth mode: base hosts + that provider's set (another provider: its API host). */
 export function egressFor(kind: RealAgent, auth: EgressAuth): string[] {
   return [...new Set([...BASE_EGRESS.slice(0, 1), ...((PROVIDER_EGRESS as Record<RealAgent, Record<EgressAuth, string[]> | undefined>)[kind]?.[auth] ?? [agentApiHost(kind)]), ...BASE_EGRESS.slice(1)])];
@@ -129,6 +139,9 @@ export interface AgentConfig {
   /** USD per million tokens, for the codex budget guard (codex exec reports tokens, not cost). */
   codexUsdPerMtokIn: number;
   codexUsdPerMtokOut: number;
+  /** Another provider's rates, by its name, for a CLI that reports tokens and not cost: CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN
+   *  and _OUT (fx's default when unset: FX_DEFAULT_USD_PER_MTOK). Unset for a provider: codex's. */
+  usdPerMtok?: Record<string, { in: number; out: number }>;
   /** Profile name this config came from (null: env only). */
   profile: string | null;
   systemPrompt?: string;
@@ -202,6 +215,22 @@ export function agentModel(spec: { model?: string } | null | undefined, source: 
   return envVar("AGENT_MODEL", source) ?? spec?.model;
 }
 
+/** CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN and _OUT of every active provider but codex (whose are its own fields), when both
+ *  are set; fx's default otherwise (it reports tokens, never cost). */
+function providerRates(source: Record<string, string | undefined>, opt: (name: string) => number | undefined): Record<string, { in: number; out: number }> {
+  const out: Record<string, { in: number; out: number }> = { fx: { ...FX_DEFAULT_USD_PER_MTOK } };
+  const { agentProviderNames } = require("../plugins/agents") as typeof import("../plugins/agents");
+  for (const p of agentProviderNames()) {
+    if (p === "codex" || !/^[a-z][a-z0-9-]*$/.test(p)) continue;
+    const key = p.toUpperCase().replace(/-/g, "_");
+    if (envVar(`${key}_USD_PER_MTOK_IN`, source) === undefined && envVar(`${key}_USD_PER_MTOK_OUT`, source) === undefined) continue;
+    const i = opt(`${key}_USD_PER_MTOK_IN`), o = opt(`${key}_USD_PER_MTOK_OUT`);
+    if (i === undefined || o === undefined) throw new Error(`CAPCOMD_${key}_USD_PER_MTOK_IN and _OUT go together: set both`);
+    out[p] = { in: i, out: o };
+  }
+  return out;
+}
+
 const list = (v: string | undefined, d: string[]) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : d);
 
 export function loadAgentConfig(source: Record<string, string | undefined> = process.env, profileName?: string | null, pinned?: unknown): AgentConfig {
@@ -251,6 +280,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexSandbox: sandbox,
     codexUsdPerMtokIn: num("CODEX_USD_PER_MTOK_IN", 1.25),
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
+    usdPerMtok: providerRates(source, opt),
     credentialMode: cred,
     ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
     ...(personaOf(spec) ? { persona: personaOf(spec)! } : {}),

@@ -303,12 +303,13 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       ],
       "properties": {
         "kind": {
-          "description": "The runner: claude-code, codex, or fake (a local stand-in with no AI provider)",
+          "description": "The runner: claude-code, codex, fx, or fake (a local stand-in with no AI provider)",
           "type": "string",
           "enum": [
             "fake",
             "claude-code",
-            "codex"
+            "codex",
+            "fx"
           ]
         },
         "provider": {
@@ -316,7 +317,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "string",
           "enum": [
             "claude",
-            "codex"
+            "codex",
+            "fx"
           ]
         },
         "model": {
@@ -4426,7 +4428,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
           },
           "provider": {
-            "description": "The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent",
+            "description": "The AI provider the agent runs on: claude, codex or fx; null for a fake (local stand-in) agent",
             "type": [
               "string",
               "null"
@@ -4434,6 +4436,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "enum": [
               "claude",
               "codex",
+              "fx",
               null
             ]
           },

@@ -218,6 +218,9 @@ and the package), and `bun run typecheck` / `test:fast` cover it. Its golden fil
 (`packages/agent-thread/fixtures/golden/*.items.json`, decoded by the Swift renderer too) are generated from the fixture
 sessions next to them; after an intended change to the thread output, refresh them with
 `bun packages/agent-thread/scripts/golden.ts` (the tests fail while they are stale). Keep new fixtures small.
+The fx provider's fixtures (`tests/agents/fixtures/fx`: fx's ACP sessions and the bridge's output for them) are recorded
+from the pinned fx by `scripts/fx-record/record.sh` (needs Docker; fx runs only in a throwaway container with no network,
+against a scripted model server): run it after changing `FX_VERSION` or the bridge, and review the diff.
 `packages/plugin` too; its published form is built by `bun packages/plugin/scripts/pack.ts [--out <dir>]` (default
 `packages/plugin/dist`, not committed) and checked by `packages/plugin/test/pack.test.ts` (test:fast) and
 `packages/plugin/scripts/smoke.sh <tgz>` (needs node and npm; CI's plugin-package job). The examples import it by name

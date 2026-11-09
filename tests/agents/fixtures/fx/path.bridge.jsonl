@@ -1,0 +1,8 @@
+{"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
+{"type":"session","sessionId":"Wy9OjLNJV6jl","model":"stub-model","provider":"stub"}
+{"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_path_0","name":"shell","title":"Running","kind":"execute","status":"pending","rawInput":{"action":"run","command":"capcomd status; echo PATH=$PATH; command -v node"},"_meta":{"fx":{"toolCall":{"internal":false}}}}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_path_0","status":"in_progress"}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_path_0","status":"completed","content":[{"type":"content","content":{"type":"text","text":"capcomd-found\nPATH=/tmp/xbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n/usr/local/bin/node\n"}}],"command_result":{"kind":"command","command":"capcomd status; echo PATH=$PATH; command -v node","cwd":"/work","exit_code":0,"signal":null,"timed_out":false,"duration_ms":6,"stdout_bytes":110,"stderr_bytes":0,"truncated":false,"output_file":"fx-command-replay-11b87eaa0ad9-72b32d47b6dca4315f4eddc40cc25f146ab02a550dca26e05f225483e9a54c98.bin","stdout_file":null,"stderr_file":null}}}
+{"type":"message","role":"agent","messageId":"9a770121bb9ff059eb852f0a55ecea12","text":"checked"}
+{"type":"update","update":{"sessionUpdate":"usage_update","used":1341,"size":200000}}
+{"type":"result","stopReason":"end_turn","usage":{"inputTokens":2500,"outputTokens":81},"lastText":"checked"}

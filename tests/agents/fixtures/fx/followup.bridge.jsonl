@@ -1,0 +1,10 @@
+{"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
+{"type":"session","sessionId":"IuwDJU5UnL-C","model":"stub-model","provider":"stub"}
+{"type":"message","role":"thought","text":"The user wants a greeting; keep it short."}
+{"type":"message","role":"agent","messageId":"9a38f61ab714f0f992f3970c3de4658c","text":"Hello from the stub model. The answer is 42."}
+{"type":"update","update":{"sessionUpdate":"usage_update","used":1240,"size":200000}}
+{"type":"result","stopReason":"end_turn","usage":{"inputTokens":1200,"outputTokens":40},"lastText":"Hello from the stub model. The answer is 42."}
+{"type":"message","role":"thought","text":"The user wants a greeting; keep it short."}
+{"type":"message","role":"agent","messageId":"09bca1c2625e2268ab51625797672a7f","text":"Hello from the stub model. The answer is 42."}
+{"type":"update","update":{"sessionUpdate":"usage_update","used":1341,"size":200000}}
+{"type":"result","stopReason":"end_turn","usage":{"inputTokens":1300,"outputTokens":41},"lastText":"Hello from the stub model. The answer is 42."}

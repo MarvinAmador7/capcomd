@@ -80,9 +80,28 @@ export function isCodexNamingCall(item: Record<string, any>): boolean {
 	return item.type === "mcp_tool_call" && item.server === "capcomd" && NAMING_TOOL.test(String(item.tool ?? ""));
 }
 
-/** Every naming call in one raw CLI event (Claude stream-json or Codex --json): its call id and title words. */
+/** An fx tool call (fx acp `tool_call`, as capcomd's fx bridge prints it) by which the agent names its own tab. */
+export function fxNaming(u: Record<string, any>): string | null {
+	const input = u.rawInput && typeof u.rawInput === "object" ? u.rawInput : {};
+	if (u.name === "shell") return namingCommand(String(input.command ?? ""));
+	const mcp = u._meta?.fx?.toolCall?.mcp;
+	return mcp?.server === "capcomd" && NAMING_TOOL.test(String(mcp.tool ?? "")) ? selfTitle(input) : null;
+}
+export function isFxNamingCall(u: Record<string, any>): boolean {
+	const input = u.rawInput && typeof u.rawInput === "object" ? u.rawInput : {};
+	if (u.name === "shell") return titleArgs(String(input.command ?? "")) !== null;
+	const mcp = u._meta?.fx?.toolCall?.mcp;
+	return mcp?.server === "capcomd" && NAMING_TOOL.test(String(mcp.tool ?? ""));
+}
+
+/** Every naming call in one raw CLI event (Claude stream-json, Codex --json, or a line of capcomd's fx bridge): its call
+ *  id and title words. */
 export function namingCalls(raw: unknown): Array<{ callId: string; title: string }> {
 	const r = raw as any;
+	if (r?.type === "update" && r.update?.sessionUpdate === "tool_call") {
+		const t = fxNaming(r.update);
+		return t === null ? [] : [{ callId: String(r.update.toolCallId ?? ""), title: t }];
+	}
 	const content = r?.message?.content;
 	if (r?.type === "assistant" && Array.isArray(content)) {
 		return content.flatMap((c: any) => {

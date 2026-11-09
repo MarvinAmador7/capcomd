@@ -82,7 +82,7 @@ identity:
   avatar: { seed: security-critic }   # packages/bot-avatar input; absent: derived from the agent id as today
 
 harness:
-  provider: claude                # claude | codex | <a provider plugin's name> (ADR-023 §4.2)
+  provider: claude                # claude | codex | fx | <a provider plugin's name> (ADR-023 §4.2)
   auth: subscription              # exactly one, as v1
   model: claude-opus-4-1
   effort: high
@@ -634,6 +634,12 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
   name before (a typo is caught where it is made), while one a profile already names doesn't stop a change to
   something else. `validate` looks for a `sandbox.environment` only in a sandbox this process has: one only the
   daemon's plugins provide keeps its environments there, and a spawn checks it.
+- **`fx` is a third built-in provider** (`agent-fx`, spec §7.3, 2026-11-09): `harness.provider: fx` validates like
+  the others, `harness.model` is an AI Gateway model id (`anthropic/claude-sonnet-5`) and `harness.effort` one of fx's
+  levels (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; fx itself refuses at start one the model lacks).
+  capcomd has no plan login for fx (its `describe().subscription` is false), so `harness.auth: subscription` on it is
+  refused at validation; `apikey` is `AI_GATEWAY_API_KEY`. `tools.mode: orchestrate` holds on fx (spec §16.1: fx's own
+  permission rules). fx isn't a run driver (`--planner-provider` stays `claude | codex`).
 
 Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`, `src/profiles/fields.ts`,
 `src/api/profiles.ts`):

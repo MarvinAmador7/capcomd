@@ -17,11 +17,12 @@ import { newRun, trajectory, waitAll, world, type World } from "./harness";
 let w: World;
 beforeAll(async () => {
   w = await world("provider");
-  // Two more profiles next to the harness's: a claude one and a codex one, each pinning a model.
+  // Three more profiles next to the harness's: a claude one, a codex one and an fx one, each pinning a model.
   const path = join(w.dir, "agents.json");
   const f = JSON.parse(readFileSync(path, "utf8"));
   f.agents.sonnet = { provider: "claude", auth: "subscription", model: "claude-sonnet-4-5", maxTurns: 10 };
   f.agents.coder = { provider: "codex", auth: "subscription", model: "gpt-5-codex", effort: "high", maxTurns: 10 };
+  f.agents.gateway = { provider: "fx", auth: "apikey", model: "anthropic/claude-sonnet-5", effort: "medium", maxTurns: 10 };
   writeFileSync(path, JSON.stringify(f));
 }, 120_000);
 afterAll(async () => { await w?.stop(); });
@@ -33,11 +34,12 @@ async function spawn(run: string, key: string, args: string[], env: Record<strin
   return JSON.parse(r.stdout.trim().split("\n").pop()!).agentId as string;
 }
 
-test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: claude and codex profiles, env-chosen and fake agents", async () => {
+test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: claude, codex and fx profiles, env-chosen and fake agents", async () => {
   const run = await newRun(w);
   const ids = {
     claude: await spawn(run, "claude", ["--profile", "sonnet"]),
     codex: await spawn(run, "codex", ["--profile", "coder"]),
+    fx: await spawn(run, "fx", ["--profile", "gateway"], { AI_GATEWAY_API_KEY: "vck_test" }),
     // The harness's worker profile pins no model: the provider CLI picks its default.
     noModel: await spawn(run, "nomodel", ["--profile", "worker"]),
     // CAPCOMD_AGENT picks a runner without a profile; CAPCOMD_AGENT_MODEL is the model it runs with.
@@ -48,6 +50,7 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
   const want: Record<keyof typeof ids, { provider: string | null; model: string | null }> = {
     claude: { provider: "claude", model: "claude-sonnet-4-5" },
     codex: { provider: "codex", model: "gpt-5-codex" },
+    fx: { provider: "fx", model: "anthropic/claude-sonnet-5" },
     noModel: { provider: "claude", model: null },
     env: { provider: "codex", model: "gpt-5-mini" },
     fake: { provider: null, model: null },
@@ -59,6 +62,7 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
   const spawned = new Map((await trajectory(w, run)).filter((e) => e.type === "AGENT_SPAWNED").map((e) => [e.agentId, e.data]));
   expect(spawned.get(ids.claude).agent).toMatchObject({ kind: "claude-code", provider: "claude", model: "claude-sonnet-4-5" });
   expect(spawned.get(ids.codex).agent).toMatchObject({ kind: "codex", provider: "codex", model: "gpt-5-codex", effort: "high" });
+  expect(spawned.get(ids.fx).agent).toMatchObject({ kind: "fx", provider: "fx", model: "anthropic/claude-sonnet-5", effort: "medium" });
   expect(spawned.get(ids.env).agent).toEqual({ kind: "codex", model: "gpt-5-mini" });
   expect(spawned.get(ids.fake).agent).toEqual({ kind: "fake" });
   for (const d of spawned.values()) expect(strictEventData("agent.spawned", d)).toEqual({ ok: true });
@@ -71,12 +75,12 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
   const res = await req(`/v1/runs/${run}/agents`);
   expect(res.status).toBe(200);
   const listed = (await res.json()) as any[];
-  expect(listed.length).toBe(5);
+  expect(listed.length).toBe(6);
   for (const [k, id] of Object.entries(ids)) {
     const a = listed.find((x) => x.id === id);
     expect(Agent.safeParse(a).success).toBe(true);
     expect({ k, provider: a.provider, model: a.model }).toEqual({ k, ...want[k as keyof typeof ids] });
-    expect({ k, effort: a.effort }).toEqual({ k, effort: k === "codex" ? "high" : null });
+    expect({ k, effort: a.effort }).toEqual({ k, effort: k === "codex" ? "high" : k === "fx" ? "medium" : null });
     // The profile it runs (the harness's agents.json is the project's layer, and its profiles are version 1); an agent
     // CAPCOMD_AGENT picked without a profile has none.
     const profiled = k !== "env" && k !== "fake";
@@ -99,7 +103,7 @@ test("provider and model on GET /v1/runs/{runId}/agents and snapshot.agents: cla
   expect(frame).toBeDefined();
   const snap = JSON.parse(frame!.slice(frame!.indexOf("data: ") + 6));
   const agents = (snap.data?.agents ?? snap.agents) as any[];
-  expect(agents.length).toBe(5);
+  expect(agents.length).toBe(6);
   for (const [k, id] of Object.entries(ids)) {
     const a = agents.find((x) => x.id === id);
     expect({ k, provider: a.provider, model: a.model }).toEqual({ k, ...want[k as keyof typeof ids] });

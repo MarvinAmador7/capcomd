@@ -213,6 +213,8 @@ export function validateSpec(name: string, raw: unknown, labels: SpecLabels = { 
   }
   if (s.auth === undefined) at(legacyKey || legacySub ? `use auth: "${legacyKey ? "apikey" : "subscription"}" instead of a credential field` : `${k$("auth")} is required ("apikey" or "subscription"): neither is configured`);
   else if (!["apikey", "subscription"].includes(s.auth as string)) at(`${k$("auth")} must be "apikey" or "subscription"`);
+  else if (s.auth === "subscription" && typeof s.provider === "string" && agentSeam(s.provider)?.describe().subscription === false)
+    at(`${k$("auth")} "subscription": capcomd has no plan login for ${agentSeam(s.provider)!.describe().label}; use auth: "apikey" with ${agentSeam(s.provider)!.describe().secretName}`);
   const posInt = (k: string, min = 1) => { if (s[k] !== undefined && (!Number.isInteger(s[k]) || (s[k] as number) < min)) at(`${k$(k)} must be an integer >= ${min}`); };
   posInt("maxTurns"); posInt("timeoutMs", 1000); posInt("idleAfterMs", 1000); posInt("checkpointEveryMs", 1000); posInt("stuckRepeats", 2); posInt("noChangeAfterMs", 1000);
   if (s.maxBudgetUsd !== undefined && !(typeof s.maxBudgetUsd === "number" && Number.isFinite(s.maxBudgetUsd) && s.maxBudgetUsd > 0)) at(`${k$("maxBudgetUsd")} must be > 0`);

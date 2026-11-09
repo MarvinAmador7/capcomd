@@ -1,0 +1,4 @@
+{"dir":"start","args":["acp","--log-file","/out/noauth.fx.log"],"env":{"FX_AUTO_UPGRADE":"0","FX_NO_OPEN_BROWSER":"1","FX_PERMISSION_MODE":"full-access","FX_PROVIDER":"gateway"}}
+{"dir":"c2a","msg":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,"session":{"notices":{}}}}}}
+{"dir":"a2c","msg":{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"fx needs access to Vercel AI Gateway. Run fx login to sign in, fx setup to use an API key, or set AI_GATEWAY_API_KEY."}}}
+{"dir":"exit","code":0,"signal":null}

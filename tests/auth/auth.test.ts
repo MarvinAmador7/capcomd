@@ -17,6 +17,7 @@ import { envBuild } from "../../src/env/build";
 import { doctor, formatDoctor } from "../../src/env/doctor";
 import { bareRepo } from "../merge/gitfixture";
 import { taskBranch } from "../../src/merge/config";
+import { stubFx } from "../helpers/fx-stub";
 
 const TOKEN = "sk-ant-oat01-FAKEOAUTHTOKEN_abcdefghijklmnopqrstuvwxyz0123456789-XYZ";
 const FAKE_CLAUDE = new URL("./fake-claude-login.sh", import.meta.url).pathname;
@@ -31,6 +32,7 @@ function setup(agent: "claude-code" | "codex", over: Record<string, string> = {}
   const cfg = loadAgentConfig({ CAPCOMD_AGENT: agent, CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: agent === "codex" ? FAKE_CODEX : FAKE_CLAUDE, CAPCOMD_CREDENTIALS: "auto", ...over });
   const home = join(workdir, "home");
   mkdirSync(home, { recursive: true });
+  stubFx(home);
   return { p, cfg, workdir, ledger, home, log };
 }
 function terminal(input?: string) {

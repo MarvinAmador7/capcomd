@@ -1,0 +1,11 @@
+{"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
+{"type":"session","sessionId":"0Kyv_zkG2Gpv","model":"stub-model","provider":"stub"}
+{"type":"message","role":"agent","messageId":"4a9db94e097dd3ea41bf7fa05f82cebb","text":"Working on it."}
+{"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_steer_0","name":"shell","title":"Running","kind":"execute","status":"pending","rawInput":{"action":"run","command":"sleep 4 && echo slept"},"_meta":{"fx":{"toolCall":{"internal":false}}}}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_steer_0","status":"in_progress"}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_steer_0","status":"completed","content":[{"type":"content","content":{"type":"text","text":"slept\n"}}],"command_result":{"kind":"command","command":"sleep 4 && echo slept","cwd":"/work","exit_code":0,"signal":null,"timed_out":false,"duration_ms":4011,"stdout_bytes":6,"stderr_bytes":0,"truncated":false,"output_file":"fx-command-replay-64c42bd7f8bf-d033f5ef4e54fde047a906d532fd617e10bb17de9d1eb7b5919be9cd00c9c6e2.bin","stdout_file":null,"stderr_file":null}}}
+{"type":"update","update":{"sessionUpdate":"user_message_chunk","messageId":"e499732dc9c73d620ffa0ad08a5c7433","content":{"type":"text","text":"Also, the answer must mention the word pineapple."},"_meta":{"fx":{"steering":{"requestId":4}}}}}
+{"type":"message","role":"agent","messageId":"113e03a647d5f61eb4b885a45a69be4a","text":"I read your note: \"<user_steering>\\nApply this live user update to the current task. Continue working unless the user asks you to stop, the task is complete, or a genuine blocker prevents progress.\\n\\nAlso, the answer must\""}
+{"type":"update","update":{"sessionUpdate":"usage_update","used":1341,"size":200000}}
+{"type":"steer","delivery":"absorbed"}
+{"type":"result","stopReason":"end_turn","usage":{"inputTokens":2500,"outputTokens":81},"lastText":"I read your note: \"<user_steering>\\nApply this live user update to the current task. Continue working unless the user asks you to stop, the task is complete, or a genuine blocker prevents progress.\\n\\nAlso, the answer must\""}

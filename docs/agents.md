@@ -587,6 +587,38 @@ Auth is exactly one of `apikey` (the provider's API key, from local env or a box
 
 `children` (policy only for now): `{allowSpawn, maxDepth, maxChildren, maxTotalDescendants, allowedChildProfiles, budgetShare}`. Children may only narrow their parent.
 
-`provider` is the name of an active agent provider: `claude` and `codex` are built-in plugins (`agent-claude`, `agent-codex` in `capcomd plugins list`), and another plugin may add one. A profile naming one that isn't active is refused when it's validated. Outside the daemon (the CLI, the MCP server) "active" means built in or listed by the running daemon (`capcomd plugins list`), since a plugin may be loaded only there; with no daemon running, a name that isn't built in is a warning (`capcomd profiles validate` lists it) and the daemon checks it when an agent uses the profile. The same goes for `sandbox.provider`. `capcomd profiles add`, `set` and `rm` still refuse a change that brings in such a name unless the running daemon lists it.
+`provider` is the name of an active agent provider: `claude`, `codex` and `fx` are built-in plugins (`agent-claude`, `agent-codex`, `agent-fx` in `capcomd plugins list`), and another plugin may add one. A profile naming one that isn't active is refused when it's validated. Outside the daemon (the CLI, the MCP server) "active" means built in or listed by the running daemon (`capcomd plugins list`), since a plugin may be loaded only there; with no daemon running, a name that isn't built in is a warning (`capcomd profiles validate` lists it) and the daemon checks it when an agent uses the profile. The same goes for `sandbox.provider`. `capcomd profiles add`, `set` and `rm` still refuse a change that brings in such a name unless the running daemon lists it.
+
+### fx
+
+[fx](https://fx.sh) (Vercel Labs' coding agent, 0.0.16; experimental, as fx itself is) runs models through the
+[Vercel AI Gateway](https://vercel.com/docs/ai-gateway) with an API key:
+
+```bash
+export AI_GATEWAY_API_KEY=…                       # or `capcomd secrets sync` on boxd: bound to ai-gateway.vercel.sh
+capcomd profiles add gw --provider fx --auth apikey --model anthropic/claude-sonnet-5 --effort high
+capcomd run --profile gw "goal"
+```
+
+- **Install.** The agent's environment gets fx's pinned release (`capcomd env build` bakes it in; an environment built
+  before has an agent on fx install it as it starts): the archive for the machine's architecture from
+  `releases.fx.sh`, checked against the sha256 capcomd ships before it is unpacked, as `<agent home>/bin/fx`. fx's own
+  installer script is never run, fx never upgrades itself in the agent's machine, and an `fx` already on its `PATH` (a
+  JSON viewer has the name too) isn't used. An environment with a restricted egress needs `ai-gateway.vercel.sh`
+  (and `releases.fx.sh` while it installs).
+- **Model and effort.** `model` is any AI Gateway model id (`anthropic/claude-sonnet-5`, `openai/gpt-6`, …; unset:
+  fx's default); `effort` one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` (fx refuses at start a level
+  the model doesn't have).
+- **Login.** An API key only: `auth: apikey` with `AI_GATEWAY_API_KEY`. fx's own logins (`fx login vercel|grok|codex`)
+  aren't supported, so `auth: subscription` is refused; for a ChatGPT plan use the `codex` provider.
+- **Messages.** `capcomd send` reaches a working fx agent: fx takes it at its next model call, or as its next turn.
+- **Limits.** `maxTurns` counts tool steps (and is fx's own step limit too); `maxBudgetUsd` is estimated from tokens at
+  `CAPCOMD_FX_USD_PER_MTOK_IN` and `_OUT` (default 5 and 25 USD per million tokens: fx reports no cost, and the model
+  behind the Gateway can be anyone's), checked when each turn ends. Tokens an fx subagent spends aren't in fx's count.
+  Out of credits, or a rate limit that doesn't pass for 10 minutes, pauses the agent like any provider's usage limit.
+- **MCP.** capcomd's own server and the profile's `trusted` servers start; an untrusted one doesn't (fx runs with full
+  access in its sandbox, so nothing would hold its tools for approval), and the agent's log says so.
+- **Orchestrate.** A planner or lead on fx runs with fx's permission rules: it reads, searches and runs the read-only
+  commands and capcomd's; anything else (an edit, a command not on the list, a chained command) is refused.
 
 `toolMode: "orchestrate"` (default `"execute"`) makes an agent that plans, spawns, verifies and merges but never changes a file itself (docs/spec/plugin-api.md §16.1): Claude Code gets only `Read, Glob, Grep, LS, Bash(capcomd:*)` with the edit tools denied, Codex runs with `--sandbox read-only` (its capcomd MCP tools still work), nothing it does is committed or pushed, and capcomd refuses to verify or merge its own ref. It needs `children.allowSpawn`; its children run in their own mode, and an override can't lift it without `--operator`. `capcomd setup project` gives it to `planner` and `lead`.

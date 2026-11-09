@@ -51,7 +51,10 @@ export const AgentResult = z.looseObject({
 }).meta({ "x-untrusted": true, description: "Agent-written text: the agent's declared result. Render every string as plain text, never markdown, links or actions" });
 const finish = { result: AgentResult, spent: U, budget: U };
 /** Which AI provider an agent runs on (harness.v1 Agent.provider, agent.spawned agent.provider). */
-export const AgentProvider = z.enum(["claude", "codex"]);
+export const AgentProvider = z.enum(["claude", "codex", "fx"]);
+/** The providers a run can be driven by (harness.v1 `DriverOption.provider`, POST /v1/runs `driver`) and that have plan
+ *  logins (GET /v1/logins): Claude Code and Codex. */
+export const DriverProvider = z.enum(["claude", "codex"]);
 /** Where an agent's profile came from (harness.v1 Agent.profileSource, agent.spawned profileSource; ADR-024 §2.3): the
  *  layer its name was found in. Same values as `src/profiles/load.ts` ProfileLayer. */
 export const ProfileSource = z.enum(["project", "user", "bundled"]);
@@ -63,7 +66,7 @@ export const PROFILE_SOURCE_TEXT = "The layer its profile was found in at spawn:
 /** agent.spawned `agent`: the agent's profile as resolved at spawn (provider, auth, limits, …) plus the runner the daemon
  * chose. Open: other profile fields come along, and may be added. */
 export const SpawnedAgent = z.looseObject({
-	kind: z.enum(["fake", "claude-code", "codex"]).optional().describe("The runner: claude-code, codex, or fake (a local stand-in with no AI provider)"),
+	kind: z.enum(["fake", "claude-code", "codex", "fx"]).optional().describe("The runner: claude-code, codex, fx, or fake (a local stand-in with no AI provider)"),
 	provider: AgentProvider.optional().describe("The profile's provider; absent when the agent was chosen by CAPCOMD_AGENT without a profile (then see kind)"),
 	model: z.string().nullable().optional().describe("The model it runs with (CAPCOMD_AGENT_MODEL, else the profile's); absent or null: the provider CLI's default"),
 	effort: z.string().nullable().optional().describe("The reasoning effort it runs with (CAPCOMD_AGENT_EFFORT, else the profile's or the run's chosen level); absent or null: the provider CLI's default"),

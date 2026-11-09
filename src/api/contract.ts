@@ -3,7 +3,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentProvider, AgentResult, AgentTitleSource, HeldBy, LegacyEventData, PROFILE_SOURCE_TEXT, PROFILE_VERSION_TEXT, ProfileSource, ProfileVersion, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, DriverProvider, AgentTitleSource, HeldBy, LegacyEventData, PROFILE_SOURCE_TEXT, PROFILE_VERSION_TEXT, ProfileSource, ProfileVersion, UntrustedText } from "./legacy-events";
 import { RENAME_WINDOW_MS, RENAMES_MAX, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
@@ -108,7 +108,7 @@ export const Agent = z.object({
 	taskAttachment: AttachmentRef.nullable(),
 	result: AgentResult.nullable(),
 	workspace: AgentWorkspace.nullable(),
-	provider: AgentProvider.nullable().describe("The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent"),
+	provider: AgentProvider.nullable().describe("The AI provider the agent runs on: claude, codex or fx; null for a fake (local stand-in) agent"),
 	model: z.string().nullable().describe("The model the agent runs with, when the daemon knows it (the profile's model or CAPCOMD_AGENT_MODEL); null: the provider CLI's default, or a fake agent"),
 	effort: z.string().nullable().describe("The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent"),
 	createdAt: Timestamp.nullable().optional().describe("When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it"),
@@ -558,7 +558,7 @@ export const CreateRunBody = z.object({
 	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target. With a goal branch (capability runs.goal_branch), the base: send `base` instead."),
 	base: BranchName.optional().describe("Capability runs.goal_branch. The origin branch the run's goal branch is cut from and its pull request goes into (`capcomd run --base`), as the user picked it in the setup screen (GET /v1/projects/branches). Omitted: `targetBranch`, else the project's target, else the remote's default branch; when none of those is known, 422 with `field` base: ask the user. Never a guessed main"),
 	goalBranch: z.union([BranchName, z.literal(false)]).optional().describe("Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (capcomd/<goal-slug>, never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"),
-	driver: AgentProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
+	driver: DriverProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
 	model: z.string().min(1).max(100).regex(/^[A-Za-z0-9._:\/-]+$/, "model must be a model id").optional().describe("Capability runs.options.models. The model the run's planner (the driver) runs on (`capcomd run --planner-model`): one of that driver's `models[].id` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Passed to the agent CLI as a profile's model is (Claude Code `--model`, Codex `-m`). Omitted: the driver's `model` there (the planner profile's, else the CLI's default)."),
 	plugins: z.record(z.string(), z.record(z.string(), z.unknown())).optional().describe("Capability plugins.config. The run's own plugin settings (`capcomd run --plugin-config <plugin>.<key>=<value>`), by plugin name: only the settings a plugin's config schema marks per-run (`x-per-run`), each valid against its schema; anything else is 422 with `field` plugins.<name>.<key>. Kept for the run in the plugin's run storage (plugin API §10.2); the plugins' own config is unchanged"),
@@ -577,7 +577,7 @@ export const DriverFit = z.object({
 	reason: z.string().nullable().describe("Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available"),
 });
 export const DriverOption = z.object({
-	provider: AgentProvider,
+	provider: DriverProvider,
 	label: z.string().describe("What to call it: \"Claude Code\" or \"Codex\""),
 	model: z.string().nullable().describe("The model the planner would run with on this provider; null: the provider CLI's default"),
 	models: z.array(z.object({
@@ -623,7 +623,7 @@ export const RunOptionsQuery = z.object({
 /** GET /v1/logins, /v1/environments, /v1/service: what the app's Settings window shows. Local state only. */
 const SettingsSandbox = z.string().describe(`Where agents run: a listed place's name, today ${LISTED_PROVIDERS.map((n) => `${n} ("${PROVIDER_LABEL[n]}")`).join(" or ")}`);
 export const Login = z.object({
-	provider: AgentProvider,
+	provider: DriverProvider,
 	sandbox: SettingsSandbox,
 	loggedIn: z.boolean().describe("Agents of this provider can log in in this sandbox"),
 	how: z.enum(["plan", "api_key"]).nullable().describe("plan: a plan login (`capcomd auth login`) saved for this sandbox; api_key: ANTHROPIC_API_KEY / OPENAI_API_KEY is set for the daemon, or (boxd) kept as a boxd secret with CAPCOMD_CREDENTIALS=secret. A plan login wins when there are both. null when not logged in"),
