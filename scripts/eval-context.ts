@@ -22,10 +22,11 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ARMS, armNamed, type Arm } from "./eval-context/arms";
-import { briefItems, inlineTask, pushText, triggered, type BriefItem } from "./eval-context/deliver";
+import { briefItems, briefWithoutSkills, inlineTask, pushText, skillBlocks, triggered, type BriefItem } from "./eval-context/deliver";
 import { actionsFromLogs, admissions, decidedLimits, spendFromSpans, startingLimits, summarize, type Metrics, type Row } from "./eval-context/report";
 import { checkCommand, FAKE_EXPECTED, parseVerdict, suite, type Chain, type Step, type Verdict } from "./eval-context/tasks";
 import { generateWorld, repoFiles, worldHash } from "./eval-context/world";
+import { contextSkills } from "../src/context/skills";
 import { reapUnder } from "./reap";
 
 const { values: a } = parseArgs({
@@ -167,15 +168,19 @@ type StepResult = { agentId: string | null; status: string; verdict: Verdict; me
 
 async function runStep(env: Record<string, string>, runId: string, step: Step, profile: string, tag: string, arm: Arm, files: Record<string, string>): Promise<StepResult> {
   // Inline and triggered arms (step 6's questions): the router's brief for this agent's profile, now, says which items.
-  let items: BriefItem[] = [];
-  if (arm.inline || arm.triggered) {
-    const b = await cli(["context", "brief", profile, "--run", runId], env);
+  // Without the skills, it is the brief the harness delivers, so it is the one the router would give this agent (a
+  // report agent is briefed as a reviewer).
+  let items: BriefItem[] = [], brief = "";
+  if (arm.inline || arm.triggered || arm.noSkills) {
+    const b = await cli(["context", "brief", profile, "--run", runId, ...(arm.noSkills && step.report ? ["--review"] : [])], env);
     if (typeof b.j?.brief !== "string") return { agentId: null, status: "not-spawned", verdict: { success: false }, metrics: null, harnessError: `context brief failed: ${b.text.slice(-400)}` };
-    items = briefItems(b.j.brief);
+    brief = b.j.brief;
+    items = briefItems(brief);
   }
   const t0 = Date.now();
   const inline = arm.inline ? inlineTask(step.prompt, items, files, arm.inline) : null;
-  const sp = await cli(["spawn", runId, "--profile", profile, "--task", inline?.text ?? step.prompt, "--title", title(step), "--key", step.id, ...(step.report ? ["--report"] : [])], env);
+  const sp = await cli(["spawn", runId, "--profile", profile, "--task", inline?.text ?? step.prompt, "--title", title(step), "--key", step.id, ...(step.report ? ["--report"] : []),
+    ...(arm.noSkills ? ["--overrides", JSON.stringify(briefWithoutSkills(brief))] : [])], env);
   const agentId: string | null = sp.j?.agentId ?? null;
   if (!agentId) return { agentId, status: "not-spawned", verdict: { success: false }, metrics: null, harnessError: `spawn failed: ${sp.text.slice(-400)}` };
   let agent: any = null;
@@ -200,10 +205,23 @@ async function runStep(env: Record<string, string>, runId: string, step: Step, p
   }
   watching = false;
   await watcher;
-  const delivered = { ...(inline ? { inlined: inline.inlined } : {}), ...(arm.triggered ? { pushed: [...pushed.keys()] } : {}) };
+  const prompt = arm.context ? deliveredPrompt(agentId) : null;
+  const delivered = { ...(inline ? { inlined: inline.inlined } : {}), ...(arm.triggered ? { pushed: [...pushed.keys()] } : {}), ...(prompt ?? {}) };
   if (!agent || !TERMINAL.has(agent.status)) { await cli(["cancel", runId, agentId, "--reason", "eval timeout"], env); return { agentId, status: "timeout", verdict: { success: false, error: "the agent didn't finish in time" }, metrics: null, delivered }; }
   const res = await scoreStep(env, runId, step, tag, agentId, agent, t0);
   return { ...res, delivered };
+}
+
+/** What the agent's appended system prompt carried (the files its brief's lines point at, in order; the names of its
+ *  skill blocks), read on the fake sandbox, where its machine is a folder and the runner uploaded the prompt to the
+ *  attempt's own; null on a live one. */
+function deliveredPrompt(agentId: string): { brief: string[]; skills: string[] } | null {
+  if (LIVE) return null;
+  const vm = common.CAPCOMD_AGENT_WORKDIR!, attempt = (d: string) => Number(d.slice(agentId.length + 2));
+  const last = (existsSync(vm) ? readdirSync(vm) : []).filter((d) => d.startsWith(`${agentId}-e`)).sort((x, y) => attempt(x) - attempt(y)).pop();
+  const f = last ? join(vm, last, "append-system.txt") : null;
+  const s = f && existsSync(f) ? readFileSync(f, "utf8") : "";
+  return { brief: briefItems(s).map((i) => i.file), skills: skillBlocks(s) };
 }
 
 async function scoreStep(env: Record<string, string>, runId: string, step: Step, tag: string, agentId: string, agent: any, t0: number): Promise<StepResult> {
@@ -350,6 +368,21 @@ if (a.expect) {
     const pushedFor = (file: string) => r.delivered?.pushed?.some((p) => p.endsWith(`/${file.toLowerCase()}.md`));
     if (r.arm === "index-triggered" && r.step === "business-fee" && !pushedFor(world.shipping.current.id)) bad.push(`index-triggered business-fee: pushed ${JSON.stringify(r.delivered?.pushed)}`);
     if (r.arm === "index-triggered" && r.step === "stale-tier" && !pushedFor(world.tiers.current.id)) bad.push(`index-triggered stale-tier: pushed ${JSON.stringify(r.delivered?.pushed)}`);
+    // The delivered prompt: the brief in every arm with a context block, with the skills the router attaches (the
+    // doctrine, and the routing paragraph for a working agent) in each but index-noskills, which has neither and has
+    // the very brief the index arm's agent of that step had (a report agent's is a reviewer's): the skills are all it lacks.
+    const arm = armNamed(r.arm), step = chains.flatMap((c) => c.steps).find((s) => s.id === r.step);
+    if (arm?.context && step && r.agentId) {
+      const skills = arm.noSkills ? [] : contextSkills({ role: step.report ? "review" : "work", capcomd: true }).map((s) => s.name);
+      if (!r.delivered?.brief?.length) bad.push(`${r.arm} ${r.step}: no brief in the delivered prompt`);
+      if (JSON.stringify(r.delivered?.skills) !== JSON.stringify(skills)) bad.push(`${r.arm} ${r.step}: the delivered prompt has the skills ${JSON.stringify(r.delivered?.skills)}, not ${JSON.stringify(skills)}`);
+      const twin = arm.noSkills ? results.get("fake")!.find((x) => x.arm === arm.against && x.rep === r.rep && x.step === r.step && x.delivered?.brief) : undefined;
+      const [mine, theirs] = [r.delivered?.brief ?? [], twin?.delivered?.brief ?? []];
+      if (twin && JSON.stringify(mine) !== JSON.stringify(theirs)) {
+        const only = (x: string[], y: string[]) => JSON.stringify(x.filter((f) => !y.includes(f)));
+        bad.push(`${r.arm} ${r.step}: the delivered brief isn't ${arm.against}'s (${mine.length} lines against ${theirs.length}; only here ${only(mine, theirs)}, only there ${only(theirs, mine)})`);
+      }
+    }
   }
   const ran = new Set(results.get("fake")!.map((r) => `${r.arm} ${r.step}`));
   for (const arm of arms) for (const s of chains.flatMap((c) => c.steps)) if (want[arm.name]?.[s.id] && !ran.has(`${arm.name} ${s.id}`)) bad.push(`${arm.name} ${s.id}: not run`);

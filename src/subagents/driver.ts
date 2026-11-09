@@ -21,7 +21,7 @@ import { env } from "../utils/env";
 import type { SandboxProvider, VmId } from "../providers/sandbox";
 import { rawProvider } from "../providers/resilient";
 import { VM_RPC_DIR } from "./skill";
-import { attachMachine, type JobMachine } from "../jobs/service";
+import { attachMachine, noteStep, type JobMachine } from "../jobs/service";
 import { TERMINAL_AGENT } from "../primitives/policy";
 
 
@@ -39,8 +39,9 @@ function pumpFor(runId: string, a: ScopeAgent, spool: LocalSpool | VmSpool, inte
   const ttlMs = Number(env("TOKEN_TTL_MS") ?? 30 * 60_000);
   let jti: string | null = null;
   // The capcomd ops it calls (spawn, await, send, …) are what it is doing too (harness.v1 Agent.activity).
+  // Each one is a step its background jobs' afterTurnMs counts from (§16.2 rule 2).
   const activity = activityReporter((act) => s.setActivity({ agentId: a.agentId, activity: act }),
-    o.steps ? { onStep: (st) => s.recordStep({ agentId: a.agentId, ...st }) } : {});
+    { onSeen: (at) => noteStep(runId, a.agentId, at), ...(o.steps ? { onStep: (st) => s.recordStep({ agentId: a.agentId, ...st }) } : {}) });
   // The agent's machine: its VM, or this host for a scripted agent on a local spool.
   const exec = spool instanceof VmSpool ? (cmd: string[], o: { cwd?: string; timeoutMs?: number }) => spool.provider.exec(spool.vmId, cmd, o) : localExec;
   const upload = spool instanceof VmSpool ? (path: string, data: Uint8Array) => spool.provider.upload(spool.vmId, path, data) : localUpload;

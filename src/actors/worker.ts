@@ -27,6 +27,7 @@ import { slotsFor } from "../providers/capacity";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent, stoppedAt } from "../agents/runner";
 import { activityReporter } from "../agents/activity";
+import { noteStep } from "../jobs/service";
 import { itemWriter } from "../agents/thread-store";
 import { heartbeatEveryMs } from "../subagents/results";
 import { adapterFor } from "../agents/adapters";
@@ -435,7 +436,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     let raised: string | null = null;
     // What it is doing now (harness.v1 Agent.activity): classified from its events, written at most once a second.
     // Each finished step goes into its history too (agent.step), unthrottled; the last one when it ends (not on a cancel).
-    const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a }), { onStep: (st) => scope.recordStep({ agentId: workerId, ...st }) }) : null;
+    // Each step it is seen taking is one its background jobs' afterTurnMs counts from (plugin API §16.2 rule 2).
+    const activity = scope ? activityReporter((a) => scope.setActivity({ agentId: workerId, activity: a }), { onStep: (st) => scope.recordStep({ agentId: workerId, ...st }), onSeen: (at) => noteStep(runId, workerId, at) }) : null;
     let cancelSeen = false;
     // Its thread (harness.v1 thread items), written in order; flushed before the agent is reported finished. Agents
     // that may spawn get one too: the spool pump forwards only their capcomd calls, not their own events.

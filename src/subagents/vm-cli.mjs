@@ -139,9 +139,11 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
   fetch [branch…]   the latest branches into your checkout as origin/<branch> (e.g. the target after a merge), to read with git log/show/diff
   check [agt|branch] [--check NAME]   the run's checks on that branch's commit as it is, in a sandbox (default: the run's
         target, i.e. the combined code after the merges); prints pass/fail and the output. Merges nothing.
-  job start [--label L] [--foreground-ms N] [--timeout-ms N] -- <cmd…>   run a long command in the background: it
+  job start [--label L] [--foreground-ms N] [--timeout-ms N] [--run] -- <cmd…>   run a long command in the background: it
         answers with its result when it ends within the foreground wait, else "running" and its result comes to you
-        as a message (capcomd inbox). One word with spaces runs with sh -c.
+        as a message (capcomd inbox). One word with spaces runs with sh -c. --run: the run's job instead, for one
+        that must outlive you (a server kept for review): it runs in a machine of the run's own (the run's
+        environment image, without your checkout or credentials) until the run ends or its --timeout-ms.
   job output <job> [--tail BYTES]   job list   job kill <job> [--reason R]
   mcp   (serve these as MCP tools over stdio)`;
 
@@ -212,9 +214,11 @@ export function toCall(argv) {
     case "job": {
       const action = pos.shift();
       if (action === "start") {
+        // --run takes no value: a word after it (with no `--`) is the command's first.
+        if (typeof fl.run === "string" && fl.run !== "true" && !rest.length) pos.unshift(fl.run);
         const cmd = rest.length ? rest : pos;
         if (!cmd.length) usage("job start needs a command: capcomd job start -- npm test");
-        return { op: "job.start", args: { cmd, ...jobStartArgs(), ...(fl.label !== undefined ? { label: fl.label } : {}), ...(fl["foreground-ms"] !== undefined ? { foregroundMs: Number(fl["foreground-ms"]) } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(key !== undefined ? { key } : {}) } };
+        return { op: "job.start", args: { cmd, ...jobStartArgs(), ...(fl.run !== undefined ? { run: true } : {}),...(fl.label !== undefined ? { label: fl.label } : {}), ...(fl["foreground-ms"] !== undefined ? { foregroundMs: Number(fl["foreground-ms"]) } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(key !== undefined ? { key } : {}) } };
       }
       if (action === "output") { if (!pos[0]) usage("job output needs a job id"); return { op: "job.output", args: { job: pos[0], ...(fl.tail !== undefined ? { tail: Number(fl.tail) } : {}) } }; }
       if (action === "list") return { op: "job.list", args: {} };
@@ -266,7 +270,7 @@ export const TOOLS = [
   ["merge", "Merge a child's verified commit (needs require=vfy id). Its result says whether the checks ran on the combined code (result.combined).", S({ ref: str, require: str, key: str }, ["ref", "require"])],
   ["fetch", "Fetch the latest branches (all, or `branches`) into your checkout as origin/<branch>, e.g. the target after a merge; read them with git log/show/diff, or `git switch --detach origin/<branch>` and the file tools. Changes no code.", S({ branches: ids })],
   ["check", "Run the run's checks on a branch's commit as it is (ref: a branch or a child's agent id; default: the run's target, i.e. the combined code after the merges), in a sandbox: the full output and pass/fail (result.pass, result.text, result.checks.output). Merges and reviews nothing; how you know the combined code works without running it yourself. Identical checks of one commit are shared.", S({ ref: str, check: str, key: str })],
-  ["job_start", "Run a long command (tests, a build, a server) in the background in your machine. It answers with the result when the command ends within `foregroundMs` (default: your profile's, 60 s), else state \"running\" and a job id: the result then comes to you as a message. `cmd`: a shell line, or argv.", S({ cmd: { anyOf: [str, ids] }, label: str, foregroundMs: num, timeoutMs: num, key: str }, ["cmd"])],
+  ["job_start", "Run a long command (tests, a build, a server) in the background in your machine. It answers with the result when the command ends within `foregroundMs` (default: your profile's, 60 s), else state \"running\" and a job id: the result then comes to you as a message. `cmd`: a shell line, or argv. `run: true`: the run's job instead, for one that must outlive you (a server kept for review): it runs in a machine of the run's own (the run's environment image, without your checkout or credentials) until the run ends or its `timeoutMs`.", S({ cmd: { anyOf: [str, ids] }, label: str, foregroundMs: num, timeoutMs: num, run: { type: "boolean" }, key: str }, ["cmd"])],
   ["job_output", "The output of one of your background jobs so far (or its result once it ended).", S({ job: str, tail: num }, ["job"])],
   ["job_list", "Your background jobs, newest first, with their state.", S({})],
   ["job_kill", "Stop one of your background jobs (SIGTERM, then SIGKILL after 5 s).", S({ job: str, reason: str }, ["job"])],
