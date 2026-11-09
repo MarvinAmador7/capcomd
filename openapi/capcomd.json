@@ -8086,10 +8086,10 @@
                             "properties": {
                               "kind": {
                                 "type": "string",
-                                "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                                "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`), job (a run's own background jobs: a server kept for review, `capcomd job start --run`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
                               },
                               "runId": {
-                                "description": "The run (agent, check); null for a job that belongs to no run",
+                                "description": "The run (agent, check, job); null for a job that belongs to no run",
                                 "type": [
                                   "string",
                                   "null"
@@ -8103,7 +8103,7 @@
                                 ]
                               },
                               "role": {
-                                "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment",
+                                "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment, jobs",
                                 "type": [
                                   "string",
                                   "null"
@@ -8316,10 +8316,10 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                          "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`), job (a run's own background jobs: a server kept for review, `capcomd job start --run`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
                         },
                         "runId": {
-                          "description": "The run (agent, check); null for a job that belongs to no run",
+                          "description": "The run (agent, check, job); null for a job that belongs to no run",
                           "type": [
                             "string",
                             "null"
@@ -8333,7 +8333,7 @@
                           ]
                         },
                         "role": {
-                          "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment",
+                          "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment, jobs",
                           "type": [
                             "string",
                             "null"
@@ -9004,10 +9004,10 @@
                           "properties": {
                             "kind": {
                               "type": "string",
-                              "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
+                              "description": "Capability sandboxes.settings. Who uses it: agent (an agent's machine), or one of capcomd's own short jobs: check (a run's checks), login (`capcomd auth login` or `auth status`), env_build (`capcomd env build`), doctor (`capcomd doctor`), job (a run's own background jobs: a server kept for review, `capcomd job start --run`). Treat an unknown kind like a job of capcomd's: never left behind. Absent from older daemons: agent"
                             },
                             "runId": {
-                              "description": "The run (agent, check); null for a job that belongs to no run",
+                              "description": "The run (agent, check, job); null for a job that belongs to no run",
                               "type": [
                                 "string",
                                 "null"
@@ -9021,7 +9021,7 @@
                               ]
                             },
                             "role": {
-                              "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment",
+                              "description": "An agent's profile (planner, worker, reviewer…), null when it has none; for capcomd's own jobs a word for the job: checks, login, environment, jobs",
                               "type": [
                                 "string",
                                 "null"

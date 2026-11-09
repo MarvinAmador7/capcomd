@@ -4,13 +4,15 @@
 //  - exec: a command in its owner agent's machine (src/jobs/machine.ts), through the exec its spool pump uses. The pump
 //    attaches the machine while the agent runs (src/subagents/driver.ts); while attached its jobs are looked at every
 //    second. An agent's long command returns `running` and its result arrives as a message in its inbox. When the agent
-//    ends its jobs are killed; when the daemon restarts, the agent's pump attaches again and its jobs are settled from
-//    their files.
+//    ends its jobs are killed, and one that runs on `afterTurnMs` past its agent's last step is stopped; when the
+//    daemon restarts, the agent's pump attaches again and its jobs are settled from their files. A run-owned one
+//    (`owner: {run: true}`) runs in the run's job machine (src/jobs/run-machine.ts), made for it and attached here
+//    while any runs in it: it outlives the agent that started it, and is killed when the run ends (or at its
+//    `timeoutMs`), the machine destroyed with it. A restarted daemon finds that machine again from the jobs' records.
 //  - timer: fires `at` a time, or every `everyMs` until `until`. Re-armed from its record when the daemon starts; a
 //    missed fire fires once then.
 // Changes reach plugins as `job.changed` hook calls (started, output, fired, ended) and the run's stream as events.
-// Nobody polls a job; `wait` is a convenience bounded by its deadline. A run-owned job machine (`owner: {run: true}`
-// for exec) is a later step's: refused as unsupported here.
+// Nobody polls a job; `wait` is a convenience bounded by its deadline.
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Job, JobSpec, JobState, Principal } from "../../packages/plugin/src/shapes";
@@ -25,6 +27,7 @@ import { paramsHash, stableId, TERMINAL_AGENT } from "../primitives/policy";
 import { env } from "../utils/env";
 import { stateDir } from "../utils/home";
 import { launch, look, noMessage, readFrom, signal, tails, type JobMachine } from "./machine";
+import { ensureRunMachine, reattachRunMachine, RUN_OWNER, type HeldRunMachine, type RunMachineRef } from "./run-machine";
 
 export type { JobMachine } from "./machine";
 
@@ -32,8 +35,13 @@ export type { JobMachine } from "./machine";
 export type JobRecord = Job & {
   /** Who started it: an agent id, `plugin:<name>`, or `operator`. */
   by: string;
-  /** exec: killed this long after it started (default the owner's `jobs.afterTurnMs`). */
+  /** exec: killed this long after it started; null: no limit of its own (an agent's job started without `timeoutMs`,
+   *  which `afterTurnMs` bounds). A record written before `afterTurnMs` has this as its owner's afterTurnMs. */
   timeoutMs: number | null;
+  /** An agent's exec job: killed this long after its agent's last step (its owner's `jobs.afterTurnMs`). */
+  afterTurnMs?: number | null;
+  /** A run-owned exec job: the run's job machine it runs in (src/jobs/run-machine.ts). */
+  machine?: RunMachineRef;
   /** timer: when it fires next (ms epoch), and how many times it fired. */
   nextAt?: number | null;
   fired?: number;
@@ -60,6 +68,7 @@ const OUT_TAIL = 48 * 1024, ERR_TAIL = 16 * 1024, FRAME_MAX = 16 * 1024;
 const MESSAGE_TAIL = 4 * 1024;
 const KILL_AFTER_MS = 5_000;
 const AGENT_ENDED = "its agent ended";
+const RUN_ENDED = "its run ended";
 /** A foreground wait is never longer than an in-VM call may be held (as a verify's, src/subagents/rpc.ts). */
 export const FOREGROUND_MAX_MS = 90_000;
 const pollMs = () => Number(env("JOBS_POLL_MS") ?? 1000);
@@ -85,7 +94,12 @@ export function useDaemonEvents(sink: DaemonSink | null) { daemonSink = sink; }
 
 const runIdOf = (r: Pick<JobRecord, "spec">) => r.spec.runId;
 const ownerAgent = (r: Pick<JobRecord, "spec">): string | null => ("agentId" in r.spec.owner ? r.spec.owner.agentId : null);
-const ownerName = (r: Pick<JobRecord, "spec">) => ownerAgent(r) ?? ("run" in r.spec.owner ? "run" : "plugin");
+const runOwned = (r: Pick<JobRecord, "spec">) => "run" in r.spec.owner;
+const ownerName = (r: Pick<JobRecord, "spec">) => ownerAgent(r) ?? (runOwned(r) ? "run" : "plugin");
+/** The machine an exec job runs in, by its owner: its agent's, or the run's job machine (RUN_OWNER). */
+const ownerKey = (r: Pick<JobRecord, "spec">) => ownerAgent(r) ?? RUN_OWNER;
+/** Who hears how a job ended, as a message: its owner agent, or the agent that started a run-owned one. */
+const recipient = (r: Pick<JobRecord, "spec" | "by">): string | null => ownerAgent(r) ?? (runOwned(r) && r.by.startsWith("agt-") ? r.by : null);
 const msOf = (r: Pick<JobRecord, "startedAt">) => Date.parse(r.startedAt);
 const live = (s: JobState) => s === "running" || s === "stopping";
 
@@ -211,23 +225,44 @@ interface Watch {
   /** Its agent stopped it itself: no message about it. */
   quiet: boolean;
 }
-interface Attached { m: JobMachine; watches: Map<string, Watch>; loop: ReturnType<typeof setInterval> | null; busy: boolean }
+interface Attached {
+  m: JobMachine; watches: Map<string, Watch>; loop: ReturnType<typeof setInterval> | null; busy: boolean;
+  /** When it was attached here: an agent's last step is never taken as earlier (a restarted daemon saw none). */
+  since: number;
+  /** The run's job machine: held while any job runs in it, released (destroyed) after; starts on their way to it. */
+  run?: { held: HeldRunMachine; starting: number; checkedAt: number };
+}
 const machines = new Map<string, Attached>();
 const machineKey = (runId: string, agentId: string) => `${runId}/${agentId}`;
+/** When each attached agent last took a step (noteStep), for `afterTurnMs`. */
+const lastSteps = new Map<string, number>();
+
+/**
+ * The agent took a step of its work (src/agents/activity.ts: a tool call, a capcomd op): its jobs' `afterTurnMs` counts
+ * from here (§16.2 rule 2). Kept only while its machine is attached here (its jobs are watched from here).
+ */
+export function noteStep(runId: string, agentId: string, at = Date.now()) {
+  const key = machineKey(runId, agentId);
+  if (machines.has(key) && (lastSteps.get(key) ?? 0) < at) lastSteps.set(key, at);
+}
 
 /**
  * The agent's machine, while it runs (its spool pump, src/subagents/driver.ts): its jobs, started now or before a
  * restart, are watched from here. `detach({ended: true})` when the agent ended: its jobs are killed (§16.2 rule 4).
+ * The run's job machine is attached the same way (its owner key RUN_OWNER), with its run-owned jobs.
  */
-export async function attachMachine(m: JobMachine): Promise<{ detach: (o: { ended: boolean }) => Promise<void> }> {
+export async function attachMachine(m: JobMachine, run?: HeldRunMachine): Promise<{ detach: (o: { ended: boolean }) => Promise<void> }> {
   const key = machineKey(m.runId, m.agentId);
-  const at: Attached = machines.get(key) ?? { m, watches: new Map(), loop: null, busy: false };
+  const at: Attached = machines.get(key) ?? { m, watches: new Map(), loop: null, busy: false, since: Date.now() };
   at.m = m;
+  if (run && !at.run) at.run = { held: run, starting: 0, checkedAt: 0 };
   machines.set(key, at);
-  // A restart: the jobs it had running are watched again, and settled from their files (§16.2 rule 6).
+  // A restart: the jobs it had running are watched again, and settled from their files (§16.2 rule 6). Only the run
+  // job machine's own: a record of another one (gone with its jobs) is left to `get`.
   const recs = await listRecords(m.runId).catch(() => [] as JobRecord[]);
   for (const r of recs) {
-    if (r.spec.kind !== "exec" || ownerAgent(r) !== m.agentId || !live(r.state) || at.watches.has(r.jobId)) continue;
+    if (r.spec.kind !== "exec" || ownerKey(r) !== m.agentId || !live(r.state) || at.watches.has(r.jobId)) continue;
+    if (run && r.machine?.vmId !== run.ref.vmId) continue;
     // One that was being stopped gets its SIGKILL now if it is still there.
     watch(at, r).killAt = r.state === "stopping" ? Date.now() : null;
   }
@@ -247,11 +282,46 @@ function watch(at: Attached, rec: JobRecord, fg: Watch["fg"] = null): Watch {
 function unwatch(at: Attached, jobId: string) {
   at.watches.delete(jobId);
   if (!at.watches.size && at.loop) { clearInterval(at.loop); at.loop = null; }
+  // The run's job machine with no job left in it, and none on its way: destroyed (another start makes a new one).
+  if (!at.watches.size && at.run && !at.run.starting) releaseRunMachine(at);
+}
+
+/** The run's job machine goes: no longer attached (a start from now makes a new one), then destroyed. */
+function releaseRunMachine(at: Attached) {
+  const key = machineKey(at.m.runId, at.m.agentId);
+  if (machines.get(key) === at) machines.delete(key);
+  if (runMachines.get(at.m.runId) === at) runMachines.delete(at.m.runId);
+  if (at.loop) { clearInterval(at.loop); at.loop = null; }
+  void at.run?.held.release();
+}
+
+/** Why the run's jobs end now (its run ended or is gone), or null while it goes on. Looked at once a second. */
+async function runOver(at: Attached): Promise<string | null> {
+  if (!at.run || Date.now() - at.run.checkedAt < 1000) return null;
+  at.run.checkedAt = Date.now();
+  return runEnded(at.m.runId);
+}
+
+/**
+ * Whether a run is over for its run-owned jobs (§16.2 rule 4: they live until the run ends): it ended itself (a
+ * cancel, `scope.endRun`), its last agent ended (the lifecycle feed's run.completed / failed / cancelled), or it is
+ * gone. null while it goes on, or when the engine didn't answer.
+ */
+async function runEnded(runId: string): Promise<string | null> {
+  const s = client().scope.getOrCreate([runId]);
+  const scope = await s.getScope({}).catch(() => undefined);
+  if (scope === undefined) return null;
+  if (!scope) return "its run is gone";
+  if (scope.ended) return RUN_ENDED;
+  const agents = await s.listAgents({}).catch(() => null);
+  return agents?.length && agents.every((a: { status: string }) => TERMINAL_AGENT.has(a.status)) ? RUN_ENDED : null;
 }
 
 async function tick(at: Attached) {
   const ws = [...at.watches.values()].filter((w) => !w.settling);
   if (!ws.length) return;
+  const over = await runOver(at);
+  if (over) return stopAll(at, ws, over);
   const seen = await look(at.m, ws.map((w) => w.rec.jobId)).catch(() => null);
   if (!seen) return; // the machine didn't answer: next time
   const now = Date.now();
@@ -269,9 +339,30 @@ async function tick(at: Attached) {
     }
     if (w.killAt !== null && now >= w.killAt) { w.killAt = null; await signal(at.m, w.rec.jobId, "KILL").catch(() => {}); continue; }
     if (w.rec.state === "stopping") continue;
-    const timeout = w.rec.timeoutMs ?? jobLimits(null).afterTurnMs;
-    if (now - msOf(w.rec) > timeout) void stopExec(at, w, `its timeout (${secs(timeout)}) passed`);
+    const timeout = w.rec.timeoutMs;
+    if (timeout != null && now - msOf(w.rec) > timeout) { void stopExec(at, w, `its timeout (${secs(timeout)}) passed`); continue; }
+    // §16.2 rule 2: an agent's job runs at most afterTurnMs past its agent's last step (or its own start, if later).
+    const turn = w.rec.afterTurnMs;
+    if (turn != null && ownerAgent(w.rec)) {
+      const last = Math.max(msOf(w.rec), at.since, lastSteps.get(machineKey(at.m.runId, at.m.agentId)) ?? 0);
+      if (now - last > turn) void stopExec(at, w, `its agent took no step for ${secs(turn)} (jobs.afterTurnMs)`);
+    }
   }
+}
+
+/** Every job in the machine ends now (its run ended): TERM, up to 5 s to exit, then KILL; each settles `killed`. */
+async function stopAll(at: Attached, ws: Watch[], reason: string) {
+  await Promise.all(ws.map((w) => signal(at.m, w.rec.jobId, "TERM", reason).catch(() => {})));
+  const deadline = Date.now() + KILL_AFTER_MS;
+  let left = ws;
+  while (left.length && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+    const seen = await look(at.m, left.map((w) => w.rec.jobId)).catch(() => null);
+    if (!seen) break;
+    left = left.filter((w) => seen.get(w.rec.jobId)?.state === "running");
+  }
+  await Promise.all(left.map((w) => signal(at.m, w.rec.jobId, "KILL").catch(() => {})));
+  await Promise.all(ws.map((w) => settleExec(at, w, "killed", null, reason, { quiet: true })));
 }
 
 /** SIGTERM now, SIGKILL in 5 s if it is still there; the job settles `killed` when it exits. */
@@ -297,7 +388,7 @@ async function settleExec(at: Attached, w: Watch, state: "done" | "failed" | "ki
     unwatch(at, rec.jobId);
     if (ended) return; // another watcher settled it first
     tell(rec, { kind: "ended", state });
-    const fg = w.fg, message = !fg && !o.quiet && !w.quiet && rec.by === ownerAgent(rec);
+    const fg = w.fg, message = !fg && !o.quiet && !w.quiet && rec.by === recipient(rec);
     if (fg) fg(rec);
     else if (message) await notifyAgent(rec).catch((e) => console.error(`[jobs] ${rec.jobId}: telling ${rec.by}: ${(e as Error)?.message ?? e}`));
     // No message comes for it: its supervisor doesn't hold the agent's input open waiting for one (an agent that is
@@ -310,9 +401,10 @@ async function settleExec(at: Attached, w: Watch, state: "done" | "failed" | "ki
   }
 }
 
-/** §16.2 rule 1: the result of a job that answered `running` arrives as a message its supervisor delivers. */
+/** §16.2 rule 1: the result of a job that answered `running` arrives as a message its supervisor delivers (a run-owned
+ *  one's to the agent that started it, while that agent still runs). */
 async function notifyAgent(r: JobRecord) {
-  const agentId = ownerAgent(r)!;
+  const agentId = recipient(r)!;
   const a = await client().scope.getOrCreate([r.spec.runId!]).getAgent({ agentId });
   if (!a || TERMINAL_AGENT.has(a.status)) return;
   await client().scope.getOrCreate([r.spec.runId!]).sendMessage({ to: agentId, from: r.jobId, body: jobMessage(r), key: `job-ended-${r.jobId}` });
@@ -348,23 +440,12 @@ async function detach(key: string, o: { ended: boolean }) {
   if (!at) return;
   machines.delete(key);
   if (at.loop) { clearInterval(at.loop); at.loop = null; }
+  lastSteps.delete(key);
   if (!o.ended) return; // a restart attaches again
-  // The agent ended: its jobs end with it (§16.2 rule 4), its timers too. TERM, up to 5 s to exit, then KILL.
+  // The agent ended: its jobs end with it (§16.2 rule 4), its timers too; its run-owned ones don't.
   await endAgentTimers(at.m.runId, at.m.agentId);
   const ws = [...at.watches.values()].filter((w) => !w.settling);
-  if (!ws.length) return;
-  const reason = AGENT_ENDED;
-  await Promise.all(ws.map((w) => signal(at.m, w.rec.jobId, "TERM", reason).catch(() => {})));
-  const deadline = Date.now() + KILL_AFTER_MS;
-  let left = ws;
-  while (left.length && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 250));
-    const seen = await look(at.m, left.map((w) => w.rec.jobId)).catch(() => null);
-    if (!seen) break;
-    left = left.filter((w) => seen.get(w.rec.jobId)?.state === "running");
-  }
-  await Promise.all(left.map((w) => signal(at.m, w.rec.jobId, "KILL").catch(() => {})));
-  await Promise.all(ws.map((w) => settleExec(at, w, "killed", null, reason, { quiet: true })));
+  if (ws.length) await stopAll(at, ws, AGENT_ENDED);
 }
 
 // ---- timers ---------------------------------------------------------------------------------------------------------
@@ -419,8 +500,10 @@ async function fire(runId: string | null, jobId: string) {
 
 /**
  * `capcomd serve`, once its plugins are loaded: the timers of the daemon and of its runs are armed again from their
- * records (§16.2 rule 6); one that should have fired while the daemon was down fires once now. A run's pointer whose
- * job settled unmarked (or whose run is gone) is marked settled, without making the run again to look, and old ones go.
+ * records (§16.2 rule 6); one that should have fired while the daemon was down fires once now. A run's job machine with
+ * a running run-owned job in it is found again and its jobs watched (an agent's are, when its pump starts again). A
+ * run's pointer whose job settled unmarked (or whose run is gone) is marked settled, without making the run again to
+ * look, and old ones go.
  */
 export async function resumeTimers(): Promise<number> {
   if (!existsSync(jobsDir())) return 0;
@@ -440,6 +523,7 @@ export async function resumeTimers(): Promise<number> {
       r = got;
     }
     if (r && r.spec.kind === "timer" && live(r.state)) { arm(r); n++; }
+    else if (r && r.spec.kind === "exec" && runOwned(r) && live(r.state)) void reattachRun(r);
   }
   return n;
 }
@@ -474,8 +558,7 @@ function checkSpec(spec: JobSpec) {
   if (spec.runId !== null && (typeof spec.runId !== "string" || !/^run-[A-Za-z0-9_-]+$/.test(spec.runId))) usage(`not a run id: ${String(spec.runId).slice(0, 80)}`, "A run id is run-…, or null for a plugin's own timer.");
   if (spec.runId === null && owner !== "plugin") usage("only a plugin's timer lives outside a run", "Name the run (runId), or own it as the plugin.");
   if (spec.kind === "exec") {
-    if (owner === "run") throw new RelayError("conflict", "a run-owned job needs a job machine of its run, which this capcomd doesn't make yet", "Own it as an agent: it runs in that agent's machine.", { code: "unsupported" });
-    if (owner === "plugin") usage("an exec job is owned by an agent", "It runs in that agent's machine.");
+    if (owner === "plugin") usage("an exec job is owned by an agent or the run", "An agent's runs in its machine; the run's in a job machine of the run's own.");
     if (!Array.isArray(spec.cmd) || !spec.cmd.length || spec.cmd.length > 256 || spec.cmd.some((x) => typeof x !== "string")) usage("cmd is a non-empty list of strings", "One string runs with sh -c; more are argv.");
     if (Buffer.byteLength(JSON.stringify(spec.cmd)) > 16 * 1024) usage("cmd is over 16 KB", "Put a long script in a file and run that.");
     if (spec.cwd !== undefined && (typeof spec.cwd !== "string" || !spec.cwd.startsWith("/") || spec.cwd.split("/").includes(".."))) usage("cwd is an absolute path", "Where the command runs, e.g. your checkout.");
@@ -495,11 +578,70 @@ function checkSpec(spec: JobSpec) {
 /** The spec as it is recorded: env values are not kept (a run's records are readable in it). */
 const recordedSpec = (spec: JobSpec): JobSpec => (spec.kind === "exec" && spec.env ? { ...spec, env: Object.fromEntries(Object.keys(spec.env).map((k) => [k, "[set]"])) } : spec);
 
+/** The run's job machine attached here, by run, and the ones being made (or found again after a restart). */
+const runMachines = new Map<string, Attached>();
+const runMachinesComing = new Map<string, Promise<Attached>>();
+
+/**
+ * The run's job machine for a start (§16.2, `owner: {run: true}`): the one attached here, else a new one, made for a job
+ * that may run `lifetimeMs`. Counted as a start on its way to it (`run.starting`) before it is returned, so it isn't
+ * released under the caller; the caller calls `started(at)` once its job is watched there, or wasn't started.
+ */
+async function runMachineFor(runId: string, lifetimeMs: number): Promise<Attached> {
+  let at = runMachines.get(runId);
+  // One found again after a restart with no job left in it was released as it came: another is made.
+  while (!at) {
+    let coming = runMachinesComing.get(runId);
+    if (!coming) {
+      coming = (async () => {
+        const held = await ensureRunMachine(runId, { lifetimeMs });
+        await attachMachine(held.m, held);
+        const made = machines.get(machineKey(runId, RUN_OWNER))!;
+        runMachines.set(runId, made);
+        return made;
+      })().finally(() => runMachinesComing.delete(runId));
+      runMachinesComing.set(runId, coming);
+    }
+    const got = await coming;
+    if (runMachines.get(runId) === got) at = got;
+  }
+  at.run!.starting++;
+  // A machine made for an earlier job lives as long as this one may run, too, and never less than the jobs in it may
+  // (a machine found again after a restart doesn't know its deadline).
+  const now = Date.now();
+  const need = Math.max(lifetimeMs, ...[...at.watches.values()].map((w) => (w.rec.timeoutMs != null ? msOf(w.rec) + w.rec.timeoutMs - now : 0)));
+  await at.run!.held.cover(need).catch(() => {});
+  return at;
+}
+
+function started(at: Attached) {
+  if (!at.run) return;
+  at.run.starting--;
+  if (!at.watches.size && !at.run.starting) releaseRunMachine(at);
+}
+
+/** A restarted daemon: the run's job machine a running run-owned job is in is found again, and its jobs watched. */
+async function reattachRun(r: JobRecord): Promise<void> {
+  const runId = r.spec.runId!;
+  if (!r.machine || runMachines.has(runId) || runMachinesComing.has(runId)) return;
+  const coming = (async () => {
+    const held = await reattachRunMachine(runId, r.machine!);
+    await attachMachine(held.m, held);
+    const at = machines.get(machineKey(runId, RUN_OWNER))!;
+    runMachines.set(runId, at);
+    if (!at.watches.size) releaseRunMachine(at);
+    return at;
+  })().finally(() => runMachinesComing.delete(runId));
+  runMachinesComing.set(runId, coming);
+  await coming.catch((e) => console.error(`[jobs] ${runId}: finding its job machine again: ${(e as Error)?.message ?? e}`));
+}
+
 /**
  * Start a job (§16.2 rule 1). An exec job that ends within its foreground wait (the spec's `foregroundMs`, else the
  * owner's `jobs.foregroundMs`) returns `done` or `failed` with its result; otherwise `running`, and its result arrives
  * later (`job.changed`, and a message to the agent that started it). Idempotent by `key`. Refused past the owner's
- * `jobs.max` running jobs.
+ * `jobs.max` running jobs. A run-owned exec job runs in the run's job machine (made for it when the run has none here),
+ * with the limits of the agent that started it, if one did.
  */
 export async function startJob(spec: JobSpec, o: StartOptions): Promise<Job> {
   checkSpec(spec);
@@ -511,15 +653,22 @@ export async function startJob(spec: JobSpec, o: StartOptions): Promise<Job> {
   if (have) {
     if (have.paramsHash !== ph) throw new RelayError("conflict", `job key ${o.key} was used with other parameters`, "Use a new key for a different job.", { code: "idempotency_conflict" });
     if (have.spec.kind === "timer" && live(have.state) && !armed.has(have.jobId)) arm(have);
-    if (have.spec.kind === "exec" && live(have.state) && o.machine) { const at = machines.get(machineKey(o.machine.runId, o.machine.agentId)); if (at && !at.watches.has(have.jobId)) watch(at, have); }
+    if (have.spec.kind === "exec" && live(have.state) && o.machine && ownerKey(have) === o.machine.agentId) { const at = machines.get(machineKey(o.machine.runId, o.machine.agentId)); if (at && !at.watches.has(have.jobId)) watch(at, have); }
     return jobOf(have);
   }
+  const ofRun = spec.kind === "exec" && "run" in spec.owner;
   const a = owner && runId ? await client().scope.getOrCreate([runId]).getAgent({ agentId: owner }) : null;
   if (owner && (!a || TERMINAL_AGENT.has(a.status))) throw new RelayError("conflict", `agent ${owner} ${a ? `is ${a.status}` : "isn't in this run"}: its jobs would end at once`, "Start jobs for an agent that is running.", { code: "not_running" });
-  const limits = jobLimits(a?.spec as Parameters<typeof jobLimits>[0]);
-  // §16.2 rule 2: at most `max` running jobs per owner.
-  const mine = (await listRecords(runId)).filter((r) => live(r.state) && (owner ? ownerAgent(r) === owner : r.plugin === (o.plugin ?? null)));
-  if (mine.length >= limits.max) throw new RelayError("conflict", `${owner ?? `the ${o.plugin} plugin`} has ${mine.length} running jobs, its most (jobs.max ${limits.max})`, "Wait for one to end (its result arrives as a message), or kill one: capcomd job kill <id>.", { code: "too_many_jobs" });
+  // A run-owned job an agent starts is held to that agent's limits: a job is never a way around them.
+  const starter = ofRun && runId && o.by.startsWith("agt-") ? await client().scope.getOrCreate([runId]).getAgent({ agentId: o.by }) : null;
+  // A run that is over makes no job machine (its jobs would be killed at once): refused before one is made.
+  const over = ofRun ? await runEnded(runId!) : null;
+  if (over) throw new RelayError("conflict", `run ${runId} ${over === RUN_ENDED ? "has ended" : "is gone"}: its jobs would end at once`, "Start run jobs while the run goes on.", { code: "not_running" });
+  const limiting = (a ?? starter)?.spec as Parameters<typeof jobLimits>[0];
+  const limits = jobLimits(limiting);
+  // §16.2 rule 2: at most `max` running jobs per owner (the run's exec jobs count together).
+  const mine = (await listRecords(runId)).filter((r) => live(r.state) && (owner ? ownerAgent(r) === owner : ofRun ? r.spec.kind === "exec" && runOwned(r) : r.plugin === (o.plugin ?? null)));
+  if (mine.length >= limits.max) throw new RelayError("conflict", `${owner ?? (ofRun ? "the run" : `the ${o.plugin} plugin`)} has ${mine.length} running jobs, its most (jobs.max ${limits.max})`, "Wait for one to end (its result arrives as a message), or kill one: capcomd job kill <id>.", { code: "too_many_jobs" });
   const now = Date.now();
   const base: JobRecord = { jobId, plugin: o.plugin ?? null, spec: recordedSpec(spec), state: "running", startedAt: iso(now), endedAt: null, result: null, reason: null, by: o.by, timeoutMs: null, paramsHash: ph };
 
@@ -532,28 +681,39 @@ export async function startJob(spec: JobSpec, o: StartOptions): Promise<Job> {
     return jobOf(rec);
   }
 
-  const at = machines.get(machineKey(runId!, owner!));
-  const m = o.machine ?? at?.m;
-  if (!m) throw new RelayError("engine_unreachable", `agent ${owner}'s machine isn't reachable from here: its jobs run where its spool is pumped`, "Start it from the agent (capcomd job start), or while the agent runs in this daemon.", { code: "unavailable", retryable: true });
-  const att = machines.get(machineKey(m.runId, m.agentId)) ?? (await attachMachine(m), machines.get(machineKey(m.runId, m.agentId))!);
-  // §16.2 rule 2: a job's own timeout, by default the owner's afterTurnMs, and never longer than an afterTurnMs its
-  // profile sets: that is a limit (a child or an override may only lower it), which a start's timeoutMs can't lift.
-  const cap = (a?.spec as { jobs?: { afterTurnMs?: number } } | null | undefined)?.jobs?.afterTurnMs;
-  const rec: JobRecord = { ...base, timeoutMs: Math.min(spec.timeoutMs ?? limits.afterTurnMs, cap ?? Infinity) };
-  await writeRecord(rec, "started");
-  try {
-    await launch(m, jobId, { cmd: spec.cmd, cwd: spec.cwd ?? m.cwd, ...(spec.env ? { env: spec.env } : {}) });
-  } catch (e) {
-    const failed: JobRecord = { ...rec, state: "failed", endedAt: iso(), result: { code: 127, stdout: "", stderr: String((e as Error)?.message ?? e).slice(0, 2000), truncated: false } };
-    await writeRecord(failed, "ended");
-    tell(failed, { kind: "ended", state: "failed" });
-    return jobOf(failed);
+  // §16.2 rule 2: a job's own timeout, never longer than an afterTurnMs its owner's profile sets: that is a limit (a
+  // child or an override may only lower it), which a start's timeoutMs can't lift. An agent's job without one is
+  // bounded by afterTurnMs from its agent's last step; a run-owned one gets afterTurnMs from its start.
+  const cap = (limiting as { jobs?: { afterTurnMs?: number } } | null | undefined)?.jobs?.afterTurnMs ?? Infinity;
+  const timeoutMs = spec.timeoutMs !== undefined ? Math.min(spec.timeoutMs, cap) : ofRun ? Math.min(limits.afterTurnMs, cap) : null;
+  let att: Attached;
+  if (ofRun) att = await runMachineFor(runId!, timeoutMs!);
+  else {
+    const m = o.machine ?? machines.get(machineKey(runId!, owner!))?.m;
+    if (!m) throw new RelayError("engine_unreachable", `agent ${owner}'s machine isn't reachable from here: its jobs run where its spool is pumped`, "Start it from the agent (capcomd job start), or while the agent runs in this daemon.", { code: "unavailable", retryable: true });
+    att = machines.get(machineKey(m.runId, m.agentId)) ?? (await attachMachine(m), machines.get(machineKey(m.runId, m.agentId))!);
   }
-  tell(rec, { kind: "started" });
-  const fgMs = Math.min(FOREGROUND_MAX_MS, o.foregroundCapMs ?? Infinity, spec.foregroundMs ?? limits.foregroundMs);
+  const m = att.m;
+  const rec: JobRecord = { ...base, timeoutMs, ...(ofRun ? { afterTurnMs: null, machine: att.run!.held.ref } : { afterTurnMs: limits.afterTurnMs }) };
+  let w: Watch;
   let resolveFg!: (r: JobRecord | null) => void;
   const fg = new Promise<JobRecord | null>((r) => { resolveFg = r; });
-  const w = watch(att, rec, (r) => resolveFg(r));
+  try {
+    await writeRecord(rec, "started");
+    try {
+      await launch(m, jobId, { cmd: spec.cmd, cwd: spec.cwd ?? m.cwd, ...(spec.env ? { env: spec.env } : {}) });
+    } catch (e) {
+      const failed: JobRecord = { ...rec, state: "failed", endedAt: iso(), result: { code: 127, stdout: "", stderr: String((e as Error)?.message ?? e).slice(0, 2000), truncated: false } };
+      await writeRecord(failed, "ended");
+      tell(failed, { kind: "ended", state: "failed" });
+      return jobOf(failed);
+    }
+    tell(rec, { kind: "started" });
+    w = watch(att, rec, (r) => resolveFg(r));
+  } finally {
+    started(att);
+  }
+  const fgMs = Math.min(FOREGROUND_MAX_MS, o.foregroundCapMs ?? Infinity, spec.foregroundMs ?? limits.foregroundMs);
   const timer = setTimeout(() => { w.fg = null; resolveFg(null); }, fgMs);
   const done = await fg;
   clearTimeout(timer);
@@ -568,11 +728,16 @@ export async function getJob(jobId: string, runId?: string | null): Promise<Job>
   return jobOf(await orphaned(r));
 }
 
-/** An agent's exec job still `running` on record, nobody watching it here, and its agent ended: settled `lost`. */
+/** An exec job still `running` on record, nobody watching it here, and its agent ended (a run-owned one: its run
+ *  ended, and its machine isn't being found again): settled `lost`. */
 async function orphaned(r: JobRecord): Promise<JobRecord> {
-  const agentId = ownerAgent(r);
-  if (r.spec.kind !== "exec" || !live(r.state) || !agentId || machines.get(machineKey(r.spec.runId!, agentId))?.watches.has(r.jobId)) return r;
-  const a = await client().scope.getOrCreate([r.spec.runId!]).getAgent({ agentId }).catch(() => null);
+  const agentId = ownerAgent(r), runId = r.spec.runId!;
+  if (r.spec.kind !== "exec" || !live(r.state) || machines.get(machineKey(runId, ownerKey(r)))?.watches.has(r.jobId)) return r;
+  if (!agentId) {
+    if (!runOwned(r) || runMachinesComing.has(runId) || !(await runEnded(runId))) return r;
+    return settleLost(r, "its run ended while capcomd wasn't watching the job");
+  }
+  const a = await client().scope.getOrCreate([runId]).getAgent({ agentId }).catch(() => null);
   if (a && !TERMINAL_AGENT.has(a.status)) return r;
   return settleLost(r, "its agent ended while capcomd wasn't watching the job");
 }
@@ -587,10 +752,27 @@ async function settleLost(r: JobRecord, reason: string): Promise<JobRecord> {
   return rec;
 }
 
-export async function listJobs(filter: { runId?: string | null; agentId?: string; plugin?: string; state?: JobState }): Promise<Job[]> {
+/** An agent's own jobs (§16.2 rule 8, in-VM `job.*`): the ones it owns, and the run-owned ones it started. */
+const ownJob = (r: JobRecord, agentId: string) => ownerAgent(r) === agentId || (runOwned(r) && r.by === agentId);
+
+/** `of`: an agent's own jobs (ownJob); `agentId`: the jobs an agent owns. */
+export async function listJobs(filter: { runId?: string | null; agentId?: string; of?: string; plugin?: string; state?: JobState }): Promise<Job[]> {
   const runId = filter.runId ?? null;
-  const recs = await Promise.all((await listRecords(runId)).filter((r) => (!filter.agentId || ownerAgent(r) === filter.agentId) && (!filter.plugin || r.plugin === filter.plugin)).map(orphaned));
+  const recs = await Promise.all((await listRecords(runId)).filter((r) => (!filter.agentId || ownerAgent(r) === filter.agentId) && (!filter.of || ownJob(r, filter.of)) && (!filter.plugin || r.plugin === filter.plugin)).map(orphaned));
   return recs.filter((r) => !filter.state || r.state === filter.state).sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map(jobOf);
+}
+
+/** One of an agent's own jobs (ownJob), or null: another's, or none. */
+export async function ownJobOf(jobId: string, runId: string, agentId: string): Promise<Job | null> {
+  const r = JOB_ID.test(jobId) ? await readRecord(runId, jobId).catch(() => null) : null;
+  return r && ownJob(r, agentId) ? jobOf(await orphaned(r)) : null;
+}
+
+/** The last `max` bytes of a running exec job's output, read from the machine it runs in (null: not watched here). */
+export async function liveOutput(job: Job, max: number): Promise<{ stdout: string; stderr: string; truncated: boolean } | null> {
+  if (job.spec.kind !== "exec" || !live(job.state) || !job.spec.runId) return null;
+  const at = machines.get(machineKey(job.spec.runId, ownerKey(job)));
+  return at?.watches.has(job.jobId) ? tails(at.m, job.jobId, max, max).catch(() => null) : null;
 }
 
 /** §16.2 rule 5: stop it (exec: SIGTERM, SIGKILL after 5 s; it settles `killed` once it exited). */
@@ -601,7 +783,7 @@ export async function cancelJob(jobId: string, reason: string, o: { runId?: stri
   if (!live(r.state)) return jobOf(r);
   const why = reason.trim().slice(0, 300) || "killed";
   if (r.spec.kind === "timer") return jobOf(await endTimer(r, why));
-  const at = machines.get(machineKey(r.spec.runId!, ownerAgent(r)!));
+  const at = machines.get(machineKey(r.spec.runId!, ownerKey(r)));
   const w = at?.watches.get(jobId);
   if (!at || !w) return jobOf(await orphaned(r));
   if (o.byOwner) w.quiet = true;
@@ -645,6 +827,9 @@ export function pluginJobs(plugin: string): JobsService {
 export function resetJobs() {
   for (const at of machines.values()) if (at.loop) clearInterval(at.loop);
   machines.clear();
+  runMachines.clear();
+  runMachinesComing.clear();
+  lastSteps.clear();
   for (const t of armed.values()) clearTimeout(t);
   armed.clear();
   waiters.clear();

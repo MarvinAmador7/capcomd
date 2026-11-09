@@ -22,16 +22,17 @@ import { MACHINE_PREFIX } from "./sandbox";
 
 type Env = Record<string, string | undefined>;
 
-export type JobKind = "check" | "login" | "env_build" | "doctor";
+export type JobKind = "check" | "login" | "env_build" | "doctor" | "job";
 export interface JobMachine {
 	/** The machine's name at the provider (capcomd's prefix + a hash of its idempotency key). */
 	name: string;
 	/** The place it runs (a provider name). */
 	sandbox: string;
 	kind: JobKind;
-	/** What exactly: checks, auth-login, auth-status, auth-carry-read/-write (env build moving a login), env-build, doctor. */
+	/** What exactly: checks, auth-login, auth-status, auth-carry-read/-write (env build moving a login), env-build, doctor,
+	 *  job (a run's own background jobs, plugin API §16.2). */
 	purpose: string;
-	/** check: the run (and task) whose checks run there. */
+	/** check: the run (and task) whose checks run there; job: the run whose jobs run there. */
 	runId: string | null;
 	taskId: string | null;
 	/** login: claude-code or codex. */
@@ -66,7 +67,7 @@ export function machineNameFor(idemKey: string, prefix = MACHINE_PREFIX): string
 }
 
 const SAFE = /^[A-Za-z0-9._-]{1,128}$/;
-const JOB_KINDS: readonly string[] = ["check", "login", "env_build", "doctor"];
+const JOB_KINDS: readonly string[] = ["check", "login", "env_build", "doctor", "job"];
 
 /** Writes one record atomically (0600). Never throws; false when it couldn't be written. */
 function writeRecord(rec: MachineRecord, env: Env): boolean {
@@ -182,5 +183,6 @@ export function jobOwnerText(m: Pick<JobMachine, "kind" | "purpose" | "runId" | 
 		case "login": return { role: "login", label: m.purpose === "auth-status" ? `Checking the ${ai} login` : m.purpose.startsWith("auth-carry") ? `Moving the ${ai} login to the new environment` : `Logging in to ${ai}` };
 		case "env_build": return { role: "environment", label: "Building the agent environment" };
 		case "doctor": return { role: "environment", label: "Checking the agent environment" };
+		case "job": return { role: "jobs", label: m.runId && SAFE.test(m.runId) ? `Background jobs for ${m.runId}` : "Background jobs" };
 	}
 }
