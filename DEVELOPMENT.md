@@ -366,7 +366,8 @@ that's already on npm is skipped, so re-runs are safe. Never `npm publish` by ha
 
 `@capcomd/plugin`, the plugin API package, is published the same way and at the same version by the `npm-plugin` job,
 only while the repository variable `PUBLISH_PLUGIN_PACKAGE` is `true` (off by default: the `@capcomd` scope must exist
-on npmjs.com and the token or trusted publishing must be allowed to publish to it). The job packs it from the tag
+on npmjs.com and the token or trusted publishing must be allowed to publish to it) and capcomd itself is published to
+npm (never while `package.json` is private), after the `npm` job succeeded. The job packs it from the tag
 (`packages/plugin/scripts/pack.ts`), installs and uses it from Node (`packages/plugin/scripts/smoke.sh`) and publishes
 that tarball; the GitHub release doesn't wait for it.
 

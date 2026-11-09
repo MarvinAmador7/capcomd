@@ -363,6 +363,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
   capcomd daemon in a throwaway home on the fake sandbox, with your plugin installed and running, for your own tests
   (`capcomd` from your `PATH`, or the `capcomd` option). Until it is on npm, `bun packages/plugin/scripts/pack.ts` in a
   capcomd checkout builds the package file to install.
+- Fixed: in `@capcomd/plugin`'s test kit, `testkit.bootWith` says plainly when your plugin is turned off
+  (`plugins.<name>.enabled` is false), and fails at once for any plugin that is off or was disabled, instead of
+  waiting up to two minutes (`readyMs`) for it to start. Calling a conformance
+  suite (`testkit.conformance.sandbox`, `agent`, `context`) under Node now says to run it under `bun test`, instead of
+  failing with "Cannot find module 'bun:test'". The release workflow publishes `@capcomd/plugin` only when it also
+  publishes capcomd itself to npm.
 - New: share agent profiles through git. `capcomd profiles install <owner/repo>[#<name>][@<ref>]` (a git URL or a
   local repository path works too) copies a profile package (a folder with a `profile.yaml`, its prompts and
   `skills/`) into `~/.capcomd/profiles/<name>/`, or with `--project` into the project's `.capcomd/profiles/<name>/` to

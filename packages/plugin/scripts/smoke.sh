@@ -54,6 +54,8 @@ const fake = testkit.fakeContext(manifest);
 await testkit.load(fake, plugin);
 assert.deepEqual((await fake.fire("merge.landing", samplePayload("merge.landing"))).result, { decision: "allow" });
 await fake.dispose();
+// The conformance suites register bun:test tests: on Node they say to run them under bun test.
+assert.throws(() => testkit.conformance.sandbox(() => ({})), (e) => e.code === "unsupported" && /run these under bun test/.test(e.message));
 
 // connect() without the daemon's environment refuses; with it, it speaks the protocol over the socket (node:http).
 assert.throws(() => connect({}), PluginError);

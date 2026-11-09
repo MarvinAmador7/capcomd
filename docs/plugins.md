@@ -246,7 +246,11 @@ await testkit.bootWith([{ dir: "." }], async (d) => {
 scripted agent with no contract script finishes at once; `{"script": "exit 1"}` fails it; the profiles `planner`,
 `worker` and `reviewer` exist (or bring your own with `profiles`). `d.fetch` calls the API with an operator's token,
 `d.cli` runs the CLI against this daemon, `d.log()` is the daemon's log. Nothing of your own capcomd setup is read or
-touched.
+touched. A plugin that won't become `active` (failed, untrusted, or turned off with `enabled: false`) fails the boot at
+once with its state and cause.
+
+The conformance suites (`testkit.conformance.*`) register `bun:test` tests, so run them under `bun test`; under Node
+they throw an error that says so. The rest of the kit runs on Node too.
 
 capcomd's own tests run the examples this way: the in-process ones through `loadDispose` and `hookContract`
 (`tests/plugins/host.test.ts`), the Slack example's unit tests (`bun test packages/plugin`), and the Slack example
