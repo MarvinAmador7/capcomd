@@ -13994,6 +13994,18 @@
                     "maxLength": 200,
                     "description": "Idempotency key: the same run, ref and key are the same operation (its id), however often asked"
                   },
+                  "driveEnv": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^CAPCOMD_[A-Z0-9_]{1,64}$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "description": "The front door's drive settings (CAPCOMD_AGENTS_FILE, CAPCOMD_SPAWN_EXEC, …: only the names an agent's `driveEnv` may carry; any other is ignored): the operation runs with them over the daemon's, as an agent's runs with its own"
+                  },
                   "waitMs": {
                     "type": "integer",
                     "minimum": 0,
@@ -14149,6 +14161,18 @@
                     "maxLength": 200,
                     "description": "Idempotency key: the same run, ref and key are the same operation (its id), however often asked"
                   },
+                  "driveEnv": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^CAPCOMD_[A-Z0-9_]{1,64}$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "description": "The front door's drive settings (CAPCOMD_AGENTS_FILE, CAPCOMD_SPAWN_EXEC, …: only the names an agent's `driveEnv` may carry; any other is ignored): the operation runs with them over the daemon's, as an agent's runs with its own"
+                  },
                   "waitMs": {
                     "type": "integer",
                     "minimum": 0,
@@ -14287,6 +14311,18 @@
                     "minLength": 1,
                     "maxLength": 200,
                     "description": "The front door's own id for this decision: asked again with the same key after it ended, the answer is its record, never a second decision"
+                  },
+                  "driveEnv": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "pattern": "^CAPCOMD_[A-Z0-9_]{1,64}$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "description": "The front door's drive settings (CAPCOMD_AGENTS_FILE, CAPCOMD_SPAWN_EXEC, …: only the names an agent's `driveEnv` may carry; any other is ignored): the operation runs with them over the daemon's, as an agent's runs with its own"
                   },
                   "waitMs": {
                     "type": "integer",

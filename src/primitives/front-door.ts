@@ -26,12 +26,23 @@ export const FRONT_HOOKS = {
  *  `skipping`: told before an operation this process runs itself starts, of the listeners it can't ask. */
 type Wait = { waitMs?: number; what: string; skipping?: (skipped: Unconsulted[], why: string) => void };
 
+/** This process's drive settings, with the agents file its profiles resolve from (the project's where it runs), as
+ *  spawnAgent records them on an agent: the daemon runs the operation with them, so a run's reviewer is the profile this
+ *  project defines, as when the operation ran here. */
+async function ownDriveEnv(): Promise<{ driveEnv: Record<string, string> }> {
+  const { captureDriveEnv } = await import("../utils/env");
+  const { agentsFilePath } = await import("../profiles/load");
+  const { resolve } = await import("node:path");
+  return { driveEnv: { ...captureDriveEnv(), CAPCOMD_AGENTS_FILE: resolve(agentsFilePath()) } };
+}
+
 /** `capcomd verify`, `capcomd_verify`: verifyRef (src/primitives/ops.ts), in the daemon when one hosts the engine. */
 export async function frontVerify(o: VerifyOpts, w: Wait): Promise<FrontAnswer> {
   const body = {
     ...(o.ref ? { ref: o.ref } : {}), ...(o.id ? { id: o.id } : {}), ...(o.check !== undefined ? { check: o.check } : {}), ...(o.checks !== undefined ? { checks: o.checks } : {}),
     ...(o.acceptance !== undefined ? { acceptance: o.acceptance } : {}), ...(o.target !== undefined ? { target: o.target } : {}),
     ...((o.reviewProfile ?? o.judgeProfile) !== undefined ? { reviewProfile: o.reviewProfile ?? o.judgeProfile } : {}), ...(o.key !== undefined ? { key: o.key } : {}),
+    ...(await ownDriveEnv()),
   };
   return front(`/v1/runs/${encodeURIComponent(o.runId)}/verifications`, "steer", body, (id) => ({ id }), FRONT_HOOKS.verify, w, async () => {
     const O = await import("./ops");
@@ -55,7 +66,7 @@ export async function frontMerge(o: MergeOpts, w: Wait): Promise<FrontAnswer> {
   const body = {
     ...(o.ref ? { ref: o.ref } : {}), ...(o.id ? { id: o.id } : {}), ...(o.require !== undefined ? { require: o.require } : {}), ...(o.target !== undefined ? { target: o.target } : {}),
     ...(o.operator ? { operator: true } : {}), ...(o.requestApproval ? { requestApproval: true } : {}), ...(o.key !== undefined ? { key: o.key } : {}),
-    ...(await ownProtected()),
+    ...(await ownProtected()), ...(await ownDriveEnv()),
   };
   return front(`/v1/runs/${encodeURIComponent(o.runId)}/merges`, "steer", body, (id) => ({ id }), FRONT_HOOKS.merge, w, async () => {
     const O = await import("./ops");
@@ -67,7 +78,7 @@ export async function frontMerge(o: MergeOpts, w: Wait): Promise<FrontAnswer> {
 /** `capcomd approve <runId> <mrg-…>`, `capcomd_approve`: decideMerge, in the daemon when one hosts the engine. */
 export async function frontDecide(runId: string, mergeId: string, d: { approve: boolean; by: string; reason?: string }, w: Wait): Promise<FrontAnswer> {
   // Its own key: a poll after the decision ended gets its record, never a second decision (src/api/front-door.ts).
-  const body = { approve: d.approve, by: d.by, ...(d.reason ? { reason: d.reason } : {}), key: `fd-${crypto.randomUUID()}` };
+  const body = { approve: d.approve, by: d.by, ...(d.reason ? { reason: d.reason } : {}), key: `fd-${crypto.randomUUID()}`, ...(await ownDriveEnv()) };
   return front(`/v1/runs/${encodeURIComponent(runId)}/merges/${encodeURIComponent(mergeId)}/decision`, "approve", body, () => body, FRONT_HOOKS.decide, w, async () => {
     const O = await import("./ops");
     return { id: mergeId, done: O.decideMerge(runId, mergeId, d) };

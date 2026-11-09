@@ -544,7 +544,10 @@ operator (a decision's `by` as the front door records it: `cli` or `--by`, `driv
 the operation's own (`ApiError.relay`), so the command fails exactly as it did running it itself. What the front door's
 own environment decided stays its say where it can only narrow: a merge carries its protected-branch patterns
 (`protectedBranches`, when `CAPCOMD_PROTECTED_BRANCHES` is set where it runs), which protect a target in the daemon too
-and never unprotect one. The daemon answers a merge, or a decision that lands one, once the merged agent's checkpoint
+and never unprotect one. Each operation carries the front door's drive settings (`driveEnv`: the names an agent's
+spawn records, `src/utils/env.ts` `captureDriveEnv`, with the agents file its project's profiles resolve from), and the
+daemon runs it with them, as an agent's operations run with its own: a verify's reviewer is the profile the front door's
+project defines, as when it ran the verify itself. The daemon answers a merge, or a decision that lands one, once the merged agent's checkpoint
 refs are deleted, as the front door waited for them when it ran the merge itself.
 
 With no daemon for its engine (none runs, the one that runs hosts another engine, its socket doesn't answer, or it

@@ -6,6 +6,7 @@
 // src/cli/daemon.ts `daemonOp`; with no daemon it runs them itself (src/primitives/front-door.ts).
 import type { z } from "zod";
 import { RelayError } from "../core/errors";
+import { withDriveEnv } from "../utils/env";
 import type { FrontDecisionBody, FrontMergeBody, FrontVerifyBody } from "./contract";
 
 /** One operation, started or joined: its id now, its record once it ends (rejected with its RelayError). */
@@ -25,6 +26,11 @@ const settled = async (O: typeof import("../primitives/ops"), p: Promise<Record<
   return v;
 };
 
+/** The operation, started with the front door's drive settings over the daemon's (only the names an agent's `driveEnv`
+ *  may carry, src/utils/env.ts): profiles resolve from the front door's project, as when it ran the operation itself and
+ *  as an agent's operations run with its own. */
+const asFrontDoor = <T>(b: { driveEnv?: Record<string, string> }, start: () => T): T => withDriveEnv(b.driveEnv, start);
+
 /** How long a keyed decision's end is kept for its front door's next poll (that poll comes at once after a 202). */
 export const DECIDED_KEPT_MS = 10 * 60_000;
 
@@ -42,22 +48,22 @@ export function kernelFrontDoor(): FrontDoorOps {
       const O = await ops();
       if (!b.ref && !b.id) throw new RelayError("usage", "ref or id required", "Pass the ref to verify (an agent id or a branch), or the vfy-… id of a verification to ask for.");
       const id = b.id ?? O.verifyIdFor(runId, b.ref!, b.key);
-      const done = O.verifyRef({
+      const done = asFrontDoor(b, () => O.verifyRef({
         runId, ref: b.ref ?? "", id, ...(b.check !== undefined ? { check: b.check } : {}), ...(b.checks !== undefined ? { checks: b.checks } : {}),
         ...(b.acceptance !== undefined ? { acceptance: b.acceptance } : {}), ...(b.target !== undefined ? { target: b.target } : {}),
         ...(b.reviewProfile !== undefined ? { reviewProfile: b.reviewProfile } : {}), ...(b.key !== undefined ? { key: b.key } : {}),
-      }) as Promise<Record<string, unknown>>;
+      })) as Promise<Record<string, unknown>>;
       return { id, done };
     },
     async merge(runId, b) {
       const O = await ops();
       if (!b.ref && !b.id) throw new RelayError("usage", "ref or id required", "Pass the ref and require (the id of a passing verify of it), or the mrg-… id of a merge to ask for.");
       const id = b.id ?? (await O.mergeIdFor(runId, b.ref!, b.key, b.target));
-      const done = settled(O, O.mergeRef({
+      const done = settled(O, asFrontDoor(b, () => O.mergeRef({
         runId, ref: b.ref ?? "", id, ...(b.require !== undefined ? { require: b.require } : {}), ...(b.target !== undefined ? { target: b.target } : {}),
         operator: b.operator === true, ...(b.requestApproval ? { requestApproval: true } : {}), ...(b.key !== undefined ? { key: b.key } : {}),
         ...(b.protectedBranches?.length ? { alsoProtected: b.protectedBranches } : {}),
-      }) as Promise<Record<string, unknown>>);
+      })) as Promise<Record<string, unknown>>);
       return { id, done };
     },
     async decide(runId, mergeId, b) {
@@ -65,7 +71,7 @@ export function kernelFrontDoor(): FrontDoorOps {
       let done = deciding.get(k);
       if (!done) {
         const O = await ops();
-        done = settled(O, O.decideMerge(runId, mergeId, { approve: b.approve, by: b.by ?? "cli", ...(b.reason ? { reason: b.reason } : {}) }) as Promise<Record<string, unknown>>);
+        done = settled(O, asFrontDoor(b, () => O.decideMerge(runId, mergeId, { approve: b.approve, by: b.by ?? "cli", ...(b.reason ? { reason: b.reason } : {}) })) as Promise<Record<string, unknown>>);
         const d = done;
         deciding.set(k, d);
         const forget = () => {

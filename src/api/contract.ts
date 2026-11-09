@@ -469,6 +469,11 @@ export const FRONT_WAIT_MAX_MS = 45_000;
 const FrontWait = z.number().int().min(0).max(FRONT_WAIT_MAX_MS).optional()
 	.describe(`How long to wait for it to end before answering 202 with its id (default ${FRONT_WAIT_DEFAULT_MS}; 0: answer at once). It keeps running in the daemon either way; ask again with its id`);
 const FrontKey = z.string().min(1).max(200).optional().describe("Idempotency key: the same run, ref and key are the same operation (its id), however often asked");
+/** The front door's own drive settings (src/utils/env.ts `captureDriveEnv`, with the agents file its profiles resolve
+ *  from), as an agent's spawn records them (`driveEnv`): the daemon runs the operation with them, so a run's reviewer
+ *  (and anything else it spawns) is the profile the front door's project defines, as when it ran the operation itself. */
+const FrontDriveEnv = z.record(z.string().regex(/^CAPCOMD_[A-Z0-9_]{1,64}$/), z.string().max(4096)).refine((v) => Object.keys(v).length <= 64, "at most 64 settings").optional()
+	.describe("The front door's drive settings (CAPCOMD_AGENTS_FILE, CAPCOMD_SPAWN_EXEC, …: only the names an agent's `driveEnv` may carry; any other is ignored): the operation runs with them over the daemon's, as an agent's runs with its own");
 /** POST /v1/runs/{runId}/verifications: `capcomd verify`'s options (src/primitives/ops.ts verifyRef). */
 export const FrontVerifyBody = z.object({
 	ref: z.string().min(1).max(512).optional().describe("An agent id (agt-…) or a branch: what to verify; not needed with `id`"),
@@ -479,6 +484,7 @@ export const FrontVerifyBody = z.object({
 	target: z.string().min(1).max(255).optional(),
 	reviewProfile: z.string().min(1).max(128).optional().describe("The reviewer profile, instead of the run's"),
 	key: FrontKey,
+	driveEnv: FrontDriveEnv,
 	waitMs: FrontWait,
 }).strict();
 /** POST /v1/runs/{runId}/merges: `capcomd merge`'s options (src/primitives/ops.ts mergeRef). */
@@ -492,6 +498,7 @@ export const FrontMergeBody = z.object({
 	protectedBranches: z.array(z.string().min(1).max(255)).max(100).optional()
 		.describe("The front door's own protected-branch patterns (CAPCOMD_PROTECTED_BRANCHES where it runs): a target they match is protected too. They only add protection; the daemon's own still apply"),
 	key: FrontKey,
+	driveEnv: FrontDriveEnv,
 	waitMs: FrontWait,
 }).strict();
 /** POST /v1/runs/{runId}/merges/{mergeId}/decision: `capcomd approve <runId> <mrg-…>` (src/primitives/ops.ts decideMerge). */
@@ -500,6 +507,7 @@ export const FrontDecisionBody = z.object({
 	by: z.string().min(1).max(128).optional().describe("Who decided, as the front door records it (the CLI's `--by`, `driver`, `driver:elicited`); default `cli`"),
 	reason: z.string().max(4000).optional(),
 	key: z.string().min(1).max(200).optional().describe("The front door's own id for this decision: asked again with the same key after it ended, the answer is its record, never a second decision"),
+	driveEnv: FrontDriveEnv,
 	waitMs: FrontWait,
 }).strict();
 /** A front door's operation, ended (200, `done`) or still running in the daemon (202). */
