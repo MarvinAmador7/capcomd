@@ -39,11 +39,11 @@ export function daemonHooks(): void {
 /**
  * Before a verify runs, and before an agent is prepared (agent.preparing: the orchestration skill, src/primitives/ops.ts
  * `preparingHooks`): the plugins that judge or prepare it are listening in this process. The daemon's are its host's. A
- * process that runs a verify against the engine itself (the CLI, the MCP server, a run's driver) starts the built-in
- * gates in a local host of its own (src/plugins/host.ts `localHost`), so the run's reviewer judges every verify wherever
- * it runs, until those front doors go through the daemon (plugin API §6.1, §17.2 step 8). (A merge's gate,
- * merge.landing, fires in the engine host, the daemon, where the merge runs.) Gates that fail to start leave a verify
- * with a reviewer failing closed (src/primitives/ops.ts reviewOfJudges).
+ * process that runs a verify against the engine itself (a front door with no daemon for its engine, a run's driver)
+ * starts the built-in gates in a local host of its own (src/plugins/host.ts `localHost`), so the run's reviewer judges
+ * every verify wherever it runs; a front door with a daemon sends its verify there (plugin API §6.1,
+ * src/primitives/front-door.ts). (A merge's gate, merge.landing, fires in the engine host, the daemon, where the merge
+ * runs.) Gates that fail to start leave a verify with a reviewer failing closed (src/primitives/ops.ts reviewOfJudges).
  */
 export async function gates(): Promise<void> {
   if (registry) return;

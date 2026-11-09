@@ -516,17 +516,55 @@ sites named in §6.6: `src/primitives/ops.ts` (spawn, verify, merge, send, cance
 agent's phases), `src/api/server.ts` (approvals, run creation), the host (daemon, plugins), the jobs and triggers
 services (§16).
 
-A hook fires in the process its kernel operation runs in, and only the daemon has a plugin host. The scope actor's
-changes (every `*.changed` hook), the sandbox calls, the agent's phases, `merge.landing` (under the target's lock) and
-everything an agent asks from its VM run in the daemon. An operation a CLI or the MCP server runs against the engine
-itself (`capcomd run new`, `spawn`, `verify`, `merge`, `approve` from the host shell or `capcomd mcp`) fires its
-`ops.ts` gates in that process, where nothing listens. Since §17.2 step 8 those commands and tools are front doors'
-registrations, but they still run in the process that serves them; sending their operations through the daemon is not
-part of this version (a later step; until then a third-party plugin's gates judge only what the daemon runs).
+A hook fires in the process its kernel operation runs in, and only the daemon has a full plugin host: the user's plugins
+and a trusted project's (always out of process, §5.2) run only there. The scope actor's changes (every `*.changed`
+hook), the sandbox calls, the agent's phases, `merge.landing` (under the target's lock, in the engine host) and
+everything an agent asks from its VM run in the daemon.
+
+**A front door's gated operations run in the daemon** (the owner's decision of 2026-11-08, ADR-023 §9 decision 8;
+capability `ops.front_door`; spec 1.0.73). Since §17.2 step 8 the CLI's commands and `capcomd mcp`'s tools are front
+doors' registrations; those whose operation fires a gate where it runs send it to the daemon that hosts their engine, so
+every plugin's gate, an out-of-process plugin's too, judges it exactly as it judges an agent's:
+
+| Operation | Front doors | Hooks it fires, in the daemon |
+|---|---|---|
+| verify | `capcomd verify`, `capcomd_verify` | `verify.starting`, `verify.judging`, `verify.changed` (and its checks' `sandbox.*`) |
+| merge | `capcomd merge` (also `--operator`, `--request-approval`), `capcomd_merge` | `merge.landing`, `merge.changed` |
+| a decision on a merge | `capcomd approve <runId> <mrg-…>` (also `--deny`), `capcomd_approve` (both of its approval modes) | `approval.deciding`, `approval.changed`, then `merge.landing`, `merge.changed` |
+
+The front door finds the daemon by its listing (`state/plugins.json`, §13.2), whose `endpoint` must be the front door's
+own engine, and posts the operation to `POST /v1/runs/{runId}/verifications`, `/merges` or `/merges/{mergeId}/decision`
+(`src/primitives/front-door.ts`, `src/api/front-door.ts`) with a token it makes for that one call and marks as a front
+door's (`frontDoor`, `src/api/clients.ts` `oneCallClient`): an app's or a plugin's token gets 403 there, since an operator
+merge past the gates and a check command of one's own stay the operator's front doors'. The daemon answers within the
+call's `waitMs` (at most 45 s, under the socket's idle timeout) with the operation's record, or 202 with its id while it
+runs on; the front door asks again by that id (a decision: with the same body, which joins it). Who caused it is as
+before: the operator (a decision's `by` as the front door records it: `cli` or `--by`, `driver`, `driver:elicited`). A
+refusal is the operation's own (`ApiError.relay`), so the command fails exactly as it did running it itself.
+
+With no daemon for its engine (none runs, the one that runs hosts another engine, its socket doesn't answer, or it
+predates these routes) the front door runs the operation itself, as before, but first asks which plugins only the daemon
+runs listen to its hooks (`src/plugins/unconsulted.ts`: the user's and a trusted project's, not turned off, read from
+their manifests). A listener it can't ask is a call that failed (§6.5): a gate's, or one declared `failure: closed`,
+refuses the operation (relay.v1 `config`, reason `plugins_unconsulted`, naming each plugin and hook: fail-closed); any
+other is skipped and the front door names it (on stderr; `capcomd mcp`: `pluginsNotConsulted` on its answer). Once the
+daemon took an operation, the front door never runs it itself: a daemon gone mid-operation is a retryable error, and
+asking again by the id picks the operation up.
+
+Not sent through the daemon in this version: `capcomd run new` and `capcomd_run_new` (`run.creating`), `capcomd spawn`
+and `capcomd_spawn` (`profile.resolved`, `agent.spawning`), and `capcomd run <goal>`'s driver (`run.creating`, and
+`profile.resolved` and `agent.spawning` for its planner; `POST /v1/runs` starts the same driver). They resolve the
+project, its profiles and its settings where they are typed, which the daemon's process doesn't have, so they run there
+and apply the same rule with or without a daemon: a closed listener only the daemon runs refuses them, an open one is
+named and skipped. An agent's own spawns, verifies and merges (from its VM) run in the daemon. The front doors' other
+operations (`check`, `send`, `cancel`, `pause`, `resume`, `grant`, `title`, `task`, `kv`) fire no gate where they run:
+what they change fires its `*.changed` hooks in the daemon's scope actor, and a check's sandbox hooks fire in the engine
+host.
+
 The exception is the built-in gates the kernel's own contract depends on (the reviewer gate, §15.3): before a verify
-runs, a process that isn't the daemon starts them in a local host of its own (`src/plugins/hooks.ts` `gates()`; in
-tests also `CAPCOMD_TEST_PLUGINS`), so a run's reviewer judges every verify wherever it runs; the daemon's verifies wait
-for its host to start instead. Such a local host writes no daemon-stream events; its gate events go on the run's stream.
+runs, a process that isn't the daemon (a front door with no daemon, a run's driver) starts them in a local host of its
+own (`src/plugins/hooks.ts` `gates()`; in tests also `CAPCOMD_TEST_PLUGINS`), so a run's reviewer judges every verify
+wherever it runs; the daemon's verifies wait for its host to start instead. Such a local host writes no daemon-stream events; its gate events go on the run's stream.
 With no listener a site builds no payload and awaits nothing (`HookRegistry.listening`). The same holds for the
 built-ins every process loads (`everyProcess` in `src/plugins/builtins.ts`): the front doors, the forges, the reviewer
 gate and the orchestration skill; an attempt prepared outside the daemon (a run's driver) waits for that local host, and
@@ -1342,7 +1380,9 @@ before the next start, only while that pid still runs the recorded command. `CAP
 before the plugins load (§5.5 step 4): it serves the harness.v1 API to plugin tokens only (401 for any other,
 `src/api/server.ts` `pluginsOnly`). Only the daemon starts processes: a CLI's local host has no launcher, so a
 `process` plugin stays `validated` there, and an operation a CLI or the MCP server runs itself fires its `ops.ts` gates
-where the plugin doesn't listen (§6.1): a process plugin's gates judge what the daemon runs.
+where the plugin doesn't listen (§6.1): a process plugin's gates judge what the daemon runs, which includes a front
+door's verify, merge and decision on a merge whenever a daemon hosts its engine, and a front door with no daemon refuses
+an operation such a gate must judge (§6.1).
 
 ### 9.3 Handshake and token
 
@@ -2645,6 +2685,7 @@ ADR-024's steps interleave: its loader (step 1 there) and the blocks with no new
 | 1.0.69 | 2026-11-08 | The consolidator in every project, the brief only where there is memory, decided by the owner (ADR-025 D17, 2026-11-08; §6.6.7): `ContextProvider.index` may answer `empty: true` (optional, additive; read only with no lines, and the conformance suite fails `true` with lines): the provider has nothing at all for the scope. The built-in memory provider says so when the run's base holds no item file (`memory/**.md`, `facts/**.md`, but `index.md` and `log.md`) and no index (`index.md`, or the profile's `memory.files`; that index missing beside other memory still skips the provider `not found`) under `.capcomd/context/`. The router leaves such a provider out of the header, records `plugin.context.skipped` with `reason: empty` (a new reason value), and gives a loaded provider's outcome `empty: true` (additive); when every provider of the block is empty it returns no patch: no brief and no context skill, the prompt byte for byte the one without a context block. `capcomd context brief` answers `brief: null`, `empty: true`, `skills: []` then (additive). `capcomd setup project` adds the advice step `consolidator` (with `command`) when the project's own planner may spawn but doesn't list `context-consolidator`, and `capcomd profiles migrate --json` gains `consolidator` (`{missing: profile \| planner, detail, command}`) in a project whose planner can't spawn it; neither changes a profile. No hook, seam, route or harness contract shape changes. |
 | 1.0.70 | 2026-11-09 | SDK polish (the critic's C13 leftovers; §14.3, §14.5, §14.6): `testkit.bootWith` fails the boot at once, with the plugin's state and cause, for a plugin that is `disposed` or disabled (cause `disabled`, or `enabled: false` with no cause), as it already did for `failed` and `validated` with a cause, instead of waiting out `readyMs`; a disabled one's message says `plugins.<name>.enabled` is false. The conformance suites throw `unsupported` ("run these under bun test", naming the suite and the runtime) where `bun:test` can't be loaded, instead of Node's module-not-found error. The release workflow's `npm-plugin` job also needs `prepare`'s `npm` (capcomd itself published to npm) and the `npm` job's success, so `@capcomd/plugin` is never published while capcomd's `package.json` is private. No API, hook or seam changes. |
 | 1.0.71 | 2026-11-09 | Text only, the spec and ADRs brought in line with the code after the wave's fixes (no hook, seam, route, shape or behaviour changes): §8.1's "Today" column names the code a primitive stands on, with `jobs` and `triggers` built, and points to §8.4 for what answers where; §8.2 says the kernel's services apply a call's `key` but the host doesn't yet apply its `signal` or `timeoutMs` (only `jobs.wait` and a seam call through `sandboxes.provider` are bounded); §9.6 says the client library is a `PluginClient` (`open`, `hooks`, `answer`, `emit`, `storage`, `fetch`), not a `PluginContext` (whether it grows `ctx`-shaped wrappers is open), lists which `ctx` services answer in process today, and its profiles row names `untrustedSandbox`; §9.9, §12.4 and §13.1: `plugin.config_refused`, `plugin.trusted` and `trigger.*` (with `trigger.replied`) are written, and only `plugin.hook_deprecated` isn't (no hook is deprecated); §10.2: a run's plugin settings are checked against the plugins of the run's project (`POST /v1/runs`' `repo`), not the daemon's; §15.1: the built-in `sandbox-docker` has no plugin config (its CLI and image from `CAPCOMD_DOCKER_BIN`/`CAPCOMD_DOCKER_IMAGE`, `idleLifetime` and `agentMemory` the place's settings), the example's config is the example's, and whether the built-in takes it is open; §15.2: the example declares an `x-secret` `token`, and the built-in `forge-github` doesn't yet: it reads the caller's `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token` under §7.4's interim rule, not §10.3's (moving it to a declared `token` is open); §17.1: the persona is shown at `agent.preparing` and placed by the runner; §17.2 step 4's "refused at `validate`" holds while a daemon runs (1.0.49), step 13's smoke script is `packages/plugin/scripts/smoke.sh` (also in `release.yml`'s comments). ADR-024: §2.5's "shown before it is applied" is `update`'s report in the same command, and marketplace discovery isn't built; §5 marks what isn't built (`add`'s v2 shorthand flags and `--from`, `PUT` creating a profile, `DELETE /v1/profiles/{name}`, `POST /v1/profiles/install`, the Crew screen and a planner picker, `POST /v1/runs` `planner`, the avatar seed); the step 7 note on trust in the API and the decision table's persona row are corrected; `memory.files`' index is under `.capcomd/context/`. ADR-025 §10: the `files:` index is built (1.0.60). |
+| 1.0.73 | 2026-11-09 | A front door's gated operations go through the daemon (§6.1, §9.2; the owner's decision of 2026-11-08, ADR-023 §9 decision 8, replacing the C8/C9 deviation that a CLI or `capcomd mcp` operation ran its gates where it was served): `capcomd verify`, `merge`, `approve <runId> <mrg-…>` and `capcomd_verify`, `capcomd_merge`, `capcomd_approve` run in the daemon that hosts their engine, so an out-of-process plugin's `verify.*`, `merge.*` and `approval.*` gates judge them. Capability `ops.front_door`: `POST /v1/runs/{runId}/verifications`, `/merges` and `/merges/{mergeId}/decision`, only for a front door's one-call token (`frontDoor`), a bounded wait (202 with the id), the operation's own refusal as `ApiError.relay` (additive). The daemon's listing (`state/plugins.json`) names the engine it hosts (`endpoint`, additive). With no daemon for its engine a front door runs them itself, refusing one a gate (or a `failure: closed` listener) only the daemon runs must judge (`plugins_unconsulted`) and naming the other listeners it skipped; `run new`, `spawn` and `run <goal>` (not sent through the daemon in this version) apply the same rule with or without a daemon. |
 | 1.0.72 | 2026-11-09 | The watchdog's commands and waits (§16.4, a fix from the live re-check): a foreground command's time while another wait holds the agent's clock (a job, a verification, an approval, a pause) no longer counts toward the at most `stalledAfterMs` of commands between two signs of progress, and is taken off once, by that wait when it ends; a command that started before the wait still has its time up to the wait taken off. Before, a worker that started its suite as a background job and then waited in a command (`sleep`, then `capcomd inbox`) used up its commands' allowance while the job ran, and was flagged `stalled` about a minute after the job ended, while still in that command. No hook, shape or config changes. |
 
 Decisions made while writing this document, with reasons, are listed in ADR-023 ("Decisions made in the spec") and

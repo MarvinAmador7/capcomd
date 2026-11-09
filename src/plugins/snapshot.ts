@@ -11,9 +11,11 @@ import { inDaemon } from "./hooks";
 type Env = Record<string, string | undefined>;
 
 /** Where the running daemon keeps its plugin listing for `capcomd plugins list` (the CLI has no API token), with the
- *  harness socket it serves (`socket`), where `capcomd plugins enable|disable` reach it (src/cli/daemon.ts). */
+ *  harness socket it serves (`socket`), where `capcomd plugins enable|disable` reach it (src/cli/daemon.ts), and the
+ *  engine it hosts (`endpoint`), so a front door sends that engine's verifies, merges and approvals to it (plugin API
+ *  §6.1). */
 export const pluginsSnapshotPath = (env: Env = process.env) => join(stateDir(env), "plugins.json");
-export type PluginsSnapshot = { pid: number; at: string; plugins: PluginSummary[]; socket?: string };
+export type PluginsSnapshot = { pid: number; at: string; plugins: PluginSummary[]; socket?: string; endpoint?: string };
 
 /** The running daemon's listing, or null when there is none or the daemon that wrote it is gone. A pid that isn't a
  *  process's (0 and -1 name a process group and every process, which a signal 0 always reaches) is no daemon. */

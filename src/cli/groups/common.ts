@@ -19,6 +19,16 @@ export function usage(message: string): never {
   throw new RelayError("usage", message, "Run `capcomd --help` for usage.");
 }
 
+/** Plugins only the daemon runs that an operation this process ran itself couldn't ask (plugin API §6.1), on stderr:
+ *  scripts read stdout. */
+export function saySkipped(what: string, skipped: ReadonlyArray<{ plugin: string; hooks: readonly string[] }>, why: string): void {
+  if (skipped.length) console.error(`capcomd: ${what}: not asked: ${skipped.map((u) => `${u.plugin} (${u.hooks.join(", ")})`).join(", ")}, because ${why}.`);
+}
+
+/** Why `capcomd spawn` and `capcomd run` can't ask the daemon's plugins: they run where the command's project is. */
+export const RUNS_HERE = "this command runs in this process (it reads the project and settings where you typed it), and only the daemon runs those plugins";
+export const RUNS_HERE_HINT = "A spawn or a run typed here can't reach the daemon's plugins yet (plugin API §6.1): an agent's spawns run in the daemon. Turn the plugin off (`plugins.<name>.enabled: false` in ~/.capcomd/config.json) to do it from here.";
+
 /** One relay.v1 envelope on stdout. */
 export const out = (obj: Record<string, unknown>) => console.log(JSON.stringify({ schema: SCHEMA, ok: true, ...obj }));
 

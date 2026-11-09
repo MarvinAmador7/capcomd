@@ -470,6 +470,14 @@ Decided by the owner on 2026-11-08:
    validates the plugin and before every start of its process, naming each path. Out of process, the child's module
    loading is guarded too: a Bun and a Node preload refuse a module outside the directory as it loads. Built-ins are
    exempt. What this does and doesn't hold is in spec §4.9 and §11.6 (spec 1.0.65).
+8. **A front door's gated operations go through the daemon.** The CLI's and `capcomd mcp`'s verify, merge and
+   approval of a merge (the critic's C8/C9: they ran their gates in the process that served them, where only the
+   built-ins listen) are sent to the running daemon's API, with the CLI's own one-call token, so the daemon's plugin
+   host, in-process and out-of-process plugins alike, fires `verify.judging`, `merge.landing`, `approval.deciding` and
+   the rest for them exactly as for an agent's. With no daemon the front door keeps running them itself, and refuses
+   one that a plugin it can't ask must judge (the conservative choice: a gate it can't ask is a failed gate call,
+   fail-closed); listeners of other hooks are named as skipped. Which operations, and which stay in the front door's
+   process for now (`run new`, `spawn`, a run's driver), is in spec §6.1 (spec 1.0.73).
 
 Risks that stay:
 

@@ -6,7 +6,7 @@ import { Hono, type Context } from "hono";
 import { implement, ORPCError } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import type { z } from "zod";
-import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
+import { BrainProposalsSendBody, CAPABILITY_NAMES, contract, CreateRunBody, FRONT_WAIT_DEFAULT_MS, FrontDecisionBody, FrontMergeBody, FrontVerifyBody, type PluginDetail, type Plugins, MESSAGE_BODY_MAX_BYTES, ProfileWriteBody, ProjectGitInitBody, ProjectPublishBody, ProjectSetupBody, PullRequestBody, StreamFrames, THREAD_PAGE_MAX, TRANSCRIPT_PAGE_MAX } from "./contract";
 import { resolveSkills } from "../agents/skills";
 import { mediaOfPath, sniffImage, workspacePath } from "../../packages/agent-thread/src/index";
 import { authenticate, loadClients, pluginClients, type AuthedClient, type ClientRecord, type ClientScope } from "./clients";
@@ -26,6 +26,8 @@ import { parseSettingsPatch } from "./sandboxes";
 import { runFiles } from "./run-files";
 import { isListedProvider, PROVIDER_LABEL } from "../providers/registry";
 import { resourceActionEvent, resourceDeletedEvent } from "../providers/machine-audit";
+import { toRelayError, type ErrorCode } from "../core/errors";
+import type { FrontDoorOps, FrontOp } from "./front-door";
 
 export const HEARTBEAT_MS = 15_000;
 
@@ -66,6 +68,8 @@ export type ServerOptions = {
 	pluginHost?: GatewayHost;
 	/** A plugin's private storage (src/plugins/storage.ts), for its /v1/plugins/{name}/storage routes. */
 	pluginStorage?: (plugin: string) => PluginStore;
+	/** A front door's verify, merge and approval (capability ops.front_door, src/api/front-door.ts; absent: 404). */
+	frontDoor?: FrontDoorOps;
 };
 
 /** The out-of-process protocol's routes (plugin API §9.3-§9.6): only the plugin's own token, whatever its scopes. */
@@ -75,6 +79,12 @@ const PLUGIN_STATUS: Record<PluginErrorCode, 403 | 404 | 409 | 422 | 503> = { fo
 /** A plugin route's thrown PluginError (plugin API §4.7.3); any other code, or any other throw, is 500 "plugin error". */
 const ROUTE_STATUS: Partial<Record<PluginErrorCode, 403 | 404 | 409 | 422 | 503>> = { forbidden: 403, not_found: 404, conflict: 409, invalid: 422, unavailable: 503 };
 const PLUGIN_ROUTES = "/v1/x/";
+/** Capability ops.front_door: a decision on a merge needs the approve scope, as POST /v1/approvals/{id}/decision does. */
+const FRONT_DECISION = /^\/v1\/runs\/[^/]+\/merges\/[^/]+\/decision$/;
+/** A front door's operation refused: its relay.v1 code as the gateway's status and code (ApiError `relay` keeps it). */
+const FRONT_STATUS: Record<ErrorCode, [422 | 404 | 409 | 503, string]> = {
+	usage: [422, "invalid"], config: [422, "invalid"], not_found: [404, "not_found"], conflict: [409, "conflict"], run_failed: [409, "conflict"], engine_unreachable: [503, "unavailable"],
+};
 
 /** A plugin route's params when `path` matches its `pattern`: a `{name}` segment takes one path segment; null otherwise. */
 export function routeParams(pattern: string, path: string): Record<string, string> | null {
@@ -275,6 +285,12 @@ export function harnessApp(o: ServerOptions) {
 			storagePut: os.plugins.storagePut.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 			storageDelete: os.plugins.storageDelete.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
 		},
+		// Served natively below (capability ops.front_door: the front doors' own tokens, a bounded wait): never reached.
+		frontDoor: {
+			verify: os.frontDoor.verify.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			merge: os.frontDoor.merge.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+			decide: os.frontDoor.decide.handler(() => { throw new ORPCError("NOT_FOUND", { message: "served natively" }); }),
+		},
 		events: {
 			replay: os.events.replay.handler(async ({ input }) => {
 				if (input.scope === "daemon") return state.daemonEvents(input.after ?? 0).map(daemonEnvelope);
@@ -300,7 +316,7 @@ export function harnessApp(o: ServerOptions) {
 		// drafts in a company's brain in the caller's name (context.brain_proposals): the configure scope, which steering
 		// a run doesn't give.
 		const configures = c.req.method === "PATCH" || (c.req.method === "POST" && (CONFIGURE_POSTS.has(c.req.path) || PLUGIN_CONTROL.test(c.req.path) || BRAIN_SEND.test(c.req.path))) || (c.req.method !== "GET" && c.req.path.startsWith("/v1/profiles/"));
-		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") ? "approve" : "steer";
+		const need: ClientScope = c.req.method === "GET" ? "read" : configures ? "configure" : c.req.path.startsWith("/v1/approvals/") || (c.req.method === "POST" && FRONT_DECISION.test(c.req.path)) ? "approve" : "steer";
 		if (!cl.scopes.includes(need)) return err(c, 403, "forbidden", `token lacks the ${need} scope`);
 		return next();
 	});
@@ -551,6 +567,41 @@ export function harnessApp(o: ServerOptions) {
 			const r = await src.send(runId, agentId, body, `harness:${client.clientId}:${key}`, sk.skills);
 			return { status: 200, body: { runId, to: agentId, from: "operator", seq: r.seq, note: r.note } };
 		});
+	});
+
+	// Capability ops.front_door (plugin API §6.1): the CLI's and `capcomd mcp`'s verify, merge and approval of a merge run
+	// here, in the daemon, so every plugin's gate (an out-of-process plugin's too) judges them as it judges an agent's.
+	// Only the one-call tokens those front doors make for it: an app or a plugin gets 403 (an operator's merge past the
+	// gates, a check command of its own, are the operator's front doors' alone). Idempotent by the operation's id; the
+	// answer waits at most `waitMs`, then says it still runs (202) and the caller asks again with its id.
+	const frontOp = async <S extends z.ZodTypeAny>(c: Context, schema: S, start: (b: z.infer<S>) => Promise<FrontOp>) => {
+		if (!(c.get("client") as AuthedClient).frontDoor) return err(c, 403, "forbidden", "this route runs the CLI's and capcomd mcp's own operations (the one-call tokens they make for it); an app or a plugin can't call it");
+		if (!o.frontDoor) return err(c, 404, "not_found", "this daemon doesn't run front doors' operations");
+		const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
+		if (!parsed.success) {
+			const i = parsed.error.issues[0];
+			return err(c, 422, "invalid", i?.path.length ? `${i.path.join(".")}: ${i.message}` : "the body must be a JSON object", i?.path.length ? { field: String(i.path[0]) } : {});
+		}
+		const wait = (parsed.data as { waitMs?: number }).waitMs ?? FRONT_WAIT_DEFAULT_MS;
+		try {
+			const op = await start(parsed.data);
+			op.done.catch(() => {}); // still running when the answer goes: its end (or failure) is the next ask's
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const r = await Promise.race([op.done.then((v) => ({ v })), new Promise<null>((res) => { timer = setTimeout(() => res(null), wait); })]).finally(() => clearTimeout(timer));
+			if (!r) return c.json({ done: false, id: op.id, state: "running" }, 202);
+			return c.json({ done: true, id: op.id, state: String(r.v.state ?? ""), op: r.v }, 200);
+		} catch (e) {
+			const r = toRelayError(e);
+			const [status, code] = FRONT_STATUS[r.code] ?? [409, "conflict"];
+			return err(c, status, code, r.message, { relay: r.toJSON().error });
+		}
+	};
+	app.post("/v1/runs/:runId/verifications", (c) => frontOp(c, FrontVerifyBody, (b) => o.frontDoor!.verify(c.req.param("runId"), b)));
+	app.post("/v1/runs/:runId/merges", (c) => frontOp(c, FrontMergeBody, (b) => o.frontDoor!.merge(c.req.param("runId"), b)));
+	app.post("/v1/runs/:runId/merges/:mergeId/decision", async (c) => {
+		const mergeId = c.req.param("mergeId");
+		if (!/^mrg-[A-Za-z0-9]+$/.test(mergeId)) return err(c, 422, "invalid", `${mergeId.slice(0, 64)} isn't a merge id (mrg-…)`, { field: "mergeId" });
+		return frontOp(c, FrontDecisionBody, (b) => o.frontDoor!.decide(c.req.param("runId"), mergeId, b));
 	});
 
 	// Goal branches (capability runs.goal_branch; the steer scope): open a pull request from the run's goal branch into its

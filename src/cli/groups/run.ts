@@ -10,7 +10,7 @@ import { loadTrace, renderTrace } from "../commands/trace";
 
 /** Which `capcomd run <goal>` path runs by default (ADR-016 step 4). */
 export const DEFAULT_RUN_PATH: "recipe" | "legacy" = "recipe";
-import { type Cmd, type KernelCommand, usage, out, deepMerge, runTraceAt } from "./common";
+import { type Cmd, type KernelCommand, usage, out, deepMerge, runTraceAt, saySkipped, RUNS_HERE, RUNS_HERE_HINT } from "./common";
 
 /** `capcomd run` */
 async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
@@ -30,6 +30,8 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     // --sandbox NAME: where this run's agents and checks run (recorded with the run); default: the project's.
     const sandbox = values.sandbox !== undefined ? await (await import("../../config/sandbox")).askedSandbox(String(values.sandbox)) : undefined;
     const pluginConfig = await runPluginConfig(values);
+    // Its run.creating fires here, where the daemon's plugins aren't (plugin API §6.1).
+    saySkipped("capcomd run new", await (await import("../../plugins/unconsulted")).unconsulted("capcomd run new", ["run.creating"], RUNS_HERE, { hint: RUNS_HERE_HINT }), RUNS_HERE);
     const r = await P.runNew({ ...(pluginConfig ? { pluginConfig } : {}), budget, label: values.label as string | undefined, ...(values.goal ? { goal: values.goal as string } : {}), key: values.key as string | undefined, runId: values["run-id"] as string | undefined, checks, ...(reviewer ? { reviewer } : {}), ...(sandbox ? { sandbox } : {}),
       ...(goalBranch !== undefined || base !== undefined ? { ...(goalBranch !== undefined ? { goalBranch } : {}), ...(base !== undefined ? { base } : {}) } : { ...(target ? { target } : {}), ...(values["target-from"] ? { targetFrom: values["target-from"] as string } : {}) }) });
     if (json) out(r); else console.log(r.runId);
@@ -150,6 +152,10 @@ async function runCommand({ positionals, values, json }: Cmd): Promise<number> {
     targetBranch = undefined;
   }
 
+  // Its driver (this process, or the one it starts in the background, which asks again) creates the run and spawns its
+  // planner: their run.creating, profile.resolved and agent.spawning fire there, where the daemon's plugins aren't
+  // (plugin API §6.1).
+  saySkipped("capcomd run", await (await import("../../plugins/unconsulted")).unconsulted("capcomd run", ["run.creating", "profile.resolved", "agent.spawning"], RUNS_HERE, { hint: RUNS_HERE_HINT }), RUNS_HERE);
   if (values.detach) {
     const dir = join((await import("../../utils/home")).stateDir(), "runs");
     mkdirSync(dir, { recursive: true });
@@ -485,12 +491,13 @@ async function approveCommand({ positionals, values, json }: Cmd): Promise<numbe
   const taskId = positionals[2] ?? usage("usage: capcomd approve <runId> <taskId|mrgId> [--deny] [--reason R]");
   // An agent's merge into a protected target (mrg-…): approve runs it, --deny fails it.
   if (taskId.startsWith("mrg-")) {
-    const P = await import("../../primitives/ops");
-    const m: any = await P.decideMerge(runId, taskId, { approve: !values.deny, by: (values.by as string | undefined) ?? "cli", ...(values.reason ? { reason: String(values.reason) } : {}) });
+    // In the daemon that hosts the engine, so approval.deciding and merge.landing ask every plugin (plugin API §6.1).
+    const a = await (await import("../../primitives/front-door")).frontDecide(runId, taskId, { approve: !values.deny, by: (values.by as string | undefined) ?? "cli", ...(values.reason ? { reason: String(values.reason) } : {}) }, { what: "capcomd approve", skipping: (s, why) => saySkipped("capcomd approve", s, why) });
+    const m: any = a.done ? a.value : null;
     if (json) out(m); else console.log(`${taskId}: ${m.state}${m.result?.sha ? ` (${String(m.result.sha).slice(0, 12)})` : ""}${m.result?.reason ? ` ${m.result.reason}` : ""}`);
     // Approved, then held by a plugin (merge.landing): it waits for a second approval, of that plugin's hold.
     if (!json && m.state === "awaiting_approval" && m.heldBy) console.log((await import("../status-text")).heldMergeText(runId, taskId, m, { again: true }).join("\n"));
-    await P.settleCleanups();
+    if (a.done && a.where === "here") await (await import("../../primitives/ops")).settleCleanups();
     return m.state === "merged" || (values.deny && m.state === "failed") ? EXIT.ok : EXIT.run_failed;
   }
   if (values.deny) usage("--deny applies to an agent's parked merge (mrg-…)");
