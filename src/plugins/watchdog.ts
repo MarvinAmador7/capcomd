@@ -11,8 +11,8 @@
 // that time doesn't count (once, when waits overlap). Jobs and commands count so for at most `stalledAfterMs` in all
 // between two signs of progress, however many there are, so one that hangs, one run again and again, or a job that
 // never ends and is polled, is still caught; a verification, an approval or a pause holds the clock as long as it
-// lasts. An agent
-// with agents of its own running is judged through them: they stall first, and their end is its progress. An agent
+// lasts. An agent with agents of its own running is judged through them: they stall first, and their end is its
+// progress. An agent
 // whose work never shows as files changing (a reviewer, a report-only agent, an orchestrate agent: none is
 // checkpointed) isn't judged at all; the kernel's own notices still watch its process. While the kernel's own notice
 // shows on an agent, `stalled` isn't raised over it (the stop still comes). No progress for `stalledAfterMs` (15 min)
