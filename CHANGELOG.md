@@ -5,6 +5,12 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Fixed: a fact that isn't in effect yet no longer reaches agents' context brief as if it applied today. A brain (or
+  the project's memory) item whose `valid_from` is a later date, such as a price change decided now for next March,
+  used to be listed as a current `stable` fact next to the rule still in force. It is now left out until its day, and
+  the brief's header says how many lines were left out that way ("1 line not in effect yet left out"). The file is
+  still in the agent's copy of the brain. `capcomd context brief --json` and the `plugin.context.loaded` event include
+  the count as `notYetEffective`.
 - Fixed: the watchdog no longer flags an agent that started a background job and then waits for it in a command
   (a `sleep`, a wait on its inbox). The time that command ran alongside the job used up the command time the watchdog
   allows between two signs of progress (`plugins.watchdog.stalledAfterMs`), so with a short limit the agent was flagged

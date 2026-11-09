@@ -96,7 +96,8 @@ export interface IndexLine {
   /** Where the body is, as the agent sees it (a path in its checkout). */
   path: string;
   paths?: readonly string[];
-  authority: Pick<Authority, "status" | "staleAfter" | "supersededBy">;
+  /** `validFrom` (additive): a line not yet in effect (after the brief's day) leaves the brief, as a stale one does. */
+  authority: Pick<Authority, "status" | "validFrom" | "staleAfter" | "supersededBy">;
   modified: string;
 }
 export interface ContextItem {
