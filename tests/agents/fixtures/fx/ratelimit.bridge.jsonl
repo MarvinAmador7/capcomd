@@ -1,5 +1,5 @@
 {"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
-{"type":"session","sessionId":"5QmoVMopUxs5","model":"stub-model","provider":"stub"}
+{"type":"session","sessionId":"a76sk5nHEWsb","model":"stub-model","provider":"stub"}
 {"type":"update","update":{"sessionUpdate":"session_info_update","_meta":{"fx":{"modelResponseRecovery":{"state":"active","kind":"auto_retry","cause":"rate_limited","action":"retrying_request","attempt":1,"attemptLimit":10,"delaySeconds":1,"message":"⚠ Rate limited · HTTP 429 · rate_limit_exceeded: Rate limit exceeded · retrying request in 1s"}}}}}
 {"type":"update","update":{"sessionUpdate":"session_info_update","_meta":{"fx":{"modelResponseRecovery":{"state":"active","kind":"auto_retry","cause":"rate_limited","action":"retrying_request","attempt":2,"attemptLimit":10,"delaySeconds":1,"message":"⚠ Rate limited · HTTP 429 · rate_limit_exceeded: Rate limit exceeded · retrying request in 1s"}}}}}
 {"type":"update","update":{"sessionUpdate":"session_info_update","_meta":{"fx":{"modelResponseRecovery":{"state":"active","kind":"auto_retry","cause":"rate_limited","action":"retrying_request","attempt":2,"attemptLimit":10,"delaySeconds":1,"message":"⚠ Rate limited · HTTP 429 · rate_limit_exceeded: Rate limit exceeded · retrying request in 1s"}}}}}

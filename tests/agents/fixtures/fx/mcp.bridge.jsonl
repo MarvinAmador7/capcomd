@@ -1,10 +1,10 @@
 {"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
 {"type":"notice","text":"capcomd: MCP servers not started on fx: untrusted-one (untrusted: fx runs with full access, so their tools would run unasked)"}
 {"type":"notice","text":"capcomd: MCP server other not started: no-such-program isn't in this sandbox"}
-{"type":"session","sessionId":"u9CO5ETJlpgK","model":"stub-model","provider":"stub"}
+{"type":"session","sessionId":"bwEFl_wfBZBj","model":"stub-model","provider":"stub"}
 {"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_mcp_0","name":"mcp_capcomd_status","title":"status","kind":"other","status":"pending","rawInput":{},"_meta":{"fx":{"toolCall":{"internal":false,"mcp":{"server":"capcomd","tool":"status"}}}}}}
 {"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_mcp_0","status":"in_progress"}}
 {"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_mcp_0","status":"completed","content":[{"type":"content","content":{"type":"text","text":"{\"server\":\"capcomd\",\"tool\":\"mcp_capcomd_status\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"run is ok\"}],\"isError\":false}}"}}]}}
-{"type":"message","role":"agent","messageId":"804ce0f5dde0971ec0123ff88c9af719","text":"capcomd says ok."}
+{"type":"message","role":"agent","messageId":"6d94142875373b166e2e03d5eaec44a7","text":"capcomd says ok."}
 {"type":"update","update":{"sessionUpdate":"usage_update","used":1341,"size":200000}}
 {"type":"result","stopReason":"end_turn","usage":{"inputTokens":2500,"outputTokens":81},"lastText":"capcomd says ok."}

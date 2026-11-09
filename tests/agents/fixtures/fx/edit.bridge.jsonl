@@ -1,12 +1,12 @@
 {"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
-{"type":"session","sessionId":"6jnUo_qkmRik","model":"stub-model","provider":"stub"}
-{"type":"message","role":"agent","messageId":"9278cce934d2e9c8bc3f928195d32b71","text":"I'll create the file."}
+{"type":"session","sessionId":"aNvqiEvr3sEg","model":"stub-model","provider":"stub"}
+{"type":"message","role":"agent","messageId":"ed7ddbc190b2bca42e5ad011a11f5bb0","text":"I'll create the file."}
 {"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_edit_0","name":"write_file","title":"Writing","kind":"edit","status":"pending","rawInput":{"path":"notes.txt","content":"first line\n"},"_meta":{"fx":{"toolCall":{"internal":false}}}}}
 {"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_edit_0","status":"in_progress"}}
 {"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_edit_0","status":"completed","content":[{"type":"content","content":{"type":"text","text":"wrote notes.txt (11 bytes)"}}]}}
 {"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_edit_1","name":"edit_file","title":"Editing","kind":"edit","status":"pending","rawInput":{"path":"notes.txt","old_string":"first line","new_string":"edited line"},"_meta":{"fx":{"toolCall":{"internal":false}}}}}
 {"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_edit_1","status":"in_progress"}}
 {"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_edit_1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"edited notes.txt (12 bytes)"}}]}}
-{"type":"message","role":"agent","messageId":"06f205ee11384e23f496f300e08e81bc","text":"Created and edited notes.txt."}
+{"type":"message","role":"agent","messageId":"ec7e8514ec5311141a2f5714001491ce","text":"Created and edited notes.txt."}
 {"type":"update","update":{"sessionUpdate":"usage_update","used":1442,"size":200000}}
 {"type":"result","stopReason":"end_turn","usage":{"inputTokens":3900,"outputTokens":123},"lastText":"Created and edited notes.txt."}

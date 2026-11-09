@@ -1,8 +1,8 @@
 {"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
-{"type":"session","sessionId":"0-rfgXAQXKmt","model":"stub-model","provider":"stub"}
-{"type":"message","role":"agent","messageId":"86b5216f76c1db7f33730c7eface3051","text":"Working on it."}
+{"type":"session","sessionId":"aBFI_svTeyF0","model":"stub-model","provider":"stub"}
+{"type":"message","role":"agent","messageId":"38ee0ef4034b406a53c2379fb9d8cd1b","text":"Working on it."}
 {"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_steer_0","name":"shell","title":"Running","kind":"execute","status":"pending","rawInput":{"action":"run","command":"sleep 4 && echo slept"},"_meta":{"fx":{"toolCall":{"internal":false}}}}}
 {"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_steer_0","status":"in_progress"}}
-{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_steer_0","status":"failed","content":[{"type":"content","content":{"type":"text","text":""}}],"command_result":{"kind":"command","command":"sleep 4 && echo slept","cwd":"/work","exit_code":null,"signal":15,"timed_out":false,"duration_ms":2872,"stdout_bytes":0,"stderr_bytes":0,"truncated":false,"output_file":null,"stdout_file":null,"stderr_file":null}}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_steer_0","status":"failed","content":[{"type":"content","content":{"type":"text","text":""}}],"command_result":{"kind":"command","command":"sleep 4 && echo slept","cwd":"/work","exit_code":null,"signal":15,"timed_out":false,"duration_ms":2866,"stdout_bytes":0,"stderr_bytes":0,"truncated":false,"output_file":null,"stdout_file":null,"stderr_file":null}}}
 {"type":"update","update":{"sessionUpdate":"usage_update","used":1240,"size":200000}}
 {"type":"result","stopReason":"cancelled","usage":{"inputTokens":1200,"outputTokens":40},"lastText":"Working on it."}

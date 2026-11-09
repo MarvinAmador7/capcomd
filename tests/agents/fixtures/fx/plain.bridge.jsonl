@@ -1,6 +1,6 @@
 {"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
-{"type":"session","sessionId":"pvGIJWNGUFLy","model":"stub-model","provider":"stub"}
+{"type":"session","sessionId":"wNKtmV-8cy__","model":"stub-model","provider":"stub"}
 {"type":"message","role":"thought","text":"The user wants a greeting; keep it short."}
-{"type":"message","role":"agent","messageId":"263fc4653dae2e2e1508208ecdfad1ec","text":"Hello from the stub model. The answer is 42."}
+{"type":"message","role":"agent","messageId":"404e5fba8714df849651f5c7747c5602","text":"Hello from the stub model. The answer is 42."}
 {"type":"update","update":{"sessionUpdate":"usage_update","used":1240,"size":200000}}
 {"type":"result","stopReason":"end_turn","usage":{"inputTokens":1200,"outputTokens":40},"lastText":"Hello from the stub model. The answer is 42."}
