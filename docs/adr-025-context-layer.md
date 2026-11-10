@@ -1,6 +1,6 @@
 # ADR-025: The context layer: memory and business knowledge as plugins
 
-Status: **Accepted** (2026-11-05; the owner accepted decisions D1–D16 in §15 as recommended; D17 decided by the owner on 2026-11-08). Builds on ADR-023 (the plugin core; spec [docs/spec/plugin-api.md](spec/plugin-api.md)
+Status: **Accepted** (2026-11-05; the owner accepted decisions D1–D16 in §15 as recommended; D17 decided by the owner on 2026-11-08; D6a accepted as built and D18 decided by the owner on 2026-11-10). Builds on ADR-023 (the plugin core; spec [docs/spec/plugin-api.md](spec/plugin-api.md)
 1.0.8, which wins where this ADR and it differ), ADR-024 (agent profiles v2, whose `memory` block this replaces),
 ADR-017 (in-VM sub-agents and the closed op list), ADR-003 (verification, not self-report), ADR-005 (approvals),
 ADR-013 (merges). Research: [docs/research/memory-and-context.md](research/memory-and-context.md), cited below as
@@ -500,6 +500,10 @@ facts, not memory.
   with frontmatter; `index.md` is the brain's own navigation); `supersedes`/`superseded_by` read from frontmatter; the
   authority/freshness filter applied router-side. This works for any OKF producer and makes the groundray CLI
   unnecessary for reads (the aging review's point: groundray's measured value is governance, research §8).
+- **Not in effect yet** (D18, the owner's decision of 2026-11-10): a fact whose `valid_from` is after the brief's UTC
+  day stays out of the brief until that day; the header counts it ("N lines not in effect yet left out"), and `search`
+  and `get` still find it, as they read every item of the bundle (`src/context/brief.ts` `notInEffect`,
+  `src/context/groundray.ts` `search` and `get`). Agents are not shown upcoming facts marked with their date.
 - **In the sandbox**: the bundle at the pinned commit as a second checkout in the environment image or cloned in the
   prelude (§6.2); `restricted` brains are not added to the host at all.
 - **Write**: `propose()` → `groundray knowledge create --brain <slug> --actor <approver or capcomd/<v>> --method
@@ -906,7 +910,8 @@ as the orchestration skill does. Still not to a reviewer, a report agent or the 
 spawn, as before: a worker's profile that resolved before still does, and the router leaves the paragraph out (and logs
 it) when its other skills leave no room.
 
-**Changed since: consolidation is reachable in a default team** (spec 1.0.58; D6 as amended by D6a, §15). A live run
+**Changed since: consolidation is reachable in a default team** (spec 1.0.58; D6 as amended by D6a, §15, which the
+owner accepted as built on 2026-11-10). A live run
 whose goal asked for lessons ended with none consolidated: its planner proposed none and never spawned the consolidator.
 Four things stood between D6 and a held memory change, each fixed:
 
@@ -1039,8 +1044,9 @@ owner's decision of 2026-11-08, §15):
   frontmatter (an item's `valid_from`). The brief's result and `plugin.context.loaded` carry `notYetEffective`
   (additive).
 - The day is the brief's UTC day, so one valid from later the same day waits for the next day's brief (the brief stays
-  one per day). Leaving it out rather than showing it with a "from" date is the narrower choice. Whether agents
-  should see upcoming facts instead, marked with their date, is an open question for the owner.
+  one per day). Leaving it out rather than showing it with a "from" date is the narrower choice, and the owner kept it
+  on 2026-11-10 (D18, §15): agents are not shown upcoming facts marked with their date; the header's count, `search`
+  and `get` are how an agent finds one before its day.
 
 ## 14. What the review changed
 
@@ -1094,8 +1100,8 @@ framing costs success.
 
 ## 15. Owner decisions
 
-Accepted by the owner on 2026-11-05: every decision below as recommended, except D6a, a proposed amendment awaiting the
-owner (built as recommended, and off with one setting if declined), and D17, which the owner decided on 2026-11-08.
+Accepted by the owner on 2026-11-05: every decision below as recommended, except D6a, an amendment the owner accepted
+as built on 2026-11-10, D17, which the owner decided on 2026-11-08, and D18, which the owner decided on 2026-11-10.
 
 | # | Decision | Recommendation |
 |---|---|---|
@@ -1105,7 +1111,7 @@ owner (built as recommended, and off with one setting if declined), and D17, whi
 | D4 | Budgets and k | **Eval outputs per model** in `docs/evidence/context/<model>/limits.json`; no inline items in v1; start from 25 KB / 200 lines / k = 1 |
 | D5 | Gate for the consolidator's branch | **`review: human` (a `hold`) for the first release**; `lint` per project once the poisoning probe passes on the current model |
 | D6 | Consolidator: who spawns it, which model | **The planner, as its run's last child; the run's strongest model**; cheap is opt-in |
-| D6a | *Proposed amendment to D6 (2026-11-08, not yet accepted):* when the planner misses it | **A fallback in `context-memory`, on by default (`autoConsolidate`, per run too)**: once every agent that may spawn the consolidator has ended, a run with candidates and no consolidator gets one (spawned by capcomd at the run's top), and a consolidator's branch nobody merged is verified and its merge asked for, held by the gate as the planner's would be; lessons no done consolidator was given (declared after it started) get one follow-up consolidator per run, given only those; why not is an event. The planner stays the first path (§13, "consolidation is reachable") |
+| D6a | *Amendment to D6, proposed 2026-11-08; accepted as built by the owner on 2026-11-10:* when the planner misses it | **A fallback in `context-memory`, on by default (`autoConsolidate`, per run too)**: once every agent that may spawn the consolidator has ended, a run with candidates and no consolidator gets one (spawned by capcomd at the run's top), and a consolidator's branch nobody merged is verified and its merge asked for, held by the gate as the planner's would be; lessons no done consolidator was given (declared after it started) get one follow-up consolidator per run, given only those; why not is an event. The planner stays the first path (§13, "consolidation is reachable"). Accepted because it is the only way a run whose planner forgot the consolidator still captures its lessons; nothing it starts lands without the gate (its merge is held for a person under the default `review: human`, `context-memory`'s `merge.landing` hold); and one setting turns it off (`autoConsolidate: false`, in the config or for one run) |
 | D7 | Keep transcripts for cross-run search | **No**: distilled items only; `agent_items` keep their own retention |
 | D8 | Freshness defaults | **`lesson` 180 d, `feedback` 90 d, `reference` none, facts per brain**, as absolute `stale_after`; stale leaves the brief, is not deleted |
 | D9 | groundray: read through its CLI or the bundle; when `serve --stdio` | **Bundle for reads, CLI for proposals**; `serve --stdio` and the filters filed as asks, a precondition only for a hot write path |
@@ -1117,6 +1123,7 @@ owner (built as recommended, and off with one setting if declined), and D17, whi
 | D15 | `user`/`profile`/`org` layers | **Wait** for the transfer ablation; `profile` admits only project-free, human-approved items |
 | D16 | Plugin-contributed agent tools (`capcomd context …` in the VM, a `plugin` spool op) | **A separate ADR** with its own threat model; v1 memory needs none of it |
 | D17 | *Decided by the owner on 2026-11-08:* who gets the consolidator, and who gets the memory brief | **Every project gets the consolidator**: `capcomd setup project` (and its templates; `profiles migrate` says what adds it) gives every project `context-consolidator`, so its planner can spawn it; memory changes still land only through the held `review: human` merge. **The brief only where there is memory**: an agent gets the memory brief and the doctrine and routing skills only when `.capcomd/context/` on the run's base holds at least one memory item (an item file or an index); an empty or missing folder sends nothing, so an empty project pays no prompt cost and its prompt prefix stays stable. Proposing a lesson (`capcomd result` `data.context`, notes) stays open either way, so the first lesson can be captured (§13, "the consolidator in every project") |
+| D18 | *Decided by the owner on 2026-11-10:* a fact whose `valid_from` is after today | **Left out of the brief until its day**, as built (§11.2, §13 "a fact not in effect yet"): the brief's header counts it, and `search` and `get` still find it; agents are not shown upcoming facts marked with their date |
 
 ## 16. Consequences
 
