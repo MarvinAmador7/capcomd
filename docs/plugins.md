@@ -141,10 +141,13 @@ What to know when you answer:
 - An operator can merge past your veto (`capcomd merge --operator`): the merge is recorded with your plugin's reason as
   bypassed (§6.5).
 - **You hear what the daemon runs** (§6.1). Merges, the `*.changed` hooks, sandboxes, triggers and everything an agent
-  asks for from its sandbox run in the daemon. An operation `capcomd` or its MCP server runs in its own process
-  (`capcomd verify`, `spawn`, `approve`, `run new` from your shell, or the driver's MCP tools) fires its gates there,
-  where your plugin doesn't run: `verify.judging`, `verify.starting`, `approval.deciding`, `run.creating`,
-  `agent.spawning` and the other spawn hooks don't reach you for those yet. `merge.landing` always does.
+  asks for from its sandbox run in the daemon, and so do `capcomd verify`, `merge` and `approve` and the driver's
+  `capcomd_verify`, `capcomd_merge` and `capcomd_approve` whenever a daemon runs for their engine: your
+  `verify.*`, `merge.*` and `approval.*` gates judge them. With no daemon they run in the command itself, and one your
+  gate must judge is refused there (it can't ask you) rather than run unjudged. `run new`, `spawn` and `run <goal>` from
+  your shell (and the driver's `capcomd_run_new`, `capcomd_spawn`) still run where they're typed: `run.creating`,
+  `profile.resolved` and `agent.spawning` don't reach you for those yet. If you declare `failure: closed` on one of
+  them, those commands are refused instead; otherwise they go on and say you weren't asked.
 
 Deadlines (§6.4): observe 30 s (`agent.item`, `job.changed` 5 s), gates and modifies 10 s (at most 60 s),
 `verify.judging` 30 min (at most 60: a reviewer agent runs inside it).

@@ -130,7 +130,7 @@ export const LegacyEventShapes = {
 		profileSource: ProfileSource.nullable().optional().describe(`${PROFILE_SOURCE_TEXT} (Agent.profileSource). null without a profile. Absent from older daemons`),
 		budget: U, limits: U, agent: SpawnedAgent.nullable(), task: nT.describe("Task text, inline when ≤ 64 KB (UTF-8); null when stored as `taskAttachment`"), taskAttachment: AttachmentRef.nullable().optional(), key: nS, operator: z.boolean(), review: z.boolean().optional(), grant: U.optional(), workspace: AgentWorkspace.nullable().optional(),
 		title: AgentTitleText.optional().describe("Agent-written text: render as plain text, never markdown, links or actions. Capability agents.title: its title at spawn (Agent.title): its spawner's (`spawn --title`; agent.titled follows), else derived from the task. Absent when it has none, and from older daemons"),
-		titleSource: AgentTitleSource.optional(), ...cause },
+		titleSource: AgentTitleSource.optional(), by: S.optional().describe("Who asked for it when that is a plugin (plugin:<name>, its ctx.agents.spawn); absent for a parent's spawn (parent) and the operator's or driver's"), ...cause },
 	"agent.started": { ...cause },
 	"agent.titled": {
 		agentId: S,

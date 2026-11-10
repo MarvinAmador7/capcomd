@@ -10,15 +10,17 @@
 //                    (`review: human`, the default) or lands on lint alone (`review: lint`, its profile's context block).
 // A branch that isn't an agent's (a person's) and one that doesn't touch .capcomd/context/ are let through unjudged.
 // And the fallback (ADR-025 D6a), on agent.changed `ended`: once every agent of a run that may spawn the consolidator
-// (its planner) has ended, a run whose agents proposed lessons that no consolidator took gets one, started by capcomd at
-// the run's top, and a consolidator's branch nobody asked to merge is verified and its merge asked for (held for a person
-// by the gate above, as the planner's merge would be); lessons that came after the run's consolidator started (the
-// planner's own, declared after it spawned it) get one follow-up consolidator, given only those (key `consolidator-late`,
-// at most one per run). `autoConsolidate` (default on, per run too) turns it off;
-// `plugin.context-memory.consolidator_started`, `merge_requested` and `consolidator_skipped` (why not) say what it did.
+// (its planner) has ended, a run whose agents proposed lessons that no consolidator took gets one, started at the run's
+// top, and a consolidator's branch nobody asked to merge is verified and its merge asked for (held for a person by the
+// gate above, as the planner's merge would be); lessons that came after the run's consolidator started (the planner's
+// own, declared after it spawned it) get one follow-up consolidator, given only those (key `consolidator-late`, at most
+// one per run). It does all of it with its own primitives (`ctx.agents.spawn`, `ctx.gates`), so the spawn, the verify
+// and the merge are `plugin:context-memory`'s, never the operator's. `autoConsolidate` (default on, per run too) turns
+// it off; `plugin.context-memory.consolidator_started`, `merge_requested` and `consolidator_skipped` (why not) say what
+// it did.
 import { existsSync, rmSync } from "fs";
 import { join } from "path";
-import { definePlugin } from "../../packages/plugin/src/context";
+import { definePlugin, type AgentsService, type GatesService } from "../../packages/plugin/src/context";
 import type { Outcome } from "../../packages/plugin/src/context-layer";
 import type { PluginManifest } from "../../packages/plugin/src/manifest";
 import { VERSION } from "../utils/self";
@@ -32,7 +34,7 @@ export const manifest: PluginManifest = {
   description: "Project memory: the lessons and facts a project keeps under .capcomd/context/ in its repository, as a context provider (memory) a profile names, and the gates through which they change: only from the run's consolidator, lint-clean, and (by default) after a person's look.",
   apiVersion: 1, engines: { capcomd: VERSION }, entry: { runtime: "in-process", module: "./context-memory.ts" },
   provides: ["context:memory"],
-  // steer: only to emit its own events (spec §11.1), what the fallback did or why it didn't.
+  // steer (spec §11.1): the fallback's spawn, verify and merge, and its own events (what it did or why it didn't).
   scopes: ["steer"],
   // Gates are fail-closed (spec §6.5). Each may fetch the branch and the target first, so the merge's waits up to its
   // maximum, a minute, and a verify's two. agent.changed is observe (open): the fallback never holds anything up.
@@ -201,6 +203,9 @@ export const FALLBACK_KEY = "consolidate";
 /** The follow-up's task and key (D6a): one per run, for the lessons proposed after its consolidator started. */
 export const LATE_TASK = "Consolidate the lessons this run's agents proposed after its consolidator started";
 export const LATE_KEY = "consolidator-late";
+/** Whether a consolidator is the follow-up, from the key it was spawned with: the plugin's own (`ctx.agents.spawn`
+ *  records `plugin:context-memory:consolidator-late`, §8.4), or the bare key of a run from before it spawned as itself. */
+export const isLateKey = (key: string | null | undefined) => key === LATE_KEY || key === `plugin:${manifest.name}:${LATE_KEY}`;
 
 const ENDED = new Set(["done", "failed", "cancelled"]);
 /** An agent whose orchestration skill tells it to spawn the consolidator (src/subagents/skill.ts consolidatorRule). */
@@ -229,7 +234,7 @@ export function fallbackPlan(o: { agents: ReadonlyArray<RunAgent>; lessons: impo
     const late = o.lessons.late;
     if (!late) return null;
     // At most one follow-up per run: once it ended done, what came after it is left (it is said in `capcomd status`).
-    const again = cs.find((c) => c.key === LATE_KEY);
+    const again = cs.find((c) => isLateKey(c.key));
     if (again?.status === "done") return null;
     const last = done[done.length - 1]!;
     const what = `the run's agents proposed ${late} lesson${late === 1 ? "" : "s"} after ${last.agentId} (${CONSOLIDATOR_PROFILE}) started`;
@@ -250,6 +255,10 @@ export function fallbackPlan(o: { agents: ReadonlyArray<RunAgent>; lessons: impo
   return { do: "spawn", lessons: n, key: FALLBACK_KEY };
 }
 
+/** The primitives the fallback acts with: the plugin's own (`ctx.agents`, `ctx.gates`), so what it does is recorded as
+ *  `plugin:context-memory`'s, held to the spawn checks and the gates as any caller's. */
+export interface FallbackServices { agents: Pick<AgentsService, "spawn">; gates: Pick<GatesService, "verify" | "merge"> }
+
 /** What the fallback reads and does besides the payload (a test replaces it). */
 export const fallbackKernel = {
   /** The ended agent, as the kernel recorded it. */
@@ -263,26 +272,24 @@ export const fallbackKernel = {
     const { runLessons } = await import("../context/consolidator");
     return { agents, lessons: await runLessons(runId), merged: new Set(merges.map((m) => m.data.agentId).filter((x): x is string => typeof x === "string")) };
   },
-  /** Start the run's consolidator at its top (`key`: the fallback's, or its follow-up's), with the drive settings of the
-   *  agent that ended (its agents file: the project's profiles). Idempotent by its key. */
-  spawn: async (runId: string, driveEnv: Record<string, string> | null, key: string = FALLBACK_KEY): Promise<{ agentId: string; created: boolean }> => {
-    const { spawnAgent } = await import("../primitives/ops");
+  /** Start the run's consolidator at its top (`ctx.agents.spawn`; `key`: the fallback's, or its follow-up's), with the
+   *  drive settings of the agent that ended (its agents file: the project's profiles). Idempotent by its key. */
+  spawn: async (runId: string, driveEnv: Record<string, string> | null, ctx: FallbackServices, key: string = FALLBACK_KEY): Promise<{ agentId: string }> => {
     const late = key === LATE_KEY;
-    const a = await withDriveEnv(driveEnv, () => spawnAgent({ runId, profile: CONSOLIDATOR_PROFILE, task: late ? LATE_TASK : FALLBACK_TASK, key, title: late ? "late memory lessons" : "memory lessons" }));
-    return { agentId: a.agentId, created: !!a.created };
+    const a = await withDriveEnv(driveEnv, () => ctx.agents.spawn({ runId, profile: CONSOLIDATOR_PROFILE, task: late ? LATE_TASK : FALLBACK_TASK, title: late ? "late memory lessons" : "memory lessons" }, { key }));
+    return { agentId: a.id };
   },
   /** Verify consolidator `agentId`'s branch at `commit` (a passed verify of that commit is used again), then ask to
-   *  merge it as an agent's merge is asked: parked for a person on a protected target, and held by this plugin's gate
-   *  under `review: human`. Idempotent by its keys. */
-  land: async (runId: string, agentId: string, commit: string): Promise<{ verify: { id: string; state: string }; merge: { id: string; state: string; heldBy?: unknown } | null }> => {
-    const O = await import("../primitives/ops");
+   *  merge it (`ctx.gates`): parked for a person on a protected target, and held by this plugin's gate under `review:
+   *  human`. Idempotent by its keys. A merge waiting for a person is `awaiting_approval`, as `capcomd merge` says. */
+  land: async (runId: string, agentId: string, commit: string, ctx: FallbackServices): Promise<{ verify: { id: string; state: string }; merge: { id: string; state: string } | null }> => {
     const { client } = await import("../core/relay");
     const ops = (await client().scope.getOrCreate([runId]).listOps({ kind: "verify", state: "passed" })) as Array<{ id: string; data: { agentId?: unknown }; result?: { commit?: unknown } | null }>;
     const done = ops.find((v) => v.data.agentId === agentId && v.result?.commit === commit);
-    const v = done ? { id: done.id, state: "passed" } : ((await O.verifyRef({ runId, ref: agentId, key: `memory-verify-${agentId}` })) as { id: string; state: string });
+    const v = done ? { id: done.id, state: "passed" } : await ctx.gates.verify(runId, { ref: agentId }, { key: `memory-verify-${agentId}` }).then((x) => ({ id: x.vfyId, state: x.state }));
     if (v.state !== "passed") return { verify: v, merge: null };
-    const m = (await O.mergeRef({ runId, ref: agentId, require: v.id, key: `memory-merge-${agentId}`, requestApproval: true })) as { id: string; state: string; heldBy?: unknown };
-    return { verify: v, merge: m };
+    const m = await ctx.gates.merge(runId, { ref: agentId, require: v.id }, { key: `memory-merge-${agentId}` });
+    return { verify: v, merge: { id: m.mrgId, state: m.state === "parked" ? "awaiting_approval" : m.state } };
   },
 };
 
@@ -303,7 +310,7 @@ type Emit = (type: string, text: string, data: Record<string, unknown>, key: str
  * so a replayed change records nothing twice; the spawn, the verify and the merge are idempotent by their keys.
  * Returns the first plan.
  */
-export async function fallback(runId: string, ended: RunAgent, o: { enabled: boolean; emit: Emit; log: (m: string, f: Record<string, unknown>) => void }): Promise<FallbackPlan | null> {
+export async function fallback(runId: string, ended: RunAgent, o: { enabled: boolean; emit: Emit; log: (m: string, f: Record<string, unknown>) => void; ctx: FallbackServices }): Promise<FallbackPlan | null> {
   const st = await fallbackKernel.state(runId);
   const merged = new Set(st.merged);
   let first: FallbackPlan | null = null;
@@ -320,7 +327,7 @@ export async function fallback(runId: string, ended: RunAgent, o: { enabled: boo
 }
 
 /** Do what `plan` says for run `runId` (`fallback`). */
-async function act(runId: string, ended: RunAgent, st: Awaited<ReturnType<typeof fallbackKernel.state>>, plan: FallbackPlan, o: { emit: Emit; log: (m: string, f: Record<string, unknown>) => void }): Promise<void> {
+async function act(runId: string, ended: RunAgent, st: Awaited<ReturnType<typeof fallbackKernel.state>>, plan: FallbackPlan, o: { emit: Emit; log: (m: string, f: Record<string, unknown>) => void; ctx: FallbackServices }): Promise<void> {
   const skipped = (reason: SkipReason, text: string, data: Record<string, unknown> = {}) => o.emit("consolidator_skipped", text, { reason, ...data }, `consolidator-skipped:${runId}:${reason}${typeof data.agentId === "string" ? `:${data.agentId}` : ""}`);
   if (plan.do === "skip") { await skipped(plan.reason, plan.text); return; }
   if (plan.do === "spawn") {
@@ -329,7 +336,7 @@ async function act(runId: string, ended: RunAgent, st: Awaited<ReturnType<typeof
     const n = `${plan.lessons} candidate lesson${plan.lessons === 1 ? "" : "s"}`;
     const late = plan.key === LATE_KEY;
     try {
-      const a = await fallbackKernel.spawn(runId, owner?.driveEnv ?? null, plan.key);
+      const a = await fallbackKernel.spawn(runId, owner?.driveEnv ?? null, o.ctx, plan.key);
       const text = late
         ? `${who} ended with ${n} that came after ${plan.after} (${CONSOLIDATOR_PROFILE}) started, so it never read them: capcomd started ${a.agentId} to consolidate only those; its change waits for a person before it lands.`
         : `${who} ended with ${n} and no ${CONSOLIDATOR_PROFILE}: capcomd started ${a.agentId} to consolidate them; its change waits for a person before it lands.`;
@@ -346,7 +353,7 @@ async function act(runId: string, ended: RunAgent, st: Awaited<ReturnType<typeof
   // agent's settings this listener's queue happened to start under.
   const cons = st.agents.find((a) => a.agentId === plan.agentId);
   const driveEnv = cons?.driveEnv ?? st.agents.find(mayConsolidate)?.driveEnv ?? null;
-  const p: Promise<unknown> = withDriveEnv(driveEnv, () => fallbackKernel.land(runId, plan.agentId, plan.commit)).then(async (r) => {
+  const p: Promise<unknown> = withDriveEnv(driveEnv, () => fallbackKernel.land(runId, plan.agentId, plan.commit, o.ctx)).then(async (r) => {
     if (!r.merge) return skipped("verify_failed", `${plan.agentId}'s memory change didn't pass its verify (${r.verify.id}: ${r.verify.state}), so capcomd didn't ask to merge it.`, { agentId: plan.agentId, verify: r.verify.id });
     const held = r.merge.state === "awaiting_approval";
     return o.emit("merge_requested", `capcomd asked to merge ${plan.agentId}'s memory change (${r.merge.id}): ${held ? `it waits for a person: capcomd approve ${runId} ${r.merge.id}` : r.merge.state}.`,
@@ -397,7 +404,7 @@ export const plugin = definePlugin<MemoryConfig>({
         const own = (await ctx.storage.get({ runId: agent.runId }, "config").catch(() => undefined)) as Partial<MemoryConfig> | undefined;
         const enabled = typeof own?.autoConsolidate === "boolean" ? own.autoConsolidate : ctx.config.get().autoConsolidate !== false;
         const emit: Emit = (type, text, data, key) => ctx.events.emit({ type, stream: agent.runId, entity: typeof data.agentId === "string" ? data.agentId : agent.id, text, data }, { key });
-        await fallback(agent.runId, a, { enabled, emit, log: (m, f) => ctx.log.warn(m, f) });
+        await fallback(agent.runId, a, { enabled, emit, log: (m, f) => ctx.log.warn(m, f), ctx });
       } catch (e) {
         ctx.log.warn("the memory fallback couldn't look at the run", { runId: agent.runId, agentId: agent.id, error: (e as Error)?.message ?? String(e) });
       }

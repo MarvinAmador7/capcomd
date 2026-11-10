@@ -1,6 +1,7 @@
 // The kernel's primitives for a plugin (docs/spec/plugin-api.md §8.1, §8.4; src/plugins/services.ts) without an engine:
 // which processes have which services (the daemon's engine primitives, every process's sandboxes and auth), the scope
-// each call needs, what a call refuses before it reaches a run (a reserved kv key, a value over 64 KB, a bad id), the
+// each call needs, what a call refuses before it reaches a run (a reserved kv key, a value over 64 KB, a bad id, a spawn
+// or merge as the operator), the
 // sandbox a plugin gets (the kernel's wrapper, never the seam object, its deadline kept) and the auth facts. Every
 // primitive against a real engine, and a plugin talking to an agent: tests/scenarios/plugin-services.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
@@ -40,17 +41,82 @@ const RUN = "run-services-nowhere";
 describe("which process has which service (§8.4)", () => {
   test("a CLI's local host has no engine primitive; its plugins still have sandboxes and auth", async () => {
     const { ctx } = await started({ daemon: false });
-    const calls = [() => ctx.runs.get(RUN), () => ctx.runs.list({}), () => ctx.messages.inbox(RUN, "agt-x", 0), () => ctx.kv.get(RUN, "k"), () => ctx.board.list(RUN), () => ctx.gates.pending(RUN), () => ctx.profiles.list({}), () => ctx.agents.get(RUN, "agt-x")];
+    const calls = [() => ctx.runs.get(RUN), () => ctx.runs.list({}), () => ctx.messages.inbox(RUN, "agt-x", 0), () => ctx.kv.get(RUN, "k"), () => ctx.board.list(RUN), () => ctx.gates.pending(RUN), () => ctx.profiles.list({}), () => ctx.agents.get(RUN, "agt-x"),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t" }), () => ctx.agents.await(RUN, ["agt-x"], {}), () => ctx.agents.grant(RUN, "agt-x", { usd: 1 }), () => ctx.agents.title(RUN, "agt-x", "x"),
+      () => ctx.gates.verify(RUN, { ref: "agt-x" }), () => ctx.gates.merge(RUN, { ref: "agt-x", require: "vfy-1" })];
     expect(await codes(calls)).toEqual(calls.map(() => "unsupported"));
     expect(ctx.sandboxes.descriptors().map((d) => d.name)).toEqual(describedSandboxes().map((d) => d.name));
     expect(ctx.auth.credentialMode("claude", "subscription")).toBe("subscription");
   });
 
-  test("what isn't implemented yet answers unsupported in the daemon too", async () => {
+  test("the daemon's host has every primitive of agents and gates (§8.4)", async () => {
+    const services = (await import("../../src/plugins/services")).daemonServices({ name: "services-probe", scopes: ["read", "steer"] } as never);
+    expect(Object.keys(services.agents).sort()).toEqual(["await", "cancel", "get", "grant", "notice", "spawn", "title", "tree"]);
+    expect(Object.keys(services.gates).sort()).toEqual(["merge", "pending", "verify"]);
+  });
+});
+
+describe("agents and gates: never the operator, never past a gate (§8.4, §11.3)", () => {
+  test("a merge or a spawn as the operator, a reviewer, a check command or a host-only contract key is forbidden", async () => {
     const { ctx } = await started({ daemon: true });
-    expect(await code(ctx.gates.verify(RUN, { ref: "a" }))).toBe("unsupported");
-    expect(await code(ctx.gates.merge(RUN, { ref: "a", require: "vfy-1" }))).toBe("unsupported");
-    expect(await code(ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t" }))).toBe("unsupported");
+    const forbidden = [
+      () => ctx.gates.merge(RUN, { ref: "agt-x", require: "vfy-1", operator: true } as never),
+      () => ctx.gates.merge(RUN, { ref: "agt-x", operator: true } as never),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", operator: true } as never),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", review: true }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", contract: { checks: "rm -rf ." } }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", contract: { review: { vfyId: "vfy-1" } } }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", contract: { from: { agentId: "agt-x" } } }),
+      () => ctx.gates.verify(RUN, { ref: "agt-x", checks: "true" } as never),
+    ];
+    expect(await codes(forbidden)).toEqual(forbidden.map(() => "forbidden"));
+  });
+
+  test("the kernel itself refuses a plugin's spawn or merge as the operator", async () => {
+    const O = await import("../../src/primitives/ops");
+    const principal = { kind: "plugin" as const, name: "services-probe", scopes: ["steer" as const] };
+    const spawned = await O.spawnAgent({ runId: RUN, profile: "worker", task: "t", principal, operator: true }).then(() => null, (e: unknown) => e);
+    expect(spawned).toMatchObject({ code: "conflict", reason: "forbidden" });
+    const merged = await O.mergeRef({ runId: RUN, ref: "agt-x", requester: "plugin:services-probe", operator: true }).then(() => null, (e: unknown) => e);
+    expect(merged).toMatchObject({ code: "conflict", reason: "forbidden" });
+  });
+
+  test("what they're given is checked before any run is looked up", async () => {
+    const { ctx } = await started({ daemon: true });
+    const invalid = [
+      () => ctx.agents.spawn({ runId: RUN, profile: "Not A Name", task: "t" }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: " " }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", budget: { usd: -1 } }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", contract: [] as never }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", grant: "all" as never }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t", title: 7 as never }),
+      () => ctx.agents.spawn({ runId: "not-a-run", profile: "worker", task: "t" }),
+      // A contract key named like an Object.prototype member is the plugin's own, not a host-only key: past it, to the run id.
+      () => ctx.agents.spawn({ runId: "not-a-run", profile: "worker", task: "t", contract: { constructor: 1, toString: "x" } }),
+      () => ctx.agents.spawn({ runId: RUN, profile: "worker", task: "t" }, { key: "a".repeat(201) }),
+      () => ctx.agents.await(RUN, [], {}),
+      () => ctx.agents.await(RUN, ["not-an-agent"], {}),
+      () => ctx.agents.await(RUN, ["agt-x"], { any: "yes" as never }),
+      () => ctx.agents.await(RUN, ["agt-x"], {}, { timeoutMs: 2 * 60 * 60_000 }),
+      () => ctx.agents.grant(RUN, "agt-x", {}),
+      () => ctx.agents.grant(RUN, "agt-x", { dollars: 1 } as never),
+      () => ctx.agents.title(RUN, "agt-x", 7 as never),
+      () => ctx.gates.verify(RUN, { ref: "" }),
+      () => ctx.gates.verify(RUN, { ref: "agt-x", reviewer: "Not A Name" }),
+      () => ctx.gates.merge(RUN, { ref: "agt-x", require: "mrg-1" }),
+      () => ctx.gates.merge(RUN, { ref: "agt-x" } as never),
+    ];
+    expect(await codes(invalid)).toEqual(invalid.map(() => "invalid"));
+  });
+
+  test("a read-only plugin awaits and never spawns, grants, names, verifies or merges", async () => {
+    const { reader, nobody } = await started({ daemon: true });
+    const steer = [() => reader.agents.spawn({ runId: RUN, profile: "worker", task: "t" }), () => reader.agents.grant(RUN, "agt-x", { usd: 1 }), () => reader.agents.title(RUN, "agt-x", "x"),
+      () => reader.gates.verify(RUN, { ref: "agt-x" }), () => reader.gates.merge(RUN, { ref: "agt-x", require: "vfy-1" })];
+    expect(await codes(steer)).toEqual(steer.map(() => "forbidden"));
+    // A read: past the scope check, to the checks of what it is given.
+    expect(await code(reader.agents.await(RUN, [], {}))).toBe("invalid");
+    expect(await code(nobody.agents.await(RUN, ["agt-x"], {}))).toBe("forbidden");
   });
 });
 

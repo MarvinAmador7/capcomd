@@ -139,7 +139,8 @@ export async function consolidationInputs(runId: string, agentId: string, o: { t
 /** An agent of the run as `lessonsOf` reads it. */
 export interface LessonAgent { agentId: string; profile: string | null; status: string; contract?: unknown; result?: Record<string, unknown> | null; key?: string | null }
 /** A consolidator of the run: its state, the commit the kernel staged for it (null: none, or not ended yet) and the key
- *  it was spawned with (the fallback's are `consolidate` and `consolidator-late`). */
+ *  it was spawned with (the fallback's are its own, §8.4: `plugin:context-memory:consolidate` and
+ *  `plugin:context-memory:consolidator-late`; bare `consolidate`, `consolidator-late` in a run from before). */
 export interface RunConsolidator { agentId: string; status: string; commit: string | null; key: string | null }
 /**
  * What a run holds for its memory now (ADR-025 §5.2): its candidates (what capture kept), the lessons agents declared in

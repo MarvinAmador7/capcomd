@@ -215,6 +215,12 @@ describe("the fallback's plan (ADR-025 D6a)", () => {
     expect(plan({ lessons: late({ consolidators: [done, f] }), merged: ["agt-cons"] })).toBeNull();
     expect(plan({ lessons: late({ consolidators: [done, { ...f, status: "done" }] }), merged: ["agt-cons"] })).toBeNull();
     expect(plan({ lessons: late({ consolidators: [done, { ...f, status: "failed" }] }), merged: ["agt-cons"] })).toMatchObject({ do: "skip", reason: "consolidator_failed", text: `the run's agents proposed 1 lesson after agt-cons (${CONSOLIDATOR_PROFILE}) started, and agt-late, started for them, ended failed, so capcomd starts no other.` });
+    // The fallback spawns it as the plugin (ctx.agents.spawn), so its recorded key is the plugin's own: the same follow-up.
+    const own = { ...f, key: "plugin:context-memory:consolidator-late" };
+    expect(plan({ lessons: late({ consolidators: [done, { ...own, status: "done" }] }), merged: ["agt-cons"] })).toBeNull();
+    expect(plan({ lessons: late({ consolidators: [done, { ...own, status: "failed" }] }), merged: ["agt-cons"] })).toMatchObject({ do: "skip", reason: "consolidator_failed" });
+    // Another plugin's key of that name isn't the fallback's.
+    expect(plan({ lessons: late({ consolidators: [done, { ...own, key: "plugin:other:consolidator-late", status: "done" }] }), merged: ["agt-cons"] })).toEqual({ do: "spawn", lessons: 1, key: "consolidator-late", after: "agt-late" });
     // Its own branch nobody merged comes first (the fallback plans again after landing it).
     expect(plan({ lessons: late() })).toEqual({ do: "land", agentId: "agt-cons", commit: "c".repeat(40) });
     // Off: said, as late_lessons. Its planner cancelled: left.
@@ -236,7 +242,7 @@ describe("context-memory's fallback on agent.changed ended", () => {
     Object.assign(memoryPlugin.fallbackKernel, {
       agent: async (_r: string, id: string) => o.agents.find((a) => a.agentId === id)!,
       state: async () => ({ agents: o.agents, lessons: o.lessons, merged: new Set(o.merged ?? []) }),
-      spawn: async (_r: string, driveEnv: unknown, key?: string) => { spawned.push({ driveEnv, key }); return { agentId: key === "consolidator-late" ? "agt-late" : "agt-fallback", created: spawned.length === 1 }; },
+      spawn: async (_r: string, driveEnv: unknown, _ctx: unknown, key?: string) => { spawned.push({ driveEnv, key }); return { agentId: key === "consolidator-late" ? "agt-late" : "agt-fallback", created: spawned.length === 1 }; },
       land: async (_r: string, agentId: string) => { landed.push(agentId); return { verify: { id: "vfy-mem", state: "passed" }, merge: { id: "mrg-mem", state: "awaiting_approval" } }; },
     });
     return { spawned, landed };
@@ -262,7 +268,7 @@ describe("context-memory's fallback on agent.changed ended", () => {
     // The planner didn't merge its consolidator's branch, and declared one more lesson after it started.
     const k = kernel({ agents: [PLANNER, WORKER, cons], lessons: L({ candidates: 2, pending: 1, late: 1, consolidators: [{ agentId: "agt-cons", status: "done", commit: "c".repeat(40), key: "consolidate" }] }) });
     const events: Array<[string, Record<string, unknown>, string]> = [];
-    const o = { enabled: true, emit: async (t: string, _x: string, d: Record<string, unknown>, key: string) => { events.push([t, d, key]); }, log: () => {} };
+    const o = { enabled: true, emit: async (t: string, _x: string, d: Record<string, unknown>, key: string) => { events.push([t, d, key]); }, log: () => {}, ctx: {} as never };
     expect(await memoryPlugin.fallback(RUN, PLANNER, o)).toEqual({ do: "land", agentId: "agt-cons", commit: "c".repeat(40) });
     await memoryPlugin.settleFallbacks();
     expect(k.landed).toEqual(["agt-cons"]);
@@ -347,6 +353,27 @@ describe("context-memory's fallback on agent.changed ended", () => {
     expect((await fake.fire("agent.changed", ended("agt-plan", "planner"), { runId: RUN })).failure).toBeNull();
     expect(fake.emitted().map((e) => [e.type, e.data.reason])).toEqual([["plugin.context-memory.consolidator_skipped", "off"], ["plugin.context-memory.consolidator_skipped", "spawn_refused"]]);
     expect(fake.emitted()[1]!.data.error).toContain("profile context-consolidator not found");
+    await fake.dispose();
+  });
+
+  test("it spawns with the plugin's own primitive, never the kernel's operator path: the fixed task, its key, its title, under the planner's drive settings", async () => {
+    const { env } = await import("../../src/utils/env");
+    const asked: unknown[] = [];
+    const ctx = {
+      agents: { spawn: async (input: unknown, o: unknown) => { asked.push({ input, o, agentsFile: env("AGENTS_FILE") }); return { id: "agt-cons" } as never; } },
+      gates: { verify: async () => { throw new Error("not asked"); }, merge: async () => { throw new Error("not asked"); } },
+    };
+    expect(await memoryPlugin.fallbackKernel.spawn(RUN, { CAPCOMD_AGENTS_FILE: "/p/agents.json" }, ctx)).toEqual({ agentId: "agt-cons" });
+    expect(asked).toEqual([{ input: { runId: RUN, profile: CONSOLIDATOR_PROFILE, task: memoryPlugin.FALLBACK_TASK, title: "memory lessons" }, o: { key: memoryPlugin.FALLBACK_KEY }, agentsFile: "/p/agents.json" }]);
+    // The listener hands the plugin's own context to the kernel's calls.
+    let given: unknown = null;
+    kernel({ agents: [PLANNER, WORKER], lessons: L({ candidates: 1, agents: 1 }) });
+    memoryPlugin.fallbackKernel.spawn = async (_r, _e, c) => { given = c; return { agentId: "agt-fallback" }; };
+    const fake = testkit.fakeContext(memoryPlugin.manifest);
+    await testkit.load(fake, memoryPlugin.plugin as never);
+    await fake.fire("agent.changed", ended("agt-plan", "planner"), { runId: RUN });
+    expect(typeof (given as { agents?: { spawn?: unknown } } | null)?.agents?.spawn).toBe("function");
+    expect(typeof (given as { gates?: { merge?: unknown } } | null)?.gates?.merge).toBe("function");
     await fake.dispose();
   });
 

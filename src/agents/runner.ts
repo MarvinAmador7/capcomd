@@ -174,7 +174,8 @@ export interface AgentRunOptions {
 }
 
 export class AgentError extends Error {
-  constructor(readonly kind: "cancelled" | "failed" | "no_changes" | "install" | "git" | "credentials" | "limit", message: string) {
+  /** `resultText`: the agent's final words, kept on its failure (one that changed nothing: what it found). */
+  constructor(readonly kind: "cancelled" | "failed" | "no_changes" | "install" | "git" | "credentials" | "limit", message: string, readonly resultText?: string) {
     super(message);
     this.name = "AgentError";
   }
@@ -1247,7 +1248,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       // nothing to keep yet either: it starts over when it resumes.
       if ((opts.subagents && opts.subagents.maySpawn !== false) || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(finalWords ? { resultText: finalWords } : {}), ...(limit ? { limit } : {}), ...resetAt }; }
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before changing anything`);
-      throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`);
+      throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`, finalWords || undefined);
     }
     // At a limit the stop is always recorded in a commit (empty if the agent committed everything itself), so a replay sees it.
     if (status.stdout.trim() || limit) {
