@@ -17,7 +17,7 @@ export type DaemonCall =
 
 /** `method path` on the running daemon, with a token of `scope` for this call only. `snapshot`: that daemon's listing
  *  (default: the running daemon's, whichever engine it hosts); `frontDoor`: the call is a front door's operation. */
-export async function callDaemon(method: "POST", path: string, o: { scope: ClientScope; body?: unknown; timeoutMs?: number; snapshot?: PluginsSnapshot; frontDoor?: boolean }): Promise<DaemonCall> {
+export async function callDaemon(method: "GET" | "POST", path: string, o: { scope: ClientScope; body?: unknown; timeoutMs?: number; snapshot?: PluginsSnapshot; frontDoor?: boolean }): Promise<DaemonCall> {
   const snap = o.snapshot ?? (await import("../plugins/snapshot")).readSnapshot();
   if (!snap) return { kind: "none" };
   const socket = typeof snap.socket === "string" && snap.socket ? snap.socket : await (await import("./commands/serve")).harnessSocket();

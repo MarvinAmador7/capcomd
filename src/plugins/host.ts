@@ -27,6 +27,8 @@ import { eventSinks, noEventSinks, scopeEvents, type EventReads } from "./events
 import { processLauncher } from "./process";
 import { containedRefusals } from "./contained";
 import type { ProcessTimings } from "../../packages/plugin/src/host/process";
+import type { LogLine } from "../../packages/plugin/src/host/context";
+import { agentSpanId, recordSpan, rootSpanIdForRun } from "../utils/tracing-simple";
 
 /** A durable daemon-stream event (`harnessState().recordDaemonEvent`). */
 export type DaemonEventSink = (e: { type: string; entity: string; text: string; data: Record<string, unknown> }) => { seq: number };
@@ -151,8 +153,15 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
   const pluginEvent = pluginEventWriter({ ...(o.record ? { daemon: o.record } : {}), ...(o.run ? { run: o.run } : {}) });
   const dataDir = pluginDataDir;
   const streams = o.events ? eventSinks({ daemon: o.events.daemon, run: o.events.run ?? scopeEvents }, o.events.pollMs ? { pollMs: o.events.pollMs } : {}) : noEventSinks;
-  // §13.3: one JSON line per log call in the daemon's log, never an event. A CLI's local host keeps its output clean.
-  const log = (l: { plugin: string; level: string; message: string; fields: Record<string, unknown> }) => { if (o.log !== false) console.log(JSON.stringify({ plugin: l.plugin, level: l.level, message: l.message, fields: l.fields })); };
+  // §13.3: one JSON line per log call in the daemon's log, never an event, with the run, agent, trace and span of the
+  // hook call it was written in. A CLI's local host keeps its output clean.
+  const log = (l: Omit<LogLine, "level"> & { level: string }) => {
+    if (o.log === false) return;
+    console.log(JSON.stringify({
+      plugin: l.plugin, level: l.level, message: l.message, fields: l.fields,
+      ...(l.runId !== undefined ? { runId: l.runId, agentId: l.agentId ?? null } : {}), ...(l.traceId ? { traceId: l.traceId, spanId: l.spanId } : {}),
+    }));
+  };
   const host = new PluginHost({
     capcomd: VERSION,
     kernel: CAPABILITY_NAMES.map((n) => `kernel:${n}`),
@@ -185,13 +194,28 @@ export function kernelHost(o: { record?: DaemonEventSink; events?: { daemon: Eve
     },
     // A third-party plugin is self-contained (§4.9, §11.6): checked when validated and before each start of its process.
     contained: (m, dir) => containedRefusals(dir, m, { dataDir: dataDir(m.name) }),
-    sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent, subscribe: streams.subscribe, replay: streams.replay },
+    sinks: { redact: (t) => redactor.text(t), log, emit: pluginEvent, subscribe: streams.subscribe, replay: streams.replay, span: (s) => tracePluginSpan({ ...s, endedAt: s.startedAt + s.ms }) },
+    hookSpan: (s) => tracePluginSpan({ ...s, events: [], ok: s.attributes.outcome !== "failed" }),
     ...(o.process ? { launcher: processLauncher({ socket: o.process.socket, log }), ...(o.process.timings ? { processTimings: o.process.timings } : {}) } : {}),
     ...(o.snapshot ? { onChange: (plugins: PluginSummary[]) => writeSnapshot(o.snapshot!, plugins, o.socket, o.endpoint) } : {}),
   });
   // The host whose plugins have ctx.triggers holds their sources' reply paths: the intake posts replies through them.
   if (o.triggers) useTriggerReplies(host.contributions);
   return host;
+}
+
+/**
+ * A plugin's hook call (`plugin.hook`) or its own span (`plugin.<name>.<op>`) in the run's trace (§13.4,
+ * src/utils/tracing-simple.ts): a hook call with no span the kernel fired from hangs off the agent's span
+ * (`agentSpanId`), else the run's root. Not in a run: kept in memory only, as any span without a run is.
+ */
+export function tracePluginSpan(s: { name: string; traceId: string; spanId: string; parentSpanId: string | null; runId: string | null; agentId: string | null; startedAt: number; endedAt: number; attributes: Record<string, unknown>; events: string[]; ok: boolean }): void {
+  const parent = s.parentSpanId ?? (s.runId ? (s.agentId ? agentSpanId(s.runId, s.agentId) : rootSpanIdForRun(s.runId)) : null);
+  recordSpan({
+    traceId: s.traceId, spanId: s.spanId, ...(parent ? { parentSpanId: parent } : {}), name: s.name, startTime: s.startedAt, endTime: s.endedAt,
+    attributes: { ...s.attributes, ...(s.runId ? { "relay.run_id": s.runId } : {}), ...(s.agentId ? { "relay.agent_id": s.agentId } : {}) },
+    events: s.events.map((name) => ({ name, timestamp: s.endedAt })), status: { code: s.ok ? 1 : 2 },
+  });
 }
 
 /** What a process that isn't the daemon loads: the built-ins marked `everyProcess` (the reviewer gate, the forges, the

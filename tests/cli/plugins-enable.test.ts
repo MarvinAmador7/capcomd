@@ -147,4 +147,14 @@ describe("against a running daemon", () => {
     expect(list.daemon).not.toBeNull();
     expect(list.plugins.find((p: { name: string }) => p.name === "forge-git")).toMatchObject({ state: "active", enabled: true });
   }, 60_000);
+
+  test("show prints the plugin's call statistics, asked of the running daemon with a token it deletes (plugin API §13.5)", async () => {
+    await listed((p, daemon) => !!daemon && p.state === "active");
+    const r = await cli("plugins", "show", "proc-gate");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^ {2}hook calls: \d+, \d+ failed, \d+ dropped/m);
+    const j = (await cli("plugins", "show", "proc-gate", "--json")).j;
+    expect(j.plugin.stats).toMatchObject({ seams: {} });
+    expect(loadClients()).toEqual([]);
+  }, 60_000);
 });

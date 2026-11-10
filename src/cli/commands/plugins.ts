@@ -292,7 +292,9 @@ async function showCommand(args: string[], values: Values): Promise<number> {
   if (!d) throw new RelayError("not_found", `no plugin ${name}`, "capcomd plugins list names them.");
   const live = P.readSnapshot()?.plugins.find((p) => p.name === name) ?? null;
   const facts = (await installedFacts([d]))[name] ?? null;
-  const plugin = { ...d, ...(live ? { state: live.state, cause: live.cause, stats: live.stats, hooksSuspended: live.hooksSuspended } : {}) };
+  // The listing is written when a plugin changes state; its statistics now are the daemon's to say (§13.5).
+  const now = live ? await liveStats(name) : null;
+  const plugin = { ...d, ...(live ? { state: live.state, cause: live.cause, stats: now ?? live.stats, hooksSuspended: live.hooksSuspended } : {}) };
   if (values.json) { out({ plugin, installed: facts, message: host.message(name) }); return EXIT.ok; }
   console.log(`${d.name} ${d.version}  ${d.source}  ${plugin.state}${plugin.cause ? ` (${plugin.cause})` : ""}${live ? "" : "  (no daemon is running: what one would do)"}`);
   if (d.manifest) console.log(`  ${d.manifest.description}`);
@@ -303,7 +305,27 @@ async function showCommand(args: string[], values: Values): Promise<number> {
   if (plugin.commands?.length) console.log(`  commands: ${plugin.commands.map((c) => `capcomd ${c}`).join(", ")}`);
   if (plugin.tools?.length) console.log(`  MCP tools: ${plugin.tools.join(", ")}`);
   for (const [k, v] of Object.entries(d.config.values)) console.log(`  config ${k} = ${JSON.stringify(v)}  (${d.config.sources[k] ?? "default"})`);
+  if (live) for (const line of statsLines(plugin.stats)) console.log(`  ${line}`);
   return EXIT.ok;
+}
+
+/** A plugin's statistics from the running daemon (GET /v1/plugins/{name}); null when it can't say. */
+async function liveStats(name: string): Promise<PluginSummary["stats"] | null> {
+  const { callDaemon } = await import("../daemon");
+  const r = await callDaemon("GET", `/v1/plugins/${encodeURIComponent(name)}`, { scope: "read", timeoutMs: 5_000 });
+  const stats = r.kind === "answered" && r.status === 200 ? (r.body as { stats?: PluginSummary["stats"] }).stats : undefined;
+  return stats && typeof stats === "object" ? stats : null;
+}
+
+/** §13.5 as `capcomd plugins show` prints it: hook calls, then each seam's calls and failures by kind. */
+export function statsLines(s: PluginSummary["stats"]): string[] {
+  const time = s.p50Ms === null ? "" : `; p50 ${s.p50Ms} ms, p95 ${s.p95Ms} ms`;
+  const lines = [`hook calls: ${s.calls}, ${s.failures} failed, ${s.dropped ?? 0} dropped${time}`];
+  for (const [seam, x] of Object.entries(s.seams ?? {})) {
+    const errors = Object.entries(x.errors).map(([kind, n]) => `${n} ${kind}`).join(", ");
+    lines.push(`${seam} seam: ${x.calls} calls${errors ? `, failed: ${errors}` : ""}`);
+  }
+  return lines;
 }
 
 /** One plugin's validation, as `--json` prints it. */

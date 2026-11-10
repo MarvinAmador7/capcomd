@@ -63,7 +63,9 @@ describe("the built-in agent plugins (§7.3, §17.1)", () => {
     ]);
     useAgentSeams(h.contributions);
     expect(agentProviderNames()).toEqual(["claude", "codex", "fx"]);
-    expect(agentSeam("claude")).toBe(claude);
+    // The host's seam is the plugin's, its calls counted for its stats (§13.5).
+    expect(agentSeam("claude")!.describe()).toEqual(claude.describe());
+    expect(agentSeam("claude")!.baseEnv()).toEqual(claude.baseEnv());
     await h.stop();
     expect(agentProviderNames()).toEqual([]);
   });

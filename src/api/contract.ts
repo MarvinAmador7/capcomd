@@ -595,6 +595,7 @@ export const CAPABILITIES = {
 	"plugins.routes": "Plugin API routes (plugin API §4.7.3): METHOD /v1/x/{plugin}/… serves a plugin's own routes, JSON in and out, with the caller's token, which needs the scope the route declares (403 `forbidden` otherwise; 404 `not_found` for a route no active plugin serves; a plugin's failure is 500 `internal` with the message \"plugin error\"). GET /v1/plugins/{name} lists its `routes` and the `capabilities` it adds here, named x.<plugin>.<flag>",
 	"context.brain_proposals": "A run's proposals to a company's brain (ADR-025 step 5): GET /v1/runs/{runId}/brain-proposals lists them and whether each was sent; POST /v1/runs/{runId}/brain-proposals/send (the `configure` scope, an Idempotency-Key) sends those waiting for a person as the caller (groundray's actor human:<client id>), as `capcomd context brain propose --run <runId> --yes` does",
 	"ops.front_door": "POST /v1/runs/{runId}/verifications, /merges and /merges/{mergeId}/decision: a kernel front door's verify, merge and approval of a merge (the CLI's and `capcomd mcp`'s), run in the daemon so every plugin's gate judges them (plugin API §6.1). Only the one-call tokens the CLI and `capcomd mcp` make for them (403 `forbidden` for any other token, a plugin's or an app's)",
+	"plugins.seam_stats": "GET /v1/plugins (and GET /v1/plugins/{name}) `stats.seams`: the daemon's calls to each seam a plugin provides (sandbox, agent, forge, context) since it started, and the failed ones by their error kind (plugin API §13.5)",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -735,6 +736,10 @@ export const PluginSummary = z.object({
 		p50Ms: z.number().nullable().describe("Median call time over its recent calls; null before the first"),
 		p95Ms: z.number().nullable(),
 		lastFailureAt: Timestamp.nullable(),
+		seams: z.record(z.string(), z.object({
+			calls: z.number().int().describe("The daemon's calls to it since it started"),
+			errors: z.record(z.string(), z.number().int()).describe("The calls that failed, by their error kind as the seam classifies it (spec §7: config, auth, not_found, transient, quota, timeout, unknown). Treat a kind you don't know as unknown"),
+		})).optional().describe("Capability plugins.seam_stats. By seam kind (sandbox, agent, forge, context; ignore one you don't know), the seams it provides that the daemon has called; empty before the first call. This daemon always sends it; optional because daemons from before plugins.seam_stats don't"),
 	}),
 	commands: z.array(z.string()).optional().describe("The CLI commands its manifest declares (`capcomd <command>`, spec §4.7.1), whatever its state; absent when it adds none. A command whose plugin isn't active is refused naming the plugin and its cause"),
 	tools: z.array(z.string()).optional().describe("Its MCP tools (spec §4.7.2) as the `capcomd mcp` server lists them, `capcomd_<plugin>_<tool>` (a kernel front door's `capcomd_<tool>`): those it registered while active, those its manifest declares otherwise; absent when it adds none"),

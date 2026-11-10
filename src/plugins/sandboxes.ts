@@ -63,6 +63,11 @@ export function sandboxSeam(name: string): SandboxSeam | null {
   return (store().get("seam", `sandbox/${name}`)?.value.impl as SandboxSeam | undefined) ?? null;
 }
 
+/** The plugin that provides the sandbox `name` (what a seam call's span names, §13.4), or null when none does. */
+export function sandboxPluginOf(name: string): string | null {
+  return store().get("seam", `sandbox/${name}`)?.plugin ?? null;
+}
+
 /** Every active sandbox seam's descriptor (§7.2 `describe()`), in load order. */
 export function describedSandboxes(): SandboxDescriptor[] {
   return sandboxSeams().map((s) => s.seam.describe());

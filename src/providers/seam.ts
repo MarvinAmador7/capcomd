@@ -6,6 +6,7 @@
 // carry no seam in protocol 1, §9.6) is adapted here, its errors turned back into the kernel's sandbox errors through its
 // own classifyError (§7.2.3).
 import { PluginError } from "../../packages/plugin/src/errors";
+import { countCalls, seamCounter } from "../../packages/plugin/src/host/context";
 import type { ErrorClass, SandboxDescriptor, SandboxProvider as SandboxSeam, SeamCall } from "../../packages/plugin/src/seams";
 import {
   SandboxAuthError, SandboxConfigError, SandboxError, SandboxNotFoundError, SandboxQuotaError, SandboxTimeoutError,
@@ -158,7 +159,12 @@ const EXEC_MS = 60 * 60_000;
  *  the kernel's timeouts; an exec past its deadline is exit 124, as GNU `timeout` reports it). */
 export function kernelSandbox(seam: SandboxSeam, env: Env = process.env, secret?: SecretOf): SandboxProvider {
   const native = (seam as Partial<BuiltinSandboxSeam>)[NATIVE];
-  if (native) return native.create(env, secret);
+  if (native) {
+    // The kernel calls a built-in's own provider, past the seam's methods: its calls are counted here (§13.5).
+    const counter = seamCounter(seam);
+    const p = native.create(env, secret);
+    return counter ? countCalls(p, counter) : p;
+  }
   const go = async <T>(what: string, ms: number, fn: (c: SeamCall) => Promise<T>, vmId?: string): Promise<T> => {
     const { call, done } = seamCall(ms);
     try { return await fn(call); } catch (e) { throw kernelError(seam, e, `${seam.describe().name} ${what}`, vmId); } finally { done(); }

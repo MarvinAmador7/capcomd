@@ -106,10 +106,20 @@ function persist(span: SimpleSpan) {
 export function endSpan(span: SimpleSpan) {
   if (span.endTime !== undefined) return;
   span.endTime = Date.now();
+  if (currentSpan === span) currentSpan = null;
+  keep(span);
+}
+
+function keep(span: SimpleSpan) {
   spans.push(span);
   if (spans.length > 5000) spans = spans.slice(-2500);
-  if (currentSpan === span) currentSpan = null;
   persist(span);
+}
+
+/** Record a span that has already ended, its ids and times given: one written elsewhere than in `withSpan`, such as a
+ *  plugin's hook call or its own span (plugin API §13.4). */
+export function recordSpan(span: SimpleSpan & { endTime: number }) {
+  keep(span);
 }
 
 export function setSpanAttributes(span: SimpleSpan, attributes: Record<string, any>) {

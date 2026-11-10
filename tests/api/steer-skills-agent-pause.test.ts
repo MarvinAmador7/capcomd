@@ -64,7 +64,7 @@ describe("health capabilities", () => {
 	test("health lists the features a client can detect, with no token", async () => {
 		const { app } = setup();
 		const h = await (await app.request("/v1/health")).json() as any;
-		expect(h.capabilities).toEqual(["run.controls", "agents.messages", "steer.skills", "agent.pause", "runs.options", "runs.options.repo", "runs.options.sandbox", "runs.options.models", "agent.steps", "logins", "environments", "service", "sandboxes", "sandboxes.resources", "sandboxes.settings", "sandboxes.actions", "projects.setup", "projects.known", "projects.git", "runs.goal_branch", "agents.title", "agents.thread_tail", "plugins", "profiles", "plugins.protocol", "triggers", "profiles.edit", "plugins.config", "profiles.facts", "runs.options.planners", "plugins.routes", "context.brain_proposals", "ops.front_door"]);
+		expect(h.capabilities).toEqual(["run.controls", "agents.messages", "steer.skills", "agent.pause", "runs.options", "runs.options.repo", "runs.options.sandbox", "runs.options.models", "agent.steps", "logins", "environments", "service", "sandboxes", "sandboxes.resources", "sandboxes.settings", "sandboxes.actions", "projects.setup", "projects.known", "projects.git", "runs.goal_branch", "agents.title", "agents.thread_tail", "plugins", "profiles", "plugins.protocol", "triggers", "profiles.edit", "plugins.config", "profiles.facts", "runs.options.planners", "plugins.routes", "context.brain_proposals", "ops.front_door", "plugins.seam_stats"]);
 		expect(h.capabilities).toEqual(CAPABILITY_NAMES);
 	});
 });
