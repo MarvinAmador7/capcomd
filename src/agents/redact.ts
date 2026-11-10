@@ -22,6 +22,45 @@ export const REDACTED = "[REDACTED]";
 /** The keys whose string value `Redactor.value` replaces whole, whatever its shape. */
 export const SECRET_KEY = /api[_-]?key|token|secret|password|authorization/i;
 
+/** A URL in text: its scheme, then up to whitespace, a quote or a bracket (or, in the callback, the next URL's scheme). */
+const URL_IN_TEXT = /([a-z][a-z0-9+.-]*:\/\/)([^\s"'`<>]*)/gi;
+const SCHEME = /[a-z][a-z0-9+.-]*:\/\//i;
+/** A URL's query (or fragment) parameter that carries a credential: a SECRET_KEY name, a signature's or a key's. */
+const SECRET_PARAM = new RegExp(`${SECRET_KEY.source}|signature|credential|key$|^(?:sig|auth|pass|passwd|pwd)$`, "i");
+
+/**
+ * Text with each URL's credentials taken out, for a URL a client is shown (a profile's `sharing.source`): its userinfo
+ * (`user:password@`, or a token standing as the user) and each `name=value` (split at `&` or `;`) of its query or
+ * fragment whose name, percent-decoded, says it is a credential (`token`, `access_token`, `api_key`, `privateKey`,
+ * `sig`, …), with a `?` or `#` left empty dropped. A URL inside another (`https://a/b,https://u:p@c`,
+ * `?url=https://u:p@c`) is taken as a URL of its own. What is left still says where it points; a credential with no
+ * such place or name shows.
+ */
+export function withoutUrlCredentials(text: string): string {
+  const named = (kv: string) => {
+    if (!kv.includes("=")) return false;
+    let name = kv.slice(0, kv.indexOf("="));
+    try { name = decodeURIComponent(name.replace(/\+/g, " ")); } catch { /* as written */ }
+    return SECRET_PARAM.test(name);
+  };
+  const params = (part: string) => part.split("&").map((g) => g.split(";").filter((kv) => !named(kv)).join(";")).filter(Boolean).join("&");
+  return text.replace(URL_IN_TEXT, (_m, scheme: string, all: string) => {
+    const next = all.search(SCHEME);
+    const rest = next < 0 ? all : all.slice(0, next);
+    const end = rest.search(/[/?#]/);
+    const authority = end < 0 ? rest : rest.slice(0, end);
+    let tail = end < 0 ? "" : rest.slice(end);
+    const hash = tail.indexOf("#");
+    const fragment = hash < 0 ? "" : params(tail.slice(hash + 1));
+    if (hash >= 0) tail = tail.slice(0, hash);
+    const q = tail.indexOf("?");
+    const query = q < 0 ? "" : params(tail.slice(q + 1));
+    if (q >= 0) tail = tail.slice(0, q);
+    const url = `${scheme}${authority.slice(authority.lastIndexOf("@") + 1)}${tail}${query ? `?${query}` : ""}${fragment ? `#${fragment}` : ""}`;
+    return next < 0 ? url : url + withoutUrlCredentials(all.slice(next));
+  });
+}
+
 export class Redactor {
   private secrets: string[];
   constructor(secrets: Array<string | undefined | null> = []) {

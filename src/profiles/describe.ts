@@ -6,6 +6,7 @@
 // needs the place and the login ledger: src/providers/capacity.ts profileCapacity. Pure: readiness (is its login
 // present?) is the caller's, which knows the environment it asks for. Read by capcomd_profiles (src/mcp/driver.ts),
 // `capcomd profiles` and GET /v1/profiles.
+import { Redactor, withoutUrlCredentials } from "../agents/redact";
 import { agentSeam } from "../plugins/agents";
 import { abilityText, leadText, readOnlySpec, type AgentSpec, type AuthMode } from "./v1";
 import { PROFILE_JSON_SCHEMA, type ProfileDoc } from "./v2";
@@ -154,7 +155,8 @@ export interface ProfileFacts {
   canReport: boolean;
   fit: string;
   cost: CostTier | null;
-  /** `sharing` (where an installed profile came from, its license), when it says. */
+  /** `sharing` (where an installed profile came from, its license), when it says; `source` without a URL's credentials
+   *  or a token's shape (it is served to any reading client and to a driver agent), as GET /v1/profiles/{name}'s row. */
   sharing?: { source?: string; license?: string };
 }
 
@@ -163,12 +165,15 @@ const block = (doc: Record<string, unknown>, k: string) => {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 };
 
+/** A profile's `sharing.source` as capcomd shows it anywhere: no URL credentials (`user:password@`, `?token=`), no token's shape. */
+export const sharedSource = (source: string) => new Redactor().text(withoutUrlCredentials(source));
+
 /** The step-4 blocks of a resolved profile, and the facts capcomd writes about it. */
 export function profileFacts(p: Pick<ResolvedProfile, "manifest" | "spec">): ProfileFacts {
   const title = block(p.manifest, "identity").title;
   const report = block(p.manifest, "permissions").report;
   const sh = block(p.manifest, "sharing");
-  const sharing = Object.fromEntries(["source", "license"].filter((k) => typeof sh[k] === "string").map((k) => [k, sh[k] as string]));
+  const sharing = Object.fromEntries(["source", "license"].filter((k) => typeof sh[k] === "string").map((k) => [k, k === "source" ? sharedSource(sh[k] as string) : sh[k] as string]));
   return {
     title: typeof title === "string" ? title : null,
     tags: Array.isArray(p.manifest.tags) ? (p.manifest.tags as string[]) : [],

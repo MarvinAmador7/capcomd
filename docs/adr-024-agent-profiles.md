@@ -537,6 +537,13 @@ Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src
   since it has no per-tool allow-list, never for a provider capcomd doesn't know), report, provider label, model,
   effort, cost, limits, an egress allowlist's size, whether it leads (`leadText`). No `description`,
   `tags`, `title` or `sharing` goes into it, so a shared package can't word it.
+- **`sharing.source` is shown without a URL's credentials everywhere it is served** (`profileFacts`, so
+  `capcomd_profiles`, `capcomd profiles list|show --json` and `show`'s values; and `GET /v1/profiles/{name}`'s row):
+  its `user:password@` (or a token standing as the user) and a query or fragment parameter named like a credential
+  (read percent-decoded; a name ending in `key` too) are taken out, and the redactor's token shapes, and a URL inside
+  another (`?url=https://u:p@…`, or after it with no space) is taken as a URL of its own, fail-closed (2026-11-09, from a review: the list served the URL as
+  written while the row redacted only its password). The file keeps it as written: `install` and `update` read their
+  own LOCK, never this.
 - **`cost` is a tier by model family** (Haiku, `-mini`, `-nano`: low; Sonnet, GPT, `o<N>`: medium; Opus, `-pro`:
   high), null when the profile leaves the model to the CLI or names one outside those families. No price table is
   kept: list prices change, the relative tiers rarely do.
@@ -668,7 +675,9 @@ Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`,
   (`skills`, `tools.mcp`, `x-` fields) are read-only rows labelled by their path, so they show without an app release;
   `tools.mcp` and `context.providers` show their names only, since a command line or a provider's own settings may
   carry a token, and any other such row has the redactor's token shapes taken out, a value under a key named like a
-  secret (`password`, `apiKey`, `token`, …, as the redactor's values) replaced whole and a URL's password removed;
+  secret (`password`, `apiKey`, `token`, …, as the redactor's values) replaced whole and a URL's credentials removed
+  (its `user:password@` whole, and a query or fragment parameter named like one, `src/agents/redact.ts`
+  `withoutUrlCredentials`; "Made while building the blocks with no new runtime" has `sharing.source`'s other outputs);
   a secret with none of these shapes still shows, as the file's other free text does. Files are written through a
   temporary file with an unguessable name, created exclusively (spec 1.0.45): a project's profiles directory is its
   repository's, and a link planted at a predictable name would be written through. A file keeps its mode (spec

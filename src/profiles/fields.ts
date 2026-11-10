@@ -4,7 +4,7 @@
 // value is a string in one encoding both ways (a list is a JSON array). Labels, help and `display` are written here,
 // except for the free text a profile's file holds (`description`, `identity.title`, a value outside the catalog). No
 // prompt text is ever served: a prompt row says only whether it is set.
-import { REDACTED, Redactor, SECRET_KEY } from "../agents/redact";
+import { REDACTED, Redactor, SECRET_KEY, withoutUrlCredentials } from "../agents/redact";
 import { agentSeams } from "../plugins/agents";
 import { profileValues } from "./describe";
 import type { ResolvedProfile } from "./load";
@@ -127,12 +127,13 @@ function encode(f: ProfileFieldSpec, v: unknown): string | null {
 /**
  * A value of the file as a reading client may see it: the token shapes the redactor knows taken out, a value under a
  * key named like a secret (`password`, `apiKey`, `token`, …; the row's own last key too) replaced whole, and a URL's
- * password. It is still text from the file: a secret with no such shape or key shows.
+ * credentials (its `user:password@`, a query parameter named like one: redact.ts withoutUrlCredentials, as
+ * describe.ts profileFacts shows `sharing.source`). It is still text from the file: a secret with no such shape or key shows.
  */
 function withoutSecrets(path: string, v: unknown): string {
   if (SECRET_KEY.test(path.slice(path.lastIndexOf(".") + 1)) && v !== null && v !== undefined) return REDACTED;
   const r = new Redactor().value(v);
-  return (typeof r === "string" ? r : JSON.stringify(r)).replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]*:)[^\s/?#@]+@/gi, `$1${REDACTED}@`);
+  return withoutUrlCredentials(typeof r === "string" ? r : JSON.stringify(r));
 }
 
 function shown(v: unknown): string {
