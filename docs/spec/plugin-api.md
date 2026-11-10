@@ -557,7 +557,10 @@ their manifests). A listener it can't ask is a call that failed (§6.5): a gate'
 refuses the operation (relay.v1 `config`, reason `plugins_unconsulted`, naming each plugin and hook: fail-closed); any
 other is skipped and the front door names it (on stderr; `capcomd mcp`: `pluginsNotConsulted` on its answer). Once the
 daemon took an operation, the front door never runs it itself: a daemon gone mid-operation is a retryable error, and
-asking again by the id picks the operation up.
+asking again by the id picks the operation up. A wait outside the daemon (`capcomd_await` with `ops`) that finds a verify
+or merge running that isn't its own process's picks it up the same way, through the daemon that hosts the engine (which
+joins the one it runs, or picks it up itself), never again in its own process past the daemon's judges; with no daemon,
+under the same rule as a call.
 
 Not sent through the daemon in this version: `capcomd run new` and `capcomd_run_new` (`run.creating`), `capcomd spawn`
 and `capcomd_spawn` (`profile.resolved`, `agent.spawning`), and `capcomd run <goal>`'s driver (`run.creating`, and

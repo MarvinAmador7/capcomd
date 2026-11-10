@@ -125,6 +125,24 @@ test("a merge.landing deny or hold from it stops `capcomd merge` and capcomd_mer
   expect(asked("merge.landing", run).length).toBeGreaterThanOrEqual(3);
 }, 300_000);
 
+test("capcomd_await on a verify the daemon runs waits for the daemon's judges: it never picks it up in capcomd mcp, past them", async () => {
+  control({ "merge.landing": "allow" });
+  const run = await newRun("await");
+  const a = await done(run, "e");
+  // The plugin doesn't answer: only the daemon's verify can end it, and that waits for the plugin.
+  control({ "verify.judging": "none", "merge.landing": "allow" });
+  const started: any = await mcp.callTool({ name: "capcomd_verify", arguments: { runId: run, ref: a, check: "unit", timeoutMs: 0 } });
+  const id = JSON.parse(started.content[0].text).id as string;
+  expect(id).toMatch(/^vfy-/);
+  // Before, the wait found the record running, not this process's, and ran the verify again in capcomd mcp, where only
+  // the built-in judges listen: it passed while the plugin was still being asked.
+  const waited: any = await mcp.callTool({ name: "capcomd_await", arguments: { runId: run, ops: [id], timeoutMs: 15_000 } });
+  const body = JSON.parse(waited.content[0].text);
+  expect(body.pending).toEqual([id]);
+  expect(body.ops).toEqual([]);
+  await until(() => asked("verify.judging", run).length === 1);
+}, 300_000);
+
 test("the one-call tokens the front doors made for these calls are gone after them", async () => {
   const { loadClients } = await import("../../src/api/clients");
   expect(loadClients().filter((c) => c.frontDoor)).toEqual([]);

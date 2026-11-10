@@ -42,7 +42,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, inDaemon, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import { agentSeam } from "../plugins/agents";
 import { sameHold, type PluginHold } from "../merge/types";
@@ -1505,8 +1505,9 @@ export async function getAgentOrThrow(runId: string, agentId: string): Promise<S
  * waiter hears about trouble when it happens; one already showing when the wait began doesn't.
  * `ops` (vfy-… / mrg-… ids) are waited on with the agents: an op is finished once it isn't running (passed, failed,
  * merged, or parked for an approval); `ops` in the result has each one's record. With `any`, the first agent or op to
- * finish ends the wait. An op left running by a caller that went away (another session, a restarted server) is resumed
- * here, as a call with its id would (idempotent: the verifier shares one run per op).
+ * finish ends the wait. An op running that isn't this process's (a front door's, in the daemon; one left by a caller
+ * that went away) is picked up as a call with its id would (`resumeOp`: through the daemon, outside it; idempotent: the
+ * verifier shares one run per op).
  */
 export async function awaitAgents(runId: string, ids: string[], opts: { timeoutMs?: number; any?: boolean; notices?: boolean; ops?: string[] } = {}) {
   await assertEngine();
@@ -1559,7 +1560,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       if (mine) { if (feed) void mine.then(feed.poke, feed.poke); }
       else if (!resumed.has(id)) {
         resumed.add(id);
-        const p = op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id }) : op.kind === "check" ? checkRef({ runId, id }) : mergeRef({ runId, ref: op.data.ref as string, id });
+        const p = resumeOp(runId, op);
         p.catch(() => {}); // its record says how it ended; the next look reads it
         if (feed) void p.then(feed.poke, feed.poke);
       }
@@ -1576,6 +1577,22 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (feed) await feed.wait(Math.min(eventFallbackMs(), Math.max(0, deadline - Date.now()) + 1)); else await sleep(pollMs());
   }
   } finally { feed?.close(); }
+}
+
+/**
+ * An op a wait found running that isn't this process's, picked up as a call with its id would. A verify or merge outside
+ * the daemon goes through the front door (src/primitives/front-door.ts, plugin API §6.1): the daemon that hosts the
+ * engine joins it (most often it is the one running it: a front door's own, started there) or picks it up itself, so
+ * its plugins judge it; with no daemon it runs here once nothing this process can't ask must judge it. Never run again
+ * here past the daemon's judges, which a verify the daemon runs may still be waiting on. A check fires no gate (§6.1).
+ */
+function resumeOp(runId: string, op: import("../actors/scope").ScopeOp): Promise<unknown> {
+  if (op.kind === "check") return checkRef({ runId, id: op.id });
+  if (inDaemon()) return op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id: op.id }) : mergeRef({ runId, ref: op.data.ref as string, id: op.id });
+  return import("./front-door").then((F) => {
+    const w = { waitMs: 0, what: `the wait for ${op.id}` };
+    return op.kind === "verify" ? F.frontVerify({ runId, ref: op.data.ref as string, id: op.id }, w) : F.frontMerge({ runId, ref: op.data.ref as string, id: op.id }, w);
+  });
 }
 
 const eventFallbackMs = () => Number(env("AWAIT_FALLBACK_MS") ?? 5000);
