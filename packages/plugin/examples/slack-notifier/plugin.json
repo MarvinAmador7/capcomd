@@ -21,7 +21,7 @@
     "additionalProperties": false,
     "required": ["webhook"],
     "properties": {
-      "webhook": { "type": "string", "x-secret": true, "description": "The incoming-webhook URL. A secret reference ({\"$secret\": \"keychain:slack-webhook\"}), never the URL itself" },
+      "webhook": { "type": "string", "x-secret": true, "description": "The incoming-webhook URL. A secret reference ({\"$secret\": \"env:SLACK_WEBHOOK\"}), never the URL itself" },
       "channel": { "type": "string", "default": "#capcomd" },
       "quiet": { "type": "boolean", "default": false, "x-per-run": true, "description": "Post only failures and landed work for this run" }
     }

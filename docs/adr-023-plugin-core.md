@@ -479,6 +479,19 @@ Decided by the owner on 2026-11-08:
    fail-closed); listeners of other hooks are named as skipped. Which operations, and which stay in the front door's
    process for now (`run new`, `spawn`, a run's driver), is in spec §6.1.
 
+Decided by the owner on 2026-11-10 (spec §10.3):
+
+9. **An explicit secret reference that doesn't resolve is refused, never silently replaced.** A reference the user set
+   (`plugins.<name>.<key>` in their config, `CAPCOMD_PLUGIN_<NAME>_<KEY>`) whose variable isn't set is `config_invalid`,
+   its message naming the reference and the fix. sandbox-boxd no longer falls back to `BOXD_API_KEY` then, which could
+   bill another boxd account than the one the user chose: its place reports itself unavailable with that reason, and
+   `capcomd doctor`, `plugins show` and `plugins validate` say why. The default reference, used when nothing is set
+   (`env:BOXD_API_KEY`), works as before.
+10. **`keychain:<account>` references stay unbuilt, and are refused when the config is loaded**: `config_invalid` with
+    the hint to use `env:<VAR>` for now, from the user's config, a project's, `CAPCOMD_PLUGIN_*` or a manifest's
+    default, rather than failing at first use or falling back. Which keychain service they read stays open, decided
+    when keychain references are built.
+
 Risks that stay:
 
 - **Latency on the hot path.** `agent.item` fires per thread item; `observe` hooks run concurrently on a bounded queue
@@ -511,7 +524,7 @@ the corresponding text above.
 | **The breaker suspends listeners, not the plugin**; a suspended gate denies | disposing a sandbox provider mid-run because a hook threw would be worse than a denied merge | §6.5 |
 | `permissions` → **`scopes`**: the manifest names harness.v1 scopes directly; kernel abilities (be a provider) are `provides`, registrations are `contributes` | one permission model; §6.4 above had a second vocabulary mapped onto the first | §4.5, §4.6, §4.7, §11.1 |
 | **`provides`/`requires` capability ids** (`seam:…`, `source:…`, `plugin:…`, `kernel:…`) drive resolution and order | dependencies between plugins are the seams and sources; a typed id is enough, no DI container | §4.6, §6.3 |
-| **Secrets are `x-secret` config properties holding references** (`env:`, `keychain:`), resolved by the kernel, readable only by the declaring plugin; built-ins follow the same rule | one mechanism for boxd's key, GitHub's token and a Slack webhook; no `secrets:read` permission | §10.3 |
+| **Secrets are `x-secret` config properties holding references** (`env:`; `keychain:` reserved, refused until built, decision 10), resolved by the kernel, readable only by the declaring plugin; built-ins follow the same rule; one the user set that doesn't resolve is refused, never replaced (decision 9) | one mechanism for boxd's key, GitHub's token and a Slack webhook; no `secrets:read` permission | §10.3 |
 | **Config is constant for the plugin's life**; per-run overrides (`x-per-run`) are run data in storage; no file watching | every listener stays a pure function of its call plus one read; reload is `disable`/`enable` | §10.2, §5.4 |
 | **No hot reload of code** | a changed in-process module needs a daemon restart; out of process, `disable`/`enable` runs new code | §5.4 |
 | **The forge seam owns direct pushes too** (`forge-git`), and is selected by `matches(remote)`; the kernel keeps lock, CAS, integration and checks | goal branches need `openPullRequest` even in direct mode; "direct" is a `LandRequest.mode`, not a second seam | §7.4 |
