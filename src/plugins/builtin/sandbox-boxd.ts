@@ -2,13 +2,18 @@
 // src/providers/boxd.ts BoxdProvider; what used to be the kernel's knowledge of boxd's errors (src/actors/worker.ts
 // isBoxdAuthError, src/recipes/hierarchical.ts) is this plugin's classifyError (§7.2.3). The API key is the plugin's
 // `apiKey` secret (§10.3): a reference, by default to BOXD_API_KEY, which the daemon's environment gets from the shell,
-// the OS keychain or the credentials file `capcomd setup` wrote (src/config/store.ts applyConfig), as before.
+// the OS keychain or the credentials file `capcomd setup` wrote (src/config/store.ts applyConfig), as before. A reference
+// the user set (plugins.sandbox-boxd.apiKey, CAPCOMD_PLUGIN_SANDBOX_BOXD_APIKEY) that doesn't resolve, or a keychain
+// one, is refused, config_invalid: the provider is unavailable with that reason and never falls back to BOXD_API_KEY,
+// which may be another boxd account's (owner decision 2026-11-10).
 import { definePlugin } from "../../../packages/plugin/src/context";
 import { PluginError } from "../../../packages/plugin/src/errors";
 import type { ErrorClass, SandboxDescriptor } from "../../../packages/plugin/src/seams";
+import { RelayError } from "../../core/errors";
 import { BOXD_AUTH_HINT, isBoxdAuthError, mapBoxdError } from "../../providers/boxd-errors";
 import { builtinSandbox, classifySandboxError, type NativeSandbox, type SecretOf } from "../../providers/seam";
 import { VERSION } from "../../utils/self";
+import { builtinSecret, SecretRefused, secretSource } from "../secrets";
 import { contributeRows, rowContributions } from "./sandbox-rows";
 import { env as envVar } from "../../utils/env";
 
@@ -62,11 +67,42 @@ export function classifyBoxdError(e: unknown): ErrorClass {
   return classifySandboxError(e instanceof PluginError ? e : mapBoxdError(e), BOXD_AUTH_REASON);
 }
 
+/** A refused reference (SecretRefused) as the kernel's config error, its message and fix as `capcomd` prints them. */
+export function boxdKeyRefused(e: unknown): unknown {
+  return e instanceof SecretRefused ? new RelayError("config", `boxd's API key: ${e.message}`, e.hint ?? "", { code: "config_invalid" }) : e;
+}
+
+/**
+ * The boxd API key for `env` (§10.3): `key` from the reference the user set (`ref`), or the default's, BOXD_API_KEY
+ * (undefined when it isn't set: the provider then uses the machine's own credentials inside a boxd VM). A reference the
+ * user set that doesn't resolve, or a keychain one, throws (a RelayError `config`, reason `config_invalid`): it is never
+ * replaced with BOXD_API_KEY.
+ */
+export function boxdApiKey(env: Record<string, string | undefined> = process.env): { key: string | undefined; ref: string | null } {
+  let key: string | undefined;
+  try { key = builtinSecret(manifest, "apiKey", env); } catch (e) { throw boxdKeyRefused(e); }
+  let ref: string | null = null;
+  try { const s = secretSource(manifest, "apiKey", env, null, { builtin: true }); if (s.layer !== "default") ref = s.ref; } catch { /* no reference */ }
+  return { key, ref };
+}
+
+/** Whether boxd has a key to run with (§7.2 `available`): the reference the user set and resolved, else BOXD_API_KEY
+ *  or where `capcomd setup` keeps it; a refused reference is unavailable with its reason and fix. */
+export async function boxdKeyAvailable(env: Record<string, string | undefined> = process.env): Promise<{ ok: true } | { ok: false; reason: string; fix: string | null }> {
+  try { if (boxdApiKey(env).key) return { ok: true }; } catch (e) {
+    return { ok: false, reason: (e as Error).message, fix: e instanceof RelayError ? e.hint : null };
+  }
+  const { boxdKeyConfigured } = await import("../../api/run-options");
+  return boxdKeyConfigured(env) ? { ok: true } : { ok: false, reason: "No boxd API key", fix: "Run `capcomd setup accounts`, or export BOXD_API_KEY." };
+}
+
 const native: NativeSandbox = {
   create(_env, secret?: SecretOf) {
     const { BoxdProvider } = require("../../providers/boxd") as typeof import("../../providers/boxd");
     // No git credential ever reaches a VM: the host fetches and pushes for its agents (plugin API §11.7).
-    const apiKey = secret?.("apiKey");
+    // A refused reference throws here: BoxdProvider, given no key, would take BOXD_API_KEY instead.
+    let apiKey: string | undefined;
+    try { apiKey = secret?.("apiKey"); } catch (e) { throw boxdKeyRefused(e); }
     return new BoxdProvider({ ...(apiKey ? { apiKey } : {}) });
   },
 };
@@ -77,12 +113,10 @@ export const plugin = definePlugin({
       descriptor: DESCRIPTOR,
       native,
       classifyError: classifyBoxdError,
-      async available() {
-        const { boxdKeyConfigured } = await import("../../api/run-options");
-        return boxdKeyConfigured(process.env) ? { ok: true } : { ok: false, reason: "No boxd API key", fix: "Run `capcomd setup accounts`, or export BOXD_API_KEY." };
-      },
+      available: () => boxdKeyAvailable(process.env),
       async instance() {
-        const key = await ctx.config.secret("apiKey").catch(() => undefined);
+        // Only the default reference unresolved is "no key"; a refused one (the user's, unset; a keychain one) fails.
+        const key = await ctx.config.secret("apiKey").catch((e: unknown) => { if (e instanceof SecretRefused) throw boxdKeyRefused(e); return undefined; });
         return native.create(process.env, () => key);
       },
     }));

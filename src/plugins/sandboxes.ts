@@ -17,7 +17,7 @@ import type { SandboxProvider } from "../providers/sandbox";
 import { stateDir } from "../utils/home";
 import { VERSION } from "../utils/self";
 import { SANDBOX_BUILTINS } from "./builtin/sandboxes";
-import { resolveSecret, secretOrUndefined } from "./secrets";
+import { builtinSecret, resolveSecret } from "./secrets";
 
 type Env = Record<string, string | undefined>;
 
@@ -91,7 +91,7 @@ export function sandboxProvider(name: string, env: Env = process.env): SandboxPr
   const e = store().get("seam", `sandbox/${name}`);
   if (!e) throw new RelayError("config", `no active plugin provides the ${name} sandbox`, "See `capcomd plugins list` for why it isn't loaded.", { code: "sandbox" });
   const manifest = SANDBOX_BUILTINS.find((b) => b.manifest.name === e.plugin)?.manifest;
-  return kernelSandbox(e.value.impl as SandboxSeam, env, manifest ? (key) => secretOrUndefined(manifest, key, env) : undefined);
+  return kernelSandbox(e.value.impl as SandboxSeam, env, manifest ? (key) => builtinSecret(manifest, key, env) : undefined);
 }
 
 function current(): string | null {

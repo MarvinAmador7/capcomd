@@ -13,7 +13,9 @@
 // reads it); a project may not set one (it could point a plugin at another of the daemon's variables). Nor may any
 // layer of a plugin that isn't a shipped built-in, its manifest's default included, name one of the kernel's own
 // variables (`kernelSecretRef`: BOXD_API_KEY, the GitHub tokens, CAPCOMD_*…): that is `config_invalid` too, the default's
-// with layer `default`. It is never in the config. CAPCOMD_NO_CONFIG (tests) skips the files, not the environment.
+// with layer `default`. Nor may any layer, a built-in's default included, hold a `keychain:` reference, which capcomd
+// doesn't resolve yet: `config_invalid` with the hint to use `env:<VAR>` (owner decision 2026-11-10). It is never in
+// the config. CAPCOMD_NO_CONFIG (tests) skips the files, not the environment.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { projectConfigPath, readConfig, userConfigPath } from "../config/store";
@@ -54,6 +56,11 @@ export const kernelVariable = (name: string): boolean => {
   const n = name.toUpperCase();
   return KERNEL_ENV.has(n) || KERNEL_ENV_PREFIXES.some((p) => n.startsWith(p));
 };
+
+/** `keychain:<account>` references aren't built yet (§10.3, owner decision 2026-11-10): refused when the config is loaded,
+ *  `config_invalid`, whichever layer names one (a manifest's default included), never at first use or by falling back. */
+export const KEYCHAIN_HINT = 'capcomd doesn\'t resolve keychain references yet: use {"$secret": "env:<VAR>"} for now, a variable of the daemon\'s environment that holds the value';
+const keychainRef = (ref: string | null): ref is string => !!ref && ref.startsWith("keychain:");
 
 /** Why reference `ref` is the kernel's and no plugin's (words to follow "names"), or null when it isn't. */
 export function kernelSecretRef(ref: string): string | null {
@@ -197,12 +204,14 @@ export function pluginSettings(m: { name: string; config?: unknown }, o: { dir?:
     }
     for (const k of Object.keys(rest)) {
       if (!secret.has(k)) continue;
-      if (layer === "project") errors.push({ path: k, message: "is a secret: only your own config (or CAPCOMD_PLUGIN_*) may set its reference", layer });
+      if (layer === "project") errors.push({ path: k, message: `is a secret: only your own config (or CAPCOMD_PLUGIN_*) may set its reference${keychainRef(secretRefOf(rest[k])) ? `; and ${KEYCHAIN_HINT}` : ""}`, layer });
       else if (rest[k] !== null && !secretRefOf(rest[k])) errors.push({ path: k, message: 'is a secret: give a reference, {"$secret": "env:<VAR>"}, never the value', layer });
       else if (rest[k] !== null) {
         named.add(k);
-        const owned = kernel ? null : kernelSecretRef(secretRefOf(rest[k])!);
+        const ref = secretRefOf(rest[k])!;
+        const owned = kernel ? null : kernelSecretRef(ref);
         if (owned) errors.push({ path: k, message: `is a secret that names ${owned}`, layer });
+        else if (keychainRef(ref)) errors.push({ path: k, message: `is a secret that references ${ref}: ${KEYCHAIN_HINT}`, layer });
       }
       delete rest[k];
     }
@@ -217,11 +226,13 @@ export function pluginSettings(m: { name: string; config?: unknown }, o: { dir?:
   // A secret no layer gave a reference: the manifest's default can't name the kernel's either. A third-party's default
   // is never followed (src/plugins/secrets.ts), but one that names the kernel's variables is refused outright (§10.3),
   // so the operator sees what the plugin asked for; a test plugin's (source builtin, with a directory) is followed.
-  if (!kernel) for (const k of secret) {
+  // Nor is any plugin's default a keychain reference, a built-in's included (not built yet).
+  for (const k of secret) {
     if (named.has(k)) continue;
     const ref = secretRefOf((schema?.properties?.[k] as { default?: unknown } | undefined)?.default);
-    const owned = ref ? kernelSecretRef(ref) : null;
+    const owned = ref && !kernel ? kernelSecretRef(ref) : null;
     if (owned) errors.push({ path: k, message: `is a secret whose default names ${owned}`, layer: "default" });
+    else if (keychainRef(ref)) errors.push({ path: k, message: `is a secret whose default references ${ref}: ${KEYCHAIN_HINT}`, layer: "default" });
   }
   return { ...(enabled === undefined ? {} : { enabled }), config, errors, sources };
 }
