@@ -27,6 +27,8 @@ type Env = Record<string, string | undefined>;
 
 export interface GitHubForgeConfig { api: string; pollMs: number; timeoutMs: number }
 const DEFAULTS: GitHubForgeConfig = { api: "https://api.github.com", pollMs: 5000, timeoutMs: 30 * 60_000 };
+/** How many more times a merge call GitHub failed with a 5xx is made (each after a poll interval and a fresh look). */
+const MERGE_5XX_RETRIES = 3;
 /** How long `gh repo create … --push` may take. */
 const PUBLISH_TIMEOUT_MS = 180_000;
 
@@ -91,7 +93,17 @@ export class GitHubForge implements Forge {
 
     killpoint("merge.pr.before_merge");
     const merge = () => gh.mergePull(repo, pr.number, { merge_method: req.strategy, sha: head, commit_title: `${req.subject} (#${pr.number})`, commit_message: trailerLines(req.trailers) });
-    let res = await merge();
+    let res = await merge(), tries = 1;
+    // GitHub's own failure (a 5xx, often with no body; seen live as a bare 500): the merge may have happened all the
+    // same. Look at the pull request again, then ask again, a few times before calling it failed.
+    for (; !res.merged && res.status >= 500 && tries <= MERGE_5XX_RETRIES && !c.signal.aborted; tries++) {
+      await sleep(s.pollMs, c.signal);
+      if (c.signal.aborted) break;
+      const now = await gh.getPull(repo, pr.number).catch(() => null);
+      if (now?.merged && now.merge_commit_sha) return { status: "merged", sha: now.merge_commit_sha, already: false, how: `pr-${req.strategy}`, pr: now.number };
+      if (now) pr = now;
+      res = await merge();
+    }
     if (!res.merged && (res.status === 405 || res.status === 409)) {
       // Protection, pending required checks or a merge queue: hand it to auto-merge and wait.
       await gh.enableAutoMerge(repo, pr, req.strategy).catch(() => false);
@@ -109,6 +121,8 @@ export class GitHubForge implements Forge {
           if (res.merged) { pr = await gh.getPull(repo, pr.number); break; }
         }
       }
+    } else if (!res.merged && res.status >= 500) {
+      return { status: "failed", reason: `GitHub failed to merge PR #${pr.number} (${res.status}, ${tries} ${tries === 1 ? "try" : "tries"})${res.message ? `: ${res.message}` : ""}; merge again later`, retryable: false };
     } else if (!res.merged) {
       return { status: "failed", reason: `GitHub refused merge of PR #${pr.number} (${res.status}): ${res.message}`, retryable: false };
     } else {

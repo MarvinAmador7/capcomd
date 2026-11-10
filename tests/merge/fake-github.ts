@@ -11,12 +11,15 @@ interface FakePr {
 
 /**
  * Fake GitHub REST (+ the one GraphQL mutation) backed by a real bare repo. Merges really happen
- * in the bare repo. Knobs: required checks pending, a merge queue (auto-merge only), call log.
+ * in the bare repo. Knobs: required checks pending, a merge queue (auto-merge only), GitHub's own failures of the merge
+ * call (`mergeErrors`: the next merge calls answer 500 with no body; `mergedThen500`: the first one merges, then
+ * answers 500), call log.
  */
-export function fakeGitHub(bare: string, opts: { requireChecks?: boolean; mergeQueue?: boolean } = {}) {
+export function fakeGitHub(bare: string, opts: { requireChecks?: boolean; mergeQueue?: boolean; mergeErrors?: number; mergedThen500?: boolean } = {}) {
   const pulls: FakePr[] = [];
   const calls: string[] = [];
   let checksPassing = !opts.requireChecks;
+  let mergeErrors = opts.mergeErrors ?? 0, mergedThen500 = !!opts.mergedThen500;
   const work = mkdtempSync(join(tmpdir(), "fakegh-"));
   const git = new Git(work);
   let ready: Promise<void> = (async () => {
@@ -122,8 +125,10 @@ export function fakeGitHub(bare: string, opts: { requireChecks?: boolean; mergeQ
         if (b.sha && b.sha !== pr.head.sha) return json(409, { message: "Head branch was modified. Review and try the merge again." });
         if (!checksPassing) return json(405, { message: "Required status check \"ci\" is expected." });
         if (opts.mergeQueue) return json(405, { message: "Changes must be made through the merge queue" });
+        if (mergeErrors > 0) { mergeErrors--; return new Response("", { status: 500 }); }
         pr.title = b.commit_title ?? pr.title; pr.body = b.commit_message ?? pr.body;
         const res = await doMerge(pr, b.merge_method ?? "merge");
+        if (res.ok && mergedThen500) { mergedThen500 = false; return new Response("", { status: 500 }); }
         return res.ok ? json(200, { merged: true, sha: res.sha, message: "Pull Request successfully merged" }) : json(405, { message: res.message });
       }
       return json(404, { message: "Not Found" });

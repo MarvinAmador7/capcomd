@@ -2131,8 +2131,11 @@ own. **Not built for the built-in:** `src/plugins/forges/github.ts` declares no 
 `GITHUB_TOKEN`, else `GH_TOKEN`, else `gh auth token` itself (`src/plugins/forges/github-rest.ts`), under §7.4's
 interim rule for the built-in forges rather than §10.3's (a built-in reads only the secrets its schema declares, which
 for a built-in may default to `{"$secret": "env:GITHUB_TOKEN"}`). Moving it to a declared `token` is open.
-`classifyError` maps rate limits to `quota` and 401/403 to `auth`. The kernel keeps the lock, the CAS, integration and
-the checks.
+`classifyError` maps rate limits to `quota` and 401/403 to `auth`. In the built-in's `land`, a merge call GitHub fails
+with a 5xx (its own error, which may still have merged) is made again up to three more times, each after a poll interval
+and a fresh read of the pull request; one found merged is the landing (`already: false`), and four failures are
+`{status: "failed", retryable: false}` naming the status and the tries. The kernel keeps the lock, the CAS, integration
+and the checks.
 
 ### 15.3 The reviewer as a gate (`gate-reviewer`, in-process)
 
