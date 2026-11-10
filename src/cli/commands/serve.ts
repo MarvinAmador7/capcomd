@@ -286,12 +286,13 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // (§5.5 step 4), before the harness socket opens to clients. It serves the same API, to their tokens only.
   const { pluginSocketPath } = await import("../../api/socket");
   const pluginSock = pluginSocketPath(sock);
-  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), events: { daemon: (after) => harnessStore.daemonEvents(after) }, snapshot: P.pluginsSnapshotPath(), socket: sock, jobs: true, triggers: true, process: { socket: pluginSock } });
+  const host = P.kernelHost({ record: (e) => harnessStore.recordDaemonEvent(e), events: { daemon: (after) => harnessStore.daemonEvents(after) }, snapshot: P.pluginsSnapshotPath(), socket: sock, endpoint: process.env.CAPCOMD_ENDPOINT, jobs: true, triggers: true, process: { socket: pluginSock } });
   process.on("exit", () => P.releaseSnapshot());
   const { harnessApp, pluginsOnly } = await import("../../api/server");
   const { rivetSource } = await import("../../api/rivet-source");
   const { pluginStore } = await import("../../plugins/storage");
-  const app = harnessApp({ source: rivetSource(), state: harnessStore, plugins: () => host.list(), pluginHost: host, pluginStorage: (name) => pluginStore(name, P.pluginDataDir(name)) });
+  const { kernelFrontDoor } = await import("../../api/front-door");
+  const app = harnessApp({ source: rivetSource(), state: harnessStore, plugins: () => host.list(), pluginHost: host, pluginStorage: (name) => pluginStore(name, P.pluginDataDir(name)), frontDoor: kernelFrontDoor() });
   try {
     const plugSocket = await serveHarnessSocket(pluginSock, pluginsOnly((req) => app.fetch(req)));
     process.on("exit", () => plugSocket.release());

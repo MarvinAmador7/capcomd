@@ -11,10 +11,12 @@ import { capcomdHome } from "../utils/home";
 
 export const CLIENT_SCOPES = ["read", "steer", "approve", "configure"] as const;
 export type ClientScope = (typeof CLIENT_SCOPES)[number];
-/** `app`: made by `capcomd clients pair --app <app>` (the next pairing of that app revokes it). */
-export type ClientRecord = { id: string; name: string; scopes: ClientScope[]; sha256: string; createdAt: string; revokedAt: string | null; app?: string; plugin?: string };
-/** `plugin`: the token was minted for that plugin's process (plugin API §9.3), which its protocol routes require. */
-export type AuthedClient = { clientId: string; name: string; scopes: ClientScope[]; plugin?: string };
+/** `app`: made by `capcomd clients pair --app <app>` (the next pairing of that app revokes it). `frontDoor`: made by the
+ *  CLI or `capcomd mcp` for one call of a kernel front door's operation (src/cli/daemon.ts `daemonOp`). */
+export type ClientRecord = { id: string; name: string; scopes: ClientScope[]; sha256: string; createdAt: string; revokedAt: string | null; app?: string; plugin?: string; frontDoor?: true };
+/** `plugin`: the token was minted for that plugin's process (plugin API §9.3), which its protocol routes require.
+ *  `frontDoor`: the CLI's or `capcomd mcp`'s own one-call token, which the front-door operation routes require (§6.1). */
+export type AuthedClient = { clientId: string; name: string; scopes: ClientScope[]; plugin?: string; frontDoor?: true };
 
 export const clientsPath = (env: Record<string, string | undefined> = process.env) => join(capcomdHome(env), "harness-clients.json");
 const hash = (t: string) => createHash("sha256").update(t).digest("hex");
@@ -69,10 +71,12 @@ export function pairClient(app: string, scopes: ClientScope[] = APP_SCOPES, path
 /**
  * A token for one call of the CLI to the daemon (src/cli/daemon.ts): the CLI holds none, so it makes one with the scopes
  * the call needs, as `pairClient` does (writing the clients file is what lets it), and `remove()` deletes the record once
- * the call is answered, so it neither works nor stays listed after.
+ * the call is answered, so it neither works nor stays listed after. `frontDoor`: the call is a kernel front door's
+ * operation (the CLI's or `capcomd mcp`'s verify, merge or approval, plugin API §6.1), which only such a token may ask.
  */
-export function oneCallClient(name: string, scopes: ClientScope[], path = clientsPath()): { client: ClientRecord; token: string; remove(): void } {
-	const made = mint(name, scopes);
+export function oneCallClient(name: string, scopes: ClientScope[], path = clientsPath(), o: { frontDoor?: boolean } = {}): { client: ClientRecord; token: string; remove(): void } {
+	const minted = mint(name, scopes);
+	const made = o.frontDoor ? { ...minted, client: { ...minted.client, frontDoor: true as const } } : minted;
 	save(path, [...loadClients(path), made.client]);
 	return { ...made, remove: () => save(path, loadClients(path).filter((c) => c.id !== made.client.id)) };
 }
@@ -94,7 +98,7 @@ export function authenticate(header: string | null | undefined, clients: ClientR
 	for (const c of clients) {
 		if (c.revokedAt) continue;
 		const ch = Buffer.from(c.sha256, "hex");
-		if (ch.length === h.length && timingSafeEqual(ch, h)) return { clientId: c.id, name: c.name, scopes: c.scopes, ...(c.plugin ? { plugin: c.plugin } : {}) };
+		if (ch.length === h.length && timingSafeEqual(ch, h)) return { clientId: c.id, name: c.name, scopes: c.scopes, ...(c.plugin ? { plugin: c.plugin } : {}), ...(c.frontDoor === true && !c.plugin ? { frontDoor: true as const } : {}) };
 	}
 	return null;
 }

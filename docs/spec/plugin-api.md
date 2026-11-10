@@ -516,17 +516,66 @@ sites named in §6.6: `src/primitives/ops.ts` (spawn, verify, merge, send, cance
 agent's phases), `src/api/server.ts` (approvals, run creation), the host (daemon, plugins), the jobs and triggers
 services (§16).
 
-A hook fires in the process its kernel operation runs in, and only the daemon has a plugin host. The scope actor's
-changes (every `*.changed` hook), the sandbox calls, the agent's phases, `merge.landing` (under the target's lock) and
-everything an agent asks from its VM run in the daemon. An operation a CLI or the MCP server runs against the engine
-itself (`capcomd run new`, `spawn`, `verify`, `merge`, `approve` from the host shell or `capcomd mcp`) fires its
-`ops.ts` gates in that process, where nothing listens. Since §17.2 step 8 those commands and tools are front doors'
-registrations, but they still run in the process that serves them; sending their operations through the daemon is not
-part of this version (a later step; until then a third-party plugin's gates judge only what the daemon runs).
+A hook fires in the process its kernel operation runs in, and only the daemon has a full plugin host: the user's plugins
+and a trusted project's (always out of process, §5.2) run only there. The scope actor's changes (every `*.changed`
+hook), the sandbox calls, the agent's phases, `merge.landing` (under the target's lock, in the engine host) and
+everything an agent asks from its VM run in the daemon.
+
+**A front door's gated operations run in the daemon** (the owner's decision of 2026-11-08, ADR-023 §9 decision 8;
+capability `ops.front_door`). Since §17.2 step 8 the CLI's commands and `capcomd mcp`'s tools are front
+doors' registrations; those whose operation fires a gate where it runs send it to the daemon that hosts their engine, so
+every plugin's gate, an out-of-process plugin's too, judges it exactly as it judges an agent's:
+
+| Operation | Front doors | Hooks it fires, in the daemon |
+|---|---|---|
+| verify | `capcomd verify`, `capcomd_verify` | `verify.starting`, `verify.judging`, `verify.changed` (and its checks' `sandbox.*`) |
+| merge | `capcomd merge` (also `--operator`, `--request-approval`), `capcomd_merge` | `merge.landing`, `merge.changed` |
+| a decision on a merge | `capcomd approve <runId> <mrg-…>` (also `--deny`), `capcomd_approve` (both of its approval modes) | `approval.deciding`, `approval.changed`, then `merge.landing`, `merge.changed` |
+
+The front door finds the daemon by its listing (`state/plugins.json`, §13.2), whose `endpoint` must be the front door's
+own engine, and posts the operation to `POST /v1/runs/{runId}/verifications`, `/merges` or `/merges/{mergeId}/decision`
+(`src/primitives/front-door.ts`, `src/api/front-door.ts`) with a token it makes for that one call and marks as a front
+door's (`frontDoor`, `src/api/clients.ts` `oneCallClient`): an app's or a plugin's token gets 403 there, since an
+operator merge past the gates and a check command of one's own stay the operator's front doors'. The daemon answers
+within the call's `waitMs` (at most 45 s, under the socket's idle timeout) with the operation's record, or 202 with its
+id while it runs on; the front door asks again by that id (a decision: with the same body and its own `key`, which joins
+it, and gets its record if it ended in between, never a second decision past a hold). Who caused it is as before: the
+operator (a decision's `by` as the front door records it: `cli` or `--by`, `driver`, `driver:elicited`). A refusal is
+the operation's own (`ApiError.relay`), so the command fails exactly as it did running it itself. What the front door's
+own environment decided stays its say where it can only narrow: a merge carries its protected-branch patterns
+(`protectedBranches`, when `CAPCOMD_PROTECTED_BRANCHES` is set where it runs), which protect a target in the daemon too
+and never unprotect one. Each operation carries the front door's drive settings (`driveEnv`: the names an agent's
+spawn records, `src/utils/env.ts` `captureDriveEnv`, with the agents file its project's profiles resolve from), and the
+daemon runs it with them, as an agent's operations run with its own: a verify's reviewer is the profile the front door's
+project defines, as when it ran the verify itself. The daemon answers a merge, or a decision that lands one, once the merged agent's checkpoint
+refs are deleted, as the front door waited for them when it ran the merge itself.
+
+With no daemon for its engine (none runs, the one that runs hosts another engine, its socket doesn't answer, or it
+predates these routes) the front door runs the operation itself, as before, but first asks which plugins only the daemon
+runs listen to its hooks (`src/plugins/unconsulted.ts`: the user's and a trusted project's, not turned off, read from
+their manifests). A listener it can't ask is a call that failed (§6.5): a gate's, or one declared `failure: closed`,
+refuses the operation (relay.v1 `config`, reason `plugins_unconsulted`, naming each plugin and hook: fail-closed); any
+other is skipped and the front door names it (on stderr; `capcomd mcp`: `pluginsNotConsulted` on its answer). Once the
+daemon took an operation, the front door never runs it itself: a daemon gone mid-operation is a retryable error, and
+asking again by the id picks the operation up. A wait outside the daemon (`capcomd_await` with `ops`) that finds a verify
+or merge running that isn't its own process's picks it up the same way, through the daemon that hosts the engine (which
+joins the one it runs, or picks it up itself), never again in its own process past the daemon's judges; with no daemon,
+under the same rule as a call.
+
+Not sent through the daemon in this version: `capcomd run new` and `capcomd_run_new` (`run.creating`), `capcomd spawn`
+and `capcomd_spawn` (`profile.resolved`, `agent.spawning`), and `capcomd run <goal>`'s driver (`run.creating`, and
+`profile.resolved` and `agent.spawning` for its planner; `POST /v1/runs` starts the same driver). They resolve the
+project, its profiles and its settings where they are typed, which the daemon's process doesn't have, so they run there
+and apply the same rule with or without a daemon: a closed listener only the daemon runs refuses them, an open one is
+named and skipped. An agent's own spawns, verifies and merges (from its VM) run in the daemon. The front doors' other
+operations (`check`, `send`, `cancel`, `pause`, `resume`, `grant`, `title`, `task`, `kv`) fire no gate where they run:
+what they change fires its `*.changed` hooks in the daemon's scope actor, and a check's sandbox hooks fire in the engine
+host.
+
 The exception is the built-in gates the kernel's own contract depends on (the reviewer gate, §15.3): before a verify
-runs, a process that isn't the daemon starts them in a local host of its own (`src/plugins/hooks.ts` `gates()`; in
-tests also `CAPCOMD_TEST_PLUGINS`), so a run's reviewer judges every verify wherever it runs; the daemon's verifies wait
-for its host to start instead. Such a local host writes no daemon-stream events; its gate events go on the run's stream.
+runs, a process that isn't the daemon (a front door with no daemon, a run's driver) starts them in a local host of its
+own (`src/plugins/hooks.ts` `gates()`; in tests also `CAPCOMD_TEST_PLUGINS`), so a run's reviewer judges every verify
+wherever it runs; the daemon's verifies wait for its host to start instead. Such a local host writes no daemon-stream events; its gate events go on the run's stream.
 With no listener a site builds no payload and awaits nothing (`HookRegistry.listening`). The same holds for the
 built-ins every process loads (`everyProcess` in `src/plugins/builtins.ts`): the front doors, the forges, the reviewer
 gate and the orchestration skill; an attempt prepared outside the daemon (a run's driver) waits for that local host, and
@@ -1373,7 +1422,9 @@ before the next start, only while that pid still runs the recorded command. `CAP
 before the plugins load (§5.5 step 4): it serves the harness.v1 API to plugin tokens only (401 for any other,
 `src/api/server.ts` `pluginsOnly`). Only the daemon starts processes: a CLI's local host has no launcher, so a
 `process` plugin stays `validated` there, and an operation a CLI or the MCP server runs itself fires its `ops.ts` gates
-where the plugin doesn't listen (§6.1): a process plugin's gates judge what the daemon runs.
+where the plugin doesn't listen (§6.1): a process plugin's gates judge what the daemon runs, which includes a front
+door's verify, merge and decision on a merge whenever a daemon hosts its engine, and a front door with no daemon refuses
+an operation such a gate must judge (§6.1).
 
 ### 9.3 Handshake and token
 

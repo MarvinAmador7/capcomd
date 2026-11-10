@@ -42,7 +42,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, inDaemon, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import { agentSeam } from "../plugins/agents";
 import { sameHold, type PluginHold } from "../merge/types";
@@ -1509,8 +1509,9 @@ export async function getAgentOrThrow(runId: string, agentId: string): Promise<S
  * waiter hears about trouble when it happens; one already showing when the wait began doesn't.
  * `ops` (vfy-… / mrg-… ids) are waited on with the agents: an op is finished once it isn't running (passed, failed,
  * merged, or parked for an approval); `ops` in the result has each one's record. With `any`, the first agent or op to
- * finish ends the wait. An op left running by a caller that went away (another session, a restarted server) is resumed
- * here, as a call with its id would (idempotent: the verifier shares one run per op).
+ * finish ends the wait. An op running that isn't this process's (a front door's, in the daemon; one left by a caller
+ * that went away) is picked up as a call with its id would (`resumeOp`: through the daemon, outside it; idempotent: the
+ * verifier shares one run per op).
  */
 export async function awaitAgents(runId: string, ids: string[], opts: { timeoutMs?: number; any?: boolean; notices?: boolean; ops?: string[] } = {}) {
   await assertEngine();
@@ -1548,10 +1549,11 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     for (const id of opIds) {
       if (opsDone.has(id)) continue;
       const op = await s.getOp({ opId: id });
-      // Started here a moment ago and not recorded yet (a verify answers with its id before it has resolved its ref).
-      if (!op && inflightOps.has(id)) {
+      // Started here (or by this process's front door in the daemon) a moment ago and not recorded yet (a verify answers
+      // with its id before it has resolved its ref).
+      if (!op && (inflightOps.has(id) || justStartedInDaemon(id))) {
         opsLatest.set(id, { id, kind: id.startsWith("vfy-") ? "verify" : id.startsWith("chk-") ? "check" : "merge", state: "running" } as any);
-        if (feed) void inflightOps.get(id)!.then(feed.poke, feed.poke);
+        if (feed && inflightOps.has(id)) void inflightOps.get(id)!.then(feed.poke, feed.poke);
         continue;
       }
       if (!op || (op.kind !== "verify" && op.kind !== "merge" && op.kind !== "check")) throw new RelayError("not_found", `${id} not found in ${runId}`, "Pass the vfy-… / mrg-… / chk-… ids capcomd verify, merge and check returned.");
@@ -1562,7 +1564,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       if (mine) { if (feed) void mine.then(feed.poke, feed.poke); }
       else if (!resumed.has(id)) {
         resumed.add(id);
-        const p = op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id }) : op.kind === "check" ? checkRef({ runId, id }) : mergeRef({ runId, ref: op.data.ref as string, id });
+        const p = resumeOp(runId, op);
         p.catch(() => {}); // its record says how it ended; the next look reads it
         if (feed) void p.then(feed.poke, feed.poke);
       }
@@ -1579,6 +1581,22 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (feed) await feed.wait(Math.min(eventFallbackMs(), Math.max(0, deadline - Date.now()) + 1)); else await sleep(pollMs());
   }
   } finally { feed?.close(); }
+}
+
+/**
+ * An op a wait found running that isn't this process's, picked up as a call with its id would. A verify or merge outside
+ * the daemon goes through the front door (src/primitives/front-door.ts, plugin API §6.1): the daemon that hosts the
+ * engine joins it (most often it is the one running it: a front door's own, started there) or picks it up itself, so
+ * its plugins judge it; with no daemon it runs here once nothing this process can't ask must judge it. Never run again
+ * here past the daemon's judges, which a verify the daemon runs may still be waiting on. A check fires no gate (§6.1).
+ */
+function resumeOp(runId: string, op: import("../actors/scope").ScopeOp): Promise<unknown> {
+  if (op.kind === "check") return checkRef({ runId, id: op.id });
+  if (inDaemon()) return op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id: op.id }) : mergeRef({ runId, ref: op.data.ref as string, id: op.id });
+  return import("./front-door").then((F) => {
+    const w = { waitMs: 0, what: `the wait for ${op.id}` };
+    return op.kind === "verify" ? F.frontVerify({ runId, ref: op.data.ref as string, id: op.id }, w) : F.frontMerge({ runId, ref: op.data.ref as string, id: op.id }, w);
+  });
 }
 
 const eventFallbackMs = () => Number(env("AWAIT_FALLBACK_MS") ?? 5000);
@@ -1810,6 +1828,16 @@ export async function finishedVerify(runId: string, vfyId: string) {
 }
 /** The verifies and merges this process runs, by id: a second call for one shares its run (never a second run here). */
 const inflightOps = new Map<string, Promise<any>>();
+/** The verifies, merges and decisions a front door of this process started in the daemon (plugin API §6.1,
+ *  src/primitives/front-door.ts), by id, until when: the daemon answers with the id before it has written the record,
+ *  so a wait that comes at once counts such an id as running, as it counts one started here (`inflightOps`). */
+const startedInDaemon = new Map<string, number>();
+export const STARTED_IN_DAEMON_MS = 60_000;
+export function noteStartedInDaemon(id: string, now = Date.now()): void {
+  for (const [k, until] of startedInDaemon) if (until <= now) startedInDaemon.delete(k);
+  startedInDaemon.set(id, now + STARTED_IN_DAEMON_MS);
+}
+const justStartedInDaemon = (id: string) => (startedInDaemon.get(id) ?? 0) > Date.now();
 /** Run `work` as the one run of op `id` in this process (the caller checked there is none). */
 function track<T>(id: string, work: () => Promise<T>): Promise<T> {
   const p = work().finally(() => { if (inflightOps.get(id) === p) inflightOps.delete(id); });
@@ -2183,6 +2211,9 @@ export interface MergeOpts {
   requestApproval?: boolean;
   /** The agent that asked for the merge (in-VM merges): it waits on the decision, so the approval shows on its column. */
   askedBy?: string;
+  /** A front door's own protected-branch patterns (CAPCOMD_PROTECTED_BRANCHES where it runs, plugin API §6.1), for a
+   *  merge it sent to the daemon: a target they match is protected too. They only add protection, never remove it. */
+  alsoProtected?: string[];
   /** A plugin's merge (`ctx.gates.merge`): `plugin:<name>`, kept beside the record as who asked (merge.landing's
    *  `requestedBy`). Never with `operator`. */
   requester?: string;
@@ -2245,7 +2276,8 @@ async function startMerge(o: MergeOpts, mrgId: string) {
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
   // The run's goal branch takes reviewed work with no human step: the person decides once, on the pull request into the
   // base, when the planner is done (it can't be a protected branch: `run new` refuses that).
-  const needsApproval = !!cfg && !goal && isProtectedBranch(target, runEnv) && !o.operator;
+  const callerProtects = !!o.alsoProtected?.length && isProtectedBranch(target, { CAPCOMD_PROTECTED_BRANCHES: o.alsoProtected.join(",") });
+  const needsApproval = !!cfg && !goal && (isProtectedBranch(target, runEnv) || callerProtects) && !o.operator;
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need a person: pass --request-approval to park the merge for `capcomd approve` (every plugin's gate is still asked), or --operator to land it past their vetoes.");
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
   // Who asked is not a parameter of the merge: a retry by another caller is the same merge.
