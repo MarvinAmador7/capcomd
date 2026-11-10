@@ -751,7 +751,8 @@ per patch, each value a string of at most 4 096 characters; a name the agent's e
 runner's `HOME`, `PATH`, `CAPCOMD_RPC_DIR` and `CAPCOMD_CHECKOUT`, the provider's own variables and its credential's) or
 a reserved one is `widening`. Reserved (`reservedEnvName`), whether or not the agent has it, is a name that would steer
 the agent without prompt text: the kernel's `CAPCOMD_*`; the agent providers' families `ANTHROPIC_*`, `CLAUDE_*`,
-`OPENAI_*`, `CODEX_*` (where a CLI sends its credential, which login it reads); what a shell or runtime loads first
+`OPENAI_*`, `CODEX_*`, and fx's `AI_GATEWAY_*`, `VERCEL_*`, `FX_*` (where a CLI sends its credential, which login it
+reads: fx's `FX_HOME` is where its login and settings live); what a shell or runtime loads first
 (`LD_*`, `DYLD_*`, `NODE_*`, `NPM_CONFIG_*`, `PYTHON*`, `PERL5*`, `RUBY*`, `BASH_ENV`, `ENV`, `SHELL`, `IFS`, `CDPATH`,
 `PS4`, `PROMPT_COMMAND`, `ZDOTDIR`); the proxy and certificates its traffic trusts (`HTTP_PROXY`, `HTTPS_PROXY`,
 `ALL_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`); git's `GIT_*`; and
@@ -1725,8 +1726,8 @@ references are resolved, and the boxd provider then falls back to the daemon's `
 The kernel's own variables are a fixed list (`src/plugins/config.ts` `kernelVariable`), matched whatever their case:
 `BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting
 `CAPCOMD_`, its deprecated alias `RELAY_` (the kernel reads `RELAY_<NAME>` as `CAPCOMD_<NAME>`), `GIT_`, `RIVET`, or the
-agent providers' `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_` (the keys the kernel binds into sandboxes); and its
-keychain items, `keychain:capcomd…`. Only a shipped built-in (a plugin without a directory) may reference one; for
+agent providers' `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_`, and fx's `AI_GATEWAY_`, `VERCEL_`, `FX_` (the keys
+the kernel binds into sandboxes); and its keychain items, `keychain:capcomd…`. Only a shipped built-in (a plugin without a directory) may reference one; for
 every other plugin (a user's, a project's, a test's) such a reference is refused whichever layer it comes from: the
 user layer's or the env layer's is `config_invalid` on that layer, and the schema's `default`, when no layer gives a
 reference, is `config_invalid` on layer `default` (§10.4), although a third-party default is never followed, so the

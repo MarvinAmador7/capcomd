@@ -75,7 +75,7 @@ function recordPass(file: string, key: string, output: string) {
  * checks run as they would in the operator's shell. (The VM path passes only the run, task and target ids.)
  */
 export function hostCheckEnv(source: Record<string, string | undefined> = process.env): Record<string, string> {
-  const drop = /^(CAPCOMD_|RELAY_|BOXD_|ANTHROPIC_|OPENAI_|CLAUDE_|CODEX_|GH_|GITHUB_|GIT_CONFIG_|GIT_ASKPASS$|SSH_AUTH_SOCK$|AWS_|GOOGLE_|AZURE_|NPM_TOKEN$)|(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i;
+  const drop = /^(CAPCOMD_|RELAY_|BOXD_|ANTHROPIC_|OPENAI_|CLAUDE_|CODEX_|AI_GATEWAY_|VERCEL_|FX_|GH_|GITHUB_|GIT_CONFIG_|GIT_ASKPASS$|SSH_AUTH_SOCK$|AWS_|GOOGLE_|AZURE_|NPM_TOKEN$)|(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i;
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(source)) if (v !== undefined && !drop.test(k)) out[k] = v;
   return out;

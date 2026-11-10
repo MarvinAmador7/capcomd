@@ -160,6 +160,37 @@ describe("the host and the built-ins", () => {
     expect(pluginSettings(kernelDefault, { ...place(undefined, undefined), source: "user", dir: "/plugins/my-plugin" }).errors).toMatchObject([{ path: "token", layer: "default" }]);
   });
 
+  test("fx's variables are the kernel's too, as Claude Code's and Codex's: a user's plugin naming env:AI_GATEWAY_API_KEY fails config_invalid, unread", async () => {
+    for (const v of ["AI_GATEWAY_API_KEY", "ai_gateway_api_key", "VERCEL_OIDC_TOKEN", "VERCEL_TOKEN", "FX_HOME", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_HOME"]) expect([v, kernelSecretRef(`env:${v}`)]).toEqual([v, expect.stringContaining("one of capcomd's own variables")]);
+    for (const v of ["MY_AI_GATEWAY_KEY", "MY_VERCEL_TOKEN", "FXR_TOKEN"]) expect([v, kernelSecretRef(`env:${v}`)]).toEqual([v, null]);
+    const user = place({ token: { $secret: "env:AI_GATEWAY_API_KEY" } }, undefined);
+    const s = pluginSettings(M, { ...user, source: "user", dir: "/plugins/my-plugin" });
+    expect(s.errors).toEqual([{ path: "token", layer: "user", message: expect.stringContaining("names env:AI_GATEWAY_API_KEY, one of capcomd's own variables") }]);
+    const env = { ...place(undefined, undefined).env, CAPCOMD_PLUGIN_MY_PLUGIN_TOKEN: '{"$secret":"env:FX_HOME"}' };
+    expect(pluginSettings(M, { env, source: "user", dir: "/plugins/my-plugin" }).errors).toMatchObject([{ path: "token", layer: "env" }]);
+    // Through the daemon's candidates, as the boxd-peek case above: the user's plugin fails before it starts, unasked.
+    const dir = join(user.env.CAPCOMD_HOME!, "plugins", "my-plugin");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "plugin.json"), JSON.stringify({ ...manifest, entry: { runtime: "process", command: ["./run.sh"] } }));
+    writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
+    const c = builtinCandidates({ ...user.env, AI_GATEWAY_API_KEY: "vck_kernel" }, user.cwd).find((x) => x.dir === dir)!;
+    expect(c.configErrors).toEqual([{ path: "token", layer: "user", message: expect.stringContaining("names env:AI_GATEWAY_API_KEY, one of capcomd's own variables") }]);
+    const events: HostEvent[] = [];
+    const asked: string[] = [];
+    const h = new PluginHost({ capcomd: "1.0.0", kernel: [], emit: (e) => { events.push(e); }, dataDir: (n) => `/nonexistent/${n}`, secret: async (_m, key) => { asked.push(key); return "x"; } });
+    const [r] = await h.start([c]);
+    expect(r).toMatchObject({ name: "my-plugin", state: "failed", cause: "config_invalid" });
+    expect(events.find((e) => e.type === "plugin.config_refused")?.data).toMatchObject({ plugin: "my-plugin", layer: "user" });
+    expect(asked).toEqual([]);
+    const read: string[] = [];
+    const watched = new Proxy({ ...user.env, CAPCOMD_PLUGIN_MY_PLUGIN_TOKEN: '{"$secret":"env:AI_GATEWAY_API_KEY"}', AI_GATEWAY_API_KEY: "vck_kernel" } as Record<string, string | undefined>, { get: (t, k: string) => { read.push(k); return t[k]; } });
+    expect(() => resolveSecret(M, "token", watched, "/plugins/my-plugin", { builtin: false })).toThrow(expect.objectContaining({ code: "forbidden" }));
+    expect(read).not.toContain("AI_GATEWAY_API_KEY");
+    // A shipped built-in (no directory) still reads it, as sandbox-boxd reads BOXD_API_KEY.
+    expect(pluginSettings(M, { env: { ...env, CAPCOMD_PLUGIN_MY_PLUGIN_TOKEN: '{"$secret":"env:AI_GATEWAY_API_KEY"}' }, source: "builtin", dir: null }).errors).toEqual([]);
+    expect(resolveSecret(M, "token", { CAPCOMD_NO_CONFIG: "1", CAPCOMD_PLUGIN_MY_PLUGIN_TOKEN: '{"$secret":"env:AI_GATEWAY_API_KEY"}', AI_GATEWAY_API_KEY: "vck_kernel" }, null, { builtin: true })).toBe("vck_kernel");
+  });
+
   test("sandbox-boxd, the kernel's own, still resolves its default env:BOXD_API_KEY", async () => {
     const p = place(undefined, undefined);
     const c = builtinCandidates({ ...p.env, BOXD_API_KEY: "bxd_kernel" }, p.cwd).find((x) => (x.manifest as { name?: string } | undefined)?.name === "sandbox-boxd")!;

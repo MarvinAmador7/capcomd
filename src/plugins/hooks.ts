@@ -250,11 +250,12 @@ export const SKILLS_MAX = 8, SKILL_BYTES_MAX = 256 * 1024;
 const ENV_MAX = 32, ENV_VALUE_MAX = 4096;
 /**
  * Names a plugin never sets, even when the agent's environment doesn't have them yet: the kernel's (`CAPCOMD_*`), the
- * agent providers' families (where their CLIs send the credential and which login they read), what a shell or a runtime
+ * agent providers' families (where their CLIs send the credential and which login they read: fx's `FX_HOME` is where
+ * its login and settings live), what a shell or a runtime
  * loads before the agent's code (`LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`…), the proxy and certificates its traffic
  * trusts, and git's. Any one of them would steer the agent without a word of prompt text (§6.6.7).
  */
-const RESERVED_ENV_PREFIXES = ["CAPCOMD_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "LD_", "DYLD_", "NODE_", "NPM_CONFIG_", "PYTHON", "PERL5", "RUBY", "GIT_"];
+const RESERVED_ENV_PREFIXES = ["CAPCOMD_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "AI_GATEWAY_", "VERCEL_", "FX_","LD_", "DYLD_", "NODE_", "NPM_CONFIG_", "PYTHON", "PERL5", "RUBY", "GIT_"];
 const RESERVED_ENV = new Set(["BASH_ENV", "ENV", "SHELL", "IFS", "CDPATH", "PS4", "PROMPT_COMMAND", "ZDOTDIR", "TMPDIR", "USER", "LOGNAME",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"]);
 /**

@@ -43,12 +43,12 @@ export const secretRefOf = (v: unknown): string | null =>
 /**
  * The daemon's own variables (§10.3): the boxd key, the GitHub tokens the forges use, every CAPCOMD_* (client tokens,
  * the RPC key, the git token) and its deprecated RELAY_* alias (src/utils/env.ts reads RELAY_RPC_KEY as CAPCOMD_RPC_KEY),
- * the engine's and git's, and the agent providers' families (the keys the kernel binds into sandboxes), whatever their
- * case. And its keychain items (`keychain:capcomd…`: `capcomd setup` keeps the boxd key there), refused before keychain
+ * the engine's and git's, and the agent providers' families (the keys the kernel binds into sandboxes: Claude Code's,
+ * Codex's, and fx's `AI_GATEWAY_*`, `VERCEL_*`, `FX_*`), whatever their case. And its keychain items (`keychain:capcomd…`: `capcomd setup` keeps the boxd key there), refused before keychain
  * references resolve at all. Only a shipped built-in's reference may name one (sandbox-boxd's `env:BOXD_API_KEY`); a
  * plugin of the user's or a project's never reads the kernel's secrets, whichever layer names it.
  */
-const KERNEL_ENV_PREFIXES = ["CAPCOMD_", "RELAY_", "BOXD_", "RIVET", "GIT_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_"];
+const KERNEL_ENV_PREFIXES = ["CAPCOMD_", "RELAY_", "BOXD_", "RIVET", "GIT_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "AI_GATEWAY_", "VERCEL_", "FX_"];
 const KERNEL_ENV = new Set(["GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]);
 export const kernelVariable = (name: string): boolean => {
   const n = name.toUpperCase();
