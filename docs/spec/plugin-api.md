@@ -1712,8 +1712,15 @@ without its key and says why it can't run. A plugin reads its own secrets throug
 `SessionOpened.secrets` (out of process, over the 0600 socket; never in the environment, never in argv). A secret
 property never appears in `ctx.config.get()`, `GET /v1/plugins/{name}`, events or logs. A plugin MAY read only secrets
 declared in **its own** schema; the kernel's secrets (`BOXD_API_KEY`, client tokens, the RPC key, git credentials) are
-not reachable. Built-ins follow the same rule: the boxd plugin declares `apiKey` as `x-secret`, and the kernel's
-existing keychain entry is mapped to it by the config migration (§17).
+not reachable. Built-ins follow the same rule: the boxd plugin declares `apiKey` as `x-secret`, its schema's default
+`{"$secret": "env:BOXD_API_KEY"}` (`src/plugins/builtin/sandbox-boxd.ts`). No migration rewrites the key that
+`capcomd setup` keeps in the OS keychain (or the 0600 credentials file) into a `keychain:` reference: the daemon puts
+it in its own environment as `BOXD_API_KEY` as it starts (the CLI entry's `src/cli/apply-config.ts`,
+`src/config/store.ts` `applyConfig`; only while `BOXD_API_KEY` is unset or empty, after the config files' `env`
+blocks, and not under `CAPCOMD_NO_CONFIG`), which is what that default names. A `keychain:` reference for `apiKey`,
+the user layer's or `CAPCOMD_PLUGIN_SANDBOX_BOXD_APIKEY`'s, answers `unsupported`, as any does until keychain
+references are resolved, and the boxd provider then falls back to the daemon's `BOXD_API_KEY`
+(`src/providers/boxd.ts`).
 
 The kernel's own variables are a fixed list (`src/plugins/config.ts` `kernelVariable`), matched whatever their case:
 `BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting
