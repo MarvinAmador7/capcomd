@@ -11,10 +11,11 @@
 // change files the daemon reads at its next start or a plugin's `enable`.
 // `capcomd plugins enable|disable <name>` (§5.4, §6.5, §10.2): `plugins.<name>.enabled` in the user's config, and the
 // running daemon's POST /v1/plugins/{name}/enable|disable (src/cli/daemon.ts), so it acts now and lasts.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { RelayError, SCHEMA, EXIT } from "../../core/errors";
 import type { PluginSummary } from "../../../packages/plugin/src/host/host";
+import type { PluginManifest } from "../../../packages/plugin/src/manifest";
 import type { PluginModule } from "../../../packages/plugin/src/context";
 import type { ConformanceResult, SandboxConformanceOptions } from "../../../packages/plugin/src/conformance";
 import type { ManifestIssue } from "../../../packages/plugin/src/load";
@@ -205,7 +206,7 @@ async function trustCommand(args: string[], values: Values): Promise<number> {
         const def = secretRefOf((schemaOf(m, p.dir)?.properties?.[k] as { default?: unknown } | undefined)?.default);
         return def && kernelSecretRef(def) ? `${k} (none set; its default ${visible(def)} is ${refused})` : `${k} (none set)`;
       }
-      return `${k} ← ${visible(ref)}${kernelSecretRef(ref) ? ` (${refused})` : ""}`;
+      return `${k} ← ${visible(ref)}${kernelSecretRef(ref) ? ` (${refused})` : ref.startsWith("keychain:") ? " (refused: capcomd doesn't resolve keychain references yet; it won't start until your config uses env:<VAR>)" : ""}`;
     });
     console.log(`  secrets  ${refs.join(", ") || "none"}`);
     console.log(`  hash     ${p.hash}`);
@@ -287,7 +288,8 @@ async function showCommand(args: string[], values: Values): Promise<number> {
   if (!name || args.length > 1) throw new RelayError("usage", "show takes a plugin's name", USAGE);
   const P = await import("../../plugins/host");
   const host = P.kernelHost({ log: false });
-  host.plan(P.builtinCandidates());
+  const candidates = P.builtinCandidates();
+  host.plan(candidates);
   const d = host.detail(name);
   if (!d) throw new RelayError("not_found", `no plugin ${name}`, "capcomd plugins list names them.");
   const live = P.readSnapshot()?.plugins.find((p) => p.name === name) ?? null;
@@ -295,11 +297,15 @@ async function showCommand(args: string[], values: Values): Promise<number> {
   // The listing is written when a plugin changes state; its statistics now are the daemon's to say (§13.5).
   const now = live ? await liveStats(name) : null;
   const plugin = { ...d, ...(live ? { state: live.state, cause: live.cause, stats: now ?? live.stats, hooksSuspended: live.hooksSuspended } : {}) };
-  if (values.json) { out({ plugin, installed: facts, message: host.message(name) }); return EXIT.ok; }
+  const secrets = d.manifest ? await refusedSecretsOf(d.manifest, d.source, candidates) : [];
+  if (values.json) { out({ plugin, installed: facts, message: host.message(name), refusedSecrets: secrets }); return EXIT.ok; }
   console.log(`${d.name} ${d.version}  ${d.source}  ${plugin.state}${plugin.cause ? ` (${plugin.cause})` : ""}${live ? "" : "  (no daemon is running: what one would do)"}`);
   if (d.manifest) console.log(`  ${d.manifest.description}`);
   const why = host.message(name);
   if (why && plugin.cause) console.log(`  why: ${why}`);
+  // §10.3: a secret reference you set that doesn't resolve (or a keychain one) is refused, never replaced by another
+  // credential: for sandbox-boxd, the boxd place is unavailable until it resolves.
+  for (const s of secrets) console.log(`  secret ${s.key} refused (config_invalid): ${s.message}. ${s.hint}`);
   if (facts?.source) console.log(`  installed from ${facts.source} (commit ${facts.commit ? short(facts.commit) : "?"})${facts.modified ? "; files changed since" : ""}`);
   if (facts?.trust) console.log(`  trust: ${facts.trust}`);
   if (plugin.commands?.length) console.log(`  commands: ${plugin.commands.map((c) => `capcomd ${c}`).join(", ")}`);
@@ -307,6 +313,16 @@ async function showCommand(args: string[], values: Values): Promise<number> {
   for (const [k, v] of Object.entries(d.config.values)) console.log(`  config ${k} = ${JSON.stringify(v)}  (${d.config.sources[k] ?? "default"})`);
   if (live) for (const line of statsLines(plugin.stats)) console.log(`  ${line}`);
   return EXIT.ok;
+}
+
+/** The secret references of plugin `m` the kernel refuses (§10.3: one you set that doesn't resolve, a keychain one), as
+ *  this process's environment and your config stand; as the daemon's host asks for them. No value is printed. */
+async function refusedSecretsOf(m: PluginManifest, source: PluginSummary["source"], candidates: Array<{ dir?: string; manifest?: unknown }>) {
+  const { secretKeys } = await import("../../../packages/plugin/src/host/host");
+  const { refusedSecrets } = await import("../../plugins/secrets");
+  const nameIn = (dir: string) => { try { return (JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8")) as { name?: unknown }).name; } catch { return null; } };
+  const dir = candidates.find((c) => !c.manifest && c.dir && nameIn(c.dir) === m.name)?.dir ?? null;
+  return refusedSecrets(m, secretKeys(m, dir), process.env, dir, { builtin: source === "builtin" });
 }
 
 /** A plugin's statistics from the running daemon (GET /v1/plugins/{name}); null when it can't say. */
@@ -369,14 +385,26 @@ async function validateOne(t: Target, conformance: boolean, strict: boolean): Pr
   const loaded = t.dir ? readManifest(t.dir, { capcomd: VERSION }) : loadManifest(t.manifest, { capcomd: VERSION, kernelSurface: !!t.kernelSurface });
   const m = loaded.manifest;
   const v: Validated = { name: m?.name ?? t.label, version: m?.version ?? null, source: t.dir ? "dir" : "builtin", path: t.dir, ok: loaded.ok, issues: loaded.ok ? [] : loaded.issues, warnings: loaded.ok ? loaded.warnings : [], conformance: [] };
-  // §10.3: a plugin directory's default secret reference can't name the kernel's own variables (only a built-in's can);
-  // the daemon would fail it config_invalid unless the user's config names another variable.
+  // §10.3: a secret reference you set that doesn't resolve, or a keychain one, is refused (config_invalid), never
+  // replaced by another credential: an issue of the plugin as your config and this environment stand.
+  if (loaded.ok) {
+    const { secretKeys } = await import("../../../packages/plugin/src/host/host");
+    const { refusedSecrets } = await import("../../plugins/secrets");
+    for (const s of refusedSecrets(loaded.manifest, secretKeys(loaded.manifest, t.dir), process.env, t.dir, { builtin: !t.dir })) {
+      v.issues.push({ path: `plugins.${loaded.manifest.name}.${s.key}`, message: `refused (config_invalid): ${s.message}. ${s.hint}` });
+    }
+    if (v.issues.length) v.ok = false;
+  }
+  // §10.3: a plugin directory's default secret reference can't name the kernel's own variables (only a built-in's can),
+  // nor be a keychain reference (not built yet); the daemon would fail it config_invalid unless the user's config names
+  // another variable.
   if (loaded.ok && t.dir) {
-    const { schemaOf, secretRefOf, kernelSecretRef } = await import("../../plugins/config");
+    const { schemaOf, secretRefOf, kernelSecretRef, KEYCHAIN_HINT } = await import("../../plugins/config");
     for (const [k, p] of Object.entries(schemaOf(loaded.manifest, t.dir)?.properties ?? {})) {
       const ref = p?.["x-secret"] === true ? secretRefOf((p as { default?: unknown }).default) : null;
       const owned = ref ? kernelSecretRef(ref) : null;
       if (owned) v.issues.push({ path: `config.properties.${k}.default`, message: `names ${owned}` });
+      else if (ref?.startsWith("keychain:")) v.issues.push({ path: `config.properties.${k}.default`, message: `references ${ref}: ${KEYCHAIN_HINT}` });
     }
     // §4.9, §11.6: a plugin from a directory runs out of process, and only from its own folder. Each path it would run
     // from elsewhere is an issue (a copy of the client library outside, not capcomd's own, among them); a bare import that

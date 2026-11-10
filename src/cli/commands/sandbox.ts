@@ -128,7 +128,9 @@ export function localShellDeps(env: Env = process.env): ShellDeps {
 		provider: async (name) => {
 			if (name === "docker") return new (await import("../../providers/docker")).DockerProvider();
 			const { BoxdProvider } = await import("../../providers/boxd");
-			return new BoxdProvider({ keepaliveMs: 0 });
+			// The key the sandbox-boxd plugin's apiKey references (§10.3); a refused reference throws, never BOXD_API_KEY.
+			const { key } = (await import("../../plugins/builtin/sandbox-boxd")).boxdApiKey(env);
+			return new BoxdProvider({ keepaliveMs: 0, ...(key ? { apiKey: key } : {}) });
 		},
 		spawn: async (argv) => Bun.spawn(argv, { stdio: ["inherit", "inherit", "inherit"], env: env as Record<string, string> }).exited,
 		attach: attachTerminal,

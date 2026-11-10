@@ -28,12 +28,24 @@ async function defaultBoxdList(apiKey?: string) {
 
 export async function runPreflight(source: Record<string, string | undefined> = process.env, deps: PreflightDeps = {}, profile?: string): Promise<PreflightCheck[]> {
   const out: PreflightCheck[] = [];
-  const boxdKey = source.BOXD_API_KEY?.trim();
+  const provider = sandboxName(source);
+  // boxd's key is the one its plugin's `apiKey` references (§10.3): one the user set that doesn't resolve is refused
+  // (config_invalid), never checked as BOXD_API_KEY instead.
+  let boxdKey = source.BOXD_API_KEY?.trim();
+  let boxdLabel = "BOXD_API_KEY";
+  let refused: string | null = null;
+  if (provider === "boxd") {
+    const { boxdApiKey } = require("../plugins/builtin/sandbox-boxd") as typeof import("../plugins/builtin/sandbox-boxd");
+    try {
+      const k = boxdApiKey(source);
+      if (k.ref) { boxdKey = k.key?.trim(); boxdLabel = `the boxd key ${k.ref} holds`; }
+    } catch (e) { refused = `${(e as Error).message}. ${(e as { hint?: string }).hint ?? ""}`.trim(); }
+  }
   const anthKey = source.ANTHROPIC_API_KEY?.trim();
   const r = new Redactor([boxdKey, anthKey, source.BOXD_API_KEY, source.ANTHROPIC_API_KEY]);
 
-  const provider = sandboxName(source);
-  if (provider === "docker") {
+  if (refused) out.push({ name: "boxd", ok: false, detail: refused });
+  else if (provider === "docker") {
     const { dockerBin } = require("../providers/docker") as typeof import("../providers/docker");
     const v = Bun.spawnSync([dockerBin(source), "version", "--format", "{{.Server.Version}}"], { stdout: "pipe", stderr: "pipe" });
     out.push(v.exitCode === 0
@@ -56,10 +68,10 @@ export async function runPreflight(source: Record<string, string | undefined> = 
   } else {
     try {
       await (deps.boxdList ?? defaultBoxdList)(boxdKey);
-      out.push({ name: "boxd", ok: true, detail: "BOXD_API_KEY accepted (machines.list)" });
+      out.push({ name: "boxd", ok: true, detail: `${boxdLabel} accepted (machines.list)` });
     } catch (err) {
       out.push({ name: "boxd", ok: false, detail: sandboxAuthError(err, "boxd")
-        ? `BOXD_API_KEY was rejected by boxd (invalid or expired). ${BOXD_AUTH_HINT}`
+        ? `${boxdLabel} was rejected by boxd (invalid or expired). ${BOXD_AUTH_HINT}`
         : `boxd unreachable: ${r.text((err as Error)?.message ?? String(err)).slice(0, 300)}` });
     }
   }

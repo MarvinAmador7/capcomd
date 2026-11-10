@@ -17,6 +17,7 @@ import { LISTED_PROVIDERS, PROVIDER_LABEL, sandboxName, type ListedProvider } fr
 import { withSandbox } from "../providers/run-sandbox";
 import { egressProblem, envSnapshotProblem, isolationProblem } from "../primitives/ops";
 import { capcomdHome } from "../utils/home";
+import type { RelayError } from "../core/errors";
 import { harnessModels, type HarnessModel } from "../config/models";
 
 type Env = Record<string, string | undefined>;
@@ -85,7 +86,14 @@ export function boxdKeyConfigured(source: Env = process.env): boolean {
 type Availability = { available: boolean; reason: string | null };
 /** Each listed provider's availability check: cheap and local (a key is configured; the docker CLI answers, cached). */
 const AVAILABLE: Record<RunSandbox, (source: Env, ask?: Parameters<typeof dockerReachable>[1]) => Promise<Availability>> = {
-	boxd: async (source) => (boxdKeyConfigured(source) ? { available: true, reason: null } : { available: false, reason: "No boxd API key (run capcomd setup)" }),
+	// A key reference the user set that doesn't resolve (or a keychain one) is the reason, never covered by BOXD_API_KEY.
+	boxd: async (source) => {
+		const { boxdApiKey } = await import("../plugins/builtin/sandbox-boxd");
+		try { if (boxdApiKey(source).key) return { available: true, reason: null }; } catch (e) {
+			return { available: false, reason: `${(e as Error).message}. ${(e as RelayError).hint ?? ""}`.trim() };
+		}
+		return boxdKeyConfigured(source) ? { available: true, reason: null } : { available: false, reason: "No boxd API key (run capcomd setup)" };
+	},
 	docker: async (source, ask) => { const d = await dockerReachable(source, ask); return { available: d.ok, reason: d.reason }; },
 };
 export async function sandboxAvailable(name: RunSandbox, source: Env = process.env, ask?: Parameters<typeof dockerReachable>[1]): Promise<Availability> {

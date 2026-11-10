@@ -195,7 +195,10 @@ your secrets' values are redacted from it.
   `GITHUB_TOKEN`, `GH_TOKEN`, `CAPCOMD_*`, `RELAY_*`, `GIT_*`, `RIVET*`, `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*`,
   `CODEX_*`, `AI_GATEWAY_*`, `VERCEL_*`, `FX_*`, any other agent provider's own families, in any case) or its
   keychain items (`keychain:capcomd…`), as your default or in the user's config: the plugin fails `config_invalid` instead (§10.3). Suggest a variable of your own (`env:MY_PLUGIN_GITHUB_TOKEN`);
-  `capcomd plugins validate` flags a default that names one of capcomd's.
+  `capcomd plugins validate` flags a default that names one of capcomd's. `keychain:` references aren't supported
+  yet: one anywhere (your default, the user's config, `CAPCOMD_PLUGIN_*`) fails the plugin `config_invalid` with the
+  hint to use `env:<VAR>`. A reference the user set whose variable isn't set is refused, never replaced with another
+  credential: `capcomd plugins show` and `validate` say which and how to fix it.
 - `"x-per-run": true`: a run may set it (`capcomd run --plugin-config my-gate.strict=true`, or `plugins` in
   `POST /v1/runs`).
 

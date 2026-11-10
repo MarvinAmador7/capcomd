@@ -1720,15 +1720,37 @@ key `config` of the run scope is the kernel's, and a plugin's write or delete of
 ### 10.3 Secrets
 
 Config files never hold secret values. A property marked `x-secret` takes a **reference** `{"$secret": "<ref>"}` where
-`ref` is `env:<VAR>` (an environment variable of the daemon) or `keychain:<account>` (the OS keychain through
-`src/config/keychain.ts`, service `capcomd`; not resolved yet: `unsupported`). The reference is the user layer's, else one
+`ref` is `env:<VAR>` (an environment variable of the daemon). The form `keychain:<account>` (the OS keychain through
+`src/config/keychain.ts`) is reserved and not built: see "Keychain references" below. The reference is the user layer's, else one
 held by `CAPCOMD_PLUGIN_<NAME>_<KEY>`, else, for a built-in only, the schema's `default`: a plugin from a directory (a
 user's or a project's) never names its own, as its author would choose which of the daemon's variables it gets, so its
 secret is unset (`not_found`) until the user points it at one. A project's or a run's reference is `config_invalid` (a
 repository must not point a plugin at another of the daemon's variables), and so is a value where a reference belongs. A
-reference that resolves to nothing is the plugin's to report: `ctx.config.secret` rejects `not_found`, and a process
+default reference that resolves to nothing is the plugin's to report: `ctx.config.secret` rejects `not_found`, and a process
 plugin's is left out of `SessionOpened.secrets` with a warning (§9.3), so a built-in such as `sandbox-boxd` still loads
-without its key and says why it can't run. A plugin reads its own secrets through `ctx.config.secret(key)` (in process) or receives them once in
+without its key and says why it can't run.
+
+**An explicit reference that doesn't resolve is refused, never replaced** (owner decision, 2026-11-10). A reference
+the user set (the user layer's or `CAPCOMD_PLUGIN_<NAME>_<KEY>`'s) whose variable is unset or empty, or a value there
+that isn't a reference, is `config_invalid` when it is resolved (`src/plugins/secrets.ts` `SecretRefused`;
+`ctx.config.secret` still rejects with `not_found`, or `invalid` for a value that isn't a reference): the message names
+the reference and the fix, and nothing is used in its place. For `sandbox-boxd` this means its provider never falls
+back to `BOXD_API_KEY`, which may hold another boxd account's key than the one the user chose: the boxd place reports
+itself unavailable (`available()`, `GET /v1/sandboxes`, `capcomd run`'s preflight) with that reason, whatever makes
+its provider (a run on boxd, `capcomd doctor`, `capcomd sandbox`) fails with it (exit 2, reason `config_invalid`), and
+`capcomd plugins show` and `capcomd plugins validate` print it. The default reference, used when nothing is set
+(`env:BOXD_API_KEY`), works as before.
+
+**Keychain references** are not built yet (owner decision, 2026-11-10). A `keychain:` reference is refused when the
+config is loaded, `config_invalid` (§10.4) with the hint to use `env:<VAR>` for now, from whichever layer names it: the
+user's config, `CAPCOMD_PLUGIN_<NAME>_<KEY>`, a project's config (refused there anyway) or a manifest's `default` (a
+built-in's included; `capcomd plugins validate <dir>` reports one). It never fails at first use and is never passed
+over for another reference: a resolution that gets there anyway (a process without the daemon's host, such as the CLI)
+is refused too (`config_invalid`; `ctx.config.secret` rejects `unsupported`). Open question, decided when keychain references are
+built: which keychain service they read (this text said `capcomd`; `capcomd setup` keeps the boxd key under the
+service `capcomd.boxd`, account `capcomd`).
+
+A plugin reads its own secrets through `ctx.config.secret(key)` (in process) or receives them once in
 `SessionOpened.secrets` (out of process, over the 0600 socket; never in the environment, never in argv). A secret
 property never appears in `ctx.config.get()`, `GET /v1/plugins/{name}`, events or logs. A plugin MAY read only secrets
 declared in **its own** schema; the kernel's secrets (`BOXD_API_KEY`, client tokens, the RPC key, git credentials) are
@@ -1738,9 +1760,9 @@ not reachable. Built-ins follow the same rule: the boxd plugin declares `apiKey`
 it in its own environment as `BOXD_API_KEY` as it starts (the CLI entry's `src/cli/apply-config.ts`,
 `src/config/store.ts` `applyConfig`; only while `BOXD_API_KEY` is unset or empty, after the config files' `env`
 blocks, and not under `CAPCOMD_NO_CONFIG`), which is what that default names. A `keychain:` reference for `apiKey`,
-the user layer's or `CAPCOMD_PLUGIN_SANDBOX_BOXD_APIKEY`'s, answers `unsupported`, as any does until keychain
-references are resolved, and the boxd provider then falls back to the daemon's `BOXD_API_KEY`
-(`src/providers/boxd.ts`).
+the user layer's or `CAPCOMD_PLUGIN_SANDBOX_BOXD_APIKEY`'s, fails `sandbox-boxd` `config_invalid` when the config is
+loaded, and an `env:` one whose variable isn't set makes the boxd place unavailable, as above: neither falls back to
+`BOXD_API_KEY`.
 
 The built-in `forge-github` declares no secret today: its config has no `token` (`src/plugins/forges/github.ts`), and
 it reads the caller's `GITHUB_TOKEN`, else `GH_TOKEN`, else `gh auth token` (`userToken` there, `githubToken` in
@@ -1768,7 +1790,7 @@ variable of the plugin's own.
 
 Config is validated against the schema at `resolved` (layers 1–4) and at run creation (layer 5). Invalid config is
 `failed(config_invalid)` with `plugin.config_refused {errors: [{path, message}], layer}`; the plugin is **not** run with
-defaults (a project layer for a plugin not the project's is set aside instead, §10.2). Each layer is checked on its own, so an error names its layer (one event per layer; `default` for a schema default the kernel refuses, a secret reference naming one of its own variables, §10.3); the kernel checks the
+defaults (a project layer for a plugin not the project's is set aside instead, §10.2). Each layer is checked on its own, so an error names its layer (one event per layer; `default` for a schema default the kernel refuses, a secret reference naming one of its own variables or a `keychain:` one, §10.3); a `keychain:` reference is refused at every layer (§10.3); the kernel checks the
 subset of JSON Schema manifests use (`type`, `enum`, `minimum`/`maximum` and their exclusive forms, `minLength`/
 `maxLength`, `items`, `required`, `properties`, `additionalProperties`); a disabled plugin's settings aren't checked. `plugin.failed`'s message and `capcomd plugins show` show the errors; `GET /v1/plugins/{name}`'s `config.sources` say which layer each value came from. A run-layer error is a 422 on `POST
 /v1/runs` with `field: "plugins.<name>.<path>"`.
