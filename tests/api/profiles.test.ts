@@ -197,10 +197,16 @@ describe("GET /v1/profiles (capability profiles)", () => {
 			"https://u:secret@host/repo", "https://ghp_tok@github.com/acme/p.git#reviewer@v2", "ssh://deploy@host:22/acme/p.git",
 			"https://host/repo?token=abc&ref=main", "https://host/p?access_token=a&X-Amz-Signature=b&sig=c&key=d", "https://host/p?api_key=a#frag",
 			"https://host/p#access_token=a", "github:acme/profiles#reviewer", "see https://a:b@x.io/y and postgres://app:pw@db:5432/x", "https://host/p.git@v1",
+			// A URL inside another (in its query, after a comma, after a JSON escape) is one of its own; a parameter's name
+			// is read percent-decoded, a key's name by its ending, `;` separates as `&` does.
+			"https://a/b,https://u:pw@c/d", "https://m/?url=https://u:pw@c/d?token=t&ref=x", '["https://h/x\\nhttps://u:pw@h2/y"]', "x_https://u:pw@h/",
+			"https://host/p?api%5Fkey=a&access_key=b&privateKey=c&ref=main", "https://host/p?ref=main;token=a",
 		].map(withoutUrlCredentials)).toEqual([
 			"https://host/repo", "https://github.com/acme/p.git#reviewer@v2", "ssh://host:22/acme/p.git",
 			"https://host/repo?ref=main", "https://host/p", "https://host/p#frag",
 			"https://host/p", "github:acme/profiles#reviewer", "see https://x.io/y and postgres://db:5432/x", "https://host/p.git@v1",
+			"https://a/b,https://c/d", "https://m/?url=https://c/d?ref=x", '["https://h/x\\nhttps://h2/y"]', "x_https://h/",
+			"https://host/p?ref=main", "https://host/p?ref=main",
 		]);
 	});
 

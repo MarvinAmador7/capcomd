@@ -540,7 +540,8 @@ Made while building the blocks with no new runtime (§7 step 4, 2026-11-05; `src
 - **`sharing.source` is shown without a URL's credentials everywhere it is served** (`profileFacts`, so
   `capcomd_profiles`, `capcomd profiles list|show --json` and `show`'s values; and `GET /v1/profiles/{name}`'s row):
   its `user:password@` (or a token standing as the user) and a query or fragment parameter named like a credential
-  are taken out, and the redactor's token shapes, fail-closed (2026-11-09, from a review: the list served the URL as
+  (read percent-decoded; a name ending in `key` too) are taken out, and the redactor's token shapes, and a URL inside
+  another (`?url=https://u:p@…`, or after it with no space) is taken as a URL of its own, fail-closed (2026-11-09, from a review: the list served the URL as
   written while the row redacted only its password). The file keeps it as written: `install` and `update` read their
   own LOCK, never this.
 - **`cost` is a tier by model family** (Haiku, `-mini`, `-nano`: low; Sonnet, GPT, `o<N>`: medium; Opus, `-pro`:

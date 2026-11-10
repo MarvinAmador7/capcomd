@@ -263,10 +263,12 @@ describe("profileFields: the rows a client edits", () => {
     expect(JSON.stringify(profileFields(ctx.load().profiles.lead!))).not.toMatch(/s3cr3t|ghp_abc/);
     // A secret with no token shape: by the key that holds it (as the redactor's values), or in a URL's credentials
     // (its user:password@, taken out whole: the user may be a token too).
-    const plain = world({ "P/lead.yaml": `${LEAD}sharing: { source: "https://me:hunter2@git.example.com/p.git" }\nx-db: { password: hunter3, url: "postgres://app:hunter4@db:5432/x", port: 5432 }\nx-hook: { auth: { apiKey: hunter5, Authorization: Bearer hunter6 } }\n` }, { worker });
+    const plain = world({ "P/lead.yaml": `${LEAD}sharing: { source: "https://me:hunter2@git.example.com/p.git" }\nx-db: { password: hunter3, url: "postgres://app:hunter4@db:5432/x", port: 5432 }\nx-hook: { auth: { apiKey: hunter5, Authorization: Bearer hunter6 } }\nx-mirrors: "https://m.example/?url=https://ci:hunter7@git.example.com/p.git,https://ro:hunter8@b.example/p"\n` }, { worker });
     const pf = Object.fromEntries(profileFields(plain.load().profiles.lead!).map((r) => [r.id, r]));
     expect([pf["sharing.source"]?.display, pf["x-db.password"]?.display, pf["x-db.url"]?.display, pf["x-db.port"]?.display, pf["x-hook.auth"]?.display])
       .toEqual(["https://git.example.com/p.git", "[REDACTED]", "postgres://db:5432/x", "5432", '{"apiKey":"[REDACTED]","Authorization":"[REDACTED]"}']);
+    // A URL inside another one's query, or right after it, is a URL of its own (the row before redacted it too).
+    expect(pf["x-mirrors"]?.display).toBe("https://m.example/?url=https://git.example.com/p.git,https://b.example/p");
     expect(JSON.stringify(profileFields(plain.load().profiles.lead!))).not.toMatch(/hunter|me:|app:/);
     // PUT's values: an editable row with a value of its type.
     expect(editOf(lead, { "limits.maxTurns": "60", tags: '["a"]', "permissions.report": "false", "harness.model": null })).toEqual({ edit: { "limits.maxTurns": 60, tags: ["a"], "permissions.report": false, "harness.model": null } });
