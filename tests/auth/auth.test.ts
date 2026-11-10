@@ -299,7 +299,7 @@ describe("subscription mode in workers, preflight, doctor", () => {
     }, 30_000);
   }
 
-  test("fx worker on a Grok plan login: the AI Gateway key placeholder dropped, fx run on its grok provider from its own folder", async () => {
+  const fxWorker = async (login: "vercel" | "grok", over: Record<string, string> = {}) => {
     const r = await bareRepo();
     const workdir = mkdtempSync(join(tmpdir(), "capcomd-subrun-fx-"));
     const p = new FakeProvider({ hostExec: true });
@@ -307,18 +307,39 @@ describe("subscription mode in workers, preflight, doctor", () => {
     const home = join(workdir, "home");
     stubFx(home);
     mkdirSync(join(home, ".fx"), { recursive: true });
-    writeFileSync(join(home, ".fx/grok-auth.json"), '{"refresh_token":"xrt_x"}');
+    writeFileSync(join(home, login === "grok" ? ".fx/grok-auth.json" : ".fx/auth.json"), '{"refresh_token":"rt_x"}');
+    // The ledger says which login it is, as `capcomd auth login fx [grok]` recorded it.
+    const ledger = join(workdir, "auths.json");
+    writeAuthLedger({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: login === "grok" ? "browser-code" : "device-auth", login, env: ENV_SNAP, createdAt: "t" } }, ledger);
     const { id } = await p.ensure({ idemKey: `sub-fx-${Math.random()}`, isolated: true, ttlSeconds: 60, egressAllow: ["github.com"], labels: {} });
     await p.waitReady(id, 1000);
     const fake = new URL("../agents/fake-fx.mjs", import.meta.url).pathname;
     chmodSync(fake, 0o755);
-    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: fake, CAPCOMD_AGENT_POLL_MS: "50", CAPCOMD_CREDENTIALS: "subscription" });
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: fake, CAPCOMD_AGENT_POLL_MS: "50", CAPCOMD_CREDENTIALS: "subscription", CAPCOMD_AUTH_LEDGER: ledger, ...over });
+    expect(cfg.planLogin).toBe(login);
     const task = { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: r.bare, goal: "make the failing test pass" };
     const res = await runAgent(adapterFor("fx"), p, id, task, cfg, {});
-    expect(res).toMatchObject({ credentialMode: "subscription", billing: "subscription", costUsd: 0 });
     const seen = JSON.parse(readFileSync(join(workdir, "task-1-e1/fx-seen.json"), "utf8"));
+    return { res, seen, home };
+  };
+
+  test("fx worker on a Grok plan login: the AI Gateway key placeholder dropped, fx run on its grok provider from its own folder; a plan, so no cost", async () => {
+    const { res, seen, home } = await fxWorker("grok");
+    expect(res).toMatchObject({ credentialMode: "subscription", billing: "subscription", costUsd: 0 });
+    expect(res.notionalCostUsd).toBeGreaterThan(0);
     expect(seen).toMatchObject({ key: null, oidc: null });
     expect(seen.env).toMatchObject({ FX_PROVIDER: "grok", FX_HOME: join(home, ".fx") });
+  }, 30_000);
+
+  test("fx worker on a Vercel login: the AI Gateway bills the team per token, so its cost counts and its budget holds, as on a key", async () => {
+    const { res, seen } = await fxWorker("vercel");
+    expect(res).toMatchObject({ credentialMode: "subscription", billing: "api" });
+    expect(res.costUsd).toBeGreaterThan(0);
+    expect(res.costUsd).toBe(res.notionalCostUsd!);
+    expect(seen).toMatchObject({ key: null, oidc: null });
+    expect(seen.env).toMatchObject({ FX_PROVIDER: "gateway" });
+    const capped = await fxWorker("vercel", { CAPCOMD_AGENT_MAX_BUDGET_USD: "0.01" });
+    expect(capped.res.stopReason).toBe("max_budget_usd");
   }, 30_000);
 
   test("doctor in subscription mode boots the auth snapshot and verifies the login (no API keys)", async () => {

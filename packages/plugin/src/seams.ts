@@ -99,6 +99,9 @@ export interface AgentConfig {
   denyCommands?: string[];
   /** `auto`: the sandbox's host-bound secret placeholder when it has one, else the key in the agent's environment. */
   credentialMode: "auto" | "secret" | "env" | "subscription" | "none";
+  /** On `subscription`, for a provider with several plan logins (`describe().logins`): the one the agent runs on (its
+   *  name, as `capcomd auth login` recorded it). Additive. */
+  planLogin?: string;
   /** USD per million tokens, for a CLI that reports tokens and not cost: the provider's budget guard estimates from
    *  them (codex: CAPCOMD_CODEX_USD_PER_MTOK_IN, _OUT). */
   usdPerMtok?: { in: number; out: number };
@@ -142,8 +145,10 @@ export interface AgentArchive { url: string; sha256: string }
 /** One of the plan logins a CLI offers when it has more than one (`describe().logins`): `capcomd auth login <provider>
  *  <name>` makes it (the first that isn't `refused` when no name is given). The login VM reaches BASE_EGRESS and this
  *  login's `egress`, not `loginEgress`. `refused`: capcomd can't make this login headless (a browser callback to the
- *  login VM's own localhost, say); the sentence says why and what to use instead, and nothing is started for it. */
-export interface AgentLogin { name: string; label: string; egress: readonly string[]; refused?: string }
+ *  login VM's own localhost, say); the sentence says why and what to use instead, and nothing is started for it.
+ *  `metered`: model calls on this login are billed per token, not by a plan (fx's Vercel login: the AI Gateway on the
+ *  user's Vercel team), so an agent on it is spend as on an API key: its estimated cost counts and budgets hold. */
+export interface AgentLogin { name: string; label: string; egress: readonly string[]; refused?: string; metered?: boolean }
 
 /** `src/agents/types.ts` AgentAdapter, as a seam (§7.3). The kernel's runner (`src/agents/runner.ts`) does clone,
  *  install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is run and

@@ -621,8 +621,11 @@ capcomd profiles add fxp --provider fx --auth subscription
   `capcomd auth login fx` the way Codex's is: fx logs in inside a login machine of the sandbox (never on your
   computer), prints the URL for your browser, and that machine is saved as a private login image agents on fx start
   from. `capcomd auth login fx` (or `fx vercel`) is your Vercel account: open the URL, confirm the code it shows, and
-  model calls go through the AI Gateway on your Vercel team. `capcomd auth login fx grok` is a SuperGrok or X Premium
-  plan: open the URL, sign in to xAI, and paste the code it shows back into the terminal. One fx login per sandbox (a
+  model calls go through the AI Gateway on your Vercel team, billed to its credits per token: capcomd counts their
+  estimated cost as it does on a key, so a profile's `maxBudgetUsd` and a run's budget still stop the agent (fx reports
+  no cost; see Limits). `capcomd auth login fx grok` is a SuperGrok or X Premium
+  plan: open the URL, sign in to xAI, and paste the code it shows back into the terminal; a plan, like Claude's and
+  Codex's, so its agents cost nothing in capcomd's accounts. One fx login per sandbox (a
   new one replaces it). Only whether fx sees the login leaves the login machine; the session itself stays in the image.
   `capcomd auth status` lists the fx login and checks it with a real call, `capcomd auth logout fx` deletes it, and
   `capcomd doctor` checks it when it is fx's only credential here (no `AI_GATEWAY_API_KEY` set). fx's ChatGPT login (`fx login codex`) can't be made this way (its

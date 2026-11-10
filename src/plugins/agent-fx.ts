@@ -29,10 +29,12 @@ export const FX_BRIDGE_SOURCE: string = bridgeSource;
  * VM, as codex's does, and the VM is snapshotted with it; each login is one private file in `$FX_HOME` (0600), and fx
  * runs on the fx provider it signs in to. `egress`: what the login and the model calls on it reach. Vercel's is an OAuth
  * device flow against vercel.com (its session reaches the AI Gateway); Grok's a browser login whose code is pasted back.
+ * `metered`: Vercel's login is no plan: the AI Gateway bills the user's Vercel team per token (its credits), as a key
+ * would, so capcomd counts the estimated cost and budgets hold; a Grok plan is a plan (cost 0, as Claude's and Codex's).
  */
 export const FX_LOGINS = [
-  { name: "vercel", label: "Vercel", file: "auth.json", fxProvider: "gateway", egress: ["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"] },
-  { name: "grok", label: "Grok", file: "grok-auth.json", fxProvider: "grok", egress: ["auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"] },
+  { name: "vercel", label: "Vercel", file: "auth.json", fxProvider: "gateway", metered: true, egress: ["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"] },
+  { name: "grok", label: "Grok", file: "grok-auth.json", fxProvider: "grok", metered: false, egress: ["auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"] },
 ] as const;
 /** fx's ChatGPT login (`fx login codex`) is a browser login whose callback is the login VM's own localhost:1455, with no
  *  device code and no code to paste: capcomd doesn't forward a port from a login VM to this machine, so it isn't made. */
@@ -93,7 +95,7 @@ const DESCRIPTION = {
   streamInput: true,
   // A plan login is one of fx's own (FX_LOGINS), snapshotted like codex's; an AI Gateway key otherwise.
   loginEgress: FX_LOGIN_HOSTS,
-  logins: [...FX_LOGINS.map((l) => ({ name: l.name, label: l.label, egress: [...l.egress] })), { name: "codex", label: "ChatGPT", egress: [] as string[], refused: FX_CODEX_LOGIN_REFUSED }],
+  logins: [...FX_LOGINS.map((l) => ({ name: l.name, label: l.label, egress: [...l.egress], ...(l.metered ? { metered: true } : {}) })), { name: "codex", label: "ChatGPT", egress: [] as string[], refused: FX_CODEX_LOGIN_REFUSED }],
   // §16.1: fx's own permission rules hold an orchestrate agent (fxOrchestrateRules): only the read tools and the
   // read-only commands are allowed, denyCommands are denied, and anything else fx would ask about is refused. Whatever
   // it writes anyway never lands: the kernel never commits or pushes its checkout, and reports what it discarded.
@@ -268,8 +270,10 @@ export const fx: AgentProvider = {
   loginCheck: (bin, q) => `FX_AUTO_UPGRADE=0 FX_PROVIDER="\${CAPCOMD_FX_PROVIDER:-gateway}" ${q(bin)} status --json 2>/dev/null < /dev/null | node -e ${q(FX_STATUS_BOOLEAN)}`,
   guard(state, cfg) {
     if (cfg.maxTurns && state.turns > cfg.maxTurns) return `max_turns (${state.turns} > ${cfg.maxTurns} tool steps)`;
-    // fx reports tokens only when a turn ends, so a budget stops the agent at a turn's end.
-    if (cfg.maxBudgetUsd && cfg.credentialMode !== "subscription" && state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
+    // fx reports tokens only when a turn ends, so a budget stops the agent at a turn's end. It holds on a key and on a
+    // login billed per token (Vercel's, also when the login isn't named), not on a Grok plan.
+    const plan = cfg.credentialMode === "subscription" && !(FX_LOGINS.find((l) => l.name === cfg.planLogin) ?? FX_LOGINS[0]).metered;
+    if (cfg.maxBudgetUsd && !plan && state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
     return null;
   },
   outcome(state, exitCode) {

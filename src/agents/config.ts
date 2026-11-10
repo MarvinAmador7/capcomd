@@ -152,6 +152,9 @@ export interface AgentConfig {
    * Default: subscription when an auth profile exists for the agent, else auto.
    */
   credentialMode: "auto" | "secret" | "env" | "subscription";
+  /** On `subscription`: which of its provider's plan logins the agent runs on (the auth ledger's `login`: fx's vercel or
+   *  grok), for a provider with several. A login billed per token (`describe().logins[].metered`) is spend. */
+  planLogin?: string;
   /** The profile's `toolMode` (docs/spec/plugin-api.md §16.1), when `orchestrate`: the agent reads, spawns and decides,
    *  with its provider's tool policy applied to the lists above, and never commits or pushes. Unset: `execute`. */
   toolMode?: "orchestrate";
@@ -250,6 +253,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "danger-full-access") as AgentConfig["codexSandbox"];
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) throw new Error(`CAPCOMD_CODEX_SANDBOX=${sandbox} is invalid`);
   const cred = credentialModeFor(kind, source, spec?.auth);
+  const planLogin = cred === "subscription" && isRealAgent(kind) ? (require("../auth/profiles") as typeof import("../auth/profiles")).profileFor(kind, source)?.login : undefined;
   // ADR-024 `tools.mcp`: pinned at spawn on its spec; a profile resolved by name has them on the resolution.
   const mcp = ra.runtime?.mcp ?? pinnedRuntime(spec).mcp;
   const cfg: AgentConfig = {
@@ -282,6 +286,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
     usdPerMtok: providerRates(source, opt),
     credentialMode: cred,
+    ...(planLogin ? { planLogin } : {}),
     ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
     ...(personaOf(spec) ? { persona: personaOf(spec)! } : {}),
     // An orchestrate agent runs nothing (§16.1): never a server, whatever made it orchestrate after its profile was checked.

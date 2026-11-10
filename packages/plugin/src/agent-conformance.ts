@@ -84,6 +84,7 @@ export const AGENT_CASES: readonly Case[] = [
         if (typeof l.label !== "string" || !l.label) fail(`describe().logins.${l.name}.label must be a non-empty string`);
         if (!Array.isArray(l.egress) || l.egress.some((h: unknown) => typeof h !== "string" || !h)) fail(`describe().logins.${l.name}.egress must be a list of hosts`);
         if (l.refused !== undefined && (typeof l.refused !== "string" || !l.refused)) fail(`describe().logins.${l.name}.refused must be a sentence`);
+        if (l.metered !== undefined && typeof l.metered !== "boolean") fail(`describe().logins.${l.name}.metered must be a boolean`);
       }
       if (d.logins.every((l) => l.refused)) fail("describe().logins must have one login capcomd can make");
     }

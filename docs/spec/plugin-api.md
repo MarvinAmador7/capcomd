@@ -1208,7 +1208,11 @@ login <provider> [<name>]` makes the named one (the first without `refused` when
 `loginCommand(bin, name)` (the second argument additive) in the login VM, which reaches `BASE_EGRESS` and that login's
 `egress` instead of `loginEgress`; the auth ledger records the name (`AuthProfile.login`), and `auth status`, an env
 build's move of the login and the app's login command use it again. A login with `refused` is one capcomd can't make
-headless: the kernel refuses it with that sentence before any machine starts. The optional, pure `loginCheck(bin, q)`
+headless: the kernel refuses it with that sentence before any machine starts. A login with `metered: true` (additive)
+is billed per token, not by a plan: an agent on it is spend as on an API key (`billing: "api"`, its estimated cost
+counted, its budgets held). The kernel names the login an agent on `subscription` runs on in `AgentConfig.planLogin`
+(additive; from the ledger, for a provider with `logins`), and a recorded one it doesn't know counts as the provider's
+first. The optional, pure `loginCheck(bin, q)`
 is a shell line the kernel runs in the login VM after the login (behind `subscriptionPrelude`): it prints one JSON line
 `{"loggedIn": <boolean>}`, whether the CLI itself sees the login, and only that boolean leaves the VM; false fails the
 login before anything is saved. `AgentConfig.usdPerMtok` is the provider's own rates
@@ -1228,7 +1232,8 @@ first), as the next turn. Credential: an AI Gateway API key, `AI_GATEWAY_API_KEY
 Vercel OIDC token, which fx would prefer, is dropped), or a plan login of fx's own, made as codex's is (`capcomd auth
 login fx [vercel|grok]`: `fx login <name>` in a PTY in a login VM with `FX_NO_OPEN_BROWSER=1`, the VM then
 snapshotted): `logins` are `vercel` (fx's OAuth device flow against vercel.com, its session `$FX_HOME/auth.json`; the
-login reaches `vercel.com`, `api.vercel.com`, `ai-gateway.vercel.sh`), `grok` (a browser login whose code is pasted
+login reaches `vercel.com`, `api.vercel.com`, `ai-gateway.vercel.sh`; `metered`: the AI Gateway bills the Vercel team
+per token, so its cost counts and `maxBudgetUsd` holds), `grok` (a browser login whose code is pasted
 back through the PTY, `$FX_HOME/grok-auth.json`; `auth.x.ai`, `accounts.x.ai`, `cli-chat-proxy.grok.com`, `api.x.ai`)
 and `codex`, `refused`: fx's ChatGPT login answers only on the login VM's own `localhost:1455` and has no code to paste,
 and capcomd forwards no port from a login VM, so it points to capcomd's `codex` provider. `loginCheck` is `fx status

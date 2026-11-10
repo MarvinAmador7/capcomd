@@ -104,7 +104,7 @@ export interface AgentAdapter {
   /** Hosts the login VM may reach. */
   loginEgress: string[];
   /** The plan logins the CLI offers when it has more than one (each with the hosts its login VM reaches). */
-  logins?: Array<{ name: string; label: string; egress: string[]; refused?: string }>;
+  logins?: Array<{ name: string; label: string; egress: string[]; refused?: string; metered?: boolean }>;
   /** Shell printing `{"loggedIn": <boolean>}` after a login: whether the CLI sees it (only the boolean leaves the VM). */
   loginCheck?(bin: string, q: (s: string) => string): string;
   /** Cheap headless call proving the login works; exit 0 + stdout containing "ok". */

@@ -457,6 +457,13 @@ export function detectedUsable(a: AgentAdapter, cfg: AgentConfig, d: Detected): 
 }
 /** Whether capcomd has a plan login for an agent kind's CLI (its provider's `describe().subscription`, true unless false). */
 const agentSubscription = (kind: string) => agentSeam(providerOfKind(kind))?.describe().subscription !== false;
+/** Is the agent's plan login one billed per token (`describe().logins[].metered`)? The recorded one (`planLogin`), else
+ *  the one `capcomd auth login` makes unasked, its provider's first. */
+const meteredLogin = (adapter: AgentAdapter, cfg: AgentConfig) => {
+  const logins = adapter.logins;
+  if (!logins) return false;
+  return !!(logins.find((l) => l.name === cfg.planLogin) ?? logins.find((l) => !l.refused))?.metered;
+};
 /** Where an installed CLI is: `<home>/bin/<bin>` from a release archive, else npm's. */
 export const installedBin = (a: AgentAdapter, home: string) => (a.install ? `${home}/bin/${a.bin}` : `${home}/npm/bin/${a.bin}`);
 export interface Detected { bin?: string; version?: string; node?: string }
@@ -795,7 +802,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         credential = opts.apiKey;
       }
     }
-    setSpanAttributes(span, { "agent.credential_mode": credentialMode });
+    // A plan login is spend all the same when its model calls are billed per token (fx's Vercel login: the AI Gateway on
+    // the user's team): its estimated cost counts, as an API key's does, and budgets hold.
+    const billing: "api" | "subscription" = credentialMode === "subscription" && !meteredLogin(adapter, cfg) ? "subscription" : "api";
+    setSpanAttributes(span, { "agent.credential_mode": credentialMode, "agent.billing": billing });
 
     // 4. Run headless in the background; the JSON event stream lands in a file we tail.
     // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
@@ -1116,7 +1126,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       // A budget is enforced by the engine from live spend (its own, an ancestor's or the run's), for every provider.
       if (opts.onSpend && now() - spendAt >= (opts.spendEveryMs ?? SPEND_REPORT_MS)) {
         spendAt = now();
-        const usd = credentialMode === "subscription" ? 0 : Math.round(state.costUsd * 1e6) / 1e6;
+        const usd = billing === "subscription" ? 0 : Math.round(state.costUsd * 1e6) / 1e6;
         const rep = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round((now() - startedAt) / 1000) }, streaming ? inboxSeq : undefined).catch(() => null);
         // Messages sent to it since the last report: into the VM, where the supervisor hands them to the CLI. A
         // message means someone looked at the agent: its stuck window starts again (ADR-019 §2).
@@ -1192,7 +1202,6 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     limit ??= state.quota ? "quota" : LIMIT_STOPS[out.stopReason] ?? null;
     const resetAt = limit === "quota" && state.quota?.resetAt ? { resetAt: state.quota.resetAt } : {};
     if (limit === "quota") addSpanEvent(span, "agent.quota", { "agent.quota_message": r.text(state.quota?.message ?? ""), ...(state.quota?.resetAt ? { "agent.quota_reset_at": state.quota.resetAt } : {}) });
-    const billing = credentialMode === "subscription" ? "subscription" : "api";
     const notionalCostUsd = state.costUsd;
     const costUsd = billing === "subscription" ? 0 : state.costUsd;
     const { turns } = state;
@@ -1274,7 +1283,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     }
     // Failed/timed-out spans still carry what was spent so far (subscription billing: cost 0, notional set).
     const st = live as AgentRunState | null;
-    const sub = span.attributes["agent.billing"] === "subscription" || span.attributes["agent.credential_mode"] === "subscription";
+    const sub = span.attributes["agent.billing"] === "subscription";
     setSpanAttributes(span, {
       "agent.cost_usd": st && !sub ? st.costUsd : 0, "agent.notional_cost_usd": st?.costUsd ?? 0, "agent.turns": st?.turns ?? 0,
       "agent.error_kind": e instanceof AgentError ? e.kind : "error", ...(span.attributes["agent.stop_reason"] ? {} : { "agent.stop_reason": e instanceof AgentError ? e.kind : "error" }),

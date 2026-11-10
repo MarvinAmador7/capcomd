@@ -110,7 +110,7 @@ describe("agent-fx: describe() and registration (§7.3)", () => {
     const d = fx.describe();
     expect(d.subscription).toBeUndefined(); // absent: capcomd has a plan login for fx
     expect(d.logins).toEqual([
-      { name: "vercel", label: "Vercel", egress: ["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"] },
+      { name: "vercel", label: "Vercel", egress: ["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"], metered: true },
       { name: "grok", label: "Grok", egress: ["auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"] },
       { name: "codex", label: "ChatGPT", egress: [], refused: FX_CODEX_LOGIN_REFUSED },
     ]);
@@ -129,6 +129,24 @@ describe("agent-fx: describe() and registration (§7.3)", () => {
     expect(runAgentConformance(allRefused, { name: "fx" }).find((r) => !r.ok)?.message).toBe("describe().logins must have one login capcomd can make");
     const twice = { ...fx, describe: () => ({ ...fx.describe(), logins: [FX_LOGINS[0], FX_LOGINS[0]].map((l) => ({ name: l.name, label: l.label, egress: [...l.egress] })) }) };
     expect(runAgentConformance(twice, { name: "fx" }).find((r) => !r.ok)?.message).toBe('describe().logins: "vercel" must be a unique lowercase name');
+    const odd = { ...fx, describe: () => ({ ...fx.describe(), logins: [{ name: "vercel", label: "Vercel", egress: [], metered: "yes" as any }] }) };
+    expect(runAgentConformance(odd, { name: "fx" }).find((r) => !r.ok)?.message).toBe("describe().logins.vercel.metered must be a boolean");
+    expect(adapterOf(fx).logins?.map((l) => !!l.metered)).toEqual([true, false, false]);
+  });
+
+  test("a budget holds on a key and on Vercel's login (the AI Gateway bills per token), not on a Grok plan", () => {
+    const spent = { ...fresh(), costUsd: 2 };
+    const guard = (over: Partial<AgentConfig>) => fx.guard(spent, { credentialMode: "auto", maxBudgetUsd: 1, ...over });
+    expect(guard({})).toStartWith("max_budget_usd");
+    expect(guard({ credentialMode: "subscription", planLogin: "vercel" })).toStartWith("max_budget_usd");
+    // A plan login whose name wasn't recorded is the one `capcomd auth login fx` makes unasked: Vercel's.
+    expect(guard({ credentialMode: "subscription" })).toStartWith("max_budget_usd");
+    expect(guard({ credentialMode: "subscription", planLogin: "grok" })).toBeNull();
+    // The kernel hands the provider the recorded login.
+    const ledger = join(mkdtempSync(join(tmpdir(), "capcomd-fx-plan-")), "auths.json");
+    writeFileSync(ledger, JSON.stringify({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: "browser-code", login: "grok", env: "capcomd-env-x", createdAt: "t" } }));
+    expect(seamConfig(loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_CREDENTIALS: "subscription", CAPCOMD_AUTH_LEDGER: ledger }), "fx").planLogin).toBe("grok");
+    expect(seamConfig(loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AUTH: "apikey", AI_GATEWAY_API_KEY: "k", CAPCOMD_AUTH_LEDGER: ledger }), "fx").planLogin).toBeUndefined();
   });
 
   test("on a plan login: the keys fx would prefer dropped, FX_HOME its folder, fx run on the provider the login signed in to", async () => {
@@ -269,7 +287,7 @@ describe("agent-fx: parse, guard, outcome", () => {
     expect(fx.guard({ ...fresh(), turns: 6 }, cfg({ maxTurns: 5 }))).toBe("max_turns (6 > 5 tool steps)");
     expect(fx.guard({ ...fresh(), turns: 5 }, cfg({ maxTurns: 5 }))).toBeNull();
     expect(fx.guard({ ...fresh(), costUsd: 1.5 }, cfg({ maxBudgetUsd: 1 }))).toBe("max_budget_usd (~$1.500 > $1)");
-    expect(fx.guard({ ...fresh(), costUsd: 1.5 }, cfg({ maxBudgetUsd: 1, credentialMode: "subscription" }))).toBeNull();
+    expect(fx.guard({ ...fresh(), costUsd: 1.5 }, cfg({ maxBudgetUsd: 1, credentialMode: "subscription", planLogin: "grok" }))).toBeNull();
   });
 
   test("a later turn that ends well clears an earlier turn's failure; a quota or a bridge error doesn't clear", () => {

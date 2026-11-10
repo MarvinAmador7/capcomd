@@ -61,6 +61,7 @@ export function seamConfig(cfg: AgentConfig, provider = "codex"): SeamConfig {
   return {
     model: cfg.model, effort: cfg.effort, maxTurns: cfg.maxTurns, maxBudgetUsd: cfg.maxBudgetUsd,
     allowedTools: cfg.allowedTools, disallowedTools: cfg.disallowedTools, sandbox: cfg.codexSandbox, credentialMode: cfg.credentialMode,
+    ...(cfg.planLogin ? { planLogin: cfg.planLogin } : {}),
     ...(cfg.denyCommands?.length ? { denyCommands: cfg.denyCommands } : {}),
     ...(rates ? { usdPerMtok: rates } : {}),
   };
@@ -88,7 +89,7 @@ export function adapterOf(p: AgentProvider): AgentAdapter {
     subscriptionPrelude: (home, q) => p.subscriptionPrelude(home, q),
     loginCommand: (bin, login) => (login === undefined ? p.loginCommand(bin) : p.loginCommand(bin, login)),
     loginEgress: [...d.loginEgress],
-    ...(d.logins ? { logins: d.logins.map((l) => ({ name: l.name, label: l.label, egress: [...l.egress], ...(l.refused ? { refused: l.refused } : {}) })) } : {}),
+    ...(d.logins ? { logins: d.logins.map((l) => ({ name: l.name, label: l.label, egress: [...l.egress], ...(l.refused ? { refused: l.refused } : {}), ...(l.metered ? { metered: true } : {}) })) } : {}),
     ...(p.loginCheck ? { loginCheck: (bin: string, q: (s: string) => string) => p.loginCheck!(bin, q) } : {}),
     verifyCommand: (bin, q) => p.verifyCommand(bin, q),
     outcome: (state, exitCode) => p.outcome(state, exitCode),
