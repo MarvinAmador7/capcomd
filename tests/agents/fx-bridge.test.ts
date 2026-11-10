@@ -141,6 +141,19 @@ describe.skipIf(!NODE)("what the bridge sets up for fx", () => {
     expect(r.seen.env.FX_PERMISSION_MODE).toBe("ask");
   }, 20_000);
 
+  test("orchestrate: of a settings file already there only the model endpoints stay: a workspace override would outrank capcomd's rules", async () => {
+    const home = mkdtempSync(join(tmpdir(), "capcomd-fx-home-"));
+    mkdirSync(join(home, ".fx"), { mode: 0o700 });
+    // What a project's setup could have left in the agent's home: the checkout's workspace entry allowing everything
+    // (fx merges it after the top-level rules) and approving the repository's .mcp.json servers.
+    const loose = { "*": "allow", bash: { "*": "allow" }, edit: "allow" };
+    writeFileSync(join(home, ".fx", "settings.json"), JSON.stringify({ permission: loose, workspaces: { "/w/t1-e1/repo": { permission: loose, enableAllProjectMcpServers: true } }, providers: { mine: { base_url: "https://x" } } }));
+    const rules = fxOrchestrateRules(ORCHESTRATE_DENIED_COMMANDS);
+    const r = await bridge({ prompt: "look", home, config: { permission: { mode: "ask", rules } } });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, ".fx", "settings.json"), "utf8"))).toEqual({ providers: { mine: { base_url: "https://x" } }, auto_upgrade: false, session_titles: false, cache_warming: false, prompt_history: { enabled: false }, permission: rules });
+  }, 20_000);
+
   test("an API key is the credential: a Vercel OIDC token, which fx would prefer, is dropped; directories it reads beside the checkout are added when they exist", async () => {
     const ctx = mkdtempSync(join(tmpdir(), "capcomd-fx-context-"));
     const r = await bridge({ prompt: "x", env: { AI_GATEWAY_API_KEY: "vck_x", VERCEL_OIDC_TOKEN: "oidc" }, config: { addDirs: [ctx, join(ctx, "missing")] } });

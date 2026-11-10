@@ -28,12 +28,16 @@ const QUOTA_TEXT = /insufficient_quota|credit_card_required|usage_limit_reached|
 const FLUSH_MS = 5_000;
 
 // ---- fx's settings: capcomd's keys merged into $HOME/.fx/settings.json (fx reads only that file, and only when it and
-// its folder are private), whatever a login wrote kept.
+// its folder are private), whatever a login wrote kept. An orchestrate agent's file keeps only the model endpoints
+// (`providers`, `models`) besides capcomd's keys: anything else already there could loosen its rules (a `workspaces`
+// entry for the checkout outranks the top-level `permission`) or approve the repository's own MCP servers.
+const ORCHESTRATE_KEEP = new Set(["providers", "models"]);
 function settings() {
   const dir = join(process.env.HOME || "/root", ".fx"), file = join(dir, "settings.json");
   let s = {};
   try { s = JSON.parse(readFileSync(file, "utf8")); } catch {}
   if (!s || typeof s !== "object" || Array.isArray(s)) s = {};
+  if (cfg.permission?.mode === "ask") s = Object.fromEntries(Object.entries(s).filter(([k]) => ORCHESTRATE_KEEP.has(k)));
   // No upgrades, and no model calls beyond the agent's own (a title, keeping a cache warm).
   Object.assign(s, { auto_upgrade: false, session_titles: false, cache_warming: false, prompt_history: { enabled: false } });
   if (cfg.permission?.mode === "ask") s.permission = cfg.permission.rules ?? { "*": "ask" };

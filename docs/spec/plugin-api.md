@@ -2157,7 +2157,9 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
      (`cd x && bun test` is refused) but not a redirection (`echo x > f` runs), `sh -c` or option tricks: so the kernel
      doesn't rely on any CLI's rules for writes (item 3).
    - fx: `denyCommands` as codex's, which the provider turns into fx's permission rules (`fxOrchestrateRules`, in
-     `$HOME/.fx/settings.json`; the last matching rule wins) with fx in `ask` mode (full access skips every rule):
+     `$HOME/.fx/settings.json`, of which the bridge keeps only `providers` and `models` from a file already there: a
+     `workspaces` entry for the checkout would outrank the rules, as recorded against fx 0.0.16, and could approve the
+     repository's MCP servers; the last matching rule wins) with fx in `ask` mode (full access skips every rule):
      `read`, `glob`, `grep`, `skill`, capcomd's MCP tools allowed; `edit`, fx's `subagent` and `install_skill` denied;
      in `bash`, the read-only commands above allowed as `<prefix>` and `<prefix> *`, then `denyCommands` and the git
      options above denied; everything else `ask`, and the bridge answers every ask `reject_once`. fx matches an allow
