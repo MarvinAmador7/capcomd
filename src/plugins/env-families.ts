@@ -36,7 +36,7 @@ export function kernelFamilyTakenIn(prefix: string): string | null {
 /** Why the kernel refuses an agent seam's `envPrefixes` (§7.3), or null: one that isn't a family (`ENV_PREFIX`: not
  *  `""`, `C` or lower case) or that would take in a kernel family. The host asks at registration (src/plugins/host.ts). */
 export function agentSeamRefusal(p: Pick<AgentProvider, "describe">): string | null {
-  const prefixes: unknown = p.describe().envPrefixes;
+  const prefixes: unknown = (p as Partial<AgentProvider>).describe?.()?.envPrefixes;
   const issue = envPrefixesIssue(prefixes);
   if (issue || prefixes === undefined) return issue;
   for (const x of prefixes as string[]) {
