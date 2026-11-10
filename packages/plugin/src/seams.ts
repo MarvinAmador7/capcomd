@@ -139,6 +139,12 @@ export interface AgentRunState {
 /** One release archive of an agent CLI (`describe().install`): where it is, and its sha256 (lowercase hex). */
 export interface AgentArchive { url: string; sha256: string }
 
+/** One of the plan logins a CLI offers when it has more than one (`describe().logins`): `capcomd auth login <provider>
+ *  <name>` makes it (the first that isn't `refused` when no name is given). The login VM reaches BASE_EGRESS and this
+ *  login's `egress`, not `loginEgress`. `refused`: capcomd can't make this login headless (a browser callback to the
+ *  login VM's own localhost, say); the sentence says why and what to use instead, and nothing is started for it. */
+export interface AgentLogin { name: string; label: string; egress: readonly string[]; refused?: string }
+
 /** `src/agents/types.ts` AgentAdapter, as a seam (§7.3). The kernel's runner (`src/agents/runner.ts`) does clone,
  *  install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is run and
  *  how its stream is read. Every method is pure except `available`. */
@@ -167,6 +173,9 @@ export interface AgentProvider {
      *  validation otherwise). Absent: true. */
     subscription?: boolean;
     loginEgress: readonly string[];
+    /** The plan logins the CLI offers, when it has more than one (fx: a Vercel or a Grok login). Absent: one login,
+     *  `loginCommand(bin)` with `loginEgress`. Additive. */
+    logins?: readonly AgentLogin[];
     /** The tool lists that make an `orchestrate` agent (ADR-024 `tools.mode`, §16.1): it sees everything (reading and
      *  searching files, read-only git with fetch, every capcomd read) and runs nothing that changes or runs code (no
      *  edits, commits, merges, pushes, installs, builds or tests: those are its children's, checked at verify and
@@ -189,8 +198,13 @@ export interface AgentProvider {
   guard(state: AgentRunState, cfg: AgentConfig): string | null;
   subscriptionCheck(home: string, q: (s: string) => string): string;
   subscriptionPrelude(home: string, q: (s: string) => string): string;
-  loginCommand(bin: string): string[];
+  /** The interactive login (run in a PTY in the login VM); `login` names the one of `describe().logins` to make. */
+  loginCommand(bin: string, login?: string): string[];
   verifyCommand(bin: string, q: (s: string) => string): string;
+  /** Optional, pure: a shell line run in the login VM right after the login (after `subscriptionPrelude`) that prints
+   *  one JSON line, `{"loggedIn": <boolean>}`, whether the CLI itself sees the login. Only that boolean leaves the VM;
+   *  false fails the login before anything is saved. */
+  loginCheck?(bin: string, q: (s: string) => string): string;
   outcome(state: AgentRunState, exitCode: number): { ok: boolean; stopReason: string };
   /** Optional, pure: a tool call the CLI refused, from one line of its stderr (`ctx.errFile`), for a CLI that reports
    *  refusals only there (codex 0.163 logs a command its rules forbid and leaves it out of `--json`); null otherwise.

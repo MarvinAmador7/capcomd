@@ -99,10 +99,14 @@ export interface AgentAdapter {
   subscriptionCheck(home: string, q: (s: string) => string): string;
   /** Lines run in run.sh before the agent: drop API keys, load the plan login. */
   subscriptionPrelude(home: string, q: (s: string) => string): string;
-  /** Interactive login argv (run in a PTY in the login VM). */
-  loginCommand(bin: string): string[];
+  /** Interactive login argv (run in a PTY in the login VM); `login` names one of `logins`. */
+  loginCommand(bin: string, login?: string): string[];
   /** Hosts the login VM may reach. */
   loginEgress: string[];
+  /** The plan logins the CLI offers when it has more than one (each with the hosts its login VM reaches). */
+  logins?: Array<{ name: string; label: string; egress: string[]; refused?: string }>;
+  /** Shell printing `{"loggedIn": <boolean>}` after a login: whether the CLI sees it (only the boolean leaves the VM). */
+  loginCheck?(bin: string, q: (s: string) => string): string;
   /** Cheap headless call proving the login works; exit 0 + stdout containing "ok". */
   verifyCommand(bin: string, q: (s: string) => string): string;
   /** Interpret the finished run. */

@@ -18,12 +18,15 @@ type Env = Record<string, string | undefined>;
 /** The places Settings shows: the listed providers (src/providers/registry.ts), docker then boxd. */
 export const SETTINGS_SANDBOXES = LISTED_PROVIDERS;
 export type SettingsSandbox = ListedProvider;
-const PROVIDERS = ["claude", "codex"] as const;
-const API_KEY: Record<(typeof PROVIDERS)[number], string> = { claude: "ANTHROPIC_API_KEY", codex: "OPENAI_API_KEY" };
+const PROVIDERS = ["claude", "codex", "fx"] as const;
+type LoginProvider = (typeof PROVIDERS)[number];
+/** Listed unasked (clients from before fx know these two). */
+const DEFAULT_PROVIDERS: readonly LoginProvider[] = ["claude", "codex"];
+const API_KEY: Record<LoginProvider, string> = { claude: "ANTHROPIC_API_KEY", codex: "OPENAI_API_KEY", fx: "AI_GATEWAY_API_KEY" };
 /** Where each built-in's host-bound secret goes: its plugin's API host, whether or not the daemon has it active. */
 const API_HOST = (provider: (typeof PROVIDERS)[number]) => BUILTIN_AGENTS.find((p) => p.describe().name === provider)!.describe().apiHost;
 
-export interface LoginState { provider: "claude" | "codex"; sandbox: SettingsSandbox; loggedIn: boolean; how: "plan" | "api_key" | null; detail: string | null; hostBound: boolean; boundTo: string | null; command: string }
+export interface LoginState { provider: LoginProvider; sandbox: SettingsSandbox; loggedIn: boolean; how: "plan" | "api_key" | null; detail: string | null; hostBound: boolean; boundTo: string | null; command: string }
 export interface EnvironmentState { sandbox: SettingsSandbox; status: "ready" | "missing" | "building" | "failed"; name: string | null; versions: Record<string, string>; builtAt: string | null; command: string }
 export interface ServiceState { installed: boolean; loaded: boolean; installCommand: string; uninstallCommand: string }
 
@@ -32,17 +35,21 @@ export interface ServiceState { installed: boolean; loaded: boolean; installComm
  * login wins over an API key (it is what a subscription profile uses); an API key counts when the daemon has it in its
  * environment, or (boxd only) when CAPCOMD_CREDENTIALS=secret keeps it as a boxd secret. `hostBound`/`boundTo`: the
  * login is a host-bound secret (the ledger's `store: "secret"`, or CAPCOMD_CREDENTIALS=secret), so agents only see a
- * placeholder and the platform swaps the value in on the way to `boundTo`. `sandbox` limits it to one place.
+ * placeholder and the platform swaps the value in on the way to `boundTo`. `sandbox` limits it to one place;
+ * `provider` to one AI (fx's are listed only when asked for: capability logins.fx).
  */
-export function logins(source: Env = process.env, only?: SettingsSandbox): LoginState[] {
-	return PROVIDERS.flatMap((provider) => SETTINGS_SANDBOXES.filter((x) => !only || x === only).map((sandbox): LoginState => {
+export function logins(source: Env = process.env, only?: SettingsSandbox, provider?: LoginProvider): LoginState[] {
+	return (provider ? [provider] : DEFAULT_PROVIDERS).flatMap((provider) => SETTINGS_SANDBOXES.filter((x) => !only || x === only).map((sandbox): LoginState => {
 		const s = withSandbox(source, sandbox);
-		const command = `capcomd auth login ${provider} --sandbox ${sandbox}`;
 		const host = API_HOST(provider);
 		const unbound = { hostBound: false, boundTo: null };
 		const plan = profileFor(providerKind(provider), s);
+		// fx has two plan logins: the one saved is the one its command makes again (Vercel's unless it is Grok's).
+		const which = plan?.login && plan.login !== "vercel" ? ` ${plan.login}` : "";
+		const command = `capcomd auth login ${provider}${which} --sandbox ${sandbox}`;
 		if (plan) {
-			const detail = plan.store === "secret" ? `Kept as a boxd secret bound to ${host}` : plan.store === "snapshot" ? "Saved in the agent environment" : null;
+			const label = plan.login ? ` (${plan.login === "grok" ? "Grok" : plan.login === "vercel" ? "Vercel" : plan.login} login)` : "";
+			const detail = plan.store === "secret" ? `Kept as a boxd secret bound to ${host}` : plan.store === "snapshot" ? `Saved in the agent environment${label}` : null;
 			return { provider, sandbox, loggedIn: true, how: "plan", detail, ...(plan.store === "secret" ? { hostBound: true, boundTo: host } : unbound), command };
 		}
 		const key = API_KEY[provider];
@@ -52,6 +59,10 @@ export function logins(source: Env = process.env, only?: SettingsSandbox): Login
 		return { provider, sandbox, loggedIn: false, how: null, detail: null, ...unbound, command };
 	}));
 }
+
+/** Claude's and Codex's logins only (what GET /v1/logins lists unasked): the Logins row and project setup read these. */
+export const driverLogins = (source: Env = process.env): Array<LoginState & { provider: "claude" | "codex" }> =>
+	logins(source).filter((l): l is LoginState & { provider: "claude" | "codex" } => l.provider !== "fx");
 
 const SNAPSHOT_NAME = /^[A-Za-z0-9._-]{1,128}$/;
 const VERSION = /^[A-Za-z0-9.+_-]{1,64}$/;

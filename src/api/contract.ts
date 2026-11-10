@@ -595,6 +595,7 @@ export const CAPABILITIES = {
 	"plugins.routes": "Plugin API routes (plugin API §4.7.3): METHOD /v1/x/{plugin}/… serves a plugin's own routes, JSON in and out, with the caller's token, which needs the scope the route declares (403 `forbidden` otherwise; 404 `not_found` for a route no active plugin serves; a plugin's failure is 500 `internal` with the message \"plugin error\"). GET /v1/plugins/{name} lists its `routes` and the `capabilities` it adds here, named x.<plugin>.<flag>",
 	"context.brain_proposals": "A run's proposals to a company's brain (ADR-025 step 5): GET /v1/runs/{runId}/brain-proposals lists them and whether each was sent; POST /v1/runs/{runId}/brain-proposals/send (the `configure` scope, an Idempotency-Key) sends those waiting for a person as the caller (groundray's actor human:<client id>), as `capcomd context brain propose --run <runId> --yes` does",
 	"ops.front_door": "POST /v1/runs/{runId}/verifications, /merges and /merges/{mergeId}/decision: a kernel front door's verify, merge and approval of a merge (the CLI's and `capcomd mcp`'s), run in the daemon so every plugin's gate judges them (plugin API §6.1). Only the one-call tokens the CLI and `capcomd mcp` make for them (403 `forbidden` for any other token, a plugin's or an app's)",
+	"logins.fx": "GET /v1/logins takes `provider` (claude, codex or fx): only that AI's logins; fx's (a Vercel or Grok plan login with `capcomd auth login fx`, or AI_GATEWAY_API_KEY) are listed only when asked for with `provider=fx`",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -684,20 +685,24 @@ export const RunOptionsQuery = z.object({
 
 /** GET /v1/logins, /v1/environments, /v1/service: what the app's Settings window shows. Local state only. */
 const SettingsSandbox = z.string().describe(`Where agents run: a listed place's name, today ${LISTED_PROVIDERS.map((n) => `${n} ("${PROVIDER_LABEL[n]}")`).join(" or ")}`);
+/** The AIs GET /v1/logins answers for: the drivers', and fx's when asked for (capability logins.fx). */
+export const LoginProvider = z.enum(["claude", "codex", "fx"]);
 export const Login = z.object({
-	provider: DriverProvider,
+	provider: LoginProvider.describe("claude or codex; fx only with `provider=fx` (capability logins.fx)"),
 	sandbox: SettingsSandbox,
 	loggedIn: z.boolean().describe("Agents of this provider can log in in this sandbox"),
-	how: z.enum(["plan", "api_key"]).nullable().describe("plan: a plan login (`capcomd auth login`) saved for this sandbox; api_key: ANTHROPIC_API_KEY / OPENAI_API_KEY is set for the daemon, or (boxd) kept as a boxd secret with CAPCOMD_CREDENTIALS=secret. A plan login wins when there are both. null when not logged in"),
+	how: z.enum(["plan", "api_key"]).nullable().describe("plan: a plan login (`capcomd auth login`) saved for this sandbox; api_key: ANTHROPIC_API_KEY / OPENAI_API_KEY (fx: AI_GATEWAY_API_KEY) is set for the daemon, or (boxd) kept as a boxd secret with CAPCOMD_CREDENTIALS=secret. A plan login wins when there are both. null when not logged in"),
 	detail: z.string().nullable().describe("Where the login lives, one short sentence written by the daemon (trusted, never a credential), e.g. \"Kept as a boxd secret bound to api.anthropic.com\", \"Saved in the agent environment\"; null when not logged in"),
 	hostBound: z.boolean().describe("Capability sandboxes. The login is a host-bound secret: the platform swaps it in on the way to `boundTo`, so agents only ever see a placeholder (a plan login stored as a secret, or CAPCOMD_CREDENTIALS=secret). false when not logged in, or when agents can read it (kept in the agent environment, or an API key passed to the agent)"),
 	boundTo: z.string().nullable().describe("Capability sandboxes. The host the login is bound to (the AI's API host, e.g. api.anthropic.com) when `hostBound`; else null"),
-	command: z.string().describe("The CLI that logs in there, e.g. `capcomd auth login claude --sandbox docker` (interactive: run it in a terminal)"),
+	command: z.string().describe("The CLI that logs in there, e.g. `capcomd auth login claude --sandbox docker` (interactive: run it in a terminal); fx's names its Grok login when that is the one saved (`capcomd auth login fx grok --sandbox docker`), else it makes a Vercel login"),
 });
-export const Logins = z.object({ logins: z.array(Login).describe("Claude, then Codex, each in every listed place (today four: claude in docker, claude in boxd, codex in docker, codex in boxd); with `sandbox`, that place's only") });
+export const Logins = z.object({ logins: z.array(Login).describe("Claude, then Codex, each in every listed place (today four: claude in docker, claude in boxd, codex in docker, codex in boxd); with `sandbox`, that place's only; with `provider`, that AI's only (fx's only so)") });
 export const LOGINS_DOC = "Capability logins. Who agents can log in as, per AI and per sandbox (plan logins are saved per sandbox). Needs the `read` scope. Local files and the daemon's environment only (no VM, container or network call), so poll it freely. Never contains a credential. " +
-	"`sandbox` (capability sandboxes): only that place's logins; 404 `not_found` for a name that isn't a listed place.";
+	"`sandbox` (capability sandboxes): only that place's logins; 404 `not_found` for a name that isn't a listed place. " +
+	"`provider` (capability logins.fx): only that AI's logins; fx's are listed only when asked for so, since clients from before it know two AIs.";
 export const SandboxQuery = z.object({ sandbox: z.string().optional().describe("Capability sandboxes. Only this place (a listed place's name, GET /v1/sandboxes); 404 when it isn't one") });
+export const LoginsQuery = SandboxQuery.extend({ provider: LoginProvider.optional().describe("Capability logins.fx. Only this AI's logins; fx's are listed only when asked for so. Omitted: claude's and codex's") });
 export const Environment = z.object({
 	sandbox: SettingsSandbox,
 	status: z.enum(["ready", "missing", "building", "failed"]).describe("building: a `capcomd env build` for this sandbox is running now; failed: the last build failed (`name`, `versions` and `builtAt` then still describe the environment agents use, if any); ready: agents boot from `name`; missing: none built yet (agents can't run real CLIs there)"),
@@ -1395,7 +1400,7 @@ export const contract = {
 		get: oc.route({ method: "GET", path: "/v1/run-options", description: RUN_OPTIONS_DOC }).input(RunOptionsQuery).output(RunOptions),
 	},
 	logins: {
-		list: oc.route({ method: "GET", path: "/v1/logins", description: LOGINS_DOC }).input(SandboxQuery).output(Logins),
+		list: oc.route({ method: "GET", path: "/v1/logins", description: LOGINS_DOC }).input(LoginsQuery).output(Logins),
 	},
 	environments: {
 		list: oc.route({ method: "GET", path: "/v1/environments", description: ENVIRONMENTS_DOC }).input(SandboxQuery).output(Environments),

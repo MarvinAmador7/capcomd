@@ -644,8 +644,9 @@ Made while building the runtime blocks (§7 step 8, 2026-11-06; `src/profiles/ru
 - **`fx` is a third built-in provider** (`agent-fx`, spec §7.3, 2026-11-09): `harness.provider: fx` validates like
   the others, `harness.model` is an AI Gateway model id (`anthropic/claude-sonnet-5`) and `harness.effort` one of fx's
   levels (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; fx itself refuses at start one the model lacks).
-  capcomd has no plan login for fx (its `describe().subscription` is false), so `harness.auth: subscription` on it is
-  refused at validation; `apikey` is `AI_GATEWAY_API_KEY`. `tools.mode: orchestrate` holds on fx (spec §16.1: fx's own
+  `apikey` is `AI_GATEWAY_API_KEY`; `harness.auth: subscription` is one of fx's own logins that `capcomd auth login
+  fx [vercel|grok]` made and snapshotted (spec §7.3 `describe().logins`; until then capcomd had no plan login for fx
+  and refused it at validation). `tools.mode: orchestrate` holds on fx (spec §16.1: fx's own
   permission rules). fx isn't a run driver (`--planner-provider` stays `claude | codex`).
 
 Made while building the writes (§7 step 6, 2026-11-06; `src/profiles/write.ts`, `src/profiles/fields.ts`,

@@ -93,8 +93,9 @@ export interface HarnessSource {
 	profile(name: string, repo?: string): Promise<ProfileLookup>;
 	/** PUT /v1/profiles/{name}: change it in its own file; the event to record when something changed. */
 	updateProfile(name: string, repo: string | undefined, body: { values: Record<string, string | null>; rev: string }): Promise<ProfileUpdate>;
-	/** GET /v1/logins: claude then codex, each in docker then boxd. Local state only; never a credential. */
-	logins(): Promise<O<typeof Login>[]>;
+	/** GET /v1/logins: claude then codex, each in docker then boxd; with `provider`, that AI's only (fx's only so).
+	 *  Local state only; never a credential. */
+	logins(provider?: O<typeof Login>["provider"]): Promise<O<typeof Login>[]>;
 	/** GET /v1/environments: docker then boxd. */
 	environments(): Promise<O<typeof Environment>[]>;
 	/** GET /v1/service. */
@@ -283,7 +284,9 @@ export function memorySource(seed: Partial<{
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
 	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }> = [];
-	const loginsOf = async () => seed.logins ?? (["claude", "codex"] as const).flatMap((provider) => LISTED_PROVIDERS.map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` })));
+	const loginsOf = async (only?: O<typeof Login>["provider"]) => (seed.logins ?? (["claude", "codex", "fx"] as const).flatMap((provider) => LISTED_PROVIDERS.map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` }))))
+		.filter((l) => (only ? l.provider === only : l.provider !== "fx"));
+	const driverLoginsOf = async () => (await loginsOf()).filter((l): l is O<typeof Login> & { provider: "claude" | "codex" } => l.provider !== "fx");
 	const optionsOf = async () => seed.runOptions ?? {
 		drivers: [
 			{ provider: "claude" as const, label: "Claude Code", model: null, models: [...HARNESS_MODELS.claude], efforts: ["low", "medium", "high", "xhigh", "max"], effort: null, available: false, reason: "No planner profile (run capcomd setup)", default: false, sandboxes: noPlanner },
@@ -305,7 +308,7 @@ export function memorySource(seed: Partial<{
 		},
 		cancelAgent: async (runId, agentId, by) => ({ changed: (await controlOf!(runId, "cancel", by, agentId)).changed.includes(agentId) }),
 		settings: seed.settings ?? memorySettingsStore(),
-		logins: loginsOf,
+		logins: driverLoginsOf,
 		availability: async (name) => {
 			const o = (await optionsOf()).sandboxes.find((x) => x.name === name);
 			return { available: o?.available ?? false, reason: o ? o.reason : "unknown", default: o?.default ?? false };
@@ -344,7 +347,7 @@ export function memorySource(seed: Partial<{
 		return out;
 	};
 	controlOf = control;
-	const projectDeps: ProjectDeps = { env: process.env, logins: loginsOf, ghReady: async () => false, ...seed.projects };
+	const projectDeps: ProjectDeps = { env: process.env, logins: driverLoginsOf, ghReady: async () => false, ...seed.projects };
 	const goals = seed.goals ?? {};
 	// Run.goalBranch follows the seeded goal as it changes (a pull request opened, the branch kept).
 	const syncGoal = (runId: string) => {

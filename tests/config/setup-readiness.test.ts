@@ -33,6 +33,19 @@ describe("plan logins", () => {
     expect([...keys!]).toEqual([]);
     expect(loginSteps(AUTH, keys, "docker").every((s) => s.ok)).toBe(true);
   });
+  test("a profile on fx with a plan login needs fx's login (not Claude's), and says how to make it", async () => {
+    const needed = loginsNeeded(projectWith({ a: { provider: "fx", auth: "subscription" } }), { CAPCOMD_NO_CONFIG: "1" });
+    expect([...needed!]).toEqual(["fx"]);
+    expect(loginSteps([...AUTH, { agent: "fx", present: false }], needed, "boxd")[2]).toMatchObject({ step: "fx login", ok: false, hint: "Run `capcomd auth login fx --sandbox boxd` in a terminal." });
+    // `capcomd profiles list`: an fx profile's readiness is fx's key or login, not Anthropic's.
+    const { readiness } = await import("../../src/cli/commands/profiles");
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-ready-fx-"));
+    const ledger = join(dir, "auths.json");
+    expect(readiness("gw", { provider: "fx", auth: "apikey" } as any, { ANTHROPIC_API_KEY: "sk-ant-x" })).toEqual({ ready: false, detail: "AI_GATEWAY_API_KEY not set" });
+    expect(readiness("gw", { provider: "fx", auth: "subscription" } as any, { CAPCOMD_AUTH_LEDGER: ledger })).toEqual({ ready: false, detail: "not logged in: capcomd auth login fx" });
+    writeFileSync(ledger, JSON.stringify({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: "device-auth", login: "vercel", env: "e", createdAt: "t" } }));
+    expect(readiness("gw", { provider: "fx", auth: "subscription" } as any, { CAPCOMD_AUTH_LEDGER: ledger })).toEqual({ ready: true, detail: "logged in (capcomd-auth-fx-x)" });
+  });
   test("no profiles to tell from (not set up yet): every login counts, as before", () => {
     const d = mkdtempSync(join(tmpdir(), "capcomd-ready-none-"));
     expect(loginsNeeded(d, { CAPCOMD_NO_CONFIG: "1", CAPCOMD_AGENTS_FILE: join(d, "missing.json") })).toBeNull();

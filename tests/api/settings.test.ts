@@ -110,6 +110,23 @@ describe("GET /v1/logins", () => {
 		expect(pick(l, "codex", "boxd")).toMatchObject({ loggedIn: true, how: "api_key", detail: "Kept as a boxd secret bound to api.openai.com" });
 		expect(pick(l, "claude", "docker").loggedIn).toBe(false);
 	});
+	test("fx's logins only when asked for (provider=fx): its plan login, which one it is, its key, its boxd secret", () => {
+		expect(logins(world().env).map((l) => l.provider)).toEqual(["claude", "claude", "codex", "codex"]);
+		const w = world();
+		const f = w.state(ledgerFile("docker", "auths"));
+		writeFileSync(f, JSON.stringify({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: "browser-code", login: "grok", env: "capcomd-env-x", createdAt: "2026-10-01T00:00:00.000Z", token: PLANTED } }));
+		const l = logins(w.env, undefined, "fx");
+		expect(Logins.parse({ logins: l })).toBeTruthy();
+		expect(l).toEqual([
+			{ provider: "fx", sandbox: "docker", loggedIn: true, how: "plan", detail: "Saved in the agent environment (Grok login)", hostBound: false, boundTo: null, command: "capcomd auth login fx grok --sandbox docker" },
+			{ provider: "fx", sandbox: "boxd", loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: "capcomd auth login fx --sandbox boxd" },
+		]);
+		expect(JSON.stringify(l)).not.toContain(PLANTED);
+		// Unasked, the list is as it was: an fx login doesn't show up in it.
+		expect(logins(w.env).map((x) => x.provider)).toEqual(["claude", "claude", "codex", "codex"]);
+		expect(pick(logins(world({ env: { AI_GATEWAY_API_KEY: "vck_x" } }).env, undefined, "fx"), "fx", "boxd")).toMatchObject({ how: "api_key", detail: "AI_GATEWAY_API_KEY is set for capcomd" });
+		expect(pick(logins(world({ env: { CAPCOMD_CREDENTIALS: "secret" } }).env, undefined, "fx"), "fx", "boxd")).toMatchObject({ how: "api_key", hostBound: true, boundTo: "ai-gateway.vercel.sh" });
+	});
 	test("the daemon's own CAPCOMD_SANDBOX doesn't change which ledger each entry reads", () => {
 		const w = world({ env: { CAPCOMD_SANDBOX: "docker" } });
 		planLogin(w, "boxd", "claude-code", "secret");
@@ -233,7 +250,9 @@ describe("GET /v1/service", () => {
 describe("the routes", () => {
 	const ROUTES = ["/v1/logins", "/v1/environments", "/v1/service"];
 	test("published and advertised as capabilities", () => {
-		expect(CAPABILITY_NAMES).toEqual(expect.arrayContaining(["logins", "environments", "service"]));
+		expect(CAPABILITY_NAMES).toEqual(expect.arrayContaining(["logins", "logins.fx", "environments", "service"]));
+		const query = (spec as any).paths["/v1/logins"].get.parameters.find((x: any) => x.name === "provider");
+		expect(query.schema.enum).toEqual(["claude", "codex", "fx"]);
 		for (const p of ROUTES) expect((spec as any).paths[p]?.get).toBeTruthy();
 		const login = (spec as any).paths["/v1/logins"].get.responses["200"].content["application/json"].schema.properties.logins.items;
 		expect(login.required).toEqual(["provider", "sandbox", "loggedIn", "how", "detail", "hostBound", "boundTo", "command"]);
@@ -259,6 +278,9 @@ describe("the routes", () => {
 		const app = harnessApp({ source: memorySource(), clients: () => loadClients(cpath), state: harnessState(null) });
 		const get = async (p: string) => (await app.request(p, { headers: { authorization: `Bearer ${reader}` } })).json() as Promise<any>;
 		expect((await get("/v1/logins")).logins.map((l: any) => [l.provider, l.sandbox, l.loggedIn])).toEqual([["claude", "docker", false], ["claude", "boxd", false], ["codex", "docker", false], ["codex", "boxd", false]]);
+		expect((await get("/v1/logins?provider=fx")).logins.map((l: any) => [l.provider, l.sandbox, l.command])).toEqual([["fx", "docker", "capcomd auth login fx --sandbox docker"], ["fx", "boxd", "capcomd auth login fx --sandbox boxd"]]);
+		expect((await get("/v1/logins?provider=codex&sandbox=boxd")).logins.map((l: any) => [l.provider, l.sandbox])).toEqual([["codex", "boxd"]]);
+		expect((await app.request("/v1/logins?provider=gemini", { headers: { authorization: `Bearer ${reader}` } })).status).toBe(422);
 		expect((await get("/v1/environments")).environments.map((e: any) => [e.sandbox, e.status])).toEqual([["docker", "missing"], ["boxd", "missing"]]);
 		expect(await get("/v1/service")).toEqual({ installed: false, loaded: false, installCommand: "capcomd service install", uninstallCommand: "capcomd service uninstall" });
 	});

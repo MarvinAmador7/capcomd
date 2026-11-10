@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, sharedSource, skillRows, trustProfile, untrustedPersona, untrustedSandbox, projectMachineTrust, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
+import { agentSeam, kindOf } from "../../plugins/agents";
 import { RelayError, SCHEMA } from "../../core/errors";
 
 const list = (v: unknown) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined);
@@ -76,8 +77,10 @@ const unconfirmedOk = (): SeamCheck => ({ warnings: [] });
 
 /** Is this profile's single credential actually present? (never reads values out) */
 export function readiness(name: string, spec: AgentSpec, source = process.env) {
-  const kind = spec.provider === "codex" ? "codex" : "claude-code";
-  const keyName = kind === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  // Each provider's own key and login (fx's AI_GATEWAY_API_KEY and `capcomd auth login fx`), Claude Code's by default.
+  const provider = spec.provider ?? "claude";
+  const kind = kindOf(provider);
+  const keyName = agentSeam(provider)?.describe().secretName ?? "ANTHROPIC_API_KEY";
   if (spec.auth === "apikey") return { ready: !!source[keyName]?.trim() || source.CAPCOMD_CREDENTIALS === "secret", detail: source[keyName]?.trim() ? `${keyName} set` : source.CAPCOMD_CREDENTIALS === "secret" ? "boxd secret (CAPCOMD_CREDENTIALS=secret)" : `${keyName} not set` };
   const p = profileFor(kind, source);
   return { ready: !!p, detail: p ? `logged in (${p.store === "secret" ? "boxd secret" : p.snapshot})` : `not logged in: capcomd auth login ${spec.provider}` };

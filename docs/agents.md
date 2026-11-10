@@ -587,7 +587,7 @@ You can pause agents yourself: `capcomd pause <runId> [agt]` (or `POST /v1/runs/
 
 `capcomd send <runId> <agt> <text> --skill NAME` (repeatable, at most 8 skills and 256 KB of `SKILL.md` together) sends skills with a message: the agent reads each skill's `SKILL.md` with the message text, as one more part of the message. `capcomd skills` lists the names: the bundled capcomd skills and your `~/.claude/skills`. Only `SKILL.md` goes: files next to it in the skill's directory are not copied into the agent's VM.
 
-Auth is exactly one of `apikey` (the provider's API key, from local env or a boxd secret) or `subscription` (from `capcomd auth login claude|codex`). Giving both or neither is an error. `CAPCOMD_AGENT` still works as an override, set to a kind or a profile name.
+Auth is exactly one of `apikey` (the provider's API key, from local env or a boxd secret) or `subscription` (from `capcomd auth login claude|codex|fx`). Giving both or neither is an error. `CAPCOMD_AGENT` still works as an override, set to a kind or a profile name.
 
 `children` (policy only for now): `{allowSpawn, maxDepth, maxChildren, maxTotalDescendants, allowedChildProfiles, budgetShare}`. Children may only narrow their parent.
 
@@ -596,12 +596,16 @@ Auth is exactly one of `apikey` (the provider's API key, from local env or a box
 ### fx
 
 [fx](https://fx.sh) (Vercel Labs' coding agent, 0.0.16; experimental, as fx itself is) runs models through the
-[Vercel AI Gateway](https://vercel.com/docs/ai-gateway) with an API key:
+[Vercel AI Gateway](https://vercel.com/docs/ai-gateway) with an API key, or on your own Vercel account or Grok plan:
 
 ```bash
 export AI_GATEWAY_API_KEY=…                       # or `capcomd secrets sync` on boxd: bound to ai-gateway.vercel.sh
 capcomd profiles add gw --provider fx --auth apikey --model anthropic/claude-sonnet-5 --effort high
 capcomd run --profile gw "goal"
+
+capcomd auth login fx                             # or: your Vercel account instead of a key (`fx login vercel`)
+capcomd auth login fx grok                        # or: your SuperGrok / X Premium plan (`fx login grok`)
+capcomd profiles add fxp --provider fx --auth subscription
 ```
 
 - **Install.** The agent's environment gets fx's pinned release (`capcomd env build` bakes it in; an environment built
@@ -613,8 +617,20 @@ capcomd run --profile gw "goal"
 - **Model and effort.** `model` is any AI Gateway model id (`anthropic/claude-sonnet-5`, `openai/gpt-6`, …; unset:
   fx's default); `effort` one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` (fx refuses at start a level
   the model doesn't have).
-- **Login.** An API key only: `auth: apikey` with `AI_GATEWAY_API_KEY`. fx's own logins (`fx login vercel|grok|codex`)
-  aren't supported, so `auth: subscription` is refused; for a ChatGPT plan use the `codex` provider.
+- **Login.** `auth: apikey` with `AI_GATEWAY_API_KEY`, or `auth: subscription` with one of fx's own logins, made by
+  `capcomd auth login fx` the way Codex's is: fx logs in inside a login machine of the sandbox (never on your
+  computer), prints the URL for your browser, and that machine is saved as a private login image agents on fx start
+  from. `capcomd auth login fx` (or `fx vercel`) is your Vercel account: open the URL, confirm the code it shows, and
+  model calls go through the AI Gateway on your Vercel team. `capcomd auth login fx grok` is a SuperGrok or X Premium
+  plan: open the URL, sign in to xAI, and paste the code it shows back into the terminal. One fx login per sandbox (a
+  new one replaces it). Only whether fx sees the login leaves the login machine; the session itself stays in the image.
+  `capcomd auth status` lists the fx login and checks it with a real call, `capcomd auth logout fx` deletes it, and
+  `capcomd doctor` checks it when it is fx's only credential here (no `AI_GATEWAY_API_KEY` set). fx's ChatGPT login (`fx login codex`) can't be made this way (its
+  browser answer goes to the login machine's own `localhost`, with no code to paste), so `capcomd auth login fx codex`
+  refuses it: for a ChatGPT plan use the `codex` provider (`capcomd auth login codex`). With a restricted egress, an
+  fx agent on a plan login needs its login's hosts: `vercel.com`, `api.vercel.com` and `ai-gateway.vercel.sh` for
+  Vercel's; `auth.x.ai`, `accounts.x.ai`, `cli-chat-proxy.grok.com` and `api.x.ai` for Grok's. The app's Accounts
+  board doesn't list fx yet; `GET /v1/logins?provider=fx` has its logins.
 - **Messages.** `capcomd send` reaches a working fx agent: fx takes it at its next model call, or as its next turn.
 - **Limits.** `maxTurns` counts tool steps (and is fx's own step limit too); `maxBudgetUsd` is estimated from tokens at
   `CAPCOMD_FX_USD_PER_MTOK_IN` and `_OUT` (default 5 and 25 USD per million tokens: fx reports no cost, and the model

@@ -75,6 +75,18 @@ export const AGENT_CASES: readonly Case[] = [
     if (!Array.isArray(d.efforts) || d.efforts.some((e) => typeof e !== "string" || !e)) fail("describe().efforts must be a list of levels");
     if (d.defaultEffort !== null && !d.efforts.includes(d.defaultEffort)) fail(`describe().defaultEffort ${JSON.stringify(d.defaultEffort)} isn't one of its efforts`);
     if (!Array.isArray(d.loginEgress)) fail("describe().loginEgress must be a list of hosts");
+    if (d.logins !== undefined) {
+      if (!Array.isArray(d.logins) || !d.logins.length) fail("describe().logins must be a non-empty list when given");
+      const names = new Set<string>();
+      for (const l of d.logins) {
+        if (typeof l?.name !== "string" || !/^[a-z][a-z0-9-]*$/.test(l.name) || names.has(l.name)) fail(`describe().logins: ${JSON.stringify(l?.name)} must be a unique lowercase name`);
+        names.add(l.name);
+        if (typeof l.label !== "string" || !l.label) fail(`describe().logins.${l.name}.label must be a non-empty string`);
+        if (!Array.isArray(l.egress) || l.egress.some((h: unknown) => typeof h !== "string" || !h)) fail(`describe().logins.${l.name}.egress must be a list of hosts`);
+        if (l.refused !== undefined && (typeof l.refused !== "string" || !l.refused)) fail(`describe().logins.${l.name}.refused must be a sentence`);
+      }
+      if (d.logins.every((l) => l.refused)) fail("describe().logins must have one login capcomd can make");
+    }
     equal(p.describe(), d, "a second describe()");
   } },
   { name: "toolPolicies.orchestrate contains no edit or write tool (§16.1)", run(p) {

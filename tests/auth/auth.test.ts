@@ -1,16 +1,17 @@
 // Subscription auth profiles with fake CLIs in a host-exec FakeProvider.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync, rmSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync, rmSync } from "fs";
 import { PassThrough } from "stream";
 import { tmpdir } from "os";
 import { join } from "path";
 import { FakeProvider } from "../../src/providers/fake";
-import { loadAgentConfig, credentialModeFor, egressFor } from "../../src/agents/config";
+import { loadAgentConfig, credentialModeFor, egressFor, BASE_EGRESS } from "../../src/agents/config";
 import { TokenFilter, AUTH_SHAPES } from "../../src/auth/interactive";
 import { authLogin, authStatus, authLogout } from "../../src/auth/login";
 import { readAuthLedger, writeAuthLedger, authSnapshotName } from "../../src/auth/profiles";
 import { runAgent } from "../../src/agents/runner";
-import { claudeAdapter, codexAdapter } from "../../src/agents/adapters";
+import { adapterFor, claudeAdapter, codexAdapter } from "../../src/agents/adapters";
+import { FX_CODEX_LOGIN_REFUSED } from "../../src/plugins/agent-fx";
 import { runPreflight } from "../../src/core/preflight";
 import { secretsSync } from "../../src/env/secrets";
 import { envBuild } from "../../src/env/build";
@@ -22,14 +23,15 @@ import { stubFx } from "../helpers/fx-stub";
 const TOKEN = "sk-ant-oat01-FAKEOAUTHTOKEN_abcdefghijklmnopqrstuvwxyz0123456789-XYZ";
 const FAKE_CLAUDE = new URL("./fake-claude-login.sh", import.meta.url).pathname;
 const FAKE_CODEX = new URL("./fake-codex-login.sh", import.meta.url).pathname;
+const FAKE_FX = new URL("./fake-fx-login.sh", import.meta.url).pathname;
 const ENV_SNAP = "capcomd-env-2f1eed2b11c528fc";
 
-function setup(agent: "claude-code" | "codex", over: Record<string, string> = {}) {
+function setup(agent: "claude-code" | "codex" | "fx", over: Record<string, string> = {}) {
   const workdir = mkdtempSync(join(tmpdir(), "capcomd-auth-"));
   const ledger = join(workdir, "auths.json");
   const log: any[] = [];
   const p = new FakeProvider({ hostExec: true, log });
-  const cfg = loadAgentConfig({ CAPCOMD_AGENT: agent, CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: agent === "codex" ? FAKE_CODEX : FAKE_CLAUDE, CAPCOMD_CREDENTIALS: "auto", ...over });
+  const cfg = loadAgentConfig({ CAPCOMD_AGENT: agent, CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: agent === "codex" ? FAKE_CODEX : agent === "fx" ? FAKE_FX : FAKE_CLAUDE, CAPCOMD_CREDENTIALS: "auto", ...over });
   const home = join(workdir, "home");
   mkdirSync(home, { recursive: true });
   stubFx(home);
@@ -124,6 +126,122 @@ describe("capcomd auth login|status|logout", () => {
   }, 30_000);
 });
 
+/** What the host got back from every exec in the login VMs (only booleans and "ok" may come out of a login). */
+function seenFromVm(p: FakeProvider): string[] {
+  const seen: string[] = [];
+  const exec = p.exec.bind(p);
+  (p as any).exec = async (...a: Parameters<FakeProvider["exec"]>) => { const r = await exec(...a); seen.push(r.stdout, r.stderr); return r; };
+  return seen;
+}
+
+describe("capcomd auth login fx (fx's own Vercel and Grok logins)", () => {
+  test("vercel (the default): fx's device code shown, its session snapshotted like codex's; only booleans leave the VM; status; logout", async () => {
+    const s = setup("fx");
+    const seen = seenFromVm(s.p);
+    const t = terminal();
+    const logs: string[] = [];
+    const res = await authLogin(s.p as any, "fx", { cfg: s.cfg, envSnapshot: ENV_SNAP, ledgerPath: s.ledger, stdout: t.stdout, stdin: t.stdin, log: (l) => logs.push(l), pollMs: 1 });
+    const shown = t.out.join("") + logs.join("\n");
+    expect(shown).toContain("WXYZ-9876");
+    expect(shown).toContain("Signed in to Vercel");
+    expect(shown).not.toContain("vcr_FAKEREFRESH");
+    expect(shown).not.toMatch(/eyJhbGci/);
+    expect(logs).toContain("fx sees the login (Vercel)");
+    expect(res.profile).toMatchObject({ agent: "fx", store: "snapshot", method: "device-auth", login: "vercel", snapshot: "capcomd-auth-fx-2f1eed2b11c528fc", verified: true });
+    expect(s.p.snapshots.get(res.profile.snapshot!)!.status).toBe("ready");
+    const f = join(s.home, ".fx/auth.json");
+    expect(statSync(f).mode & 0o777).toBe(0o600);
+    // fx printed its URL instead of opening a browser (the fake exits 6 otherwise), in a VM that reached Vercel's hosts.
+    const loginVm = [...s.p.egress.values()][0]!;
+    expect(loginVm).toEqual([...new Set([...BASE_EGRESS, "vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"])]);
+    // `fx status --json` said more (a session field); the host only ever got its boolean, and "ok" from the verify call.
+    expect(seen.join("\n")).not.toContain("vcr_FAKEREFRESH");
+    expect(seen.join("\n")).toContain('{"loggedIn":true}');
+    expect(readFileSync(s.ledger, "utf8")).not.toContain("FAKEREFRESH");
+    expect(await s.p.list("")).toEqual([]);
+
+    // Unasked, status lists fx once it has a login, and checks it in a VM that reaches the same hosts.
+    const all = await authStatus(s.p as any, s.cfg, { ledgerPath: s.ledger });
+    expect(all.map((l) => l.agent)).toEqual(["claude-code", "codex", "fx"]);
+    expect(all[2]).toMatchObject({ present: true, valid: true, login: "vercel" });
+    expect(all[2]!.detail).toStartWith("Vercel login: fx answered via plan login");
+    rmSync(f);
+    expect((await authStatus(s.p as any, s.cfg, { ledgerPath: s.ledger, agents: ["fx"] }))[0]).toMatchObject({ valid: false });
+    expect(await authLogout(s.p as any, "fx", { ledgerPath: s.ledger })).toEqual([res.profile.snapshot!]);
+    expect(readAuthLedger(s.ledger)).toEqual({});
+    expect((await authStatus(s.p as any, s.cfg, { ledgerPath: s.ledger, verify: false })).map((l) => l.agent)).toEqual(["claude-code", "codex"]);
+  }, 30_000);
+
+  test("grok: the browser URL, then the code pasted through the terminal; Grok's hosts only; fx runs on its grok provider", async () => {
+    const s = setup("fx");
+    const t = terminal("XAI-CODE-123\n");
+    const logs: string[] = [];
+    const res = await authLogin(s.p as any, "fx", { cfg: s.cfg, envSnapshot: ENV_SNAP, ledgerPath: s.ledger, stdout: t.stdout, stdin: t.stdin, log: (l) => logs.push(l), pollMs: 1, login: "grok" });
+    const shown = t.out.join("");
+    expect(shown).toContain("https://auth.x.ai/oauth2/auth");
+    expect(shown).toContain("Paste the code shown by xAI");
+    expect(shown).not.toContain("xrt_FAKEREFRESH");
+    expect(res.profile).toMatchObject({ agent: "fx", method: "browser-code", login: "grok", snapshot: "capcomd-auth-fx-2f1eed2b11c528fc" });
+    expect(existsSync(join(s.home, ".fx/grok-auth.json"))).toBe(true);
+    expect(existsSync(join(s.home, ".fx/auth.json"))).toBe(false);
+    expect([...s.p.egress.values()][0]).toEqual([...new Set([...BASE_EGRESS, "auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"])]);
+    // The verify call ran fx on the provider the login signed in to (the fake answers only with that provider's login).
+    expect(logs.join("\n")).toContain("fx answered via plan login");
+  }, 30_000);
+
+  test("grok: a wrong code → the login fails, nothing saved", async () => {
+    const s = setup("fx");
+    const t = terminal("nope\n");
+    await expect(authLogin(s.p as any, "fx", { cfg: s.cfg, envSnapshot: ENV_SNAP, ledgerPath: s.ledger, stdout: t.stdout, stdin: t.stdin, pollMs: 1, login: "grok" })).rejects.toThrow("login not completed");
+    expect(readAuthLedger(s.ledger)).toEqual({});
+    expect(s.p.snapshots.size).toBe(0);
+  }, 30_000);
+
+  test("fx itself sees no login after it (its status says missing) → the login fails before anything is saved", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "capcomd-fx-missing-"));
+    const bin = join(dir, "fx");
+    writeFileSync(bin, `#!/bin/sh\nFAKE_FX_STATUS=missing exec ${FAKE_FX} "$@"\n`);
+    chmodSync(bin, 0o755);
+    const s = setup("fx", { CAPCOMD_AGENT_BIN: bin });
+    const t = terminal();
+    await expect(authLogin(s.p as any, "fx", { cfg: s.cfg, envSnapshot: ENV_SNAP, ledgerPath: s.ledger, stdout: t.stdout, stdin: t.stdin, pollMs: 1 })).rejects.toThrow("fx login vercel finished but fx sees no login; nothing was saved");
+    expect(readAuthLedger(s.ledger)).toEqual({});
+    expect(s.p.snapshots.size).toBe(0);
+    expect(await s.p.list("")).toEqual([]);
+  }, 30_000);
+
+  test("codex (fx's ChatGPT login): refused before any machine starts, pointing to capcomd's codex provider", async () => {
+    const s = setup("fx");
+    const t = terminal();
+    let ensured = 0;
+    const ensure = s.p.ensure.bind(s.p);
+    (s.p as any).ensure = async (...a: Parameters<FakeProvider["ensure"]>) => { ensured++; return ensure(...a); };
+    await expect(authLogin(s.p as any, "fx", { cfg: s.cfg, envSnapshot: ENV_SNAP, ledgerPath: s.ledger, stdout: t.stdout, stdin: t.stdin, pollMs: 1, login: "codex" })).rejects.toThrow(FX_CODEX_LOGIN_REFUSED);
+    expect(ensured).toBe(0);
+    expect(s.log).toEqual([]);
+    expect(readAuthLedger(s.ledger)).toEqual({});
+    // Claude Code and Codex have one login each: naming one is a usage error, also before anything starts.
+    await expect(authLogin(s.p as any, "codex", { cfg: s.cfg, envSnapshot: ENV_SNAP, ledgerPath: s.ledger, stdout: t.stdout, stdin: t.stdin, pollMs: 1, login: "vercel" })).rejects.toThrow("codex has one plan login");
+    expect(ensured).toBe(0);
+  });
+
+  test("an fx login boots agents from its snapshot; doctor checks it in subscription mode with the logins' hosts", async () => {
+    const s = setup("fx");
+    mkdirSync(join(s.home, ".fx"), { recursive: true });
+    writeFileSync(join(s.home, ".fx/auth.json"), "{}");
+    const rep = await doctor(s.p, { cfg: s.cfg, snapshot: ENV_SNAP, source: {}, modes: { fx: "subscription" }, snapshots: { fx: "capcomd-auth-fx-x" } });
+    expect(rep.agents.find((x) => x.agent === "fx")).toMatchObject({ ok: true, credential: { mode: "subscription" }, from: "capcomd-auth-fx-x" });
+    const vm = [...s.p.egress.values()].find((e) => e.includes("vercel.com"))!;
+    expect(vm).toEqual(expect.arrayContaining(["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh", "auth.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"]));
+    // A ledger with an fx login makes subscription fx's mode, as for codex.
+    const led = join(s.workdir, "fx-auths.json");
+    writeAuthLedger({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: "device-auth", login: "vercel", env: ENV_SNAP, createdAt: "t" } }, led);
+    expect(credentialModeFor("fx", { CAPCOMD_AUTH_LEDGER: led })).toBe("subscription");
+    expect(() => credentialModeFor("fx", { CAPCOMD_AUTH_LEDGER: led, AI_GATEWAY_API_KEY: "vck_x" })).toThrow("both AI_GATEWAY_API_KEY and a subscription login");
+    expect(adapterFor("fx").kind).toBe("fx");
+  }, 30_000);
+});
+
 describe("subscription mode in workers, preflight, doctor", () => {
   const profileLedger = (dir: string) => {
     const path = join(dir, "auths.json");
@@ -180,6 +298,28 @@ describe("subscription mode in workers, preflight, doctor", () => {
       expect(err.message).toContain("capcomd auth login");
     }, 30_000);
   }
+
+  test("fx worker on a Grok plan login: the AI Gateway key placeholder dropped, fx run on its grok provider from its own folder", async () => {
+    const r = await bareRepo();
+    const workdir = mkdtempSync(join(tmpdir(), "capcomd-subrun-fx-"));
+    const p = new FakeProvider({ hostExec: true });
+    await secretsSync(p, { AI_GATEWAY_API_KEY: "vck_SHOULDNOTUSE_0123456789abcdef" });
+    const home = join(workdir, "home");
+    stubFx(home);
+    mkdirSync(join(home, ".fx"), { recursive: true });
+    writeFileSync(join(home, ".fx/grok-auth.json"), '{"refresh_token":"xrt_x"}');
+    const { id } = await p.ensure({ idemKey: `sub-fx-${Math.random()}`, isolated: true, ttlSeconds: 60, egressAllow: ["github.com"], labels: {} });
+    await p.waitReady(id, 1000);
+    const fake = new URL("../agents/fake-fx.mjs", import.meta.url).pathname;
+    chmodSync(fake, 0o755);
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AGENT_WORKDIR: workdir, CAPCOMD_AGENT_BIN: fake, CAPCOMD_AGENT_POLL_MS: "50", CAPCOMD_CREDENTIALS: "subscription" });
+    const task = { runId: "r1", taskId: "task-1", epoch: 1, branch: taskBranch("r1", "task-1"), target: "main", repoUrl: r.bare, goal: "make the failing test pass" };
+    const res = await runAgent(adapterFor("fx"), p, id, task, cfg, {});
+    expect(res).toMatchObject({ credentialMode: "subscription", billing: "subscription", costUsd: 0 });
+    const seen = JSON.parse(readFileSync(join(workdir, "task-1-e1/fx-seen.json"), "utf8"));
+    expect(seen).toMatchObject({ key: null, oidc: null });
+    expect(seen.env).toMatchObject({ FX_PROVIDER: "grok", FX_HOME: join(home, ".fx") });
+  }, 30_000);
 
   test("doctor in subscription mode boots the auth snapshot and verifies the login (no API keys)", async () => {
     const s = setup("codex");

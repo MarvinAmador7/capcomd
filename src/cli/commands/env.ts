@@ -52,7 +52,7 @@ export async function envCommand(command: string, pos: string[], values: Record<
     const { credentialModeFor } = await import("../../agents/config");
     const { profileFor } = await import("../../auth/profiles");
     const modes: Record<string, "subscription" | "api"> = {}, snapshots: Record<string, string> = {};
-    for (const k of ["claude-code", "codex"] as const) {
+    for (const k of ["claude-code", "codex", "fx"] as const) {
       let m = "auto"; try { m = credentialModeFor(k); } catch {}
       if (m === "subscription") { modes[k] = "subscription"; const pr = profileFor(k); if (pr?.snapshot) snapshots[k] = pr.snapshot; }
     }
@@ -181,27 +181,31 @@ async function templateNotes(current: import("../../env/resolve").EnvRecord | un
 
 async function authCommand(pos: string[], values: Record<string, any>): Promise<number> {
   const json = !!values.json;
-  const { authLogin, authStatus, authLogout, parseAgentArg } = await import("../../auth/login");
+  const { authLogin, authStatus, authLogout, parseAgentArg, parseLoginArg } = await import("../../auth/login");
   const sub = pos[1];
   const p = platform();
   const cfg = toolCfg();
   if (sub === "login") {
     const agent = parseAgentArg(pos[2]);
+    // fx: which of its logins (vercel, the default, or grok); its ChatGPT one is refused here, before anything starts.
+    const login = parseLoginArg(agent, pos[3]);
     let envSnapshot = resolveEnvSnapshot();
     if (!envSnapshot) {
       console.error("[auth] no env snapshot yet; building one first");
       envSnapshot = (await envBuild(p, { cfg, log: (l) => console.error(`[env] ${l}`) })).name;
     }
-    console.error(`[auth] ${agent === "codex" ? "codex login --device-auth" : "claude setup-token"} in a VM from ${envSnapshot}. Open the URL below in your browser; tokens are never printed.`);
+    const how = agent === "codex" ? "codex login --device-auth" : agent === "fx" ? `fx login ${login}` : "claude setup-token";
+    const then = login === "grok" ? "Open the URL below in your browser, then paste the code xAI shows you here" : "Open the URL below in your browser";
+    console.error(`[auth] ${how} in a VM from ${envSnapshot}. ${then}; tokens are never printed.`);
     const store = (process.env.CAPCOMD_AUTH_STORE ?? "auto") as "auto" | "secret" | "snapshot";
-    const res = await authLogin(p, agent, { cfg, envSnapshot, store, log: (l) => console.error(`[auth] ${l}`) });
-    emit(json, { profile: res.profile, loginMs: res.loginMs, totalMs: res.totalMs }, `logged in: ${agent} → ${res.profile.store === "secret" ? "boxd secret CLAUDE_CODE_OAUTH_TOKEN" : res.profile.snapshot}  (verified, ${(res.totalMs / 1000).toFixed(1)}s)`);
+    const res = await authLogin(p, agent, { cfg, envSnapshot, store, login, log: (l) => console.error(`[auth] ${l}`) });
+    emit(json, { profile: res.profile, loginMs: res.loginMs, totalMs: res.totalMs }, `logged in: ${agent}${login ? ` (${login})` : ""} → ${res.profile.store === "secret" ? "boxd secret CLAUDE_CODE_OAUTH_TOKEN" : res.profile.snapshot}  (verified, ${(res.totalMs / 1000).toFixed(1)}s)`);
     return 0;
   }
   if (sub === "status") {
     const agents = pos[2] ? [parseAgentArg(pos[2])] : undefined;
     const lines = await authStatus(p, cfg, { verify: !values.quick, agents });
-    emit(json, { ok: lines.every((l) => !l.present || l.valid !== false), profiles: lines }, lines.map((l) => `  ${!l.present ? "none " : l.valid === false ? "INVALID" : l.valid ? "valid" : "?    "} ${l.agent.padEnd(12)} ${l.snapshot ?? (l.store === "secret" ? "boxd secret" : "")}  ${l.detail}`).join("\n"));
+    emit(json, { ok: lines.every((l) => !l.present || l.valid !== false), profiles: lines }, lines.map((l) => `  ${!l.present ? "none " : l.valid === false ? "INVALID" : l.valid ? "valid" : "?    "} ${(l.login ? `${l.agent} (${l.login})` : l.agent).padEnd(12)} ${l.snapshot ?? (l.store === "secret" ? "boxd secret" : "")}  ${l.detail}`).join("\n"));
     return lines.some((l) => l.present && l.valid === false) ? 1 : 0;
   }
   if (sub === "logout") {
@@ -209,5 +213,5 @@ async function authCommand(pos: string[], values: Record<string, any>): Promise<
     emit(json, { removed }, removed.length ? `removed: ${removed.join(", ")}` : "no profile");
     return 0;
   }
-  throw new RelayError("usage", "usage: capcomd auth login|status|logout claude|codex [--quick]", "");
+  throw new RelayError("usage", "usage: capcomd auth login|status|logout claude|codex|fx [vercel|grok] [--quick]", "");
 }

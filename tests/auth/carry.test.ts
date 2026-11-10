@@ -151,4 +151,25 @@ describe("env build moves plan logins onto the new env image", () => {
       { ...base, agent: "codex", store: "snapshot", snapshot: "a1", env: "e1" },
     ]).map((p) => p.snapshot)).toEqual(["a1"]);
   });
+
+  test("an fx login moves as its session file; one that can't names its own login in what to run", async () => {
+    const w = world();
+    expect(loginFiles("fx", w.home)).toEqual([`${w.home}/.fx/auth.json`, `${w.home}/.fx/grok-auth.json`]);
+    const fx = new Map(w.p.images.get("capcomd-env-old")!);
+    fx.set(`${w.home}/.fx/grok-auth.json`, enc('{"refresh_token":"scratch-not-a-token"}'));
+    fx.set(`${w.home}/.fx/sessions/s1.json`, enc("{}"));
+    w.p.images.set("capcomd-auth-fx-old", fx);
+    const l = readAuthLedger(w.ledgerPath);
+    writeAuthLedger({ ...l, fx: { agent: "fx", snapshot: "capcomd-auth-fx-old", store: "snapshot", method: "browser-code", login: "grok", env: "capcomd-env-old", createdAt: "x" } }, w.ledgerPath);
+    expect(loginsOnOlderEnv("capcomd-env-new", [readAuthLedger(w.ledgerPath).fx!])[0]).toContain("`capcomd auth login fx grok --sandbox docker`");
+    w.p.failSnapshot = true;
+    const failed = await carryLogin(w.p as any, "fx", w.opts);
+    expect(failed.message).toContain("`capcomd auth login fx grok --sandbox docker`");
+    w.p.failSnapshot = false;
+    expect(await carryLogin(w.p as any, "fx", w.opts)).toMatchObject({ status: "moved", to: "capcomd-auth-fx-new" });
+    const moved = w.p.images.get("capcomd-auth-fx-new")!;
+    expect(moved.has(`${w.home}/.fx/grok-auth.json`)).toBe(true);
+    expect(moved.has(`${w.home}/.fx/sessions/s1.json`)).toBe(false);
+    expect(readAuthLedger(w.ledgerPath).fx).toMatchObject({ snapshot: "capcomd-auth-fx-new", login: "grok", carriedFrom: "capcomd-env-old" });
+  });
 });

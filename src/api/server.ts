@@ -284,7 +284,7 @@ export function harnessApp(o: ServerOptions) {
 		// ?sandbox= (capability sandboxes): one place's rows; a name that isn't a listed place is 404.
 		logins: { list: os.logins.list.handler(async ({ input }) => {
 			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);
-			return { logins: (await src.logins()).filter((l) => input.sandbox === undefined || l.sandbox === input.sandbox) };
+			return { logins: (await src.logins(input.provider)).filter((l) => input.sandbox === undefined || l.sandbox === input.sandbox) };
 		}) },
 		environments: { list: os.environments.list.handler(async ({ input }) => {
 			if (input.sandbox !== undefined && !isListedProvider(input.sandbox)) throw nf(`sandbox ${input.sandbox.slice(0, 64)}`);

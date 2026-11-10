@@ -558,7 +558,7 @@ export function loginsNeeded(cwd = process.cwd(), env: Record<string, string | u
   try { agents = P.readProfiles(envVar("AGENTS_FILE", env) ?? defaultAgentsFile(env, cwd), env).agents as any; } catch { return null; }
   const specs = Object.values(agents ?? {});
   if (!specs.length) return null;
-  return new Set(specs.filter((s) => s.auth === "subscription").map((s) => (s.provider === "codex" ? "codex" : "claude-code")));
+  return new Set(specs.filter((s) => s.auth === "subscription").map((s) => (!s.provider || s.provider === "claude" ? "claude-code" : s.provider)));
 }
 
 /** The plan logins' steps: only the ones `needed` names (null: all) gate setup; a Claude-only project needs no Codex login. */
@@ -597,7 +597,10 @@ export async function checkSetup(cwd = process.cwd(), o: { mcpClient?: boolean }
   }
   // Logins are per sandbox: the ones agents of this project's runs will use.
   const auth = sandbox && !sandbox.startsWith("fake") ? json(self(["auth", "status", "--json"], { cwd, env: { CAPCOMD_SANDBOX: sandbox, RELAY_SANDBOX: undefined } }).stdout)?.profiles ?? [] : [];
-  out.push(...loginSteps(auth, auth.length ? loginsNeeded(cwd) : null, sandbox));
+  const needed = auth.length ? loginsNeeded(cwd) : null;
+  // `auth status` lists fx only once it has a login: a profile here that needs one it hasn't is a missing login too.
+  for (const a of needed ?? []) if (a === "fx" && !auth.some((x: { agent: string }) => x.agent === a)) auth.push({ agent: a, present: false });
+  out.push(...loginSteps(auth, needed, sandbox));
   const repo = process.env.CAPCOMD_REPO ?? proj.env?.CAPCOMD_REPO;
   const target = proj.run?.target ?? process.env.CAPCOMD_MERGE_TARGET ?? proj.env?.CAPCOMD_MERGE_TARGET ?? null;
   out.push({ step: "project", ok: !!repo, detail: repo ? `${repo} → ${target ?? "no target branch set (each run asks for its base)"}${projPath ? ` (${projPath})` : " (environment)"}` : "no .capcomd/config.json here or above", ...(repo ? {} : { hint: "Run `capcomd setup project` in your repository." }) });

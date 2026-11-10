@@ -3,7 +3,7 @@ import { OPEN_EGRESS } from "../providers/sandbox";
 import { agentSeam, orchestrateConfig, providerOfKind } from "../plugins/agents";
 import { CLAUDE_CODE_VERSION } from "../plugins/agent-claude";
 import { CODEX_VERSION } from "../plugins/agent-codex";
-import { FX_DEFAULT_USD_PER_MTOK, FX_RELEASE } from "../plugins/agent-fx";
+import { FX_DEFAULT_USD_PER_MTOK, FX_LOGINS, FX_RELEASE } from "../plugins/agent-fx";
 import { reservedEnvName } from "../plugins/hooks";
 import { pinnedRuntime, type McpServer } from "../profiles/runtime";
 export { CLAUDE_USD_PER_MTOK, claudeCostUsd, type ClaudeUsage } from "../plugins/agent-claude";
@@ -55,8 +55,8 @@ export const PROVIDER_EGRESS: Record<"claude-code" | "codex" | "fx", Record<Egre
   "claude-code": { apikey: ["api.anthropic.com"], subscription: ["api.anthropic.com"] },
   codex: { apikey: ["api.openai.com"], subscription: ["api.openai.com", ...CODEX_SUBSCRIPTION_HOSTS] },
   // fx: the AI Gateway (model calls, its model list), and its release host for the pinned install when the image lacks
-  // it. No plan login (describe().subscription is false).
-  fx: { apikey: ["ai-gateway.vercel.sh", FX_RELEASE.host], subscription: ["ai-gateway.vercel.sh", FX_RELEASE.host] },
+  // it. On a plan login, the hosts of both of fx's logins (Vercel's session and the Gateway; Grok's), whichever it is.
+  fx: { apikey: ["ai-gateway.vercel.sh", FX_RELEASE.host], subscription: [...new Set([...FX_LOGINS.flatMap((l) => l.egress), FX_RELEASE.host])] },
 };
 /** The hosts an install of the active providers' CLIs downloads from besides BASE_EGRESS (a release archive's,
  *  `describe().install`): an env build's VM reaches them too. */
