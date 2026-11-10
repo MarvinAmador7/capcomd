@@ -18,6 +18,19 @@ const RESERVED_KV = ["_", "approval/", "recipe/", "handoff/"];
 export { WAIT_DEFAULT_MS, WAIT_MAX_MS };
 
 const deny = (message: string, hint: string): never => { throw new RelayError("usage", message, hint, { code: "forbidden" }); };
+
+// Plugin API §6.1: verify, merge and approve go to the daemon that hosts the engine (src/primitives/front-door.ts), so
+// every plugin's gate judges them. run_new and spawn run here, where the project is: a plugin only the daemon runs that
+// listens to their hooks is named in the answer (`pluginsNotConsulted`), or refuses them (a `failure: closed` listener).
+const F = () => import("../primitives/front-door");
+const RUNS_HERE = "capcomd mcp runs it in its own process (it reads the project where it runs), and only the daemon runs those plugins";
+const RUNS_HERE_HINT = "A run or spawn from capcomd mcp can't reach the daemon's plugins yet (plugin API §6.1): an agent's spawns run in the daemon. Ask the user to turn the plugin off (`plugins.<name>.enabled: false`) if it shouldn't judge this.";
+const NO_DAEMON = "no daemon runs for this engine to ask them";
+/** The listeners an operation run here skipped, as the answer names them (additive; absent: none). */
+const notConsulted = (skipped: ReadonlyArray<{ plugin: string; hooks: readonly string[] }>, why: string) =>
+  skipped.length ? { pluginsNotConsulted: { plugins: skipped.map((u) => ({ plugin: u.plugin, hooks: [...u.hooks] })), why } } : {};
+const runsHere = async (what: string, hooks: Array<import("../../packages/plugin/src/hooks").HookName>) =>
+  notConsulted(await (await import("../plugins/unconsulted")).unconsulted(what, hooks, RUNS_HERE, { hint: RUNS_HERE_HINT }), RUNS_HERE);
 /** A wait's bound: 0 answers at once (a look, or a verify/merge started without waiting), at most WAIT_MAX_MS. */
 const waitMs = (v: unknown) => { const n = v === undefined || v === null ? WAIT_DEFAULT_MS : Number(v); return Number.isFinite(n) ? Math.min(Math.max(n, 0), WAIT_MAX_MS) : WAIT_DEFAULT_MS; };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -73,9 +86,10 @@ export async function runNew(a: { budget?: string; label?: string; key?: string;
     goal = { branch: r.goalBranch, base: r.base };
   }
   const target = goal ? goal.branch : a.target ?? d.target;
+  const skipped = await runsHere("capcomd_run_new", ["run.creating"]);
   const r = await O.runNew({ budget, label: a.label, key: a.key, checks: d.checks ?? {}, ...(d.reviewer ? { reviewer: d.reviewer } : {}), ...(sandbox ? { sandbox } : {}), ...(goal ? { goalBranch: goal.branch, base: goal.base } : { ...(target ? { target } : {}), ...(a.targetFrom ? { targetFrom: a.targetFrom } : {}) }) });
   const where = r.sandbox.name ? `Its agents and checks run on ${r.sandbox.name} (${SANDBOX_FROM[r.sandbox.source]}).` : "Its agents and checks run on the engine's own sandbox (nothing configured for this project: pass sandbox, or set it with `capcomd setup project --sandbox docker|boxd`).";
-  const out = { ...r, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
+  const out = { ...r, ...skipped, gates: { checks: Object.keys(d.checks ?? {}), reviewer: d.reviewer ?? null, target: target ?? null, ...(goal ? { goalBranch: goal.branch, base: goal.base } : {}) },
     next: `${where} ` + (goal ? `Spawn agents with capcomd_spawn; verified merges land on ${goal.branch} with no approval. When the work is done, show the user capcomd_goal and ask before capcomd_pr_open.` : "Spawn agents with capcomd_spawn; give each a check name from gates.checks.") };
   return withTeamShape(out, await runCapacity(r.runId));
 }
@@ -181,9 +195,10 @@ export async function inspect(a: { runId: string; agent: string; tail?: number }
 export async function spawn(a: { runId: string; task: string; title?: string; profile?: string; key?: string; budget?: string; check?: string; report?: boolean; continue?: string; children?: Record<string, unknown> }) {
   let budget: Budget | undefined;
   try { budget = a.budget ? parseBudget(a.budget) : undefined; } catch (e) { throw new RelayError("usage", `budget: ${(e as Error).message}`, "Units: usd, turns, wallSeconds, e.g. \"usd=1,turns=40\"."); }
+  const skipped = await runsHere("capcomd_spawn", ["profile.resolved", "agent.spawning"]);
   // No `operator`: a driver's spawn may only narrow the profile, like any parent.
   const r = await O.spawnAgent({ runId: a.runId, task: a.task, ...(a.title !== undefined ? { title: a.title } : {}), profile: a.profile, key: a.key, ...(budget ? { budget } : {}), ...(a.check ? { check: a.check } : {}), ...(a.report ? { report: true } : {}), ...(a.continue ? { continueFrom: a.continue } : {}), ...(a.children ? { grant: a.children as any } : {}) });
-  return { ...agentView(r), next: `Wait with capcomd_await {runId: "${a.runId}", agents: ["${r.agentId}"]}.` };
+  return { ...agentView(r), ...skipped, next: `Wait with capcomd_await {runId: "${a.runId}", agents: ["${r.agentId}"]}.` };
 }
 
 /**
@@ -296,22 +311,18 @@ export async function verify(a: { runId: string; ref?: string; id?: string; chec
   // Checks are named by the operator, the reviewer is the run's: a driver picks a check, never writes one.
   // A call without a key or id gets an id of its own up front, so the answer names it and later calls poll that one.
   const id = a.id ?? O.verifyIdFor(a.runId, a.ref!, a.key ?? `drv-${crypto.randomUUID()}`);
-  const work = O.verifyRef({ runId: a.runId, ref: a.ref ?? "", id, ...(a.check ? { check: a.check } : {}), ...(a.acceptance !== undefined ? { acceptance: a.acceptance } : {}), ...(a.key ? { key: a.key } : {}) });
-  work.catch(() => {}); // a timed-out call leaves it running; its error reaches the next call
-  const r = await bounded(work, waitMs(a.timeoutMs));
+  const r = await (await F()).frontVerify({ runId: a.runId, ref: a.ref ?? "", id, ...(a.check ? { check: a.check } : {}), ...(a.acceptance !== undefined ? { acceptance: a.acceptance } : {}), ...(a.key ? { key: a.key } : {}) }, { waitMs: waitMs(a.timeoutMs), what: "capcomd_verify" });
   if (!r.done) return { id, state: "running", next: still(a.runId, id, "The checks (and the review, if the run has a reviewer) are") };
   const v: any = r.value;
-  return { ...v, next: opNext(a.runId, v) };
+  return { ...v, ...notConsulted(r.skipped, NO_DAEMON), next: opNext(a.runId, v) };
 }
 
 export async function merge(a: { runId: string; ref?: string; require?: string; id?: string; key?: string; timeoutMs?: number }) {
   if (!a.ref && !a.id) throw new RelayError("usage", "ref or id required", "Pass the ref and require (the id of a passing capcomd_verify of it), or the mrg-… id of a merge to poll.");
   const id = a.id ?? (a.key ? await O.mergeIdFor(a.runId, a.ref!, a.key) : `mrg-d${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`);
-  const work = O.mergeRef({ runId: a.runId, ref: a.ref ?? "", id, ...(a.require ? { require: a.require } : {}), ...(a.key ? { key: a.key } : {}), requestApproval: true });
-  work.catch(() => {});
-  const r = await bounded(work, waitMs(a.timeoutMs));
+  const r = await (await F()).frontMerge({ runId: a.runId, ref: a.ref ?? "", id, ...(a.require ? { require: a.require } : {}), ...(a.key ? { key: a.key } : {}), requestApproval: true }, { waitMs: waitMs(a.timeoutMs), what: "capcomd_merge" });
   if (!r.done) return { id, state: "running", next: still(a.runId, id, "The merge is") };
-  const m: any = r.value;
+  const m: any = { ...r.value, ...notConsulted(r.skipped, NO_DAEMON) };
   if (m.state === "awaiting_approval") {
     const how = `a person approves with \`capcomd approve ${a.runId} ${m.id}\` (or in the TUI)`;
     const elicit = ((await policy()).approvals ?? "human") === "elicit";
@@ -396,7 +407,8 @@ export async function approve(a: { runId: string; merge: string; deny?: boolean;
   if (mode !== "client-confirmed") {
     deny("approving merges into protected branches is left to a person in this project", `Ask the user to run \`capcomd approve ${a.runId} ${a.merge}\`${a.deny ? " --deny" : ""} (or approve in the TUI). A project can let capcomd ask the user itself with driver.approvals: "elicit" in .capcomd/config.json (\`capcomd setup agent --approvals elicit\`).`);
   }
-  return O.decideMerge(a.runId, a.merge, { approve: !a.deny, by: DRIVER, ...(a.reason ? { reason: a.reason } : {}) });
+  const r = await (await F()).frontDecide(a.runId, a.merge, { approve: !a.deny, by: DRIVER, ...(a.reason ? { reason: a.reason } : {}) }, { what: "capcomd_approve" });
+  return r.done ? { ...r.value, ...notConsulted(r.skipped, NO_DAEMON) } : { id: a.merge, state: "running" };
 }
 
 /**
@@ -454,12 +466,10 @@ async function approveElicited(a: { runId: string; merge: string; deny?: boolean
     if (after !== commit) throw new RelayError("conflict", `branch ${d.branch} moved while the user was asked (${short(commit)} → ${short(after)}); not approved`, `The merge is still waiting. Verify the new commit (capcomd_verify) and merge that; tell the user.`, { code: "branch_moved" });
     // Who asked and what the person saw, next to the decision (kv approval/<mrg>, reserved: only capcomd writes it).
     await S.kvWrite(a.runId, { k: `approval/${a.merge}`, value: { decision: a.deny ? "deny" : "approve", by: ELICITED, client: name || null, commit, target: d.target, project: port!.project?.name ?? null, at: new Date().toISOString() }, writer: "operator" }).catch(() => {});
-    const work = O.decideMerge(a.runId, a.merge, { approve: !a.deny, by: ELICITED, ...(a.deny && a.reason ? { reason: a.reason } : {}) });
-    work.catch(() => {});
-    const r = await bounded(work, WAIT_DEFAULT_MS);
+    const r = await (await F()).frontDecide(a.runId, a.merge, { approve: !a.deny, by: ELICITED, ...(a.deny && a.reason ? { reason: a.reason } : {}) }, { waitMs: WAIT_DEFAULT_MS, what: "capcomd_approve" });
     const said = { decision: a.deny ? "denied" : "approved", decidedBy: ELICITED, ...(name ? { via: name } : {}), commit };
     if (!r.done) return { id: a.merge, state: "running", ...said, next: "The user approved; the merge is landing (the checks run again on the latest target). Check with capcomd_tree." };
-    return { ...(r.value as Record<string, unknown>), ...said };
+    return { ...(r.value as Record<string, unknown>), ...notConsulted(r.skipped, NO_DAEMON), ...said };
   } finally { asking.delete(key); }
 }
 

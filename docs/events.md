@@ -437,6 +437,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       ],
       "description": "Where Agent.title comes from: user (renamed in an app or with PUT …/title; it sticks until they clear it), self (the agent named itself: `capcomd title` in its VM), parent (its parent named it: `spawn --title`, `capcomd title <child>`), driver (the user's driving harness: capcomd_title, `capcomd title <runId> <agt>`), derived (nobody did: the daemon's, from the task's first words). More may be added: show the title whatever its source"
     },
+    "by": {
+      "description": "Who asked for it when that is a plugin (plugin:<name>, its ctx.agents.spawn); absent for a parent's spawn (parent) and the operator's or driver's",
+      "type": "string"
+    },
     "cause": {
       "description": "Lifecycle feed only: why the state changed (trusted code, see LifecycleCause)",
       "type": "string"

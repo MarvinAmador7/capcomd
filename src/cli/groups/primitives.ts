@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "fs";
 import { EXIT } from "../../core/errors";
 import { assertEngine } from "../../core/relay";
-import { type Cmd, type KernelCommand, usage, out, jsonish, deepMerge } from "./common";
+import { type Cmd, type KernelCommand, usage, out, jsonish, deepMerge, saySkipped, RUNS_HERE, RUNS_HERE_HINT } from "./common";
 
 /** `capcomd spawn` */
 async function spawnCommand({ positionals, values, json }: Cmd): Promise<number> {
@@ -24,6 +24,8 @@ async function spawnCommand({ positionals, values, json }: Cmd): Promise<number>
   }
   let budget: Record<string, number> | undefined;
   try { if (values.budget !== undefined) budget = (await import("../../primitives/policy")).parseBudget(values.budget); } catch (e) { usage(`--budget: ${(e as Error).message}`); }
+  // Its profile.resolved and agent.spawning fire here, where the daemon's plugins aren't (plugin API §6.1).
+  saySkipped("capcomd spawn", await (await import("../../plugins/unconsulted")).unconsulted("capcomd spawn", ["profile.resolved", "agent.spawning"], RUNS_HERE, { hint: RUNS_HERE_HINT }), RUNS_HERE);
   const P = await import("../../primitives/ops");
   const r = await P.spawnAgent({
     runId, task, ...(profile ? { profile } : {}), ...(Object.keys(set).length || values.operator ? { overrides: { set, operator: !!values.operator } } : {}),
@@ -62,10 +64,12 @@ async function verifyCommand({ positionals, values, json }: Cmd): Promise<number
     const raw = String(values.acceptance);
     try { acceptance = raw.trim().startsWith("{") || raw.trim().startsWith("[") ? JSON.parse(raw) : existsSync(raw) ? JSON.parse(readFileSync(raw, "utf8")) : raw; } catch (e) { usage(`bad --acceptance: ${(e as Error).message}`); }
   }
-  const r: any = await (await import("../../primitives/ops")).verifyRef({
+  // In the daemon that hosts the engine, so every plugin's judge is asked (plugin API §6.1); else here.
+  const a = await (await import("../../primitives/front-door")).frontVerify({
     runId, ref, checks: values.checks as string | undefined, check: values.check as string | undefined, acceptance, reviewProfile: (values["review-profile"] ?? values["judge-profile"]) as string | undefined,
     target: values.target as string | undefined, key: values.key as string | undefined,
-  });
+  }, { what: "capcomd verify", skipping: (s, why) => saySkipped("capcomd verify", s, why) });
+  const r: any = a.done ? a.value : null;
   if (json) out(r);
   else console.log(`${r.id}: ${r.state}${r.result?.commit ? ` (${String(r.result.commit).slice(0, 12)})` : ""}${r.result?.checks?.reason ? ` ${r.result.checks.reason}` : ""}${r.result?.combined?.text ? `\n  ${r.result.combined.text}` : ""}`);
   return r.state === "passed" ? EXIT.ok : EXIT.run_failed;
@@ -94,15 +98,18 @@ async function mergeCommand({ positionals, values, json }: Cmd): Promise<number>
   if (values.operator && values["request-approval"]) usage("--request-approval and --operator are two ways to merge into a protected target: pick one");
   // --request-approval: a protected target parks the merge for `capcomd approve`, as an agent's merge is parked, so a
   // person lands it through every plugin's gate (a memory change's hold too) instead of past them with --operator.
-  const r: any = await (await import("../../primitives/ops")).mergeRef({
+  // In the daemon that hosts the engine, so every plugin's gate is asked (plugin API §6.1); else here.
+  const a = await (await import("../../primitives/front-door")).frontMerge({
     runId, ref, require: values.require as string | undefined, target: values.target as string | undefined,
     operator: !!values.operator, key: values.key as string | undefined, ...(values["request-approval"] ? { requestApproval: true } : {}),
-  });
+  }, { what: "capcomd merge", skipping: (s, why) => saySkipped("capcomd merge", s, why) });
+  const r: any = a.done ? a.value : null;
   if (json) out(r);
   else console.log(`${r.id}: ${r.state}${r.result?.sha ? ` ${String(r.result.sha).slice(0, 12)}` : ""}${r.result?.reason ? ` ${r.result.reason}` : ""}${r.result?.combined?.text ? `\n  ${r.result.combined.text}` : ""}`);
   if (!json && r.state === "awaiting_approval") console.log(r.heldBy ? (await import("../status-text")).heldMergeText(runId, r.id, r).join("\n") : `  approve it to land it: capcomd approve ${runId} ${r.id}`);
-  // The merged agent's checkpoint refs are deleted after the merge's record: finish that before this process ends.
-  await (await import("../../primitives/ops")).settleCleanups();
+  // The merged agent's checkpoint refs are deleted after the merge's record: finish that before this process ends (the
+  // daemon's merge does it there).
+  if (a.done && a.where === "here") await (await import("../../primitives/ops")).settleCleanups();
   return r.state === "merged" ? EXIT.ok : EXIT.run_failed;
 }
 

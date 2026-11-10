@@ -131,7 +131,9 @@ src/
                   ~/.capcomd/plugins/.project/<key>/, exemptions in ~/.capcomd/plugins/compatibility.json;
                   run-config.ts, a run's per-run plugin settings (`--plugin-config`, POST /v1/runs `plugins`) in the
                   plugin's run storage
-  primitives/   - ADR-016 operations, policy, task board, kv
+  primitives/   - ADR-016 operations, policy, task board, kv; front-door.ts, a front door's verify, merge and approval
+                  sent to the daemon that hosts its engine (plugin API §6.1; the daemon's side is api/front-door.ts), else
+                  run here once ../plugins/unconsulted.ts says no plugin only the daemon runs must judge it
   profiles/     - agent profiles (ADR-024): the flat v1 spec every profile pins (v1.ts), the v2 manifest (v2.ts), the
                   layers a name resolves through, project, user, bundled (load.ts), a profile's skills, read and
                   hashed (skills.ts), what an agent is pinned with beside the flat spec: MCP servers, sandbox,

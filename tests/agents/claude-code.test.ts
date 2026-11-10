@@ -415,7 +415,10 @@ describe("claude-code adapter (fake claude in FakeProvider)", () => {
 
   test("no changes and agent errors are typed failures", async () => {
     const n = await setup("[nochange] look around");
-    expect((await runClaudeCode(n.provider, n.id, n.task, n.cfg, { apiKey: KEY }).catch((e) => e)).kind).toBe("no_changes");
+    const none = await runClaudeCode(n.provider, n.id, n.task, n.cfg, { apiKey: KEY }).catch((e) => e);
+    expect(none.kind).toBe("no_changes");
+    // Its final words go with the failure, so its parent reads what it found.
+    expect(none.resultText).toBe("fixed sum");
     const f = await setup("[fail] boom");
     expect((await runClaudeCode(f.provider, f.id, f.task, f.cfg, { apiKey: KEY }).catch((e) => e)).kind).toBe("failed");
   });

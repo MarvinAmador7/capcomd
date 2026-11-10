@@ -42,7 +42,7 @@ import { engineDrivesAgents } from "../utils/agent-workflow-flag";
 import { realSandbox, sandboxCaps, sandboxName } from "../providers/registry";
 import { OPEN_EGRESS } from "../providers/sandbox";
 import { normalizeTitle, shownTitle, type TitleBy } from "./agent-title";
-import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
+import { applyPreparePatch, applyProfilePatch, applyRunPatch, applySpawnPatch, gates, hooks, inBackground, inDaemon, preparingAgent, principalOf, refusedError, refusedText, skillHash, untrusted } from "../plugins/hooks";
 import { agentOf, approvalOf, mergeOf, pinnedOf, verificationOf } from "../plugins/shapes";
 import { agentSeam } from "../plugins/agents";
 import { sameHold, type PluginHold } from "../merge/types";
@@ -452,6 +452,9 @@ export interface SpawnOpts {
   continueFrom?: string;
   /** Its title (capability agents.title), from its parent (`spawn --title` in a VM) or the driver (host CLI, MCP). */
   title?: string;
+  /** A plugin's spawn (`ctx.agents.spawn`, plugin API §8.4): the principal its hooks are told, and the spawn's `by`
+   *  (`plugin:<name>`, on agent.spawned and its title's `setBy`). Never with `operator`. */
+  principal?: Principal;
 }
 /**
  * What spawning `ref` (a profile, or an encoded ref with overrides) checks before anything is recorded: the profile
@@ -547,6 +550,8 @@ export const rootAgentIdFor = (runId: string, key: string) => stableId("agt", `$
 export const PLANNER_KV = "_planner";
 
 export async function spawnAgent(o: SpawnOpts) {
+  // A plugin is held to the spawn checks as any caller (plugin API §8.4): its spawn is never the operator's.
+  if (o.principal?.kind === "plugin" && o.operator) throw new RelayError("conflict", "a plugin's spawn is never the operator's", "Spawn without operator: a plugin is held to the same checks as any caller (plugin API §8.4).", { code: "forbidden" });
   await assertEngine();
   // A title that would be refused refuses the spawn, before anything is recorded.
   let title: string | undefined;
@@ -565,6 +570,7 @@ export async function spawnAgent(o: SpawnOpts) {
     await namedCheck(o.runId, pin); // unknown names are refused here, not at verify time
     o = { ...o, contract: { ...(o.contract ?? {}), check: pin } };
   }
+  const by = o.principal?.kind === "plugin" ? `plugin:${o.principal.name}` : undefined;
   const ref = o.profile ? encodeAgentRef(o.profile, o.overrides) : null;
   const scope = o.parent ?? "operator";
   const agentId = stableId("agt", `${o.runId}\0${scope}`, o.key);
@@ -632,7 +638,9 @@ export async function spawnAgent(o: SpawnOpts) {
     // ADR-022: how this shell (or the parent's driver) drives agents travels with the agent, for the engine to use.
     // The agents file the driver would have resolved its children's profiles from (this shell's, or the project's).
     driveEnv: { ...captureDriveEnv(), CAPCOMD_AGENTS_FILE: resolve(agentsFilePath()) },
-    ...(title ? { title: { title, ...(o.parent && !o.operator ? { by: "parent" as const, setBy: o.parent } : { by: "driver" as const, setBy: "driver" }) } } : {}),
+    // A plugin's title is set from the host, as a driver's is, and names the plugin.
+    ...(title ? { title: { title, ...(by ? { by: "driver" as const, setBy: by } : o.parent && !o.operator ? { by: "parent" as const, setBy: o.parent } : { by: "driver" as const, setBy: "driver" }) } } : {}),
+    ...(by ? { by } : {}),
   }).catch(asRelay);
   if (o.start !== false && !TERMINAL_AGENT.has(res.agent.status)) await startDriver(o.runId, agentId);
   return { ...view(res.agent), created: res.created };
@@ -645,8 +653,9 @@ function reportAllowed(resolved: ResolvedAgent, contract: Record<string, unknown
     throw new RelayError("config", `profile ${resolved.name} can't be spawned with report (its permissions.report is false)`, "Spawn a profile that may report (capcomd_profiles canReport), or spawn this one without report.", { code: "report_not_allowed" });
 }
 
-/** Who asked for a spawn (§3.2): the parent agent from its VM, else the operator or driver on the host. */
-const spawnPrincipal = (o: SpawnOpts) => (o.parent && !o.operator ? principalOf(o.parent, o.runId) : principalOf(null));
+/** Who asked for a spawn (§3.2): a plugin (ctx.agents.spawn), else the parent agent from its VM, else the operator or
+ *  driver on the host. */
+const spawnPrincipal = (o: SpawnOpts) => o.principal ?? (o.parent && !o.operator ? principalOf(o.parent, o.runId) : principalOf(null));
 
 /** profile.resolved (plugin API §6.6.5): a plugin may narrow the resolved spec as a user override does; a widening is
  *  refused (`widening`). Fires on every resolution of a spawn, before the spawn checks run on the result. */
@@ -1055,11 +1064,14 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
   const report = (a.contract as any)?.report === true;
   const from = (a.contract as any)?.from as { agentId: string; ref: string; stopped: string } | undefined;
   // ADR-025 §5.2: a consolidator answers with deltas, which the kernel stages on its branch when it ends (settlePushed);
-  // a real one reads the run's candidates and outcomes in its prompt (a scripted one reads them with its capcomd).
+  // a real one reads the run's candidates and outcomes in its prompt (a scripted one reads them with its capcomd): the
+  // ones no consolidator of the run that ended done was given.
   const { isConsolidator, consolidationInputs } = await import("../context/consolidator");
   // The brain its profile names, which its prompt says it may propose new drafts to (ADR-025 step 5).
   const brain = isConsolidator(a) ? (await import("../context/consolidate")).brainOf((a.spec as { context?: import("../../packages/plugin/src/context-layer").ContextSpec } | null)?.context) : null;
-  const consolidate = isConsolidator(a) && !review && !report ? { inputs: exec && mode !== "script" ? await consolidationInputs(runId) : "", ...(brain ? { brain } : {}) } : null;
+  // What it is given is recorded on every attempt (a scripted one reads the run itself, but is given the same), so the
+  // fallback knows which lessons a later consolidator still has to take (D6a).
+  const consolidate = isConsolidator(a) && !review && !report ? { inputs: await consolidationInputs(runId, agentId, { text: !!exec && mode !== "script" }), ...(brain ? { brain } : {}) } : null;
   // Children branch from the run's target (a staging branch) when the operator set one.
   const target = await runTarget(runId);
   // Its title (the driver's --title, its parent's, the user's or its own), for its commit's subject; not one derived from the brief.
@@ -1426,7 +1438,7 @@ export async function recordAgentRunSpan(runId: string, agentId: string, started
 }
 
 /** The agent failed for good: its result says why (a cancel meanwhile wins: its VM is released). */
-export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string }): Promise<ScopeAgent> {
+export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string; resultText?: string }): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
   if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
   // Its jobs settle and its machine goes once it has failed (here too when an earlier settle recorded the failure but
@@ -1434,7 +1446,11 @@ export async function finishFailed(runId: string, agentId: string, epoch: number
   const drain = async () => { await endJobs(runId, agentId, "its agent failed"); await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {}); };
   if (TERMINAL_AGENT.has(a.status)) { if (a.status === "failed") await drain(); return a; }
   const res = await resultOf(runId, agentId);
-  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
+  // A worker that changed no files: its final message is its summary when it declared none, so its parent reads what
+  // it found (as a finished agent's is).
+  const words = typeof err.resultText === "string" && err.resultText.trim() ? err.resultText.trim().slice(0, 2000) : null;
+  const noChanges = err.kind === "no_changes" ? { errorKind: "no_changes", ...(!res.summary && words ? { summary: words } : {}) } : {};
+  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, ...noChanges, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
   await drain();
   return fin.agent;
 }
@@ -1493,8 +1509,9 @@ export async function getAgentOrThrow(runId: string, agentId: string): Promise<S
  * waiter hears about trouble when it happens; one already showing when the wait began doesn't.
  * `ops` (vfy-… / mrg-… ids) are waited on with the agents: an op is finished once it isn't running (passed, failed,
  * merged, or parked for an approval); `ops` in the result has each one's record. With `any`, the first agent or op to
- * finish ends the wait. An op left running by a caller that went away (another session, a restarted server) is resumed
- * here, as a call with its id would (idempotent: the verifier shares one run per op).
+ * finish ends the wait. An op running that isn't this process's (a front door's, in the daemon; one left by a caller
+ * that went away) is picked up as a call with its id would (`resumeOp`: through the daemon, outside it; idempotent: the
+ * verifier shares one run per op).
  */
 export async function awaitAgents(runId: string, ids: string[], opts: { timeoutMs?: number; any?: boolean; notices?: boolean; ops?: string[] } = {}) {
   await assertEngine();
@@ -1532,10 +1549,11 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     for (const id of opIds) {
       if (opsDone.has(id)) continue;
       const op = await s.getOp({ opId: id });
-      // Started here a moment ago and not recorded yet (a verify answers with its id before it has resolved its ref).
-      if (!op && inflightOps.has(id)) {
+      // Started here (or by this process's front door in the daemon) a moment ago and not recorded yet (a verify answers
+      // with its id before it has resolved its ref).
+      if (!op && (inflightOps.has(id) || justStartedInDaemon(id))) {
         opsLatest.set(id, { id, kind: id.startsWith("vfy-") ? "verify" : id.startsWith("chk-") ? "check" : "merge", state: "running" } as any);
-        if (feed) void inflightOps.get(id)!.then(feed.poke, feed.poke);
+        if (feed && inflightOps.has(id)) void inflightOps.get(id)!.then(feed.poke, feed.poke);
         continue;
       }
       if (!op || (op.kind !== "verify" && op.kind !== "merge" && op.kind !== "check")) throw new RelayError("not_found", `${id} not found in ${runId}`, "Pass the vfy-… / mrg-… / chk-… ids capcomd verify, merge and check returned.");
@@ -1546,7 +1564,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
       if (mine) { if (feed) void mine.then(feed.poke, feed.poke); }
       else if (!resumed.has(id)) {
         resumed.add(id);
-        const p = op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id }) : op.kind === "check" ? checkRef({ runId, id }) : mergeRef({ runId, ref: op.data.ref as string, id });
+        const p = resumeOp(runId, op);
         p.catch(() => {}); // its record says how it ended; the next look reads it
         if (feed) void p.then(feed.poke, feed.poke);
       }
@@ -1563,6 +1581,22 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     if (feed) await feed.wait(Math.min(eventFallbackMs(), Math.max(0, deadline - Date.now()) + 1)); else await sleep(pollMs());
   }
   } finally { feed?.close(); }
+}
+
+/**
+ * An op a wait found running that isn't this process's, picked up as a call with its id would. A verify or merge outside
+ * the daemon goes through the front door (src/primitives/front-door.ts, plugin API §6.1): the daemon that hosts the
+ * engine joins it (most often it is the one running it: a front door's own, started there) or picks it up itself, so
+ * its plugins judge it; with no daemon it runs here once nothing this process can't ask must judge it. Never run again
+ * here past the daemon's judges, which a verify the daemon runs may still be waiting on. A check fires no gate (§6.1).
+ */
+function resumeOp(runId: string, op: import("../actors/scope").ScopeOp): Promise<unknown> {
+  if (op.kind === "check") return checkRef({ runId, id: op.id });
+  if (inDaemon()) return op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id: op.id }) : mergeRef({ runId, ref: op.data.ref as string, id: op.id });
+  return import("./front-door").then((F) => {
+    const w = { waitMs: 0, what: `the wait for ${op.id}` };
+    return op.kind === "verify" ? F.frontVerify({ runId, ref: op.data.ref as string, id: op.id }, w) : F.frontMerge({ runId, ref: op.data.ref as string, id: op.id }, w);
+  });
 }
 
 const eventFallbackMs = () => Number(env("AWAIT_FALLBACK_MS") ?? 5000);
@@ -1772,9 +1806,20 @@ export interface VerifyOpts {
   judgeProfile?: string;
   /** In-VM verify: the calling agent, which pays for the reviewer (the operator's verify: the run). */
   reviewParent?: string;
+  /** A plugin's verify (`ctx.gates.verify`): `plugin:<name>`, kept beside the record as who asked (its hooks' principal);
+   *  the run pays for its reviewer, as for the operator's. */
+  requester?: string;
 }
 
 export const verifyIdFor = (runId: string, ref: string, key?: string) => stableId("vfy", `${runId}\0${ref}`, key);
+
+/** Who asked for a verification or a merge, kept beside its record and never a parameter of it (a retry by another
+ *  caller is the same op): an in-VM call's agent (`askedBy`), else a plugin (`requester`, `plugin:<name>`). */
+const askers = (o: { reviewParent?: string; askedBy?: string; requester?: string }) => {
+  const agent = o.reviewParent ?? o.askedBy;
+  return agent ? { askedBy: agent } : o.requester ? { requester: o.requester } : {};
+};
+const requesterOf = (op: { data: Record<string, unknown> }) => (typeof op.data.requester === "string" ? op.data.requester : undefined);
 
 /** A finished verification's record (null while it runs or before it starts): what a poll returns at once. */
 export async function finishedVerify(runId: string, vfyId: string) {
@@ -1783,6 +1828,16 @@ export async function finishedVerify(runId: string, vfyId: string) {
 }
 /** The verifies and merges this process runs, by id: a second call for one shares its run (never a second run here). */
 const inflightOps = new Map<string, Promise<any>>();
+/** The verifies, merges and decisions a front door of this process started in the daemon (plugin API §6.1,
+ *  src/primitives/front-door.ts), by id, until when: the daemon answers with the id before it has written the record,
+ *  so a wait that comes at once counts such an id as running, as it counts one started here (`inflightOps`). */
+const startedInDaemon = new Map<string, number>();
+export const STARTED_IN_DAEMON_MS = 60_000;
+export function noteStartedInDaemon(id: string, now = Date.now()): void {
+  for (const [k, until] of startedInDaemon) if (until <= now) startedInDaemon.delete(k);
+  startedInDaemon.set(id, now + STARTED_IN_DAEMON_MS);
+}
+const justStartedInDaemon = (id: string) => (startedInDaemon.get(id) ?? 0) > Date.now();
 /** Run `work` as the one run of op `id` in this process (the caller checked there is none). */
 function track<T>(id: string, work: () => Promise<T>): Promise<T> {
   const p = work().finally(() => { if (inflightOps.get(id) === p) inflightOps.delete(id); });
@@ -1903,7 +1958,7 @@ async function verifyOnce(o: VerifyOpts, vfyId: string) {
   const data = { ref: o.ref, agentId, branch, target, ...(o.check !== undefined ? { check: o.check } : {}), checks: checks ?? null, acceptance: o.acceptance ?? null, reviewProfile: reviewProfile ?? null };
   // Who asked (an in-VM verify's agent) isn't a parameter of the verification, as for a merge: it is kept beside it, so
   // its changes name the agent that caused them (plugin API §3.2) and a resume asks the gates as that agent again.
-  const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data: o.reviewParent ? { ...data, askedBy: o.reviewParent } : data }).catch(asRelay);
+  const st = await s.startOp({ opId: vfyId, kind: "verify", paramsHash: paramsHash(data), data: { ...data, ...askers(o) } }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   return runVerify(o.runId, st.op, o.reviewParent);
 }
@@ -1919,11 +1974,12 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
   const { label } = await resolveRef(runId, d.ref);
   const direct = onGoal(await runGoal(runId), target);
   const reviewProfile = d.reviewProfile ?? undefined;
+  const asker = reviewParent ?? requesterOf(op);
   // verify.starting (plugin API §6.6.12): plugins may change the acceptance criteria (never the checks), or fail it.
   let acceptance = d.acceptance;
   if (hooks.listening("verify.starting")) {
-    const out = await hooks.fire("verify.starting", "modify", { verification: { vfyId, runId, ref: d.ref, target, check: (op.data.check as string | undefined) ?? null }, acceptance, reviewer: reviewProfile ?? null, requestedBy: principalOf(reviewParent ?? null, runId) },
-      { principal: principalOf(reviewParent ?? null, runId), entity: vfyId, runId, agentId, apply: (p, patch) => ({ ...p, ...(patch.acceptance !== undefined ? { acceptance: patch.acceptance } : {}) }) });
+    const out = await hooks.fire("verify.starting", "modify", { verification: { vfyId, runId, ref: d.ref, target, check: (op.data.check as string | undefined) ?? null }, acceptance, reviewer: reviewProfile ?? null, requestedBy: principalOf(asker, runId) },
+      { principal: principalOf(asker, runId), entity: vfyId, runId, agentId, apply: (p, patch) => ({ ...p, ...(patch.acceptance !== undefined ? { acceptance: patch.acceptance } : {}) }) });
     if (out.decision === "deny") return refusedVerify(runId, op, out);
     acceptance = out.payload.acceptance;
   }
@@ -1943,7 +1999,7 @@ async function runVerify(runId: string, op: import("../actors/scope").ScopeOp, r
   if (hooks.listening("verify.changed")) verifyChanged(runId, op, { kind: "checked", passed: checksPassed, where: out.timings?.checksWhere ?? (alreadyMerged ? "reused" : "none"), excerpt: out.status === "failed" ? checkExcerpt("output" in out ? String(out.output ?? "") : "") : null });
   // verify.judging (plugin API §6.6.13): the judges (the reviewer gate among them) judge the tree the checks passed; the
   // checks and every judge must pass, and a reviewer configured for the verify must have passed that same tree.
-  const judges = out.status === "verified" && out.sha && out.targetSha && out.taskSha && hooks.listening("verify.judging") ? await verifyJudging(runId, op, { sha: out.sha, targetSha: out.targetSha, commit: out.taskSha }, acceptance, reviewProfile ?? null, agentId, reviewParent)
+  const judges = out.status === "verified" && out.sha && out.targetSha && out.taskSha && hooks.listening("verify.judging") ? await verifyJudging(runId, op, { sha: out.sha, targetSha: out.targetSha, commit: out.taskSha }, acceptance, reviewProfile ?? null, agentId, asker)
     .catch((e) => ({ passed: false, plugins: [] as string[], deniedBy: "capcomd", reasons: [`the judges could not be asked: ${String((e as Error)?.message ?? e).slice(0, 300)}`], reviews: [] })) : null;
   const judged = checksPassed && out.status === "verified" && out.taskSha ? reviewOfJudges(reviewProfile, judges, { taskSha: out.taskSha, ...(out.targetSha ? { targetSha: out.targetSha } : {}) }) : null;
   const review = judged?.review ?? null;
@@ -1997,11 +2053,11 @@ function verifyChanged(runId: string, op: import("../actors/scope").ScopeOp, cha
 /** The plugins' judges of a verification (§6.6.13), in order: the first deny fails it, with its reasons (at most 20 of
  *  500 chars, as a reviewer's). Fail-closed: a judge that doesn't answer is a deny (the registry's gate policy). The
  *  reviews the judges reported come back with it. */
-async function verifyJudging(runId: string, op: import("../actors/scope").ScopeOp, tested: { sha: string; targetSha: string; commit: string }, acceptance: unknown, reviewer: string | null, agentId: string | null, reviewParent?: string) {
+async function verifyJudging(runId: string, op: import("../actors/scope").ScopeOp, tested: { sha: string; targetSha: string; commit: string }, acceptance: unknown, reviewer: string | null, agentId: string | null, asker?: string) {
   const a = agentId ? await getAgentOrThrow(runId, agentId).catch(() => null) : null;
   const judges = hooks.order("verify.judging");
   const out = await hooks.fire("verify.judging", "veto", { verification: { ...verificationOf(runId, op), tested }, acceptance, task: a ? untrusted(a.task, a.parent ?? "operator") : null, reviewer },
-    { principal: principalOf(reviewParent ?? null, runId), entity: op.id, runId, agentId });
+    { principal: principalOf(asker, runId), entity: op.id, runId, agentId });
   const reasons = out.decision === "deny" ? (out.reasons.length ? out.reasons : [out.text]).slice(0, 20).map((r) => String(r).slice(0, 500)) : [];
   if (hooks.listening("verify.changed")) {
     for (const by of judges) {
@@ -2155,6 +2211,12 @@ export interface MergeOpts {
   requestApproval?: boolean;
   /** The agent that asked for the merge (in-VM merges): it waits on the decision, so the approval shows on its column. */
   askedBy?: string;
+  /** A front door's own protected-branch patterns (CAPCOMD_PROTECTED_BRANCHES where it runs, plugin API §6.1), for a
+   *  merge it sent to the daemon: a target they match is protected too. They only add protection, never remove it. */
+  alsoProtected?: string[];
+  /** A plugin's merge (`ctx.gates.merge`): `plugin:<name>`, kept beside the record as who asked (merge.landing's
+   *  `requestedBy`). Never with `operator`. */
+  requester?: string;
 }
 
 /** The merge target a call means: its own, else the run's, else the repository's, else "main" (a dry run's label). */
@@ -2171,6 +2233,8 @@ export async function mergeIdFor(runId: string, ref: string, key?: string, targe
 
 /** Land a ref. Requires a passing vfy for that exact commit and target, unless --operator. Idempotent by id, like verifyRef. */
 export async function mergeRef(o: MergeOpts) {
+  // A plugin never lands past the gates (plugin API §11.3): its merge is never the operator's.
+  if (o.requester && o.operator) throw new RelayError("conflict", "a plugin's merge is never the operator's", "Merge with require (a passing verification): every plugin's gate is asked (plugin API §11.3).", { code: "forbidden" });
   const id = o.id ?? (await mergeIdFor(o.runId, o.ref, o.key, o.target));
   if (!/^mrg-[A-Za-z0-9]+$/.test(id)) throw new RelayError("usage", `${id} isn't a merge id`, "Pass the mrg-… id capcomd merge returned.");
   const given = { ref: o.ref || undefined, require: o.require, target: o.target, operator: o.operator || undefined };
@@ -2212,11 +2276,12 @@ async function startMerge(o: MergeOpts, mrgId: string) {
   // No repo configured (fake merges, like the legacy loop without CAPCOMD_REPO): nothing to protect.
   // The run's goal branch takes reviewed work with no human step: the person decides once, on the pull request into the
   // base, when the planner is done (it can't be a protected branch: `run new` refuses that).
-  const needsApproval = !!cfg && !goal && isProtectedBranch(target, runEnv) && !o.operator;
+  const callerProtects = !!o.alsoProtected?.length && isProtectedBranch(target, { CAPCOMD_PROTECTED_BRANCHES: o.alsoProtected.join(",") });
+  const needsApproval = !!cfg && !goal && (isProtectedBranch(target, runEnv) || callerProtects) && !o.operator;
   if (needsApproval && !o.requestApproval) throw new RelayError("conflict", `target ${target} is protected`, "Protected targets need a person: pass --request-approval to park the merge for `capcomd approve` (every plugin's gate is still asked), or --operator to land it past their vetoes.");
   const data = { ref: o.ref, agentId, branch, target, require: o.require ?? null, operator: !!o.operator, expectSha: expectSha ?? null, ...(needsApproval ? { approval: true } : {}) };
   // Who asked is not a parameter of the merge: a retry by another caller is the same merge.
-  const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data: o.askedBy ? { ...data, askedBy: o.askedBy } : data }).catch(asRelay);
+  const st = await s.startOp({ opId: mrgId, kind: "merge", paramsHash: paramsHash(data), data: { ...data, ...askers(o) } }).catch(asRelay);
   if (st.op.state !== "running") return opView(st.op);
   if (needsApproval) {
     // The person deciding sees what lands: the files the verified commit changes (best effort, never blocks the park).
@@ -2252,7 +2317,7 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   const t0 = Date.now();
   const c = client();
   const s = c.scope.getOrCreate([runId]);
-  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null; operator?: boolean; askedBy?: string; heldBy?: PluginHold; approvedHolds?: PluginHold[]; diff?: unknown };
+  const d = op.data as { ref: string; agentId?: string | null; branch: string; target: string; require: string | null; expectSha: string | null; operator?: boolean; askedBy?: string; requester?: string; heldBy?: PluginHold; approvedHolds?: PluginHold[]; diff?: unknown };
   const { label } = await resolveRef(runId, d.ref);
   // Re-run the checks that verification passed with (the target may have moved), not the repo default.
   const v = d.require ? await s.getOp({ opId: d.require }) : null;
@@ -2269,7 +2334,7 @@ async function executeMerge(runId: string, op: import("../actors/scope").ScopeOp
   const prior = d.approvedHolds ?? [];
   const approvedHolds = [...prior, ...(d.heldBy && !prior.some((h) => sameHold(h, { ...d.heldBy!, text: d.heldBy!.reason })) ? [d.heldBy] : [])];
   const gate: import("../merge/types").MergeGate = {
-    merge: mergeOf(runId, op), verification: v ? verificationOf(runId, v) : null, operator: !!d.operator, requestedBy: principalOf(d.askedBy ?? null, runId),
+    merge: mergeOf(runId, op), verification: v ? verificationOf(runId, v) : null, operator: !!d.operator, requestedBy: principalOf(d.askedBy ?? requesterOf(op), runId),
     attempt: approvedHolds.length + 1, ...(approvedHolds.length ? { approvedHolds } : {}),
   };
   const res: any = await c.verifier.getOrCreate([runId, op.id]).verify({

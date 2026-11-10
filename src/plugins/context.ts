@@ -399,7 +399,7 @@ export const plugin = definePlugin({
       if (skills.length < wanted.length) ctx.log.warn("an agent's other skills leave no room for a context skill: it starts without it", { agentId: agent.id, left: wanted.filter((s) => !skills.includes(s)).map((s) => s.name) });
       const loaded = b.providers.flatMap((p) => (p.state === "loaded" && !p.empty ? [`${p.name} at ${sha(p.revision)}`] : []));
       await emit("loaded", `${agent.id} starts with ${b.loaded} of ${b.total} context lines${loaded.length ? ` (${loaded.join(", ")})` : ""}.`, {
-        agentId: agent.id, profile: agent.profile, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes,
+        agentId: agent.id, profile: agent.profile, loaded: b.loaded, total: b.total, stale: b.stale, notYetEffective: b.notYetEffective, bytes: b.bytes,
         budget: { briefBytes: b.limits.briefBytes, indexLines: b.limits.indexLines, source: b.source }, providers: b.providers,
         skills: skills.map(({ name, hash }) => ({ name, hash })),
         ...(b.bundles.length ? { bundles: b.bundles.map((x) => ({ provider: x.provider, name: x.name, commit: x.commit })) } : {}),
@@ -465,7 +465,7 @@ export const plugin = definePlugin({
         const capcomd = hasVmCapcomd({ limits: { allowSpawn: spec.children?.allowSpawn === true }, profile: name });
         const skills = contextSkills({ role, capcomd }).map(({ name: n, hash }) => ({ name: n, hash }));
         return {
-          schema: SCHEMA, ok: true, profile: name, brief: b.text, loaded: b.loaded, total: b.total, stale: b.stale, bytes: b.bytes, budget: { ...b.limits, source: b.source }, providers: b.providers, skills,
+          schema: SCHEMA, ok: true, profile: name, brief: b.text, loaded: b.loaded, total: b.total, stale: b.stale, notYetEffective: b.notYetEffective, bytes: b.bytes, budget: { ...b.limits, source: b.source }, providers: b.providers, skills,
           text: `${b.text}\n\nWith the skills: ${skills.map((s) => `${s.name} (sha256 ${s.hash.slice(0, 12)})`).join(", ")}.`,
         };
       },

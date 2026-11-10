@@ -3,11 +3,11 @@
 // `worked`, an agent under it spawned or ended, the end of a verification or approval it waited on) and what doesn't
 // (tool calls, a job's end), `stalled` at stalledAfterMs and a stop at stopAfterMs (both from the last progress) saying
 // what it saw, progress clearing the notice, waiting (a job, a check, an approval, a foreground command, up to a limit
-// for commands) holding the clock, an agent with agents of its own judged through them, its memory across a restart
-// (the time the daemon was down doesn't count), its one timer, its config refused when the stop comes before the notice
-// and warned about when the notice would come before progress can show, and an agent it stopped forgotten even when
-// nobody said it ended. The same against a daemon:
-// tests/scenarios/watchdog.test.ts.
+// shared by jobs and commands, so a polled job that never ends is caught) holding the clock, an agent with agents of
+// its own judged through them, its memory across a restart (the time the daemon was down doesn't count), its one timer,
+// its config refused when the stop comes before the notice and warned about when the notice would come before progress
+// can show, and an agent it stopped forgotten even when nobody said it ended. The same against a daemon:
+// tests/scenarios/watchdog.test.ts and tests/scenarios/watchdog-progress.test.ts.
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -138,17 +138,17 @@ describe("the watchdog", () => {
     expect(kinds(k)).toEqual(["agt-c2:stalled", "agt-p:stalled"]);
   });
 
-  test("waiting on a job, a verification, an approval or a paused agent under it holds the clock; a check's or approval's end is progress", async () => {
+  test("waiting on a job (up to stalledAfterMs), a verification, an approval or a paused agent under it holds the clock; a check's or approval's end is progress", async () => {
     const k = kernel();
     const p = k.agent("agt-p"), c = k.agent("agt-c", "agt-p");
     const { changed, tick, fake } = await boot(k);
     await changed(p, started()); await changed(c, { kind: "spawned" }); await changed(c, started());
     const exec: Job = { jobId: "job-x1aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-c" }, cmd: ["npm test"], label: "tests" }, state: "running", startedAt: new Date(now).toISOString(), endedAt: null, result: null, reason: null };
     await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
-    at(40 * MIN); await tick();
+    at(14 * MIN); await tick();
     expect(k.notices).toEqual([]);
-    at(41 * MIN); await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
-    at(55 * MIN); await tick();
+    at(14.5 * MIN); await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
+    at(29 * MIN); await tick();
     expect(k.notices).toEqual([]);
     // A verification it asked for (its principal), then an approval it waits on.
     const agentC: Principal = { kind: "agent", agentId: "agt-c", runId: RUN };
@@ -398,9 +398,11 @@ describe("the watchdog", () => {
     expect(kinds(k)).toEqual(["agt-fg:stalled"]);
   });
 
-  test("a command it runs while a job holds its clock doesn't use up its commands' allowance: one after the job still holds", async () => {
+  test("a command it runs while a job holds its clock counts once, with the job: one after the job holds for what the job left", async () => {
     // Seen live (90 s limit): a worker edits, starts its integration suite as a background job (`capcomd job start`,
     // 60 s in the foreground), then sleeps in a command while the job runs and past its end, until it reads its inbox.
+    // (Live, the suite ran 150 s, over that limit; a job's time now shares the commands' stalledAfterMs, so here it ends
+    // at 70 s, inside it.)
     const k = kernel();
     const a = k.agent("agt-bg");
     const { changed, tick, fake } = await boot(k, { cfg: { stalledAfterMs: 90_000, stopAfterMs: 0, everyMs: 15_000 } });
@@ -409,18 +411,98 @@ describe("the watchdog", () => {
     for (let s = 5; s <= 285; s += 5) {
       at(s * 1000);
       if (s === 20) await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
-      if (s === 170) await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
-      // Its runner's heartbeat: its files changed (at 20 s), the `job start` command (20-80 s), then `sleep 200` (84 s on).
+      if (s === 70) await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
+      // Its runner's heartbeat: its files changed (at 30 s), the `job start` command (20-80 s), then `sleep 200` (84 s on).
       if (s % 30 === 0) await changed(a, worked({ files: s === 30, ...(s <= 80 ? { commandAt: 20_000 } : s >= 90 ? { commandAt: 84_000 } : {}) }));
       if (s % 15 === 0) await tick();
+      // From its progress at 30 s: the job's 40 s don't count, the command's time under the job isn't taken off again,
+      // and the `sleep` gets the 50 s the job left (84-134 s). The 14 s between the two count: stalled at 210 s.
+      if (s === 195) expect(k.notices).toEqual([]);
+      if (s === 210) expect(kinds(k)).toEqual(["agt-bg:stalled"]);
     }
-    // The job's 150 s don't count, and then its command's up to 90 s: 25 s after that, it isn't stalled.
+    expect(k.notices[0]!.notice!.detail).toBe("no progress for 90 s: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; no tool step seen meanwhile; it has been waiting on one command for 2 min");
+  });
+
+  test("a job that never ends holds its clock for stalledAfterMs at most, however it is polled: then it is flagged, naming the job", async () => {
+    // Seen live: a worker polls a job that never ends (`capcomd job output` in a loop); before, nothing was judged until
+    // the job's own time limit killed it.
+    const k = kernel();
+    const a = k.agent("agt-poll");
+    const { changed, tick, fake } = await boot(k);
+    await changed(a, started());
+    const exec: Job = { jobId: "job-n1aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-poll" }, cmd: ["sleep", "3600"], label: "forever" }, state: "running", startedAt: new Date(T0 + MIN).toISOString(), endedAt: null, result: null, reason: null };
+    let steps = 0;
+    /** On to `toMin`: every 30 s a poll (a tool step, and a foreground command its runner sees, started 2 s ago), every
+     *  minute a look, then `each`. */
+    const until = async (toMin: number, each: (m: number) => void = () => {}) => {
+      for (let s = (now - T0) / 1000 + 30; s <= toMin * 60; s += 30) {
+        at(s * 1000);
+        await changed(a, step()); steps++;
+        await changed(a, worked({ commandAt: s * 1000 - 2000 }));
+        if (s % 60 === 0) { await tick(); each(s / 60); }
+      }
+    };
+    // 1 min quiet, then the job: its 15 min don't count, so stalled at 30 min, 2 × stalledAfterMs.
+    at(MIN); await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
+    await until(30, (m) => { if (m < 30) expect(k.notices).toEqual([]); });
+    expect(k.notices).toEqual([{ agentId: "agt-poll", notice: { kind: "stalled", detail: stalledDetail(15 * MIN, CFG, { steps, commandMs: 2000, job: { id: "job-n1aaaaaa", ms: 29 * MIN } }) } }]);
+    expect(k.notices[0]!.notice!.detail).toBe(`no progress for 15 min: no file change seen, no agent of its own started or ended, no check or approval it waited on finished; ${steps} tool steps seen meanwhile; it has been waiting on one command for 2 s; it has been waiting on job job-n1aaaaaa for 29 min; the watchdog stops it after 45 min without progress`);
+    // Its files change at 31 min: the notice goes, and the job holds its clock again, for 15 min at most.
+    at(31 * MIN); await changed(a, worked({ files: true }));
+    await Bun.sleep(0);
+    expect(kinds(k)).toEqual(["agt-poll:stalled", "agt-poll:cleared"]);
+    await until(61, (m) => { if (m < 61) expect(kinds(k)).toEqual(["agt-poll:stalled", "agt-poll:cleared"]); });
+    expect(kinds(k)).toEqual(["agt-poll:stalled", "agt-poll:cleared", "agt-poll:stalled"]);
+    // Stopped once 45 min of it counted, saying the job it waits on.
+    await until(90);
+    expect(k.cancels).toEqual([]);
+    await until(91);
+    expect(k.cancels).toHaveLength(1);
+    expect(k.cancels[0]!.reason).toMatch(/^no progress for 45 min: .*; it has been waiting on one command for 2 s; it has been waiting on job job-n1aaaaaa for 90 min$/);
+  });
+
+  test("jobs share the allowance with commands: a job that ends inside it doesn't count, a second one gets what is left", async () => {
+    const k = kernel();
+    const a = k.agent("agt-two");
+    const { changed, tick, fake } = await boot(k);
+    await changed(a, started());
+    const exec = (id: string): Job => ({ jobId: id, plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-two" }, cmd: ["make"], label: id }, state: "running", startedAt: new Date(now).toISOString(), endedAt: null, result: null, reason: null });
+    // Quiet 2 min, then a 13 min job, polled every minute.
+    at(2 * MIN); await fake.fire("job.changed", { job: exec("job-a1aaaaaa"), change: { kind: "started" } });
+    for (let m = 3; m <= 15; m++) { at(m * MIN); await changed(a, worked({ commandAt: m * MIN - 1000 })); await tick(); }
+    await fake.fire("job.changed", { job: { ...exec("job-a1aaaaaa"), state: "done" }, change: { kind: "ended", state: "done" } });
+    // It ended inside stalledAfterMs: none of its time counts, only the 2 min before it (and none of its commands').
     expect(k.notices).toEqual([]);
-    // Its command ended at 285 s: the clock runs from 260 s, so stalled 90 s later, not sooner.
-    at(345_000); await tick();
+    at(19.9 * MIN); await tick();
     expect(k.notices).toEqual([]);
-    at(351_000); await tick();
-    expect(kinds(k)).toEqual(["agt-bg:stalled"]);
+    // A second job at 20 min that never ends (7 min counted so far): the 2 min left of the allowance hold the clock, no
+    // more, so 8 more min from 22 min.
+    at(20 * MIN); await fake.fire("job.changed", { job: exec("job-b1aaaaaa"), change: { kind: "started" } });
+    at(29.9 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    at(30 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-two:stalled"]);
+    expect(k.notices[0]!.notice!.detail).toContain("; it has been waiting on job job-b1aaaaaa for 10 min;");
+  });
+
+  test("a job that runs while it waits on a check holds as long as the check does, without using up the allowance", async () => {
+    const k = kernel();
+    const a = k.agent("agt-jv");
+    const { changed, tick, fake } = await boot(k);
+    await changed(a, started());
+    const exec: Job = { jobId: "job-v1aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-jv" }, cmd: ["sleep", "3600"], label: "server" }, state: "running", startedAt: new Date(T0 + MIN).toISOString(), endedAt: null, result: null, reason: null };
+    at(MIN); await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
+    const me: Principal = { kind: "agent", agentId: "agt-jv", runId: RUN };
+    const v = { vfyId: "vfy-j1", runId: RUN, ref: "agt-jv", target: "main", check: null, state: "running" as const, tested: null, passed: null, reasons: [] };
+    at(2 * MIN); await fake.fire("verify.changed", { verification: v, change: { kind: "started" } }, { principal: me });
+    for (let m = 3; m <= 100; m++) { at(m * MIN); await tick(); }
+    expect(k.notices).toEqual([]);
+    // The check's end is progress; the job, still running, then holds the clock for 15 min, and 15 more are quiet.
+    await fake.fire("verify.changed", { verification: { ...v, state: "passed", passed: true }, change: { kind: "finished", passed: true } }, { principal: me });
+    at(129.9 * MIN); await tick();
+    expect(k.notices).toEqual([]);
+    at(130 * MIN); await tick();
+    expect(kinds(k)).toEqual(["agt-jv:stalled"]);
   });
 
   test("a command that started before a wait keeps its time up to the wait: none of it counts", async () => {
@@ -428,17 +510,36 @@ describe("the watchdog", () => {
     const a = k.agent("agt-cw");
     const { changed, tick, fake } = await boot(k, { cfg: { stalledAfterMs: 90_000, stopAfterMs: 0, everyMs: 15_000 } });
     await changed(a, started());
-    // A command from 10 s, seen at 30 s; at 50 s it starts a job (heard before the next heartbeat) that runs to 200 s.
+    // A command from 10 s, seen at 30 s; at 50 s it starts a job (heard before the next heartbeat) that runs to 90 s.
     const exec: Job = { jobId: "job-c1aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-cw" }, cmd: ["make"], label: "build" }, state: "running", startedAt: new Date(T0 + 50_000).toISOString(), endedAt: null, result: null, reason: null };
     at(30_000); await changed(a, worked({ commandAt: 10_000 }));
     at(50_000); await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
     at(60_000); await changed(a, worked({ commandAt: 10_000 }));
-    at(200_000); await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
-    // 10 s before the command counted; the command's 40 s up to the job and the job's 150 s didn't: stalled 80 s on.
-    at(279_000); await tick();
+    at(90_000); await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
+    // 10 s before the command counted; the command's 40 s up to the job and the job's 40 s didn't: stalled 80 s on.
+    at(169_000); await tick();
     expect(k.notices).toEqual([]);
-    at(281_000); await tick();
+    at(171_000); await tick();
     expect(kinds(k)).toEqual(["agt-cw:stalled"]);
+  });
+
+  test("a command that started before a wait keeps its time up to the wait, with a look before its next heartbeat", async () => {
+    const k = kernel();
+    const a = k.agent("agt-cl");
+    const { changed, tick, fake } = await boot(k, { cfg: { stalledAfterMs: 90_000, stopAfterMs: 0, everyMs: 15_000 } });
+    await changed(a, started());
+    // As above, with a look at 55 s, after the job started and before the command is seen again (60 s).
+    const exec: Job = { jobId: "job-l2aaaaaa", plugin: null, spec: { kind: "exec", runId: RUN, owner: { agentId: "agt-cl" }, cmd: ["make"], label: "build" }, state: "running", startedAt: new Date(T0 + 50_000).toISOString(), endedAt: null, result: null, reason: null };
+    at(30_000); await changed(a, worked({ commandAt: 10_000 }));
+    at(50_000); await fake.fire("job.changed", { job: exec, change: { kind: "started" } });
+    at(55_000); await tick();
+    at(60_000); await changed(a, worked({ commandAt: 10_000 }));
+    at(90_000); await fake.fire("job.changed", { job: { ...exec, state: "done" }, change: { kind: "ended", state: "done" } });
+    // The command's 20 s from its last heartbeat to the job don't count either: stalled at 170 s, not 150 s.
+    at(169_000); await tick();
+    expect(k.notices).toEqual([]);
+    at(171_000); await tick();
+    expect(kinds(k)).toEqual(["agt-cl:stalled"]);
   });
 
   test("a stall limit shorter than progress takes to show is warned about, not refused", async () => {
