@@ -1813,7 +1813,9 @@ sha256("trace:"+runId)`, a child of the agent span `agentSpanId` when the call h
 written to the run's trace file by whichever process fired the hook). `call.trace` carries the trace id and the call's
 own span id, so an out-of-process plugin can continue the trace under its call; `ctx.trace.span(op, fn)` opens
 `plugin.<name>.<op>` as a child of the active call's span (or of the plugin span it runs in), with the call's run, and
-what `fn` logs or opens belongs to it. A span outside any hook call starts a trace of its own and, without a run, is
+what `fn` logs or opens belongs to it; its attributes and events are redacted as log fields are, its `plugin` attribute
+is always its own name, and the `relay.*` attributes that pick the run's trace are the kernel's (a plugin's are dropped,
+so it can't write into another run's trace). A span outside any hook call starts a trace of its own and, without a run, is
 kept in memory only. Seam calls are spans already (`tracedProvider`); they gain `plugin`, the plugin that provides the
 place, as an attribute.
 

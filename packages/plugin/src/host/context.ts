@@ -251,6 +251,19 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     });
   };
 
+  // A plugin's span attributes as written (§13.4): redacted like its log lines, `plugin` its own name, and never the
+  // kernel's `relay.*` keys, which say which run's trace the span goes to.
+  const spanAttributes = (a: Record<string, unknown>): Record<string, string | number | boolean> => {
+    const out: Record<string, string | number | boolean> = {};
+    for (const [k, v] of Object.entries(a)) {
+      if (k.startsWith("relay.") || k === "__proto__") continue;
+      if (typeof v === "string") out[k] = redact(v);
+      else if (typeof v === "number" || typeof v === "boolean") out[k] = v;
+    }
+    out.plugin = name;
+    return out;
+  };
+
   const ctx: PluginContext<C> = {
     plugin: { name, version: m.version, runtime: o.runtime, root: o.root, dataDir: o.dataDir, manifest: m },
     principal: { kind: "plugin", name, scopes },
@@ -272,7 +285,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         const span: Span = { setAttributes: (a) => Object.assign(attributes, a), event: (n) => { events.push(n); }, end: () => {} };
         let ok = false;
         try { const r = await withActive(frame, () => fn(span)); ok = true; return r; } finally {
-          o.span?.({ name: `plugin.${name}.${op}`, attributes, events, ms: Date.now() - started, ok, traceId: frame.traceId, spanId: frame.spanId, parentSpanId: parent?.spanId ?? null, runId: frame.runId, agentId: frame.agentId, startedAt: started });
+          o.span?.({ name: `plugin.${name}.${op}`, attributes: spanAttributes(attributes), events: events.map((e) => redact(String(e))), ms: Date.now() - started, ok, traceId: frame.traceId, spanId: frame.spanId, parentSpanId: parent?.spanId ?? null, runId: frame.runId, agentId: frame.agentId, startedAt: started });
         }
       },
     },

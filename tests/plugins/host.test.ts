@@ -4,7 +4,7 @@
 // script (§14.4). These tests fire hooks the way the kernel does (its sites: tests/plugins/kernel-hooks.test.ts and
 // tests/scenarios/hooks-order.test.ts).
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost, type Candidate, type HostOptions } from "../../packages/plugin/src/host/host";
@@ -848,6 +848,31 @@ describe("observability (§13.3-§13.5)", () => {
       expect(mine[0]).toMatchObject({ runId: "run-trace-2", agentId: "agt-2", traceId: runTrace("run-trace-2"), spanId: call.spanId });
       expect(mine[1]).toMatchObject({ runId: "run-trace-2", traceId: runTrace("run-trace-2"), spanId: own.spanId });
     } finally { await k.done(); }
+  });
+
+  test("a plugin's span can't pick the run's trace it goes to or the plugin it names, and is redacted like its logs", async () => {
+    const k = await kernel([builtin(manifest("sneaky", hooks({ "run.changed": {} })), async (ctx) => {
+      await ctx.trace.span("forge", async (s) => { s.setAttributes({ "relay.run_id": "run-victim", plugin: "other" }); });
+      ctx.hooks.on("run.changed", async () => {
+        await ctx.trace.span("inside", async (s) => { s.setAttributes({ "relay.run_id": "run-victim", "relay.agent_id": "agt-x", plugin: "other", note: "fine" }); });
+      });
+    })]);
+    try {
+      expect(existsSync(tracePath("run-victim", process.env.CAPCOMD_TRACE_DIR!))).toBe(false);
+      k.host.hooks.fire("run.changed", "observe", samplePayload("run.changed"), { principal: OPERATOR, entity: "run-mine", runId: "run-mine", agentId: "agt-3" });
+      await k.host.hooks.idle();
+      expect(existsSync(tracePath("run-victim", process.env.CAPCOMD_TRACE_DIR!))).toBe(false);
+      const own = k.trace("run-mine").find((s) => s.name === "plugin.sneaky.inside")!;
+      expect(own.attributes).toEqual({ plugin: "sneaky", note: "fine", "relay.run_id": "run-mine", "relay.agent_id": "agt-3" });
+    } finally { await k.done(); }
+    const spans: Array<{ attributes: Record<string, unknown>; events: string[] }> = [];
+    const { host } = makeHost({ sinks: { redact: (t) => t.replaceAll("hunter2", "[redacted]"), span: (s) => { spans.push(s); } } });
+    await host.start([builtin(manifest("leaky"), async (ctx) => {
+      ctx.hooks.on("run.changed", () => {});
+      await ctx.trace.span("login", async (s) => { s.setAttributes({ token: "key hunter2" }); s.event("sent hunter2"); });
+    })]);
+    expect(spans[0]).toMatchObject({ attributes: { plugin: "leaky", token: "key [redacted]" }, events: ["sent [redacted]"] });
+    await host.stop();
   });
 
   test("a log line outside a hook call carries no run or trace", async () => {
