@@ -11,6 +11,8 @@ import { agentChange, changedHooks, mergeChange } from "../../src/plugins/change
 import { hookedProvider, purposeOf } from "../../src/plugins/sandbox";
 import { applyOverrides, type AgentSpec } from "../../src/profiles";
 import { loadAgentConfig } from "../../src/agents/config";
+import { agentEnvNames } from "../../src/primitives/ops";
+import { fx } from "../../src/plugins/agent-fx";
 import { FakeProvider } from "../../src/providers/fake";
 
 const OPERATOR = { kind: "operator" as const, clientId: null };
@@ -189,6 +191,23 @@ describe("the kernel's patch rules (§6.6)", () => {
   test("agent.preparing: an attempt's spec reaches the agent's environment with only the names a plugin may add", () => {
     const spec = { provider: "claude", auth: "apikey", kind: "claude-code", pluginEnv: { PLUGIN_TEAM: "payments", ANTHROPIC_BASE_URL: "https://example.test", NODE_OPTIONS: "--require x", CAPCOMD_X: "1", lower: "1" } };
     expect(loadAgentConfig({ ANTHROPIC_API_KEY: "k" }, null, spec).pluginEnv).toEqual({ PLUGIN_TEAM: "payments" });
+  });
+
+  test("agent.preparing on an fx agent: fx's families are reserved as Claude Code's and Codex's, so no plugin moves its login (FX_HOME) or its key", () => {
+    const env = agentEnvNames("fx");
+    expect(env).toContain("AI_GATEWAY_API_KEY");
+    const p: AgentPreparing = { agent: {} as never, spec: {} as never, prompt: { system: null, append: null, skills: [] }, env, egress: [], credentialMode: "secret", sandbox: { provider: "fake", environment: null } };
+    // The same code as the Claude Code agent's ANTHROPIC_* gets above: widening, whether or not the agent has the name.
+    for (const k of ["FX_HOME", "AI_GATEWAY_API_KEY", "AI_GATEWAY_BASE_URL", "VERCEL_OIDC_TOKEN", "VERCEL_TOKEN", "FX_PROVIDER", "FX_PERMISSION_MODE", "ANTHROPIC_BASE_URL"])
+      expect([k, widens(() => applyPreparePatch(p, { env: { [k]: "/tmp/plugin-fx" } }))]).toEqual([k, "widening"]);
+    expect(applyPreparePatch(p, { env: { PLUGIN_TEAM: "payments", FXR_MODE: "1" } }).env).toEqual([...env, "PLUGIN_TEAM", "FXR_MODE"]);
+    // An attempt's spec written with one anyway: dropped before the runner sets the agent's environment.
+    const spec = { provider: "fx", auth: "apikey", kind: "fx", pluginEnv: { PLUGIN_TEAM: "payments", FX_HOME: "/tmp/plugin-fx", AI_GATEWAY_API_KEY: "vck_plugin", VERCEL_OIDC_TOKEN: "t", FX_PROVIDER: "grok" } };
+    expect(loadAgentConfig({ CAPCOMD_AGENT: "fx", AI_GATEWAY_API_KEY: "vck_kernel" }, null, spec).pluginEnv).toEqual({ PLUGIN_TEAM: "payments" });
+    // The fx built-in still sets its own: the key as AI_GATEWAY_API_KEY, its settings, and FX_HOME on a plan login.
+    expect(fx.credentialEnv("vck_kernel")).toEqual({ AI_GATEWAY_API_KEY: "vck_kernel" });
+    expect(fx.baseEnv()).toMatchObject({ FX_AUTO_UPGRADE: "0", FX_NO_OPEN_BROWSER: "1" });
+    expect(fx.subscriptionPrelude("/home/agent", (s: string) => `'${s}'`)).toContain("export FX_HOME='/home/agent/.fx'");
   });
 
   test("sandbox.ensuring: labels under plugin.<name>., size and lifetime never grow", () => {

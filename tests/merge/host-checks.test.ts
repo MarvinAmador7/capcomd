@@ -15,7 +15,9 @@ test("hostCheckEnv drops capcomd settings, keys, tokens, git credential config a
     BOXD_API_KEY: "bxd_x", ANTHROPIC_API_KEY: "sk-ant", OPENAI_API_KEY: "sk", GH_TOKEN: "ghp", GITHUB_TOKEN: "ghs",
     CAPCOMD_REPO: "https://github.com/a/b", CLAUDE_CODE_OAUTH_TOKEN: "t", NPM_TOKEN: "n", MY_SERVICE_SECRET: "s",
     DB_PASSWORD: "p", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_ASKPASS: "/x", SSH_AUTH_SOCK: "/tmp/agent",
-    AWS_ACCESS_KEY_ID: "a", STRIPE_KEY: "k",
+    AWS_ACCESS_KEY_ID: "a", STRIPE_KEY: "k", CODEX_HOME: "/home/me/.codex",
+    // fx's families, as Claude Code's and Codex's: where its login lives (FX_HOME), its gateway and Vercel's settings.
+    AI_GATEWAY_BASE_URL: "https://gw.example", VERCEL_ORG_ID: "team_x", FX_HOME: "/home/me/.fx",
   });
   expect(env).toEqual({ PATH: "/usr/bin", HOME: "/home/me", BUN_INSTALL: "/home/me/.bun", LANG: "C.UTF-8", NODE_ENV: "test" });
 });
