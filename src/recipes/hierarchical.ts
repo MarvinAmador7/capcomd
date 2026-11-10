@@ -177,7 +177,7 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
       const tgt = v.target as string;
       // A branch that changes the project's memory never lands from here (ADR-025 §5.3): refused before it is parked
       // for a person or merged, whichever plugins are on, as a failed verification the agent's next attempt is told.
-      const refused = await memoryRefusal(await mergeConfigFor(runId), { branch: String(v.data?.branch ?? ag.result?.branch ?? ""), commit: v.result?.commit ?? ag.result?.commit ?? null, target: tgt });
+      const refused = await memoryRefusal(await mergeConfigFor(runId), { branch: String(v.branch ?? ag.result?.branch ?? ""), commit: v.result?.commit ?? ag.result?.commit ?? null, target: tgt });
       if (refused) {
         feedback = lastReason = refused;
         if (approved) throw new RelayError("run_failed", `Merge of ${t.id} refused: ${refused}`, `Drop the change to .capcomd/context/, then resume with \`capcomd run --run-id ${runId} <goal>\`.`);

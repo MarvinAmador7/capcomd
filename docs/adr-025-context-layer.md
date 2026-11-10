@@ -281,7 +281,8 @@ project and the ADR amendment that makes it the default must cite the probe. gro
 **Runs without a planner agent** (`recipe-hierarchical`: `capcomd run --legacy`, `--recipe`, `CAPCOMD_RUN_PATH`; off
 by default) have no consolidator, and `--legacy` merges with no `merge.landing` gate at all. So before either merges a
 task's branch, or parks it for a person on a protected target, it reads what the branch changes from where it left the
-target (the verified commit for `--recipe`, the branch's tip that `--legacy` lands) and **refuses** a branch touching
+target, in the run's repository (the verified commit for `--recipe`, which its merge requires; the branch's tip for
+`--legacy`, whose verifier then lands that commit or fails the branch as moved) and **refuses** a branch touching
 `.capcomd/context/` (by any spelling a checkout lands there, as the gate reads it) from any agent, as a failed
 verification whose reason points to the consolidator path: run the goal with a planner agent, or commit the change by
 hand. Fail-closed: a branch it can't read doesn't land; with no repository (a dry run) nothing lands, so nothing is

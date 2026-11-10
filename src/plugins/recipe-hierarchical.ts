@@ -73,48 +73,58 @@ export const MEMORY_REFUSED = "capcomd run --legacy/--recipe doesn't land change
 const MEMORY_CLONE = "recipe-memory";
 const SAFE_BRANCH = (b: string) => !!b && !/[^A-Za-z0-9._/-]|\.\.|^[-/]/.test(b);
 
-/** The paths `commit` (else `branch`'s tip on the remote) changes from where it left `target`; a rename as both paths. */
-export async function changedPaths(cfg: MergeConfig, w: { branch: string; commit?: string | null; target: string }): Promise<string[]> {
+/** The paths `commit` (else `branch`'s tip on the remote) changes from where it left `target`, a rename as both paths,
+ *  and that commit (`tip`: a merge bound to it lands what was read, or nothing). */
+export async function changedPaths(cfg: MergeConfig, w: { branch: string; commit?: string | null; target: string }): Promise<{ paths: string[]; tip: string }> {
   if (!SAFE_BRANCH(w.branch) || !SAFE_BRANCH(w.target)) throw new Error("not a branch name");
   const commit = w.commit && /^[0-9a-f]{40,64}$/.test(w.commit) ? w.commit : null;
   const { cloneDir, withCloneLock } = await import("../merge/repo");
   const { hostRepoProblems, initHostRepo, isHostRepo, remoteGit } = await import("../merge/host-git");
   const { Git } = await import("../merge/git");
   const ref = (b: string) => `+refs/heads/${b}:refs/remotes/origin/${b}`;
-  const git = await withCloneLock(cfg, MEMORY_CLONE, async () => {
+  const { git, tip } = await withCloneLock(cfg, MEMORY_CLONE, async () => {
     const dir = cloneDir(cfg, MEMORY_CLONE);
     let g = new Git(dir);
     if (!existsSync(join(dir, "HEAD")) || !isHostRepo(dir) || (await hostRepoProblems(g)).length) { rmSync(dir, { recursive: true, force: true }); g = await initHostRepo(dir, { bare: true }); }
     const f = await remoteGit(g, ["fetch", "-q", "--no-tags", cfg.remote, ref(w.target), ref(w.branch)], cfg.remote);
     if (f.code !== 0) throw new Error(`git fetch ${cfg.remote} failed: ${(f.stderr || f.stdout).trim().slice(0, 200)}`);
+    const has = async (sha: string) => (await g.run(["cat-file", "-e", `${sha}^{commit}`])).code === 0;
     // The commit the worker handed off, by its id when its branch has moved on since.
-    if (commit && (await g.run(["cat-file", "-e", `${commit}^{commit}`])).code !== 0) await remoteGit(g, ["fetch", "-q", "--no-tags", cfg.remote, commit], cfg.remote);
-    return g;
+    if (commit && !(await has(commit))) await remoteGit(g, ["fetch", "-q", "--no-tags", cfg.remote, commit], cfg.remote);
+    if (commit && !(await has(commit))) throw new Error(`commit ${commit.slice(0, 12)} isn't on ${cfg.remote}`);
+    // Else the branch's tip as this fetch found it, by its id: another read's fetch may move the ref once the lock is gone.
+    return { git: g, tip: commit ?? (await g.run(["rev-parse", "--verify", "-q", `refs/remotes/origin/${w.branch}^{commit}`])).stdout.trim() };
   });
-  const tip = commit ?? `refs/remotes/origin/${w.branch}`;
+  if (!/^[0-9a-f]{40,64}$/.test(tip)) throw new Error(`${w.branch} isn't on ${cfg.remote}`);
   const base = (await git.run(["merge-base", tip, `refs/remotes/origin/${w.target}`])).stdout.trim();
   if (!base) throw new Error(`${w.branch} has no common history with ${w.target}`);
   const d = await git.run(["-c", "core.quotepath=off", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tip]);
   if (d.code !== 0) throw new Error(`git diff failed: ${d.stderr.trim().slice(0, 200)}`);
-  return d.stdout.split("\0").filter(Boolean);
+  return { paths: d.stdout.split("\0").filter(Boolean), tip };
 }
 
 /** Why `branch` may not land (it changes `.capcomd/context/`, or it can't be read), or null to merge it as before. No
  *  repository (`cfg` null) is a dry run: nothing lands anywhere, so nothing is refused. */
 export async function memoryRefusal(cfg: MergeConfig | null, w: { branch: string; commit?: string | null; target: string }): Promise<string | null> {
-  if (!cfg) return null;
-  let paths: string[];
-  try { paths = await changedPaths(cfg, w); } catch (e) {
-    return `can't tell whether ${w.branch} changes .capcomd/context/, so it doesn't land: ${(e as Error)?.message ?? String(e)}`;
-  }
-  const memory = paths.filter((p) => touchesContext(p));
-  if (!memory.length) return null;
-  return `${w.branch} changes ${memory.slice(0, 5).join(", ")}${memory.length > 5 ? ` and ${memory.length - 5} more` : ""}; ${MEMORY_REFUSED}`;
+  return (await judgeMemory(cfg, w)).refused;
 }
 
-/** `--legacy`'s verify-and-merge of a task's branch (its tip): `land` only when `memoryRefusal` lets it, else the
- *  failed outcome a failed verification is, with nothing landed. */
-export async function landUnlessMemory(cfg: MergeConfig | null, w: { branch: string; target: string | undefined }, land: () => Promise<MergeOutcome>): Promise<MergeOutcome> {
-  const refused = w.target ? await memoryRefusal(cfg, { branch: w.branch, target: w.target }) : null;
-  return refused ? { status: "failed", reason: refused } : land();
+/** `memoryRefusal`, with the commit it judged (null when it read none). */
+async function judgeMemory(cfg: MergeConfig | null, w: { branch: string; commit?: string | null; target: string }): Promise<{ refused: string | null; tip: string | null }> {
+  if (!cfg) return { refused: null, tip: null };
+  let read: { paths: string[]; tip: string };
+  try { read = await changedPaths(cfg, w); } catch (e) {
+    return { refused: `can't tell whether ${w.branch} changes .capcomd/context/, so it doesn't land: ${(e as Error)?.message ?? String(e)}`, tip: null };
+  }
+  const memory = read.paths.filter((p) => touchesContext(p));
+  if (!memory.length) return { refused: null, tip: read.tip };
+  return { refused: `${w.branch} changes ${memory.slice(0, 5).join(", ")}${memory.length > 5 ? ` and ${memory.length - 5} more` : ""}; ${MEMORY_REFUSED}`, tip: read.tip };
+}
+
+/** `--legacy`'s verify-and-merge of a task's branch (its tip; no `target` is the verifier's default, `main`): `land` only
+ *  when `memoryRefusal` lets it, given the commit that was judged so that it lands that one or nothing (a branch moved in
+ *  between fails as moved, never lands unread), else the failed outcome a failed verification is, with nothing landed. */
+export async function landUnlessMemory(cfg: MergeConfig | null, w: { branch: string; target: string | undefined }, land: (judged: string | undefined) => Promise<MergeOutcome>): Promise<MergeOutcome> {
+  const j = await judgeMemory(cfg, { branch: w.branch, target: w.target ?? "main" });
+  return j.refused ? { status: "failed", reason: j.refused } : land(j.tip ?? undefined);
 }

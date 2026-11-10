@@ -80,6 +80,43 @@ describe("recipe-hierarchical never lands memory", () => {
     expect(await r.landings(taskKey("run-mem", "task-2"))).toBe(1);
   });
 
+  test("--legacy lands the commit it read or nothing: memory pushed to the branch after the check doesn't land", async () => {
+    const r = await bareRepo();
+    const w = req("run-mem", "task-3");
+    await workerBranch(r, w.branch, { "src/c.txt": "c\n" });
+    const read = await r.sha(w.branch);
+    const before = await r.sha("main");
+    let judged: string | undefined;
+    const out = await landUnlessMemory(r.cfg, w, async (sha) => {
+      judged = sha;
+      // The branch moves on between the check and the verifier's own fetch, now with a memory file.
+      await r.seed.ok(["checkout", "-q", w.branch]);
+      mkdirSync(join(r.root, "seed", ".capcomd/context/lessons"), { recursive: true });
+      writeFileSync(join(r.root, "seed", ".capcomd/context/lessons/z.md"), "---\nid: z\n---\nLate\n");
+      await r.seed.ok(["add", "."]);
+      await r.seed.ok(["commit", "-q", "-m", "late memory"]);
+      await r.seed.ok(["push", "-q", "origin", `${w.branch}:${w.branch}`]);
+      await r.seed.ok(["checkout", "-q", "main"]);
+      return mergeTask({ ...w, ...(sha ? { expectSha: sha } : {}) }, r.cfg);
+    });
+    expect(read).toBeTruthy();
+    expect(judged).toBe(read!);
+    expect(out.status).toBe("failed");
+    expect(out.status === "failed" && out.reason).toContain("moved since verification");
+    expect(await r.sha("main")).toBe(before);
+    expect(await r.landings(taskKey("run-mem", "task-3"))).toBe(0);
+  });
+
+  test("--legacy with no target names checks against the verifier's default, main", async () => {
+    const r = await bareRepo();
+    const w = req("run-mem", "task-4");
+    await workerBranch(r, w.branch, { ".capcomd/context/lessons/x.md": "x\n" });
+    let landed = 0;
+    const out = await landUnlessMemory(r.cfg, { branch: w.branch, target: undefined }, async () => { landed++; return mergeTask(w, r.cfg); });
+    expect(out.status === "failed" && out.reason).toContain(MEMORY_REFUSED);
+    expect(landed).toBe(0);
+  });
+
   test("--recipe's check reads the verified commit, renames out of the directory and any spelling a checkout lands there", async () => {
     const r = await bareRepo();
     await workerBranch(r, "capcomd/run-r/agt-1", { "notes/y.md": "y\n" });
