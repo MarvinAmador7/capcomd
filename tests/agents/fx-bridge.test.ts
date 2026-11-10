@@ -19,7 +19,7 @@ const NODE = Bun.which("node");
 interface Run { lines: any[]; code: number | null; home: string; seen: any; seenFile: string; mcp: any; err: string }
 
 /** Runs the bridge with `config` (bin: the fake fx), feeding `prompt` and `messages` as the supervisor does. */
-async function bridge(o: { name?: string; prompt: string; stdin?: boolean; config?: Record<string, unknown>; messages?: Array<{ on: (l: any) => boolean; text: string }>; signalOn?: (l: any) => boolean; home?: string; env?: Record<string, string> }): Promise<Run> {
+async function bridge(o: { name?: string; prompt: string; stdin?: boolean; config?: Record<string, unknown>; messages?: Array<{ on: (l: any) => boolean; text: string }>; signalOn?: (l: any) => boolean; promptOn?: (l: any) => boolean; home?: string; env?: Record<string, string> }): Promise<Run> {
   const dir = mkdtempSync(join(tmpdir(), "capcomd-fx-bridge-"));
   const home = o.home ?? join(dir, "home");
   mkdirSync(home, { recursive: true });
@@ -33,7 +33,9 @@ async function bridge(o: { name?: string; prompt: string; stdin?: boolean; confi
     env: { PATH: process.env.PATH!, HOME: home, FAKE_FX_SEEN: seen, ...(o.name ? { FAKE_FX_REPLAY: join(FIX, `${o.name}.acp.jsonl`) } : {}), ...o.env },
   });
   const say = (t: string) => { (p.stdin as any).write(JSON.stringify({ type: "user", message: { role: "user", content: t } }) + "\n"); (p.stdin as any).flush?.(); };
-  if (o.stdin) say(o.prompt);
+  // The prompt is the first line, at once (the supervisor writes it as it starts), or when `promptOn` matches a line.
+  let prompted = !o.stdin;
+  if (o.stdin && !o.promptOn) { say(o.prompt); prompted = true; }
   const lines: any[] = [];
   const pending = [...(o.messages ?? [])];
   let sentAt = Date.now(), resultAt = 0, closed = false, signalled = false;
@@ -49,6 +51,7 @@ async function bridge(o: { name?: string; prompt: string; stdin?: boolean; confi
       const l = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
       lines.push(l);
       if (l.type === "result") resultAt = Date.now();
+      if (!prompted && o.promptOn?.(l)) { say(o.prompt); prompted = true; sentAt = Date.now(); }
       // Every message waiting for this line, in order.
       for (let i = pending.findIndex((m) => m.on(l)); i >= 0 && !closed; i = pending.findIndex((m) => m.on(l))) { say(pending.splice(i, 1)[0]!.text); sentAt = Date.now(); }
       if (o.signalOn && !signalled && o.signalOn(l)) { signalled = true; p.kill("SIGTERM"); }
@@ -172,6 +175,15 @@ describe.skipIf(!NODE)("what the bridge sets up for fx", () => {
     const prompts = readFileSync(`${r.seenFile}.prompts`, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(prompts.map((p) => [p.steer, p.head.slice(0, 12)])).toEqual([[false, "first [wait]"], [true, "small"], [false, "xxxxxxxxxxxx"]]);
     expect(prompts[2].bytes).toBe(big.length + "\n\nsmall".length);
+  }, 20_000);
+
+  test("the prompt is the first turn even when a message comes right behind it after fx's session started", async () => {
+    // The supervisor writes the prompt as it starts and the inbox's messages after it: when fx was quicker to start its
+    // session than they were to arrive, a message right behind the prompt still goes after it.
+    const r = await bridge({ prompt: "the task", stdin: true, promptOn: (l) => l.type === "session", messages: [{ on: (l) => l.type === "session", text: "a message" }] });
+    expect(r.code).toBe(0);
+    const prompts = readFileSync(`${r.seenFile}.prompts`, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(prompts.map((p) => [p.steer, p.head])).toEqual([[false, "the task\n\na message"]]);
   }, 20_000);
 
   test("a missing fx binary is a setup failure: an error line and exit 2", async () => {

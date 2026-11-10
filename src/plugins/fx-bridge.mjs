@@ -207,7 +207,8 @@ fx.stdout.on("data", (d) => {
 
 // ---- capcomd's messages.
 const queue = [];
-let inputDone = !cfg.stdin, firstPrompt = null;
+// `started`: the prompt is queued as the first turn. Until then a message waits behind it, even once fx's session is up.
+let inputDone = !cfg.stdin, firstPrompt = null, started = false;
 const steers = new Set();
 function steer(text) {
   const p = call("session/prompt", { sessionId, prompt: [{ type: "text", text }], _meta: { fx: { steer: true } } }).then((r) => {
@@ -220,7 +221,7 @@ function steer(text) {
   p.finally(() => steers.delete(p));
 }
 function message(text) {
-  if (!sessionId || firstPrompt === null) { if (firstPrompt === null) firstPrompt = text; else queue.push(text); return; }
+  if (!started) { if (firstPrompt === null) firstPrompt = text; else queue.push(text); return; }
   if (turn && steering && Buffer.byteLength(text) <= STEER_MAX) steer(text);
   else queue.push(text);
   pump();
@@ -317,4 +318,5 @@ const waitFirst = () => new Promise((ok) => { const t = setInterval(() => { if (
 await waitFirst();
 if (firstPrompt === null) await finish(0);
 queue.unshift(firstPrompt);
+started = true;
 pump();
