@@ -336,12 +336,13 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           const approved = task.state === "approved";
           // Protected targets: verify only, park for approval, merge after `capcomd approve`.
           const testOnly = !approved && isProtectedBranch(target);
-          const verifierHandle = c.verifier.getOrCreate([runId, taskId]);
-          const result = await verifierHandle.verify({
+          // No merge.landing gate here: a branch that changes the project's memory is refused before it is verified
+          // (so no one is asked to approve it) and before it is merged (ADR-025 §5.3). The verifier lands the branch's tip.
+          const { landUnlessMemory } = await import("../plugins/recipe-hierarchical");
+          const outcome = await landUnlessMemory(mergeCfg, { branch, target }, async () => (await c.verifier.getOrCreate([runId, taskId]).verify({
             verifierId: `${taskId}-${approved ? "merge" : "verify"}-e${epoch}`,
             taskId, branch, runId, target, testOnly,
-          });
-          const outcome = result.outcome as MergeOutcome;
+          })).outcome as MergeOutcome);
           if (outcome.status === "conflict") {
             await taskBoardHandle.mergeConflict({ taskId, files: outcome.files, targetSha: outcome.targetSha, epoch });
             await releaseWorker();

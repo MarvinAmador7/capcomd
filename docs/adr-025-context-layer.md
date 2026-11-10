@@ -278,6 +278,15 @@ project and the ADR amendment that makes it the default must cite the probe. gro
 "infer approval from a merge alone" is forbidden unless governance defines the merge as approval
 (`architecture.md:246-249`); here the merge *is* the defined approval, and the lint check is what the gate judged.
 
+**Runs without a planner agent** (`recipe-hierarchical`: `capcomd run --legacy`, `--recipe`, `CAPCOMD_RUN_PATH`; off
+by default) have no consolidator, and `--legacy` merges with no `merge.landing` gate at all. So before either merges a
+task's branch, or parks it for a person on a protected target, it reads what the branch changes from where it left the
+target (the verified commit for `--recipe`, the branch's tip that `--legacy` lands) and **refuses** a branch touching
+`.capcomd/context/` (by any spelling a checkout lands there, as the gate reads it) from any agent, as a failed
+verification whose reason points to the consolidator path: run the goal with a planner agent, or commit the change by
+hand. Fail-closed: a branch it can't read doesn't land; with no repository (a dry run) nothing lands, so nothing is
+refused. This holds whether or not `context-memory` is on (`src/plugins/recipe-hierarchical.ts` `memoryRefusal`).
+
 What this removes from the first draft: a `publish()` method, an approval kind `context.promote`, a `ctx.context`
 service, `GET /v1/context`, `capcomd context promote|sweep|show`, `log.jsonl` (the event log is the source of truth),
 `agent.settling`, project-scoped `ctx.storage`, a serialised writer (the target lock serialises two runs' consolidators,
