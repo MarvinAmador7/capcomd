@@ -63,6 +63,35 @@ describe("pr mode against a fake GitHub (backed by a real bare repo)", () => {
     expect(await p).toMatchObject({ status: "merged" });
   });
 
+  test("GitHub fails the merge call (a bare 500): asked again after a fresh look, it merges once", async () => {
+    const { r, gh } = await setup({ mergeErrors: 2 });
+    await produceFakeWork(r.cfg, { ...req("p8", "t"), epoch: 1 });
+    expect(await mergeTask(req("p8", "t"), r.cfg)).toMatchObject({ status: "merged", pr: 1, already: false });
+    expect(gh.calls.filter((c) => c.endsWith("/merge")).length).toBe(3);
+    expect(await r.landings(taskKey("p8", "t"))).toBe(1);
+  });
+
+  test("a merge call GitHub answers 500 after merging is recorded as merged, not merged again", async () => {
+    const { r, gh } = await setup({ mergedThen500: true });
+    await produceFakeWork(r.cfg, { ...req("p9", "t"), epoch: 1 });
+    const out = await mergeTask(req("p9", "t"), r.cfg);
+    expect(out).toMatchObject({ status: "merged", pr: 1 });
+    expect((out as any).sha).toBe(gh.pulls[0]!.merge_commit_sha);
+    expect(gh.calls.filter((c) => c.endsWith("/merge")).length).toBe(1);
+    expect(await r.landings(taskKey("p9", "t"))).toBe(1);
+  });
+
+  test("GitHub failing every merge call is a failed merge that says so, after a few tries", async () => {
+    const { r, gh } = await setup({ mergeErrors: 99 });
+    const before = await r.sha("main");
+    await produceFakeWork(r.cfg, { ...req("p10", "t"), epoch: 1 });
+    const out = await mergeTask(req("p10", "t"), r.cfg);
+    expect(out).toMatchObject({ status: "failed" });
+    expect((out as any).reason).toContain("GitHub failed to merge PR #1 (500, 4 tries)");
+    expect(gh.calls.filter((c) => c.endsWith("/merge")).length).toBe(4);
+    expect(await r.sha("main")).toBe(before);
+  });
+
   test("local conflict with the latest target is caught before a PR is opened", async () => {
     const { r, gh } = await setup();
     await produceFakeWork(r.cfg, { ...req("p4", "t"), epoch: 1, path: "shared.txt", content: "line 1\nA\nline 3\n" });
