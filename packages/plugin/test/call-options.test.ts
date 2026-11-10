@@ -4,6 +4,8 @@
 // the kernel's side is passed the composed signal; `jobs.wait` and `agents.await` still answer at their own timeout.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { PluginError } from "../src/errors";
+import { ContributionStore, createContext } from "../src/host/context";
+import { HookRegistry } from "../src/host/registry";
 import type { CallOptions } from "../src/context";
 import type { PluginManifest } from "../src/manifest";
 import type { Agent, Job, Merge, Verification } from "../src/shapes";
@@ -146,5 +148,32 @@ describe("jobs.wait and agents.await keep their own timeout (§8.2, §8.4, §16.
     const call = fake.ctx.jobs.wait("job-1", { signal: ac.signal });
     ac.abort();
     expect((await rejection(call)).code).toBe("timeout");
+  });
+});
+
+describe("events.emit and events.replay are bounded too (§8.2)", () => {
+  const withSinks = (sinks: { emit?: () => Promise<{ seq: number }>; replay?: () => Promise<never[]> }) => createContext({
+    manifest: { ...manifest, contributes: { events: ["noted"] } } as unknown as PluginManifest, runtime: "in-process", root: "", dataDir: "/nonexistent",
+    hooks: new HookRegistry({ emit: () => {}, rank: () => 0 }), store: new ContributionStore(), config: {}, ...sinks,
+  });
+  const noted = { type: "noted", stream: "daemon", entity: "", text: "t", data: {} };
+
+  test("an emit or replay that never answers rejects timeout, retryable, at timeoutMs", async () => {
+    const r = withSinks({ emit: never, replay: never });
+    const emitted = await rejection(r.ctx.events.emit(noted, { timeoutMs: 30 }));
+    expect([emitted.code, emitted.retryable]).toEqual(["timeout", true]);
+    const replayed = await rejection(r.ctx.events.replay("daemon", 0, { timeoutMs: 30 }));
+    expect([replayed.code, replayed.retryable]).toEqual(["timeout", true]);
+  });
+
+  test("their signal rejects them and dispose rejects them in flight; an answer in time comes back", async () => {
+    const r = withSinks({ emit: never, replay: never });
+    expect((await rejection(r.ctx.events.replay("daemon", 0, { signal: AbortSignal.abort() }))).code).toBe("timeout");
+    const call = r.ctx.events.emit(noted);
+    await sleep(5);
+    await r.dispose();
+    expect((await rejection(call)).code).toBe("disposed");
+    const ok = withSinks({ emit: async () => ({ seq: 7 }) });
+    expect(await ok.ctx.events.emit(noted, { timeoutMs: 1000 })).toEqual({ seq: 7 });
   });
 });

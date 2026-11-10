@@ -1225,7 +1225,8 @@ call, with the semantics of the CLI's `--key` and the API's `Idempotency-Key`: t
 the thing once and returns the recorded result; the same key with different arguments is `conflict`. `signal` is
 composed with `ctx.signal`. `timeoutMs` defaults to 30 000; past it the call rejects `timeout` and the kernel's side
 either completed or did not (the caller re-reads). The kernel's services apply a mutating call's `key` (§8.4); the host
-bounds every async primitive (`packages/plugin/src/host/context.ts` `guarded`), whichever comes first:
+bounds every async primitive (`packages/plugin/src/host/context.ts` `guarded`, and `events.emit` and `events.replay`
+beside it), whichever comes first:
 
 - its deadline, `timeoutMs` (a number above 0, else `invalid`): `timeout`, `retryable`. A primitive that runs a kernel
   operation to its end has a longer default: `jobs.start` 120 000 (its `exec`'s foreground hold, at most 90 000, §16.2

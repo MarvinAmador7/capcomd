@@ -337,7 +337,9 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
       },
     },
     events: {
-      async emit(e) {
+      // Bounded like the guarded primitives (§8.2): its CallOptions are its second argument, replay's its third.
+      emit: (...args: [EmittedEvent, CallOptions?]) => bounded("events.emit", 1, args, ([x]) => {
+        const e = x as EmittedEvent;
         live();
         if (!scopes.includes("steer")) throw new PluginError("forbidden", `events.emit needs the steer scope (§11.1)`);
         if (!(declared.events ?? []).includes(e.type)) throw new PluginError("forbidden", `event type ${e.type} is not declared in contributes.events (§8.4)`);
@@ -346,7 +348,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         if (Buffer.byteLength(JSON.stringify(data)) > EVENT_DATA_MAX) throw new PluginError("invalid", "event data is over 64 KB");
         if (!o.emit) throw new PluginError("unsupported", "events.emit is not available to plugins yet");
         return o.emit({ ...e, type: pluginEventType(name, e.type), text: redact(String(e.text)), data });
-      },
+      }) as Promise<{ seq: number }>,
       subscribe(stream, filter, handler) {
         live();
         if (!scopes.includes("read")) throw new PluginError("forbidden", "events.subscribe needs the read scope (§11.1)");
@@ -367,13 +369,13 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         const sub = o.subscribe(stream, { ...(f.types ? { types: [...f.types] } : {}), ...(f.after !== undefined ? { after: f.after } : {}) }, deliver);
         return register({ kind: "subscription", stream }, () => { on = false; void sub.dispose(); });
       },
-      async replay(stream, after) {
+      replay: (...args: [string, number, CallOptions?]) => bounded("events.replay", 2, args, ([stream, after]) => {
         live();
         if (!scopes.includes("read")) throw new PluginError("forbidden", "events.replay needs the read scope (§11.1)");
-        if (!(Number.isSafeInteger(after) && after >= 0)) throw new PluginError("invalid", "events.replay: after is a seq (an integer ≥ 0)");
+        if (!(Number.isSafeInteger(after) && (after as number) >= 0)) throw new PluginError("invalid", "events.replay: after is a seq (an integer ≥ 0)");
         if (!o.replay) throw new PluginError("unsupported", "events.replay is not available to plugins yet");
-        return o.replay(stream, after);
-      },
+        return o.replay(stream as string, after as number);
+      }) as Promise<HarnessEventEnvelope[]>,
     },
     storage: guarded("storage"),
     runs: guarded("runs"),
