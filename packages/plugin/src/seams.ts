@@ -201,6 +201,8 @@ export interface AgentProvider {
   parse(line: string, redact: (s: string) => string, state: AgentRunState, cfg: AgentConfig): AgentEvent | null;
   /** Why to stop the agent now (a turn or budget guard), or null. */
   guard(state: AgentRunState, cfg: AgentConfig): string | null;
+  /** Shell printing "secret" and/or "file" when a plan login is in the VM; with `describe().logins`, "file <name>" for
+   *  each one it finds, so an agent whose VM holds a `metered` login is spend whatever the ledger records. */
   subscriptionCheck(home: string, q: (s: string) => string): string;
   subscriptionPrelude(home: string, q: (s: string) => string): string;
   /** The interactive login (run in a PTY in the login VM); `login` names the one of `describe().logins` to make. */

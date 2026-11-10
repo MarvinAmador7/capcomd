@@ -257,7 +257,8 @@ export const fx: AgentProvider = {
   },
   // A plan login (FX_LOGINS) is its file in $FX_HOME (fx's ~/.fx); the prelude drops the keys fx would prefer to it and
   // names the fx provider it signed in to (CAPCOMD_FX_PROVIDER, which the bridge runs fx on).
-  subscriptionCheck: (home, q) => FX_LOGINS.map((l) => `[ -s ${q(`${home}/.fx/${l.file}`)} ] && echo file`).join("; ") + "; true",
+  // Each login found is named (`file vercel`), so the kernel bills the agent on what its VM holds.
+  subscriptionCheck: (home, q) => FX_LOGINS.map((l) => `[ -s ${q(`${home}/.fx/${l.file}`)} ] && echo 'file ${l.name}'`).join("; ") + "; true",
   subscriptionPrelude: (home, q) => `unset AI_GATEWAY_API_KEY VERCEL_OIDC_TOKEN; export FX_HOME=${q(`${home}/.fx`)}; ` +
     FX_LOGINS.map((l, i) => `${i ? "elif" : "if"} [ -s "$FX_HOME/${l.file}" ]; then export CAPCOMD_FX_PROVIDER=${l.fxProvider}`).join("; ") + "; fi",
   loginCommand(bin, login = FX_LOGINS[0].name) {

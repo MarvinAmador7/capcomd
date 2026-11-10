@@ -299,7 +299,7 @@ describe("subscription mode in workers, preflight, doctor", () => {
     }, 30_000);
   }
 
-  const fxWorker = async (login: "vercel" | "grok", over: Record<string, string> = {}) => {
+  const fxWorker = async (login: "vercel" | "grok", over: Record<string, string> = {}, inVm: Array<"vercel" | "grok"> = [login]) => {
     const r = await bareRepo();
     const workdir = mkdtempSync(join(tmpdir(), "capcomd-subrun-fx-"));
     const p = new FakeProvider({ hostExec: true });
@@ -307,7 +307,7 @@ describe("subscription mode in workers, preflight, doctor", () => {
     const home = join(workdir, "home");
     stubFx(home);
     mkdirSync(join(home, ".fx"), { recursive: true });
-    writeFileSync(join(home, login === "grok" ? ".fx/grok-auth.json" : ".fx/auth.json"), '{"refresh_token":"rt_x"}');
+    for (const l of inVm) writeFileSync(join(home, l === "grok" ? ".fx/grok-auth.json" : ".fx/auth.json"), '{"refresh_token":"rt_x"}');
     // The ledger says which login it is, as `capcomd auth login fx [grok]` recorded it.
     const ledger = join(workdir, "auths.json");
     writeAuthLedger({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: login === "grok" ? "browser-code" : "device-auth", login, env: ENV_SNAP, createdAt: "t" } }, ledger);
@@ -341,6 +341,19 @@ describe("subscription mode in workers, preflight, doctor", () => {
     const capped = await fxWorker("vercel", { CAPCOMD_AGENT_MAX_BUDGET_USD: "0.01" });
     expect(capped.res.stopReason).toBe("max_budget_usd");
   }, 30_000);
+
+  test("fx worker whose ledger says Grok but whose VM holds Vercel's login: fx runs on the AI Gateway, so it is billed and budgeted as Vercel's", async () => {
+    // Vercel's session there (with Grok's, or alone: a login replaced while the agent started): fx's prelude runs it on
+    // the gateway, billed per token, whatever the ledger recorded.
+    for (const inVm of [["vercel", "grok"], ["vercel"]] as const) {
+      const { res, seen } = await fxWorker("grok", {}, [...inVm]);
+      expect(seen.env).toMatchObject({ FX_PROVIDER: "gateway" });
+      expect(res).toMatchObject({ credentialMode: "subscription", billing: "api" });
+      expect(res.costUsd).toBeGreaterThan(0);
+    }
+    const capped = await fxWorker("grok", { CAPCOMD_AGENT_MAX_BUDGET_USD: "0.01" }, ["vercel"]);
+    expect(capped.res.stopReason).toBe("max_budget_usd");
+  }, 60_000);
 
   test("doctor in subscription mode boots the auth snapshot and verifies the login (no API keys)", async () => {
     const s = setup("codex");

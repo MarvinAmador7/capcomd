@@ -1212,7 +1212,9 @@ headless: the kernel refuses it with that sentence before any machine starts. A 
 is billed per token, not by a plan: an agent on it is spend as on an API key (`billing: "api"`, its estimated cost
 counted, its budgets held). The kernel names the login an agent on `subscription` runs on in `AgentConfig.planLogin`
 (additive; from the ledger, for a provider with `logins`), and a recorded one it doesn't know counts as the provider's
-first. The optional, pure `loginCheck(bin, q)`
+first. What the agent's VM holds counts too: a provider with `logins` has `subscriptionCheck` print `file <name>` for
+each login it finds there, and a metered one found makes the agent spend whatever the ledger records (its guard then
+gets that login as `planLogin`). The optional, pure `loginCheck(bin, q)`
 is a shell line the kernel runs in the login VM after the login (behind `subscriptionPrelude`): it prints one JSON line
 `{"loggedIn": <boolean>}`, whether the CLI itself sees the login, and only that boolean leaves the VM; false fails the
 login before anything is saved. `AgentConfig.usdPerMtok` is the provider's own rates
@@ -1237,7 +1239,8 @@ per token, so its cost counts and `maxBudgetUsd` holds), `grok` (a browser login
 back through the PTY, `$FX_HOME/grok-auth.json`; `auth.x.ai`, `accounts.x.ai`, `cli-chat-proxy.grok.com`, `api.x.ai`)
 and `codex`, `refused`: fx's ChatGPT login answers only on the login VM's own `localhost:1455` and has no code to paste,
 and capcomd forwards no port from a login VM, so it points to capcomd's `codex` provider. `loginCheck` is `fx status
---json`'s `auth` not `missing`. On a plan login `subscriptionPrelude` drops `AI_GATEWAY_API_KEY` and
+--json`'s `auth` not `missing`. `subscriptionCheck` prints `file vercel` and `file grok` for the session files it
+finds. On a plan login `subscriptionPrelude` drops `AI_GATEWAY_API_KEY` and
 `VERCEL_OIDC_TOKEN`, sets `FX_HOME` to the agent home's `.fx` and `CAPCOMD_FX_PROVIDER` to the fx provider the login
 signed in to (`gateway` for Vercel's, `grok`), and `command` leaves the bridge's `provider` out so it runs fx on that
 one; `verifyCommand` does the same.

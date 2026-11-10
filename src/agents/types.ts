@@ -95,7 +95,8 @@ export interface AgentAdapter {
   parse(line: string, r: Redactor, state: AgentRunState, cfg: AgentConfig): AgentEvent | null;
   /** Reason to stop the agent now (turn/budget guard), or null. */
   guard(state: AgentRunState, cfg: AgentConfig): string | null;
-  /** Subscription mode (ADR-015 §5). Shell that prints "secret" and/or "file" when a plan login is present. */
+  /** Subscription mode (ADR-015 §5). Shell that prints "secret" and/or "file" when a plan login is present; with
+   *  `logins`, "file <name>" for each one it finds (a metered one found makes the agent spend). */
   subscriptionCheck(home: string, q: (s: string) => string): string;
   /** Lines run in run.sh before the agent: drop API keys, load the plan login. */
   subscriptionPrelude(home: string, q: (s: string) => string): string;

@@ -457,12 +457,18 @@ export function detectedUsable(a: AgentAdapter, cfg: AgentConfig, d: Detected): 
 }
 /** Whether capcomd has a plan login for an agent kind's CLI (its provider's `describe().subscription`, true unless false). */
 const agentSubscription = (kind: string) => agentSeam(providerOfKind(kind))?.describe().subscription !== false;
-/** Is the agent's plan login one billed per token (`describe().logins[].metered`)? The recorded one (`planLogin`), else
- *  the one `capcomd auth login` makes unasked, its provider's first. */
-const meteredLogin = (adapter: AgentAdapter, cfg: AgentConfig) => {
+/** The agent's plan login when it is billed per token (`describe().logins[].metered`), else undefined: the recorded one
+ *  (`planLogin`; unrecorded, the one `capcomd auth login` makes unasked, its provider's first), or one its VM holds
+ *  (`subscriptionCheck`'s `file <name>` lines, `found`). What the VM holds counts whatever the ledger says: a login image
+ *  with a metered login in it while the ledger names a plan (both files there, a login replaced as the agent started)
+ *  is spend. */
+export const meteredLogin = (adapter: AgentAdapter, cfg: AgentConfig, found = ""): string | undefined => {
   const logins = adapter.logins;
-  if (!logins) return false;
-  return !!(logins.find((l) => l.name === cfg.planLogin) ?? logins.find((l) => !l.refused))?.metered;
+  if (!logins) return undefined;
+  const recorded = logins.find((l) => l.name === cfg.planLogin) ?? logins.find((l) => !l.refused);
+  if (recorded?.metered) return recorded.name;
+  const lines = new Set(found.split("\n").map((s) => s.trim()));
+  return logins.find((l) => l.metered && lines.has(`file ${l.name}`))?.name;
 };
 /** Where an installed CLI is: `<home>/bin/<bin>` from a release archive, else npm's. */
 export const installedBin = (a: AgentAdapter, home: string) => (a.install ? `${home}/bin/${a.bin}` : `${home}/npm/bin/${a.bin}`);
@@ -785,8 +791,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     let credential: string | undefined;
     let credentialMode: "secret" | "env" | "subscription" = "env";
     let prelude = "";
+    let chk = "";
     if (cfg.credentialMode === "subscription") {
-      const chk = (await sh(adapter.subscriptionCheck(home, sq))).stdout;
+      chk = (await sh(adapter.subscriptionCheck(home, sq))).stdout;
       if (!/secret|file/.test(chk)) throw new AgentError("credentials", agentSubscription(name) ? `no ${name} subscription login in this VM; run \`capcomd auth login ${name === "claude-code" ? "claude" : name}\`` : `${name} has no plan login in capcomd: use auth: "apikey" with ${adapter.secretName}`);
       credentialMode = "subscription";
       prelude = adapter.subscriptionPrelude(home, sq);
@@ -804,8 +811,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     }
     // A plan login is spend all the same when its model calls are billed per token (fx's Vercel login: the AI Gateway on
     // the user's team): its estimated cost counts, as an API key's does, and budgets hold.
-    const billing: "api" | "subscription" = credentialMode === "subscription" && !meteredLogin(adapter, cfg) ? "subscription" : "api";
+    const metered = credentialMode === "subscription" ? meteredLogin(adapter, cfg, chk) : undefined;
+    const billing: "api" | "subscription" = credentialMode === "subscription" && !metered ? "subscription" : "api";
     setSpanAttributes(span, { "agent.credential_mode": credentialMode, "agent.billing": billing });
+    // The provider's own budget guard judges the login the agent is billed on (the VM's metered one, when it holds one).
+    const guardCfg: AgentConfig = metered && metered !== cfg.planLogin ? { ...cfg, planLogin: metered } : cfg;
 
     // 4. Run headless in the background; the JSON event stream lands in a file we tail.
     // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
@@ -1116,7 +1126,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         limit = "quota";
         break;
       }
-      const guard = adapter.guard(state, cfg);
+      const guard = adapter.guard(state, guardCfg);
       if (guard) {
         await kill(); await drain(true);
         addSpanEvent(span, "agent.guard", { reason: guard });

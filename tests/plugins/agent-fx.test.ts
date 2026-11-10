@@ -156,9 +156,11 @@ describe("agent-fx: describe() and registration (§7.3)", () => {
     expect(run(fx.subscriptionCheck(h, q)).trim()).toBe("");
     mkdirSync(join(h, ".fx"));
     writeFileSync(join(h, ".fx", "grok-auth.json"), "{}");
-    expect(run(fx.subscriptionCheck(h, q)).trim()).toBe("file");
+    // Each login found is named, so the kernel bills the agent on what its VM holds.
+    expect(run(fx.subscriptionCheck(h, q)).trim()).toBe("file grok");
     expect(run(shown).trim()).toBe(`key= oidc= home=${h}/.fx provider=grok`);
     writeFileSync(join(h, ".fx", "auth.json"), "{}");
+    expect(run(fx.subscriptionCheck(h, q)).trim().split("\n")).toEqual(["file vercel", "file grok"]);
     expect(run(shown).trim()).toBe(`key= oidc= home=${h}/.fx provider=gateway`);
     // fx's ChatGPT session isn't a login capcomd made: alone, it is none.
     const other = mkdtempSync(join(tmpdir(), "capcomd-fx-sub-"));
