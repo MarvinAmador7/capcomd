@@ -1200,7 +1200,7 @@ ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude`, `c
 **fx** (`agent-fx`, fx 0.0.16, Vercel Labs' coding agent, https://fx.sh): fx runs as `fx acp`, its Agent Client
 Protocol server (newline-delimited JSON-RPC 2.0 on stdio), behind a bridge (`src/plugins/fx-bridge.mjs`, node, no
 dependencies) that `command` writes next to the run: it starts fx, opens one session (`session/new` with capcomd's MCP
-server and the profile's trusted ones, each command absolute), sends the prompt, and prints the session as JSON lines
+server and the profile's trusted ones, an orchestrate agent capcomd's only, each command absolute), sends the prompt, and prints the session as JSON lines
 (`init`, `session`, `update` for each ACP `session/update` but message text, `message` for a whole agent message or
 thought, `permission`, `steer`, `notice`, `quota`, `error`, and `result` at the end of each turn), which `parse` reads.
 `streamInput` is true: a message capcomd sends while fx works goes to it as a steering prompt (fx's

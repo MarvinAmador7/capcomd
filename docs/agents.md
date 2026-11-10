@@ -620,8 +620,9 @@ capcomd run --profile gw "goal"
   `CAPCOMD_FX_USD_PER_MTOK_IN` and `_OUT` (default 5 and 25 USD per million tokens: fx reports no cost, and the model
   behind the Gateway can be anyone's), checked when each turn ends. Tokens an fx subagent spends aren't in fx's count.
   Out of credits, or a rate limit that doesn't pass for 10 minutes, pauses the agent like any provider's usage limit.
-- **MCP.** capcomd's own server and the profile's `trusted` servers start; an untrusted one doesn't (fx runs with full
-  access in its sandbox, so nothing would hold its tools for approval), and the agent's log says so.
+- **MCP.** capcomd's own server and the profile's `trusted` servers start (for a planner or lead in orchestrate mode,
+  capcomd's only); an untrusted one doesn't (fx runs with full access in its sandbox, so nothing would hold its tools
+  for approval), and the agent's log says so.
 - **Orchestrate.** A planner or lead on fx runs with fx's permission rules: it reads, searches and runs the read-only
   commands and capcomd's; anything else (an edit, a command not on the list, a chained command) is refused.
 
