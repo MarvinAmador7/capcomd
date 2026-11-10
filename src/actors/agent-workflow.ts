@@ -216,7 +216,8 @@ export async function workflowStats(c: any): Promise<{ rows: number; bytes: numb
 
 /** What a failed attempt was, as stored (the driver's classification: some failures are never retried). `transient`:
  *  the sandbox provider didn't answer (an outage): tried again without counting against the attempts. */
-interface AttemptError { kind: string; message: string; exitCode?: number; final: boolean; transient?: boolean }
+/** `resultText`: the agent's final words when it failed having changed nothing (`no_changes`). */
+interface AttemptError { kind: string; message: string; exitCode?: number; final: boolean; transient?: boolean; resultText?: string }
 /** `outages`: attempts so far that failed only because the provider didn't answer (not counted as attempts). */
 type Drive = { phase: "ensure" | "start" | "watch" | "failed"; n: number; error?: AttemptError; outages?: number;
   /** The spec agent.preparing's plugins made for this attempt (absent: the agent's own; nothing listened). */
@@ -234,11 +235,14 @@ const injectAttemptError = () => {
 };
 
 const ops = () => import("../primitives/ops");
+/** The fix a worker that changed no files is told (`no_changes`). */
+export const NO_CHANGES_HINT = "spawn it with --report for work that changes no files";
 const scopeOf = async (runId: string) => (await import("../core/relay")).client().scope.getOrCreate([runId]);
 
 /** Errors the driver never retried: a rejected sandbox login, a scripted agent's exit code, a missing env snapshot,
- *  a limit (timeout, turns, budget) and a configuration problem. */
-async function classify(e: unknown): Promise<AttemptError> {
+ *  a limit (timeout, turns, budget) and a configuration problem. Nor a worker that changed no files (`no_changes`): it
+ *  would change none again; it fails with its final words and the hint to spawn such work with `--report`. */
+export async function classify(e: unknown): Promise<AttemptError> {
   try { return await classifyOrThrow(e); } catch { return { kind: "error", message: redactShapes(String((e as Error)?.message ?? e)).slice(0, 2000), final: false }; }
 }
 async function classifyOrThrow(e: unknown): Promise<AttemptError> {
@@ -247,11 +251,15 @@ async function classifyOrThrow(e: unknown): Promise<AttemptError> {
   const { sandboxAuthError } = await import("../plugins/sandboxes");
   const { EnvSnapshotMissing } = await ops();
   const kind = String((e as any)?.code ?? (e as any)?.kind ?? (e as Error)?.name ?? "error");
-  const message = redactShapes(String((e as Error)?.message ?? e)).slice(0, 2000);
+  const noChanges = kind === "no_changes";
+  const message = redactShapes(`${String((e as Error)?.message ?? e)}${noChanges ? `; ${NO_CHANGES_HINT}` : ""}`).slice(0, 2000);
   // The provider didn't answer for the whole outage window: the waiting is over, another attempt would wait again.
-  const final = !!sandboxAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || kind === "sandbox_auth" || isSandboxUnreachable(e);
+  const final = noChanges || !!sandboxAuthError(e) || e instanceof ScriptFailed || e instanceof EnvSnapshotMissing || kind === "limit" || kind === "config" || kind === "sandbox_auth" || isSandboxUnreachable(e);
   const transient = !final && isTransientSandboxError(e);
-  return { kind, message, final, ...(transient ? { transient: true } : {}), ...(e instanceof ScriptFailed ? { exitCode: e.exitCode } : {}) };
+  // Its final words (on the error, or on the push's error metadata), so its parent reads what it found.
+  const words = (e as { resultText?: unknown })?.resultText ?? (e as { metadata?: { resultText?: unknown } })?.metadata?.resultText;
+  const said = noChanges && typeof words === "string" && words.trim() ? { resultText: redactShapes(words.trim()).slice(0, 4000) } : {};
+  return { kind, message, final, ...(transient ? { transient: true } : {}), ...(e instanceof ScriptFailed ? { exitCode: e.exitCode } : {}), ...said };
 }
 
 /**

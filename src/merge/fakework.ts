@@ -24,6 +24,9 @@ export async function produceFakeWork(cfg: MergeConfig, p: { runId: string; task
   mkdirSync(join(git.cwd, rel, ".."), { recursive: true });
   writeFileSync(join(git.cwd, rel), p.content ?? `# ${p.taskId}\n\nrun ${p.runId}, epoch ${p.epoch}\n`);
   await git.ok(["add", rel]);
+  // The file as the target already has it: the agent changed nothing, as a real worker that ends with no change of its
+  // own (runner.ts `no_changes`; never retried).
+  if ((await git.run(["diff", "--cached", "--quiet"])).code === 0) throw Object.assign(new Error(`${p.taskId} made no changes for ${taskKey(p.runId, p.taskId)}`), { kind: "no_changes" });
   await git.ok(["commit", "-q", ...(cfg.signCommits ? ["-S"] : []), "-m", `${p.taskId}: work for ${p.runId}\n\nCapcomd-Task: ${taskKey(p.runId, p.taskId)}`]);
   const sha = await git.ok(["rev-parse", "HEAD"]);
   const pushed = await remoteGit(git, ["push", "-q", `--force-with-lease=refs/heads/${p.branch}:${existing ?? ""}`, cfg.remote, `${sha}:refs/heads/${p.branch}`], cfg.remote);

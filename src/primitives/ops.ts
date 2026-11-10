@@ -1438,7 +1438,7 @@ export async function recordAgentRunSpan(runId: string, agentId: string, started
 }
 
 /** The agent failed for good: its result says why (a cancel meanwhile wins: its VM is released). */
-export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string }): Promise<ScopeAgent> {
+export async function finishFailed(runId: string, agentId: string, epoch: number, err: { message: string; exitCode?: number; kind?: string; resultText?: string }): Promise<ScopeAgent> {
   const a = await getAgentOrThrow(runId, agentId);
   if (a.status === "cancelled") return settleEnded(runId, agentId, epoch);
   // Its jobs settle and its machine goes once it has failed (here too when an earlier settle recorded the failure but
@@ -1446,7 +1446,11 @@ export async function finishFailed(runId: string, agentId: string, epoch: number
   const drain = async () => { await endJobs(runId, agentId, "its agent failed"); await workerOf(runId, agentId, epoch).drainWorker({ workerId: agentId }).catch(() => {}); };
   if (TERMINAL_AGENT.has(a.status)) { if (a.status === "failed") await drain(); return a; }
   const res = await resultOf(runId, agentId);
-  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
+  // A worker that changed no files: its final message is its summary when it declared none, so its parent reads what
+  // it found (as a finished agent's is).
+  const words = typeof err.resultText === "string" && err.resultText.trim() ? err.resultText.trim().slice(0, 2000) : null;
+  const noChanges = err.kind === "no_changes" ? { errorKind: "no_changes", ...(!res.summary && words ? { summary: words } : {}) } : {};
+  const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, ...noChanges, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
   await drain();
   return fin.agent;
 }
