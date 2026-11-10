@@ -192,6 +192,7 @@ export const HOST_CONTRACT_KEYS: Readonly<Record<string, string>> = {
   from: "set by --continue",
 };
 
+const SPAWN_LIMITS_HINT = "use the patch's budget and grant";
 /** §6.6.6: `budget` lowers; `grant` narrows what was asked (the scope still checks it against the parent's ceiling);
  *  `contract` adds keys, never changes one, and never adds `budget` or `children` (`invalid`: use `budget` and `grant`). */
 export function applySpawnPatch(p: AgentSpawning, patch: SpawnPatch): AgentSpawning {
@@ -230,7 +231,9 @@ export function applySpawnPatch(p: AgentSpawning, patch: SpawnPatch): AgentSpawn
     for (const [k, why] of Object.entries(HOST_CONTRACT_KEYS)) if (Object.hasOwn(added, k) && !Object.hasOwn(was, k)) throw widening(`contract.${k}: ${why}`);
     // The contract's `budget` and `children` are read before this hook (spawnAgent parses them into the spawn's budget
     // and grant), so one a plugin adds would say what the kernel never applied: it lowers and narrows through the patch.
-    for (const k of ["budget", "children"]) if (Object.hasOwn(added, k) && !Object.hasOwn(was, k)) throw new PluginError("invalid", `contract.${k} is read before agent.spawning, so a plugin can't add it`, "use the patch's budget and grant");
+    // The registry keeps only the message of a patch's error (plugin.hook_failed, a closed listener's refusal), so the
+    // hint is in it too.
+    for (const k of ["budget", "children"]) if (Object.hasOwn(added, k) && !Object.hasOwn(was, k)) throw new PluginError("invalid", `contract.${k} is read before agent.spawning, so a plugin can't add it: ${SPAWN_LIMITS_HINT}`, SPAWN_LIMITS_HINT);
     if (Object.hasOwn(added, "report") && added.report !== true) throw invalid("contract.report must be true");
     if (Object.hasOwn(added, "check") && typeof added.check !== "string") throw invalid("contract.check must be a check name");
     spawn.contract = { ...patch.contract, ...was };

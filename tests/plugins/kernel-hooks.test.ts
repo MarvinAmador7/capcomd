@@ -134,6 +134,21 @@ describe("the kernel's patch rules (§6.6)", () => {
     expect(applySpawnPatch(s, { budget: { turns: 2 }, grant: { maxChildren: 0 }, contract: { team: "a" } }).spawn).toMatchObject({ budget: { turns: 2 }, grant: { maxChildren: 0 }, contract: { script: "x", team: "a" } });
   });
 
+  test("agent.spawning: an added contract.budget is a failed call (§6.5), its hint in the message: closed refuses, open is skipped", async () => {
+    const s: AgentSpawning = { spawn: { runId: "run-1", parent: null, profile: "lead", task: { text: "t", untrusted: true, by: "operator" }, contract: { script: "x" }, budget: { turns: 10 }, grant: null, review: false, operator: false }, spec: {} as never, parent: null };
+    const adder = (name: string, failure: "closed" | "open") => plugin(name, { "agent.spawning": { failure } }, (ctx) => {
+      ctx.hooks.on("agent.spawning", () => ({ decision: "allow", patch: { budget: { turns: 5 }, contract: { budget: { turns: 2 } } } }));
+    });
+    const fire = () => hooks.fire("agent.spawning", "modify", s, { principal: OPERATOR, entity: "agt-1", runId: "run-1", agentId: "agt-1", apply: (p, patch) => applySpawnPatch(p, patch) });
+    await hostWith(adder("strict", "closed"));
+    const refused = await fire();
+    expect(refused).toMatchObject({ decision: "deny", plugin: "strict", failure: "invalid_result" });
+    expect(refused.decision === "deny" && refused.text).toContain("contract.budget is read before agent.spawning, so a plugin can't add it: use the patch's budget and grant");
+    // Open (the default): the whole patch is dropped, so neither its contract.budget nor its budget is recorded.
+    await hostWith(adder("lenient", "open"));
+    expect(await fire()).toMatchObject({ decision: "allow", patches: [], payload: { spawn: { budget: { turns: 10 }, contract: { script: "x" } } } });
+  });
+
   test("agent.preparing: text is appended after the profile's, egress only shrinks", () => {
     const p: AgentPreparing = { agent: {} as never, spec: {} as never, prompt: { system: null, append: "Be brief.", skills: [] }, env: [], egress: ["github.com", "npmjs.org"], credentialMode: "subscription", sandbox: { provider: "fake", environment: null } };
     expect(applyPreparePatch(p, { prompt: { append: "Cite files." }, egress: ["github.com"] })).toMatchObject({ prompt: { append: "Be brief.\n\nCite files." }, egress: ["github.com"] });
