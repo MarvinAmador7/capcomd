@@ -902,8 +902,9 @@ ended done, the lessons no consolidator that ended done was given. The kernel re
 starts, the agents whose capture records it is given (kv `_consolidator/<agentId>`, reserved): every record no
 consolidator of the run that ended done was given.
 
-The built-in `context-memory` listens here too (ADR-025 D6a), on `ended`: once every agent of the run that may spawn the
-consolidator (`children.allowedChildProfiles` has it) has ended and no consolidator still runs, it starts one at the
+The built-in `context-memory` listens here too (ADR-025 D6a, accepted as built by the owner on 2026-11-10), on
+`ended`: once every agent of the run that may spawn the consolidator (`children.allowedChildProfiles` has it) has
+ended and no consolidator still runs, it starts one at the
 run's top (key `consolidate`, the ended agent's drive settings) when the run's agents proposed lessons (candidates, or
 declared and not collected) and none ran; for a consolidator that ended done with a branch no merge was asked for,
 it verifies that commit (a passed verify of it is used again) and asks to merge it as an agent's merge is asked
@@ -1723,6 +1724,13 @@ the user layer's or `CAPCOMD_PLUGIN_SANDBOX_BOXD_APIKEY`'s, answers `unsupported
 references are resolved, and the boxd provider then falls back to the daemon's `BOXD_API_KEY`
 (`src/providers/boxd.ts`).
 
+The built-in `forge-github` declares no secret today: its config has no `token` (`src/plugins/forges/github.ts`), and
+it reads the caller's `GITHUB_TOKEN`, else `GH_TOKEN`, else `gh auth token` (`userToken` there, `githubToken` in
+`src/plugins/forges/github-rest.ts`), §7.4's interim rule for the built-in forges (§15.2). **Decided, not built** (the
+owner, 2026-11-10; scheduled for after the next release): it declares `token` as `x-secret`, its schema's default
+`{"$secret": "env:GITHUB_TOKEN"}`, with `gh auth token` kept as a fallback for the built-in only, so nothing changes
+for users.
+
 The kernel's own variables are a fixed list (`src/plugins/config.ts` `kernelVariable`), matched whatever their case:
 `BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting
 `CAPCOMD_`, its deprecated alias `RELAY_` (the kernel reads `RELAY_<NAME>` as `CAPCOMD_<NAME>`), `GIT_`, `RIVET`, or the
@@ -2138,7 +2146,10 @@ third-party plugin it may not reference the kernel's own variables (§10.3), so 
 own. **Not built for the built-in:** `src/plugins/forges/github.ts` declares no `token`; it reads the caller's
 `GITHUB_TOKEN`, else `GH_TOKEN`, else `gh auth token` itself (`src/plugins/forges/github-rest.ts`), under §7.4's
 interim rule for the built-in forges rather than §10.3's (a built-in reads only the secrets its schema declares, which
-for a built-in may default to `{"$secret": "env:GITHUB_TOKEN"}`). Moving it to a declared `token` is open.
+for a built-in may default to `{"$secret": "env:GITHUB_TOKEN"}`). **Decided, not built** (the owner, 2026-11-10;
+scheduled for after the next release): the built-in moves to a declared §10.3 secret, `token`, its schema's default
+`{"$secret": "env:GITHUB_TOKEN"}`, and keeps `gh auth token` as a fallback for the built-in only (in its own code, not
+a rule §10.3 gives other plugins), so nothing changes for users. Until then the interim rule above is the behaviour.
 `classifyError` maps rate limits to `quota` and 401/403 to `auth`. In the built-in's `land`, a merge call GitHub fails
 with a 5xx (its own error, which may still have merged) is made again up to three more times, each after a poll interval
 and a fresh read of the pull request; one found merged is the landing (`already: false`), and four failures are
