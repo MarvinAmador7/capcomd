@@ -10,7 +10,7 @@ import type { ApiRouteSpec, CallOptions, CliCommandSpec, Disposable, EmittedEven
 import type { TriggerReply } from "../shapes";
 import type { AgentProvider, Forge, SandboxProvider } from "../seams";
 import type { ContextProvider } from "../context-layer";
-import { activeCall, withActive, type ActiveCall, type HookRegistry } from "./registry";
+import { activeCall, outsideCalls, withActive, type ActiveCall, type HookRegistry } from "./registry";
 import { randomBytes } from "node:crypto";
 
 /** Named contributions every plugin shares one namespace of (§4.2): a second registration of a key is `conflict`. */
@@ -83,18 +83,29 @@ const counters = new WeakMap<object, SeamCounter>();
 export const seamCounter = (seam: object): SeamCounter | undefined => counters.get(seam);
 /** Methods that describe a seam rather than use it: not counted. */
 const UNCOUNTED = new Set(["describe", "available", "classifyError", "constructor"]);
+/** The kinds an `ErrorClass` has (§7): a failure the seam classifies otherwise is counted as `unknown`, so a plugin
+ *  can't add keys of its own to its stats. */
+const ERROR_KINDS = new Set(["config", "auth", "not_found", "transient", "quota", "timeout", "unknown"]);
 /** `impl` with each method call that returns a promise counted by `c` when it settles. Methods run on `impl` itself. */
 export function countCalls<T extends object>(impl: T, c: SeamCounter): T {
   const wrapped = new WeakMap<(...a: unknown[]) => unknown, (...a: unknown[]) => unknown>();
-  return new Proxy(impl, {
-    get(t, k) {
-      const v = Reflect.get(t, k, t) as unknown;
+  // A proxy can't answer a frozen seam's own method with a wrapper (a non-configurable property reads as itself), so a
+  // seam with one stands behind a copy of its shape, every read and write going to the seam.
+  const pinned = Reflect.ownKeys(impl).some((k) => Reflect.getOwnPropertyDescriptor(impl, k)?.configurable === false);
+  const target = !pinned ? impl : Object.create(Object.getPrototypeOf(impl), Object.fromEntries(Reflect.ownKeys(impl).map((k) => {
+    const d = Reflect.getOwnPropertyDescriptor(impl, k)!;
+    return [k, { ...d, configurable: true, ...("value" in d ? { writable: true } : {}) }];
+  }))) as T;
+  return new Proxy(target, {
+    set: (_t, k, v) => Reflect.set(impl, k, v),
+    get(_t, k) {
+      const v = Reflect.get(impl, k, impl) as unknown;
       if (typeof v !== "function" || typeof k !== "string" || UNCOUNTED.has(k)) return v;
       const f = v as (...a: unknown[]) => unknown;
       let w = wrapped.get(f);
       if (!w) {
         w = (...args: unknown[]) => {
-          const out = f.apply(t, args);
+          const out = f.apply(impl, args);
           if (!out || typeof (out as { then?: unknown }).then !== "function") return out;
           return (out as Promise<unknown>).then((x) => { c.ok(); return x; }, (e: unknown) => { c.failed(e); throw e; });
         };
@@ -200,7 +211,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
       failed: (e) => {
         let kind = "unknown";
         try { kind = String((impl as { classifyError?(e: unknown): { kind?: unknown } }).classifyError?.(e)?.kind ?? "unknown"); } catch { /* unknown */ }
-        o.hooks.seamCall(name, seam, kind);
+        o.hooks.seamCall(name, seam, ERROR_KINDS.has(kind) ? kind : "unknown");
       },
     };
     const w = countCalls(impl, c);
@@ -365,11 +376,12 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         if (typeof handler !== "function") throw new PluginError("invalid", "events.subscribe takes a handler function");
         if (!o.subscribe) throw new PluginError("unsupported", "events.subscribe is not available to plugins yet");
         // §8.4: the host calls `deliver` in order, one at a time; a handler that throws is logged and the event skipped,
-        // and nothing reaches it once the subscription (or the plugin) is disposed.
+        // and nothing reaches it once the subscription (or the plugin) is disposed. A delivery is no hook call's, even
+        // when the plugin subscribed inside one (§13.3, §13.4): its logs and spans aren't tied to that call or its run.
         let on = true;
         const deliver = async (e: HarnessEventEnvelope) => {
           if (!on) return;
-          try { await handler(e); } catch (err) {
+          try { await outsideCalls(() => handler(e)); } catch (err) {
             log("warn", "an events.subscribe handler threw; the event was skipped", { stream, type: e.type, seq: e.seq, error: err instanceof Error ? err.message : String(err) });
           }
         };

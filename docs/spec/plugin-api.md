@@ -1883,8 +1883,9 @@ same. `/v1/health` gains the feature flag `plugins`.
 
 `ctx.log.<level>(message, fields)` writes one JSON line to the daemon log with `plugin`, `level`, `message`, `fields`
 (redacted), `runId`/`agentId` when inside a hook call, and `traceId`/`spanId` inside a hook call or a `ctx.trace.span`
-(the call's span, or the plugin span it runs in; neither outside both). Out of process, stdout/stderr lines are
-parsed as in §9.2. Logs are not events: they never reach clients.
+(the call's span, or the plugin span it runs in; neither outside both: an `events.subscribe` delivery is part of no
+call, even to a subscription made inside one). Out of process, stdout/stderr lines are parsed as in §9.2. Logs are not
+events: they never reach clients.
 
 ### 13.4 Tracing
 
@@ -1907,9 +1908,9 @@ Derived from events and spans, no new pipeline: per plugin, hook calls and failu
 recent calls (`stats`), breaker trips (`plugin.suspended`) and process restarts (`plugin.process_changed`); per seam,
 the daemon's calls and errors by `ErrorClass.kind`. A seam's calls are those that return a promise, counted when they
 settle (its `describe`, `available` and `classifyError` aren't calls), including the calls the kernel makes to a
-built-in sandbox's own provider; a failure is counted by the seam's own `classifyError`, `unknown` when it throws.
-Exposed in `GET /v1/plugins` `stats` (`seams`: by seam kind, `{calls, errors: {<kind>: n}}`, capability
-`plugins.seam_stats`, additive) and by `capcomd plugins show <name>`, which asks the running daemon for them.
+built-in sandbox's own provider; a failure is counted by the seam's own `classifyError`, `unknown` when it throws or
+names a kind `ErrorClass` doesn't have. A frozen seam is counted like any other. Exposed in `GET /v1/plugins` `stats`
+(`seams`: by seam kind, `{calls, errors: {<kind>: n}}`, capability `plugins.seam_stats`, additive) and by `capcomd plugins show <name>`, which asks the running daemon for them.
 
 ## 14. Testing
 

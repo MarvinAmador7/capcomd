@@ -921,4 +921,40 @@ describe("observability (§13.3-§13.5)", () => {
     expect(statsLines(host.get("sandbox-test")!.stats)).toEqual(["hook calls: 0, 0 failed, 0 dropped", "sandbox seam: 3 calls, failed: 1 unknown, 1 quota"]);
     await host.stop();
   });
+
+  test("a frozen seam still answers and is counted; a kind the seam makes up is counted as unknown", async () => {
+    const { host } = makeHost();
+    await host.start([builtin(manifest("sandbox-cold", { provides: ["seam:sandbox/coldbox"], contributes: { seams: [{ kind: "sandbox", name: "coldbox" }] } }), (ctx) => {
+      ctx.seams.sandbox(Object.freeze({
+        describe: () => ({ name: "coldbox" }), classifyError: () => ({ kind: "__proto__", retryable: false }),
+        available: async () => ({ ok: true }), waitReady: async () => "ready", ensure: async () => { throw new Error("no machine"); },
+      }) as never);
+    })]);
+    const seam = host.contributions.get("seam", "sandbox/coldbox")!.value.impl as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    expect(await seam.waitReady!("vm-1", {})).toBe("ready");
+    await expect(seam.ensure!({}, {})).rejects.toThrow("no machine");
+    expect(Object.keys(seam)).toEqual(["describe", "classifyError", "available", "waitReady", "ensure"]);
+    expect(host.get("sandbox-cold")!.stats.seams).toEqual({ sandbox: { calls: 2, errors: { unknown: 1 } } });
+    await host.stop();
+  });
+
+  test("an event delivered to a subscription made inside a hook call belongs to no call", async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    const delivered: Array<Promise<void>> = [];
+    const { host } = makeHost({ sinks: {
+      log: (l) => { lines.push(l as unknown as Record<string, unknown>); },
+      // The daemon's subscription polls on a timer it starts when the plugin subscribes (src/plugins/events.ts).
+      subscribe: (_stream, _f, handler) => { const t = setTimeout(() => { delivered.push(Promise.resolve(handler({ seq: 1, type: "profile.changed" } as never))); }, 5); return { dispose: () => clearTimeout(t) }; },
+    } });
+    await host.start([builtin(manifest("listener", { scopes: ["read"] }), (ctx) => {
+      ctx.hooks.on("run.changed", () => { ctx.log.info("in the call"); ctx.events.subscribe("daemon", {}, () => { ctx.log.info("delivered"); }); });
+    })]);
+    host.hooks.fire("run.changed", "observe", samplePayload("run.changed"), { principal: OPERATOR, entity: "run-sub", runId: "run-sub", agentId: "agt-4" });
+    await host.hooks.idle();
+    await sleep(30);
+    await Promise.all(delivered);
+    expect(lines.find((l) => l.message === "in the call")).toMatchObject({ runId: "run-sub" });
+    expect(lines.find((l) => l.message === "delivered")).toEqual({ plugin: "listener", level: "info", message: "delivered", fields: {} });
+    await host.stop();
+  });
 });

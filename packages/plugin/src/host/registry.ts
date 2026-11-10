@@ -65,6 +65,8 @@ const active = new AsyncLocalStorage<ActiveCall>();
 export const activeCall = (plugin: string): ActiveCall | undefined => { const a = active.getStore(); return a?.plugin === plugin ? a : undefined; };
 /** Run `fn` as part of `a` (a hook call, or a plugin's span). */
 export const withActive = <T>(a: ActiveCall, fn: () => T): T => active.run(a, fn);
+/** Run `fn` as part of no call: kernel code that calls a plugin back outside its hooks (an event delivery). */
+export const outsideCalls = <T>(fn: () => T): T => active.exit(fn);
 
 export interface RegistryOptions {
   emit(e: HostEvent): void;
