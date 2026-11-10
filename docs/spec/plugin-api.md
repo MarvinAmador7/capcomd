@@ -262,14 +262,21 @@ else 500 with the message replaced by "plugin error" (the message goes to the da
 plugin publishes events instead).
 
 As served (capability `plugins.routes`): a `{param}` segment of a route's path takes one non-empty path segment,
-percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters). Only an active
+percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters, counted by
+`{param}` segment: `/{x}/{x}` has two). Two routes of one method that could both match a path with as many parameters
+each (`/a/{x}/c` and `/a/b/{y}` on `/a/b/c`) would tie, so they are refused: the manifest validator fails the plugin
+`invalid_manifest`, naming both, and `ctx.api.route` throws `conflict` for the second one registered (the same route
+twice is still "already registered"). Only an active
 plugin's registrations are served: a disposed or disabled plugin's routes are 404 `not_found`, as is a path or method no
 route of an active plugin matches; the token's scope is checked after the route is found (the route's declared scope,
 whatever the method: a `GET` that declares `steer` needs `steer`), so an unknown route is 404 to any token and a missing
 token is 401 first. The scopes are not ranked (a `configure` route needs a token with `configure`). The principal is
 the caller's (§11.2): a plugin's token is that `plugin`, a token with only `read` is a `viewer`, any other client an
 `operator` with its client id. A body is parsed as JSON for `POST`, `PUT` and `PATCH` (an empty one is `undefined`; one
-that isn't JSON is 422 `invalid`), never for `GET` or `DELETE`; `query` has the first value of each name. A
+that isn't JSON is 422 `invalid`), never for `GET` or `DELETE`; a body over 1 MiB is 413 `invalid` before the
+handler runs, read no further than that whatever its `content-length`. A handler that hasn't answered within 30 s is
+504 `timeout`; its `signal` is aborted then (reason a `PluginError` `timeout`) and whatever it answers later is dropped.
+The `signal` is also aborted when the caller goes away. `query` has the first value of each name. A
 `PluginError` with a mapped code answers `{code, message}` with its `hint` when it has one; the 500 is `{code:
 "internal", message: "plugin error"}` and the daemon log gets one JSON line `{plugin, level: "error", message, fields}`
 with the method, path and real message, redacted. A handler that answers `undefined` is 204 with no body; one that answers a

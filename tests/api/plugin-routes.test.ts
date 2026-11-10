@@ -2,7 +2,9 @@
 // plugin registered with ctx.api.route at METHOD /v1/x/<name>/<path>, with the caller's token checked against the
 // route's declared scope and the handler run as the caller; a thrown PluginError keeps its code where the spec maps one,
 // anything else is 500 "plugin error" with the message only in the daemon log; never a stream. Its feature flags join
-// GET /v1/health, and GET /v1/plugins/{name} lists its routes and flags. The fixture: tests/plugins/fixtures/api-routes.
+// GET /v1/health, and GET /v1/plugins/{name} lists its routes and flags. A body over 1 MiB is 413 before the handler
+// runs; a handler that doesn't answer within the deadline is 504, its signal aborted. The fixture:
+// tests/plugins/fixtures/api-routes.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +12,8 @@ import { join } from "node:path";
 import { kernelHost } from "../../src/plugins/host";
 import { addClient, loadClients, mintPluginClient } from "../../src/api/clients";
 import { PluginDetail } from "../../src/api/contract";
-import { harnessApp, routeParams } from "../../src/api/server";
+import { harnessApp, ROUTE_BODY_MAX_BYTES, ROUTE_DEADLINE_MS, routeParams } from "../../src/api/server";
+import { PluginError } from "../../packages/plugin/src/errors";
 import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
 import type { PluginHost } from "../../packages/plugin/src/host/host";
@@ -18,11 +21,12 @@ import type { PluginHost } from "../../packages/plugin/src/host/host";
 const FIXTURE = join(import.meta.dir, "..", "plugins", "fixtures", "api-routes");
 const NAME = "api-routes";
 
-let dir: string, host: PluginHost, app: ReturnType<typeof harnessApp>;
+let dir: string, host: PluginHost, app: ReturnType<typeof harnessApp>, cpath: string;
+const seen = () => (globalThis as unknown as { apiRoutesSeen: { blob: number; aborted: unknown[] } }).apiRoutesSeen;
 const tokens: Record<"reader" | "steerer" | "configurer", { token: string; id: string }> = {} as never;
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-plugin-routes-"));
-  const cpath = join(dir, "clients.json");
+  cpath = join(dir, "clients.json");
   for (const [k, scopes] of [["reader", ["read"]], ["steerer", ["steer"]], ["configurer", ["read", "steer", "configure"]]] as const) {
     const made = addClient(k, [...scopes], cpath);
     tokens[k] = { token: made.token, id: made.client.id };
@@ -46,6 +50,10 @@ describe("the gateway (§4.7.3)", () => {
     expect(await json(r)).toEqual({ route: "echo", params: { id: "run-1" }, query: { limit: "3" }, body: null, principal: { kind: "viewer", clientId: tokens.reader.id } });
     // A literal segment wins over a parameter.
     expect(await json(await call(`/v1/x/${NAME}/echo/latest`, "reader"))).toEqual({ route: "latest", params: {} });
+    // Parameters are counted by segment, as the manifest validator counts them: `/pair/{a}/{a}` has two, so
+    // `/pair/one/{b}` wins although it was registered second.
+    expect(await json(await call(`/v1/x/${NAME}/pair/one/z`, "reader"))).toEqual({ route: "pair-one", params: { b: "z" } });
+    expect(await json(await call(`/v1/x/${NAME}/pair/two/z`, "reader"))).toEqual({ route: "pair-two", params: { a: "z" } });
   });
 
   test("the route's declared scope, not the method's: a token without it is 403, no token 401", async () => {
@@ -124,6 +132,48 @@ describe("the gateway (§4.7.3)", () => {
     expect(lines.map((l) => JSON.parse(l).message)).toEqual(["GET /v1/x/api-routes/symbol: its answer isn't JSON: a symbol"]);
   });
 
+  test("a body over 1 MiB is 413 invalid and the handler never runs, with or without a content-length", async () => {
+    expect(ROUTE_BODY_MAX_BYTES).toBe(1024 * 1024);
+    const put = (body: string | ReadableStream<Uint8Array>) => call(`/v1/x/${NAME}/blob`, "steerer", { method: "PUT", body, headers: { "content-type": "application/json" }, duplex: "half" } as RequestInit);
+    // At the cap it is served.
+    const fits = JSON.stringify({ data: "x".repeat(ROUTE_BODY_MAX_BYTES - 11) });
+    expect(Buffer.byteLength(fits)).toBe(ROUTE_BODY_MAX_BYTES);
+    const ok = await put(fits);
+    expect(ok.status).toBe(200);
+    expect(await json(ok)).toEqual({ length: ROUTE_BODY_MAX_BYTES - 11 });
+    const before = seen().blob;
+    const over = await put(JSON.stringify({ data: "x".repeat(ROUTE_BODY_MAX_BYTES) }));
+    expect(over.status).toBe(413);
+    expect(await json(over)).toEqual({ code: "invalid", message: `the body is over ${ROUTE_BODY_MAX_BYTES} bytes` });
+    // A chunked body has no content-length: it is read up to the cap, no further.
+    const chunk = new TextEncoder().encode("x".repeat(256 * 1024));
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({ pull(k) { if (sent++ < 8) k.enqueue(chunk); else k.close(); } });
+    const chunked = await put(stream);
+    expect(chunked.status).toBe(413);
+    expect(sent).toBeLessThan(8);
+    expect(seen().blob).toBe(before);
+  });
+
+  test("a handler that hasn't answered within the deadline is 504 timeout, and its signal is aborted", async () => {
+    expect(ROUTE_DEADLINE_MS).toBe(30_000);
+    const quick = harnessApp({ source: memorySource({}), clients: () => loadClients(cpath), state: harnessState(null), plugins: () => host.list(), pluginHost: host, routeDeadlineMs: 50 });
+    const aborted = seen().aborted.length;
+    const started = Date.now();
+    const r = await quick.request(`/v1/x/${NAME}/slow`, { headers: { authorization: `Bearer ${tokens.reader.token}` } });
+    expect(r.status).toBe(504);
+    expect(await json(r)).toEqual({ code: "timeout", message: `GET /v1/x/${NAME}/slow: the plugin didn't answer within 0.05 s` });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(seen().aborted.length).toBe(aborted + 1);
+    const reason = seen().aborted.at(-1);
+    expect(reason).toBeInstanceOf(PluginError);
+    expect((reason as PluginError).code).toBe("timeout");
+    // A handler that answers in time is served as before, and nothing aborts it afterwards.
+    expect((await quick.request(`/v1/x/${NAME}/echo/1`, { headers: { authorization: `Bearer ${tokens.reader.token}` } })).status).toBe(200);
+    await Bun.sleep(100);
+    expect(seen().aborted.length).toBe(aborted + 1);
+  });
+
   test("what no active plugin serves is 404: another path, another method, another plugin", async () => {
     for (const [path, method] of [[`/v1/x/${NAME}/nothing`, "GET"], [`/v1/x/${NAME}/items`, "GET"], [`/v1/x/${NAME}/echo/1/more`, "GET"], ["/v1/x/nobody/echo/1", "GET"], [`/v1/x/${NAME}`, "GET"]] as const) {
       const r = await call(path, "configurer", { method });
@@ -141,12 +191,16 @@ describe("listing (§4.7.3, §13.2)", () => {
     expect(d.routes).toEqual([
       { method: "GET", path: `/v1/x/${NAME}/echo/{id}`, scope: "read" },
       { method: "GET", path: `/v1/x/${NAME}/echo/latest`, scope: "read" },
+      { method: "GET", path: `/v1/x/${NAME}/pair/{a}/{a}`, scope: "read" },
+      { method: "GET", path: `/v1/x/${NAME}/pair/one/{b}`, scope: "read" },
       { method: "POST", path: `/v1/x/${NAME}/items`, scope: "steer" },
       { method: "POST", path: `/v1/x/${NAME}/fail/{code}`, scope: "steer" },
       { method: "GET", path: `/v1/x/${NAME}/boom`, scope: "read" },
       { method: "GET", path: `/v1/x/${NAME}/stream`, scope: "read" },
       { method: "DELETE", path: `/v1/x/${NAME}/items/{id}`, scope: "configure" },
       { method: "GET", path: `/v1/x/${NAME}/symbol`, scope: "read" },
+      { method: "PUT", path: `/v1/x/${NAME}/blob`, scope: "steer" },
+      { method: "GET", path: `/v1/x/${NAME}/slow`, scope: "read" },
     ]);
     expect(d.capabilities).toEqual([{ name: `x.${NAME}.digest`, doc: "GET /v1/x/api-routes/echo/{id}: an echo of what it was given." }]);
     const health = await json(await app.request("/v1/health"));
@@ -162,7 +216,7 @@ describe("listing (§4.7.3, §13.2)", () => {
     expect((await json(r)).code).toBe("not_found");
     expect((await json(await app.request("/v1/health"))).capabilities).not.toContain(`x.${NAME}.digest`);
     const d = PluginDetail.parse(await (await call(`/v1/plugins/${NAME}`, "reader")).json());
-    expect(d.routes?.length).toBe(8);
+    expect(d.routes?.length).toBe(12);
     expect(d.capabilities).toEqual([]);
     await host.enable(NAME);
     expect((await call(`/v1/x/${NAME}/echo/1`, "reader")).status).toBe(200);
