@@ -38,6 +38,8 @@ export const ApiError = z.looseObject({
 	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub. From PUT /v1/profiles/{name} (capability profiles.edit): the field id the value is about (limits.maxTurns), rev, or repo"),
 	rev: z.string().optional().describe("409 conflict from PUT /v1/profiles/{name} (capability profiles.edit): the profile's current `rev`"),
 	problem: z.string().optional().describe("422 invalid from POST /v1/projects (and the projects.git routes): the inspect problem code that blocks the folder (not_git, home, no_origin, not_github, not_found)"),
+	relay: z.looseObject({ code: z.string(), message: z.string(), hint: z.string(), reason: z.string().optional(), retryable: z.boolean().optional() }).optional()
+		.describe("Capability ops.front_door: the operation's own refusal as the CLI prints it (relay.v1 `error`: its code, message, next step, finer reason), so the front door that asked fails exactly as it would have running it itself"),
 });
 export const ERROR_STATUSES = [401, 404, 409, 422] as const;
 
@@ -347,8 +349,8 @@ const TriggerEventData = {
 		thread: z.string().describe("The conversation it belongs to, in the source's terms (a pull request, an issue, a schedule)"),
 		actor: z.string().describe("Who sent it, as the source names them (never mapped across sources)"),
 		addressed: z.enum(["mention", "direct"]).nullable().describe("Whether it addressed capcomd: a mention, a direct message, or neither (null)"),
-		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"),
-		runId: z.string().nullable().describe("The run it started or continued; null otherwise"),
+		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin; on a thread a live run follows, an actor the gate doesn't allow, with that run's runId, nothing delivered), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"),
+		runId: z.string().nullable().describe("The run it started or continued, or, denied, the live run following its thread whose planner the gate kept it from; null otherwise"),
 		restarted: z.string().optional().describe("With continued: the run had ended, and this planner agent (a new one, continuing the last) started on the trigger (spec §16.3.2 step 2). Absent otherwise"),
 		unrecorded: z.array(z.string()).optional().describe("What capcomd couldn't record about this decision (its line in the trigger log, the trigger a run started from, the run's subscription to the thread), each with why; absent when everything was recorded. A run that started stands either way"),
 	}).describe(`${TRIGGER_EVENT}. One per trigger a source handed to the intake (spec §16.3.2); \`entity\` is trigger:<source>/<hash of id>`),
@@ -459,6 +461,65 @@ export const EventData = {
 export type EventType = keyof typeof EventData;
 
 const DecideBody = z.object({ decision: z.enum(["approve", "deny"]), reason: UntrustedText.optional() });
+
+/** Capability ops.front_door (plugin API §6.1): how long a front door's operation is waited for before the answer says it
+ *  still runs (202). Below the harness socket's idle timeout (60 s), so a call never outlives its connection. */
+export const FRONT_WAIT_DEFAULT_MS = 25_000;
+export const FRONT_WAIT_MAX_MS = 45_000;
+const FrontWait = z.number().int().min(0).max(FRONT_WAIT_MAX_MS).optional()
+	.describe(`How long to wait for it to end before answering 202 with its id (default ${FRONT_WAIT_DEFAULT_MS}; 0: answer at once). It keeps running in the daemon either way; ask again with its id`);
+const FrontKey = z.string().min(1).max(200).optional().describe("Idempotency key: the same run, ref and key are the same operation (its id), however often asked");
+/** The front door's own drive settings (src/utils/env.ts `captureDriveEnv`, with the agents file its profiles resolve
+ *  from), as an agent's spawn records them (`driveEnv`): the daemon runs the operation with them, so a run's reviewer
+ *  (and anything else it spawns) is the profile the front door's project defines, as when it ran the operation itself. */
+const FrontDriveEnv = z.record(z.string().regex(/^CAPCOMD_[A-Z0-9_]{1,64}$/), z.string().max(4096)).refine((v) => Object.keys(v).length <= 64, "at most 64 settings").optional()
+	.describe("The front door's drive settings (CAPCOMD_AGENTS_FILE, CAPCOMD_SPAWN_EXEC, …: only the names an agent's `driveEnv` may carry; any other is ignored): the operation runs with them over the daemon's, as an agent's runs with its own");
+/** POST /v1/runs/{runId}/verifications: `capcomd verify`'s options (src/primitives/ops.ts verifyRef). */
+export const FrontVerifyBody = z.object({
+	ref: z.string().min(1).max(512).optional().describe("An agent id (agt-…) or a branch: what to verify; not needed with `id`"),
+	id: z.string().regex(/^vfy-[A-Za-z0-9]+$/).optional().describe("A verification's id: start it with this id, or ask for the one that has it"),
+	check: z.string().min(1).max(200).optional().describe("One of the run's named checks"),
+	checks: z.string().min(1).max(20_000).optional().describe("A check command (`capcomd verify --checks`)"),
+	acceptance: z.unknown().optional().describe("Acceptance criteria for the reviewer"),
+	target: z.string().min(1).max(255).optional(),
+	reviewProfile: z.string().min(1).max(128).optional().describe("The reviewer profile, instead of the run's"),
+	key: FrontKey,
+	driveEnv: FrontDriveEnv,
+	waitMs: FrontWait,
+}).strict();
+/** POST /v1/runs/{runId}/merges: `capcomd merge`'s options (src/primitives/ops.ts mergeRef). */
+export const FrontMergeBody = z.object({
+	ref: z.string().min(1).max(512).optional().describe("An agent id (agt-…) or a branch: what to land; not needed with `id`"),
+	id: z.string().regex(/^mrg-[A-Za-z0-9]+$/).optional().describe("A merge's id: start it with this id, or ask for the one that has it"),
+	require: z.string().regex(/^vfy-[A-Za-z0-9]+$/).optional().describe("The passing verification of this ref"),
+	target: z.string().min(1).max(255).optional(),
+	operator: z.boolean().optional().describe("`capcomd merge --operator`: land without a passing verify and past plugin vetoes (each is asked and recorded, plugin API §6.5)"),
+	requestApproval: z.boolean().optional().describe("A protected target parks the merge for a person's approval"),
+	protectedBranches: z.array(z.string().min(1).max(255)).max(100).optional()
+		.describe("The front door's own protected-branch patterns (CAPCOMD_PROTECTED_BRANCHES where it runs): a target they match is protected too. They only add protection; the daemon's own still apply"),
+	key: FrontKey,
+	driveEnv: FrontDriveEnv,
+	waitMs: FrontWait,
+}).strict();
+/** POST /v1/runs/{runId}/merges/{mergeId}/decision: `capcomd approve <runId> <mrg-…>` (src/primitives/ops.ts decideMerge). */
+export const FrontDecisionBody = z.object({
+	approve: z.boolean().describe("true: land it; false: deny it"),
+	by: z.string().min(1).max(128).optional().describe("Who decided, as the front door records it (the CLI's `--by`, `driver`, `driver:elicited`); default `cli`"),
+	reason: z.string().max(4000).optional(),
+	key: z.string().min(1).max(200).optional().describe("The front door's own id for this decision: asked again with the same key after it ended, the answer is its record, never a second decision"),
+	driveEnv: FrontDriveEnv,
+	waitMs: FrontWait,
+}).strict();
+/** A front door's operation, ended (200, `done`) or still running in the daemon (202). */
+export const FrontOpAnswer = z.object({
+	done: z.boolean().describe("false (202): it still runs in the daemon; ask again with its id (a decision: ask again with the same body)"),
+	id: z.string().describe("The vfy-… or mrg-… id"),
+	state: z.string().describe("Its state: running, or as `op.state`"),
+	op: z.looseObject({}).optional().describe("Once done: its record exactly as `capcomd verify|merge|approve --json` prints it"),
+});
+const FRONT_DOC = "Capability ops.front_door (plugin API §6.1): a kernel front door's operation (the CLI's, `capcomd mcp`'s), run in the daemon so every plugin's gate judges it as it judges an agent's. " +
+	"Only a one-call token the CLI or `capcomd mcp` makes for it (403 `forbidden` for any other: an app's, a plugin's). Idempotent by the operation's id (`id`, else the run, ref and `key`); no Idempotency-Key. " +
+	"200 with `done: true` and the record once it ended within `waitMs`, else 202 `done: false` with its id while it keeps running. A refusal is the operation's own: 422 `invalid`, 404 `not_found`, 409 `conflict` or 503 `unavailable`, with `relay` (its relay.v1 error).";
 const IdempotencyHeaders = z.object({ "idempotency-key": z.string().min(8).max(200) });
 
 /** Body of a steer message (POST …/agents/{agentId}/messages): at most this many bytes of UTF-8. */
@@ -533,6 +594,7 @@ export const CAPABILITIES = {
 	"runs.options.planners": "GET /v1/run-options `planners`: every profile that can plan, each with whether a run can start with it now and why not (its login, untrusted project skills, an untrusted project file that sets its sandbox.provider (a run started with a `sandbox` of its own doesn't wait on it), a sandbox.provider outside the run's isolation, a sandbox.environment that isn't built, no agent environment, an egress limit its sandbox can't enforce, a lifecycle plugin that isn't active)",
 	"plugins.routes": "Plugin API routes (plugin API §4.7.3): METHOD /v1/x/{plugin}/… serves a plugin's own routes, JSON in and out, with the caller's token, which needs the scope the route declares (403 `forbidden` otherwise; 404 `not_found` for a route no active plugin serves; a plugin's failure is 500 `internal` with the message \"plugin error\"). GET /v1/plugins/{name} lists its `routes` and the `capabilities` it adds here, named x.<plugin>.<flag>",
 	"context.brain_proposals": "A run's proposals to a company's brain (ADR-025 step 5): GET /v1/runs/{runId}/brain-proposals lists them and whether each was sent; POST /v1/runs/{runId}/brain-proposals/send (the `configure` scope, an Idempotency-Key) sends those waiting for a person as the caller (groundray's actor human:<client id>), as `capcomd context brain propose --run <runId> --yes` does",
+	"ops.front_door": "POST /v1/runs/{runId}/verifications, /merges and /merges/{mergeId}/decision: a kernel front door's verify, merge and approval of a merge (the CLI's and `capcomd mcp`'s), run in the daemon so every plugin's gate judges them (plugin API §6.1). Only the one-call tokens the CLI and `capcomd mcp` make for them (403 `forbidden` for any other token, a plugin's or an app's)",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -1417,5 +1479,14 @@ export const contract = {
 			})
 			.input(z.object({ params: z.object({ approvalId: ApprovalId }), headers: IdempotencyHeaders, body: DecideBody }))
 			.output(Decision),
+	},
+	// Capability ops.front_door: served natively (src/api/server.ts).
+	frontDoor: {
+		verify: oc.route({ method: "POST", path: "/v1/runs/{runId}/verifications", inputStructure: "detailed", description: `Start or ask for a verification (\`capcomd verify\`, \`capcomd_verify\`): the checks on the ref put on the target, then every verify.judging judge. Needs the steer scope. ${FRONT_DOC}` })
+			.input(z.object({ params: z.object({ runId: z.string() }), body: FrontVerifyBody })).output(FrontOpAnswer),
+		merge: oc.route({ method: "POST", path: "/v1/runs/{runId}/merges", inputStructure: "detailed", description: `Start or ask for a merge (\`capcomd merge\`, \`capcomd_merge\`): the verified commit lands past every merge.landing gate. Needs the steer scope. ${FRONT_DOC}` })
+			.input(z.object({ params: z.object({ runId: z.string() }), body: FrontMergeBody })).output(FrontOpAnswer),
+		decide: oc.route({ method: "POST", path: "/v1/runs/{runId}/merges/{mergeId}/decision", inputStructure: "detailed", description: `Approve or deny a merge waiting for a person (\`capcomd approve <runId> <mrg-…>\`, \`capcomd_approve\`): approval.deciding asks its plugins, then an approved merge lands past merge.landing. Needs the approve scope. While it lands, the same body asked again joins it. ${FRONT_DOC}` })
+			.input(z.object({ params: z.object({ runId: z.string(), mergeId: z.string().regex(/^mrg-[A-Za-z0-9]+$/) }), body: FrontDecisionBody })).output(FrontOpAnswer),
 	},
 };

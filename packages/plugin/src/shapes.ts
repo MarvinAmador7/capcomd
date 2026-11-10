@@ -230,7 +230,9 @@ export interface Trigger {
 /** What the kernel's intake decided about a trigger (§16.3). */
 export type TriggerDecision =
   | { kind: "deduped"; first: Timestamp }
-  | { kind: "denied"; by: "allowlist" | "mode" | "plugin"; reason: string }
+  /** `wouldHave`/`runId`: the trigger was for a live run following its thread, and the gate kept it from the run's
+   *  planner (§16.3.2 step 2). */
+  | { kind: "denied"; by: "allowlist" | "mode" | "plugin"; reason: string; wouldHave?: "continue"; runId?: string }
   | { kind: "recorded"; wouldHave: "start" | "continue"; runId: string | null }
   | { kind: "started"; runId: string }
   /** A run following the thread got it as a message (`seq`, in its planner's inbox). `restarted`: the run had ended and

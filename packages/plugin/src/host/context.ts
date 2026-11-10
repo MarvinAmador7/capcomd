@@ -57,8 +57,41 @@ export const PRIMITIVES = {
   storage: { get: null, put: null, cas: null, delete: null, list: null },
 } as const satisfies Record<string, Record<string, PluginScope | null>>;
 export type ServiceName = keyof typeof PRIMITIVES;
-/** Primitives that answer synchronously: refused with a throw, not a rejection. */
-const SYNC = new Set(["sandboxes.provider", "sandboxes.descriptors", "auth.credentialMode", "auth.redact"]);
+/** Where each primitive takes its `CallOptions` (last, §8.2), by argument index; `null`: it answers synchronously, takes
+ *  none and is refused with a throw, not a rejection (a seam call through `sandboxes.provider` has its `SeamCall`). */
+const OPTIONS_AT = {
+  runs: { new: 1, get: 1, list: 1, end: 2, pause: 1, resume: 1, title: 2 },
+  agents: { spawn: 1, get: 2, tree: 2, await: 3, cancel: 3, grant: 3, title: 3, notice: 3 },
+  messages: { send: 2, inbox: 3 },
+  gates: { verify: 2, merge: 2, pending: 1 },
+  board: { add: 2, claim: 2, done: 2, release: 2, list: 1 },
+  kv: { get: 2, put: 3, cas: 4, list: 2 },
+  sandboxes: { provider: null, forRun: 1, descriptors: null },
+  profiles: { resolve: 2, list: 1 },
+  auth: { credentialMode: null, loginPresent: 2, redact: null },
+  jobs: { start: 1, get: 1, list: 1, cancel: 2, wait: 1 },
+  triggers: { emit: 1, subscribe: 1, unsubscribe: 1, subscriptions: 1 },
+  storage: { get: 2, put: 3, cas: 4, delete: 2, list: 2 },
+} as const satisfies { [S in ServiceName]: Record<keyof (typeof PRIMITIVES)[S], number | null> };
+/** A primitive's deadline when the call sets no `timeoutMs` (§8.2). */
+export const CALL_TIMEOUT_MS = 30_000;
+/** Primitives with a default deadline of their own, for the kernel operation they run to its end: `jobs.start` of an
+ *  `exec` holds up to 90 000 ms for the job to end (§16.2 rule 1), so that hold plus the call's; `agents.spawn` fires
+ *  `profile.resolved` and `agent.spawning` (modify hooks, 60 s at most each, §6.4) before it starts the agent; `gates.verify`
+ *  answers once its checks and then its judges have (`verify.judging` at most 60 min, a reviewer agent inside it), so an
+ *  hour for the checks and that; `gates.merge` once its landing gates have and it landed or parked. */
+const DEFAULT_TIMEOUT_MS: Record<string, number> = {
+  "jobs.start": 90_000 + CALL_TIMEOUT_MS,
+  "agents.spawn": 2 * 60_000 + CALL_TIMEOUT_MS,
+  "gates.verify": 2 * 3_600_000,
+  "gates.merge": 3_600_000,
+};
+/** Primitives that read `timeoutMs` as how long to wait and answer at it, not as a deadline (§16.2: `jobs.wait` answers
+ *  the job as it is then; §8.4: `agents.await` answers which agents ended by then). Their `signal` and `ctx.signal` still
+ *  bound them. */
+const WAITS = new Set(["jobs.wait", "agents.await"]);
+/** setTimeout's largest delay: a longer one fires at once. */
+const TIMER_MAX_MS = 2 ** 31 - 1;
 
 /** The name the `capcomd mcp` server lists a plugin's MCP tool by (§4.7.2): `capcomd_<plugin>_<tool>`, a kernel front
  *  door's `capcomd_<tool>`. */
@@ -154,9 +187,9 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     const impl = o.services?.[service] as Record<string, (...a: unknown[]) => unknown> | undefined;
     const out: Record<string, (...a: unknown[]) => unknown> = {};
     for (const [method, scope] of Object.entries(PRIMITIVES[service]) as Array<[string, PluginScope | null]>) {
-      const sync = SYNC.has(`${service}.${method}`);
+      const at = (OPTIONS_AT[service] as Record<string, number | null>)[method]!;
       out[method] = (...args: unknown[]) => {
-        const go = () => {
+        const go = (args: unknown[]) => {
           live();
           if (scope && !scopes.includes(scope)) throw new PluginError("forbidden", `${service}.${method} needs the ${scope} scope (${name} has ${scopes.join(", ") || "none"}; §11.1)`);
           if (service === "triggers" && method === "emit") {
@@ -167,11 +200,50 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
           if (!f) throw new PluginError("unsupported", `${service}.${method} is not available to plugins yet`);
           return f.apply(impl, args);
         };
-        if (sync) return go();
-        try { return Promise.resolve(go()); } catch (e) { return Promise.reject(e); }
+        return at === null ? go(args) : bounded(`${service}.${method}`, at, args, go);
       };
     }
     return out as unknown as PluginContext[S];
+  };
+  // §8.2: an async primitive is bounded by its call's deadline (`timeoutMs`, default 30 000: `timeout`, retryable), its
+  // `signal` (`timeout`, not retryable) and `ctx.signal` (`disposed`), whichever comes first. The kernel's side gets that
+  // composed signal in its options, so it can stop; it either completed or did not, and the caller re-reads.
+  const bounded = (what: string, at: number, args: unknown[], go: (args: unknown[]) => unknown): Promise<unknown> => {
+    const given = args[at] as CallOptions | undefined;
+    if (given !== undefined && (typeof given !== "object" || given === null)) return Promise.reject(new PluginError("invalid", `${what}: its last argument is CallOptions {key?, signal?, timeoutMs?} (§8.2)`));
+    const signal = given?.signal;
+    if (signal !== undefined && !(signal && typeof signal.addEventListener === "function" && typeof signal.aborted === "boolean")) return Promise.reject(new PluginError("invalid", `${what}: signal is an AbortSignal (§8.2)`));
+    const waits = WAITS.has(what);
+    const ms = given?.timeoutMs ?? DEFAULT_TIMEOUT_MS[what] ?? CALL_TIMEOUT_MS;
+    if (!waits && !(typeof ms === "number" && ms > 0)) return Promise.reject(new PluginError("invalid", `${what}: timeoutMs is a number of milliseconds above 0 (§8.2)`));
+    const cancelled = () => new PluginError("timeout", `${what} was cancelled: its signal aborted (§8.2)`);
+    try { live(); } catch (e) { return Promise.reject(e); }
+    if (signal?.aborted) return Promise.reject(cancelled());
+    const own = new AbortController();
+    return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settle = () => {
+        clearTimeout(timer);
+        abort.signal.removeEventListener("abort", onDispose);
+        signal?.removeEventListener("abort", onCancel);
+      };
+      const stop = (e: PluginError) => {
+        if (own.signal.aborted) return;
+        settle();
+        own.abort(e);
+        reject(e);
+      };
+      const onDispose = () => stop(new PluginError("disposed", `${name} is disposing`));
+      const onCancel = () => stop(cancelled());
+      abort.signal.addEventListener("abort", onDispose, { once: true });
+      signal?.addEventListener("abort", onCancel, { once: true });
+      if (!waits) timer = setTimeout(() => stop(new PluginError("timeout", `${what} did not answer within ${ms} ms (§8.2)`, "It may have taken effect anyway: re-read, or pass a larger timeoutMs.", true)), Math.min(ms, TIMER_MAX_MS));
+      const passed = [...args];
+      passed[at] = { ...given, signal: own.signal };
+      let p: Promise<unknown>;
+      try { p = Promise.resolve(go(passed)); } catch (e) { p = Promise.reject(e); }
+      p.then((v) => { settle(); resolve(v); }, (e: unknown) => { settle(); reject(e); });
+    });
   };
   const auth = guarded("auth");
   const triggers = guarded("triggers");
@@ -269,7 +341,9 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
       },
     },
     events: {
-      async emit(e) {
+      // Bounded like the guarded primitives (§8.2): its CallOptions are its second argument, replay's its third.
+      emit: (...args: [EmittedEvent, CallOptions?]) => bounded("events.emit", 1, args, ([x]) => {
+        const e = x as EmittedEvent;
         live();
         if (!scopes.includes("steer")) throw new PluginError("forbidden", `events.emit needs the steer scope (§11.1)`);
         if (!(declared.events ?? []).includes(e.type)) throw new PluginError("forbidden", `event type ${e.type} is not declared in contributes.events (§8.4)`);
@@ -278,7 +352,7 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         if (Buffer.byteLength(JSON.stringify(data)) > EVENT_DATA_MAX) throw new PluginError("invalid", "event data is over 64 KB");
         if (!o.emit) throw new PluginError("unsupported", "events.emit is not available to plugins yet");
         return o.emit({ ...e, type: pluginEventType(name, e.type), text: redact(String(e.text)), data });
-      },
+      }) as Promise<{ seq: number }>,
       subscribe(stream, filter, handler) {
         live();
         if (!scopes.includes("read")) throw new PluginError("forbidden", "events.subscribe needs the read scope (§11.1)");
@@ -299,13 +373,13 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         const sub = o.subscribe(stream, { ...(f.types ? { types: [...f.types] } : {}), ...(f.after !== undefined ? { after: f.after } : {}) }, deliver);
         return register({ kind: "subscription", stream }, () => { on = false; void sub.dispose(); });
       },
-      async replay(stream, after) {
+      replay: (...args: [string, number, CallOptions?]) => bounded("events.replay", 2, args, ([stream, after]) => {
         live();
         if (!scopes.includes("read")) throw new PluginError("forbidden", "events.replay needs the read scope (§11.1)");
-        if (!(Number.isSafeInteger(after) && after >= 0)) throw new PluginError("invalid", "events.replay: after is a seq (an integer ≥ 0)");
+        if (!(Number.isSafeInteger(after) && (after as number) >= 0)) throw new PluginError("invalid", "events.replay: after is a seq (an integer ≥ 0)");
         if (!o.replay) throw new PluginError("unsupported", "events.replay is not available to plugins yet");
-        return o.replay(stream, after);
-      },
+        return o.replay(stream as string, after as number);
+      }) as Promise<HarnessEventEnvelope[]>,
     },
     storage: guarded("storage"),
     runs: guarded("runs"),
