@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { blockers, casOk, checkKey, claimable, fence, findCycle, leaseMs, pickNext, valueBytes, type BoardTask } from "../../src/primitives/board";
+import { GOAL_MAX_BYTES } from "../../src/api/contract";
+import { blockers, casOk, checkKey, claimable, fence, findCycle, goalProblem, leaseMs, pickNext, TASK_GOAL_MAX_BYTES, valueBytes, type BoardTask } from "../../src/primitives/board";
+import { taskAdd } from "../../src/primitives/state";
 
 const t = (o: Partial<BoardTask>): BoardTask => ({ taskId: "tsk-1", title: "x", data: null, status: "open", holder: null, epoch: 0, leaseUntil: 0, result: null, ...o });
 
@@ -63,5 +65,22 @@ describe("dependencies", () => {
   test("valueBytes is UTF-8 JSON size", () => {
     expect(valueBytes({ a: 1 })).toBe(7);
     expect(valueBytes("é")).toBe(4);
+  });
+  test("a task's goal is checked as a run's: not empty, at most 16 KB of UTF-8 as stored, no NUL", () => {
+    expect(TASK_GOAL_MAX_BYTES).toBe(GOAL_MAX_BYTES);
+    expect(goalProblem("x".repeat(16 * 1024))).toBeNull();
+    expect(goalProblem("é".repeat(8 * 1024))).toBeNull();
+    expect(goalProblem("x".repeat(16 * 1024 + 1))).toContain("longer than 16384");
+    expect(goalProblem("é".repeat(8 * 1024 + 1))).toContain("16386 bytes");
+    // Measured as stored: a task keeps its title as given, so whitespace around it counts.
+    expect(goalProblem(` ${"x".repeat(16 * 1024)}`)).toContain("longer than");
+    expect(goalProblem("a\u0000b")).toContain("NUL");
+    for (const g of ["", "  \n", undefined, 7]) expect(goalProblem(g)).toBe("a task has a goal");
+  });
+  test("taskAdd refuses a goal over the cap as usage, before it reaches the engine", async () => {
+    const err = await taskAdd("run-board-nowhere", { title: "x".repeat(16 * 1024 + 1) }).then(() => null, (e) => e);
+    expect(err).toMatchObject({ code: "usage" });
+    expect(err.message).toContain("longer than 16384");
+    expect((await taskAdd("run-board-nowhere", { title: "" }).catch((e) => e)).code).toBe("usage");
   });
 });

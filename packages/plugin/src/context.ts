@@ -236,6 +236,7 @@ export interface GatesService {
 
 export interface BoardTask { id: string; goal: Untrusted; state: "pending" | "leased" | "running" | "done" | "released"; holder: string | null; after: string[] }
 export interface BoardService {
+  /** `goal`: checked as a run's goal is, not blank, at most 16 KB (UTF-8), no NUL; `invalid` otherwise (§8.4). */
   add(runId: string, input: { id: string; goal: string; after?: string[] }, o?: CallOptions): Promise<BoardTask>;
   claim(runId: string, input: { id?: string }, o?: CallOptions): Promise<BoardTask | null>;
   done(runId: string, id: string, o?: CallOptions): Promise<void>;
