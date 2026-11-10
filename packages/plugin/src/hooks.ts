@@ -95,8 +95,9 @@ export interface SpawnRequest {
 }
 export interface AgentSpawning { spawn: SpawnRequest; spec: PinnedSpec; parent: Agent | null }
 /** `budget` and `grant` narrow-only (policy.ts applyGrant); `contract` may add keys, never change one, and never the
- *  host's own (`from`, `review`, `checks`, `orphansPolicyOverride`); an added `report` is `true`, an added `check` one of
- *  the run's check names (§6.6.6). */
+ *  host's own (`from`, `review`, `checks`, `orphansPolicyOverride`) nor `budget` or `children` (read before the hook:
+ *  lower and narrow through `budget` and `grant`); an added `report` is `true`, an added `check` one of the run's check
+ *  names (§6.6.6). */
 export type SpawnPatch = { budget?: Budget; grant?: Grant; contract?: Record<string, unknown> };
 
 export interface AgentPreparing {

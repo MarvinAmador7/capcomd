@@ -724,7 +724,10 @@ it: the host's own keys, which a spawn from an agent's VM never carries (`from`,
 `checks` and `orphansPolicyOverride`, the operator's), may not be added (`widening`); an added `report` is `true` and an
 added `check` a string (else `invalid`), and that check is looked up in the run, so a name it doesn't have refuses the
 spawn (`usage`) as the spawner's would. A plugin lowers the budget and narrows the grant through `budget` and `grant`,
-not through the contract's `budget` or `children`, which are read before this hook.
+not through the contract's `budget` or `children`, which are read before this hook: adding either is `invalid` (hint
+`use the patch's budget and grant`, also in the message), so a spawn is never recorded with a contract that says what
+the kernel didn't apply. Like every patch the kernel rejects, it is a failed call (§6.5): a `closed` listener refuses
+the spawn, an `open` one (the default) is skipped and its whole patch dropped.
 
 #### 6.6.7 `agent.preparing` · modify · workflow `prepare` (`agent-workflow.ts`), before the machine is ensured
 `AgentPreparing {agent, spec, prompt: {system, append, persona, skills[]}, env: names[], egress[], credentialMode, sandbox}`.
