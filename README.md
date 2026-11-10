@@ -217,7 +217,7 @@ capcomd spawn $RUN --profile planner --task "Fix the three failing tests; one ch
 ```bash
 export BOXD_API_KEY=…  CAPCOMD_SANDBOX=boxd
 capcomd env build                 # bake the agent CLIs into a VM snapshot (once; no secrets)
-capcomd auth login claude         # log in with your plan inside a VM (or: codex)
+capcomd auth login claude         # log in with your plan inside a VM (or: codex; fx for a Vercel or Grok login)
 capcomd doctor --strict           # check every agent works
 export CAPCOMD_REPO=https://github.com/you/app.git  CAPCOMD_MERGE_TARGET=main  CAPCOMD_MERGE_MODE=pr
 capcomd profiles add worker --provider claude --auth subscription # no limits; add --max-turns, --timeout-ms or --budget for one

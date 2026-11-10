@@ -125,7 +125,8 @@ Usage:
                                        or continued a run  ·  capcomd triggers subscriptions [runId] [--source S]: the
                                        threads runs follow (settings: \`triggers.sources.<source>\` in ~/.capcomd/config.json)
   capcomd auth login claude|codex        Log in with your Claude/ChatGPT plan in a VM; saves a private auth profile
-  capcomd auth status [agent] [--quick]  Verify saved logins   |   capcomd auth logout claude|codex
+  capcomd auth login fx [vercel|grok]    Log fx in with your Vercel account (default) or Grok plan, the same way
+  capcomd auth status [agent] [--quick]  Verify saved logins   |   capcomd auth logout claude|codex|fx
   capcomd secrets sync                   Store local ANTHROPIC/OPENAI keys as boxd host-bound secrets
   capcomd doctor                         Check agents + credentials inside a snapshot VM
   capcomd mcp                            Serve capcomd's primitives over MCP (stdio), for your agent

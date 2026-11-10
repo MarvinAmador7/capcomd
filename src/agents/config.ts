@@ -3,7 +3,7 @@ import { OPEN_EGRESS } from "../providers/sandbox";
 import { agentSeam, orchestrateConfig, providerOfKind } from "../plugins/agents";
 import { CLAUDE_CODE_VERSION } from "../plugins/agent-claude";
 import { CODEX_VERSION } from "../plugins/agent-codex";
-import { FX_DEFAULT_USD_PER_MTOK, FX_RELEASE } from "../plugins/agent-fx";
+import { FX_DEFAULT_USD_PER_MTOK, FX_LOGINS, FX_RELEASE } from "../plugins/agent-fx";
 import { reservedEnvName } from "../plugins/hooks";
 import { pinnedRuntime, type McpServer } from "../profiles/runtime";
 export { CLAUDE_USD_PER_MTOK, claudeCostUsd, type ClaudeUsage } from "../plugins/agent-claude";
@@ -55,8 +55,8 @@ export const PROVIDER_EGRESS: Record<"claude-code" | "codex" | "fx", Record<Egre
   "claude-code": { apikey: ["api.anthropic.com"], subscription: ["api.anthropic.com"] },
   codex: { apikey: ["api.openai.com"], subscription: ["api.openai.com", ...CODEX_SUBSCRIPTION_HOSTS] },
   // fx: the AI Gateway (model calls, its model list), and its release host for the pinned install when the image lacks
-  // it. No plan login (describe().subscription is false).
-  fx: { apikey: ["ai-gateway.vercel.sh", FX_RELEASE.host], subscription: ["ai-gateway.vercel.sh", FX_RELEASE.host] },
+  // it. On a plan login, the hosts of both of fx's logins (Vercel's session and the Gateway; Grok's), whichever it is.
+  fx: { apikey: ["ai-gateway.vercel.sh", FX_RELEASE.host], subscription: [...new Set([...FX_LOGINS.flatMap((l) => l.egress), FX_RELEASE.host])] },
 };
 /** The hosts an install of the active providers' CLIs downloads from besides BASE_EGRESS (a release archive's,
  *  `describe().install`): an env build's VM reaches them too. */
@@ -152,6 +152,9 @@ export interface AgentConfig {
    * Default: subscription when an auth profile exists for the agent, else auto.
    */
   credentialMode: "auto" | "secret" | "env" | "subscription";
+  /** On `subscription`: which of its provider's plan logins the agent runs on (the auth ledger's `login`: fx's vercel or
+   *  grok), for a provider with several. A login billed per token (`describe().logins[].metered`) is spend. */
+  planLogin?: string;
   /** The profile's `toolMode` (docs/spec/plugin-api.md §16.1), when `orchestrate`: the agent reads, spawns and decides,
    *  with its provider's tool policy applied to the lists above, and never commits or pushes. Unset: `execute`. */
   toolMode?: "orchestrate";
@@ -250,6 +253,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
   const sandbox = (envVar("CODEX_SANDBOX", source) ?? spec?.sandbox ?? "danger-full-access") as AgentConfig["codexSandbox"];
   if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) throw new Error(`CAPCOMD_CODEX_SANDBOX=${sandbox} is invalid`);
   const cred = credentialModeFor(kind, source, spec?.auth);
+  const planLogin = cred === "subscription" && isRealAgent(kind) ? (require("../auth/profiles") as typeof import("../auth/profiles")).profileFor(kind, source)?.login : undefined;
   // ADR-024 `tools.mcp`: pinned at spawn on its spec; a profile resolved by name has them on the resolution.
   const mcp = ra.runtime?.mcp ?? pinnedRuntime(spec).mcp;
   const cfg: AgentConfig = {
@@ -282,6 +286,7 @@ export function loadAgentConfig(source: Record<string, string | undefined> = pro
     codexUsdPerMtokOut: num("CODEX_USD_PER_MTOK_OUT", 10),
     usdPerMtok: providerRates(source, opt),
     credentialMode: cred,
+    ...(planLogin ? { planLogin } : {}),
     ...(pluginEnvOf(spec) ? { pluginEnv: pluginEnvOf(spec)! } : {}),
     ...(personaOf(spec) ? { persona: personaOf(spec)! } : {}),
     // An orchestrate agent runs nothing (§16.1): never a server, whatever made it orchestrate after its profile was checked.

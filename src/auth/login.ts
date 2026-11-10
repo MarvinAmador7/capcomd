@@ -1,4 +1,4 @@
-// `capcomd auth login|status|logout` (ADR-015 §5): plan logins for Claude Code / Codex.
+// `capcomd auth login|status|logout` (ADR-015 §5): plan logins for Claude Code, Codex and fx (a Vercel or Grok login).
 import type { SandboxProvider } from "../providers/sandbox";
 import { isSecretPlatform, type SecretPlatform, type SnapshotPlatform, type SnapshotInfo } from "../env/platform";
 import type { AgentConfig } from "../agents/config";
@@ -8,7 +8,7 @@ import type { AgentAdapter } from "../agents/types";
 import { agentHome, agentPath, detectScript, parseDetect, sq } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { AUTH_SHAPES, CLAUDE_TOKEN, bridge, hasInteractive, type InteractiveSession } from "./interactive";
-import { CLAUDE_TOKEN_SECRET, authSnapshotName, readAuthLedger, writeAuthLedger, type AuthProfile, type ProfileAgent } from "./profiles";
+import { CLAUDE_TOKEN_SECRET, PROFILE_AGENTS, authSnapshotName, readAuthLedger, writeAuthLedger, type AuthProfile, type ProfileAgent } from "./profiles";
 
 type P = SandboxProvider & SnapshotPlatform & Partial<SecretPlatform> & { streamExec?: any };
 
@@ -24,19 +24,48 @@ export interface LoginOptions {
   loginTimeoutMs?: number;
   pollMs?: number;
   now?: () => number;
+  /** Which of the provider's plan logins (`describe().logins`: fx's vercel or grok); absent: its first. */
+  login?: string;
 }
 export interface LoginResult { profile: AuthProfile; verified: boolean; loginMs: number; totalMs: number }
 
 export const parseAgentArg = (a: string | undefined): ProfileAgent => {
   if (a === "claude" || a === "claude-code") return "claude-code";
   if (a === "codex") return "codex";
-  if (a === "fx") throw new Error("capcomd has no plan login for fx: set AI_GATEWAY_API_KEY (an AI Gateway API key) and give its profiles auth: apikey");
-  throw new Error("usage: capcomd auth login|status|logout claude|codex");
+  if (a === "fx") return "fx";
+  throw new Error("usage: capcomd auth login|status|logout claude|codex|fx");
 };
+/** The agent's name on the command line (`capcomd auth login <name>`). */
+export const cliName = (agent: ProfileAgent) => (agent === "claude-code" ? "claude" : agent);
+
+/**
+ * Which of an agent's plan logins to make (`capcomd auth login fx grok`): the named one, else the first it offers;
+ * undefined for a CLI with a single login. A login capcomd can't make headless (`refused`) is refused here, before any
+ * machine starts, with the provider's reason and what to use instead.
+ */
+export function parseLoginArg(agent: ProfileAgent, name: string | undefined): string | undefined {
+  const logins = adapterFor(agent).logins;
+  if (!logins) {
+    if (name !== undefined) throw new Error(`${cliName(agent)} has one plan login: run \`capcomd auth login ${cliName(agent)}\``);
+    return undefined;
+  }
+  const l = name === undefined ? logins.find((x) => !x.refused) : logins.find((x) => x.name === name);
+  if (!l) throw new Error(`${cliName(agent)} has no login ${JSON.stringify(name)}: one of ${logins.filter((x) => !x.refused).map((x) => x.name).join(", ")}`);
+  if (l.refused) throw new Error(l.refused);
+  return l.name;
+}
+/** The hosts a login VM for this login reaches besides BASE_EGRESS: the named login's, else the provider's. */
+export function loginEgressFor(a: AgentAdapter, login?: string): string[] {
+  return (login ? a.logins?.find((l) => l.name === login)?.egress : undefined) ?? a.loginEgress;
+}
+/** The login's name for people ("Vercel", "Grok"), for a provider with several. */
+export const loginLabel = (a: AgentAdapter, login?: string) => (login ? a.logins?.find((l) => l.name === login)?.label ?? login : undefined);
+/** The login command as people know it (`fx login grok`), without the environment it runs with. */
+const shownLogin = (a: AgentAdapter, login?: string) => { const argv = a.loginCommand(a.bin, login); return argv.slice(Math.max(0, argv.indexOf(a.bin))).join(" "); };
 
 /** Boots a login VM, recorded as capcomd's own (a login) until `destroyVm`, so it never reads as left behind. */
 const releases = new Map<string, () => void>();
-export async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: string, t0: number) {
+export async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: string, t0: number, egress: string[] = a.loginEgress) {
   const idemKey = `capcomd-${purpose}-${a.kind}-${t0}`;
   const { recordJobMachine } = await import("../providers/machines");
   const { sandboxName } = await import("../providers/registry");
@@ -44,7 +73,7 @@ export async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: s
   try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
   const release = recordJobMachine({ idemKey, sandbox: place, kind: "login", purpose, agent: a.kind, ttlSeconds: 1800 });
   try {
-    const { id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 1800, egressAllow: [...BASE_EGRESS, ...a.loginEgress], labels: { purpose }, fromSnapshot: snapshot });
+    const { id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 1800, egressAllow: [...new Set([...BASE_EGRESS, ...egress])], labels: { purpose }, fromSnapshot: snapshot });
     releases.set(id, release);
     await p.waitReady(id, 120_000);
     return id;
@@ -83,10 +112,12 @@ export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Pro
   const t0 = now();
   const log = o.log ?? (() => {});
   const a = adapterFor(agent);
+  // A login capcomd can't make (fx's ChatGPT one) is refused before any machine starts.
+  const login = parseLoginArg(agent, o.login);
   const home = agentHome(o.cfg);
   const env = { PATH: agentPath(home), HOME: home, CODEX_HOME: `${home}/.codex`, TERM: "xterm-256color" };
   if (!hasInteractive(p)) throw new Error("this sandbox has no interactive exec (need boxd streamExec)");
-  const id = await bootVm(p, a, o.envSnapshot, "auth-login", t0);
+  const id = await bootVm(p, a, o.envSnapshot, "auth-login", t0, loginEgressFor(a, login));
   log(`login vm ready from ${o.envSnapshot} (${now() - t0}ms)`);
   try {
     const bin = await findBin(p, id, a, o.cfg, env);
@@ -96,10 +127,10 @@ export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Pro
     }
     // 1. Interactive login, streamed to this terminal; tokens are captured and masked.
     const t1 = now();
-    const session: InteractiveSession = await (p as any).streamExec(id, a.loginCommand(bin), { env, tty: true, cols: 500, rows: 50 });
+    const session: InteractiveSession = await (p as any).streamExec(id, a.loginCommand(bin, login), { env, tty: true, cols: 500, rows: 50 });
     const { code, tokens } = await bridge(session, { patterns: AUTH_SHAPES, stdout: o.stdout, stdin: o.stdin, timeoutMs: o.loginTimeoutMs ?? 15 * 60_000 });
     const loginMs = now() - t1;
-    if (code !== 0) throw new Error(`${a.loginCommand("").join(" ").trim()} exited ${code}; login not completed`);
+    if (code !== 0) throw new Error(`${shownLogin(a, login)} exited ${code}; login not completed`);
 
     // 2. Store the credential.
     let store: AuthProfile["store"] = "snapshot";
@@ -123,12 +154,19 @@ export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Pro
         await p.upload(id, `${home}/.capcomd-auth/claude.env`, new TextEncoder().encode(`export CLAUDE_CODE_OAUTH_TOKEN='${token}'\n`));
         await p.exec(id, ["sh", "-c", `chmod 600 ${sq(`${home}/.capcomd-auth/claude.env`)}`], { env });
       }
-    } else {
+    } else if (agent === "codex") {
       // Only booleans leave the VM.
       const shape = (await p.exec(id, ["sh", "-c", `node -e 'const j=JSON.parse(require("fs").readFileSync(process.env.CODEX_HOME+"/auth.json","utf8"));console.log(JSON.stringify({mode:j.auth_mode??null,refresh:!!(j.tokens&&j.tokens.refresh_token)}))' 2>/dev/null || echo '{}'`], { env })).stdout.trim();
       let s: any = {}; try { s = JSON.parse(shape.split("\n").pop() || "{}"); } catch {}
       if (!s.refresh) throw new Error(`codex login left no usable auth.json (auth_mode=${s.mode ?? "?"})`);
       log(`auth.json present (auth_mode=${s.mode}, refresh token: yes)`);
+    } else if (a.loginCheck) {
+      // The CLI's own word on the login (fx: `fx status --json`): only its boolean leaves the VM.
+      const seen = (await p.exec(id, ["sh", "-c", `${a.subscriptionPrelude(home, sq)}; ${a.loginCheck(bin, sq)}`], { env })).stdout.trim().split("\n").pop() ?? "";
+      let loggedIn = false;
+      try { loggedIn = JSON.parse(seen)?.loggedIn === true; } catch { /* not its line: no login */ }
+      if (!loggedIn) throw new Error(`${shownLogin(a, login)} finished but ${a.bin} sees no login; nothing was saved`);
+      log(`${a.bin} sees the login${login ? ` (${loginLabel(a, login)})` : ""}`);
     }
 
     // 3. Verify with a real headless call.
@@ -154,7 +192,8 @@ export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Pro
       log(`auth profile snapshot ${snapshot} ready (private to your boxd account)`);
     }
     if (old?.snapshot && old.snapshot !== snapshot) await p.snapshotDelete(old.snapshot).catch(() => {});
-    const profile: AuthProfile = { agent, snapshot, store, method: agent === "claude-code" ? "setup-token" : "device-auth", env: o.envSnapshot, createdAt: new Date().toISOString(), verifiedAt: new Date().toISOString(), verified: true };
+    const method: AuthProfile["method"] = agent === "claude-code" ? "setup-token" : login === "grok" ? "browser-code" : "device-auth";
+    const profile: AuthProfile = { agent, snapshot, store, method, ...(login ? { login } : {}), env: o.envSnapshot, createdAt: new Date().toISOString(), verifiedAt: new Date().toISOString(), verified: true };
     writeAuthLedger({ ...l, [agent]: profile }, o.ledgerPath);
     return { profile, verified: true, loginMs, totalMs: now() - t0 };
   } finally {
@@ -162,29 +201,35 @@ export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Pro
   }
 }
 
-export interface StatusLine { agent: ProfileAgent; present: boolean; snapshot?: string; store?: string; snapshotStatus?: string; valid?: boolean; detail: string }
+export interface StatusLine {
+  agent: ProfileAgent; present: boolean; snapshot?: string; store?: string; snapshotStatus?: string; valid?: boolean; detail: string;
+  /** Which of the provider's plan logins it is (fx: vercel or grok). */
+  login?: string;
+}
 
+/** Each plan login's state. Unasked: Claude Code's and Codex's always (as before), another agent's (fx) when it has one. */
 export async function authStatus(p: P, cfg: AgentConfig, o: { ledgerPath?: string; verify?: boolean; agents?: ProfileAgent[] } = {}): Promise<StatusLine[]> {
   const l = readAuthLedger(o.ledgerPath);
   const out: StatusLine[] = [];
-  for (const agent of o.agents ?? (["claude-code", "codex"] as ProfileAgent[])) {
+  for (const agent of o.agents ?? PROFILE_AGENTS.filter((a) => a === "claude-code" || a === "codex" || l[a])) {
     const prof = l[agent];
-    if (!prof) { out.push({ agent, present: false, detail: `no profile (capcomd auth login ${agent === "codex" ? "codex" : "claude"})` }); continue; }
-    const line: StatusLine = { agent, present: true, snapshot: prof.snapshot, store: prof.store, detail: "" };
+    if (!prof) { out.push({ agent, present: false, detail: `no profile (capcomd auth login ${cliName(agent)})` }); continue; }
+    const line: StatusLine = { agent, present: true, snapshot: prof.snapshot, store: prof.store, ...(prof.login ? { login: prof.login } : {}), detail: "" };
+    const label = loginLabel(adapterFor(agent), prof.login);
     const boot = prof.snapshot ?? prof.env;
     if (prof.snapshot) {
       const st = await p.snapshotGet(prof.snapshot);
       line.snapshotStatus = st?.status ?? "missing";
       if (!st) { line.valid = false; line.detail = "snapshot missing; run auth login again"; out.push(line); continue; }
     }
-    if (o.verify === false) { line.detail = `not verified (last ok ${prof.verifiedAt ?? "never"})`; out.push(line); continue; }
+    if (o.verify === false) { line.detail = `${label ? `${label} login, ` : ""}not verified (last ok ${prof.verifiedAt ?? "never"})`; out.push(line); continue; }
     const a = adapterFor(agent);
-    const id = await bootVm(p, a, boot, "auth-status", Date.now());
+    const id = await bootVm(p, a, boot, "auth-status", Date.now(), loginEgressFor(a, prof.login));
     try {
       const home = agentHome(cfg);
       const bin = await findBin(p, id, a, cfg, { PATH: agentPath(home), HOME: home });
       const v = await verifyLogin(p, id, a, cfg, bin);
-      line.valid = v.ok; line.detail = v.detail;
+      line.valid = v.ok; line.detail = label ? `${label} login: ${v.detail}` : v.detail;
       writeAuthLedger({ ...readAuthLedger(o.ledgerPath), [agent]: { ...prof, verified: v.ok, verifiedAt: new Date().toISOString() } }, o.ledgerPath);
     } finally { await destroyVm(p, id); }
     out.push(line);

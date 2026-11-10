@@ -95,14 +95,19 @@ export interface AgentAdapter {
   parse(line: string, r: Redactor, state: AgentRunState, cfg: AgentConfig): AgentEvent | null;
   /** Reason to stop the agent now (turn/budget guard), or null. */
   guard(state: AgentRunState, cfg: AgentConfig): string | null;
-  /** Subscription mode (ADR-015 §5). Shell that prints "secret" and/or "file" when a plan login is present. */
+  /** Subscription mode (ADR-015 §5). Shell that prints "secret" and/or "file" when a plan login is present; with
+   *  `logins`, "file <name>" for each one it finds (a metered one found makes the agent spend). */
   subscriptionCheck(home: string, q: (s: string) => string): string;
   /** Lines run in run.sh before the agent: drop API keys, load the plan login. */
   subscriptionPrelude(home: string, q: (s: string) => string): string;
-  /** Interactive login argv (run in a PTY in the login VM). */
-  loginCommand(bin: string): string[];
+  /** Interactive login argv (run in a PTY in the login VM); `login` names one of `logins`. */
+  loginCommand(bin: string, login?: string): string[];
   /** Hosts the login VM may reach. */
   loginEgress: string[];
+  /** The plan logins the CLI offers when it has more than one (each with the hosts its login VM reaches). */
+  logins?: Array<{ name: string; label: string; egress: string[]; refused?: string; metered?: boolean }>;
+  /** Shell printing `{"loggedIn": <boolean>}` after a login: whether the CLI sees it (only the boolean leaves the VM). */
+  loginCheck?(bin: string, q: (s: string) => string): string;
   /** Cheap headless call proving the login works; exit 0 + stdout containing "ok". */
   verifyCommand(bin: string, q: (s: string) => string): string;
   /** Interpret the finished run. */

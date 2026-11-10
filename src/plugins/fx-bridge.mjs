@@ -5,6 +5,7 @@
 // to the run. Config (JSON file, argv[2]):
 //   { bin, cwd, prompt, stdin?, mcpConfig?, mcpServers?, model?, effort?, provider?, permission, logFile?, addDirs?,
 //     maxSteps?, quotaAfterMs? }
+// No `provider` (a plan login): the fx provider the login signed in to, CAPCOMD_FX_PROVIDER, else the AI Gateway's.
 // `permission` is {mode: "full-access"} (the sandbox is the boundary) or {mode: "ask", rules} (an orchestrate agent:
 // fx's own rules allow and deny, and every action they leave to a person is refused here).
 // With `stdin`, the prompt and the messages capcomd sends while the agent works arrive on stdin as the supervisor writes
@@ -27,13 +28,14 @@ const QUOTA_AFTER_MS = Number(cfg.quotaAfterMs) > 0 ? Number(cfg.quotaAfterMs) :
 const QUOTA_TEXT = /insufficient_quota|credit_card_required|usage_limit_reached|out of credits|exceeded your current quota/i;
 const FLUSH_MS = 5_000;
 
-// ---- fx's settings: capcomd's keys merged into $HOME/.fx/settings.json (fx reads only that file, and only when it and
+// ---- fx's settings: capcomd's keys merged into $FX_HOME/settings.json ($HOME/.fx unless a plan login's prelude set
+// FX_HOME to it; fx reads only that file, and only when it and
 // its folder are private), whatever a login wrote kept. An orchestrate agent's file keeps only the model endpoints
 // (`providers`, `models`) besides capcomd's keys: anything else already there could loosen its rules (a `workspaces`
 // entry for the checkout outranks the top-level `permission`) or approve the repository's own MCP servers.
 const ORCHESTRATE_KEEP = new Set(["providers", "models"]);
 function settings() {
-  const dir = join(process.env.HOME || "/root", ".fx"), file = join(dir, "settings.json");
+  const dir = process.env.FX_HOME || join(process.env.HOME || "/root", ".fx"), file = join(dir, "settings.json");
   let s = {};
   try { s = JSON.parse(readFileSync(file, "utf8")); } catch {}
   if (!s || typeof s !== "object" || Array.isArray(s)) s = {};
@@ -95,7 +97,7 @@ function mcpServers() {
 
 settings();
 loginPath();
-const env = { ...process.env, CAPCOMD_PATH: process.env.PATH ?? "", FX_AUTO_UPGRADE: "0", FX_NO_OPEN_BROWSER: "1", NO_COLOR: "1", FX_PERMISSION_MODE: cfg.permission?.mode === "ask" ? "ask" : "full-access", FX_PROVIDER: cfg.provider || "gateway" };
+const env = { ...process.env, CAPCOMD_PATH: process.env.PATH ?? "", FX_AUTO_UPGRADE: "0", FX_NO_OPEN_BROWSER: "1", NO_COLOR: "1", FX_PERMISSION_MODE: cfg.permission?.mode === "ask" ? "ask" : "full-access", FX_PROVIDER: cfg.provider || process.env.CAPCOMD_FX_PROVIDER || "gateway" };
 // An API key is the credential: a Vercel OIDC token would outrank it.
 if (env.AI_GATEWAY_API_KEY) delete env.VERCEL_OIDC_TOKEN;
 if (cfg.effort) env.FX_EFFORT = String(cfg.effort);

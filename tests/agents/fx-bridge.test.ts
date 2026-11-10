@@ -164,6 +164,17 @@ describe.skipIf(!NODE)("what the bridge sets up for fx", () => {
     expect(r.seen.argv.slice(0, 3)).toEqual(["--add-dir", ctx, "acp"]);
   }, 20_000);
 
+  test("a plan login: no provider in the config runs fx on the login's (CAPCOMD_FX_PROVIDER); its settings go to FX_HOME", async () => {
+    const fxHome = mkdtempSync(join(tmpdir(), "capcomd-fx-home-"));
+    const r = await bridge({ prompt: "x", config: { provider: undefined }, env: { CAPCOMD_FX_PROVIDER: "grok", FX_HOME: fxHome } });
+    expect(r.seen.env).toMatchObject({ FX_PROVIDER: "grok", FX_HOME: fxHome });
+    expect(JSON.parse(readFileSync(join(fxHome, "settings.json"), "utf8"))).toMatchObject({ auto_upgrade: false });
+    expect(existsSync(join(r.home, ".fx", "settings.json"))).toBe(false);
+    // The config's own provider (an API key's, gateway) wins over one left in the environment.
+    const k = await bridge({ prompt: "x", env: { CAPCOMD_FX_PROVIDER: "grok" } });
+    expect(k.seen.env.FX_PROVIDER).toBe("gateway");
+  }, 20_000);
+
   test("a message too big to steer with is the next turn; a steering prompt fx refuses (the turn ended) is the next turn too", async () => {
     const big = "x".repeat(70 * 1024);
     const r = await bridge({ prompt: "first [wait]", stdin: true, messages: [{ on: (l) => toolCall(l) && l.update.toolCallId === "call_1", text: big }, { on: (l) => toolCall(l) && l.update.toolCallId === "call_1", text: "small" }] });

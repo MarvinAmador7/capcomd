@@ -24,6 +24,23 @@ export const FX_RELEASE = {
 /** The bridge's source, written next to each run (`command`). */
 export const FX_BRIDGE_SOURCE: string = bridgeSource;
 
+/**
+ * fx's own plan logins as capcomd makes them (`capcomd auth login fx [vercel|grok]`): fx's login runs in a PTY in a login
+ * VM, as codex's does, and the VM is snapshotted with it; each login is one private file in `$FX_HOME` (0600), and fx
+ * runs on the fx provider it signs in to. `egress`: what the login and the model calls on it reach. Vercel's is an OAuth
+ * device flow against vercel.com (its session reaches the AI Gateway); Grok's a browser login whose code is pasted back.
+ * `metered`: Vercel's login is no plan: the AI Gateway bills the user's Vercel team per token (its credits), as a key
+ * would, so capcomd counts the estimated cost and budgets hold; a Grok plan is a plan (cost 0, as Claude's and Codex's).
+ */
+export const FX_LOGINS = [
+  { name: "vercel", label: "Vercel", file: "auth.json", fxProvider: "gateway", metered: true, egress: ["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"] },
+  { name: "grok", label: "Grok", file: "grok-auth.json", fxProvider: "grok", metered: false, egress: ["auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"] },
+] as const;
+/** fx's ChatGPT login (`fx login codex`) is a browser login whose callback is the login VM's own localhost:1455, with no
+ *  device code and no code to paste: capcomd doesn't forward a port from a login VM to this machine, so it isn't made. */
+export const FX_CODEX_LOGIN_REFUSED = "fx's ChatGPT login (`fx login codex`) sends your browser back to localhost:1455 inside the login machine, which your browser can't reach, and has no code to paste, so capcomd can't make it. For a ChatGPT plan use capcomd's own codex provider: `capcomd auth login codex`, and profiles with provider: codex.";
+const FX_LOGIN_HOSTS = [...new Set(FX_LOGINS.flatMap((l) => l.egress))];
+
 /** USD per million tokens when the operator gives none (CAPCOMD_FX_USD_PER_MTOK_IN, _OUT): fx reports tokens, never cost,
  *  and the model behind the AI Gateway can be anyone's, so the estimate errs towards stopping early. */
 export const FX_DEFAULT_USD_PER_MTOK = { in: 5, out: 25 } as const;
@@ -76,29 +93,32 @@ const DESCRIPTION = {
   efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], defaultEffort: null,
   // The bridge takes messages on stdin while fx works: a steering prompt at fx's next model call, else the next turn.
   streamInput: true,
-  // No plan login yet: fx's own (Vercel, Grok, ChatGPT) store sessions capcomd doesn't snapshot. An AI Gateway key only.
-  subscription: false,
-  loginEgress: [] as string[],
+  // A plan login is one of fx's own (FX_LOGINS), snapshotted like codex's; an AI Gateway key otherwise.
+  loginEgress: FX_LOGIN_HOSTS,
+  logins: [...FX_LOGINS.map((l) => ({ name: l.name, label: l.label, egress: [...l.egress], ...(l.metered ? { metered: true } : {}) })), { name: "codex", label: "ChatGPT", egress: [] as string[], refused: FX_CODEX_LOGIN_REFUSED }],
   // §16.1: fx's own permission rules hold an orchestrate agent (fxOrchestrateRules): only the read tools and the
   // read-only commands are allowed, denyCommands are denied, and anything else fx would ask about is refused. Whatever
   // it writes anyway never lands: the kernel never commits or pushes its checkout, and reports what it discarded.
   toolPolicies: { orchestrate: { allowed: [] as string[], disallowed: [] as string[], denyCommands: ORCHESTRATE_DENIED_COMMANDS } },
 };
 
+/** Reads `fx status --json` on stdin and prints only whether fx has a credential: `{"loggedIn": <boolean>}`. */
+const FX_STATUS_BOOLEAN = `let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>{let a=null;for(const t of [s,s.trim().split("\\n").pop()]){try{a=JSON.parse(t).auth;break}catch{}}console.log(JSON.stringify({loggedIn:typeof a==="string"&&a!==""&&a!=="missing"}))})`;
+
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 export const fx: AgentProvider = {
   describe: () => ({
-    ...DESCRIPTION, install: { ...DESCRIPTION.install, assets: { ...DESCRIPTION.install.assets } }, efforts: [...DESCRIPTION.efforts], loginEgress: [],
+    ...DESCRIPTION, install: { ...DESCRIPTION.install, assets: { ...DESCRIPTION.install.assets } }, efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress],
+    logins: DESCRIPTION.logins.map((l) => ({ ...l, egress: [...l.egress] })),
     toolPolicies: { orchestrate: { allowed: [], disallowed: [], denyCommands: [...DESCRIPTION.toolPolicies.orchestrate.denyCommands] } },
   }),
   async available(input) {
-    if (input.auth === "subscription") return { ok: false, reason: "fx agents run with an AI Gateway API key; capcomd has no plan login for fx", fix: "Set AI_GATEWAY_API_KEY and use auth: apikey." };
     const { credentialReady } = await import("../agents/run-driver");
     const r = credentialReady("fx", input.auth);
-    return r.ready ? { ok: true } : { ok: false, reason: r.reason ?? "no credential", fix: "Set AI_GATEWAY_API_KEY (an AI Gateway API key: https://vercel.com/docs/ai-gateway)." };
+    return r.ready ? { ok: true } : { ok: false, reason: r.reason ?? "no credential", fix: input.auth === "subscription" ? "Run `capcomd auth login fx` (a Vercel login), or `capcomd auth login fx grok` (a Grok plan)." : "Set AI_GATEWAY_API_KEY (an AI Gateway API key: https://vercel.com/docs/ai-gateway)." };
   },
-  classifyError: (e) => classifyAgentError(e, "Set AI_GATEWAY_API_KEY (an AI Gateway API key), or `capcomd secrets sync` it."),
+  classifyError: (e) => classifyAgentError(e, "Set AI_GATEWAY_API_KEY (an AI Gateway API key), or `capcomd secrets sync` it; on a plan login, run `capcomd auth login fx` again."),
   credentialEnv: (v) => ({ AI_GATEWAY_API_KEY: v }),
   baseEnv: () => ({ CI: "1", NO_COLOR: "1", FX_AUTO_UPGRADE: "0", FX_NO_OPEN_BROWSER: "1" }),
   command(ctx, q) {
@@ -113,7 +133,8 @@ export const fx: AgentProvider = {
       ...(ctx.mcp || ctx.capcomd ? { mcpConfig: ctx.mcp?.config ?? ctx.capcomd!.mcpConfig, mcpServers: servers } : {}),
       ...(untrusted.length ? { untrustedMcp: untrusted } : {}),
       ...(ctx.cfg.model ? { model: ctx.cfg.model } : {}), ...(ctx.cfg.effort ? { effort: ctx.cfg.effort } : {}),
-      provider: "gateway",
+      // On a plan login, the fx provider it signed in to (the prelude's CAPCOMD_FX_PROVIDER); else the AI Gateway's.
+      ...(ctx.cfg.credentialMode === "subscription" ? {} : { provider: "gateway" }),
       permission: policy ? { mode: "ask", rules: fxOrchestrateRules(ctx.cfg.denyCommands!) } : { mode: "full-access" },
       logFile: `${ctx.dir}/fx-acp.log`,
       // The context bundles its brief cites (ADR-025 §6.2) are beside the checkout, outside fx's workspace.
@@ -234,15 +255,26 @@ export const fx: AgentProvider = {
     }
     return ev;
   },
-  // No plan login: the runner's check finds none, and says so.
-  subscriptionCheck: () => "true",
-  subscriptionPrelude: () => "unset AI_GATEWAY_API_KEY VERCEL_OIDC_TOKEN",
-  loginCommand: (bin) => [bin, "login", "vercel"],
-  verifyCommand: (bin, q) => `FX_AUTO_UPGRADE=0 ${q(bin)} ask --json --no-save --full-access 'Reply with exactly the word ok' < /dev/null | grep -q '"exit_code":0' && echo ok`,
+  // A plan login (FX_LOGINS) is its file in $FX_HOME (fx's ~/.fx); the prelude drops the keys fx would prefer to it and
+  // names the fx provider it signed in to (CAPCOMD_FX_PROVIDER, which the bridge runs fx on).
+  // Each login found is named (`file vercel`), so the kernel bills the agent on what its VM holds.
+  subscriptionCheck: (home, q) => FX_LOGINS.map((l) => `[ -s ${q(`${home}/.fx/${l.file}`)} ] && echo 'file ${l.name}'`).join("; ") + "; true",
+  subscriptionPrelude: (home, q) => `unset AI_GATEWAY_API_KEY VERCEL_OIDC_TOKEN; export FX_HOME=${q(`${home}/.fx`)}; ` +
+    FX_LOGINS.map((l, i) => `${i ? "elif" : "if"} [ -s "$FX_HOME/${l.file}" ]; then export CAPCOMD_FX_PROVIDER=${l.fxProvider}`).join("; ") + "; fi",
+  loginCommand(bin, login = FX_LOGINS[0].name) {
+    if (!FX_LOGINS.some((l) => l.name === login)) throw new Error(login === "codex" ? FX_CODEX_LOGIN_REFUSED : `fx has no login ${JSON.stringify(login)} capcomd can make (${FX_LOGINS.map((l) => l.name).join(" or ")})`);
+    // FX_NO_OPEN_BROWSER: fx prints the URL (and Vercel's device code) for the user's own browser.
+    return ["env", "FX_NO_OPEN_BROWSER=1", "FX_AUTO_UPGRADE=0", bin, "login", login];
+  },
+  verifyCommand: (bin, q) => `FX_AUTO_UPGRADE=0 FX_PROVIDER="\${CAPCOMD_FX_PROVIDER:-gateway}" ${q(bin)} ask --json --no-save --full-access 'Reply with exactly the word ok' < /dev/null | grep -q '"exit_code":0' && echo ok`,
+  // fx's own word on the login (`fx status --json` auth: "fx login", or "missing"); only the boolean is printed.
+  loginCheck: (bin, q) => `FX_AUTO_UPGRADE=0 FX_PROVIDER="\${CAPCOMD_FX_PROVIDER:-gateway}" ${q(bin)} status --json 2>/dev/null < /dev/null | node -e ${q(FX_STATUS_BOOLEAN)}`,
   guard(state, cfg) {
     if (cfg.maxTurns && state.turns > cfg.maxTurns) return `max_turns (${state.turns} > ${cfg.maxTurns} tool steps)`;
-    // fx reports tokens only when a turn ends, so a budget stops the agent at a turn's end.
-    if (cfg.maxBudgetUsd && cfg.credentialMode !== "subscription" && state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
+    // fx reports tokens only when a turn ends, so a budget stops the agent at a turn's end. It holds on a key and on a
+    // login billed per token (Vercel's, also when the login isn't named), not on a Grok plan.
+    const plan = cfg.credentialMode === "subscription" && !(FX_LOGINS.find((l) => l.name === cfg.planLogin) ?? FX_LOGINS[0]).metered;
+    if (cfg.maxBudgetUsd && !plan && state.costUsd > cfg.maxBudgetUsd) return `max_budget_usd (~$${state.costUsd.toFixed(3)} > $${cfg.maxBudgetUsd})`;
     return null;
   },
   outcome(state, exitCode) {

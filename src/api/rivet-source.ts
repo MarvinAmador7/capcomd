@@ -255,7 +255,7 @@ export function rivetSource(): HarnessSource {
 	const surface = sandboxSurface({
 		// The user config (~/.capcomd/config.json `sandboxes`); off with CAPCOMD_NO_CONFIG.
 		settings: fileSettingsStore(settingsPath()),
-		logins: async () => (await import("./settings")).logins(),
+		logins: async () => (await import("./settings")).driverLogins(),
 		// Docker's memory for the Agents at once row (asked of the docker CLI at most every 5 minutes, 3 s timeout).
 		agentSlots: async (name) => (await import("../providers/capacity")).slotsInfo(name),
 		availability: async (name) => {
@@ -374,7 +374,7 @@ export function rivetSource(): HarnessSource {
 		profile: async (name, repo) => (await import("./profiles")).profileFor(name, repo),
 		updateProfile: async (name, repo, body) => (await import("./profiles")).updateProfileFor(name, repo, body),
 		skill: (name) => readSkill(name),
-		logins: async () => (await import("./settings")).logins(),
+		logins: async (provider) => (await import("./settings")).logins(process.env, undefined, provider),
 		environments: async () => (await import("./settings")).environments(),
 		service: async () => (await import("./settings")).serviceState(),
 		approvals: async (runId) => {
@@ -492,5 +492,5 @@ async function goalAction<T>(f: () => Promise<T>): Promise<GoalOutcome<T>> {
 /** Project setup runs in the daemon's own environment, with its logins and its forges (plugin API §7.4). */
 async function projectDeps(): Promise<import("./projects").ProjectDeps> {
 	const P = await import("./projects");
-	return { env: process.env, logins: async () => (await import("./settings")).logins(), ghReady: () => P.publishLogin() };
+	return { env: process.env, logins: async () => (await import("./settings")).driverLogins(), ghReady: () => P.publishLogin() };
 }

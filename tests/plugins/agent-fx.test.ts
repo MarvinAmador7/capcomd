@@ -11,7 +11,7 @@ import { join } from "node:path";
 import type { AgentConfig, AgentRunState } from "../../packages/plugin/src/seams";
 import { testkit } from "../../packages/plugin/src/testkit";
 import { runAgentConformance } from "../../packages/plugin/src/agent-conformance";
-import { FX_BRIDGE_SOURCE, FX_DEFAULT_USD_PER_MTOK, FX_RELEASE, FX_VERSION, fx, fxOrchestrateRules } from "../../src/plugins/agent-fx";
+import { FX_BRIDGE_SOURCE, FX_CODEX_LOGIN_REFUSED, FX_DEFAULT_USD_PER_MTOK, FX_LOGINS, FX_RELEASE, FX_VERSION, fx, fxOrchestrateRules } from "../../src/plugins/agent-fx";
 import { ORCHESTRATE_DENIED_COMMANDS, ORCHESTRATE_READ_COMMANDS } from "../../src/plugins/agent-common";
 import { adapterOf, agentProviderNames, seamConfig, useAgentSeams } from "../../src/plugins/agents";
 import { AGENTS_SCHEMA, validateSpec } from "../../src/profiles";
@@ -71,9 +71,9 @@ describe("agent-fx: describe() and registration (§7.3)", () => {
     expect(agentProviderNames()).toEqual(["claude", "codex", "fx"]);
   });
 
-  test("pinned release archives with their sha256, no npm package, no plan login, an AI Gateway key", () => {
+  test("pinned release archives with their sha256, no npm package, an AI Gateway key", () => {
     const d = fx.describe();
-    expect(d).toMatchObject({ name: "fx", label: "fx", bin: "fx", pinnedVersion: FX_VERSION, secretName: "AI_GATEWAY_API_KEY", apiHost: "ai-gateway.vercel.sh", streamInput: true, subscription: false, defaultEffort: null });
+    expect(d).toMatchObject({ name: "fx", label: "fx", bin: "fx", pinnedVersion: FX_VERSION, secretName: "AI_GATEWAY_API_KEY", apiHost: "ai-gateway.vercel.sh", streamInput: true, defaultEffort: null });
     expect(d.npmPackage).toBeUndefined();
     expect(d.install).toEqual({ kind: "archive", member: "fx", assets: {
       x86_64: { url: "https://releases.fx.sh/v0.0.16/fx-linux-x86_64.tar.gz", sha256: "f0fb822c7be546c80bcc89d50521bc1454435e0c6f586e8420c4e2b84fa80599" },
@@ -96,8 +96,6 @@ describe("agent-fx: describe() and registration (§7.3)", () => {
     expect(fx.credentialEnv("bxds_placeholder")).toEqual({ AI_GATEWAY_API_KEY: "bxds_placeholder" });
     expect(fx.baseEnv()).toMatchObject({ FX_AUTO_UPGRADE: "0", FX_NO_OPEN_BROWSER: "1", NO_COLOR: "1" });
     const c = { signal: new AbortController().signal, deadline: new Date(Date.now() + 1000).toISOString(), trace: { traceId: "t", spanId: "s" } };
-    const sub = await fx.available({ sandbox: "docker", auth: "subscription" }, c);
-    expect(sub).toEqual({ ok: false, reason: "fx agents run with an AI Gateway API key; capcomd has no plan login for fx", fix: "Set AI_GATEWAY_API_KEY and use auth: apikey." });
     const saved = process.env.AI_GATEWAY_API_KEY;
     try {
       delete process.env.AI_GATEWAY_API_KEY;
@@ -105,7 +103,102 @@ describe("agent-fx: describe() and registration (§7.3)", () => {
       process.env.AI_GATEWAY_API_KEY = "vck_test";
       expect(await fx.available({ sandbox: "docker", auth: "apikey" }, c)).toEqual({ ok: true });
     } finally { if (saved === undefined) delete process.env.AI_GATEWAY_API_KEY; else process.env.AI_GATEWAY_API_KEY = saved; }
-    expect(fx.classifyError({ kind: "credentials" })).toEqual({ kind: "auth", retryable: false, hint: "Set AI_GATEWAY_API_KEY (an AI Gateway API key), or `capcomd secrets sync` it." });
+    expect(fx.classifyError({ kind: "credentials" })).toEqual({ kind: "auth", retryable: false, hint: "Set AI_GATEWAY_API_KEY (an AI Gateway API key), or `capcomd secrets sync` it; on a plan login, run `capcomd auth login fx` again." });
+  });
+
+  test("plan logins: Vercel's and Grok's, each with the hosts its login reaches; ChatGPT's refused with what to use instead", () => {
+    const d = fx.describe();
+    expect(d.subscription).toBeUndefined(); // absent: capcomd has a plan login for fx
+    expect(d.logins).toEqual([
+      { name: "vercel", label: "Vercel", egress: ["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"], metered: true },
+      { name: "grok", label: "Grok", egress: ["auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"] },
+      { name: "codex", label: "ChatGPT", egress: [], refused: FX_CODEX_LOGIN_REFUSED },
+    ]);
+    expect(FX_CODEX_LOGIN_REFUSED).toContain("localhost:1455");
+    expect(FX_CODEX_LOGIN_REFUSED).toContain("capcomd auth login codex");
+    // A login VM that doesn't name its login (auth status of an older one, a carry) reaches both logins' hosts.
+    expect(d.loginEgress).toEqual(["vercel.com", "api.vercel.com", "ai-gateway.vercel.sh", "auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"]);
+    expect(egressFor("fx", "subscription")).toEqual(expect.arrayContaining([...d.loginEgress, FX_RELEASE.host]));
+    // fx prints the URL instead of opening a browser, and never upgrades itself in the login VM.
+    expect(fx.loginCommand("/h/bin/fx")).toEqual(["env", "FX_NO_OPEN_BROWSER=1", "FX_AUTO_UPGRADE=0", "/h/bin/fx", "login", "vercel"]);
+    expect(fx.loginCommand("/h/bin/fx", "grok").slice(-2)).toEqual(["login", "grok"]);
+    expect(() => fx.loginCommand("/h/bin/fx", "codex")).toThrow(FX_CODEX_LOGIN_REFUSED);
+    expect(adapterOf(fx).logins?.map((l) => l.name)).toEqual(["vercel", "grok", "codex"]);
+    // Conformance holds a provider's logins to unique names, hosts, and at least one login it can make.
+    const allRefused = { ...fx, describe: () => ({ ...fx.describe(), logins: [{ name: "codex", label: "ChatGPT", egress: [], refused: "no" }] }) };
+    expect(runAgentConformance(allRefused, { name: "fx" }).find((r) => !r.ok)?.message).toBe("describe().logins must have one login capcomd can make");
+    const twice = { ...fx, describe: () => ({ ...fx.describe(), logins: [FX_LOGINS[0], FX_LOGINS[0]].map((l) => ({ name: l.name, label: l.label, egress: [...l.egress] })) }) };
+    expect(runAgentConformance(twice, { name: "fx" }).find((r) => !r.ok)?.message).toBe('describe().logins: "vercel" must be a unique lowercase name');
+    const odd = { ...fx, describe: () => ({ ...fx.describe(), logins: [{ name: "vercel", label: "Vercel", egress: [], metered: "yes" as any }] }) };
+    expect(runAgentConformance(odd, { name: "fx" }).find((r) => !r.ok)?.message).toBe("describe().logins.vercel.metered must be a boolean");
+    expect(adapterOf(fx).logins?.map((l) => !!l.metered)).toEqual([true, false, false]);
+  });
+
+  test("a budget holds on a key and on Vercel's login (the AI Gateway bills per token), not on a Grok plan", () => {
+    const spent = { ...fresh(), costUsd: 2 };
+    const guard = (over: Partial<AgentConfig>) => fx.guard(spent, { credentialMode: "auto", maxBudgetUsd: 1, ...over });
+    expect(guard({})).toStartWith("max_budget_usd");
+    expect(guard({ credentialMode: "subscription", planLogin: "vercel" })).toStartWith("max_budget_usd");
+    // A plan login whose name wasn't recorded is the one `capcomd auth login fx` makes unasked: Vercel's.
+    expect(guard({ credentialMode: "subscription" })).toStartWith("max_budget_usd");
+    expect(guard({ credentialMode: "subscription", planLogin: "grok" })).toBeNull();
+    // The kernel hands the provider the recorded login.
+    const ledger = join(mkdtempSync(join(tmpdir(), "capcomd-fx-plan-")), "auths.json");
+    writeFileSync(ledger, JSON.stringify({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: "browser-code", login: "grok", env: "capcomd-env-x", createdAt: "t" } }));
+    expect(seamConfig(loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_CREDENTIALS: "subscription", CAPCOMD_AUTH_LEDGER: ledger }), "fx").planLogin).toBe("grok");
+    expect(seamConfig(loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AUTH: "apikey", AI_GATEWAY_API_KEY: "k", CAPCOMD_AUTH_LEDGER: ledger }), "fx").planLogin).toBeUndefined();
+  });
+
+  test("on a plan login: the keys fx would prefer dropped, FX_HOME its folder, fx run on the provider the login signed in to", async () => {
+    const h = mkdtempSync(join(tmpdir(), "capcomd-fx-sub-"));
+    const run = (script: string) => Bun.spawnSync(["sh", "-c", script], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", AI_GATEWAY_API_KEY: "vck_x", VERCEL_OIDC_TOKEN: "oidc" } }).stdout.toString();
+    const shown = `${fx.subscriptionPrelude(h, q)}; echo "key=$AI_GATEWAY_API_KEY oidc=$VERCEL_OIDC_TOKEN home=$FX_HOME provider=$CAPCOMD_FX_PROVIDER"`;
+    expect(run(fx.subscriptionCheck(h, q)).trim()).toBe("");
+    mkdirSync(join(h, ".fx"));
+    writeFileSync(join(h, ".fx", "grok-auth.json"), "{}");
+    // Each login found is named, so the kernel bills the agent on what its VM holds.
+    expect(run(fx.subscriptionCheck(h, q)).trim()).toBe("file grok");
+    expect(run(shown).trim()).toBe(`key= oidc= home=${h}/.fx provider=grok`);
+    writeFileSync(join(h, ".fx", "auth.json"), "{}");
+    expect(run(fx.subscriptionCheck(h, q)).trim().split("\n")).toEqual(["file vercel", "file grok"]);
+    expect(run(shown).trim()).toBe(`key= oidc= home=${h}/.fx provider=gateway`);
+    // fx's ChatGPT session isn't a login capcomd made: alone, it is none.
+    const other = mkdtempSync(join(tmpdir(), "capcomd-fx-sub-"));
+    mkdirSync(join(other, ".fx"));
+    writeFileSync(join(other, ".fx", "chatgpt-auth.json"), "{}");
+    expect(run(fx.subscriptionCheck(other, q)).trim()).toBe("");
+    // The bridge gets no provider of its own then: it runs fx on CAPCOMD_FX_PROVIDER.
+    expect(bridgeConfig(fx.command(ctx({ credentialMode: "subscription" }), q)).provider).toBeUndefined();
+    expect(bridgeConfig(fx.command(ctx({ credentialMode: "auto" }), q)).provider).toBe("gateway");
+    expect(fx.verifyCommand("/h/bin/fx", q)).toContain('FX_PROVIDER="${CAPCOMD_FX_PROVIDER:-gateway}"');
+    const c = { signal: new AbortController().signal, deadline: new Date(Date.now() + 1000).toISOString(), trace: { traceId: "t", spanId: "s" } };
+    const ledger = join(h, "auths.json");
+    const saved = process.env.CAPCOMD_AUTH_LEDGER;
+    try {
+      process.env.CAPCOMD_AUTH_LEDGER = ledger;
+      expect(await fx.available({ sandbox: "boxd", auth: "subscription" }, c)).toMatchObject({ ok: false, fix: "Run `capcomd auth login fx` (a Vercel login), or `capcomd auth login fx grok` (a Grok plan)." });
+      writeFileSync(ledger, JSON.stringify({ fx: { agent: "fx", store: "snapshot", snapshot: "capcomd-auth-fx-x", method: "browser-code", login: "grok", env: "capcomd-env-x", createdAt: "t" } }));
+      expect(await fx.available({ sandbox: "boxd", auth: "subscription" }, c)).toEqual({ ok: true });
+    } finally { if (saved === undefined) delete process.env.CAPCOMD_AUTH_LEDGER; else process.env.CAPCOMD_AUTH_LEDGER = saved; }
+  });
+
+  test("the login check prints only whether fx sees a login, never what `fx status --json` says besides", () => {
+    const d = mkdtempSync(join(tmpdir(), "capcomd-fx-status-"));
+    const fake = join(d, "fx");
+    const check = (auth: string, pretty = false) => {
+      const body = JSON.stringify({ kind: "status", auth, auth_refreshable: true, session: "vcr_SECRET" }, null, pretty ? 2 : 0);
+      writeFileSync(fake, `#!/bin/sh
+[ "$1" = status ] && [ "$2" = --json ] && [ "$FX_PROVIDER" = grok ] && cat <<'EOF'
+${body}
+EOF
+`);
+      chmodSync(fake, 0o755);
+      return Bun.spawnSync(["sh", "-c", fx.loginCheck!(fake, q)], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", CAPCOMD_FX_PROVIDER: "grok" } }).stdout.toString();
+    };
+    expect(check("fx login")).toBe('{"loggedIn":true}\n');
+    expect(check("fx login", true)).toBe('{"loggedIn":true}\n');
+    expect(check("missing")).toBe('{"loggedIn":false}\n');
+    expect(check("fx login")).not.toContain("vcr_SECRET");
   });
 
   test("doctor checks fx only when its key is set here: one nobody configured isn't this machine failing (doctor --strict, capcomd setup)", () => {
@@ -196,7 +289,7 @@ describe("agent-fx: parse, guard, outcome", () => {
     expect(fx.guard({ ...fresh(), turns: 6 }, cfg({ maxTurns: 5 }))).toBe("max_turns (6 > 5 tool steps)");
     expect(fx.guard({ ...fresh(), turns: 5 }, cfg({ maxTurns: 5 }))).toBeNull();
     expect(fx.guard({ ...fresh(), costUsd: 1.5 }, cfg({ maxBudgetUsd: 1 }))).toBe("max_budget_usd (~$1.500 > $1)");
-    expect(fx.guard({ ...fresh(), costUsd: 1.5 }, cfg({ maxBudgetUsd: 1, credentialMode: "subscription" }))).toBeNull();
+    expect(fx.guard({ ...fresh(), costUsd: 1.5 }, cfg({ maxBudgetUsd: 1, credentialMode: "subscription", planLogin: "grok" }))).toBeNull();
   });
 
   test("a later turn that ends well clears an earlier turn's failure; a quota or a bridge error doesn't clear", () => {
@@ -322,15 +415,24 @@ describe("agent-fx: install (a release archive, checked by its sha256)", () => {
 });
 
 describe("agent-fx in profiles (ADR-024 harness.provider, model, effort)", () => {
-  test("a profile on fx validates; its effort is one of fx's levels; a plan login is refused", () => {
+  test("a profile on fx validates, with a key or a plan login; its effort is one of fx's levels", () => {
     expect(validateSpec("fxw", { provider: "fx", auth: "apikey", model: "anthropic/claude-sonnet-5", effort: "high" })).toEqual([]);
     expect(validateSpec("fxw", { provider: "fx", auth: "apikey", effort: "ultra" })).toEqual(["agents.fxw: effort must be one of none, minimal, low, medium, high, xhigh, max for provider fx"]);
+    expect(validateSpec("fxw", { provider: "fx", auth: "subscription" })).toEqual([]);
+    // A provider that says it has no plan login is still refused one.
+    useAgentSeams({ list: () => [{ value: { seam: "agent", impl: { ...fx, describe: () => ({ ...fx.describe(), subscription: false }) } } }] } as any);
     expect(validateSpec("fxw", { provider: "fx", auth: "subscription" })).toEqual(['agents.fxw: auth "subscription": capcomd has no plan login for fx; use auth: "apikey" with AI_GATEWAY_API_KEY']);
   });
 
-  test("`capcomd auth login fx` says there is no plan login for fx, and what to use instead", async () => {
-    const { parseAgentArg } = await import("../../src/auth/login");
-    expect(() => parseAgentArg("fx")).toThrow("capcomd has no plan login for fx: set AI_GATEWAY_API_KEY (an AI Gateway API key) and give its profiles auth: apikey");
+  test("`capcomd auth login fx [vercel|grok]`: Vercel's by default; ChatGPT's refused before anything starts, with what to use instead", async () => {
+    const { parseAgentArg, parseLoginArg } = await import("../../src/auth/login");
+    expect(parseAgentArg("fx")).toBe("fx");
+    expect(parseLoginArg("fx", undefined)).toBe("vercel");
+    expect(parseLoginArg("fx", "grok")).toBe("grok");
+    expect(() => parseLoginArg("fx", "codex")).toThrow(FX_CODEX_LOGIN_REFUSED);
+    expect(() => parseLoginArg("fx", "github")).toThrow('fx has no login "github": one of vercel, grok');
+    expect(parseLoginArg("codex", undefined)).toBeUndefined();
+    expect(() => parseLoginArg("codex", "grok")).toThrow("codex has one plan login: run `capcomd auth login codex`");
   });
 
   test("an orchestrate profile on fx runs with fx's tool policy: its denied commands, which the provider turns into fx's rules", () => {

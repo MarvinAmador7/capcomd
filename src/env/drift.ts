@@ -92,10 +92,12 @@ export async function templateDrift(rec: EnvRecord | undefined, cfg: MergeConfig
  * get its warm template (and CLIs), not the current one's. `capcomd env build --sandbox docker` moves them onto the new
  * image itself (src/auth/carry.ts), so one left here is one it couldn't move: the note says what to run.
  */
-export function loginsOnOlderEnv(current: string | undefined, profiles: Array<{ agent: string; snapshot?: string; env: string }>): string[] {
+export function loginsOnOlderEnv(current: string | undefined, profiles: Array<{ agent: string; snapshot?: string; env: string; login?: string }>): string[] {
   if (!current) return [];
   return profiles.filter((p) => p.snapshot && p.env !== current).map((p) => {
-    const cli = p.agent === "claude-code" ? "claude" : "codex";
-    return `plan login for ${cli} is still on ${p.env}: its agents boot from that image (its warm template), not ${current}. \`${REBUILD}\` moves it (it tries again), or run \`capcomd auth login ${cli} --sandbox docker\``;
+    const cli = p.agent === "claude-code" ? "claude" : p.agent;
+    // fx's Grok login is logged in again as itself (`capcomd auth login fx grok`); its Vercel one is the default.
+    const which = p.login && p.login !== "vercel" ? ` ${p.login}` : "";
+    return `plan login for ${cli} is still on ${p.env}: its agents boot from that image (its warm template), not ${current}. \`${REBUILD}\` moves it (it tries again), or run \`capcomd auth login ${cli}${which} --sandbox docker\``;
   });
 }

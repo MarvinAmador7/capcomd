@@ -11,23 +11,24 @@ import type { AgentConfig } from "../agents/config";
 import { adapterFor } from "../agents/adapters";
 import { agentHome, agentPath, sq } from "../agents/runner";
 import { Redactor } from "../agents/redact";
-import { bootVm, destroyVm } from "./login";
+import { FX_LOGINS } from "../plugins/agent-fx";
+import { bootVm, cliName, destroyVm } from "./login";
 import { authSnapshotName, readAuthLedger, writeAuthLedger, type AuthProfile, type ProfileAgent } from "./profiles";
 
 type P = SandboxProvider & SnapshotPlatform;
 
 /** The files a plan login keeps in the agent home: all that moves to a new env image (each only if present). */
 export function loginFiles(agent: ProfileAgent, home: string): string[] {
-  return agent === "claude-code"
-    // `claude setup-token`'s token (capcomd writes it), and a `claude login`'s credentials when one is there.
-    ? [`${home}/.capcomd-auth/claude.env`, `${home}/.claude/.credentials.json`]
-    // `codex login`'s file store, and the config line that makes Codex read it.
-    : [`${home}/.codex/auth.json`, `${home}/.codex/config.toml`];
+  // `claude setup-token`'s token (capcomd writes it), and a `claude login`'s credentials when one is there.
+  if (agent === "claude-code") return [`${home}/.capcomd-auth/claude.env`, `${home}/.claude/.credentials.json`];
+  // fx's own session files (`fx login vercel`, `fx login grok`), private in its folder.
+  if (agent === "fx") return FX_LOGINS.map((l) => `${home}/.fx/${l.file}`);
+  // `codex login`'s file store, and the config line that makes Codex read it.
+  return [`${home}/.codex/auth.json`, `${home}/.codex/config.toml`];
 }
 
-const cliName = (agent: ProfileAgent) => (agent === "claude-code" ? "claude" : "codex");
 /** What to run when a login couldn't be moved (it keeps working from its old image meanwhile). */
-export const relogin = (agent: ProfileAgent, sandbox = "docker") => `capcomd auth login ${cliName(agent)} --sandbox ${sandbox}`;
+export const relogin = (agent: ProfileAgent, sandbox = "docker", login?: string) => `capcomd auth login ${cliName(agent)}${login ? ` ${login}` : ""} --sandbox ${sandbox}`;
 
 export interface CarryResult {
   agent: ProfileAgent;
@@ -128,7 +129,7 @@ export async function carryLogin(p: P, agent: ProfileAgent, o: CarryOptions): Pr
     files.clear();
     // Nothing half-made is left as the login: a new image that isn't recorded is removed; the old one stays in use.
     if (made && readAuthLedger(o.ledgerPath)[agent]?.snapshot !== target) await p.snapshotDelete(target).catch(() => {});
-    const msg = `plan login for ${cliName(agent)} couldn't be moved to ${o.envSnapshot} (${why(e)}); its agents still boot from ${prof.snapshot}. Run \`${relogin(agent, o.sandbox)}\` to log in on the new one`;
+    const msg = `plan login for ${cliName(agent)} couldn't be moved to ${o.envSnapshot} (${why(e)}); its agents still boot from ${prof.snapshot}. Run \`${relogin(agent, o.sandbox, prof.login)}\` to log in on the new one`;
     log(msg);
     return res("failed", msg);
   } finally {

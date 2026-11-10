@@ -1202,7 +1202,22 @@ none (the supervisor's). Only a binary there, at `pinnedVersion`, counts as inst
 on `PATH` is someone else's. `capcomd env build` installs an archive CLI like the others, and its VM reaches the
 archives' hosts; one that fails to download there is left out of the image (the runner installs it when an agent on it
 starts). `describe().subscription` (additive, absent: true) false says capcomd has no plan login for the CLI: a
-profile on it with `auth: "subscription"` is refused at validation. `AgentConfig.usdPerMtok` is the provider's own rates
+profile on it with `auth: "subscription"` is refused at validation. `describe().logins` (additive, absent: the CLI has
+one plan login) lists the plan logins of a CLI that has several, each `{name, label, egress, refused?}`: `capcomd auth
+login <provider> [<name>]` makes the named one (the first without `refused` when none is named) by running
+`loginCommand(bin, name)` (the second argument additive) in the login VM, which reaches `BASE_EGRESS` and that login's
+`egress` instead of `loginEgress`; the auth ledger records the name (`AuthProfile.login`), and `auth status`, an env
+build's move of the login and the app's login command use it again. A login with `refused` is one capcomd can't make
+headless: the kernel refuses it with that sentence before any machine starts. A login with `metered: true` (additive)
+is billed per token, not by a plan: an agent on it is spend as on an API key (`billing: "api"`, its estimated cost
+counted, its budgets held). The kernel names the login an agent on `subscription` runs on in `AgentConfig.planLogin`
+(additive; from the ledger, for a provider with `logins`), and a recorded one it doesn't know counts as the provider's
+first. What the agent's VM holds counts too: a provider with `logins` has `subscriptionCheck` print `file <name>` for
+each login it finds there, and a metered one found makes the agent spend whatever the ledger records (its guard then
+gets that login as `planLogin`). The optional, pure `loginCheck(bin, q)`
+is a shell line the kernel runs in the login VM after the login (behind `subscriptionPrelude`): it prints one JSON line
+`{"loggedIn": <boolean>}`, whether the CLI itself sees the login, and only that boolean leaves the VM; false fails the
+login before anything is saved. `AgentConfig.usdPerMtok` is the provider's own rates
 when the operator set them (`CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN` and `_OUT`, both or neither), else codex's, as before.
 ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude`, `codex` and `fx` are the built-ins
 (`agent-claude`, `agent-codex`, `agent-fx`: `src/plugins/agent-claude.ts`, `agent-codex.ts`, `agent-fx.ts`).
@@ -1216,8 +1231,20 @@ thought, `permission`, `steer`, `notice`, `quota`, `error`, and `result` at the 
 `streamInput` is true: a message capcomd sends while fx works goes to it as a steering prompt (fx's
 `_meta.fx.steer`, applied at its next model call), or, when fx can't take it so (over 64 KiB, or the turn ended
 first), as the next turn. Credential: an AI Gateway API key, `AI_GATEWAY_API_KEY` (host `ai-gateway.vercel.sh`; a
-Vercel OIDC token, which fx would prefer, is dropped); `subscription` is false (fx's own logins aren't snapshotted).
-fx's settings (`$HOME/.fx/settings.json`, private) get capcomd's keys merged in: no upgrades, no session titles, no
+Vercel OIDC token, which fx would prefer, is dropped), or a plan login of fx's own, made as codex's is (`capcomd auth
+login fx [vercel|grok]`: `fx login <name>` in a PTY in a login VM with `FX_NO_OPEN_BROWSER=1`, the VM then
+snapshotted): `logins` are `vercel` (fx's OAuth device flow against vercel.com, its session `$FX_HOME/auth.json`; the
+login reaches `vercel.com`, `api.vercel.com`, `ai-gateway.vercel.sh`; `metered`: the AI Gateway bills the Vercel team
+per token, so its cost counts and `maxBudgetUsd` holds), `grok` (a browser login whose code is pasted
+back through the PTY, `$FX_HOME/grok-auth.json`; `auth.x.ai`, `accounts.x.ai`, `cli-chat-proxy.grok.com`, `api.x.ai`)
+and `codex`, `refused`: fx's ChatGPT login answers only on the login VM's own `localhost:1455` and has no code to paste,
+and capcomd forwards no port from a login VM, so it points to capcomd's `codex` provider. `loginCheck` is `fx status
+--json`'s `auth` not `missing`. `subscriptionCheck` prints `file vercel` and `file grok` for the session files it
+finds. On a plan login `subscriptionPrelude` drops `AI_GATEWAY_API_KEY` and
+`VERCEL_OIDC_TOKEN`, sets `FX_HOME` to the agent home's `.fx` and `CAPCOMD_FX_PROVIDER` to the fx provider the login
+signed in to (`gateway` for Vercel's, `grok`), and `command` leaves the bridge's `provider` out so it runs fx on that
+one; `verifyCommand` does the same.
+fx's settings (`$FX_HOME/settings.json`, `$HOME/.fx` unless a plan login set it; private) get capcomd's keys merged in: no upgrades, no session titles, no
 cache warming. fx runs the agent's commands in a snapshot of a login shell, whose `/etc/profile` (Debian's) sets `PATH`
 anew, so the agent's own tools (node, the in-VM capcomd) weren't found: the bridge adds a line to the agent home's
 `~/.bash_profile` and `~/.zprofile` that puts the agent's `PATH` back (from `CAPCOMD_PATH`, which it sets for fx).
