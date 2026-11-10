@@ -66,7 +66,7 @@ export interface PluginSummary {
   tools?: string[];
 }
 
-type HostSinks = Pick<ContextOptions<unknown>, "emit" | "subscribe" | "replay" | "log" | "span" | "redact" | "secret">;
+type HostSinks = Pick<ContextOptions<unknown>, "emit" | "subscribe" | "replay" | "log" | "span" | "redact" | "secret" | "refuseSeam">;
 export interface HostOptions {
   /** The running capcomd version, for `engines` (§4.4). */
   capcomd: string;

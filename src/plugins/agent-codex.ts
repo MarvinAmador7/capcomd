@@ -40,6 +40,8 @@ const CODEX_TOOL_ITEMS =new Set(["command_execution", "file_change", "mcp_tool_c
 const DESCRIPTION = {
   name: "codex", label: "Codex", bin: "codex", npmPackage: "@openai/codex", pinnedVersion: CODEX_VERSION,
   secretName: "OPENAI_API_KEY", apiHost: "api.openai.com",
+  // §7.3: the kernel's to set and read, never a plugin's: where Codex reads its key, its endpoint and its home (OPENAI_API_KEY, OPENAI_BASE_URL, CODEX_HOME).
+  envPrefixes: ["OPENAI_", "CODEX_"],
   // `-c model_reasoning_effort=<level>`, lowest to highest; the CLI's own default is medium.
   efforts: ["minimal", "low", "medium", "high"], defaultEffort: "medium",
   streamInput: false,
@@ -68,7 +70,7 @@ const CODEX_RULES = '"${CODEX_HOME:-$HOME/.codex}/rules"';
  * (command_execution/file_change/mcp_tool_call/web_search items), cost = tokens × configured rates.
  */
 export const codex: AgentProvider = {
-  describe: () => ({ ...DESCRIPTION, efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress], toolPolicies: { orchestrate: { allowed: [], disallowed: [], denyCommands: [...DESCRIPTION.toolPolicies.orchestrate.denyCommands] } } }),
+  describe: () => ({ ...DESCRIPTION, envPrefixes: [...DESCRIPTION.envPrefixes], efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress], toolPolicies: { orchestrate: { allowed: [], disallowed: [], denyCommands: [...DESCRIPTION.toolPolicies.orchestrate.denyCommands] } } }),
   async available(input) {
     const { credentialReady } = await import("../agents/run-driver");
     const r = credentialReady("codex", input.auth);

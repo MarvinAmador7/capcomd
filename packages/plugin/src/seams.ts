@@ -170,6 +170,13 @@ export interface AgentProvider {
     /** API key env name (also the host-bound secret name) and the host it is bound to. */
     secretName: string;
     apiHost: string;
+    /** The provider's environment variable families (additive, absent: none): name prefixes such as `ANTHROPIC_`, each
+     *  `ENV_PREFIX` (upper case, ending in `_`), where its CLI reads its credential, its login and its settings. The
+     *  kernel reserves them as its own (§6.6.7, §10.3): no plugin's `agent.preparing` patch sets one, no plugin's secret
+     *  references one, and checks on the host don't get them. They only add protection: a prefix that would take in
+     *  one of the kernel's own families (`C_` is fine, `GITHUB_` takes in `GITHUB_TOKEN`) is refused when the seam
+     *  registers (§7.3). */
+    envPrefixes?: readonly string[];
     efforts: readonly string[];
     defaultEffort: string | null;
     /** The CLI reads user messages on stdin while it runs (`send` reaches it mid-run). */
@@ -217,6 +224,23 @@ export interface AgentProvider {
    *  refusals only there (codex 0.163 logs a command its rules forbid and leaves it out of `--json`); null otherwise.
    *  `reason` must pass `redact`. The kernel shows it in the agent's log as `refused <call>: <reason>`. */
   refusal?(line: string, redact: (s: string) => string): { call: string; reason: string } | null;
+}
+
+/** A family of environment variables an agent provider declares (`describe().envPrefixes`, §7.3): `ANTHROPIC_`,
+ *  `AI_GATEWAY_`. Upper case and ending in `_`, so a family is never "every name starting C". */
+export const ENV_PREFIX = /^[A-Z][A-Z0-9_]*_$/;
+
+/** Why `describe().envPrefixes` isn't a list of families (§7.3), or null when it is (absent is none). */
+export function envPrefixesIssue(v: unknown): string | null {
+  if (v === undefined) return null;
+  if (!Array.isArray(v)) return "describe().envPrefixes must be a list of variable name prefixes";
+  const seen = new Set<string>();
+  for (const p of v) {
+    if (typeof p !== "string" || !ENV_PREFIX.test(p)) return `describe().envPrefixes: ${JSON.stringify(p)} must be an upper-case variable name prefix ending in "_" (${ENV_PREFIX.source})`;
+    if (seen.has(p)) return `describe().envPrefixes: ${p} is listed twice`;
+    seen.add(p);
+  }
+  return null;
 }
 
 const CREDENTIAL_KEY = /api[_-]?key|token|secret|password|authorization/i;

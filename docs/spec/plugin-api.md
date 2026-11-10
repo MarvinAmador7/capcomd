@@ -750,8 +750,9 @@ attached is `invalid`; at most 8 skills and 256 KB of them per agent, as on a me
 per patch, each value a string of at most 4 096 characters; a name the agent's environment has (the payload's `env`: the
 runner's `HOME`, `PATH`, `CAPCOMD_RPC_DIR` and `CAPCOMD_CHECKOUT`, the provider's own variables and its credential's) or
 a reserved one is `widening`. Reserved (`reservedEnvName`), whether or not the agent has it, is a name that would steer
-the agent without prompt text: the kernel's `CAPCOMD_*`; the agent providers' families `ANTHROPIC_*`, `CLAUDE_*`,
-`OPENAI_*`, `CODEX_*`, and fx's `AI_GATEWAY_*`, `VERCEL_*`, `FX_*` (where a CLI sends its credential, which login it
+the agent without prompt text: the kernel's `CAPCOMD_*`; every agent provider's families, as each declares them
+(`describe().envPrefixes`, §7.3, the owner's decision of 2026-11-10; the built-ins' `ANTHROPIC_*`, `CLAUDE_*`,
+`OPENAI_*`, `CODEX_*`, and fx's `AI_GATEWAY_*`, `VERCEL_*`, `FX_*`: where a CLI sends its credential, which login it
 reads: fx's `FX_HOME` is where its login and settings live); what a shell or runtime loads first
 (`LD_*`, `DYLD_*`, `NODE_*`, `NPM_CONFIG_*`, `PYTHON*`, `PERL5*`, `RUBY*`, `BASH_ENV`, `ENV`, `SHELL`, `IFS`, `CDPATH`,
 `PS4`, `PROMPT_COMMAND`, `ZDOTDIR`); the proxy and certificates its traffic trusts (`HTTP_PROXY`, `HTTPS_PROXY`,
@@ -1223,6 +1224,22 @@ when the operator set them (`CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN` and `_OUT`, bot
 ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude`, `codex` and `fx` are the built-ins
 (`agent-claude`, `agent-codex`, `agent-fx`: `src/plugins/agent-claude.ts`, `agent-codex.ts`, `agent-fx.ts`).
 
+**Variable families** (the owner's decision of 2026-11-10): every agent provider declares its own environment variable
+families, so capcomd no longer keeps a hand-written list of them. `describe().envPrefixes` (optional, additive; absent:
+none) lists the name prefixes where the provider's CLI reads its credential, its login and its settings, each once and
+each matching `ENV_PREFIX` (`^[A-Z][A-Z0-9_]*_$`, `packages/plugin/src/seams.ts`): Claude Code's `ANTHROPIC_`,
+`CLAUDE_`; Codex's `OPENAI_`, `CODEX_`; fx's `AI_GATEWAY_`, `VERCEL_`, `FX_`. The kernel's lists are its own families
+plus every provider's (`src/plugins/env-families.ts`): the names an `agent.preparing` `env` may not set (§6.6.7), the
+variables a plugin's secret may not reference (§10.3), and what a check on the host doesn't get
+(`src/merge/verify.ts` `hostCheckEnv`). A provider's families only add protection: the kernel's own are always in the
+lists; a built-in's stay when its plugin is disabled (the user's keys are still the user's); and `ctx.seams.agent`
+throws `invalid` (the plugin fails `activate_threw`) for a seam whose `envPrefixes` isn't such a list (`""`, `C`,
+lower case) or names a prefix that would take in one of the kernel's families: one that a kernel prefix or a kernel
+variable starts with (`NPM_` takes in `NPM_CONFIG_`, `GITHUB_` takes in `GITHUB_TOKEN`). A prefix equal to a kernel
+prefix, or inside one (`GIT_X_`), takes in nothing and is allowed. The host checks the list's shape itself and asks
+the kernel for the rest (`ContextOptions.refuseSeam`, additive, through `HostOptions.sinks`); the lists ignore a
+provider whose families it would refuse.
+
 **fx** (`agent-fx`, fx 0.0.16, Vercel Labs' coding agent, https://fx.sh): fx runs as `fx acp`, its Agent Client
 Protocol server (newline-delimited JSON-RPC 2.0 on stdio), behind a bridge (`src/plugins/fx-bridge.mjs`, node, no
 dependencies) that `command` writes next to the run: it starts fx, opens one session (`session/new` with capcomd's MCP
@@ -1262,7 +1279,8 @@ driver) they are the built-ins (`src/plugins/agents.ts`). The runner's agent kin
 Claude Code's, `claude-code` as before (CAPCOMD_AGENT, auth logins, the `Capcomd-Agent:` trailer).
 
 Conformance (§14.2): the recorded streams in `apps/tui/fixtures` and `packages/agent-thread/fixtures` are replayed
-through `parse` and `outcome`; `command` is checked to send stdout to `ctx.jsonl`; `guard` stops at the limits.
+through `parse` and `outcome`; `command` is checked to send stdout to `ctx.jsonl`; `guard` stops at the limits;
+`describe().envPrefixes`, when given, is a list of families (`ENV_PREFIX`, none twice).
 
 ### 7.4 Forge
 
@@ -1723,11 +1741,12 @@ the user layer's or `CAPCOMD_PLUGIN_SANDBOX_BOXD_APIKEY`'s, answers `unsupported
 references are resolved, and the boxd provider then falls back to the daemon's `BOXD_API_KEY`
 (`src/providers/boxd.ts`).
 
-The kernel's own variables are a fixed list (`src/plugins/config.ts` `kernelVariable`), matched whatever their case:
-`BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting
-`CAPCOMD_`, its deprecated alias `RELAY_` (the kernel reads `RELAY_<NAME>` as `CAPCOMD_<NAME>`), `GIT_`, `RIVET`, or the
-agent providers' `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_`, and fx's `AI_GATEWAY_`, `VERCEL_`, `FX_` (the keys
-the kernel binds into sandboxes); and its keychain items, `keychain:capcomd…`. Only a shipped built-in (a plugin without a directory) may reference one; for
+The kernel's own variables (`src/plugins/config.ts` `kernelVariable`), matched whatever their case, are a fixed
+list, `BOXD_*`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and every name starting
+`CAPCOMD_`, its deprecated alias `RELAY_` (the kernel reads `RELAY_<NAME>` as `CAPCOMD_<NAME>`), `GIT_` or `RIVET`,
+plus every agent provider's families, as each declares them (`describe().envPrefixes`, §7.3, the owner's decision of
+2026-11-10; the keys the kernel binds into sandboxes: the built-ins' `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_`,
+and fx's `AI_GATEWAY_`, `VERCEL_`, `FX_`); and its keychain items, `keychain:capcomd…`. Only a shipped built-in (a plugin without a directory) may reference one; for
 every other plugin (a user's, a project's, a test's) such a reference is refused whichever layer it comes from: the
 user layer's or the env layer's is `config_invalid` on that layer, and the schema's `default`, when no layer gives a
 reference, is `config_invalid` on layer `default` (§10.4), although a third-party default is never followed, so the
