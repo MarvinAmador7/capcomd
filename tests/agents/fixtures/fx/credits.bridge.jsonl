@@ -1,0 +1,6 @@
+{"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
+{"type":"session","sessionId":"vOaiOWtEYUNg","model":"stub-model","provider":"stub"}
+{"type":"update","update":{"sessionUpdate":"session_info_update","_meta":{"fx":{"modelResponseRecovery":{"state":"active","kind":"auto_retry","cause":"rate_limited","action":"retrying_request","attempt":1,"attemptLimit":10,"message":"⚠ Rate limited · HTTP 429 · insufficient_quota: You exceeded your current quota, please check your plan and billing details. · retrying request"}}}}}
+{"type":"quota","message":"Rate limited · HTTP 429 · insufficient_quota: You exceeded your current quota, please check your plan and billing details. · retrying request"}
+{"type":"update","update":{"sessionUpdate":"session_info_update","_meta":{"fx":{"modelResponseRecovery":null}}}}
+{"type":"result","stopReason":"cancelled","usage":{},"lastText":"","quota":"Rate limited · HTTP 429 · insufficient_quota: You exceeded your current quota, please check your plan and billing details. · retrying request"}

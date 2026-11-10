@@ -1190,8 +1190,42 @@ only there (codex). `command`'s `AgentCommandCtx.mcp` (additive) carries the pro
 set) as `{mcpServers: {<name>: {command, args}}}`, and `servers`, the list, for a CLI that takes servers as flags; a
 provider MUST start them only inside the sandbox, and approves a `trusted` one's tools up front as it does capcomd's. The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
 install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is invoked and read.
-ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude` and `codex` are the built-ins
-(`agent-claude`, `agent-codex`: `src/plugins/agent-claude.ts`, `agent-codex.ts`). Only the daemon has a plugin host: in
+How the CLI is installed when the sandbox lacks it: `describe().npmPackage` (installed pinned with npm, as Claude Code
+and Codex are), or `describe().install` (additive; exactly one of the two, `npmPackage` is optional for it):
+`{kind: "archive", member, assets: {x86_64, aarch64}}`, a release archive per architecture as `{url, sha256}`. The
+kernel downloads the sandbox's, checks its sha256 before it unpacks anything (a mismatch fails the install and
+installs nothing), and installs `member` as `<agent home>/bin/<bin>`; node is installed beside it when the sandbox has
+none (the supervisor's). Only a binary there, at `pinnedVersion`, counts as installed: another program of the same name
+on `PATH` is someone else's. `capcomd env build` installs an archive CLI like the others, and its VM reaches the
+archives' hosts; one that fails to download there is left out of the image (the runner installs it when an agent on it
+starts). `describe().subscription` (additive, absent: true) false says capcomd has no plan login for the CLI: a
+profile on it with `auth: "subscription"` is refused at validation. `AgentConfig.usdPerMtok` is the provider's own rates
+when the operator set them (`CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN` and `_OUT`, both or neither), else codex's, as before.
+ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude`, `codex` and `fx` are the built-ins
+(`agent-claude`, `agent-codex`, `agent-fx`: `src/plugins/agent-claude.ts`, `agent-codex.ts`, `agent-fx.ts`).
+
+**fx** (`agent-fx`, fx 0.0.16, Vercel Labs' coding agent, https://fx.sh): fx runs as `fx acp`, its Agent Client
+Protocol server (newline-delimited JSON-RPC 2.0 on stdio), behind a bridge (`src/plugins/fx-bridge.mjs`, node, no
+dependencies) that `command` writes next to the run: it starts fx, opens one session (`session/new` with capcomd's MCP
+server and the profile's trusted ones, an orchestrate agent capcomd's only, each command absolute), sends the prompt, and prints the session as JSON lines
+(`init`, `session`, `update` for each ACP `session/update` but message text, `message` for a whole agent message or
+thought, `permission`, `steer`, `notice`, `quota`, `error`, and `result` at the end of each turn), which `parse` reads.
+`streamInput` is true: a message capcomd sends while fx works goes to it as a steering prompt (fx's
+`_meta.fx.steer`, applied at its next model call), or, when fx can't take it so (over 64 KiB, or the turn ended
+first), as the next turn. Credential: an AI Gateway API key, `AI_GATEWAY_API_KEY` (host `ai-gateway.vercel.sh`; a
+Vercel OIDC token, which fx would prefer, is dropped); `subscription` is false (fx's own logins aren't snapshotted).
+fx's settings (`$HOME/.fx/settings.json`, private) get capcomd's keys merged in: no upgrades, no session titles, no
+cache warming. fx runs the agent's commands in a snapshot of a login shell, whose `/etc/profile` (Debian's) sets `PATH`
+anew, so the agent's own tools (node, the in-VM capcomd) weren't found: the bridge adds a line to the agent home's
+`~/.bash_profile` and `~/.zprofile` that puts the agent's `PATH` back (from `CAPCOMD_PATH`, which it sets for fx).
+Turns are tool steps (fx's own bookkeeping calls aside), and `FX_MAX_AGENT_STEPS` is the profile's
+`maxTurns` as fx's own backstop; cost is tokens × rates (fx reports none), at each turn's end. A turn fx ends
+`refused` carries its reason only as the turn's last message: the provider reads auth failures, out-of-credits and
+fx's step limit from it. fx retries a rate limit indefinitely: the bridge cancels the turn and reports a `quota` when the
+retry names an exhausted quota, or when a rate limit hasn't passed for 10 minutes. An untrusted MCP server isn't
+started (fx runs with full access, so its tools would run unasked; the agent's log says so). Its recorded streams
+(`tests/agents/fixtures/fx`) were made from fx 0.0.16 itself, against a scripted model server in a throwaway
+container (`scripts/fx-record`). Only the daemon has a plugin host: in
 it the active providers are the ones its plugins registered; in every other process (the CLI, the MCP server, a
 driver) they are the built-ins (`src/plugins/agents.ts`). The runner's agent kind stays the provider's name, except
 Claude Code's, `claude-code` as before (CAPCOMD_AGENT, auth logins, the `Capcomd-Agent:` trailer).
@@ -2139,6 +2173,17 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
      doesn't allow), so every command failed, reads included. Codex's rules see the commands of a simple shell line
      (`cd x && bun test` is refused) but not a redirection (`echo x > f` runs), `sh -c` or option tricks: so the kernel
      doesn't rely on any CLI's rules for writes (item 3).
+   - fx: `denyCommands` as codex's, which the provider turns into fx's permission rules (`fxOrchestrateRules`, in
+     `$HOME/.fx/settings.json`, of which the bridge keeps only `providers` and `models` from a file already there: a
+     `workspaces` entry for the checkout would outrank the rules, as recorded against fx 0.0.16, and could approve the
+     repository's MCP servers; the last matching rule wins) with fx in `ask` mode (full access skips every rule):
+     `read`, `glob`, `grep`, `skill`, capcomd's MCP tools allowed; `edit`, fx's `subagent` and `install_skill` denied;
+     in `bash`, the read-only commands above allowed as `<prefix>` and `<prefix> *`, then `denyCommands` and the git
+     options above denied; everything else `ask`, and the bridge answers every ask `reject_once`. fx matches an allow
+     rule only for a command with no chaining, substitution or redirection, and a deny rule inside a chained one too:
+     recorded against fx 0.0.16, `git log` and `git status` ran; `git commit`, `git branch -D`, `git log --output=…`
+     and `write_file` were denied by the rules; `capcomd status && rm -rf x`, `echo hi > f`, `ls | head` and `uname -a`
+     were asked and refused. So a compound line of allowed commands is refused too (stricter than Claude Code).
    The kernel applies them on top of the profile's own lists when it builds the agent's config, after
    `agent.preparing`: `allowed` replaces the profile's allowlist or narrows it, `disallowed` joins its denylist,
    `denyCommands` joins `AgentConfig.denyCommands`, `sandbox` is the loosest the CLI runs in. A profile cannot widen

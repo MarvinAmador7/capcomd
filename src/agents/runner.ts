@@ -6,6 +6,7 @@ import type { SandboxProvider, VmId, ExecResult } from "../providers/sandbox";
 import type { AgentConfig, ContextBundleSpec } from "./config";
 import type { AgentAdapter, AgentCommandCtx, AgentEvent, AgentRunState } from "./types";
 import { Redactor } from "./redact";
+import { agentSeam, providerOfKind } from "../plugins/agents";
 import { taskKey } from "../merge/config";
 import { gitSpan, progressLine, pushFromSandbox, sendToSandbox, sendTreeAt, type HostRemote, type OnTransferProgress, type SandboxGit } from "../merge/transfer";
 import { lsRemote } from "../merge/host-git";
@@ -224,10 +225,11 @@ const cutLine = (x: string, n: number) => (x.length > n ? `${x.slice(0, n)}…` 
 /**
  * A failed tool result that is the CLI's permission system refusing the call, not the call failing: Claude Code's
  * denials ("Permission to use Bash with command … has been denied.", "This command requires approval", "… needs
- * approval", "… can't be checked before it runs", a disabled tool) and codex's (an MCP tool "requires approval, but
- * approval policy is never", a command its rules reject).
+ * approval", "… can't be checked before it runs", a disabled tool), codex's (an MCP tool "requires approval, but
+ * approval policy is never", a command its rules reject) and fx's (a `tool_permission_denied` result: its rules, or the
+ * bridge refusing what they leave to a person).
  */
-export const REFUSAL = /has been denied|requires approval|needs approval|can't be checked before it runs|No such tool available|is disabled for this session|approval policy is `?never|\brejected: /i;
+export const REFUSAL = /has been denied|requires approval|needs approval|can't be checked before it runs|No such tool available|is disabled for this session|approval policy is `?never|\brejected: |tool_permission_denied/i;
 
 /** An event as `capcomd logs` lines: its tool calls, failed results (`refused …` when the CLI refused the call), text
  *  and final result. */
@@ -437,12 +439,26 @@ export function buildConsolidatePrompt(t: AgentTask & { consolidate: NonNullable
 
 export const agentHome = (cfg: AgentConfig) => `${cfg.workdir}/home`;
 export const templateDir = (cfg: AgentConfig) => `${cfg.workdir}/template`;
-export const agentPath = (home: string) => `${home}/node/bin:${home}/npm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
+export const agentPath = (home: string) => `${home}/node/bin:${home}/npm/bin:${home}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
 
-/** Prints `bin=<path>` / `version=<v>` / `node=<v>` for whatever is already installed. */
-export function detectScript(a: AgentAdapter): string {
-  return `b=$(command -v ${a.bin} 2>/dev/null) && echo "bin=$b" && echo "version=$("$b" --version 2>/dev/null | head -1)"; n=$(command -v node 2>/dev/null) && echo "node=$("$n" -v 2>/dev/null)"; true`;
+/** Prints `bin=<path>` / `version=<v>` / `node=<v>` for whatever is already installed. A CLI installed from a release
+ *  archive (`a.install`) counts only as capcomd installs it, `<home>/bin/<bin>`: another program by its name on PATH
+ *  is someone else's (fx's name is a JSON viewer's too). */
+export function detectScript(a: AgentAdapter, home?: string): string {
+  const find = a.install && home ? `b=${sq(`${home}/bin/${a.bin}`)}; [ -x "$b" ]` : `b=$(command -v ${a.bin} 2>/dev/null)`;
+  return `${find} && echo "bin=$b" && echo "version=$("$b" --version 2>/dev/null | head -1)"; n=$(command -v node 2>/dev/null) && echo "node=$("$n" -v 2>/dev/null)"; true`;
 }
+/** Whether what detectScript found is usable as it is: a release-archive CLI must be the pinned version, with node beside
+ *  it (its supervisor's and, for fx, its bridge's); an npm CLI as found (the image's, or a snapshot's). */
+export function detectedUsable(a: AgentAdapter, cfg: AgentConfig, d: Detected): boolean {
+  if (!d.bin) return false;
+  if (!a.install) return true;
+  return d.version === a.pinnedVersion(cfg) && !!d.node && Number(/^v?(\d+)/.exec(d.node)?.[1] ?? 0) >= 18;
+}
+/** Whether capcomd has a plan login for an agent kind's CLI (its provider's `describe().subscription`, true unless false). */
+const agentSubscription = (kind: string) => agentSeam(providerOfKind(kind))?.describe().subscription !== false;
+/** Where an installed CLI is: `<home>/bin/<bin>` from a release archive, else npm's. */
+export const installedBin = (a: AgentAdapter, home: string) => (a.install ? `${home}/bin/${a.bin}` : `${home}/npm/bin/${a.bin}`);
 export interface Detected { bin?: string; version?: string; node?: string }
 export function parseDetect(out: string): Detected {
   const d: Detected = {};
@@ -454,11 +470,12 @@ export function parseDetect(out: string): Detected {
   return d;
 }
 
-/** Installs pinned Node (only if no node ≥ 18 is present) and the pinned agent CLI into home/npm. */
+/** Installs pinned Node (only if no node ≥ 18 is present) and the pinned agent CLI: from npm into home/npm, or from its
+ *  release archive (`a.install`) into home/bin, the archive checked against its sha256 before anything in it is used. */
 export function installScript(cfg: AgentConfig, home: string, a: AgentAdapter): string {
   const v = cfg.nodeVersion;
   const pin = a.pinnedVersion(cfg);
-  return `set -e
+  const node = `set -e
 mkdir -p ${sq(home)} && cd ${sq(home)}
 NODE=$(command -v node || true)
 if [ -n "$NODE" ] && [ "$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 18 ]; then NPM=$(dirname "$NODE")/npm; else
@@ -469,7 +486,23 @@ if [ -n "$NODE" ] && [ "$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/de
     mkdir node && tar -xzf node.tgz -C node --strip-components=1 && rm node.tgz
   fi
   NPM=${home}/node/bin/npm
+fi`;
+  if (a.install) {
+    const { x86_64, aarch64 } = a.install.assets;
+    return `${node}
+if [ "$(bin/${a.bin} --version 2>/dev/null | head -1)" != ${sq(pin)} ]; then
+  case "$(uname -m)" in x86_64|amd64) url=${sq(x86_64.url)}; sum=${sq(x86_64.sha256)};; aarch64|arm64) url=${sq(aarch64.url)}; sum=${sq(aarch64.sha256)};; *) echo "unsupported arch $(uname -m)" >&2; exit 1;; esac
+  tmp=$(mktemp -d)
+  curl -fsSL "$url" -o "$tmp/cli.tgz"
+  got=$( (sha256sum "$tmp/cli.tgz" 2>/dev/null || shasum -a 256 "$tmp/cli.tgz" 2>/dev/null || openssl dgst -sha256 -r "$tmp/cli.tgz") | cut -d' ' -f1)
+  if [ "$got" != "$sum" ]; then rm -rf "$tmp"; echo "${a.bin} ${pin}: the downloaded archive's sha256 is $got, not $sum: not installed" >&2; exit 1; fi
+  tar -xzf "$tmp/cli.tgz" -C "$tmp" ${sq(a.install.member)}
+  mkdir -p bin && cp "$tmp/${a.install.member}" bin/${a.bin}.new && chmod 755 bin/${a.bin}.new && mv bin/${a.bin}.new bin/${a.bin}
+  rm -rf "$tmp"
 fi
+bin/${a.bin} --version`;
+  }
+  return `${node}
 if [ "$(npm/bin/${a.bin} --version 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1)" != "${pin}" ]; then
   "$NPM" install -g --prefix "${home}/npm" --no-fund --no-audit "${a.npmPackage}@${pin}"
 fi
@@ -728,13 +761,13 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     let bin = adapter.kind === "claude-code" ? (cfg.agentBin ?? cfg.claudeBin) : cfg.agentBin;
     let version = adapter.pinnedVersion(cfg);
     if (!bin) {
-      const det = parseDetect((await sh(detectScript(adapter))).stdout);
-      if (det.bin) { bin = det.bin; version = det.version ?? "unknown"; addSpanEvent(span, "agent.detected", { "agent.bin": det.bin, "agent.version": version }); }
+      const det = parseDetect((await sh(detectScript(adapter, home))).stdout);
+      if (detectedUsable(adapter, cfg, det)) { bin = det.bin!; version = det.version ?? "unknown"; addSpanEvent(span, "agent.detected", { "agent.bin": det.bin!, "agent.version": version }); }
       else {
         const install = await withSpan("agent.install", { "agent.version": adapter.pinnedVersion(cfg), "agent.node_version": cfg.nodeVersion }, async () =>
           sh(installScript(cfg, home, adapter), {}, 600_000));
         must(install, `${name} install`, "install");
-        bin = `${home}/npm/bin/${adapter.bin}`;
+        bin = installedBin(adapter, home);
         version = adapter.pinnedVersion(cfg);
       }
     }
@@ -747,7 +780,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     let prelude = "";
     if (cfg.credentialMode === "subscription") {
       const chk = (await sh(adapter.subscriptionCheck(home, sq))).stdout;
-      if (!/secret|file/.test(chk)) throw new AgentError("credentials", `no ${name} subscription login in this VM; run \`capcomd auth login ${name === "claude-code" ? "claude" : "codex"}\``);
+      if (!/secret|file/.test(chk)) throw new AgentError("credentials", agentSubscription(name) ? `no ${name} subscription login in this VM; run \`capcomd auth login ${name === "claude-code" ? "claude" : name}\`` : `${name} has no plan login in capcomd: use auth: "apikey" with ${adapter.secretName}`);
       credentialMode = "subscription";
       prelude = adapter.subscriptionPrelude(home, sq);
     } else {
@@ -890,7 +923,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Ids are unique per agent and per run of it, so a re-run never overwrites an earlier run's items.
     const items = new Map<string, ItemDraft>(), images: ThreadAttachment[] = [];
     const thread = opts.onItems ? threadBuilder({
-      cli: adapter.kind === "codex" ? "codex" : "claude", idPrefix: `itm-${task.agentId ?? `${task.taskId}-e${task.epoch}`}-${now().toString(36)}`, now,
+      cli: adapter.kind === "codex" ? "codex" : adapter.kind === "fx" ? "fx" : "claude", idPrefix: `itm-${task.agentId ?? `${task.taskId}-e${task.epoch}`}-${now().toString(36)}`, now,
       link: { root: repo }, onImage: (img) => images.push({ id: img.id, sha256: img.sha256, bytes: img.bytes, mime: img.mime, base64: img.base64 }),
     }) : null;
     const flushItems = () => { if (items.size || images.length) { opts.onItems?.([...items.values()], images.splice(0)); items.clear(); } };

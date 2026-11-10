@@ -60,7 +60,18 @@ export const AGENT_CASES: readonly Case[] = [
   { name: "describe() names the seam and is pure (§7.3)", run(p, o) {
     const d = p.describe();
     if (o.name !== undefined) equal(d.name, o.name, "describe().name");
-    for (const k of ["name", "label", "bin", "npmPackage", "pinnedVersion", "secretName", "apiHost"] as const) if (typeof d[k] !== "string" || !d[k]) fail(`describe().${k} must be a non-empty string`);
+    for (const k of ["name", "label", "bin", "pinnedVersion", "secretName", "apiHost"] as const) if (typeof d[k] !== "string" || !d[k]) fail(`describe().${k} must be a non-empty string`);
+    // How the CLI is installed: an npm package, or release archives checked by their sha256 (exactly one).
+    if ((d.npmPackage !== undefined) === (d.install !== undefined)) fail("describe() must give exactly one of npmPackage and install");
+    if (d.npmPackage !== undefined && (typeof d.npmPackage !== "string" || !d.npmPackage)) fail("describe().npmPackage must be a non-empty string");
+    if (d.install !== undefined) {
+      const i = d.install;
+      if (i?.kind !== "archive" || typeof i.member !== "string" || !i.member) fail("describe().install must be {kind: \"archive\", member, assets}");
+      for (const arch of ["x86_64", "aarch64"] as const) {
+        const a = i.assets?.[arch];
+        if (!a || typeof a.url !== "string" || !a.url.startsWith("https://") || typeof a.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(a.sha256)) fail(`describe().install.assets.${arch} must be an https url and a sha256`);
+      }
+    }
     if (!Array.isArray(d.efforts) || d.efforts.some((e) => typeof e !== "string" || !e)) fail("describe().efforts must be a list of levels");
     if (d.defaultEffort !== null && !d.efforts.includes(d.defaultEffort)) fail(`describe().defaultEffort ${JSON.stringify(d.defaultEffort)} isn't one of its efforts`);
     if (!Array.isArray(d.loginEgress)) fail("describe().loginEgress must be a list of hosts");

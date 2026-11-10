@@ -20,6 +20,7 @@ import { envBuild } from "../../src/env/build";
 import { Git } from "../../src/merge/git";
 import { runTests } from "../../src/merge/verify";
 import { bareRepo } from "../merge/gitfixture";
+import { stubFx } from "../helpers/fx-stub";
 
 const saved = { ...process.env };
 const ledger = mkdtempSync(join(tmpdir(), "capcomd-machines-"));
@@ -124,6 +125,7 @@ describe("capcomd's own jobs record their machines while they run", () => {
 		sh(join(home, "node/bin/node"), `case "$1" in -v) echo v22.9.0;; -p) echo 22;; esac`);
 		sh(join(home, "npm/bin/claude"), `echo "2.1.290 (Claude Code)"`);
 		sh(join(home, "npm/bin/codex"), `echo "codex-cli 0.1"`);
+		stubFx(home);
 		const p = new Watched({ hostExec: true });
 		await envBuild(p, { repoUrl: r.bare, cfg: loadAgentConfig({ CAPCOMD_AGENT_WORKDIR: workdir }), ledgerPath: join(workdir, "envs.json"), pollMs: 1 });
 		expect(p.seen[0]!.map((x) => [x.state, x.owner?.kind, x.owner?.label, x.actions])).toEqual([["running", "env_build", "Building the agent environment", []]]);

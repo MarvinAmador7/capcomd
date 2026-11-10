@@ -136,6 +136,9 @@ export interface AgentRunState {
   quota?: { message: string; resetAt?: number };
 }
 
+/** One release archive of an agent CLI (`describe().install`): where it is, and its sha256 (lowercase hex). */
+export interface AgentArchive { url: string; sha256: string }
+
 /** `src/agents/types.ts` AgentAdapter, as a seam (§7.3). The kernel's runner (`src/agents/runner.ts`) does clone,
  *  install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is run and
  *  how its stream is read. Every method is pure except `available`. */
@@ -143,10 +146,16 @@ export interface AgentProvider {
   describe(): {
     name: string;
     label: string;
-    /** CLI binary on PATH inside the sandbox, and the npm package that installs it pinned. */
+    /** CLI binary on PATH inside the sandbox, and how it is installed pinned when the sandbox lacks it: the npm package
+     *  (`npmPackage`), or a release archive (`install`). Exactly one of the two. */
     bin: string;
-    npmPackage: string;
+    npmPackage?: string;
     pinnedVersion: string;
+    /** A CLI shipped as release archives rather than on npm: per architecture (`uname -m`, x86_64 or aarch64) the
+     *  archive's https URL and its sha256, which the install checks before it unpacks anything (a mismatch fails it);
+     *  `member` is the binary's path in the archive. It is installed as `<agent home>/bin/<bin>`, and only a binary
+     *  there, at `pinnedVersion`, is used; node (the supervisor's) is installed beside it when the sandbox has none. */
+    install?: { kind: "archive"; member: string; assets: { x86_64: AgentArchive; aarch64: AgentArchive } };
     /** API key env name (also the host-bound secret name) and the host it is bound to. */
     secretName: string;
     apiHost: string;
@@ -154,6 +163,9 @@ export interface AgentProvider {
     defaultEffort: string | null;
     /** The CLI reads user messages on stdin while it runs (`send` reaches it mid-run). */
     streamInput: boolean;
+    /** False: capcomd has no plan login for this CLI, so a profile on it must use `auth: "apikey"` (refused at
+     *  validation otherwise). Absent: true. */
+    subscription?: boolean;
     loginEgress: readonly string[];
     /** The tool lists that make an `orchestrate` agent (ADR-024 `tools.mode`, §16.1): it sees everything (reading and
      *  searching files, read-only git with fetch, every capcomd read) and runs nothing that changes or runs code (no

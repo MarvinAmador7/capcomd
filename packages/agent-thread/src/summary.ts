@@ -71,3 +71,24 @@ export function codexSummary(item: Record<string, any>, rel: (p: unknown) => str
 	})();
 	return oneLine(s, SUMMARY_MAX);
 }
+
+/** An fx tool call (fx acp `tool_call`) as a phrase. */
+export function fxSummary(name: string, input: Record<string, any>, mcp: { server?: unknown; tool?: unknown } | null, rel: (p: unknown) => string): string {
+	const s = (() => {
+		switch (name) {
+			case "read_file": return `Read ${rel(input.path)}`;
+			case "edit_file": return `Edit ${rel(input.path)}`;
+			case "write_file": return `Write ${rel(input.path)}`;
+			case "shell": return input.action === "run" || typeof input.command === "string" ? `Run ${shellCommand(str(input.command))}` : input.action === "stop" ? "Stop a shell" : "Read shell output";
+			case "glob_files": return `Find ${str(input.pattern)}${input.path ? ` in ${rel(input.path)}` : ""}`;
+			case "grep_files": return `Search the code for ${str(input.pattern)}${input.path ? ` in ${rel(input.path)}` : ""}`;
+			case "web_fetch": return `Fetch ${str(input.url)}`;
+			case "web_search": return `Search the web for ${str(input.query)}`;
+			case "subagent": return `Delegate${input.task ? `: ${str(input.task)}` : " a task"}`;
+			case "read_tool_result": return "Read a tool's output";
+		}
+		if (mcp) return (mcp.server === "capcomd" ? capcomdSummary(str(mcp.tool), input) : null) ?? `${str(mcp.server)}: ${str(mcp.tool)}`;
+		return name || "Tool call";
+	})();
+	return oneLine(s, SUMMARY_MAX);
+}

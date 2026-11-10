@@ -92,15 +92,15 @@ describe("contract", () => {
 		const agentSchema = (spec as any).paths["/v1/runs/{runId}/agents"].get.responses["200"].content["application/json"].schema.items;
 		expect(agentSchema.required).toEqual(expect.arrayContaining(["provider", "model"]));
 		expect(agentSchema.properties.provider.type).toEqual(["string", "null"]);
-		expect(agentSchema.properties.provider.enum).toEqual(["claude", "codex", null]);
+		expect(agentSchema.properties.provider.enum).toEqual(["claude", "codex", "fx", null]);
 		expect(agentSchema.properties.model.type).toEqual(["string", "null"]);
 		expect(agentSchema.required).toContain("effort");
 		expect(agentSchema.properties.effort.type).toEqual(["string", "null"]);
 		const a = (spec as any).components.schemas.AgentSpawnedData.properties.agent;
 		expect(a.type).toEqual(["object", "null"]);
 		expect(a.additionalProperties).toEqual({});
-		expect(a.properties.kind.enum).toEqual(["fake", "claude-code", "codex"]);
-		expect(a.properties.provider.enum).toEqual(["claude", "codex"]);
+		expect(a.properties.kind.enum).toEqual(["fake", "claude-code", "codex", "fx"]);
+		expect(a.properties.provider.enum).toEqual(["claude", "codex", "fx"]);
 		expect(a.properties.model.type).toEqual(["string", "null"]);
 		expect(a.properties.effort.type).toEqual(["string", "null"]);
 	});

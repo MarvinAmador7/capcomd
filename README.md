@@ -236,7 +236,7 @@ agent profiles.
 |---|---|
 | **Run** | A durable scope with a budget, its named checks, an optional reviewer and target branch (`capcomd run new`). |
 | **Orchestrator** | Whoever calls the primitives: your agent, an agent inside a VM allowed to delegate, or you. |
-| **Agent** | One Claude Code or Codex session in its own VM and branch (`capcomd spawn`). |
+| **Agent** | One Claude Code, Codex or fx session in its own VM and branch (`capcomd spawn`). |
 | **Profile** | A reusable agent definition: provider, login, model, limits, tools, and whether it may spawn (`capcomd profiles`). |
 | **Check** | A command the operator names for the run; agents choose one per child, never write one. |
 | **Reviewer** | An agent profile that reads each verified change and returns pass or fail with reasons. |

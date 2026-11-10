@@ -1,5 +1,6 @@
 import type { AgentConfig, ClaudeUsage, RealAgent } from "./config";
 import type { Redactor } from "./redact";
+import type { AgentArchive } from "../../packages/plugin/src/seams";
 
 export interface AgentEvent {
   type: string;
@@ -74,8 +75,9 @@ export interface AgentAdapter {
   kind: RealAgent;
   /** CLI binary name on PATH. */
   bin: string;
-  /** npm package (installed pinned when the CLI is absent). */
-  npmPackage: string;
+  /** npm package (installed pinned when the CLI is absent), or `install`: release archives checked by sha256. */
+  npmPackage?: string;
+  install?: { kind: "archive"; member: string; assets: { x86_64: AgentArchive; aarch64: AgentArchive } };
   pinnedVersion(cfg: AgentConfig): string;
   /** API key env name; also the boxd host-bound secret name. */
   secretName: string;

@@ -5,8 +5,8 @@
 // at most once per `minMs` (default 1s), so a busy agent costs one small row update a second, not one per event.
 // Each finished streak is also a step of the agent's history (harness.v1 `agent.step`), reported at once, unthrottled.
 import type { AgentEvent } from "./types";
-import { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind } from "../../packages/agent-thread/src/kinds";
-import { isClaudeNamingCall, isCodexNamingCall } from "../../packages/agent-thread/src/naming";
+import { ACTIVITY_KINDS, commandKind, fxToolKind, opKind, type ActivityKind } from "../../packages/agent-thread/src/kinds";
+import { isClaudeNamingCall, isCodexNamingCall, isFxNamingCall } from "../../packages/agent-thread/src/naming";
 
 // The vocabulary and the command/op classifiers live in packages/agent-thread (the thread's tool items use them too).
 export { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind };
@@ -74,6 +74,14 @@ export function activityOf(ev: AgentEvent): ActivityStep[] {
 			case "reasoning": case "agent_message": return [step("think")];
 		}
 	}
+	// fx (its ACP session as capcomd's bridge prints it): each tool call as it starts, its messages and thoughts.
+	const u = raw?.update;
+	if (ev.type === "update" && u?.sessionUpdate === "tool_call") {
+		if (isFxNamingCall(u) || u._meta?.fx?.toolCall?.internal === true) return [];
+		const input = u.rawInput && typeof u.rawInput === "object" ? u.rawInput : {};
+		return [step(fxToolKind(String(u.name ?? ""), input, u._meta?.fx?.toolCall?.mcp ?? null), input.path ?? input.command ?? u.toolCallId)];
+	}
+	if (raw?.type === "message" && (ev.type === "message" || ev.type === "thinking")) return [step("think")];
 	return [];
 }
 

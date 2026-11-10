@@ -13,6 +13,7 @@ import { runAgent } from "../../src/agents/runner";
 import { codexAdapter } from "../../src/agents/adapters";
 import { taskBranch } from "../../src/merge/config";
 import { getFinishedSpans, resetSpans } from "../../src/utils/tracing-simple";
+import { stubFx } from "../helpers/fx-stub";
 
 const sh = (p: string, body: string) => { writeFileSync(p, `#!/bin/bash\n${body}\n`); chmodSync(p, 0o755); };
 
@@ -31,6 +32,7 @@ prefix=; pkg=; while [ $# -gt 0 ]; do case "$1" in --prefix) prefix="$2"; shift 
 name=$(echo "$pkg" | sed -E 's#^@[^/]+/##; s#@.*$##'); ver=\${pkg##*@}; [ "$name" = claude-code ] && name=claude
 mkdir -p "$prefix/bin"; printf '#!/bin/sh\\necho "%s-cli %s"\\n' "$name" "$ver" > "$prefix/bin/$name"; chmod +x "$prefix/bin/$name"`);
   sh(join(home, "npm/bin/claude"), `echo "2.1.290 (Claude Code)"`);
+  stubFx(home);
   const provider = new FakeProvider({ hostExec: true });
   const cfg = loadAgentConfig({ CAPCOMD_AGENT_WORKDIR: workdir });
   return { r, provider, cfg, home, workdir, ledger: join(workdir, "envs.json") };

@@ -1,0 +1,207 @@
+{
+  "session": "fx-0.0.16.jsonl",
+  "cli": "fx",
+  "updates": [
+    {
+      "id": "itm-agt-golden-1",
+      "rev": 1,
+      "kind": "say",
+      "status": "done",
+      "at": "2026-10-26T12:00:03.000Z",
+      "durationMs": null,
+      "text": "I'll create the file.",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "I'll create the file."
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 1,
+      "kind": "tool",
+      "status": "open",
+      "at": "2026-10-26T12:00:04.000Z",
+      "durationMs": null,
+      "text": "Write notes.txt",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "call_edit_0",
+        "name": "write_file",
+        "kind": "write",
+        "summary": "Write notes.txt",
+        "isError": false,
+        "args": "{\"path\":\"notes.txt\",\"content\":\"first line\\n\"}",
+        "output": null,
+        "files": [
+          {
+            "t": "link",
+            "text": "notes.txt",
+            "href": "notes.txt",
+            "target": "file",
+            "host": null,
+            "id": null,
+            "path": "notes.txt",
+            "mismatch": true
+          }
+        ],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 2,
+      "kind": "tool",
+      "status": "done",
+      "at": "2026-10-26T12:00:04.000Z",
+      "durationMs": null,
+      "text": "Write notes.txt",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "call_edit_0",
+        "name": "write_file",
+        "kind": "write",
+        "summary": "Write notes.txt",
+        "isError": false,
+        "args": "{\"path\":\"notes.txt\",\"content\":\"first line\\n\"}",
+        "output": "wrote notes.txt (11 bytes)",
+        "files": [
+          {
+            "t": "link",
+            "text": "notes.txt",
+            "href": "notes.txt",
+            "target": "file",
+            "host": null,
+            "id": null,
+            "path": "notes.txt",
+            "mismatch": true
+          }
+        ],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-3",
+      "rev": 1,
+      "kind": "tool",
+      "status": "open",
+      "at": "2026-10-26T12:00:07.000Z",
+      "durationMs": null,
+      "text": "Edit notes.txt",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "call_edit_1",
+        "name": "edit_file",
+        "kind": "edit",
+        "summary": "Edit notes.txt",
+        "isError": false,
+        "args": "{\"path\":\"notes.txt\",\"old_string\":\"first line\",\"new_string\":\"edited line\"}",
+        "output": null,
+        "files": [
+          {
+            "t": "link",
+            "text": "notes.txt",
+            "href": "notes.txt",
+            "target": "file",
+            "host": null,
+            "id": null,
+            "path": "notes.txt",
+            "mismatch": true
+          }
+        ],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-3",
+      "rev": 2,
+      "kind": "tool",
+      "status": "done",
+      "at": "2026-10-26T12:00:07.000Z",
+      "durationMs": null,
+      "text": "Edit notes.txt",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "call_edit_1",
+        "name": "edit_file",
+        "kind": "edit",
+        "summary": "Edit notes.txt",
+        "isError": false,
+        "args": "{\"path\":\"notes.txt\",\"old_string\":\"first line\",\"new_string\":\"edited line\"}",
+        "output": "edited notes.txt (12 bytes)",
+        "files": [
+          {
+            "t": "link",
+            "text": "notes.txt",
+            "href": "notes.txt",
+            "target": "file",
+            "host": null,
+            "id": null,
+            "path": "notes.txt",
+            "mismatch": true
+          }
+        ],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-4",
+      "rev": 1,
+      "kind": "say",
+      "status": "done",
+      "at": "2026-10-26T12:00:10.000Z",
+      "durationMs": null,
+      "text": "Created and edited notes.txt.",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "Created and edited notes.txt."
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    }
+  ],
+  "attachments": []
+}

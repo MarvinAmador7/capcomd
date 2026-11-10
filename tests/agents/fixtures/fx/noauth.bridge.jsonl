@@ -1,0 +1,1 @@
+{"type":"error","where":"initialize","code":-32600,"message":"fx needs access to Vercel AI Gateway. Run fx login to sign in, fx setup to use an API key, or set AI_GATEWAY_API_KEY."}

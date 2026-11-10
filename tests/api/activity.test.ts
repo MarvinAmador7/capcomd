@@ -47,6 +47,20 @@ describe("classification (structured fields only)", () => {
 		expect(kinds(codex("item_completed", { id: "i5", type: "reasoning", text: "hmm" }))).toEqual(["think"]);
 	});
 
+	test("fx tool calls (the bridge's lines): each as it starts; its naming and internal steps are none", () => {
+		const fx = (name: string, rawInput: Record<string, unknown>, meta?: unknown): AgentEvent => ({ type: "update", subtype: "tool_call", raw: { type: "update", update: { sessionUpdate: "tool_call", toolCallId: "c1", name, rawInput, ...(meta ? { _meta: meta } : {}) } } });
+		expect(kinds(fx("shell", { action: "run", command: "bun test" }))).toEqual(["test"]);
+		expect(kinds(fx("edit_file", { path: "a.ts" }))).toEqual(["edit"]);
+		expect(kinds(fx("write_file", { path: "b.ts" }))).toEqual(["write"]);
+		expect(kinds(fx("grep_files", { pattern: "x" }))).toEqual(["search"]);
+		expect(kinds(fx("mcp_capcomd_capcomd_send", {}, { fx: { toolCall: { mcp: { server: "capcomd", tool: "capcomd_send" } } } }))).toEqual(["message"]);
+		expect(kinds(fx("shell", { action: "run", command: "capcomd title login redirect" }))).toEqual([]);
+		expect(kinds(fx("capability_search", {}, { fx: { toolCall: { internal: true } } }))).toEqual([]);
+		expect(kinds({ type: "thinking", raw: { type: "message", role: "thought", text: "hmm" } })).toEqual(["think"]);
+		// The end of a call is no new step.
+		expect(kinds({ type: "update", subtype: "tool_call_update", raw: { type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed" } } })).toEqual([]);
+	});
+
 	test("shell commands", () => {
 		const c: Array<[string, string]> = [
 			["bun test", "test"], ["npm run test -- --watch=false", "test"], ["go test ./...", "test"], ["CI=1 cargo test", "test"],

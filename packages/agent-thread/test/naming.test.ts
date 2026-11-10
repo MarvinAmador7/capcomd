@@ -2,7 +2,7 @@
 // words parsed properly, a Codex `bash -lc` wrapper looked through), and the thread leaving every naming call out
 // (its result too) while its other tool calls stay.
 import { describe, expect, test } from "bun:test";
-import { codexNaming, isClaudeNamingCall, isCodexNamingCall, namingCalls, namingCommand, shellWords, threadBuilder, type ItemDraft } from "../src/index";
+import { codexNaming, fxNaming, isClaudeNamingCall, isCodexNamingCall, isFxNamingCall, namingCalls, namingCommand, shellWords, threadBuilder, type ItemDraft } from "../src/index";
 
 describe("shellWords", () => {
 	test("plain words, quoted or not, with escapes", () => {
@@ -82,5 +82,16 @@ describe("the thread leaves naming calls out", () => {
 			{ type: "item.completed", item: { id: "c3", type: "command_execution", command: "bun test", exit_code: 0, aggregated_output: "" } },
 		]);
 		expect(items.filter((i) => i.kind === "tool").map((i) => i.tool!.callId)).toEqual(["c3"]);
+	});
+});
+
+describe("fx (the bridge's tool_call lines)", () => {
+	const tc = (name: string, rawInput: unknown, mcp?: unknown) => ({ type: "update", update: { sessionUpdate: "tool_call", toolCallId: "c1", name, rawInput, ...(mcp ? { _meta: { fx: { toolCall: { mcp } } } } : {}) } });
+	test("a shell `capcomd title` by itself, or the capcomd_title tool, names its tab", () => {
+		expect(namingCalls(tc("shell", { action: "run", command: "capcomd title login redirect" }))).toEqual([{ callId: "c1", title: "login redirect" }]);
+		expect(namingCalls(tc("mcp_capcomd_capcomd_title", { title: "parquet" }, { server: "capcomd", tool: "capcomd_title" }))).toEqual([{ callId: "c1", title: "parquet" }]);
+		expect(namingCalls(tc("shell", { action: "run", command: "capcomd title x && ls" }))).toEqual([]);
+		expect(fxNaming(tc("shell", { action: "run", command: "capcomd title agt-1 child" }).update)).toBeNull();
+		expect(isFxNamingCall(tc("shell", { action: "run", command: "capcomd title agt-1 child" }).update)).toBe(true);
 	});
 });

@@ -14,6 +14,7 @@ import { agentHome, templateDir } from "../../src/agents/runner";
 import { loadAgentConfig } from "../../src/agents/config";
 import { TEMPLATE_MARKER, parseTemplateMarker } from "../../src/agents/workspace";
 import { baseEnvHash, envName, ENV_SCHEMA, isTemplateName, projectKey, projectTemplateFor, readTemplates, resolveEnvSnapshot, templateName, writeBuildMarker, writeLedger, writeTemplates } from "../../src/env/resolve";
+import { stubFx } from "../helpers/fx-stub";
 import { buildEgress, buildProjectTemplate, reaches, rebuildReason, refreshTemplates, removeProjectTemplate, scheduleTemplateBuild, templateBuildsSettled, templateMarkerPath, templateTarget, templateViews } from "../../src/env/templates";
 
 const KNOBS = ["CAPCOMD_SANDBOX", "CAPCOMD_TEMPLATE_LEDGER", "CAPCOMD_ENV_LEDGER", "CAPCOMD_PROJECT_TEMPLATES", "CAPCOMD_TEMPLATE_MAX_GB", "CAPCOMD_TEMPLATE_REBUILD_MB", "CAPCOMD_ENV", "CAPCOMD_ENV_SNAPSHOT"];
@@ -86,6 +87,7 @@ async function buildBox() {
   const bin = join(agentHome(cfg), "npm", "bin");
   mkdirSync(bin, { recursive: true });
   for (const a of activeAdapters()) { writeFileSync(join(bin, a.bin), `#!/bin/sh\necho "${a.bin} 9.9.9"\n`); chmodSync(join(bin, a.bin), 0o755); }
+  stubFx(agentHome(cfg));
   return { p, cfg, workdir, T: templateDir(cfg), home: agentHome(cfg) };
 }
 

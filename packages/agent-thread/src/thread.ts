@@ -1,18 +1,20 @@
 // Agent CLI events → thread items. Feed each decoded JSON line of the CLI's stream (Claude Code `--output-format
-// stream-json --verbose`, Codex `exec --json`) to `event`; it returns the items it created or changed, each with its
+// stream-json --verbose`, Codex `exec --json`, capcomd's fx bridge) to `event`; it returns the items it created or changed, each with its
 // current rev. Nothing is dropped and nothing throws: an event this doesn't know becomes an `other` item.
 //
 // Claude: every content block arrives whole as its own `assistant` event (several share a message id); a tool_use opens
 // a tool item that the user event carrying the matching tool_result (by tool_use_id) closes. Codex: items start,
-// update and complete under one id; tool steps are command_execution, file_change, mcp_tool_call and web_search.
-import { claudeToolKind, codexItemKind } from "./kinds";
+// update and complete under one id; tool steps are command_execution, file_change, mcp_tool_call and web_search. fx
+// (its ACP session as the bridge prints it): whole messages and thoughts; a tool_call opens a tool item that the
+// tool_call_update ending it (completed, failed) closes; each turn ends with a result line.
+import { claudeToolKind, codexItemKind, fxToolKind } from "./kinds";
 import { classifyLink, workspacePath, type LinkContext } from "./links";
 import { plainBlocks, toBlocks } from "./markdown";
 import { claudeInputDiff, claudeResultDiff } from "./diff";
 import { checkImage, type StoredImage } from "./images";
 import { capBytes, oneLine, sanitize, tailBytes } from "./sanitize";
-import { claudeSummary, codexSummary } from "./summary";
-import { isClaudeNamingCall, isCodexNamingCall } from "./naming";
+import { claudeSummary, codexSummary, fxSummary } from "./summary";
+import { isClaudeNamingCall, isCodexNamingCall, isFxNamingCall } from "./naming";
 import { THREAD_FORMAT, type BlockNode, type ItemDraft, type LinkNode, type ToolDiffT, type ToolInfoT } from "./schema";
 
 const EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
@@ -20,7 +22,7 @@ export const ARGS_MAX_BYTES = 4 * 1024;
 export const OUTPUT_MAX_BYTES = 16 * 1024;
 const ERROR_MAX_BYTES = 8 * 1024;
 
-export type Cli = "claude" | "codex";
+export type Cli = "claude" | "codex" | "fx";
 export interface ThreadOptions {
 	cli: Cli;
 	/** Item ids are `${idPrefix}-${n}`: the daemon makes the prefix unique per agent and per run of it. */
@@ -264,12 +266,63 @@ export function threadBuilder(o: ThreadOptions) {
 		return out;
 	};
 
+	const fx = (raw: any): ItemDraft[] => {
+		const out: ItemDraft[] = [];
+		const type = str(raw?.type);
+		if (type === "message") {
+			const t = str(raw.text);
+			if (raw.role === "thought") { if (t.trim()) out.push(thinking(t, false)); }
+			else if (t.trim()) out.push(markdownItem("say", t));
+		} else if (type === "update") {
+			const u = raw.update ?? {};
+			const kind = str(u.sessionUpdate);
+			if (kind === "tool_call") {
+				const callId = str(u.toolCallId) || `anon-${n + 1}`;
+				const input = u.rawInput && typeof u.rawInput === "object" ? u.rawInput : {};
+				// Naming its tab is bookkeeping, not a step; so are fx's own internals (looking up a capability).
+				if (isFxNamingCall(u) || u._meta?.fx?.toolCall?.internal === true) { ignoredCalls.add(callId); return out; }
+				const name = str(u.name), mcp = u._meta?.fx?.toolCall?.mcp ?? null;
+				const edits = name === "write_file" || name === "edit_file";
+				out.push(openTool(callId, {
+					name: mcp ? `${str(mcp.server)}.${str(mcp.tool)}` : name || str(u.kind) || "tool", kind: fxToolKind(name, input, mcp), summary: fxSummary(name, input, mcp, rel),
+					args: capBytes(name === "shell" ? str(input.command) || json(input) : json(input), ARGS_MAX_BYTES), files: edits ? fileLinks([input.path]) : [], diff: null,
+				}));
+			} else if (kind === "tool_call_update" && (u.status === "completed" || u.status === "failed")) {
+				const callId = str(u.toolCallId);
+				if (ignoredCalls.delete(callId)) return out;
+				const text = Array.isArray(u.content) ? u.content.map((c: any) => str(c?.content?.text)).join("\n") : "";
+				const exit = u.command_result?.exit_code;
+				const failed = u.status === "failed" || (exit !== undefined && exit !== null && Number(exit) !== 0);
+				const ms = typeof u.command_result?.duration_ms === "number" ? Math.round(u.command_result.duration_ms) : null;
+				// fx's rules, or the bridge, refused the call: it never ran.
+				const refused = /tool_permission_denied/.test(text);
+				const closed = closeTool(callId, { isError: failed, output: text || null, durationMs: ms, error: failed ? text || `exit ${exit ?? "failed"}` : null, code: refused ? "refused" : null });
+				out.push(closed ?? other("A tool result for a call this thread didn't see"));
+			} else if (kind === "session_info_update" && u._meta?.fx?.modelResponseRecovery?.message) {
+				// fx waiting on the model (a rate limit, a dropped connection): progress, not a failure.
+				out.push(other(str(u._meta.fx.modelResponseRecovery.message).replace(/^\W+\s*/, "")));
+			}
+			// Known and not shown: title and context-window updates, a steering message fx replays, running output.
+		} else if (type === "result") {
+			out.push(...closeAll("The turn ended before this call returned"));
+			const stop = str(raw.stopReason), text = str(raw.lastText).trim();
+			if (stop !== "end_turn" && stop !== "cancelled" && !raw.quota) out.push(errorItem(text && text !== lastText ? text : `The turn ended: ${stop || "unknown"}`, stop || null));
+		} else if (type === "error") out.push(errorItem(str(raw.message) || "error", str(raw.where) || null));
+		else if (type === "quota") out.push(other("Usage limit reached"));
+		else if (type === "notice") out.push(other(str(raw.text)));
+		else if (["init", "session", "permission", "steer"].includes(type)) {
+			// Known and not shown: the session starting, a refused permission (its call's failed result shows it), a message
+			// that reached it while it worked.
+		} else out.push(other(`Unknown event: ${type || "?"}`));
+		return out;
+	};
+
 	return {
 		/** One decoded line of the CLI's stream. Returns the items it created or changed (latest rev of each). */
 		event(raw: unknown): ItemDraft[] {
 			if (!raw || typeof raw !== "object") return [];
 			let out: ItemDraft[];
-			try { out = o.cli === "codex" ? codex(raw) : claude(raw); } catch (e) { out = [other(`Event not shown (${(e as Error)?.message ?? "error"})`)]; }
+			try { out = o.cli === "codex" ? codex(raw) : o.cli === "fx" ? fx(raw) : claude(raw); } catch (e) { out = [other(`Event not shown (${(e as Error)?.message ?? "error"})`)]; }
 			// One entry per item: its latest rev.
 			const latest = new Map<string, ItemDraft>();
 			for (const d of out) latest.set(d.id, items.get(d.id) ?? d);

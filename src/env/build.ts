@@ -4,9 +4,9 @@
 import type { SandboxProvider } from "../providers/sandbox";
 import type { SnapshotPlatform, SnapshotInfo } from "./platform";
 import type { AgentConfig, ContextBundleSpec } from "../agents/config";
-import { BASE_EGRESS } from "../agents/config";
+import { BASE_EGRESS, installEgress } from "../agents/config";
 import { activeAdapters } from "../agents/adapters";
-import { agentHome, agentPath, detectScript, installScript, parseDetect, placeBundle, sq, templateDir } from "../agents/runner";
+import { agentHome, agentPath, detectedUsable, detectScript, installScript, parseDetect, placeBundle, sq, templateDir } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -128,7 +128,9 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
   // is swapped in for, so a placeholder it can read is no use to it, and the setup runs without them in its env.
   // A host in the project's egress that reaches a secret's domain is left out too (a parent domain, a wildcard, `*`).
   const exposure = o.project ? await (await import("./templates")).secretExposure(p) : { domains: [], names: [] };
-  const egress = o.project ? (await import("./templates")).buildEgress(BASE_EGRESS, o.project.egress, exposure.domains) : { allow: [...BASE_EGRESS], left: [] };
+  // The CLIs' installs reach their hosts too: npm and node's (BASE_EGRESS), and a release archive's (fx's).
+  const base = [...new Set([...BASE_EGRESS, ...installEgress()])];
+  const egress = o.project ? (await import("./templates")).buildEgress(base, o.project.egress, exposure.domains) : { allow: base, left: [] };
   for (const d of egress.left) log(`egress: ${d} left out of the build VM (it reaches a domain a host-bound secret is bound to)`);
   const release = recordJobMachine({ idemKey, sandbox: place, kind: "env_build", purpose: "env-build", ttlSeconds: 3600 });
   let id: string;
@@ -221,10 +223,18 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
     // 2. Detect what the image already has; install only what is missing (pinned).
     const versions: EnvRecord["versions"] = {};
     for (const a of activeAdapters()) {
-      const det = parseDetect((await sh(detectScript(a))).stdout);
+      const det = parseDetect((await sh(detectScript(a, home))).stdout);
       if (det.node) versions.node = { version: det.node.replace(/^v/, ""), source: "image" };
-      if (det.bin) { versions[a.bin] = { version: det.version ?? "unknown", source: "image" }; log(`${a.bin}: found ${det.version} at ${det.bin} (kept)`); continue; }
-      log(`${a.bin}: missing → installing ${a.npmPackage}@${a.pinnedVersion(o.cfg)}`);
+      if (detectedUsable(a, o.cfg, det)) { versions[a.bin] = { version: det.version ?? "unknown", source: "image" }; log(`${a.bin}: found ${det.version} at ${det.bin} (kept)`); continue; }
+      log(`${a.bin}: missing → installing ${a.npmPackage ?? `the ${a.bin} release archive`}@${a.pinnedVersion(o.cfg)}`);
+      if (a.install) {
+        // A release archive (fx's) failing to download leaves the image without it: an agent on it installs it as it
+        // starts. The build doesn't fail for a CLI most projects never run.
+        const res = await sh(installScript(o.cfg, home, a), 600_000);
+        if (res.code !== 0) { log(`${a.bin}: install failed, left out of the image (an agent on it installs it as it starts): ${r.text(res.stderr || res.stdout).trim().slice(-300)}`); continue; }
+        versions[a.bin] = { version: lastVersion(res.stdout) ?? a.pinnedVersion(o.cfg), source: "installed" };
+        continue;
+      }
       const out = await must(`${a.bin} install`, installScript(o.cfg, home, a), 600_000);
       versions[a.bin] = { version: lastVersion(out.stdout) ?? a.pinnedVersion(o.cfg), source: "installed" };
     }

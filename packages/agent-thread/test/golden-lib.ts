@@ -7,7 +7,7 @@ export const GOLDEN_ATTACHMENT = { id: "att-0123456789abcdef01234567", mime: "im
 const T0 = Date.UTC(2026, 9, 26, 12, 0, 0);
 
 export function goldenOf(file: string, jsonl: string) {
-	const cli: Cli = file.startsWith("codex") ? "codex" : "claude";
+	const cli: Cli = file.startsWith("codex") ? "codex" : file.startsWith("fx") ? "fx" : "claude";
 	let t = T0;
 	const images: Array<Omit<StoredImage, "base64" | "sha256">> = [];
 	const b = threadBuilder({

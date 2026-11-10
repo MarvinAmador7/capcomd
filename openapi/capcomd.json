@@ -5296,10 +5296,11 @@
                         "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
                       },
                       "provider": {
-                        "description": "The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent",
+                        "description": "The AI provider the agent runs on: claude, codex or fx; null for a fake (local stand-in) agent",
                         "enum": [
                           "claude",
                           "codex",
+                          "fx",
                           null
                         ],
                         "type": [
@@ -14811,12 +14812,13 @@
             ],
             "properties": {
               "kind": {
-                "description": "The runner: claude-code, codex, or fake (a local stand-in with no AI provider)",
+                "description": "The runner: claude-code, codex, fx, or fake (a local stand-in with no AI provider)",
                 "type": "string",
                 "enum": [
                   "fake",
                   "claude-code",
-                  "codex"
+                  "codex",
+                  "fx"
                 ]
               },
               "provider": {
@@ -14824,7 +14826,8 @@
                 "type": "string",
                 "enum": [
                   "claude",
-                  "codex"
+                  "codex",
+                  "fx"
                 ]
               },
               "model": {
@@ -18477,7 +18480,7 @@
                   "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
                 },
                 "provider": {
-                  "description": "The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent",
+                  "description": "The AI provider the agent runs on: claude, codex or fx; null for a fake (local stand-in) agent",
                   "type": [
                     "string",
                     "null"
@@ -18485,6 +18488,7 @@
                   "enum": [
                     "claude",
                     "codex",
+                    "fx",
                     null
                   ]
                 },

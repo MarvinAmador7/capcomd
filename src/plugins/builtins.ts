@@ -7,6 +7,7 @@ import { VERSION } from "../utils/self";
 import { SANDBOX_BUILTINS } from "./builtin/sandboxes";
 import * as agentClaude from "./agent-claude";
 import * as agentCodex from "./agent-codex";
+import * as agentFx from "./agent-fx";
 import gateReviewerManifest from "./gate-reviewer/plugin.json" with { type: "json" };
 import { plugin as gateReviewer } from "./gate-reviewer/index";
 import * as forgeGit from "./forges/git";
@@ -45,6 +46,7 @@ export const BUILTINS: ReadonlyArray<Builtin> = [
   // §7.3, §17.2 step 4: the agent providers.
   { manifest: agentClaude.manifest, module: agentClaude.plugin },
   { manifest: agentCodex.manifest, module: agentCodex.plugin },
+  { manifest: agentFx.manifest, module: agentFx.plugin },
   { manifest: shipped(gateReviewerManifest), module: gateReviewer as Builtin["module"], everyProcess: true },
   // Forges (§7.4, step 6).
   { manifest: forgeGithub.manifest, module: forgeGithub.plugin, everyProcess: true },
