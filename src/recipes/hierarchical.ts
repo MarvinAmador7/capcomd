@@ -13,6 +13,8 @@ import { awaitThroughPauses, mergeRef, runNew, spawnAgent, verifyRef } from "../
 import * as S from "../primitives/state";
 import { isProtectedBranch } from "../utils/protected";
 import { loadMergeConfig } from "../merge/config";
+import { mergeConfigFor } from "../merge/run-config";
+import { memoryRefusal } from "../plugins/recipe-hierarchical";
 
 export const RECIPE_HOLDER = "recipe:hierarchical";
 const MAX_ATTEMPTS = 4; // the legacy task machine: 1 attempt + maxRetries 3; verify failures and conflicts both retry
@@ -172,8 +174,19 @@ async function recipeInner(opts: RunOptions & { budgetUsd?: number }): Promise<R
         emit(conflict ? (lt.state === "failed" ? "task.conflict_escalated" : "task.conflict") : "task.verify_failed", { taskId: t.id, epoch, reason: feedback }, `  ✗ ${t.id} epoch ${epoch}: ${feedback}`);
         continue;
       }
-      // Protection follows the legacy rule: the run's target, or the repo's default when a repo is configured.
       const tgt = v.target as string;
+      // A branch that changes the project's memory never lands from here (ADR-025 §5.3): refused before it is parked
+      // for a person or merged, whichever plugins are on, as a failed verification the agent's next attempt is told.
+      const refused = await memoryRefusal(await mergeConfigFor(runId), { branch: String(v.branch ?? ag.result?.branch ?? ""), commit: v.result?.commit ?? ag.result?.commit ?? null, target: tgt });
+      if (refused) {
+        feedback = lastReason = refused;
+        if (approved) throw new RelayError("run_failed", `Merge of ${t.id} refused: ${refused}`, `Drop the change to .capcomd/context/, then resume with \`capcomd run --run-id ${runId} <goal>\`.`);
+        await ledger.verifyComplete({ taskId: t.id, passed: false, target });
+        lt = await ledger.getTask({ taskId: t.id });
+        emit("task.verify_failed", { taskId: t.id, epoch, reason: refused }, `  ✗ ${t.id} epoch ${epoch}: ${refused}`);
+        continue;
+      }
+      // Protection follows the legacy rule: the run's target, or the repo's default when a repo is configured.
       const effective = target ?? (hasRepo ? tgt : undefined);
       if (!approved && effective && isProtectedBranch(effective)) {
         await ledger.verifyComplete({ taskId: t.id, passed: true, commitSha: ag.result?.commit ?? undefined, target: effective });

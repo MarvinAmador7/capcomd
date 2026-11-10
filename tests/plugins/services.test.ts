@@ -173,6 +173,13 @@ describe("refused before any run is looked up (§8.4)", () => {
     expect(await code(ctx.messages.send(RUN, { to: "operator", body: "hi" }))).toBe("invalid");
     expect(await code(ctx.board.add(RUN, { id: "bad id", goal: "g" }))).toBe("invalid");
     expect(await code(ctx.board.add(RUN, { id: "t1", goal: " " }))).toBe("invalid");
+    // A task's goal is checked as a run's: at most 16 KB (UTF-8), no NUL. One that fits passes on to the next check.
+    const why = (p: Promise<unknown>) => p.then(() => "ok", (e: Error) => e.message);
+    for (const goal of ["x".repeat(16 * 1024 + 1), "é".repeat(8 * 1024 + 1), "a\u0000b"])
+      expect([goal.slice(0, 20), await code(ctx.board.add(RUN, { id: "t1", goal }))]).toEqual([goal.slice(0, 20), "invalid"]);
+    expect(await why(ctx.board.add(RUN, { id: "t1", goal: "x".repeat(16 * 1024 + 1) }))).toContain("longer than 16384");
+    for (const goal of ["x".repeat(16 * 1024), "é".repeat(8 * 1024)])
+      expect(await why(ctx.board.add(RUN, { id: "t1", goal, after: ["bad id"] }))).toBe("after names task ids");
     expect(await code(ctx.profiles.resolve("Not A Name", {}))).toBe("invalid");
     expect(await code(ctx.profiles.resolve("worker", { overrides: [] as never }))).toBe("invalid");
   });

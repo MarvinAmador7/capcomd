@@ -17,7 +17,7 @@ import type { ScopeAgent, ScopeOp, ScopeTask } from "../actors/scope";
 import { RelayError } from "../core/errors";
 import { classifySandboxError } from "../providers/seam";
 import type { SandboxProvider } from "../providers/sandbox";
-import { checkKey, leaseMs } from "../primitives/board";
+import { checkKey, goalProblem, leaseMs } from "../primitives/board";
 import { paramsHash } from "../primitives/policy";
 import { agentSeam, kindOf } from "./agents";
 import { HOST_CONTRACT_KEYS, iso, skillHash, SKILL_BYTES_MAX, SKILLS_MAX, untrusted } from "./hooks";
@@ -398,7 +398,8 @@ export function pluginBoard(plugin: string): BoardService {
     async add(runId, input, o) {
       const id = input?.id;
       if (typeof id !== "string" || !TASK_ID.test(id)) throw invalid("a task's id is letters, digits and . _ : - (at most 100)");
-      if (typeof input.goal !== "string" || !input.goal.trim()) throw invalid("a task has a goal");
+      const bad = goalProblem(input.goal);
+      if (bad) throw invalid(bad);
       if (input.after !== undefined && (!Array.isArray(input.after) || input.after.some((a) => typeof a !== "string" || !TASK_ID.test(a)))) throw invalid("after names task ids");
       const after = input.after?.length ? [...new Set(input.after)].sort() : undefined;
       const idem = keyOf(plugin, o);

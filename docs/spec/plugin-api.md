@@ -1422,9 +1422,12 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 - `messages.send`: to an agent of the run, from `plugin:<name>`, a body ≤ 64 KB, `skills` pinned by the sha256 of their
   text; a replayed key answers its first message's `seq`. `messages.inbox`: the agent's messages after `seq`, each body
   `Untrusted`.
-- `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task is `pending`, `leased`
-  while held, `released` once open again after a lease, or `done`; `running` is unused today. The plugin holds what it
-  claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds (`conflict` otherwise).
+- `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task's `goal` is checked as
+  `POST /v1/runs` checks a run's: not blank, at most 16 KB (UTF-8, as given: it is stored untrimmed), no NUL; anything
+  else is `invalid`, as the same goal is `usage` from an agent's or the operator's `capcomd task add`. A task is
+  `pending`, `leased` while held, `released` once open again after a lease, or `done`; `running` is unused today. The
+  plugin holds what it claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds
+  (`conflict` otherwise).
 - `gates.verify`: `capcomd verify` as the plugin: the checks and every judge (§6.6.13) on the ref, its reviewer paid
   by the run as for the operator's verify; only a named check (`check`): a check command (`checks`) is `forbidden`, as
   it is the operator's. It resolves once the verification has passed or failed, with its record. `gates.merge`:
@@ -1945,7 +1948,7 @@ process ran the gate; `plugin.hook_failed` stays on the daemon stream. A plugin'
 ### 13.2 `GET /v1/plugins`
 
 Every discovered plugin with `state`, `enabled`, `cause`, `hooks`, `seams`, `hooksSuspended` and `stats {calls, failures,
-dropped, p50Ms, p95Ms, lastFailureAt}` (`dropped`: observe calls dropped from a full queue, §6.2), and `commands`, the CLI
+dropped, p50Ms, p95Ms, lastFailureAt, seams}` (`dropped`: observe calls dropped from a full queue, §6.2; `seams`, §13.5), and `commands`, the CLI
 commands its manifest declares, whatever its state (absent when none; §4.7.1), and `tools`, its MCP tools by the names
 the `capcomd mcp` server lists them (`capcomd_<plugin>_<tool>`, a kernel front door's `capcomd_<tool>`, §4.7.2): the
 ones it registered while active, its manifest's otherwise (absent when none; additive); `GET /v1/plugins/{name}` adds the manifest and the config with sources and without
@@ -1955,22 +1958,35 @@ same. `/v1/health` gains the feature flag `plugins`.
 ### 13.3 Logs
 
 `ctx.log.<level>(message, fields)` writes one JSON line to the daemon log with `plugin`, `level`, `message`, `fields`
-(redacted), `runId`/`agentId` when inside a hook call, and `traceId`/`spanId`. Out of process, stdout/stderr lines are
-parsed as in §9.2. Logs are not events: they never reach clients.
+(redacted), `runId`/`agentId` when inside a hook call, and `traceId`/`spanId` inside a hook call or a `ctx.trace.span`
+(the call's span, or the plugin span it runs in; neither outside both: an `events.subscribe` delivery is part of no
+call, even to a subscription made inside one). Out of process, stdout/stderr lines are parsed as in §9.2. Logs are not
+events: they never reach clients.
 
 ### 13.4 Tracing
 
 Every hook call is a span `plugin.hook` with attributes `plugin`, `hook`, `mode`, `callId`, `outcome`
-(`allow|deny|hold|skipped|failed`), `failure.kind`, under the run's trace (`tracing-simple.ts`: `traceId =
-sha256("trace:"+runId)`, the agent span `agentSpanId`). `call.trace` carries the ids so an out-of-process plugin can
-continue the trace; `ctx.trace.span(op, fn)` opens `plugin.<name>.<op>` as a child of the active call's span. Seam
-calls are spans already (`tracedProvider`); they gain `plugin` as an attribute.
+(`allow|deny|hold|skipped|failed`; an observe listener that returns is `allow`, an open listener of a suspended plugin
+`skipped`) and, when failed, `failure.kind`, under the run's trace (`tracing-simple.ts`: `traceId =
+sha256("trace:"+runId)`, a child of the agent span `agentSpanId` when the call has an agent, else of the run's root;
+written to the run's trace file by whichever process fired the hook). `call.trace` carries the trace id and the call's
+own span id, so an out-of-process plugin can continue the trace under its call; `ctx.trace.span(op, fn)` opens
+`plugin.<name>.<op>` as a child of the active call's span (or of the plugin span it runs in), with the call's run, and
+what `fn` logs or opens belongs to it; its attributes and events are redacted as log fields are, its `plugin` attribute
+is always its own name, and the `relay.*` attributes that pick the run's trace are the kernel's (a plugin's are dropped,
+so it can't write into another run's trace). A span outside any hook call starts a trace of its own and, without a run, is
+kept in memory only. Seam calls are spans already (`tracedProvider`); they gain `plugin`, the plugin that provides the
+place, as an attribute.
 
 ### 13.5 Metrics
 
-Derived from events and spans, no new pipeline: per plugin, hook calls and failures, p50/p95 per hook, breaker trips,
-observe drops, process restarts; per seam, calls and errors by `ErrorClass.kind`. Exposed in `GET /v1/plugins` `stats`
-and by `capcomd doctor`.
+Derived from events and spans, no new pipeline: per plugin, hook calls and failures, observe drops and p50/p95 of its
+recent calls (`stats`), breaker trips (`plugin.suspended`) and process restarts (`plugin.process_changed`); per seam,
+the daemon's calls and errors by `ErrorClass.kind`. A seam's calls are those that return a promise, counted when they
+settle (its `describe`, `available` and `classifyError` aren't calls), including the calls the kernel makes to a
+built-in sandbox's own provider; a failure is counted by the seam's own `classifyError`, `unknown` when it throws or
+names a kind `ErrorClass` doesn't have. A frozen seam is counted like any other. Exposed in `GET /v1/plugins` `stats`
+(`seams`: by seam kind, `{calls, errors: {<kind>: n}}`, capability `plugins.seam_stats`, additive) and by `capcomd plugins show <name>`, which asks the running daemon for them.
 
 ## 14. Testing
 
@@ -2717,7 +2733,7 @@ conformance (`--conformance`, §14.1) already fails it, and a process plugin's c
 | `src/cli/commands/hermes.ts` | `front-hermes` (`src/plugins/front/hermes-config.ts`; `capcomd hermes`, `capcomd hermes add`) | front door | §4.7.1 |
 | `src/utils/tracing-simple.ts` sinks, `runsIndexPath` writer | `observe-traces` (the run's `_trace` key; the span sink stays where a span ends), `observe-runs-index` (`src/plugins/observe.ts`, the daemon's) | observers | §6.6.4 |
 | `src/subagents/skill.ts` prompt injection | `agent.preparing` patch from `front-mcp`'s sibling `skill-orchestration` (`src/plugins/skill-orchestration.ts`) | hook | §6.6.7 |
-| `src/recipes/hierarchical.ts` | `recipe-hierarchical` (`src/plugins/recipe-hierarchical.ts`): `capcomd run` without a planner agent (the recipe, `--recipe`, and the loop it replaced, `--legacy`), **disabled by default**, kept for the parity eval (decision 5); while it's off such a run is refused naming it (`config`, `plugin:recipe-hierarchical`) | front door | §4.8 |
+| `src/recipes/hierarchical.ts` | `recipe-hierarchical` (`src/plugins/recipe-hierarchical.ts`): `capcomd run` without a planner agent (the recipe, `--recipe`, and the loop it replaced, `--legacy`), **disabled by default**, kept for the parity eval (decision 5); while it's off such a run is refused naming it (`config`, `plugin:recipe-hierarchical`); either way refuses, before its merge, a task branch that changes `.capcomd/context/` (no consolidator, no memory gate: ADR-025 §5.3), fail-closed | front door | §4.8 |
 | `plugins/capcomd/` (Claude Code / Codex plugin) | unchanged: a plugin *for* the agent (ADR-018) | | |
 | `src/api/sandboxes.ts` settings/info rows | each sandbox plugin's `ui` descriptors (`src/plugins/builtin/sandbox-rows.ts`), which `GET /v1/sandboxes/{name}` serves | UI | §4.7.5 |
 | ADR-024 profiles: `harness.provider`, `sandbox.provider`, `skills`, `identity.persona`, `lifecycle.onStart/onEnd`, `tools.mcp`, `sandbox.environment/size`, `harness.cliVersion` | seam names (`sandbox.provider` selects the agent's machine's sandbox); `agent.preparing` (`skills`; `identity.persona` shown there as `prompt.persona`, placed first by the runner, no patch changes it); `harness.cliVersion` → the spawn checks, against the CLI version the agent's environment recorded (`src/env/cli-version.ts`); `onStart/onEnd` → plugins listening to `agent.changed` filtered by profile (the `lifecycle` block names plugins that must be active; the change carries them); `tools.mcp` → the agent provider's `AgentCommandCtx.mcp`; `environment`/`size` → the machine's `VmSpec` | | §7, §6.6.7, §6.6.8 |

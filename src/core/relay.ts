@@ -336,12 +336,15 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           const approved = task.state === "approved";
           // Protected targets: verify only, park for approval, merge after `capcomd approve`.
           const testOnly = !approved && isProtectedBranch(target);
-          const verifierHandle = c.verifier.getOrCreate([runId, taskId]);
-          const result = await verifierHandle.verify({
+          // No merge.landing gate here: a branch that changes the project's memory is refused before it is verified
+          // (so no one is asked to approve it) and before it is merged (ADR-025 §5.3), and the verifier lands the commit
+          // that was read or nothing (`expectSha`). Read with this process's repository settings, as the branch is named
+          // (a legacy run records none of its own, so mergeConfigFor would only wait for a scope that isn't there).
+          const { landUnlessMemory } = await import("../plugins/recipe-hierarchical");
+          const outcome = await landUnlessMemory(mergeCfg, { branch, target }, async (judged) => (await c.verifier.getOrCreate([runId, taskId]).verify({
             verifierId: `${taskId}-${approved ? "merge" : "verify"}-e${epoch}`,
-            taskId, branch, runId, target, testOnly,
-          });
-          const outcome = result.outcome as MergeOutcome;
+            taskId, branch, runId, target, testOnly, ...(judged ? { expectSha: judged } : {}),
+          })).outcome as MergeOutcome);
           if (outcome.status === "conflict") {
             await taskBoardHandle.mergeConflict({ taskId, files: outcome.files, targetSha: outcome.targetSha, epoch });
             await releaseWorker();
