@@ -11,6 +11,18 @@ export interface BoardTask {
   /** Dependencies: this task is blocked until every one of these is done. */
   after?: string[];
 }
+/** A task's goal (its title) is checked as POST /v1/runs checks a run's goal (src/api/contract.ts `GOAL_MAX_BYTES`):
+ *  user- or agent-written text, never empty, at most this many UTF-8 bytes as stored, no NUL. */
+export const TASK_GOAL_MAX_BYTES = 16 * 1024;
+/** Why this can't be a task's goal, or null when it can. */
+export function goalProblem(g: unknown): string | null {
+  if (typeof g !== "string" || !g.trim()) return "a task has a goal";
+  const bytes = Buffer.byteLength(g, "utf8");
+  if (bytes > TASK_GOAL_MAX_BYTES) return `a task's goal is ${bytes} bytes, longer than ${TASK_GOAL_MAX_BYTES} (UTF-8)`;
+  if (g.includes("\u0000")) return "a task's goal contains a NUL character";
+  return null;
+}
+
 export const DEFAULT_LEASE_MS = 60_000;
 export const MAX_LEASE_MS = 24 * 3600_000;
 

@@ -4,7 +4,7 @@
 // the reply can retry safely; the same key with other parameters is a conflict.
 import { client, assertEngine, listEvents, type EventRecord } from "../core/relay";
 import { RelayError } from "../core/errors";
-import { checkKey, DEFAULT_KV_MAX_BYTES, leaseMs, valueBytes } from "./board";
+import { checkKey, DEFAULT_KV_MAX_BYTES, goalProblem, leaseMs, TASK_GOAL_MAX_BYTES, valueBytes } from "./board";
 import { paramsHash, stableId } from "./policy";
 import { asRelay } from "./ops";
 
@@ -20,6 +20,8 @@ async function scope(runId: string) {
 const lease = (v: unknown) => { try { return leaseMs(v); } catch (e) { return usage(e, "--lease-ms between 100 and 86400000"); } };
 
 export async function taskAdd(runId: string, o: { title: string; data?: unknown; after?: string[]; key?: string; id?: string }) {
+  const bad = goalProblem(o.title);
+  if (bad) throw new RelayError("usage", bad, `A task's title is its goal: 1 to ${TASK_GOAL_MAX_BYTES} bytes of text. Put long detail in a file in the repo, or in --data, and name it in the title.`);
   const s = await scope(runId);
   const taskId = o.id ?? stableId("tsk", runId, o.key);
   const after = o.after?.length ? [...new Set(o.after)].sort() : undefined;

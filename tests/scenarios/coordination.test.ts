@@ -264,12 +264,17 @@ sleep 0.5
 f=$(capcomd spawn --profile worker --task finish --key fin --contract "$($S/json script=${JSON.stringify(finisher)})" | $S/jget agentId)
 capcomd await $f >/dev/null
 s=$(capcomd task list | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).tasks.map(t=>t.title+"="+t.status+"@"+t.epoch).join(",")))')
-capcomd result --summary "$s" --data "$($S/json t1=$t1 t2=$t2 blocked="$blocked")" >/dev/null`);
+long=$(node -e 'process.stdout.write("x".repeat(16384))')
+over=$(capcomd task add --title "$long"x --key over | $S/jget error.code)
+fits=$(capcomd task add --title "$long" --key fits | $S/jget task.status)
+capcomd result --summary "$s" --data "$($S/json t1=$t1 t2=$t2 blocked="$blocked" over=$over fits=$fits)" >/dev/null`);
   const root = await spawnRoot(w, run, "planner", p);
   const a = await rootDone(run, root);
   expect(a.status).toBe("done");
   expect(a.result.data.blocked).toMatch(/blocked|after|depends/i);
   expect(a.result.summary).toBe("build=done@2,test=done@1");
+  // A task's goal is at most 16 KB, as a run's: one byte more is refused, 16 KB goes on the board.
+  expect(a.result.data).toMatchObject({ over: "usage", fits: "open" });
   const ty = await types(w, run);
   expect(inOrder(ty, ["TASK_ADDED", "TASK_ADDED", "TASK_CLAIMED", "TASK_LEASE_EXPIRED", "TASK_CLAIMED", "TASK_DONE", "TASK_CLAIMED", "TASK_DONE"])).toBe(true);
 }, 120_000);

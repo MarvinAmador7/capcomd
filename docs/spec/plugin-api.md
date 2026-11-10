@@ -1366,9 +1366,12 @@ Primitives reject `PluginError` (§5.6). The kernel's `RelayError` codes map ont
 - `messages.send`: to an agent of the run, from `plugin:<name>`, a body ≤ 64 KB, `skills` pinned by the sha256 of their
   text; a replayed key answers its first message's `seq`. `messages.inbox`: the agent's messages after `seq`, each body
   `Untrusted`.
-- `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task is `pending`, `leased`
-  while held, `released` once open again after a lease, or `done`; `running` is unused today. The plugin holds what it
-  claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds (`conflict` otherwise).
+- `board`: the run's task board (`src/primitives/board.ts`), the caller's `id` the task's. A task's `goal` is checked as
+  `POST /v1/runs` checks a run's: not blank, at most 16 KB (UTF-8, as given: it is stored untrimmed), no NUL; anything
+  else is `invalid`, as the same goal is `usage` from an agent's or the operator's `capcomd task add`. A task is
+  `pending`, `leased` while held, `released` once open again after a lease, or `done`; `running` is unused today. The
+  plugin holds what it claims (`plugin:<name>`, the default lease); `done` and `release` take only a task it holds
+  (`conflict` otherwise).
 - `gates.verify`: `capcomd verify` as the plugin: the checks and every judge (§6.6.13) on the ref, its reviewer paid
   by the run as for the operator's verify; only a named check (`check`): a check command (`checks`) is `forbidden`, as
   it is the operator's. It resolves once the verification has passed or failed, with its record. `gates.merge`:
