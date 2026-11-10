@@ -54,6 +54,9 @@ describe("plugin manifest (spec §4)", () => {
     expect(ambiguousRoutes("/a/{x}", "/a/b")).toBeNull();
     expect(ambiguousRoutes("/a/{x}", "/a/{x}/b")).toBeNull();
     expect(ambiguousRoutes("/a/b{x}", "/a/bc")).toBeNull(); // a segment that isn't wholly {name} is literal
+    // A parameter never takes an empty segment, so an empty literal can't tie with one.
+    expect(ambiguousRoutes("/{x}/c", "//{y}")).toBeNull();
+    expect(ambiguousRoutes("//{y}", "/{x}/c")).toBeNull();
   });
   test("ctx.api.route refuses a route that ties with one the plugin registered, even from a manifest never validated", () => {
     const m = { ...base(), contributes: { api: [{ method: "GET", path: "/a/{x}/c", scope: "read" }, { method: "GET", path: "/a/b/{y}", scope: "read" }] } } as unknown as PluginManifest;
@@ -66,6 +69,16 @@ describe("plugin manifest (spec §4)", () => {
     expect((thrown as PluginError).code).toBe("conflict");
     expect((thrown as PluginError).message).toBe("API route GET /a/b/{y} and GET /a/{x}/c both match /a/b/c with as many parameters (§4.7.3)");
     expect(fake.registrations()).toEqual([{ kind: "api", method: "GET", path: "/v1/x/example/a/{x}/c" }]);
+  });
+  test("ctx.api.route keeps the store's own refusal for the same route registered twice", () => {
+    const m = { ...base(), contributes: { api: [{ method: "GET", path: "/a/{x}", scope: "read" }] } } as unknown as PluginManifest;
+    const fake = testkit.fakeContext(m);
+    const handler = async () => ({});
+    fake.ctx.api.route({ method: "GET", path: "/a/{x}", scope: "read", handler });
+    let thrown: unknown;
+    try { fake.ctx.api.route({ method: "GET", path: "/a/{x}", scope: "read", handler }); } catch (e) { thrown = e; }
+    expect((thrown as PluginError).code).toBe("conflict");
+    expect((thrown as PluginError).message).toBe("api GET /v1/x/example/a/{x} is already registered by example");
   });
   test("a gate hook cannot declare failure: open", () => {
     expect(issues({ ...base(), contributes: { hooks: { "merge.landing": { failure: "open" } } } })).toContainEqual(expect.stringContaining("failure is always closed"));

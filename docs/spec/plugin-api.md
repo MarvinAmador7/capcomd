@@ -262,10 +262,11 @@ else 500 with the message replaced by "plugin error" (the message goes to the da
 plugin publishes events instead).
 
 As served (capability `plugins.routes`): a `{param}` segment of a route's path takes one non-empty path segment,
-percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters). Two routes of one
-method that could both match a path with as many parameters each (`/a/{x}/c` and `/a/b/{y}` on `/a/b/c`) would tie,
-so they are refused: the manifest validator fails the plugin `invalid_manifest`, naming both, and `ctx.api.route`
-throws `conflict` for the second one registered. Only an active
+percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters, counted by
+`{param}` segment: `/{x}/{x}` has two). Two routes of one method that could both match a path with as many parameters
+each (`/a/{x}/c` and `/a/b/{y}` on `/a/b/c`) would tie, so they are refused: the manifest validator fails the plugin
+`invalid_manifest`, naming both, and `ctx.api.route` throws `conflict` for the second one registered (the same route
+twice is still "already registered"). Only an active
 plugin's registrations are served: a disposed or disabled plugin's routes are 404 `not_found`, as is a path or method no
 route of an active plugin matches; the token's scope is checked after the route is found (the route's declared scope,
 whatever the method: a `GET` that declares `steer` needs `steer`), so an unknown route is 404 to any token and a missing

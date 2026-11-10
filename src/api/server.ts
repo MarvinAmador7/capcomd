@@ -100,13 +100,19 @@ async function cappedText(req: Request, max: number): Promise<string | null> {
 	return Buffer.concat(chunks).toString("utf8");
 }
 
+/** A route pattern's `{name}` segment (plugin API §4.7.3); any other segment is literal. */
+const ROUTE_PARAM = /^\{([^{}]+)\}$/;
+/** How many `{param}` segments a route pattern has: the fewest wins at the gateway. Counted by segment, not by name, as
+ *  the manifest validator counts them, so `/{x}/{x}` has two. */
+const paramCount = (pattern: string): number => pattern.split("/").filter((s) => ROUTE_PARAM.test(s)).length;
+
 /** A plugin route's params when `path` matches its `pattern`: a `{name}` segment takes one path segment; null otherwise. */
 export function routeParams(pattern: string, path: string): Record<string, string> | null {
 	const want = pattern.split("/"), got = path.split("/");
 	if (want.length !== got.length) return null;
 	const params: Record<string, string> = {};
 	for (const [i, w] of want.entries()) {
-		const name = /^\{([^{}]+)\}$/.exec(w)?.[1];
+		const name = ROUTE_PARAM.exec(w)?.[1];
 		if (name === undefined) { if (w !== got[i]) return null; continue; }
 		if (!got[i]) return null;
 		try { params[name] = decodeURIComponent(got[i]!); } catch { return null; }
@@ -1067,7 +1073,7 @@ export function harnessApp(o: ServerOptions) {
 			.map((e) => ({ spec: e.value.spec, params: routeParams(`${PLUGIN_ROUTES}${name}${e.value.spec.path}`, path) }))
 			.filter((r): r is { spec: typeof r.spec; params: Record<string, string> } => r.params !== null)
 			// A literal segment wins over a parameter: the route with the fewest parameters.
-			.sort((a, b) => Object.keys(a.params).length - Object.keys(b.params).length)[0];
+			.sort((a, b) => paramCount(a.spec.path) - paramCount(b.spec.path))[0];
 		if (!found) return err(c, 404, "not_found", `${method} ${path.slice(0, 200)}: no active plugin serves it`);
 		const client = c.get("client");
 		if (!client.scopes.includes(found.spec.scope)) return err(c, 403, "forbidden", `token lacks the ${found.spec.scope} scope`);

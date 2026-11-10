@@ -50,6 +50,10 @@ describe("the gateway (§4.7.3)", () => {
     expect(await json(r)).toEqual({ route: "echo", params: { id: "run-1" }, query: { limit: "3" }, body: null, principal: { kind: "viewer", clientId: tokens.reader.id } });
     // A literal segment wins over a parameter.
     expect(await json(await call(`/v1/x/${NAME}/echo/latest`, "reader"))).toEqual({ route: "latest", params: {} });
+    // Parameters are counted by segment, as the manifest validator counts them: `/pair/{a}/{a}` has two, so
+    // `/pair/one/{b}` wins although it was registered second.
+    expect(await json(await call(`/v1/x/${NAME}/pair/one/z`, "reader"))).toEqual({ route: "pair-one", params: { b: "z" } });
+    expect(await json(await call(`/v1/x/${NAME}/pair/two/z`, "reader"))).toEqual({ route: "pair-two", params: { a: "z" } });
   });
 
   test("the route's declared scope, not the method's: a token without it is 403, no token 401", async () => {
@@ -187,6 +191,8 @@ describe("listing (§4.7.3, §13.2)", () => {
     expect(d.routes).toEqual([
       { method: "GET", path: `/v1/x/${NAME}/echo/{id}`, scope: "read" },
       { method: "GET", path: `/v1/x/${NAME}/echo/latest`, scope: "read" },
+      { method: "GET", path: `/v1/x/${NAME}/pair/{a}/{a}`, scope: "read" },
+      { method: "GET", path: `/v1/x/${NAME}/pair/one/{b}`, scope: "read" },
       { method: "POST", path: `/v1/x/${NAME}/items`, scope: "steer" },
       { method: "POST", path: `/v1/x/${NAME}/fail/{code}`, scope: "steer" },
       { method: "GET", path: `/v1/x/${NAME}/boom`, scope: "read" },
@@ -210,7 +216,7 @@ describe("listing (§4.7.3, §13.2)", () => {
     expect((await json(r)).code).toBe("not_found");
     expect((await json(await app.request("/v1/health"))).capabilities).not.toContain(`x.${NAME}.digest`);
     const d = PluginDetail.parse(await (await call(`/v1/plugins/${NAME}`, "reader")).json());
-    expect(d.routes?.length).toBe(10);
+    expect(d.routes?.length).toBe(12);
     expect(d.capabilities).toEqual([]);
     await host.enable(NAME);
     expect((await call(`/v1/x/${NAME}/echo/1`, "reader")).status).toBe(200);

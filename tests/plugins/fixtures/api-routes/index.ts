@@ -2,7 +2,7 @@
 // `POST /items` answer with what they were given and the caller's principal; `POST /fail/{code}` throws a PluginError of
 // that code; `GET /boom` throws a plain Error whose message must stay in the daemon log; `GET /stream` answers with a
 // stream, which the gateway refuses; `DELETE /items/{id}` answers with nothing; `GET /symbol` answers with a symbol, which
-// isn't JSON; `PUT /blob` counts its calls and answers its body's length (the gateway refuses a body over 1 MiB before
+// isn't JSON; `GET /pair/{a}/{a}` (two parameters under one name) and `GET /pair/one/{b}` answer with their name; `PUT /blob` counts its calls and answers its body's length (the gateway refuses a body over 1 MiB before
 // it runs); `GET /slow` never answers on its own and records why its signal was aborted. Both write to
 // `globalThis.apiRoutesSeen`, which the test reads. A feature flag, `x.api-routes.digest`.
 import { definePlugin, PluginError } from "../../../../packages/plugin/src/index";
@@ -14,6 +14,8 @@ export const plugin = definePlugin({
   activate(ctx) {
     ctx.api.route({ method: "GET", path: "/echo/{id}", scope: "read", async handler({ params, query, body, principal }) { return { route: "echo", params, query, body: body ?? null, principal }; } });
     ctx.api.route({ method: "GET", path: "/echo/latest", scope: "read", async handler({ params }) { return { route: "latest", params }; } });
+    ctx.api.route({ method: "GET", path: "/pair/{a}/{a}", scope: "read", async handler({ params }) { return { route: "pair-two", params }; } });
+    ctx.api.route({ method: "GET", path: "/pair/one/{b}", scope: "read", async handler({ params }) { return { route: "pair-one", params }; } });
     ctx.api.route({ method: "POST", path: "/items", scope: "steer", async handler({ body, principal }) { return { created: body, principal }; } });
     ctx.api.route({
       method: "POST", path: "/fail/{code}", scope: "steer",

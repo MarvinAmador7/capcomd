@@ -15,6 +15,8 @@
     "api": [
       { "method": "GET", "path": "/echo/{id}", "scope": "read" },
       { "method": "GET", "path": "/echo/latest", "scope": "read" },
+      { "method": "GET", "path": "/pair/{a}/{a}", "scope": "read" },
+      { "method": "GET", "path": "/pair/one/{b}", "scope": "read" },
       { "method": "POST", "path": "/items", "scope": "steer" },
       { "method": "POST", "path": "/fail/{code}", "scope": "steer" },
       { "method": "GET", "path": "/boom", "scope": "read" },

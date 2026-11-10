@@ -77,8 +77,10 @@ export function ambiguousRoutes(a: string, b: string): string | null {
   for (const [i, x] of as.entries()) {
     const y = bs[i]!;
     if (routeParam(x) && routeParam(y)) path.push("x");
-    else if (routeParam(x)) path.push(y);
-    else if (routeParam(y) || x === y) path.push(x);
+    // A parameter never takes an empty segment, so it can't meet an empty literal (`/a//b`).
+    else if (routeParam(x)) { if (!y) return null; path.push(y); }
+    else if (routeParam(y)) { if (!x) return null; path.push(x); }
+    else if (x === y) path.push(x);
     else return null;
   }
   return path.join("/");
