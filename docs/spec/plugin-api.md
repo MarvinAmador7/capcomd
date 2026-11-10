@@ -1273,13 +1273,23 @@ Every async primitive takes `CallOptions {key?, signal?, timeoutMs?}` last. `key
 call, with the semantics of the CLI's `--key` and the API's `Idempotency-Key`: the same key with the same arguments does
 the thing once and returns the recorded result; the same key with different arguments is `conflict`. `signal` is
 composed with `ctx.signal`. `timeoutMs` defaults to 30 000; past it the call rejects `timeout` and the kernel's side
-either completed or did not (the caller re-reads). **Not built yet:** the kernel's services apply a mutating call's
-`key` (§8.4), but the host applies neither `signal` nor `timeoutMs` as a bound on a primitive
-(`packages/plugin/src/host/context.ts` `guarded` passes the options on unchanged), so a call runs to its own end:
-`jobs.wait` and `agents.await` read `timeoutMs` as how long to wait (30 000 by default, then they answer what is so
-now, not `timeout`; `agents.await` at most an hour), and a seam call through `sandboxes.provider` is bounded by its
-`SeamCall` deadline (§8.4); no other service reads either, so a `gates.verify` resolves when its checks and judges have
-answered, however long that takes.
+either completed or did not (the caller re-reads). The kernel's services apply a mutating call's `key` (§8.4); the host
+bounds every async primitive (`packages/plugin/src/host/context.ts` `guarded`, and `events.emit` and `events.replay`
+beside it), whichever comes first:
+
+- its deadline, `timeoutMs` (a number above 0, else `invalid`): `timeout`, `retryable`. A primitive that runs a kernel
+  operation to its end has a longer default: `jobs.start` 120 000 (its `exec`'s foreground hold, at most 90 000, §16.2
+  rule 1, plus the call's 30 000); `agents.spawn` 150 000 (its `profile.resolved` and `agent.spawning` modify hooks,
+  60 s at most each, §6.4, then the call's); `gates.verify` 7 200 000 (its checks, then its judges: `verify.judging` at
+  most 60 min, a reviewer agent inside it); `gates.merge` 3 600 000 (its landing gates, then it lands or parks);
+- its `signal` aborting: `timeout`, not retryable (already aborted: at once, and the kernel isn't called);
+- `ctx.signal` aborting, the plugin disposing (§5.3): `disposed`, so dispose rejects the calls still in flight.
+
+The kernel's implementation is passed the options with that composed signal (aborted on whichever came first), so it
+can stop. Some calls keep their own bounds: `jobs.wait` and `agents.await` read `timeoutMs` as how long to wait (30 000
+by default, then they answer what is so now, not `timeout`; `agents.await` at most an hour; their `signal` and
+`ctx.signal` still apply), and a seam call through `sandboxes.provider` (a synchronous primitive) is bounded by its
+`SeamCall` deadline (§8.4).
 
 ### 8.3 Errors
 
