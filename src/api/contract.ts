@@ -3,7 +3,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { z } from "zod";
 import { HarnessEvent, Timestamp, TIMESTAMP_DOC } from "./envelope";
-import { AgentProvider, AgentResult, AgentTitleSource, HeldBy, LegacyEventData, PROFILE_SOURCE_TEXT, PROFILE_VERSION_TEXT, ProfileSource, ProfileVersion, UntrustedText } from "./legacy-events";
+import { AgentProvider, AgentResult, DriverProvider, AgentTitleSource, HeldBy, LegacyEventData, PROFILE_SOURCE_TEXT, PROFILE_VERSION_TEXT, ProfileSource, ProfileVersion, UntrustedText } from "./legacy-events";
 import { RENAME_WINDOW_MS, RENAMES_MAX, TITLE_MAX_CHARS, TITLE_WORDS_MAX } from "../primitives/agent-title";
 import { AttachmentRef, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { LIFECYCLE_TYPES, LifecycleCause, RunLifecycleData } from "./lifecycle";
@@ -31,8 +31,8 @@ export const Scope = z.string().regex(/^(daemon|prj-[A-Za-z0-9_-]+|run-[A-Za-z0-
 
 /** Every non-2xx response. Switch on `code`. */
 export const ApiError = z.looseObject({
-	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "invalid", "internal", "unavailable"])
-		.describe("stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"),
+	code: z.enum(["unauthorized", "forbidden", "not_found", "already_decided", "idempotency_conflict", "conflict", "stopped", "invalid", "internal", "unavailable", "timeout"])
+		.describe("stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. timeout (504, capability plugins.routes): a plugin's route under /v1/x/ didn't answer within its deadline (30 s); invalid is also 413 there, a body over 1 MiB. Treat a code you don't know as a generic error"),
 	message: z.string(),
 	decision: z.lazy(() => Decision).optional().describe("409 already_decided: the existing decision"),
 	field: z.string().optional().describe("422 invalid from POST /v1/projects (capability projects.setup): the body field the message is about (path, mode, target, check, agents, budgetUsd). From the projects.git routes: path, owner, name, visibility, files (the first commit would publish likely secrets, or too many files), identity (git has no user.name/email), gh (the GitHub CLI isn't logged in); 409 name: the repository exists on GitHub. From PUT /v1/profiles/{name} (capability profiles.edit): the field id the value is about (limits.maxTurns), rev, or repo"),
@@ -110,7 +110,7 @@ export const Agent = z.object({
 	taskAttachment: AttachmentRef.nullable(),
 	result: AgentResult.nullable(),
 	workspace: AgentWorkspace.nullable(),
-	provider: AgentProvider.nullable().describe("The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent"),
+	provider: AgentProvider.nullable().describe("The AI provider the agent runs on: claude, codex or fx; null for a fake (local stand-in) agent"),
 	model: z.string().nullable().describe("The model the agent runs with, when the daemon knows it (the profile's model or CAPCOMD_AGENT_MODEL); null: the provider CLI's default, or a fake agent"),
 	effort: z.string().nullable().describe("The reasoning effort the agent runs with (its profile's, the run's chosen level for its planner, or CAPCOMD_AGENT_EFFORT): one of its provider's levels (GET /v1/run-options `efforts`); null: the provider CLI's default, or a fake agent"),
 	createdAt: Timestamp.nullable().optional().describe("When it was spawned (a client's elapsed clock starts here); null when unknown. Older daemons don't send it"),
@@ -349,8 +349,8 @@ const TriggerEventData = {
 		thread: z.string().describe("The conversation it belongs to, in the source's terms (a pull request, an issue, a schedule)"),
 		actor: z.string().describe("Who sent it, as the source names them (never mapped across sources)"),
 		addressed: z.enum(["mention", "direct"]).nullable().describe("Whether it addressed capcomd: a mention, a direct message, or neither (null)"),
-		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"),
-		runId: z.string().nullable().describe("The run it started or continued; null otherwise"),
+		decision: z.string().describe("What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin; on a thread a live run follows, an actor the gate doesn't allow, with that run's runId, nothing delivered), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"),
+		runId: z.string().nullable().describe("The run it started or continued, or, denied, the live run following its thread whose planner the gate kept it from; null otherwise"),
 		restarted: z.string().optional().describe("With continued: the run had ended, and this planner agent (a new one, continuing the last) started on the trigger (spec §16.3.2 step 2). Absent otherwise"),
 		unrecorded: z.array(z.string()).optional().describe("What capcomd couldn't record about this decision (its line in the trigger log, the trigger a run started from, the run's subscription to the thread), each with why; absent when everything was recorded. A run that started stands either way"),
 	}).describe(`${TRIGGER_EVENT}. One per trigger a source handed to the intake (spec §16.3.2); \`entity\` is trigger:<source>/<hash of id>`),
@@ -621,7 +621,7 @@ export const CreateRunBody = z.object({
 	targetBranch: BranchName.optional().describe("Branch the run's work merges into (`capcomd run --target-branch`); default: the project's target. With a goal branch (capability runs.goal_branch), the base: send `base` instead."),
 	base: BranchName.optional().describe("Capability runs.goal_branch. The origin branch the run's goal branch is cut from and its pull request goes into (`capcomd run --base`), as the user picked it in the setup screen (GET /v1/projects/branches). Omitted: `targetBranch`, else the project's target, else the remote's default branch; when none of those is known, 422 with `field` base: ask the user. Never a guessed main"),
 	goalBranch: z.union([BranchName, z.literal(false)]).optional().describe("Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (capcomd/<goal-slug>, never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"),
-	driver: AgentProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
+	driver: DriverProvider.optional().describe("Capability runs.options. Who drives the run: the provider of its planner agent (`capcomd run --planner-provider`). The run uses the project's planner profile on that provider: as it is when it already uses it, else with the provider swapped and that provider's model and login (another of the project's profiles on it, else the provider's defaults). Implies a planner agent, so not with `profile`. 422 when there is no planner profile or the provider can't run (no login or API key). Omitted: the planner profile's own provider. GET /v1/run-options lists both."),
 	effort: z.string().min(1).max(32).optional().describe("Capability runs.options. The reasoning effort of the run's planner (the driver): one of that driver's `efforts` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Omitted: the driver's `effort` there (the planner profile's level, else the provider's default)."),
 	model: z.string().min(1).max(100).regex(/^[A-Za-z0-9._:\/-]+$/, "model must be a model id").optional().describe("Capability runs.options.models. The model the run's planner (the driver) runs on (`capcomd run --planner-model`): one of that driver's `models[].id` in GET /v1/run-options (the `driver` given, else the default driver), else 422. Passed to the agent CLI as a profile's model is (Claude Code `--model`, Codex `-m`). Omitted: the driver's `model` there (the planner profile's, else the CLI's default)."),
 	plugins: z.record(z.string(), z.record(z.string(), z.unknown())).optional().describe("Capability plugins.config. The run's own plugin settings (`capcomd run --plugin-config <plugin>.<key>=<value>`), by plugin name: only the settings a plugin's config schema marks per-run (`x-per-run`), each valid against its schema; anything else is 422 with `field` plugins.<name>.<key>. Kept for the run in the plugin's run storage (plugin API §10.2); the plugins' own config is unchanged"),
@@ -640,7 +640,7 @@ export const DriverFit = z.object({
 	reason: z.string().nullable().describe("Why not, one short sentence naming the command that fixes it (trusted), e.g. \"Not logged in to Claude Code for Local (run `capcomd auth login claude --sandbox docker`)\", \"No agent environment for Local yet (run `capcomd env build --sandbox docker`)\"; null when available"),
 });
 export const DriverOption = z.object({
-	provider: AgentProvider,
+	provider: DriverProvider,
 	label: z.string().describe("What to call it: \"Claude Code\" or \"Codex\""),
 	model: z.string().nullable().describe("The model the planner would run with on this provider; null: the provider CLI's default"),
 	models: z.array(z.object({
@@ -686,7 +686,7 @@ export const RunOptionsQuery = z.object({
 /** GET /v1/logins, /v1/environments, /v1/service: what the app's Settings window shows. Local state only. */
 const SettingsSandbox = z.string().describe(`Where agents run: a listed place's name, today ${LISTED_PROVIDERS.map((n) => `${n} ("${PROVIDER_LABEL[n]}")`).join(" or ")}`);
 export const Login = z.object({
-	provider: AgentProvider,
+	provider: DriverProvider,
 	sandbox: SettingsSandbox,
 	loggedIn: z.boolean().describe("Agents of this provider can log in in this sandbox"),
 	how: z.enum(["plan", "api_key"]).nullable().describe("plan: a plan login (`capcomd auth login`) saved for this sandbox; api_key: ANTHROPIC_API_KEY / OPENAI_API_KEY is set for the daemon, or (boxd) kept as a boxd secret with CAPCOMD_CREDENTIALS=secret. A plan login wins when there are both. null when not logged in"),

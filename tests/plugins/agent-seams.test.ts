@@ -53,15 +53,16 @@ function agentsFile(agents: Record<string, unknown>) {
 afterEach(() => useAgentSeams(null));
 
 describe("the built-in agent plugins (§7.3, §17.1)", () => {
-  test("agent-claude and agent-codex load in the host and register the claude and codex seams", async () => {
+  test("agent-claude, agent-codex and agent-fx load in the host and register the claude, codex and fx seams", async () => {
     const h = host();
     const listed = await h.start(builtins());
     expect(listed.filter((p) => p.name.startsWith("agent-")).map((p) => [p.name, p.state, p.seams])).toEqual([
       ["agent-claude", "active", [{ kind: "agent", name: "claude" }]],
       ["agent-codex", "active", [{ kind: "agent", name: "codex" }]],
+      ["agent-fx", "active", [{ kind: "agent", name: "fx" }]],
     ]);
     useAgentSeams(h.contributions);
-    expect(agentProviderNames()).toEqual(["claude", "codex"]);
+    expect(agentProviderNames()).toEqual(["claude", "codex", "fx"]);
     // The host's seam is the plugin's, its calls counted for its stats (§13.5).
     expect(agentSeam("claude")!.describe()).toEqual(claude.describe());
     expect(agentSeam("claude")!.baseEnv()).toEqual(claude.baseEnv());
@@ -81,7 +82,7 @@ describe("the built-in agent plugins (§7.3, §17.1)", () => {
 describe("a profile's provider is an active seam's name (§7.1)", () => {
   test("an unknown provider is refused at validation, by `capcomd agents validate` too", () => {
     expect(validateSpec("x", { provider: "claude", auth: "apikey" })).toEqual([]);
-    expect(validateSpec("x", { provider: "gemini", auth: "apikey" })).toEqual([`agents.x: provider "gemini" isn't an active agent provider (one of claude, codex; see \`capcomd plugins list\`)`]);
+    expect(validateSpec("x", { provider: "gemini", auth: "apikey" })).toEqual([`agents.x: provider "gemini" isn't an active agent provider (one of claude, codex, fx; see \`capcomd plugins list\`)`]);
     const p = Bun.spawnSync([process.execPath, join(ROOT, "src", "cli", "index.ts"), "agents", "validate", "--json", "--spec", JSON.stringify({ provider: "gemini", auth: "apikey" })], {
       env: { ...process.env, CAPCOMD_HOME: mkdtempSync(join(tmpdir(), "capcomd-agent-seams-home-")), CAPCOMD_NO_CONFIG: "1" }, stdout: "pipe", stderr: "pipe",
     });
@@ -94,15 +95,15 @@ describe("a profile's provider is an active seam's name (§7.1)", () => {
     await h.start(builtins());
     useAgentSeams(h.contributions);
     await h.disable("agent-codex");
-    expect(agentProviderNames()).toEqual(["claude"]);
-    expect(validateSpec("cx", { provider: "codex", auth: "apikey" }).join()).toContain(`provider "codex" isn't an active agent provider (one of claude;`);
+    expect(agentProviderNames()).toEqual(["claude", "fx"]);
+    expect(validateSpec("cx", { provider: "codex", auth: "apikey" }).join()).toContain(`provider "codex" isn't an active agent provider (one of claude, fx;`);
     expect(() => resolveAgent("cx", {}, { provider: "codex", auth: "apikey", kind: "codex" })).toThrow(`provider "codex" isn't an active agent provider`);
     expect(() => adapterFor("codex")).toThrow("isn't an active agent provider");
     // The Settings logins still list the built-in's login, bound to its API host.
     const scratch = mkdtempSync(join(tmpdir(), "capcomd-agent-seams-home-"));
     expect(logins({ CAPCOMD_HOME: scratch, CAPCOMD_CREDENTIALS: "secret" }, "boxd").find((l) => l.provider === "codex")).toMatchObject({ loggedIn: true, boundTo: "api.openai.com" });
     await h.enable("agent-codex");
-    expect(agentProviderNames()).toEqual(["claude", "codex"]);
+    expect(agentProviderNames()).toEqual(["claude", "fx", "codex"]);
     await h.stop();
   });
 
@@ -116,7 +117,7 @@ describe("a profile's provider is an active seam's name (§7.1)", () => {
     const h = host();
     await h.start([...builtins(), { source: "builtin", manifest: m, module: { activate: (c: PluginContext) => { c.seams.agent(echo); } } as PluginModule<never> }]);
     useAgentSeams(h.contributions);
-    expect(agentProviderNames()).toEqual(["claude", "codex", "echo"]);
+    expect(agentProviderNames()).toEqual(["claude", "codex", "echo", "fx"]);
     expect(validateSpec("e", { provider: "echo", auth: "apikey", effort: "low" })).toEqual([]);
     expect(validateSpec("e", { provider: "echo", auth: "apikey", effort: "high" }).join()).toContain("effort must be one of low for provider echo");
     const path = agentsFile({ e: { provider: "echo", auth: "apikey", model: "m1" } });

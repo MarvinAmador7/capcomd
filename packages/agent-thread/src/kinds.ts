@@ -76,3 +76,18 @@ export function codexItemKind(item: Record<string, any>): ActivityKind | null {
 		default: return null;
 	}
 }
+
+/** An fx tool call's kind (fx acp `tool_call`: its tool name, arguments, and the MCP server and tool it calls). */
+export function fxToolKind(name: string, input: Record<string, any>, mcp?: { server?: unknown; tool?: unknown } | null): ActivityKind {
+	switch (name) {
+		case "read_file": case "read_tool_result": return "read";
+		case "edit_file": return "edit";
+		case "write_file": return "write";
+		case "glob_files": case "grep_files": return "search";
+		case "shell": return input.action === "run" || typeof input.command === "string" ? commandKind(String(input.command ?? "")) : "run";
+		case "web_fetch": case "web_search": return "web";
+		case "subagent": return "delegate";
+	}
+	if (mcp && mcp.server === "capcomd") { const k = opKind(String(mcp.tool ?? "")); if (k) return k; }
+	return "tool";
+}

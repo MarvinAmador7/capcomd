@@ -37,11 +37,19 @@ export interface DoctorOptions {
 const API: Record<string, { url: string; header: (v: string) => string[] }> = {
   ANTHROPIC_API_KEY: { url: "https://api.anthropic.com/v1/models", header: () => ["-H", 'x-api-key: $K', "-H", "anthropic-version: 2023-06-01"] },
   OPENAI_API_KEY: { url: "https://api.openai.com/v1/models", header: () => ["-H", "Authorization: Bearer $K"] },
+  // fx's: the AI Gateway's OpenAI-compatible model list.
+  AI_GATEWAY_API_KEY: { url: "https://ai-gateway.vercel.sh/v1/models", header: () => ["-H", "Authorization: Bearer $K"] },
 };
+
+/** The agents doctor checks: Claude Code and Codex always (as it always has), any other provider (fx, a plugin's) only
+ *  when its key is set here or it is logged in: one nobody configured isn't a failure of this machine. */
+export function doctorAgents(src: Record<string, string | undefined>, modes?: DoctorOptions["modes"]) {
+  return activeAdapters().filter((a) => a.kind === "claude-code" || a.kind === "codex" || !!src[a.secretName]?.trim() || modes?.[a.kind] === "subscription");
+}
 
 export async function doctor(p: SandboxProvider, o: DoctorOptions): Promise<DoctorReport> {
   const groups = new Map<string, string[]>();
-  for (const a of activeAdapters()) {
+  for (const a of doctorAgents(o.source ?? process.env, o.modes)) {
     const snap = (o.modes?.[a.kind] === "subscription" ? o.snapshots?.[a.kind] : undefined) ?? o.snapshot ?? "";
     groups.set(snap, [...(groups.get(snap) ?? []), a.kind]);
   }
@@ -80,7 +88,7 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
     const agents: DoctorAgent[] = [];
     for (const a of activeAdapters().filter((x) => kinds.includes(x.kind))) {
       if (o.modes?.[a.kind] === "subscription") {
-        const det = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a)], { env: baseEnv })).stdout);
+        const det = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a, home)], { env: baseEnv })).stdout);
         const bin = o.cfg.agentBin ?? det.bin;
         const cli = { ok: !!bin, version: det.version, bin };
         const { verifyLogin } = await import("../auth/login");
@@ -89,15 +97,16 @@ async function doctorOne(p: SandboxProvider, o: DoctorOptions, kinds: string[]):
         agents.push({ agent: a.kind, cli, credential: { mode: "subscription", via: "subscription" }, api: { ok: v.ok, detail: v.detail, ...(hint ? { hint } : {}) }, ok: cli.ok && v.ok, from: o.snapshot });
         continue;
       }
-      const det = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a)], { env: baseEnv })).stdout);
+      const det = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a, home)], { env: baseEnv })).stdout);
       const inVm = (await p.exec(id, ["sh", "-c", `printenv ${a.secretName} 2>/dev/null; true`], { env: baseEnv })).stdout.trim();
       const mode: DoctorAgent["credential"]["mode"] = !inVm ? "absent" : inVm.startsWith(SECRET_PLACEHOLDER_PREFIX) ? "placeholder" : "plain";
       let via: DoctorAgent["credential"]["via"] = mode === "placeholder" ? "secret" : "none";
       let value = mode === "placeholder" ? inVm : "";
       if (!value && src[a.secretName]?.trim()) { value = src[a.secretName]!.trim(); via = "env"; }
       let api: DoctorAgent["api"] = { ok: false, detail: "no credential (run `capcomd secrets sync` or set it locally)" };
-      if (value) {
-        const spec = API[a.secretName]!;
+      const spec = API[a.secretName];
+      if (value && !spec) api = { ok: true, detail: `${a.secretName} is set (capcomd has no API check for it)` };
+      else if (value && spec) {
         // The key/placeholder is passed via env K and expanded by sh in the VM; never on argv.
         const cmd = `${o.curlBin ?? "curl"} -sS -o /dev/null -m 20 -w '%{http_code}' ${spec.header(value).map((x) => (x.startsWith("-") ? x : `"${x}"`)).join(" ")} ${spec.url}`;
         const res = await p.exec(id, ["sh", "-c", cmd], { env: { ...baseEnv, K: value }, timeoutMs: 30_000 });

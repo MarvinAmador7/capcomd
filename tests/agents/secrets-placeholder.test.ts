@@ -30,12 +30,13 @@ async function setup(a: AgentAdapter, over: Record<string, string> = {}, sync = 
 }
 
 describe("host-bound secrets", () => {
-  test("secrets sync: both keys, private scope, bound to their API host; result carries no values", async () => {
+  test("secrets sync: every key set, private scope, bound to its API host (fx's AI Gateway key skipped when unset); result carries no values", async () => {
     const p = new FakeProvider();
     const lines = await secretsSync(p, { ANTHROPIC_API_KEY: ANTH, OPENAI_API_KEY: OPENAI });
     expect(lines.map((l) => [l.name, l.status, l.domains])).toEqual([
       ["ANTHROPIC_API_KEY", "set", ["api.anthropic.com"]],
       ["OPENAI_API_KEY", "set", ["api.openai.com"]],
+      ["AI_GATEWAY_API_KEY", "skipped", ["ai-gateway.vercel.sh"]],
     ]);
     expect(await p.secretList()).toEqual([
       { name: "ANTHROPIC_API_KEY", scope: "private", domains: ["api.anthropic.com"] },

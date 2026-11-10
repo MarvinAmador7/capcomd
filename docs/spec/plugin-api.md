@@ -262,14 +262,21 @@ else 500 with the message replaced by "plugin error" (the message goes to the da
 plugin publishes events instead).
 
 As served (capability `plugins.routes`): a `{param}` segment of a route's path takes one non-empty path segment,
-percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters). Only an active
+percent-decoded, and a literal segment wins over a parameter (the route with the fewest parameters, counted by
+`{param}` segment: `/{x}/{x}` has two). Two routes of one method that could both match a path with as many parameters
+each (`/a/{x}/c` and `/a/b/{y}` on `/a/b/c`) would tie, so they are refused: the manifest validator fails the plugin
+`invalid_manifest`, naming both, and `ctx.api.route` throws `conflict` for the second one registered (the same route
+twice is still "already registered"). Only an active
 plugin's registrations are served: a disposed or disabled plugin's routes are 404 `not_found`, as is a path or method no
 route of an active plugin matches; the token's scope is checked after the route is found (the route's declared scope,
 whatever the method: a `GET` that declares `steer` needs `steer`), so an unknown route is 404 to any token and a missing
 token is 401 first. The scopes are not ranked (a `configure` route needs a token with `configure`). The principal is
 the caller's (§11.2): a plugin's token is that `plugin`, a token with only `read` is a `viewer`, any other client an
 `operator` with its client id. A body is parsed as JSON for `POST`, `PUT` and `PATCH` (an empty one is `undefined`; one
-that isn't JSON is 422 `invalid`), never for `GET` or `DELETE`; `query` has the first value of each name. A
+that isn't JSON is 422 `invalid`), never for `GET` or `DELETE`; a body over 1 MiB is 413 `invalid` before the
+handler runs, read no further than that whatever its `content-length`. A handler that hasn't answered within 30 s is
+504 `timeout`; its `signal` is aborted then (reason a `PluginError` `timeout`) and whatever it answers later is dropped.
+The `signal` is also aborted when the caller goes away. `query` has the first value of each name. A
 `PluginError` with a mapped code answers `{code, message}` with its `hint` when it has one; the 500 is `{code:
 "internal", message: "plugin error"}` and the daemon log gets one JSON line `{plugin, level: "error", message, fields}`
 with the method, path and real message, redacted. A handler that answers `undefined` is 204 with no body; one that answers a
@@ -1183,8 +1190,42 @@ only there (codex). `command`'s `AgentCommandCtx.mcp` (additive) carries the pro
 set) as `{mcpServers: {<name>: {command, args}}}`, and `servers`, the list, for a CLI that takes servers as flags; a
 provider MUST start them only inside the sandbox, and approves a `trusted` one's tools up front as it does capcomd's. The kernel's runner (`src/agents/runner.ts`) stays the kernel's: it does clone,
 install, credentials, start, streaming, guards, cancel, commit and push; the provider says how its CLI is invoked and read.
-ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude` and `codex` are the built-ins
-(`agent-claude`, `agent-codex`: `src/plugins/agent-claude.ts`, `agent-codex.ts`). Only the daemon has a plugin host: in
+How the CLI is installed when the sandbox lacks it: `describe().npmPackage` (installed pinned with npm, as Claude Code
+and Codex are), or `describe().install` (additive; exactly one of the two, `npmPackage` is optional for it):
+`{kind: "archive", member, assets: {x86_64, aarch64}}`, a release archive per architecture as `{url, sha256}`. The
+kernel downloads the sandbox's, checks its sha256 before it unpacks anything (a mismatch fails the install and
+installs nothing), and installs `member` as `<agent home>/bin/<bin>`; node is installed beside it when the sandbox has
+none (the supervisor's). Only a binary there, at `pinnedVersion`, counts as installed: another program of the same name
+on `PATH` is someone else's. `capcomd env build` installs an archive CLI like the others, and its VM reaches the
+archives' hosts; one that fails to download there is left out of the image (the runner installs it when an agent on it
+starts). `describe().subscription` (additive, absent: true) false says capcomd has no plan login for the CLI: a
+profile on it with `auth: "subscription"` is refused at validation. `AgentConfig.usdPerMtok` is the provider's own rates
+when the operator set them (`CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN` and `_OUT`, both or neither), else codex's, as before.
+ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude`, `codex` and `fx` are the built-ins
+(`agent-claude`, `agent-codex`, `agent-fx`: `src/plugins/agent-claude.ts`, `agent-codex.ts`, `agent-fx.ts`).
+
+**fx** (`agent-fx`, fx 0.0.16, Vercel Labs' coding agent, https://fx.sh): fx runs as `fx acp`, its Agent Client
+Protocol server (newline-delimited JSON-RPC 2.0 on stdio), behind a bridge (`src/plugins/fx-bridge.mjs`, node, no
+dependencies) that `command` writes next to the run: it starts fx, opens one session (`session/new` with capcomd's MCP
+server and the profile's trusted ones, an orchestrate agent capcomd's only, each command absolute), sends the prompt, and prints the session as JSON lines
+(`init`, `session`, `update` for each ACP `session/update` but message text, `message` for a whole agent message or
+thought, `permission`, `steer`, `notice`, `quota`, `error`, and `result` at the end of each turn), which `parse` reads.
+`streamInput` is true: a message capcomd sends while fx works goes to it as a steering prompt (fx's
+`_meta.fx.steer`, applied at its next model call), or, when fx can't take it so (over 64 KiB, or the turn ended
+first), as the next turn. Credential: an AI Gateway API key, `AI_GATEWAY_API_KEY` (host `ai-gateway.vercel.sh`; a
+Vercel OIDC token, which fx would prefer, is dropped); `subscription` is false (fx's own logins aren't snapshotted).
+fx's settings (`$HOME/.fx/settings.json`, private) get capcomd's keys merged in: no upgrades, no session titles, no
+cache warming. fx runs the agent's commands in a snapshot of a login shell, whose `/etc/profile` (Debian's) sets `PATH`
+anew, so the agent's own tools (node, the in-VM capcomd) weren't found: the bridge adds a line to the agent home's
+`~/.bash_profile` and `~/.zprofile` that puts the agent's `PATH` back (from `CAPCOMD_PATH`, which it sets for fx).
+Turns are tool steps (fx's own bookkeeping calls aside), and `FX_MAX_AGENT_STEPS` is the profile's
+`maxTurns` as fx's own backstop; cost is tokens × rates (fx reports none), at each turn's end. A turn fx ends
+`refused` carries its reason only as the turn's last message: the provider reads auth failures, out-of-credits and
+fx's step limit from it. fx retries a rate limit indefinitely: the bridge cancels the turn and reports a `quota` when the
+retry names an exhausted quota, or when a rate limit hasn't passed for 10 minutes. An untrusted MCP server isn't
+started (fx runs with full access, so its tools would run unasked; the agent's log says so). Its recorded streams
+(`tests/agents/fixtures/fx`) were made from fx 0.0.16 itself, against a scripted model server in a throwaway
+container (`scripts/fx-record`). Only the daemon has a plugin host: in
 it the active providers are the ones its plugins registered; in every other process (the CLI, the MCP server, a
 driver) they are the built-ins (`src/plugins/agents.ts`). The runner's agent kind stays the provider's name, except
 Claude Code's, `claude-code` as before (CAPCOMD_AGENT, auth logins, the `Capcomd-Agent:` trailer).
@@ -1273,13 +1314,23 @@ Every async primitive takes `CallOptions {key?, signal?, timeoutMs?}` last. `key
 call, with the semantics of the CLI's `--key` and the API's `Idempotency-Key`: the same key with the same arguments does
 the thing once and returns the recorded result; the same key with different arguments is `conflict`. `signal` is
 composed with `ctx.signal`. `timeoutMs` defaults to 30 000; past it the call rejects `timeout` and the kernel's side
-either completed or did not (the caller re-reads). **Not built yet:** the kernel's services apply a mutating call's
-`key` (§8.4), but the host applies neither `signal` nor `timeoutMs` as a bound on a primitive
-(`packages/plugin/src/host/context.ts` `guarded` passes the options on unchanged), so a call runs to its own end:
-`jobs.wait` and `agents.await` read `timeoutMs` as how long to wait (30 000 by default, then they answer what is so
-now, not `timeout`; `agents.await` at most an hour), and a seam call through `sandboxes.provider` is bounded by its
-`SeamCall` deadline (§8.4); no other service reads either, so a `gates.verify` resolves when its checks and judges have
-answered, however long that takes.
+either completed or did not (the caller re-reads). The kernel's services apply a mutating call's `key` (§8.4); the host
+bounds every async primitive (`packages/plugin/src/host/context.ts` `guarded`, and `events.emit` and `events.replay`
+beside it), whichever comes first:
+
+- its deadline, `timeoutMs` (a number above 0, else `invalid`): `timeout`, `retryable`. A primitive that runs a kernel
+  operation to its end has a longer default: `jobs.start` 120 000 (its `exec`'s foreground hold, at most 90 000, §16.2
+  rule 1, plus the call's 30 000); `agents.spawn` 150 000 (its `profile.resolved` and `agent.spawning` modify hooks,
+  60 s at most each, §6.4, then the call's); `gates.verify` 7 200 000 (its checks, then its judges: `verify.judging` at
+  most 60 min, a reviewer agent inside it); `gates.merge` 3 600 000 (its landing gates, then it lands or parks);
+- its `signal` aborting: `timeout`, not retryable (already aborted: at once, and the kernel isn't called);
+- `ctx.signal` aborting, the plugin disposing (§5.3): `disposed`, so dispose rejects the calls still in flight.
+
+The kernel's implementation is passed the options with that composed signal (aborted on whichever came first), so it
+can stop. Some calls keep their own bounds: `jobs.wait` and `agents.await` read `timeoutMs` as how long to wait (30 000
+by default, then they answer what is so now, not `timeout`; `agents.await` at most an hour; their `signal` and
+`ctx.signal` still apply), and a seam call through `sandboxes.provider` (a synchronous primitive) is bounded by its
+`SeamCall` deadline (§8.4).
 
 ### 8.3 Errors
 
@@ -2135,6 +2186,17 @@ tool limits (`src/config/project-setup.ts` `planProject`: `planner` has `childre
      doesn't allow), so every command failed, reads included. Codex's rules see the commands of a simple shell line
      (`cd x && bun test` is refused) but not a redirection (`echo x > f` runs), `sh -c` or option tricks: so the kernel
      doesn't rely on any CLI's rules for writes (item 3).
+   - fx: `denyCommands` as codex's, which the provider turns into fx's permission rules (`fxOrchestrateRules`, in
+     `$HOME/.fx/settings.json`, of which the bridge keeps only `providers` and `models` from a file already there: a
+     `workspaces` entry for the checkout would outrank the rules, as recorded against fx 0.0.16, and could approve the
+     repository's MCP servers; the last matching rule wins) with fx in `ask` mode (full access skips every rule):
+     `read`, `glob`, `grep`, `skill`, capcomd's MCP tools allowed; `edit`, fx's `subagent` and `install_skill` denied;
+     in `bash`, the read-only commands above allowed as `<prefix>` and `<prefix> *`, then `denyCommands` and the git
+     options above denied; everything else `ask`, and the bridge answers every ask `reject_once`. fx matches an allow
+     rule only for a command with no chaining, substitution or redirection, and a deny rule inside a chained one too:
+     recorded against fx 0.0.16, `git log` and `git status` ran; `git commit`, `git branch -D`, `git log --output=…`
+     and `write_file` were denied by the rules; `capcomd status && rm -rf x`, `echo hi > f`, `ls | head` and `uname -a`
+     were asked and refused. So a compound line of allowed commands is refused too (stricter than Claude Code).
    The kernel applies them on top of the profile's own lists when it builds the agent's config, after
    `agent.preparing`: `allowed` replaces the profile's allowlist or narrows it, `disallowed` joins its denylist,
    `denyCommands` joins `AgentConfig.denyCommands`, `sandbox` is the loosest the CLI runs in. A profile cannot widen
@@ -2388,9 +2450,13 @@ with the `TriggerDecision`:
 
 1. **Dedupe**: `(source, id)` seen within 30 days → `deduped`.
 2. **Subscription**: the thread is subscribed by a live run (or one ended < `until`) → the trigger is delivered to that
-   run's planner as a message (`continued {runId, seq}`) **if the actor is a person** (bots and CI never resume an
-   ended run; they reach a live run as context); no further gate. A person's stop is a message too; the planner decides
-   (the prototype's rule). The planner is the run's `_planner` record, else its top-level agent spawned with the key
+   run's planner as a message (`continued {runId, seq}`). On a **live** run, only when step 3's gate allows it (its
+   actor in `allowed`, or its thread matching an `opened` pattern; bots and CI too, as context), with no further gate
+   (`trigger.admitting` and the mode aren't asked): a followed thread may be public (a goal's pull request), and
+   someone the operator didn't allow doesn't steer the working planner. Anyone else's is recorded and not delivered →
+   `denied {by: "allowlist", reason, wouldHave: "continue", runId}` (the log's `gate` says `allowed: false`; the dedupe
+   mark stays), unless an ended run following the same thread takes it as below. On an **ended** run, only a person's trigger (bots and CI never resume an ended run). A person's stop is
+   a message too; the planner decides (the prototype's rule). The planner is the run's `_planner` record, else its top-level agent spawned with the key
    `planner`; a run with neither (a run driven from outside, or the built-in recipe's) has no one to read it, and the
    trigger goes on to the gate. The message is `from: trigger:<source>`, its body who wrote on which thread and what
    (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. On a run that
@@ -2485,7 +2551,7 @@ second call may change `until`. A subscription's run must exist (`not_found`).
 | `POST /v1/runs` from the app, `capcomd run`, `capcomd_run_new` | an **explicit** trigger from source `operator`/`driver` that skips the gate: the same `runNew` path; `run.creating` fires either way (step 10 leaves these paths as they are: they don't pass through the intake yet) |
 | a person replying in the app (messages) | source `app`, always allowed (likewise unchanged in step 10) |
 | GitHub comments, CI, Slack, schedules | source plugins (`github`, `slack`, `schedule`: a timer job that emits) |
-| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread when the pull request is opened or found (`src/primitives/goal.ts` `openGoalPullRequest`, from whichever process opens it; the forge names the thread, `PullRequestRef.thread`, so the kernel has no GitHub code; a failed subscription is logged, never the opening's failure), so comments on it reach the planner: as a message while the run works, and, since a pull request is opened once the planner finished, mostly by starting the planner again (§16.3.2 step 2) on an allowed person's comment. The `github` source reads the pull request's conversation (issue comments); review comments on lines of the diff are not read yet |
+| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread when the pull request is opened or found (`src/primitives/goal.ts` `openGoalPullRequest`, from whichever process opens it; the forge names the thread, `PullRequestRef.thread`, so the kernel has no GitHub code; a failed subscription is logged, never the opening's failure), so comments on it reach the planner: as a message while the run works (an allowed actor's only: the thread may be public), and, since a pull request is opened once the planner finished, mostly by starting the planner again (§16.3.2 step 2) on an allowed person's comment. The `github` source reads the pull request's conversation (issue comments); review comments on lines of the diff are not read yet |
 
 #### 16.3.7 Replies
 

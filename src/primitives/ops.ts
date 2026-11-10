@@ -715,7 +715,8 @@ export class EnvSnapshotMissing extends Error { readonly code = "env_snapshot_mi
  * the CLI, a build's name is checked where it is resolved (src/env/resolve.ts `bootSnapshot`).
  */
 export function envSnapshotProblem(provider: unknown, source: Record<string, string | undefined> = process.env, environment?: string): string | null {
-  if (provider !== "claude" && provider !== "codex") return null;
+  // capcomd's own CLIs (Claude Code, Codex, fx), which `capcomd env build` installs; a plugin's provider installs its own.
+  if (provider !== "claude" && provider !== "codex" && provider !== "fx") return null;
   if (environment && environment !== "default") return null;
   if (!realSandbox(source) || !sandboxCaps(source).snapshots) return null;
   if ((source.CAPCOMD_SPAWN_EXEC ?? "") === "fake" || (source.CAPCOMD_SPAWN_EXEC ?? "") === "script") return null;

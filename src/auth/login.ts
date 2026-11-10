@@ -30,6 +30,7 @@ export interface LoginResult { profile: AuthProfile; verified: boolean; loginMs:
 export const parseAgentArg = (a: string | undefined): ProfileAgent => {
   if (a === "claude" || a === "claude-code") return "claude-code";
   if (a === "codex") return "codex";
+  if (a === "fx") throw new Error("capcomd has no plan login for fx: set AI_GATEWAY_API_KEY (an AI Gateway API key) and give its profiles auth: apikey");
   throw new Error("usage: capcomd auth login|status|logout claude|codex");
 };
 

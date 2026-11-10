@@ -303,12 +303,13 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       ],
       "properties": {
         "kind": {
-          "description": "The runner: claude-code, codex, or fake (a local stand-in with no AI provider)",
+          "description": "The runner: claude-code, codex, fx, or fake (a local stand-in with no AI provider)",
           "type": "string",
           "enum": [
             "fake",
             "claude-code",
-            "codex"
+            "codex",
+            "fx"
           ]
         },
         "provider": {
@@ -316,7 +317,8 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
           "type": "string",
           "enum": [
             "claude",
-            "codex"
+            "codex",
+            "fx"
           ]
         },
         "model": {
@@ -3322,10 +3324,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "decision": {
       "type": "string",
-      "description": "What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"
+      "description": "What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin; on a thread a live run follows, an actor the gate doesn't allow, with that run's runId, nothing delivered), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"
     },
     "runId": {
-      "description": "The run it started or continued; null otherwise",
+      "description": "The run it started or continued, or, denied, the live run following its thread whose planner the gate kept it from; null otherwise",
       "type": [
         "string",
         "null"
@@ -4430,7 +4432,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "description": "Where the agent works; null when its run has no repository. Absent on agent.spawned events written by older daemons"
           },
           "provider": {
-            "description": "The AI provider the agent runs on: claude or codex; null for a fake (local stand-in) agent",
+            "description": "The AI provider the agent runs on: claude, codex or fx; null for a fake (local stand-in) agent",
             "type": [
               "string",
               "null"
@@ -4438,6 +4440,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
             "enum": [
               "claude",
               "codex",
+              "fx",
               null
             ]
           },

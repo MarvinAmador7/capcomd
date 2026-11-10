@@ -1,0 +1,8 @@
+{"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
+{"type":"session","sessionId":"kpKmt9MYZxr2","model":"stub-model","provider":"stub"}
+{"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_failing_0","name":"shell","title":"Running","kind":"execute","status":"pending","rawInput":{"action":"run","command":"ls /no/such/dir"},"_meta":{"fx":{"toolCall":{"internal":false}}}}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_failing_0","status":"in_progress"}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_failing_0","status":"failed","content":[{"type":"content","content":{"type":"text","text":"ls: cannot access '/no/such/dir': No such file or directory\n"}}],"command_result":{"kind":"command","command":"ls /no/such/dir","cwd":"/work","exit_code":2,"signal":null,"timed_out":false,"duration_ms":6,"stdout_bytes":0,"stderr_bytes":60,"truncated":false,"output_file":"fx-command-replay-ac0b412093fc-7ebc20ab0e60e6f6cd5c9036dacc7a5e4b7f853e505be30d8efd38fb6fecfd40.bin","stdout_file":null,"stderr_file":null}}}
+{"type":"message","role":"agent","messageId":"4bbea21be4ab6b08c477c582005e2a90","text":"That directory does not exist."}
+{"type":"update","update":{"sessionUpdate":"usage_update","used":1341,"size":200000}}
+{"type":"result","stopReason":"end_turn","usage":{"inputTokens":2500,"outputTokens":81},"lastText":"That directory does not exist."}

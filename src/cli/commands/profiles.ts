@@ -11,7 +11,7 @@
 // Every subcommand supports --json (schema "capcomd.cli/v1" envelope) so an orchestrator (e.g. Hermes)
 // can define and pick harness agent specs programmatically.
 import { existsSync } from "node:fs";
-import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, skillRows, trustProfile, untrustedPersona, untrustedSandbox, projectMachineTrust, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
+import { addProfileFile, agentsEntryOf, migrateProfiles, profileLayers, AGENTS_JSON_SCHEMA, AGENTS_SCHEMA, AgentConfigError, agentsFilePath, editProfile, lifecyclePlugins, notApplied, onlyInProfileFile, parseSetPairs, PROFILE_JSON_SCHEMA, profileFacts, profileRows, profileValues, ProfileWriteError, readAgentsFile, projectPersonaTrust, projectSkillTrust, readProfiles, removeProfile, sharedSource, skillRows, trustProfile, untrustedPersona, untrustedSandbox, projectMachineTrust, validateSpec, writeAgentsFile, type AgentSpec, type AgentsFile, type AppliedFile, type ProfileEdit, type ProfileSet, type ResolvedProfile, type SeamCheck } from "../../profiles";
 import { loadAgentConfig } from "../../agents/config";
 import { profileFor } from "../../auth/profiles";
 import { RelayError, SCHEMA } from "../../core/errors";
@@ -179,7 +179,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
         return { ...r, ...profileFacts(f.profiles[r.name]!), ...readiness(r.name, f.agents[r.name]!), skills, untrustedSkills: skills.filter((s) => !s.trusted).map((s) => s.name), untrustedPersona: untrustedPersona(f.profiles[r.name]!.persona), untrustedSandbox: untrustedSandbox(f.profiles[r.name]!.machineFiles, f.profiles[r.name]!.runtime.sandboxProvider) };
       });
       const warned = f.warnings.length ? `\n(${f.warnings.length} warning${f.warnings.length === 1 ? "" : "s"}: \`${cmd} validate\` lists ${f.warnings.length === 1 ? "it" : "them"})` : "";
-      out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${visible(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title && visible(r.title), r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex --auth apikey|subscription`);
+      out({ file: path, default: f.default ?? null, [as]: rows, ...(f.warnings.length ? { warnings: f.warnings } : {}) }, rows.length ? rows.map((r) => `${r.default ? "*" : " "} ${r.name.padEnd(16)} ${r.source.padEnd(7)} ${r.provider.padEnd(7)} ${r.auth.padEnd(13)} ${visible(r.model ?? "-").padEnd(18)} ${r.ready ? "ready" : "NOT READY"}: ${r.detail}${r.title || r.tags.length ? `\n  ${"".padEnd(16)} ${[r.title && visible(r.title), r.tags.length ? `tags: ${r.tags.join(", ")}` : null].filter(Boolean).join(" · ")}` : ""}${r.canLead ? `\n  ${"".padEnd(16)} leads: ${r.canLead}` : ""}${r.toolMode === "orchestrate" ? `\n  ${"".padEnd(16)} orchestrates: sees everything, runs nothing (no edits, builds or tests); its children's checks run at verify and merge` : ""}`).join("\n") + warned : `no profiles (${path}); add one: ${cmd} add <name> --provider claude|codex|fx --auth apikey|subscription`);
       return 0;
     }
     case "show": {
@@ -193,7 +193,8 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
         const c = loadAgentConfig(process.env, n);
         effective = { kind: c.profile ? spec.provider : null, credentialMode: c.credentialMode, model: c.model ?? null, effort: c.effort ?? null, maxTurns: c.maxTurns ?? null, maxBudgetUsd: c.maxBudgetUsd ?? null, timeoutMs: c.timeoutMs ?? null, idleAfterMs: c.idleAfterMs, stuckRepeats: c.stuckRepeats, checkpointEveryMs: c.checkpointEveryMs, sandbox: c.codexSandbox, egress: c.egress, allowedTools: c.allowedTools ?? null, disallowedTools: c.disallowedTools, systemPrompt: c.systemPrompt ?? null, appendSystemPrompt: c.appendSystemPrompt ?? null };
       } catch (e) { error = (e as Error).message; }
-      const facts = profileFacts(r), vals = profileValues(r), unused = notApplied(r.manifest), ready = readiness(n, spec), isDefault = f.default === n;
+      // sharing.source as everywhere else: without a URL's credentials (profileFacts' too).
+      const facts = profileFacts(r), vals = profileValues(r).map((v) => v.path === "sharing.source" && typeof v.value === "string" ? { ...v, value: sharedSource(v.value) } : v), unused = notApplied(r.manifest), ready = readiness(n, spec), isDefault = f.default === n;
       // Its skills as an agent of it is pinned with them: where each came from and the sha256 of its SKILL.md; a
       // project's, whether you trust it (ADR-024 decision 4).
       const trust = new Map(projectSkillTrust(r.skills).map((t) => [t.name, t.trust]));
@@ -250,7 +251,7 @@ export async function profilesCommand(pos: string[], values: Record<string, any>
       if (f.agents[n]) throw new RelayError("conflict", `profile "${n}" already exists`, `${cmd} set ${n} …`);
       const next = agentsEntryOf(edit);
       const errs = validateSpec(n, next);
-      if (errs.length) throw new RelayError("config", errs.join("; "), "Each agent needs provider (claude|codex) and exactly one auth (apikey|subscription).");
+      if (errs.length) throw new RelayError("config", errs.join("; "), "Each agent needs provider (claude|codex|fx) and exactly one auth (apikey|subscription).");
       const file: AgentsFile = { ...f, schema: AGENTS_SCHEMA, agents: { ...f.agents, [n]: next as unknown as AgentSpec } };
       if (values.default || !file.default) file.default = n;
       // The new entry was checked above as a candidate is; one already there that names a provider no daemon is running

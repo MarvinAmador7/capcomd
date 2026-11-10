@@ -7,9 +7,9 @@ export { classifyLink, resolveMedia, workspacePath, webUrl, hostInText, mediaOfP
 export { checkImage, sniffImage, imageSize, IMAGE_MAX_BYTES, IMAGE_TYPES, type StoredImage } from "./images";
 export { claudeInputDiff, claudeResultDiff, lineDiff } from "./diff";
 export { threadBuilder, ARGS_MAX_BYTES, OUTPUT_MAX_BYTES, type ThreadOptions, type ThreadBuilder, type Cli } from "./thread";
-export { ACTIVITY_KINDS, commandKind, opKind, claudeToolKind, codexItemKind, type ActivityKind } from "./kinds";
-export { claudeSummary, codexSummary, shellCommand } from "./summary";
-export { claudeNaming, codexNaming, isClaudeNamingCall, isCodexNamingCall, namingCalls, namingCommand, shellWords } from "./naming";
+export { ACTIVITY_KINDS, commandKind, opKind, claudeToolKind, codexItemKind, fxToolKind, type ActivityKind } from "./kinds";
+export { claudeSummary, codexSummary, fxSummary, shellCommand } from "./summary";
+export { claudeNaming, codexNaming, fxNaming, isClaudeNamingCall, isCodexNamingCall, isFxNamingCall, namingCalls, namingCommand, shellWords } from "./naming";
 
 import { classifyLink, mediaOfPath, resolveMedia, type LinkContext } from "./links";
 import { toBlocks } from "./markdown";

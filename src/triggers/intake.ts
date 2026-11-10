@@ -2,10 +2,11 @@
 // source plugin hands it (`ctx.triggers.emit`). It decides, in this order, and records every decision:
 //  1. dedupe: the same (source, id) within 30 days is `deduped`;
 //  2. subscription: a thread a run follows (a live run, or one that ended less than `until` ago) gets the trigger as a
-//     message to the run's planner, `continued`, when a person sent it (a bot's reaches only a live run); on an ended
-//     run, steps 3-5 then say whether its planner starts again on it (`continued` with `restarted`), or the observe mode
-//     only records that it would have (`recorded {wouldHave: continue}`); a run the engine doesn't say anything about
-//     makes it fail for now, never a new request (that could be a second run);
+//     message to the run's planner, `continued`: a live run's when the gate allows its actor or opened its thread
+//     (else `denied {by: allowlist, wouldHave: continue}`, nothing delivered), an ended run's when a person sent it;
+//     on an ended run, steps 3-5 then say whether its planner starts again on it (`continued` with `restarted`), or
+//     the observe mode only records that it would have (`recorded {wouldHave: continue}`); a run the engine doesn't say
+//     anything about makes it fail for now, never a new request (that could be a second run);
 //  3. the kernel's gate, `triggers.sources.<source>` in the operator's config: an actor it allows or a thread it opened
 //     to requests is `allowed`, else `denied {by: allowlist}`; addressed and allowed is `explicit`, else `inferred`;
 //  4. `trigger.admitting`: a plugin may deny (`denied {by: plugin}`), never admit;
@@ -453,13 +454,16 @@ export async function admit(input: Trigger, principal: Principal): Promise<Trigg
   return d.decision;
 }
 
+/** Step 3's question: the gate allows the trigger's actor, or opened its thread to requests. */
+const allows = (g: ReturnType<typeof gateOf>, t: Trigger) => g.allowed.includes(t.actor.id) || g.opened.some((p) => threadMatches(p, t.thread));
+
 /** Steps 3 to 5 for one trigger: the kernel's gate, `trigger.admitting`, the accept mode. `act`: it may start a run (or
  *  start an ended run's planner again); else it is `denied`, or only `recorded` (observe). */
 type Judged = { gate: NonNullable<TriggerLogEntry["gate"]>; denied: Extract<TriggerDecision, { kind: "denied" }> | null; recorded: boolean; act: boolean };
 async function judge(t: Trigger, principal: Principal, subscribed: string | null): Promise<Judged> {
   // 3. The kernel's gate.
   const g = gateOf(triggersConfig(), t.source);
-  const allowed = g.allowed.includes(t.actor.id) || g.opened.some((p) => threadMatches(p, t.thread));
+  const allowed = allows(g, t);
   const strength = t.addressed && allowed ? "explicit" as const : "inferred" as const;
   const gate = { allowed, strength, mode: g.mode };
   const no = (denied: Judged["denied"]): Judged => ({ gate, denied, recorded: false, act: false });
@@ -487,17 +491,23 @@ function oneAtATime<T>(runId: string, f: () => Promise<T>): Promise<T> {
 }
 
 async function decide(t: Trigger, principal: Principal): Promise<{ decision: TriggerDecision; gate: TriggerLogEntry["gate"]; unrecorded?: string[] }> {
-  // 2. A run follows the thread: a person's trigger reaches its planner, with no further gate; a bot's only a live run.
+  // 2. A run follows the thread: an allowed actor's trigger reaches a live run's planner (a bot's as context); a person's
+  // reaches an ended run's inbox, and starts its planner again only when steps 3 to 5 would act.
   const { followed, unanswered } = await following(t.source, t.thread);
   // Steps 3 to 5 are asked once, the first time they matter.
   let judged: Judged | null = null;
   const judging = async () => (judged ??= await judge(t, principal, followed[0]?.sub.runId ?? null));
+  // A live run the gate kept the trigger from: denied with that run, unless another run following the thread takes it.
+  let kept: string | null = null;
   for (const f of followed) {
     if (t.actor.bot && !f.standing.live) continue;
     const runId = f.sub.runId, m = { from: `trigger:${t.source}`, body: triggerMessage(t), key: `trigger-${t.source}-${sha(t.id)}` };
     // Idempotent by its key: a delivery the engine didn't confirm in time is sent again with the trigger.
     const deliver = () => engine(`delivering to ${runId}`, deps.deliver(runId, m));
     if (f.standing.live) {
+      // A followed thread may be public (a goal's pull request): someone the gate doesn't allow doesn't steer the
+      // working planner. Recorded with what would have happened; nothing is delivered.
+      if (!allows(gateOf(triggersConfig(), t.source), t)) { kept ??= runId; continue; }
       const sent = await deliver();
       if (sent) return { decision: { kind: "continued", runId, seq: sent.seq }, gate: null };
       continue;
@@ -530,6 +540,8 @@ async function decide(t: Trigger, principal: Principal): Promise<{ decision: Tri
   // new request (that could start a second run on the thread). It fails for now, and the source sends it again.
   if (unanswered) throw new PluginError("unavailable", `trigger ${t.source}/${t.id} was not acted on: ${unanswered.runId} follows ${t.thread}, and the engine didn't say where it stands (${unanswered.reason})`, "It is tried again when the source sends it again.", true);
   const j = await judging();
+  // The gate didn't allow it (step 3 asks no plugin then): denied, naming the working planner it would have reached.
+  if (kept && j.denied) return { decision: { ...j.denied, reason: `${j.denied.reason}: not delivered to ${kept}`, wouldHave: "continue", runId: kept }, gate: j.gate };
   if (j.denied) return { decision: j.denied, gate: j.gate };
   if (j.recorded) return { decision: { kind: "recorded", wouldHave: "start", runId: null }, gate: j.gate };
   const { gate } = j, g = gateOf(triggersConfig(), t.source);

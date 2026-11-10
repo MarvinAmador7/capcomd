@@ -64,6 +64,28 @@ export const ApiRouteContribution = z.object({
   scope: PluginScope.describe("The caller's scope the route needs (not the plugin's)"),
 }).strict();
 
+/** A route path's `{name}` segment: it takes any one path segment (§4.7.3); any other segment is literal. */
+const routeParam = (segment: string): boolean => /^\{[^{}]+\}$/.test(segment);
+
+/** A path both route patterns match, when they would tie at the gateway: the same number of `{param}` segments (the
+ *  route with fewer wins otherwise, §4.7.3) and every segment a parameter in one of them or the same literal in both.
+ *  null when no path ties them. `/a/{x}/c` and `/a/b/{y}` tie on `/a/b/c`. */
+export function ambiguousRoutes(a: string, b: string): string | null {
+  const as = a.split("/"), bs = b.split("/");
+  if (as.length !== bs.length || as.filter(routeParam).length !== bs.filter(routeParam).length) return null;
+  const path: string[] = [];
+  for (const [i, x] of as.entries()) {
+    const y = bs[i]!;
+    if (routeParam(x) && routeParam(y)) path.push("x");
+    // A parameter never takes an empty segment, so it can't meet an empty literal (`/a//b`).
+    else if (routeParam(x)) { if (!y) return null; path.push(y); }
+    else if (routeParam(y)) { if (!x) return null; path.push(x); }
+    else if (x === y) path.push(x);
+    else return null;
+  }
+  return path.join("/");
+}
+
 export const UiSurfaceContribution = z.object({
   kind: z.enum(["settings", "info", "action", "card", "profile-field"]).describe("Descriptor kinds the app renders generically (§4.7.5; ADR-021's settings rows generalised)"),
   id: z.string().regex(/^[a-z][a-zA-Z0-9]*$/),
@@ -162,6 +184,11 @@ export const PluginManifest = z.object({
     if (!provided.has(`context:${c.name}`)) ctx.addIssue({ code: "custom", path: ["provides"], message: `a context contribution must be listed in provides: context:${c.name}` });
   }
   for (const id of provided) if (id.startsWith("context:") && !contextNames.has(id.slice("context:".length))) ctx.addIssue({ code: "custom", path: ["provides"], message: `${id} is provided but not contributed (contributes.context)` });
+  const routes = m.contributes?.api ?? [];
+  for (const [i, a] of routes.entries()) for (const b of routes.slice(i + 1)) {
+    const both = a.method === b.method ? ambiguousRoutes(a.path, b.path) : null;
+    if (both !== null) ctx.addIssue({ code: "custom", path: ["contributes", "api"], message: `${a.method} ${a.path} and ${b.method} ${b.path} both match ${both} with as many parameters, so neither would win: make one of them literal where the other has a parameter (§4.7.3)` });
+  }
   if (provided.has(`plugin:${m.name}`)) ctx.addIssue({ code: "custom", path: ["provides"], message: "a plugin provides itself implicitly; do not list plugin:<own name>" });
   for (const id of m.requires ?? []) if (id === `plugin:${m.name}` || provided.has(id)) ctx.addIssue({ code: "custom", path: ["requires"], message: `a plugin cannot require what it provides: ${id}` });
   if (m.scopes?.includes("approve" as never)) ctx.addIssue({ code: "custom", path: ["scopes"], message: "approve is not grantable to a plugin (§11.1)" });

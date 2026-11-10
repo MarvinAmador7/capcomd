@@ -22,7 +22,7 @@ final class ThreadTests: XCTestCase {
 
   func testEveryGoldenSessionDecodes() throws {
     let names = try FileManager.default.contentsOfDirectory(atPath: Self.golden.path).filter { $0.hasSuffix(".items.json") }
-    XCTAssertEqual(names.count, 5)
+    XCTAssertEqual(names.count, 7)
     for n in names {
       let items = try goldenItems(String(n.dropLast(".items.json".count)))
       XCTAssertFalse(items.isEmpty, n)
@@ -38,6 +38,19 @@ final class ThreadTests: XCTestCase {
     XCTAssertEqual(Set(book.items.map(\.id)).count, book.items.count)
     XCTAssertTrue(book.items.filter { $0.kind == "tool" }.allSatisfy { !$0.open && $0.tool != nil })
     XCTAssertEqual(book.items.map(\.order), book.items.map(\.order).sorted())
+  }
+
+  func testFxSessionShapes() throws {
+    var book = Book(); book.apply(try goldenItems("fx-0.0.16"))
+    XCTAssertTrue(Set(book.items.map(\.kind)).isSuperset(of: ["say", "tool"]))
+    // Each tool call's done rev replaced its open one.
+    XCTAssertEqual(Set(book.items.map(\.id)).count, book.items.count)
+    XCTAssertTrue(book.items.filter { $0.kind == "tool" }.allSatisfy { !$0.open && $0.tool != nil })
+    // A call fx's rules or the bridge refused is a closed tool item that carries its error.
+    var refused = Book(); refused.apply(try goldenItems("fx-0.0.16-refused"))
+    let tools = refused.items.filter { $0.kind == "tool" }
+    XCTAssertTrue(tools.allSatisfy { !$0.open })
+    XCTAssertTrue(tools.contains { $0.error?.message.isEmpty == false })
   }
 
   func testEveryBlockAndLinkTargetIsRepresented() throws {

@@ -17,7 +17,7 @@ export const PLUGIN_ERROR_CODES = [
   "not_found",
   /** The plugin is disposing: `ctx.signal` is aborted and new calls are refused. */
   "disposed",
-  /** The deadline passed (`HookCall.deadline`, or a primitive's `signal`). */
+  /** The deadline passed (`HookCall.deadline`, a primitive's `timeoutMs`), or a primitive's `signal` aborted (§8.2). */
   "timeout",
   /** The kernel could not do it now (the engine is unreachable, a provider did not answer); `retryable` is true. */
   "unavailable",

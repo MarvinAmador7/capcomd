@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { handoffDraft, threadBuilder, ThreadItem, type ItemDraft } from "../src/index";
 
-const run = (cli: "claude" | "codex", events: unknown[], o: { onImage?: (x: any) => void } = {}) => {
+const run = (cli: "claude" | "codex" | "fx", events: unknown[], o: { onImage?: (x: any) => void } = {}) => {
 	const b = threadBuilder({ cli, idPrefix: "itm-t", now: () => 0, link: { root: "/w/repo" }, ...o });
 	const updates: ItemDraft[] = [];
 	for (const e of events) updates.push(...b.event(e));
@@ -83,6 +83,43 @@ describe("codex", () => {
 	test("a tool step still running when the turn completes is closed unfinished... only at finish", () => {
 		const { updates } = run("codex", [{ type: "item.started", item: { id: "i", type: "command_execution", command: "sleep 9" } }, { type: "turn.completed" }]);
 		expect(updates.map((u) => [u.rev, u.status, u.error?.code ?? null])).toEqual([[1, "open", null], [2, "done", "unfinished"]]);
+	});
+});
+
+describe("fx (the bridge's lines)", () => {
+	const call = (id: string, name: string, rawInput: unknown, extra: Record<string, unknown> = {}) => ({ type: "update", update: { sessionUpdate: "tool_call", toolCallId: id, name, kind: "execute", status: "pending", rawInput, ...extra } });
+	const end = (id: string, status: string, text: string, extra: Record<string, unknown> = {}) => ({ type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: id, status, content: [{ type: "content", content: { type: "text", text } }], ...extra } });
+	test("a tool call opens and its end closes it: a non-zero exit and a refusal are errors, with the command's duration", () => {
+		const { items } = run("fx", [
+			call("a", "shell", { action: "run", command: "bun test" }), end("a", "failed", "1 fail", { command_result: { exit_code: 1, duration_ms: 1234 } }),
+			call("b", "shell", { action: "run", command: "git push" }), end("b", "failed", '{"error":{"type":"tool_permission_denied"}}'),
+			call("c", "read_file", { path: "/w/repo/src/a.ts" }), end("c", "completed", "text"),
+		]);
+		expect(items.map((i) => [i.text, i.tool?.kind, i.tool?.isError, i.error?.code ?? null, i.durationMs])).toEqual([
+			["Run bun test", "test", true, null, 1234], ["Run git push", "git", true, "refused", null], ["Read src/a.ts", "read", false, null, null],
+		]);
+	});
+	test("naming its tab and fx's own internal steps are left out; capcomd's MCP tools are its ops", () => {
+		const { items } = run("fx", [
+			call("t", "shell", { action: "run", command: "capcomd title login redirect" }), end("t", "completed", "ok"),
+			call("i", "capability_search", {}, { _meta: { fx: { toolCall: { internal: true } } } }), end("i", "completed", "x"),
+			call("m", "mcp_capcomd_capcomd_spawn", { profile: "worker" }, { _meta: { fx: { toolCall: { internal: false, mcp: { server: "capcomd", tool: "capcomd_spawn" } } } } }), end("m", "completed", "{}"),
+		]);
+		expect(items.map((i) => [i.text, i.tool?.name, i.tool?.kind])).toEqual([["Spawn a worker", "capcomd.capcomd_spawn", "spawn"]]);
+	});
+	test("a turn that ends refused is an error with fx's reason; a quota and fx retrying are notices; messages and thoughts are whole", () => {
+		const { items } = run("fx", [
+			{ type: "message", role: "thought", text: "hmm" }, { type: "message", role: "agent", text: "AI_GATEWAY_API_KEY authentication failed · HTTP 401" },
+			{ type: "result", stopReason: "refused", usage: {}, lastText: "AI_GATEWAY_API_KEY authentication failed · HTTP 401" },
+			{ type: "update", update: { sessionUpdate: "session_info_update", _meta: { fx: { modelResponseRecovery: { state: "active", cause: "rate_limited", message: "⚠ Rate limited · HTTP 429 · retrying request in 1s" } } } } },
+			{ type: "quota", message: "Rate limited" }, { type: "result", stopReason: "cancelled", usage: {}, lastText: "", quota: "Rate limited" },
+			{ type: "error", where: "initialize", message: "fx needs access to Vercel AI Gateway." }, { type: "steer", delivery: "absorbed" }, { type: "brand-new" },
+		]);
+		expect(items.map((i) => [i.kind, i.text, i.error?.code ?? null])).toEqual([
+			["thinking", "hmm", null], ["say", "AI_GATEWAY_API_KEY authentication failed · HTTP 401", null], ["error", "The turn ended: refused", "refused"],
+			["other", "Rate limited · HTTP 429 · retrying request in 1s", null], ["other", "Usage limit reached", null],
+			["error", "fx needs access to Vercel AI Gateway.", "initialize"], ["other", "Unknown event: brand-new", null],
+		]);
 	});
 });
 

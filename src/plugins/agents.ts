@@ -9,10 +9,11 @@ import type { AgentConfig } from "../agents/config";
 import type { AgentAdapter } from "../agents/types";
 import { claude } from "./agent-claude";
 import { codex } from "./agent-codex";
+import { fx } from "./agent-fx";
 import { daemonSeamNames } from "./snapshot";
 
 /** The built-in agent seams, in the order capcomd lists them. */
-export const BUILTIN_AGENTS: readonly AgentProvider[] = [claude, codex];
+export const BUILTIN_AGENTS: readonly AgentProvider[] = [claude, codex, fx];
 
 let store: ContributionStore | null = null;
 
@@ -51,13 +52,17 @@ export const providerOfKind = (kind: string): string => Object.entries(LEGACY_KI
 /** The CLI version pins operators can override today (CAPCOMD_CLAUDE_CODE_VERSION, CAPCOMD_CODEX_VERSION). */
 const VERSION_FIELD: Record<string, "version" | "codexVersion"> = { claude: "version", codex: "codexVersion" };
 
-/** The kernel's agent config as the seam's (§7.3): only what a provider reads. */
-export function seamConfig(cfg: AgentConfig): SeamConfig {
+/** The kernel's agent config as the seam's (§7.3): only what a provider reads. `provider`: whose token rates
+ *  (`usdPerMtok`) it gets: its own when the config has them (`cfg.usdPerMtok`: CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN, _OUT),
+ *  else codex's (CAPCOMD_CODEX_USD_PER_MTOK_IN, _OUT), as every provider got before providers had their own. */
+export function seamConfig(cfg: AgentConfig, provider = "codex"): SeamConfig {
+  const codexRates = cfg.codexUsdPerMtokIn !== undefined && cfg.codexUsdPerMtokOut !== undefined ? { in: cfg.codexUsdPerMtokIn, out: cfg.codexUsdPerMtokOut } : undefined;
+  const rates = (provider !== "codex" ? cfg.usdPerMtok?.[provider] : undefined) ?? codexRates;
   return {
     model: cfg.model, effort: cfg.effort, maxTurns: cfg.maxTurns, maxBudgetUsd: cfg.maxBudgetUsd,
     allowedTools: cfg.allowedTools, disallowedTools: cfg.disallowedTools, sandbox: cfg.codexSandbox, credentialMode: cfg.credentialMode,
     ...(cfg.denyCommands?.length ? { denyCommands: cfg.denyCommands } : {}),
-    ...(cfg.codexUsdPerMtokIn !== undefined && cfg.codexUsdPerMtokOut !== undefined ? { usdPerMtok: { in: cfg.codexUsdPerMtokIn, out: cfg.codexUsdPerMtokOut } } : {}),
+    ...(rates ? { usdPerMtok: rates } : {}),
   };
 }
 
@@ -71,14 +76,14 @@ export function adapterOf(p: AgentProvider): AgentAdapter {
   const d = p.describe();
   const field = VERSION_FIELD[d.name];
   const a: AgentAdapter = {
-    kind: kindOf(d.name), bin: d.bin, npmPackage: d.npmPackage,
+    kind: kindOf(d.name), bin: d.bin, ...(d.npmPackage !== undefined ? { npmPackage: d.npmPackage } : {}), ...(d.install ? { install: d.install } : {}),
     pinnedVersion: (cfg) => (field ? cfg[field] : undefined) || d.pinnedVersion,
     secretName: d.secretName, apiHost: d.apiHost,
     credentialEnv: (v) => p.credentialEnv(v), baseEnv: () => p.baseEnv(),
     ...(d.streamInput ? { streamInput: true } : {}),
-    command: (ctx, q) => p.command({ ...ctx, cfg: seamConfig(ctx.cfg) }, q),
-    parse: (line, r, state, cfg) => p.parse(line, (s) => r.text(s), state, seamConfig(cfg)),
-    guard: (state, cfg) => p.guard(state, seamConfig(cfg)),
+    command: (ctx, q) => p.command({ ...ctx, cfg: seamConfig(ctx.cfg, d.name) }, q),
+    parse: (line, r, state, cfg) => p.parse(line, (s) => r.text(s), state, seamConfig(cfg, d.name)),
+    guard: (state, cfg) => p.guard(state, seamConfig(cfg, d.name)),
     subscriptionCheck: (home, q) => p.subscriptionCheck(home, q),
     subscriptionPrelude: (home, q) => p.subscriptionPrelude(home, q),
     loginCommand: (bin) => p.loginCommand(bin),

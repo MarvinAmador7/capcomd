@@ -1,0 +1,9 @@
+{"type":"init","agent":{"name":"fx","title":"fx","version":"0.0.16"},"protocolVersion":1,"steering":true}
+{"type":"session","sessionId":"ZkfboPAKqKBI","model":"stub-model","provider":"stub"}
+{"type":"message","role":"agent","messageId":"8296957631e187f0a2dcf59dde86b98d","text":"Let me look at the files."}
+{"type":"update","update":{"sessionUpdate":"tool_call","toolCallId":"call_shell_0","name":"shell","title":"Running","kind":"execute","status":"pending","rawInput":{"action":"run","command":"echo hello-from-shell && ls"},"_meta":{"fx":{"toolCall":{"internal":false}}}}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_shell_0","status":"in_progress"}}
+{"type":"update","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_shell_0","status":"completed","content":[{"type":"content","content":{"type":"text","text":"hello-from-shell\nREADME.md\n"}}],"command_result":{"kind":"command","command":"echo hello-from-shell && ls","cwd":"/work","exit_code":0,"signal":null,"timed_out":false,"duration_ms":6,"stdout_bytes":27,"stderr_bytes":0,"truncated":false,"output_file":"fx-command-replay-e7280e343ba9-ac0e719929b2f6b48db10722b92d01fd8b0d35d4d78216db9343e9e8ca8341cd.bin","stdout_file":null,"stderr_file":null}}}
+{"type":"message","role":"agent","messageId":"4c742d4087c2bb281292ded41d7057c4","text":"The directory has a README. Done."}
+{"type":"update","update":{"sessionUpdate":"usage_update","used":1341,"size":200000}}
+{"type":"result","stopReason":"end_turn","usage":{"inputTokens":2500,"outputTokens":81},"lastText":"The directory has a README. Done."}
