@@ -3322,10 +3322,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "decision": {
       "type": "string",
-      "description": "What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"
+      "description": "What the intake did: deduped (seen within 30 days), denied (the allowlist, the accept mode, or a plugin; on a thread a live run follows, an actor the gate doesn't allow, with that run's runId, nothing delivered), recorded (the accept mode observe: nothing ran, or an ended run's planner wasn't started again; `capcomd triggers log` says what would have), started (a run, runId), continued (a run following its thread got it as a message, runId; `restarted` when the run had ended and its planner started again on it), failed (a run, or an ended run's planner, could not start; it may come again). More may be added"
     },
     "runId": {
-      "description": "The run it started or continued; null otherwise",
+      "description": "The run it started or continued, or, denied, the live run following its thread whose planner the gate kept it from; null otherwise",
       "type": [
         "string",
         "null"

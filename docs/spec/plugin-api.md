@@ -2385,9 +2385,13 @@ with the `TriggerDecision`:
 
 1. **Dedupe**: `(source, id)` seen within 30 days → `deduped`.
 2. **Subscription**: the thread is subscribed by a live run (or one ended < `until`) → the trigger is delivered to that
-   run's planner as a message (`continued {runId, seq}`) **if the actor is a person** (bots and CI never resume an
-   ended run; they reach a live run as context); no further gate. A person's stop is a message too; the planner decides
-   (the prototype's rule). The planner is the run's `_planner` record, else its top-level agent spawned with the key
+   run's planner as a message (`continued {runId, seq}`). On a **live** run, only when step 3's gate allows it (its
+   actor in `allowed`, or its thread matching an `opened` pattern; bots and CI too, as context), with no further gate
+   (`trigger.admitting` and the mode aren't asked): a followed thread may be public (a goal's pull request), and
+   someone the operator didn't allow doesn't steer the working planner. Anyone else's is recorded and not delivered →
+   `denied {by: "allowlist", reason, wouldHave: "continue", runId}` (the log's `gate` says `allowed: false`; the dedupe
+   mark stays), unless an ended run following the same thread takes it as below. On an **ended** run, only a person's trigger (bots and CI never resume an ended run). A person's stop is
+   a message too; the planner decides (the prototype's rule). The planner is the run's `_planner` record, else its top-level agent spawned with the key
    `planner`; a run with neither (a run driven from outside, or the built-in recipe's) has no one to read it, and the
    trigger goes on to the gate. The message is `from: trigger:<source>`, its body who wrote on which thread and what
    (`triggerMessage`), and the agent reads it as someone outside capcomd's words, not the operator's. On a run that
@@ -2482,7 +2486,7 @@ second call may change `until`. A subscription's run must exist (`not_found`).
 | `POST /v1/runs` from the app, `capcomd run`, `capcomd_run_new` | an **explicit** trigger from source `operator`/`driver` that skips the gate: the same `runNew` path; `run.creating` fires either way (step 10 leaves these paths as they are: they don't pass through the intake yet) |
 | a person replying in the app (messages) | source `app`, always allowed (likewise unchanged in step 10) |
 | GitHub comments, CI, Slack, schedules | source plugins (`github`, `slack`, `schedule`: a timer job that emits) |
-| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread when the pull request is opened or found (`src/primitives/goal.ts` `openGoalPullRequest`, from whichever process opens it; the forge names the thread, `PullRequestRef.thread`, so the kernel has no GitHub code; a failed subscription is logged, never the opening's failure), so comments on it reach the planner: as a message while the run works, and, since a pull request is opened once the planner finished, mostly by starting the planner again (§16.3.2 step 2) on an allowed person's comment. The `github` source reads the pull request's conversation (issue comments); review comments on lines of the diff are not read yet |
+| goal branches and PRs (`run.pr_opened`) | the run subscribes to its PR's thread when the pull request is opened or found (`src/primitives/goal.ts` `openGoalPullRequest`, from whichever process opens it; the forge names the thread, `PullRequestRef.thread`, so the kernel has no GitHub code; a failed subscription is logged, never the opening's failure), so comments on it reach the planner: as a message while the run works (an allowed actor's only: the thread may be public), and, since a pull request is opened once the planner finished, mostly by starting the planner again (§16.3.2 step 2) on an allowed person's comment. The `github` source reads the pull request's conversation (issue comments); review comments on lines of the diff are not read yet |
 
 #### 16.3.7 Replies
 
