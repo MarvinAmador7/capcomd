@@ -13948,9 +13948,10 @@
               "stopped",
               "invalid",
               "internal",
-              "unavailable"
+              "unavailable",
+              "timeout"
             ],
-            "description": "stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. Treat a code you don't know as a generic error"
+            "description": "stopped (409, capability runs.goal_branch): POST /v1/runs/{runId}/pull-request on a run whose planner stopped before it finished; the message is the question to ask the person, and the body `{\"stopped\": true}` opens it once they agree. conflict (409): the run or agent is in a state the action can't apply to (nothing to pause, resume or cancel; a message to an agent that has ended), or a machine changed since it was read, or a folder's origin changed since it was inspected (POST /v1/projects), or a folder is already a git checkout or already has an origin (capability projects.git), or a repository name is taken on GitHub (POST /v1/projects/publish, `field` name), or a profile changed since it was read (PUT /v1/profiles/{name}, capability profiles.edit: `rev` is its current one). unavailable (503, capability sandboxes.actions): a provider didn't answer during an action; (capability projects.git) the GitHub CLI couldn't publish. timeout (504, capability plugins.routes): a plugin's route under /v1/x/ didn't answer within its deadline (30 s); invalid is also 413 there, a body over 1 MiB. Treat a code you don't know as a generic error"
           },
           "message": {
             "type": "string"

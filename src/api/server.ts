@@ -43,7 +43,7 @@ const STATUS_CODE: Record<number, string> = { 400: "invalid", 401: "unauthorized
 const CONFIGURE_POSTS = new Set(["/v1/projects", "/v1/projects/git-init", "/v1/projects/publish"]);
 /** POST …/brain-proposals/send (capability context.brain_proposals): the configure scope too (drafts in the caller's name). */
 const BRAIN_SEND = /^\/v1\/runs\/[^/]+\/brain-proposals\/send$/;
-const err = (c: Context, status: 401 | 403 | 404 | 409 | 422 | 503, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
+const err = (c: Context, status: 401 | 403 | 404 | 409 | 413 | 422 | 503 | 504, code: string, message: string, extra: Record<string, unknown> = {}) => c.json({ code, message, ...extra }, status);
 
 /** agent.activity_changed: at most one frame per agent per this many ms (ACTIVITY_DOC). */
 export const ACTIVITY_MS = 1000;
@@ -62,6 +62,8 @@ export type GatewayHost = {
 };
 export type ServerOptions = {
 	source: HarnessSource; clients?: () => ClientRecord[]; plugins?: () => z.infer<typeof Plugins>["plugins"]; heartbeatMs?: number; pollMs?: number; activityMs?: number; threadMs?: number; snapshotSteps?: number; state?: HarnessState;
+	/** A plugin route's handler deadline (plugin API §4.7.3; default ROUTE_DEADLINE_MS). */
+	routeDeadlineMs?: number;
 	/** The plugin host behind GET /v1/plugins/{name}, the controls and the out-of-process protocol (absent: 404 / 409). */
 	pluginHost?: GatewayHost;
 	/** A plugin's private storage (src/plugins/storage.ts), for its /v1/plugins/{name}/storage routes. */
@@ -75,6 +77,28 @@ const PLUGIN_STATUS: Record<PluginErrorCode, 403 | 404 | 409 | 422 | 503> = { fo
 /** A plugin route's thrown PluginError (plugin API §4.7.3); any other code, or any other throw, is 500 "plugin error". */
 const ROUTE_STATUS: Partial<Record<PluginErrorCode, 403 | 404 | 409 | 422 | 503>> = { forbidden: 403, not_found: 404, conflict: 409, invalid: 422, unavailable: 503 };
 const PLUGIN_ROUTES = "/v1/x/";
+/** A plugin route's request body is at most this many bytes; a bigger one is 413 before the handler runs (§4.7.3). */
+export const ROUTE_BODY_MAX_BYTES = 1024 * 1024;
+/** A plugin route's handler that hasn't answered by then is 504 `timeout`, its signal aborted (§4.7.3). */
+export const ROUTE_DEADLINE_MS = 30_000;
+
+/** A request's body as text, or null once it is over `max` bytes: read no further than that, whatever its
+ *  content-length says (a chunked body has none). */
+async function cappedText(req: Request, max: number): Promise<string | null> {
+	const declared = Number(req.headers.get("content-length") ?? "");
+	if (Number.isFinite(declared) && declared > max) return null;
+	if (!req.body) return "";
+	const reader = req.body.getReader(), chunks: Uint8Array[] = [];
+	let size = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > max) { await reader.cancel().catch(() => {}); return null; }
+		chunks.push(value);
+	}
+	return Buffer.concat(chunks).toString("utf8");
+}
 
 /** A plugin route's params when `path` matches its `pattern`: a `{name}` segment takes one path segment; null otherwise. */
 export function routeParams(pattern: string, path: string): Record<string, string> | null {
@@ -111,6 +135,7 @@ export function harnessApp(o: ServerOptions) {
 	const pollMs = o.pollMs ?? 500;
 	const activityMs = o.activityMs ?? ACTIVITY_MS;
 	const threadMs = o.threadMs ?? THREAD_MS;
+	const routeDeadlineMs = o.routeDeadlineMs ?? ROUTE_DEADLINE_MS;
 	// (clientId, key) → stored outcome and approvalId → decision, persisted so a retry after restart replays.
 	const state = o.state ?? harnessState();
 	// approvalId → in-flight decision; claimed synchronously before any await so concurrent requests cannot both decide.
@@ -1030,7 +1055,8 @@ export function harnessApp(o: ServerOptions) {
 	// active plugin registered with ctx.api.route (gone from the store once it is disposed). The caller's token needs the
 	// route's declared scope; the handler runs as the caller, JSON in and out. A PluginError it throws keeps its code where
 	// the spec maps one; anything else is 500 "plugin error", its message only in the daemon log. Never a stream: the
-	// streams are the kernel's, a plugin publishes events instead.
+	// streams are the kernel's, a plugin publishes events instead. A body over ROUTE_BODY_MAX_BYTES is 413 before the
+	// handler runs; a handler that hasn't answered within the deadline is 504 `timeout`, its signal aborted.
 	const redactor = new Redactor();
 	app.all(`${PLUGIN_ROUTES}*`, async (c) => {
 		const path = new URL(c.req.url).pathname;
@@ -1046,20 +1072,33 @@ export function harnessApp(o: ServerOptions) {
 		const client = c.get("client");
 		if (!client.scopes.includes(found.spec.scope)) return err(c, 403, "forbidden", `token lacks the ${found.spec.scope} scope`);
 		let body: unknown;
-		const text = method === "GET" || method === "DELETE" ? "" : await c.req.text();
+		const text = method === "GET" || method === "DELETE" ? "" : await cappedText(c.req.raw, ROUTE_BODY_MAX_BYTES);
+		if (text === null) return err(c, 413, "invalid", `the body is over ${ROUTE_BODY_MAX_BYTES} bytes`);
 		if (text.trim()) try { body = JSON.parse(text); } catch { return err(c, 422, "invalid", "the body must be JSON"); }
 		const failed = (message: string) => {
 			console.log(JSON.stringify({ plugin: name, level: "error", message: redactor.text(`${method} ${path}: ${message}`), fields: {} }));
 			return c.json({ code: "internal", message: "plugin error" }, 500);
 		};
 		let out: unknown;
+		// The handler's signal: aborted when the caller goes away or when the deadline passes.
+		const deadline = new AbortController();
+		const signal = c.req.raw.signal ? AbortSignal.any([c.req.raw.signal, deadline.signal]) : deadline.signal;
+		const late = Symbol("late");
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			out = await found.spec.handler({ params: found.params, query: c.req.query(), body, principal: callerPrincipal(client), signal: c.req.raw.signal });
+			const answer = Promise.resolve(found.spec.handler({ params: found.params, query: c.req.query(), body, principal: callerPrincipal(client), signal }));
+			const expired = new Promise<typeof late>((resolve) => { timer = setTimeout(() => resolve(late), routeDeadlineMs); });
+			out = await Promise.race([answer, expired]);
+			if (out === late) {
+				answer.catch(() => {}); // what it does after the deadline goes nowhere
+				deadline.abort(new PluginError("timeout", `the route didn't answer within ${routeDeadlineMs} ms`));
+				return err(c, 504, "timeout", `${method} ${path.slice(0, 200)}: the plugin didn't answer within ${routeDeadlineMs / 1000} s`);
+			}
 		} catch (e) {
 			const status = e instanceof PluginError ? ROUTE_STATUS[e.code] : undefined;
 			if (e instanceof PluginError && status) return err(c, status, e.code, e.message, e.hint ? { hint: e.hint } : {});
 			return failed(e instanceof PluginError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
-		}
+		} finally { clearTimeout(timer); }
 		if (out === undefined) return c.body(null, 204);
 		if (out instanceof Response || out instanceof ReadableStream || typeof out === "function")
 			return failed("a route answers with a JSON value, never a Response or a stream (plugin API §4.7.3)");

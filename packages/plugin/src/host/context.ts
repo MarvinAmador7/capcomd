@@ -4,7 +4,7 @@
 import { PluginError } from "../errors";
 import { pluginEventType } from "../event-type";
 import { HOOKS, type HookName } from "../hooks";
-import type { PluginManifest, PluginScope } from "../manifest";
+import { ambiguousRoutes, type PluginManifest, type PluginScope } from "../manifest";
 import type { Registration } from "../testkit";
 import type { ApiRouteSpec, CallOptions, CliCommandSpec, Disposable, EmittedEvent, HarnessEventEnvelope, LogLevel, McpToolSpec, PluginContext, Span, UiDescriptor } from "../context";
 import type { TriggerReply } from "../shapes";
@@ -249,6 +249,9 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
         live();
         if (!(declared.api ?? []).some((r) => r.method === spec.method && r.path === spec.path && r.scope === spec.scope)) refuse(`API route ${spec.method} ${spec.path}`);
         const path = `/v1/x/${name}${spec.path}`;
+        // A manifest that wasn't validated can still declare two routes that tie on one path: the second is refused.
+        const tie = o.store.list("api").find((e) => e.plugin === name && e.value.spec.method === spec.method && ambiguousRoutes(e.value.spec.path, spec.path) !== null);
+        if (tie) throw new PluginError("conflict", `API route ${spec.method} ${spec.path} and ${spec.method} ${tie.value.spec.path} both match ${ambiguousRoutes(tie.value.spec.path, spec.path)} with as many parameters (§4.7.3)`);
         return contribute({ kind: "api", method: spec.method, path }, `${spec.method} ${path}`, { kind: "api", spec });
       },
       capability(flag, doc) {
