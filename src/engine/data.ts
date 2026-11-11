@@ -3,7 +3,7 @@
 // Every engine capcomd starts keeps everything under capcomd's own home (`~/.capcomd`, or $CAPCOMD_HOME), one
 // directory per port:
 //
-//   <home>/engine/<port>/db                    the engine's RocksDB (RIVET__FILE_SYSTEM__PATH, set by engine-wrapper.sh)
+//   <home>/engine/<port>/db                    the engine's storage (rivetkit 3.x: db/log and db/objects, set by engine-wrapper.sh)
 //   <home>/engine/<port>/engine.pid            the running engine's pid (engine-wrapper.sh writes it)
 //   <home>/engine/<port>/engine-version.json   the engine version that last opened db (capcomd writes it)
 //   <home>/engine/<port>/backups/<v>-<UTC>/    db/ and engine-version.json as they were before an engine of another
