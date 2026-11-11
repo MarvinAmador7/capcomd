@@ -310,6 +310,8 @@ jobs:
           mkdir -p "$tap/Formula" "$tap/Casks"
           bun scripts/homebrew-formula.ts "$V" dist "file://$PWD/dist" > "$tap/Formula/capcomd.rb"
           bun scripts/homebrew-cask.ts "$V" apps/menubar/build "file://$PWD/apps/menubar/build" capcomd-ci/app/capcomd > "$tap/Casks/capcomd-app.rb"
+          # Homebrew 7 refuses a cask's formula dependency from a tap nobody trusted; older Homebrew has no `trust`.
+          if brew help trust >/dev/null 2>&1; then brew trust capcomd-ci/app; fi
           brew install --cask capcomd-ci/app/capcomd-app
           [ "$(plutil -extract CFBundleShortVersionString raw -o - /Applications/capcomd.app/Contents/Info.plist)" = "$V" ]
           "$(brew --prefix)/bin/capcomd" --version | grep -qx "capcomd $V"
