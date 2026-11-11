@@ -255,7 +255,11 @@ jobs:
   app:
     name: The macOS app
     needs: [prepare, test, smoke, binaries]
-    runs-on: macos-15
+    # macos-26 (Xcode 26.x by default): macos-15's default Xcode 16.4 can't build the universal app since its
+    # dependencies moved on ("Some of the Swift language versions used in target … are supported. (given: [5],
+    # supported: [])" for swift-collections, swift-openapi-generator and swift-service-lifecycle). The app still
+    # targets macOS 14.
+    runs-on: macos-26
     # Two release builds (arm64, x86_64) of the app and its Swift dependencies, from scratch.
     timeout-minutes: 60
     env:
@@ -272,6 +276,9 @@ jobs:
 
       # Signed ad hoc: no CAPCOMD_SIGN_IDENTITY here until there's a Developer ID. Notarization will switch on in
       # build-app.sh (CAPCOMD_NOTARIZE, from secrets); see the comment there.
+      - name: The toolchain
+        run: xcodebuild -version && swift --version
+
       - name: Build the universal app, its zip and SHA-256
         run: BUN_BIN="$(command -v bun)" apps/menubar/scripts/build-app.sh --universal --zip
 
