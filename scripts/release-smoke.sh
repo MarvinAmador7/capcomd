@@ -33,6 +33,17 @@ else
 fi
 [ ${#FAILS[@]} -eq 0 ] || { echo "SMOKE FAIL: ${FAILS[*]}"; exit 1; }
 
+if [ $MODE = npm ]; then
+  # A user's install has no lockfile: every copy of rivet-services it resolved must be the version capcomd pins
+  # (rivetkit's ^0.2.3 once took 0.2.5, whose services never registered with the engine: no run could start).
+  PKG="$BUN_INSTALL/install/global/node_modules/capcomd"
+  PIN=$("$BUN" -e "console.log(require(process.argv[1]).dependencies?.['@rivet-dev/services'] ?? '')" "$PKG/package.json")
+  case "$PIN" in [0-9]*.[0-9]*.[0-9]*) pass "the package pins @rivet-dev/services $PIN" ;; *) fail "the package doesn't pin @rivet-dev/services to an exact version ('$PIN')" ;; esac
+  GOT=$(find "$BUN_INSTALL/install/global/node_modules" -path '*/@rivet-dev/services*/package.json' -not -path '*/@rivet-dev/services*/node_modules/*' \
+    -exec "$BUN" -e 'for (const f of process.argv.slice(1)) console.log(require(f).version)' {} + | sort -u | tr '\n' ' ')
+  [ "$GOT" = "$PIN " ] && pass "every @rivet-dev/services* installed is $PIN" || fail "@rivet-dev/services* installed: ${GOT:-none}, expected $PIN"
+fi
+
 V=$(capcomd --version --json | jget 'j.version')
 if [ -z "$WANT" ] || [ "$V" = "$WANT" ]; then pass "version $V"; else fail "version $V, expected $WANT"; fi
 capcomd --help 2>&1 | grep -q "capcomd setup" && pass "help lists setup" || fail "help doesn't list setup"
@@ -43,6 +54,9 @@ D=$(capcomd setup demo --json 2>"$W/demo.err")
 
 echo "== a run on the installed engine (fake agents)"
 P=$(( 20000 + RANDOM % 20000 )); export CAPCOMD_ENDPOINT=http://127.0.0.1:$P CAPCOMD_SANDBOX=fake CAPCOMD_SPAWN_EXEC=fake CAPCOMD_SKIP_PREFLIGHT=1
+# The package's engine starts rivet-services as it does on a user's default port (:6420), on a port of its own here:
+# a services release that never registers with the engine fails this run, not every user's.
+[ $MODE = npm ] && export RIVET_RUN_SERVICES=1 RIVET_PORT=$((P + 20))
 capcomd serve --port $P > "$W/serve.log" 2>&1 & ENGINE=$!
 R=""; for i in $(seq 1 90); do R=$(capcomd run new --budget usd=1 --json 2>/dev/null | jget 'j.runId'); [ -n "$R" ] && break; sleep 1; done
 if [ -n "$R" ]; then pass "run new $R (engine up after ${i}s)"; else fail "engine didn't come up: $(tail -5 "$W/serve.log" | tr '\n' ' ')"; fi
