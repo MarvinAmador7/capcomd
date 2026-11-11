@@ -30,7 +30,7 @@ import { activityReporter } from "../agents/activity";
 import { noteStep } from "../jobs/service";
 import { itemWriter } from "../agents/thread-store";
 import { heartbeatEveryMs } from "../subagents/results";
-import { adapterFor } from "../agents/adapters";
+import { adapterFor, envPins } from "../agents/adapters";
 import type { AttachedSkill } from "../agents/skills";
 import { bootSnapshot, projectTemplateFor } from "../env/resolve";
 import { profileFor } from "../auth/profiles";
@@ -99,7 +99,7 @@ function agentSetup(profile: string | undefined, pinned: unknown, source: Record
     if (!isRealAgent(kind)) return { kind, config: null, egressAllow: LEGACY_EGRESS, snapshot: boot() as { fromSnapshot?: string }, record: null, template: null };
     const config = loadAgentConfig(source, profile, pinned);
     const login = config.credentialMode === "subscription" ? profileFor(kind, source) : undefined;
-    const pins = { claude: config.version, codex: config.codexVersion, node: config.nodeVersion };
+    const pins = envPins(config);
     const snapshot: { fromSnapshot?: string } = boot(login ? { agent: kind, ...(login.snapshot ? { snapshot: login.snapshot } : {}), env: login.env } : null, pins);
     // Its project's template (src/env/templates.ts), when the place keeps them and nothing else chose the machine's
     // image (a plan login's, a profile's environment): used, or why not (none yet, built on other CLI pins).

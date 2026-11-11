@@ -9,10 +9,13 @@ import { providerStateFile, sandboxCaps, sandboxName } from "../providers/regist
 export const ENV_PREFIX = "capcomd-env-";
 export const ENV_SCHEMA = 1;
 
+/** The CLI versions an env image is named by: Claude Code's, Codex's, node's, and each release-archive CLI's by its
+ *  name (fx). Built by envPins (src/agents/adapters.ts). */
+export type EnvPins = { claude: string; codex: string; node: string; [cli: string]: string };
 export interface EnvManifest {
   schema: number;
   /** Pinned versions requested (what installs when the image lacks a tool). */
-  pins: { claude: string; codex: string; node: string };
+  pins: EnvPins;
   /** sha256 of the repo lockfile, or "none" (no repo given, or no lockfile). */
   lockHash: string;
   lockFile: string;
@@ -64,7 +67,7 @@ export function writeLedger(l: EnvLedger, path = ledgerPath()) {
 
 // ---- project templates (src/env/templates.ts) --------------------------------------------------------------------
 
-type Pins = EnvManifest["pins"];
+type Pins = EnvPins;
 /** A repository's key: the same for the URL spellings git treats as one (src/agents/workspace.ts `sameRepo`). */
 export function projectKey(repo: string): string {
   const norm = repo.trim().replace(/\/+$/, "").replace(/\.git$/, "").replace(/^([a-z+]+:\/\/[^/]+)/i, (h) => h.toLowerCase());

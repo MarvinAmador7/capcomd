@@ -5,7 +5,7 @@ import type { SandboxProvider } from "../providers/sandbox";
 import type { SnapshotPlatform, SnapshotInfo } from "./platform";
 import type { AgentConfig, ContextBundleSpec } from "../agents/config";
 import { BASE_EGRESS, installEgress } from "../agents/config";
-import { activeAdapters } from "../agents/adapters";
+import { activeAdapters, envPins } from "../agents/adapters";
 import { agentHome, agentPath, detectedUsable, detectScript, installScript, parseDetect, placeBundle, sq, templateDir } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { rmSync } from "node:fs";
@@ -107,7 +107,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
   const bundlesManifest = bundles.length ? { bundles: bundles.map((b) => ({ provider: b.provider, name: b.name, commit: b.commit, ...(b.path !== undefined ? { path: b.path } : {}) })) } : {};
   // No repo → the name is known up front (pins + no lockfile): skip the VM when it is already built.
   if (!o.repoUrl && !o.force) {
-    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash: "none", lockFile: "none", repo: "", ...bundlesManifest };
+    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: envPins(o.cfg), lockHash: "none", lockFile: "none", repo: "", ...bundlesManifest };
     const name = envName(manifest);
     const existing = await p.snapshotGet(name);
     if (existing?.status === "ready") {
@@ -186,7 +186,7 @@ async function buildEnv(p: SandboxProvider & SnapshotPlatform, o: BuildOptions):
         else log("warm template: couldn't read the clone's commit; workers will clone");
       }
     } else log("no repo given: baking CLIs + git config only (set CAPCOMD_REPO to bake deps)");
-    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: { claude: o.cfg.version, codex: o.cfg.codexVersion, node: o.cfg.nodeVersion }, lockHash, lockFile, repo: o.repoUrl ?? "", ...(template ? { template } : {}), ...bundlesManifest };
+    const manifest: EnvManifest = { schema: ENV_SCHEMA, pins: envPins(o.cfg), lockHash, lockFile, repo: o.repoUrl ?? "", ...(template ? { template } : {}), ...bundlesManifest };
     // A project template: every branch's tip as built (an agent's delta is counted from them), and a name per project,
     // base env and build.
     let heads: Record<string, string> = {};

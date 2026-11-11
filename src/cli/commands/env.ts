@@ -198,7 +198,10 @@ async function authCommand(pos: string[], values: Record<string, any>): Promise<
     const then = login === "grok" ? "Open the URL below in your browser, then paste the code xAI shows you here" : "Open the URL below in your browser";
     console.error(`[auth] ${how} in a VM from ${envSnapshot}. ${then}; tokens are never printed.`);
     const store = (process.env.CAPCOMD_AUTH_STORE ?? "auto") as "auto" | "secret" | "snapshot";
-    const res = await authLogin(p, agent, { cfg, envSnapshot, store, login, log: (l) => console.error(`[auth] ${l}`) });
+    // A login has no run: its failure's next step is the environment's, not `capcomd events <runId>`.
+    const res = await authLogin(p, agent, { cfg, envSnapshot, store, login, log: (l) => console.error(`[auth] ${l}`) }).catch((e) => {
+      throw e instanceof RelayError ? e : new RelayError("run_failed", e instanceof Error ? e.message : String(e), "Run `capcomd doctor` to check the environment, then log in again.");
+    });
     emit(json, { profile: res.profile, loginMs: res.loginMs, totalMs: res.totalMs }, `logged in: ${agent}${login ? ` (${login})` : ""} → ${res.profile.store === "secret" ? "boxd secret CLAUDE_CODE_OAUTH_TOKEN" : res.profile.snapshot}  (verified, ${(res.totalMs / 1000).toFixed(1)}s)`);
     return 0;
   }

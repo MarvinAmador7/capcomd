@@ -5,7 +5,7 @@ import type { AgentConfig } from "../agents/config";
 import { BASE_EGRESS } from "../agents/config";
 import { adapterFor } from "../agents/adapters";
 import type { AgentAdapter } from "../agents/types";
-import { agentHome, agentPath, detectScript, parseDetect, sq } from "../agents/runner";
+import { agentHome, agentPath, detectScript, detectedUsable, installedBin, installScript, parseDetect, sq } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { AUTH_SHAPES, CLAUDE_TOKEN, bridge, hasInteractive, type InteractiveSession } from "./interactive";
 import { CLAUDE_TOKEN_SECRET, PROFILE_AGENTS, authSnapshotName, readAuthLedger, writeAuthLedger, type AuthProfile, type ProfileAgent } from "./profiles";
@@ -73,7 +73,9 @@ export async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: s
   try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
   const release = recordJobMachine({ idemKey, sandbox: place, kind: "login", purpose, agent: a.kind, ttlSeconds: 1800 });
   try {
-    const { id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 1800, egressAllow: [...new Set([...BASE_EGRESS, ...egress])], labels: { purpose }, fromSnapshot: snapshot });
+    // A release-archive CLI (fx) the image lacks is installed in the VM (findBin): its release host too.
+    const archive = a.install ? Object.values(a.install.assets).map((x) => new URL(x.url).host) : [];
+    const { id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 1800, egressAllow: [...new Set([...BASE_EGRESS, ...egress, ...archive])], labels: { purpose }, fromSnapshot: snapshot });
     releases.set(id, release);
     await p.waitReady(id, 120_000);
     return id;
@@ -88,11 +90,20 @@ export async function destroyVm(p: P, id: string) {
   releases.delete(id);
 }
 
-async function findBin(p: P, id: string, a: AgentAdapter, cfg: AgentConfig, env: Record<string, string>) {
+/** The CLI in the VM. One installed from a release archive (fx) that the image lacks, or has at another version, is
+ *  installed here at its pin, as an agent's VM does when it starts, so a login doesn't wait on `capcomd env build`. */
+export async function findBin(p: P, id: string, a: AgentAdapter, cfg: AgentConfig, env: Record<string, string>) {
   if (cfg.agentBin) return cfg.agentBin;
-  const d = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a)], { env })).stdout);
-  if (!d.bin) throw new Error(`${a.bin} is not installed in the env snapshot; run \`capcomd env build\``);
-  return d.bin;
+  const home = agentHome(cfg);
+  const d = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a, home)], { env })).stdout);
+  if (detectedUsable(a, cfg, d)) return d.bin!;
+  if (!a.install) {
+    if (d.bin) return d.bin;
+    throw new Error(`${a.bin} is not installed in the env snapshot; run \`capcomd env build\``);
+  }
+  const res = await p.exec(id, ["sh", "-c", installScript(cfg, home, a)], { env, timeoutMs: 600_000 });
+  if (res.code !== 0) throw new Error(`${a.bin} ${a.pinnedVersion(cfg)} couldn't be installed in the login VM (exit ${res.code}): ${new Redactor([]).text((res.stderr || res.stdout).replace(/\s+/g, " ")).slice(-300)}`);
+  return installedBin(a, home);
 }
 
 /** Headless check that the login works ("ok" from the model). Never prints credentials. */
