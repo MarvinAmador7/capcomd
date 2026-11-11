@@ -255,11 +255,12 @@ jobs:
   app:
     name: The macOS app
     needs: [prepare, test, smoke, binaries]
-    # macos-26 (Xcode 26.x by default): macos-15's default Xcode 16.4 can't build the universal app since its
-    # dependencies moved on ("Some of the Swift language versions used in target … are supported. (given: [5],
-    # supported: [])" for swift-collections, swift-openapi-generator and swift-service-lifecycle). The app still
-    # targets macOS 14.
-    runs-on: macos-26
+    # xcode-27 (GitHub's preview image: macOS 27, Xcode 27.1 by default), the toolchain the app is developed with.
+    # Older Xcodes can't make the universal build of the app's dependencies: on macos-15 (Xcode 16.4) "Some of the
+    # Swift language versions used in target … are supported. (given: [5], supported: [])"; on macos-26 (Xcode 26.6,
+    # Swift 6.3) "Missing package product 'OpenAPIGenerator@11'" (the OpenAPI build plugin across two architectures).
+    # The app still targets macOS 14.
+    runs-on: xcode-27
     # Two release builds (arm64, x86_64) of the app and its Swift dependencies, from scratch.
     timeout-minutes: 60
     env:
