@@ -73,15 +73,19 @@ jobs:
           name: release-notes
           path: release-notes.md
 
+  # One leg per OS runs the type check, the fast suite and the apps; the scenario suite runs as four shards per OS
+  # (balanced by tests/scenario-timings.json, as in ci.yml), since one runner no longer finishes it within an hour.
+  # Jobs that need `test` wait for every leg.
   test:
-    name: Tests (${{ matrix.os }})
+    name: Tests (${{ matrix.os }}, ${{ matrix.part }})
     needs: prepare
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 80
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        part: [fast, scenarios-1, scenarios-2, scenarios-3, scenarios-4]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,17 +99,25 @@ jobs:
         run: bun run setup
 
       - name: Type check
+        if: matrix.part == 'fast'
         run: bun run typecheck
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
+        if: matrix.part == 'fast'
         run: bun run test:fast
 
       - name: The canvas and the TUI
+        if: matrix.part == 'fast'
         run: bun run test:apps
 
-      - name: Scenario suite (scenarios, sub-agents, primitives, agent adapters, merges)
-        run: bun run test:scenarios
-        timeout-minutes: 65   # one runner here (ci.yml shards it): ~30 min on macOS, ~43 on ubuntu-latest (the CI shards' sum)
+      - name: Scenario suite (scenarios, sub-agents, primitives, agent adapters, merges), ${{ matrix.part }} of 4
+        if: startsWith(matrix.part, 'scenarios-')
+        run: |
+          cp tests/scenario-timings.json "$RUNNER_TEMP/scenario-timings.json"
+          bun run test:scenarios --shard=${PART#scenarios-}/4 --timings="$RUNNER_TEMP/scenario-timings.json"
+        env:
+          PART: ${{ matrix.part }}
+        timeout-minutes: 35
 
   package:
     name: Package
