@@ -1209,7 +1209,9 @@ profile on it with `auth: "subscription"` is refused at validation. `describe().
 one plan login) lists the plan logins of a CLI that has several, each `{name, label, egress, refused?}`: `capcomd auth
 login <provider> [<name>]` makes the named one (the first without `refused` when none is named) by running
 `loginCommand(bin, name)` (the second argument additive) in the login VM, which reaches `BASE_EGRESS` and that login's
-`egress` instead of `loginEgress`; the auth ledger records the name (`AuthProfile.login`), and `auth status`, an env
+`egress` instead of `loginEgress` (and, for a CLI installed from a release archive, that archive's host: the login VM
+installs the pinned CLI when its image has none); after the login, `verifyCommand(bin, q, model)` (the third argument
+additive: the agent's configured model, absent for the CLI's default) proves it; the auth ledger records the name (`AuthProfile.login`), and `auth status`, an env
 build's move of the login and the app's login command use it again. A login with `refused` is one capcomd can't make
 headless: the kernel refuses it with that sentence before any machine starts. A login with `metered: true` (additive)
 is billed per token, not by a plan: an agent on it is spend as on an API key (`billing: "api"`, its estimated cost

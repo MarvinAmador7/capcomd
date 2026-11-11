@@ -109,7 +109,7 @@ export interface AgentAdapter {
   /** Shell printing `{"loggedIn": <boolean>}` after a login: whether the CLI sees it (only the boolean leaves the VM). */
   loginCheck?(bin: string, q: (s: string) => string): string;
   /** Cheap headless call proving the login works; exit 0 + stdout containing "ok". */
-  verifyCommand(bin: string, q: (s: string) => string): string;
+  verifyCommand(bin: string, q: (s: string) => string, model?: string): string;
   /** Interpret the finished run. */
   outcome(state: AgentRunState, exitCode: number): { ok: boolean; stopReason: string };
   /** A tool call the CLI refused, from one stderr line (a CLI that reports refusals only there: codex). */

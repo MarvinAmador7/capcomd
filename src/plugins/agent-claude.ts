@@ -172,7 +172,7 @@ export const claude: AgentProvider = {
   subscriptionCheck: (home, q) => `case "$(printenv CLAUDE_CODE_OAUTH_TOKEN)" in bxds_*) echo secret;; esac; [ -s ${q(`${home}/.capcomd-auth/claude.env`)} ] && echo file; [ -s ${q(`${home}/.claude/.credentials.json`)} ] && echo file; true`,
   subscriptionPrelude: (home, q) => `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; [ -s ${q(`${home}/.capcomd-auth/claude.env`)} ] && . ${q(`${home}/.capcomd-auth/claude.env`)}; export CLAUDE_CODE_OAUTH_TOKEN`,
   loginCommand: (bin) => [bin, "setup-token"],
-  verifyCommand: (bin, q) => `${q(bin)} -p 'Reply with exactly the word ok' --max-turns 1 --output-format text < /dev/null`,
+  verifyCommand: (bin, q, model) => `${q(bin)} -p 'Reply with exactly the word ok'${model ? ` --model ${q(model)}` : ""} --max-turns 1 --output-format text < /dev/null`,
   // --max-turns / --max-budget-usd are enforced by the CLI itself.
   guard: () => null,
   outcome(state, exitCode) {

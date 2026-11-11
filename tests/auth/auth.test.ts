@@ -7,7 +7,7 @@ import { join } from "path";
 import { FakeProvider } from "../../src/providers/fake";
 import { loadAgentConfig, credentialModeFor, egressFor, BASE_EGRESS } from "../../src/agents/config";
 import { TokenFilter, AUTH_SHAPES } from "../../src/auth/interactive";
-import { authLogin, authStatus, authLogout, findBin } from "../../src/auth/login";
+import { authLogin, authStatus, authLogout, findBin, verifyLogin } from "../../src/auth/login";
 import { readAuthLedger, writeAuthLedger, authSnapshotName } from "../../src/auth/profiles";
 import { runAgent } from "../../src/agents/runner";
 import { adapterFor, claudeAdapter, codexAdapter, envPins } from "../../src/agents/adapters";
@@ -154,6 +154,22 @@ describe("capcomd auth login fx (fx's own Vercel and Grok logins)", () => {
     // An npm CLI the image lacks is still `capcomd env build`'s to install.
     const claude = loadAgentConfig({ CAPCOMD_AGENT: "claude-code", CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_CREDENTIALS: "auto" });
     await expect(findBin(vm(false) as any, "vm", adapterFor("claude-code"), claude, {})).rejects.toThrow("claude is not installed in the env snapshot; run `capcomd env build`");
+  });
+
+  test("the check after a login runs on the agent's model; a billing refusal says the login worked and what to change", async () => {
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT_MODEL: "moonshotai/kimi-k3" });
+    const ran: string[] = [];
+    const vm = { exec: async (_id: string, cmd: string[]) => {
+      ran.push(cmd[2]!);
+      if (cmd[2]!.includes(" ask ")) return { code: 1, stdout: "", stderr: "fx ask: API request failed · HTTP 502 · insufficient_funds: Your Token Pass only covers requests served by the token-pass provider." };
+      return { code: 0, stdout: "file vercel\n", stderr: "" };
+    } };
+    const v = await verifyLogin(vm as any, "vm", adapterFor("fx"), cfg, "/w/home/bin/fx");
+    expect(ran.at(-1)).toContain("--model 'moonshotai/kimi-k3'");
+    expect(v.ok).toBe(false);
+    expect(v.detail).toContain("insufficient_funds");
+    expect(v.detail).toContain("The login itself worked: the account won't pay for the model moonshotai/kimi-k3.");
+    expect(v.detail).toContain("CAPCOMD_AGENT_MODEL");
   });
 
   test("fx's pin names the env image: an image from before fx is another name, so `capcomd env build` builds a new one", () => {

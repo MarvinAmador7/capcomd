@@ -112,10 +112,16 @@ export async function verifyLogin(p: P, id: string, a: AgentAdapter, cfg: AgentC
   const env = { PATH: agentPath(home), HOME: home };
   const chk = (await p.exec(id, ["sh", "-c", a.subscriptionCheck(home, sq)], { env })).stdout;
   if (!/secret|file/.test(chk)) return { ok: false, detail: "no login present in the VM" };
-  const res = await p.exec(id, ["sh", "-c", `${a.subscriptionPrelude(home, sq)}; cd /tmp && ${a.verifyCommand(bin, sq)}`], { env, timeoutMs: 120_000 });
+  const res = await p.exec(id, ["sh", "-c", `${a.subscriptionPrelude(home, sq)}; cd /tmp && ${a.verifyCommand(bin, sq, cfg.model)}`], { env, timeoutMs: 120_000 });
   const r = new Redactor([]);
   if (res.code === 0 && /\bok\b/i.test(res.stdout)) return { ok: true, detail: `${a.kind} answered via plan login (${chk.trim().split("\n").join("+")})` };
-  return { ok: false, detail: `verify failed (exit ${res.code}): ${r.text((res.stderr || res.stdout).replace(/\s+/g, " ")).slice(-300)}` };
+  const out = r.text((res.stderr || res.stdout).replace(/\s+/g, " "));
+  // The login worked; the account behind it won't pay for this model (an AI Gateway with no credit, a Token Pass that
+  // covers only its featured models). Say so, and how to pick another model, rather than leave only the provider's text.
+  const billing = /insufficient_funds|Token Pass|credit balance/i.test(out)
+    ? ` The login itself worked: the account won't pay for ${cfg.model ? `the model ${cfg.model}` : `${a.bin}'s default model`}. Add credit there, or run on a model it covers (CAPCOMD_AGENT_MODEL or the profile's \`model\`; on a Vercel Token Pass, one of its featured models) and log in again.`
+    : "";
+  return { ok: false, detail: `verify failed (exit ${res.code}): ${out.slice(-300)}${billing}` };
 }
 
 export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Promise<LoginResult> {

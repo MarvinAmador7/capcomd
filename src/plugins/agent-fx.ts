@@ -268,7 +268,7 @@ export const fx: AgentProvider = {
     // FX_NO_OPEN_BROWSER: fx prints the URL (and Vercel's device code) for the user's own browser.
     return ["env", "FX_NO_OPEN_BROWSER=1", "FX_AUTO_UPGRADE=0", bin, "login", login];
   },
-  verifyCommand: (bin, q) => `FX_AUTO_UPGRADE=0 FX_PROVIDER="\${CAPCOMD_FX_PROVIDER:-gateway}" ${q(bin)} ask --json --no-save --full-access 'Reply with exactly the word ok' < /dev/null | grep -q '"exit_code":0' && echo ok`,
+  verifyCommand: (bin, q, model) => `FX_AUTO_UPGRADE=0 FX_PROVIDER="\${CAPCOMD_FX_PROVIDER:-gateway}" ${q(bin)} ask --json --no-save --full-access${model ? ` --model ${q(model)}` : ""} 'Reply with exactly the word ok' < /dev/null | grep -q '"exit_code":0' && echo ok`,
   // fx's own word on the login (`fx status --json` auth: "fx login", or "missing"); only the boolean is printed.
   loginCheck: (bin, q) => `FX_AUTO_UPGRADE=0 FX_PROVIDER="\${CAPCOMD_FX_PROVIDER:-gateway}" ${q(bin)} status --json 2>/dev/null < /dev/null | node -e ${q(FX_STATUS_BOOLEAN)}`,
   guard(state, cfg) {

@@ -91,7 +91,7 @@ export function adapterOf(p: AgentProvider): AgentAdapter {
     loginEgress: [...d.loginEgress],
     ...(d.logins ? { logins: d.logins.map((l) => ({ name: l.name, label: l.label, egress: [...l.egress], ...(l.refused ? { refused: l.refused } : {}), ...(l.metered ? { metered: true } : {}) })) } : {}),
     ...(p.loginCheck ? { loginCheck: (bin: string, q: (s: string) => string) => p.loginCheck!(bin, q) } : {}),
-    verifyCommand: (bin, q) => p.verifyCommand(bin, q),
+    verifyCommand: (bin, q, model) => (model === undefined ? p.verifyCommand(bin, q) : p.verifyCommand(bin, q, model)),
     outcome: (state, exitCode) => p.outcome(state, exitCode),
     ...(p.refusal ? { refusal: (line, r) => p.refusal!(line, (s) => r.text(s)) } : {}),
   };
