@@ -52,7 +52,7 @@ my-gate/
   "version": "1.0.0",
   "description": "Refuses merges into main on Fridays.",
   "apiVersion": 1,
-  "engines": { "capcomd": ">=0.9.0 <1.0.0" },
+  "engines": { "capcomd": ">=0.10.0 <1.0.0" },
   "entry": { "runtime": "process", "command": ["node", "${PLUGIN_ROOT}/dist/index.js"] },
   "scopes": ["read"],
   "contributes": { "hooks": { "merge.landing": {} } }
@@ -101,7 +101,7 @@ From a git repository, `capcomd plugins install` does the copying for you (see [
 | `version` | Your plugin's own semver. |
 | `description` | One sentence, shown by `capcomd plugins list` and the app. |
 | `apiVersion` | `1`. |
-| `engines.capcomd` | The capcomd versions you tested with (`>=0.9.0 <1.0.0`; `*` is refused). A daemon outside the range doesn't run the plugin; `capcomd plugins allow-version <name>@<version> --accept-risk` lets one version through. |
+| `engines.capcomd` | The capcomd versions you tested with (`>=0.10.0 <1.0.0`; `*` is refused). A daemon outside the range doesn't run the plugin; `capcomd plugins allow-version <name>@<version> --accept-risk` lets one version through. |
 | `entry` | `{ "runtime": "process", "command": [...], "env": {...} }`. `${PLUGIN_ROOT}` is the plugin's directory, `${PLUGIN_DATA}` a directory of its own for data. A path in `command[0]` starting with `./` must stay inside the directory, and so must every path the command and `entry.env`'s `NODE_PATH`, `NODE_OPTIONS` and `BUN_OPTIONS` name ([self-contained](#shipping-a-plugin)). |
 | `scopes` | What the plugin's own token may do (§11.1): `read` (runs, agents, events, profiles), `steer` (start, pause, cancel runs, send messages, emit events), `configure`. `approve` is never grantable: approvals stay human. Default: none, which is enough to answer hooks. |
 | `order`, `after` | Where your listeners run among other plugins' (`pre`, `normal`, `post`; §6.3). |
@@ -323,7 +323,7 @@ Keep secrets in `x-secret` settings, never in `entry.env` or the manifest.
 ## Versions
 
 `apiVersion` is the plugin API's major (1). `engines.capcomd` is what you tested. `@capcomd/plugin` is versioned with
-capcomd: `@capcomd/plugin@0.9.0` is the API of capcomd 0.9.0. The process protocol is version 1 (`sessionOpen()` says
+capcomd: `@capcomd/plugin@0.10.0` is the API of capcomd 0.10.0. The process protocol is version 1 (`sessionOpen()` says
 so); a new optional field, frame or route is not a new version, so ignore what you don't know (§9.10). The handshake's
 `SessionOpened.daemon` has the daemon's version and capabilities, for feature detection.
 

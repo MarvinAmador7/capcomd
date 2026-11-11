@@ -5,6 +5,14 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.10.0 (2026-11-10)
+
+Everything is a plugin: capcomd now runs on a plugin kernel (sandboxes, agent providers, forges, gates, triggers,
+jobs, a watchdog and your own plugins, in process or as separate programs), agent profiles become YAML files you can
+share and trust, projects get memory and business knowledge (a reviewed context layer), every working agent gets
+background jobs, and fx joins Claude Code and Codex as an agent provider. Several **Breaking:** changes below. Also
+fixes fresh installs of 0.9.0, which could not start runs (an unpinned dependency).
+
 - Fixed: the watchdog no longer flags an agent that started a background job and then waits for it in a command
   (a `sleep`, a wait on its inbox). The time that command ran alongside the job used up the command time the watchdog
   allows between two signs of progress (`plugins.watchdog.stalledAfterMs`), so with a short limit the agent was flagged
@@ -929,6 +937,145 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 - Fix: `capcomd service install` from a Homebrew install runs capcomd through Homebrew's stable `opt` path, so the
   service keeps working after `brew upgrade` (before, it pointed at the old version's folder, which Homebrew removes).
   Run `capcomd service install` once more to update an existing service.
+- New: agents can run on [fx](https://fx.sh), Vercel Labs' coding agent, as a third provider beside Claude Code and
+  Codex: a profile with `provider: fx`, `auth: apikey` and `AI_GATEWAY_API_KEY` set (`capcomd profiles add gw
+  --provider fx --auth apikey --model anthropic/claude-sonnet-5`). capcomd installs fx's pinned release (0.0.16),
+  checked against its sha256, in the agent's environment (`capcomd env build` bakes it in), and runs it with capcomd's
+  tools, messages (`capcomd send` reaches it while it works), turn and budget limits, usage-limit pauses and
+  orchestrate mode for a planner or lead. Instead of a key, fx can also run on your Vercel account or Grok plan
+  (`capcomd auth login fx`); see docs/agents.md → fx.
+- `capcomd doctor` checks fx only when `AI_GATEWAY_API_KEY` is set, so `doctor --strict` and `capcomd setup` don't
+  fail for a provider you don't use.
+- `CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN` and `_OUT` set a provider's token prices for its budget estimate
+  (`CAPCOMD_FX_USD_PER_MTOK_IN`/`_OUT` for fx; codex keeps `CAPCOMD_CODEX_USD_PER_MTOK_IN`/`_OUT`).
+- A task added to a run's board (`capcomd task add`, an agent's in-VM `capcomd task add`, the MCP driver's task tool or
+  a plugin's `ctx.board.add`) now has its title checked as a run's goal is: at most 16 KB (UTF-8), no NUL character, and
+  not blank. Anything else is refused with a usage error (`invalid` for a plugin) instead of being stored; put long
+  detail in a file in the repository, or in `--data`, and name it in the title.
+- Fixed: a fact that isn't in effect yet no longer reaches agents' context brief as if it applied today. A brain (or
+  the project's memory) item whose `valid_from` is a later date, such as a price change decided now for next March,
+  used to be listed as a current `stable` fact next to the rule still in force. It is now left out until its day, and
+  the brief's header says how many lines were left out that way ("1 line not in effect yet left out"). The file is
+  still in the agent's copy of the brain. `capcomd context brief --json` and the `plugin.context.loaded` event include
+  the count as `notYetEffective`.
+- Plugins: every async `ctx` primitive now honours its call options. A call that hasn't answered within `timeoutMs`
+  (30 seconds by default) rejects with a retryable `timeout`, and the call may still have taken effect, so re-read
+  before retrying. Calls that run a whole operation have longer defaults: `jobs.start` 2 minutes (an `exec` job's
+  foreground wait), `agents.spawn` 2.5 minutes, `gates.verify` 2 hours and `gates.merge` 1 hour. Aborting the call's
+  `signal` rejects it at once (`timeout`), and disabling, updating or stopping the plugin rejects the calls it still has
+  in flight (`disposed`) instead of leaving them to run. A `timeoutMs` that isn't a number above 0 is `invalid`.
+  `jobs.wait` and `agents.await` still read `timeoutMs` as how long to wait and answer what is so then.
+- Lessons a planner states after its run's consolidator started (for example in its final result) are no longer
+  lost: once the planner ends, capcomd starts one more consolidator for just those lessons, and its memory change waits
+  for your approval like any other. It happens at most once per run; with `context-memory.autoConsolidate` off,
+  `capcomd events` shows `consolidator_skipped` with the reason `late_lessons` instead.
+- `capcomd status` from a planner now says how many of the run's lessons came after its consolidator started
+  (`lessons.late`), and the planner is told to put its own lessons in its result before it spawns the consolidator.
+- Your plugins now judge what you do from the CLI and from `capcomd mcp`, not only what agents do. `capcomd verify`,
+  `capcomd merge`, `capcomd approve <runId> <mrg-…>` and the `capcomd_verify`, `capcomd_merge` and `capcomd_approve`
+  tools run in the daemon when one is running for that engine, so a plugin you installed (in `~/.capcomd/plugins`, or a
+  project's you trusted) is asked at `verify.judging`, `merge.landing` and `approval.deciding` as it is for an agent's
+  work. Nothing changes in how you call them or in what they print.
+- With no daemon running, `capcomd verify`, `merge` and `approve <runId> <mrg-…>` (and their `capcomd mcp` tools)
+  still run in the command itself, but a plugin of yours that judges them can't be asked there, so the command is now
+  refused with a config error (reason `plugins_unconsulted`) naming the plugin: start the daemon (`capcomd serve`) and
+  run it again, or turn the plugin off (`plugins.<name>.enabled: false`). A plugin that only watches is named on stderr
+  instead (`capcomd mcp`: `pluginsNotConsulted` in the answer).
+- `capcomd run new`, `capcomd spawn` and `capcomd run <goal>` (and `capcomd_run_new`, `capcomd_spawn`) still run where
+  you type them: a plugin that declares `failure: closed` on `run.creating`, `profile.resolved` or `agent.spawning`
+  now refuses them (reason `plugins_unconsulted`), and any other plugin listening there is named as not asked.
+- For apps and scripts: capability `ops.front_door` lists the daemon's routes for this
+  (`POST /v1/runs/{runId}/verifications`, `/merges`, `/merges/{mergeId}/decision`); they take only the CLI's and
+  `capcomd mcp`'s own one-call tokens.
+- Fixed: plugins can no longer set or read fx's variables, as was already true for Claude Code's and Codex's. A
+  plugin's `agent.preparing` patch that adds `FX_HOME`, `AI_GATEWAY_*`, `VERCEL_*` or any other `FX_*` variable to an
+  agent is refused, so no plugin can change which login or settings an fx agent uses. A plugin secret that references
+  `env:AI_GATEWAY_API_KEY` (or another `AI_GATEWAY_*`, `VERCEL_*` or `FX_*` variable) now fails the plugin with
+  `config_invalid`. Give the plugin a variable of its own instead. Checks run on your computer (fake sandboxes,
+  `CAPCOMD_CHECKS=host`) no longer get these variables either.
+- New: fx agents can run on your own Vercel account or Grok plan instead of an AI Gateway key. `capcomd auth login fx`
+  signs fx in to Vercel (open the URL, confirm the code), `capcomd auth login fx grok` to a SuperGrok or X Premium plan
+  (open the URL, paste the code xAI shows back into the terminal). As with Codex, the login happens inside a login
+  machine of the sandbox, never on your computer, and is saved as a private login image; give the profile
+  `auth: subscription` (`capcomd profiles add fxp --provider fx --auth subscription`). `capcomd auth status` and
+  `capcomd auth logout fx` cover it, and `capcomd doctor` checks it. fx's ChatGPT login can't be made this way:
+  `capcomd auth login fx codex` refuses it and points to the `codex` provider. A Vercel login is billed to your team's
+  AI Gateway credits per token, so its agents' estimated cost counts and `maxBudgetUsd` and run budgets still stop
+  them, as with a key; a Grok plan login costs nothing in capcomd's accounts. See docs/agents.md → fx.
+- `GET /v1/logins?provider=fx` lists fx's logins (capability `logins.fx`); the list without `provider` is unchanged.
+- Fixed: `capcomd profiles list` showed an fx profile as needing `ANTHROPIC_API_KEY` or a Claude login; it now checks
+  `AI_GATEWAY_API_KEY` or the fx login. `capcomd setup --check` no longer counts an fx profile's plan login as Claude's.
+- Fixed: a merge into GitHub no longer fails on GitHub's own momentary error. When GitHub answers the merge of a pull
+  request with a server error (a 500 or similar, seen in a live run), capcomd looks at the pull request again (the merge
+  may have happened anyway, and is then recorded as merged) and asks again, up to three more times, a poll interval
+  (`CAPCOMD_GITHUB_POLL_MS`, 5 seconds by default) apart. If every try fails, the merge fails with
+  `GitHub failed to merge PR #N (500, 4 tries)… merge again later` instead of `GitHub refused merge of PR #N (500)`.
+- `capcomd run --legacy` and `--recipe` (runs without a planner agent, off by default) no longer merge a task's branch
+  that changes `.capcomd/context/`: the task fails its verification with a message saying that memory lands only from
+  a consolidator or a person. Run the goal with a planner agent (plain `capcomd run`), whose consolidator lands lessons
+  through the memory gate, or commit the change yourself. A branch capcomd can't read is refused too; other branches
+  land as before.
+- A worker that ends without changing any files now fails after its first attempt instead of being run again (up to
+  three times) to the same end. Its result keeps what it said (`result.summary`, with `result.errorKind: "no_changes"`),
+  and the error says what to do: spawn it with `--report` for work that changes no files. The orchestration skill tells
+  planners and leads to spawn investigation and review-only children with `--report`.
+- Fixed: a fresh install (`bun add -g capcomd`, `npm install -g capcomd`) couldn't start runs. `capcomd serve` printed
+  `actors not ready yet (RivetKit registry did not register with the Engine …)` and `Services did not register in pool
+  'services'`, and every `capcomd run new` failed. A newer release of one of the engine's dependencies
+  (`@rivet-dev/services` 0.2.5) didn't work with capcomd's engine. capcomd now pins the version that does, so fresh
+  installs start runs again. If yours is broken, upgrade capcomd and restart `capcomd serve` (or the service).
+- Plugins in the daemon can now spawn, await, budget and name agents (`ctx.agents.spawn`, `await`, `grant`, `title`)
+  and verify and merge their work (`ctx.gates.verify`, `merge`). A plugin is held to the same checks as any caller: its
+  spawn goes through the spawn limits and every `agent.spawning` listener, and its merge needs a passing verification
+  and every merge gate, so a plugin's veto is never bypassed (a protected target waits for a person). What a plugin
+  does is recorded as `plugin:<name>`'s: `agent.spawned` carries `by`, a verification's and a merge's record carry
+  `requester`.
+- The memory fallback (`context-memory`'s `autoConsolidate`) now starts the consolidator and asks to verify and merge
+  its change as `plugin:context-memory`, not as the operator, so the run's events say who did it.
+- `capcomd trace <run>` shows each plugin hook call as a `plugin.hook` span (which plugin, which hook, and whether it allowed, denied, held, was skipped or failed and why), and a plugin's own `ctx.trace.span` spans under the call they ran in.
+- A plugin's log lines in the daemon log carry the `runId`, `agentId`, `traceId` and `spanId` of the hook call they were written in.
+- Sandbox spans in a run's trace name the plugin that provides the sandbox (`plugin`).
+- `GET /v1/plugins` `stats.seams` (capability `plugins.seam_stats`) counts the daemon's calls to each seam a plugin provides and its failed ones by error kind; `capcomd plugins show <name>` prints them with the hook call statistics, live from the running daemon.
+- A plugin's API route (`/v1/x/<plugin>/…`) now refuses a request body over 1 MiB with 413 (`invalid`) before the
+  plugin sees it, and answers 504 (`timeout`) when the plugin hasn't answered within 30 seconds, so a webhook sender or
+  client is never left hanging. The plugin's request signal is aborted at that moment.
+- A plugin whose manifest declares two API routes of the same method that could both match one path with as many
+  parameters (`/a/{x}/c` and `/a/b/{y}` both match `/a/b/c`) now fails to load with `invalid_manifest`, naming both
+  routes, instead of one of them winning by the order they were registered. `capcomd plugins validate` reports it too.
+- Fixed: a profile's `sharing.source` no longer shows a URL's credentials. A source written as
+  `https://user:token@host/repo` (or with `?token=…` in it) is now shown as `https://host/repo` in
+  `capcomd profiles list --json`, `capcomd profiles show` (text and `--json`), the `capcomd_profiles` tool a driver
+  agent reads and `GET /v1/profiles/{name}`; before, the list, `show` and `capcomd_profiles` showed it as written, and
+  the API row hid only the password. The profile's file is unchanged.
+- **Breaking:** a plugin secret reference you set that doesn't resolve is now refused instead of being replaced.
+  If you point the boxd plugin's key at a variable (`plugins.sandbox-boxd.apiKey` set to
+  `{"$secret": "env:MY_BOXD_KEY"}` in `~/.capcomd/config.json`, or `CAPCOMD_PLUGIN_SANDBOX_BOXD_APIKEY`) and that
+  variable isn't set, capcomd no longer falls back to `BOXD_API_KEY`, which could be another boxd account's key.
+  The boxd place shows as unavailable, and runs on it, `capcomd doctor` and `capcomd sandbox` stop with a message
+  that names the reference and how to fix it. `capcomd plugins show` and `capcomd plugins validate` print the same
+  message. To fix it, export the variable where capcomd runs (for the service, run `capcomd service restart` after
+  you set it), or remove the setting to use `BOXD_API_KEY` as before. If you never set `apiKey`, nothing changes.
+- **Breaking:** `keychain:` secret references are refused when capcomd loads your config. Before, they failed when
+  first used, or the boxd plugin quietly used `BOXD_API_KEY` instead. Now a plugin with one in your config, a
+  project's config, a `CAPCOMD_PLUGIN_*` variable or its own manifest fails with `config_invalid`, and the message
+  says to use `{"$secret": "env:<VAR>"}` instead. Put the value in an environment variable and reference that.
+- A plugin's `agent.spawning` patch that adds `budget` or `children` to an agent's contract is now rejected as invalid
+  instead of being saved with the agent and never applied: a listener declared `failure: closed` refuses the spawn, an
+  open one (the default) is skipped and its patch dropped, as for any patch capcomd rejects. To lower an agent's budget
+  or narrow its fan-out, a plugin sets the patch's own `budget` and `grant`.
+- Fixed: on a thread a working run follows, such as a goal's pull request on a public repository, a comment now reaches
+  the run's planner only when its author is in `triggers.sources.<source>.allowed` (or the thread matches an `opened`
+  pattern). Before, anyone's comment was handed to the working planner, so a stranger could steer it. Anyone else's
+  comment is not delivered; `capcomd triggers log` shows it as `denied by allowlist: …: not delivered to run-…`,
+  and the `trigger.received` event carries `decision: denied` with that run's `runId`. Bots and CI reach a working
+  run only when allowed too. To let someone comment on your runs' pull requests, add them to `allowed`.
+- The watchdog now catches an agent that waits on a job that never ends. A job it started holds its clock for at most
+  `plugins.watchdog.stalledAfterMs` (15 minutes by default), shared with the foreground commands it runs, between two
+  signs of progress; after that the time counts, so an agent polling a stuck job (`capcomd job output` in a loop) gets
+  the **stalled** notice about 30 minutes in, and is stopped at `stopAfterMs` as any other, instead of going unjudged
+  until the job's own time limit ended it. The notice says which job: `; it has been waiting on job <id> for <time>`.
+  A job that ends within the limit still doesn't count against the agent, and checks, approvals and usage-limit pauses
+  still hold its clock as long as they last.
 
 ## 0.9.0 (2026-11-03)
 
