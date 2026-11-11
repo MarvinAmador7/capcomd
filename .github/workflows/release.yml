@@ -49,7 +49,7 @@ jobs:
       npm: ${{ steps.notes.outputs.npm }}
       npm_tag: ${{ steps.notes.outputs.npm_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
@@ -68,7 +68,7 @@ jobs:
         id: notes
         run: bun scripts/release-notes.ts "$TAG" "$GITHUB_REPOSITORY" > release-notes.md
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: release-notes.md
@@ -87,7 +87,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         part: [fast, scenarios-1, scenarios-2, scenarios-3, scenarios-4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
@@ -124,7 +124,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
@@ -141,7 +141,7 @@ jobs:
           (cd dist && sha256sum "$F" > "$F.sha256" && cat "$F.sha256")
           tar -tzf "dist/$F" | grep -q '^package/src/cli/index.ts$' || { echo "::error::the package has no CLI"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package
           path: dist/
@@ -156,7 +156,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
           sparse-checkout: |
@@ -167,7 +167,7 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: package
           path: dist
@@ -180,7 +180,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
@@ -197,7 +197,7 @@ jobs:
       - name: Each one reports this version
         run: ./dist/capcomd-linux-x64 --version | grep -qx "capcomd ${{ needs.prepare.outputs.version }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries
           path: |
@@ -218,7 +218,7 @@ jobs:
           - { target: linux-x64, os: ubuntu-latest }
           - { target: linux-arm64, os: ubuntu-24.04-arm }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
           sparse-checkout: |
@@ -230,7 +230,7 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: binaries
           path: dist
@@ -261,7 +261,7 @@ jobs:
     env:
       V: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0   # the app's build number counts commits
@@ -287,7 +287,7 @@ jobs:
           (cd "$b" && shasum -a 256 -c "capcomd-app-$V.zip.sha256")
           unzip -l "$b/capcomd-app-$V.zip" | grep -q ' capcomd.app/Contents/MacOS/CapcomdApp$' || { echo "::error::the zip has no capcomd.app"; exit 1; }
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: binaries
           path: dist
@@ -307,7 +307,7 @@ jobs:
           "$(brew --prefix)/bin/capcomd" --version | grep -qx "capcomd $V"
           brew uninstall --cask capcomd-app && brew uninstall capcomd && brew untap capcomd-ci/app
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: app
           path: |
@@ -324,7 +324,7 @@ jobs:
       contents: read
       id-token: write   # npm provenance (and trusted publishing, once configured on npmjs.com)
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -332,7 +332,7 @@ jobs:
       - name: A recent npm (trusted publishing needs npm ≥ 11.5.1)
         run: npm install -g npm@latest && npm --version
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: package
           path: dist
@@ -369,7 +369,7 @@ jobs:
       contents: read
       id-token: write   # npm provenance (and trusted publishing, once configured on npmjs.com)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
@@ -377,7 +377,7 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -422,7 +422,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -449,7 +449,7 @@ jobs:
       TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
       V: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
           sparse-checkout: |
@@ -461,12 +461,12 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: binaries
           path: dist
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: app
           path: dist-app

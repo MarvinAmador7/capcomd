@@ -41,14 +41,14 @@ jobs:
     # One macOS runner serves every PR: a hung test must fail, not hold it for hours.
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: echo "BUN_BIN=$(which bun)" >> "$GITHUB_ENV"
       # Most of this job was compiling the Swift dependencies (NIO, the OpenAPI generator, …) from scratch. The build
       # folders are cached per runner image and resolved dependencies; SwiftPM rebuilds what changed since. A PR reads
       # main's cache; a change to Package.resolved or the image starts a new one (seeded from the closest match).
       - name: Swift build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/menubar/client/.build
