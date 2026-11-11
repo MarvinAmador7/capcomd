@@ -59,6 +59,8 @@ export const ORCHESTRATE_DISALLOWED: readonly string[] = [
 const DESCRIPTION = {
   name: "claude", label: "Claude Code", bin: "claude", npmPackage: "@anthropic-ai/claude-code", pinnedVersion: CLAUDE_CODE_VERSION,
   secretName: "ANTHROPIC_API_KEY", apiHost: "api.anthropic.com",
+  // §7.3: the kernel's to set and read, never a plugin's: where Claude Code reads its key, its endpoint and its settings (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, CLAUDE_CONFIG_DIR).
+  envPrefixes: ["ANTHROPIC_", "CLAUDE_"],
   // `--effort <level>` (Claude Code `--help`), lowest to highest; unset: the CLI decides (by model).
   efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: null,
   // Messages written to stdin while it works are read at its next model call; it exits when stdin closes.
@@ -75,7 +77,7 @@ const DESCRIPTION = {
 
 /** Claude Code `--output-format stream-json`: system/assistant/user/result events. */
 export const claude: AgentProvider = {
-  describe: () => ({ ...DESCRIPTION, efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress], toolPolicies: { orchestrate: { allowed: [...DESCRIPTION.toolPolicies.orchestrate.allowed], disallowed: [...DESCRIPTION.toolPolicies.orchestrate.disallowed] } } }),
+  describe: () => ({ ...DESCRIPTION, envPrefixes: [...DESCRIPTION.envPrefixes], efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress], toolPolicies: { orchestrate: { allowed: [...DESCRIPTION.toolPolicies.orchestrate.allowed], disallowed: [...DESCRIPTION.toolPolicies.orchestrate.disallowed] } } }),
   async available(input) {
     const { credentialReady } = await import("../agents/run-driver");
     const r = credentialReady("claude", input.auth);

@@ -4,6 +4,7 @@
 // streams a plugin brings replayed through `parse` and `outcome`. `testkit.conformance.agent` registers them as bun
 // tests; `capcomd plugins validate --conformance` runs them (with no streams) and prints each result.
 import type { AgentCommandCtx, AgentConfig, AgentProvider, AgentRunState } from "./seams";
+import { envPrefixesIssue } from "./seams";
 import type { ConformanceResult } from "./conformance";
 
 /** A recorded stream (the CLI's JSONL output, as text), and optionally what it must replay to. */
@@ -75,6 +76,8 @@ export const AGENT_CASES: readonly Case[] = [
     if (!Array.isArray(d.efforts) || d.efforts.some((e) => typeof e !== "string" || !e)) fail("describe().efforts must be a list of levels");
     if (d.defaultEffort !== null && !d.efforts.includes(d.defaultEffort)) fail(`describe().defaultEffort ${JSON.stringify(d.defaultEffort)} isn't one of its efforts`);
     if (!Array.isArray(d.loginEgress)) fail("describe().loginEgress must be a list of hosts");
+    const prefixes = envPrefixesIssue(d.envPrefixes);
+    if (prefixes) fail(prefixes);
     if (d.logins !== undefined) {
       if (!Array.isArray(d.logins) || !d.logins.length) fail("describe().logins must be a non-empty list when given");
       const names = new Set<string>();

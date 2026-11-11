@@ -89,6 +89,8 @@ const DESCRIPTION = {
   name: "fx", label: "fx", bin: "fx", pinnedVersion: FX_VERSION,
   install: { kind: "archive" as const, member: "fx", assets: FX_RELEASE.assets },
   secretName: "AI_GATEWAY_API_KEY", apiHost: "ai-gateway.vercel.sh",
+  // §7.3: the kernel's to set and read, never a plugin's: where fx reads its key, Vercel's token and its login and settings (AI_GATEWAY_API_KEY, VERCEL_OIDC_TOKEN, FX_HOME).
+  envPrefixes: ["AI_GATEWAY_", "VERCEL_", "FX_"],
   // FX_EFFORT; fx checks the level against the model's own and refuses one it lacks when the agent starts.
   efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], defaultEffort: null,
   // The bridge takes messages on stdin while fx works: a steering prompt at fx's next model call, else the next turn.
@@ -109,7 +111,7 @@ const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 export const fx: AgentProvider = {
   describe: () => ({
-    ...DESCRIPTION, install: { ...DESCRIPTION.install, assets: { ...DESCRIPTION.install.assets } }, efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress],
+    ...DESCRIPTION, install: { ...DESCRIPTION.install, assets: { ...DESCRIPTION.install.assets } }, envPrefixes: [...DESCRIPTION.envPrefixes], efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress],
     logins: DESCRIPTION.logins.map((l) => ({ ...l, egress: [...l.egress] })),
     toolPolicies: { orchestrate: { allowed: [], disallowed: [], denyCommands: [...DESCRIPTION.toolPolicies.orchestrate.denyCommands] } },
   }),

@@ -13,6 +13,7 @@ import { RelayError, type ErrorCode } from "../core/errors";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { Redactor } from "../agents/redact";
+import { KERNEL_RESERVED_NAMES, reservedEnvPrefixes } from "./env-families";
 
 let registry: HookRegistry | null = null;
 /** This process is the daemon (`capcomd serve`): its gates wait for its own registry, never start a local one. */
@@ -249,15 +250,6 @@ export const SKILLS_MAX = 8, SKILL_BYTES_MAX = 256 * 1024;
 /** At most this many variables a plugin adds, each value at most this long. */
 const ENV_MAX = 32, ENV_VALUE_MAX = 4096;
 /**
- * Names a plugin never sets, even when the agent's environment doesn't have them yet: the kernel's (`CAPCOMD_*`), the
- * agent providers' families (where their CLIs send the credential and which login they read: fx's `FX_HOME` is where
- * its login and settings live), what a shell or a runtime loads before the agent's code (`LD_PRELOAD`, `NODE_OPTIONS`,
- * `BASH_ENV`…), the proxy and certificates its traffic trusts, and git's. Any one of them would steer the agent without a word of prompt text (§6.6.7).
- */
-const RESERVED_ENV_PREFIXES = ["CAPCOMD_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "AI_GATEWAY_", "VERCEL_", "FX_", "LD_", "DYLD_", "NODE_", "NPM_CONFIG_", "PYTHON", "PERL5", "RUBY", "GIT_"];
-const RESERVED_ENV = new Set(["BASH_ENV", "ENV", "SHELL", "IFS", "CDPATH", "PS4", "PROMPT_COMMAND", "ZDOTDIR", "TMPDIR", "USER", "LOGNAME",
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"]);
-/**
  * The agent agent.preparing fires for (src/primitives/ops.ts `agentPreparing`), its record as the kernel just read it:
  * kernel-internal, for the kernel's own listeners: the orchestration skill (src/plugins/skill-orchestration.ts), which
  * needs the agent's limits and budget the payload doesn't carry, and the context router (src/plugins/context.ts), which
@@ -266,8 +258,16 @@ const RESERVED_ENV = new Set(["BASH_ENV", "ENV", "SHELL", "IFS", "CDPATH", "PS4"
  */
 export const preparingAgent = new AsyncLocalStorage<{ runId: string; agentId: string; record: unknown; bundles?: unknown[] }>();
 
-/** A name agent.preparing's `env` may not add (src/agents/config.ts drops one from an attempt's spec too). */
-export const reservedEnvName = (name: string): boolean => RESERVED_ENV.has(name) || RESERVED_ENV_PREFIXES.some((p) => name.startsWith(p));
+/**
+ * Names a plugin never sets, even when the agent's environment doesn't have them yet: the kernel's (`CAPCOMD_*`), every
+ * agent provider's families (`describe().envPrefixes`: where its CLI sends the credential and which login it reads; fx's
+ * `FX_HOME` is where its login and settings live), what a shell or a runtime loads before the agent's code
+ * (`LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`…), the proxy and certificates its traffic trusts, and git's
+ * (src/plugins/env-families.ts). Any one of them would steer the agent without a word of prompt text (§6.6.7).
+ * A name agent.preparing's `env` may not add (src/agents/config.ts drops one from an attempt's spec too). The lists are
+ * read only when called: env-families.ts reaches this module again through the agent seams (src/plugins/agents.ts).
+ */
+export const reservedEnvName = (name: string): boolean => KERNEL_RESERVED_NAMES.has(name) || reservedEnvPrefixes().some((p) => name.startsWith(p));
 export const skillHash = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 /**

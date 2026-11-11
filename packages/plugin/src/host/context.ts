@@ -8,7 +8,7 @@ import { ambiguousRoutes, type PluginManifest, type PluginScope } from "../manif
 import type { Registration } from "../testkit";
 import type { ApiRouteSpec, CallOptions, CliCommandSpec, Disposable, EmittedEvent, HarnessEventEnvelope, LogLevel, McpToolSpec, PluginContext, Span, UiDescriptor } from "../context";
 import type { TriggerReply } from "../shapes";
-import type { AgentProvider, Forge, SandboxProvider } from "../seams";
+import { envPrefixesIssue, type AgentProvider, type Forge, type SandboxProvider } from "../seams";
 import type { ContextProvider } from "../context-layer";
 import { activeCall, outsideCalls, withActive, type ActiveCall, type HookRegistry } from "./registry";
 import { randomBytes } from "node:crypto";
@@ -174,6 +174,9 @@ export interface ContextOptions<C> {
    *  null outside one; `traceId` the run's trace inside a call, else a new one. */
   span?(s: PluginSpan): void;
   redact?(text: string): string;
+  /** Why the kernel refuses a seam this plugin registers (§7.3: an agent provider's `envPrefixes` that would take in a
+   *  kernel family), or null. Asked once, at registration; a refusal throws `invalid` from `ctx.seams.<kind>`. */
+  refuseSeam?(kind: "sandbox" | "agent" | "forge", impl: SandboxProvider | AgentProvider | Forge): string | null;
 }
 
 /** A context and what the host needs to hold it to the manifest and take it apart again. */
@@ -235,6 +238,12 @@ export function createContext<C>(o: ContextOptions<C>): PluginRuntime<C> {
     if (!d) refuse(`${kind} seam`);
     const named = (impl as { describe?: () => { name?: string } }).describe?.().name;
     if (named !== undefined && named !== d!.name) throw new PluginError("invalid", `the ${kind} seam describes itself as ${named}, declared as ${d!.name} (§7.1)`);
+    if (kind === "agent") {
+      const issue = envPrefixesIssue((impl as Partial<AgentProvider>).describe?.().envPrefixes);
+      if (issue) throw new PluginError("invalid", `the agent seam ${d!.name}: ${issue} (§7.3)`);
+    }
+    const refused = o.refuseSeam?.(kind, impl) ?? null;
+    if (refused) throw new PluginError("invalid", `the ${kind} seam ${d!.name}: ${refused}`);
     return contribute({ kind: "seam", seam: kind, name: d!.name }, `${kind}/${d!.name}`, { kind: "seam", seam: kind, impl: counted(kind, impl) });
   };
   // §13.5: the kernel's calls to a seam, counted in the plugin's stats by seam kind, a failed one by its ErrorClass.kind.

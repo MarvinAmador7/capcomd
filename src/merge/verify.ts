@@ -3,6 +3,7 @@ import { readFileSync, renameSync, writeFileSync } from "fs";
 import { join } from "path";
 import type { Git } from "./git";
 import { realSandbox } from "../providers/registry";
+import { HOST_CHECK_DROP_NAMES, hostCheckDropPrefixes } from "../plugins/env-families";
 
 /**
  * Where verify's check command runs. The tree under test is agent-written code, so with real agents (a provider
@@ -68,16 +69,19 @@ function recordPass(file: string, key: string, output: string) {
   try { const tmp = `${file}.${process.pid}`; writeFileSync(tmp, JSON.stringify(Object.fromEntries(kept))); renameSync(tmp, file); } catch {}
 }
 
+const CREDENTIAL_NAMED = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH/i;
 /**
  * The environment a check gets on the host (fake sandboxes, or CAPCOMD_CHECKS=host): the operator's, minus what could
- * act as them: capcomd's own settings, provider and GitHub keys, anything named like a key, token, secret, password or
- * credential, git credential config and the SSH agent. Toolchain variables (PATH, HOME, BUN_INSTALL, …) stay, so
+ * act as them: capcomd's own settings, every agent provider's families (`describe().envPrefixes`) and GitHub's keys,
+ * anything named like a key, token, secret, password or credential, git credential config and the SSH agent
+ * (src/plugins/env-families.ts), whatever their case. Toolchain variables (PATH, HOME, BUN_INSTALL, …) stay, so
  * checks run as they would in the operator's shell. (The VM path passes only the run, task and target ids.)
  */
 export function hostCheckEnv(source: Record<string, string | undefined> = process.env): Record<string, string> {
-  const drop = /^(CAPCOMD_|RELAY_|BOXD_|ANTHROPIC_|OPENAI_|CLAUDE_|CODEX_|AI_GATEWAY_|VERCEL_|FX_|GH_|GITHUB_|GIT_CONFIG_|GIT_ASKPASS$|SSH_AUTH_SOCK$|AWS_|GOOGLE_|AZURE_|NPM_TOKEN$)|(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i;
+  const prefixes = hostCheckDropPrefixes();
+  const drop = (k: string) => { const n = k.toUpperCase(); return HOST_CHECK_DROP_NAMES.has(n) || prefixes.some((p) => n.startsWith(p)) || CREDENTIAL_NAMED.test(k); };
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(source)) if (v !== undefined && !drop.test(k)) out[k] = v;
+  for (const [k, v] of Object.entries(source)) if (v !== undefined && !drop(k)) out[k] = v;
   return out;
 }
 

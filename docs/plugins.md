@@ -193,8 +193,8 @@ your secrets' values are redacted from it.
   followed, since a plugin doesn't choose which of the user's variables it receives. Until it is set, the secret is
   missing from `secrets`; say what to set. A reference may not name one of capcomd's own variables (`BOXD_API_KEY`,
   `GITHUB_TOKEN`, `GH_TOKEN`, `CAPCOMD_*`, `RELAY_*`, `GIT_*`, `RIVET*`, `ANTHROPIC_*`, `CLAUDE_*`, `OPENAI_*`,
-  `CODEX_*`, `AI_GATEWAY_*`, `VERCEL_*`, `FX_*`, in any case) or its keychain items (`keychain:capcomd…`), as your
-  default or in the user's config: the plugin fails `config_invalid` instead (§10.3). Suggest a variable of your own (`env:MY_PLUGIN_GITHUB_TOKEN`);
+  `CODEX_*`, `AI_GATEWAY_*`, `VERCEL_*`, `FX_*`, any other agent provider's own families, in any case) or its
+  keychain items (`keychain:capcomd…`), as your default or in the user's config: the plugin fails `config_invalid` instead (§10.3). Suggest a variable of your own (`env:MY_PLUGIN_GITHUB_TOKEN`);
   `capcomd plugins validate` flags a default that names one of capcomd's. `keychain:` references aren't supported
   yet: one anywhere (your default, the user's config, `CAPCOMD_PLUGIN_*`) fails the plugin `config_invalid` with the
   hint to use `env:<VAR>`. A reference the user set whose variable isn't set is refused, never replaced with another
