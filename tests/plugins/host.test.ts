@@ -590,7 +590,8 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
     const cpath = join(dir, "clients.json");
     const token = addClient("operator", ["read", "configure"], cpath).token;
     const { BUILTINS, candidateOf } = await import("../../src/plugins/builtins");
-    const { host } = makeHost();
+    const { VERSION } = await import("../../src/utils/self");
+    const { host } = makeHost({ capcomd: VERSION }); // built-ins require exactly the package's version
     await host.start(BUILTINS.filter((b) => ["forge-git", "watchdog"].includes((b.manifest as M).name as string)).map((b) => ({ ...candidateOf(b), enabled: true })));
     const app = harnessApp({ source: memorySource({}), clients: () => loadClients(cpath), state: harnessState(null), plugins: () => host.list(), pluginHost: host });
     const post = (p: string, key: string) => app.request(p, { method: "POST", headers: { authorization: `Bearer ${token}`, "idempotency-key": key } });
