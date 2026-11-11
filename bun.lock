@@ -11,6 +11,7 @@
         "@orpc/openapi": "^1.16.1",
         "@orpc/server": "1.16.1",
         "@orpc/zod": "^1.16.1",
+        "@rivet-dev/services": "0.2.4",
         "@rivetkit/engine-cli": "2.3.31",
         "@xyflow/react": "^12.12.0",
         "commander": "^15.0.0",
@@ -35,6 +36,9 @@
         "typescript": "^7",
       },
     },
+  },
+  "overrides": {
+    "@rivet-dev/services": "0.2.4",
   },
   "packages": {
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.2.5", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-3NX/MpTdroi0aKz134A6RC2Gb2iXVECN4QaAXnvCIxxIm3C3AVB1mkUe8NaaiyvOpDfsrqWhYtj+Q6a62RrTsw=="],

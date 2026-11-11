@@ -145,6 +145,27 @@ jobs:
       - name: Install it and use it from Node (packages/plugin/scripts/smoke.sh)
         run: packages/plugin/scripts/smoke.sh dist/plugin/capcomd-plugin-*.tgz
 
+  # The npm package (`bun pm pack`) installed the way a user installs it, `bun add -g` with no lockfile, so its
+  # dependencies resolve as they would for a user today, and driven with fake agents (scripts/release-smoke.sh): every
+  # @rivet-dev/services it resolved is the version package.json pins, and its engine starts rivet-services as on a
+  # user's default port. A dependency release that breaks a fresh install (rivet-services 0.2.5, 2026-11-10) fails here.
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: bun pm pack
+        run: mkdir dist && bun pm pack --destination dist
+
+      - name: Install it with a fresh HOME and drive it (scripts/release-smoke.sh)
+        run: scripts/release-smoke.sh dist/capcomd-*.tgz "$(bun -e 'console.log(require("./package.json").version)')"
+
   # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
   # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that
   # loads something by a computed name) fails here, not at release.

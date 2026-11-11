@@ -192,6 +192,7 @@ What CI runs, and where (`.github/workflows/`):
 | `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
 | `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect` with every runnable arm, below) |
+| `ci.yml` package | the npm package (`bun pm pack`), installed with `bun add -g` and no lockfile, as a user installs it, and driven (`scripts/release-smoke.sh`: every `@rivet-dev/services` resolved is the pinned version, and the engine runs rivet-services as on the default port) |
 | `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
 | `ci.yml` plugin-package | `@capcomd/plugin` packed (`packages/plugin/scripts/pack.ts`), installed into a fresh project and used from Node 20, typechecked by a TypeScript 5 consumer (`packages/plugin/scripts/smoke.sh`) |
 | `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |

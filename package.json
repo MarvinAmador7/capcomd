@@ -65,6 +65,7 @@
     "@orpc/openapi": "^1.16.1",
     "@orpc/server": "1.16.1",
     "@orpc/zod": "^1.16.1",
+    "@rivet-dev/services": "0.2.4",
     "@rivetkit/engine-cli": "2.3.31",
     "@xyflow/react": "^12.12.0",
     "commander": "^15.0.0",
@@ -81,6 +82,9 @@
     "xstate": "5.33.3",
     "yaml": "2.9.1",
     "zod": "^4.6.7"
+  },
+  "overrides": {
+    "@rivet-dev/services": "0.2.4"
   },
   "publishConfig": {
     "access": "public"
