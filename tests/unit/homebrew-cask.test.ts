@@ -17,7 +17,7 @@ describe("homebrew cask", () => {
 		expect(c).toContain(`sha256 "${sha}"`);
 		expect(c).toContain('url "https://github.com/MarvinAmador7/capcomd/releases/download/v#{version}/capcomd-app-#{version}.zip"');
 		expect(c).toContain('depends_on formula: "marvinamador7/tap/capcomd"');
-		expect(c).toContain('depends_on macos: ">= :sonoma"');
+		expect(c).toContain('depends_on macos: :sonoma');
 		expect(c).toContain('app "capcomd.app"');
 		expect(c).toContain('uninstall quit: "dev.capcomd.app"');
 		expect(c).toContain("System Settings > Privacy & Security");

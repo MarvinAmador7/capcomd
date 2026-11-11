@@ -134,6 +134,9 @@ approvals, in one app. Homebrew installs it with the CLI:
 brew install --cask MarvinAmador7/tap/capcomd-app
 ```
 
+If Homebrew refuses to load something "from untrusted tap" (Homebrew 7 and later), trust the tap once with
+`brew trust MarvinAmador7/tap` and run the install again.
+
 Open capcomd from Applications. It starts capcomd for you (as a login service) and connects by itself, so no
 terminal is needed after this. The app isn't notarized by Apple yet, so macOS blocks its first open: click **Done**,
 then in **System Settings › Privacy & Security** click **Open Anyway** next to "capcomd" and confirm. After that it

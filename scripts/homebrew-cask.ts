@@ -29,7 +29,7 @@ cask "${CASK}" do
   desc "Window and menu bar app for the capcomd agent orchestrator"
   homepage "https://github.com/${REPO}"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
   depends_on formula: "${o.formula ?? "marvinamador7/tap/capcomd"}"
 
   app "capcomd.app"
