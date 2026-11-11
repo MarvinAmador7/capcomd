@@ -214,7 +214,9 @@ export interface AgentProvider {
   subscriptionPrelude(home: string, q: (s: string) => string): string;
   /** The interactive login (run in a PTY in the login VM); `login` names the one of `describe().logins` to make. */
   loginCommand(bin: string, login?: string): string[];
-  verifyCommand(bin: string, q: (s: string) => string): string;
+  /** A cheap headless call proving the login works: exit 0 with "ok" on stdout. `model`: the agent's configured model
+   *  (unset: the CLI's own default), so the check runs on what the agent will, which a plan may limit. */
+  verifyCommand(bin: string, q: (s: string) => string, model?: string): string;
   /** Optional, pure: a shell line run in the login VM right after the login (after `subscriptionPrelude`) that prints
    *  one JSON line, `{"loggedIn": <boolean>}`, whether the CLI itself sees the login. Only that boolean leaves the VM;
    *  false fails the login before anything is saved. */

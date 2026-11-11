@@ -5,7 +5,7 @@ import type { AgentConfig } from "../agents/config";
 import { BASE_EGRESS } from "../agents/config";
 import { adapterFor } from "../agents/adapters";
 import type { AgentAdapter } from "../agents/types";
-import { agentHome, agentPath, detectScript, parseDetect, sq } from "../agents/runner";
+import { agentHome, agentPath, detectScript, detectedUsable, installedBin, installScript, parseDetect, sq } from "../agents/runner";
 import { Redactor } from "../agents/redact";
 import { AUTH_SHAPES, CLAUDE_TOKEN, bridge, hasInteractive, type InteractiveSession } from "./interactive";
 import { CLAUDE_TOKEN_SECRET, PROFILE_AGENTS, authSnapshotName, readAuthLedger, writeAuthLedger, type AuthProfile, type ProfileAgent } from "./profiles";
@@ -73,7 +73,9 @@ export async function bootVm(p: P, a: AgentAdapter, snapshot: string, purpose: s
   try { place = sandboxName(); } catch { /* unknown: recorded as such */ }
   const release = recordJobMachine({ idemKey, sandbox: place, kind: "login", purpose, agent: a.kind, ttlSeconds: 1800 });
   try {
-    const { id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 1800, egressAllow: [...new Set([...BASE_EGRESS, ...egress])], labels: { purpose }, fromSnapshot: snapshot });
+    // A release-archive CLI (fx) the image lacks is installed in the VM (findBin): its release host too.
+    const archive = a.install ? Object.values(a.install.assets).map((x) => new URL(x.url).host) : [];
+    const { id } = await p.ensure({ idemKey, isolated: true, ttlSeconds: 1800, egressAllow: [...new Set([...BASE_EGRESS, ...egress, ...archive])], labels: { purpose }, fromSnapshot: snapshot });
     releases.set(id, release);
     await p.waitReady(id, 120_000);
     return id;
@@ -88,11 +90,20 @@ export async function destroyVm(p: P, id: string) {
   releases.delete(id);
 }
 
-async function findBin(p: P, id: string, a: AgentAdapter, cfg: AgentConfig, env: Record<string, string>) {
+/** The CLI in the VM. One installed from a release archive (fx) that the image lacks, or has at another version, is
+ *  installed here at its pin, as an agent's VM does when it starts, so a login doesn't wait on `capcomd env build`. */
+export async function findBin(p: P, id: string, a: AgentAdapter, cfg: AgentConfig, env: Record<string, string>) {
   if (cfg.agentBin) return cfg.agentBin;
-  const d = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a)], { env })).stdout);
-  if (!d.bin) throw new Error(`${a.bin} is not installed in the env snapshot; run \`capcomd env build\``);
-  return d.bin;
+  const home = agentHome(cfg);
+  const d = parseDetect((await p.exec(id, ["sh", "-c", detectScript(a, home)], { env })).stdout);
+  if (detectedUsable(a, cfg, d)) return d.bin!;
+  if (!a.install) {
+    if (d.bin) return d.bin;
+    throw new Error(`${a.bin} is not installed in the env snapshot; run \`capcomd env build\``);
+  }
+  const res = await p.exec(id, ["sh", "-c", installScript(cfg, home, a)], { env, timeoutMs: 600_000 });
+  if (res.code !== 0) throw new Error(`${a.bin} ${a.pinnedVersion(cfg)} couldn't be installed in the login VM (exit ${res.code}): ${new Redactor([]).text((res.stderr || res.stdout).replace(/\s+/g, " ")).slice(-300)}`);
+  return installedBin(a, home);
 }
 
 /** Headless check that the login works ("ok" from the model). Never prints credentials. */
@@ -101,10 +112,16 @@ export async function verifyLogin(p: P, id: string, a: AgentAdapter, cfg: AgentC
   const env = { PATH: agentPath(home), HOME: home };
   const chk = (await p.exec(id, ["sh", "-c", a.subscriptionCheck(home, sq)], { env })).stdout;
   if (!/secret|file/.test(chk)) return { ok: false, detail: "no login present in the VM" };
-  const res = await p.exec(id, ["sh", "-c", `${a.subscriptionPrelude(home, sq)}; cd /tmp && ${a.verifyCommand(bin, sq)}`], { env, timeoutMs: 120_000 });
+  const res = await p.exec(id, ["sh", "-c", `${a.subscriptionPrelude(home, sq)}; cd /tmp && ${a.verifyCommand(bin, sq, cfg.model)}`], { env, timeoutMs: 120_000 });
   const r = new Redactor([]);
   if (res.code === 0 && /\bok\b/i.test(res.stdout)) return { ok: true, detail: `${a.kind} answered via plan login (${chk.trim().split("\n").join("+")})` };
-  return { ok: false, detail: `verify failed (exit ${res.code}): ${r.text((res.stderr || res.stdout).replace(/\s+/g, " ")).slice(-300)}` };
+  const out = r.text((res.stderr || res.stdout).replace(/\s+/g, " "));
+  // The login worked; the account behind it won't pay for this model (an AI Gateway with no credit, a Token Pass that
+  // covers only its featured models). Say so, and how to pick another model, rather than leave only the provider's text.
+  const billing = /insufficient_funds|Token Pass|credit balance/i.test(out)
+    ? ` The login itself worked: the account won't pay for ${cfg.model ? `the model ${cfg.model}` : `${a.bin}'s default model`}. Add credit there, or run on a model it covers (CAPCOMD_AGENT_MODEL or the profile's \`model\`; on a Vercel Token Pass, one of its featured models) and log in again.`
+    : "";
+  return { ok: false, detail: `verify failed (exit ${res.code}): ${out.slice(-300)}${billing}` };
 }
 
 export async function authLogin(p: P, agent: ProfileAgent, o: LoginOptions): Promise<LoginResult> {

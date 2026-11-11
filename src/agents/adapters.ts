@@ -7,6 +7,7 @@ import { adapterOf, agentAdapter, allAdapters } from "../plugins/agents";
 import { claude } from "../plugins/agent-claude";
 import { codex } from "../plugins/agent-codex";
 import type { AgentAdapter } from "./types";
+import type { EnvPins } from "../env/resolve";
 
 export { codexResetAt } from "../plugins/agent-codex";
 
@@ -20,5 +21,12 @@ export function adapterFor(kind: string): AgentAdapter {
 }
 /** Every active provider, in load order. */
 export const activeAdapters = (): AgentAdapter[] => allAdapters();
+/** The CLI pins an env image is named by (src/env/resolve.ts envName): Claude Code's, Codex's, node's, and each
+ *  release-archive CLI's (fx's), so a new pin names a new image and `capcomd env build` builds it instead of keeping
+ *  the old one. */
+export const envPins = (cfg: AgentConfig): EnvPins => ({
+  claude: cfg.version, codex: cfg.codexVersion, node: cfg.nodeVersion,
+  ...Object.fromEntries(activeAdapters().filter((a) => a.install).map((a) => [a.bin, a.pinnedVersion(cfg)])),
+});
 export type { AgentRunState };
 export type { AgentConfig };

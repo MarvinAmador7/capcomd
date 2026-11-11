@@ -155,7 +155,7 @@ export const codex: AgentProvider = {
   subscriptionCheck: (home, q) => `[ -s ${q(`${home}/.codex/auth.json`)} ] && echo file; true`,
   subscriptionPrelude: (home, q) => `unset CODEX_API_KEY OPENAI_API_KEY; export CODEX_HOME=${q(`${home}/.codex`)}`,
   loginCommand: (bin) => [bin, "login", "--device-auth"],
-  verifyCommand: (bin, q) => `${q(bin)} exec --json --color never --ephemeral --skip-git-repo-check --sandbox read-only 'Reply with exactly the word ok' < /dev/null | grep -q '"turn.completed"' && echo ok`,
+  verifyCommand: (bin, q, model) => `${q(bin)} exec --json --color never --ephemeral --skip-git-repo-check --sandbox read-only${model ? ` --model ${q(model)}` : ""} 'Reply with exactly the word ok' < /dev/null | grep -q '"turn.completed"' && echo ok`,
   guard(state, cfg) {
     if (cfg.maxTurns && state.turns > cfg.maxTurns) return `max_turns (${state.turns} > ${cfg.maxTurns} tool steps)`;
     // On a plan login the token cost is notional; the turn guard and timeout still apply.

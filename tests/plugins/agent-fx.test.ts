@@ -171,6 +171,9 @@ describe("agent-fx: describe() and registration (§7.3)", () => {
     expect(bridgeConfig(fx.command(ctx({ credentialMode: "subscription" }), q)).provider).toBeUndefined();
     expect(bridgeConfig(fx.command(ctx({ credentialMode: "auto" }), q)).provider).toBe("gateway");
     expect(fx.verifyCommand("/h/bin/fx", q)).toContain('FX_PROVIDER="${CAPCOMD_FX_PROVIDER:-gateway}"');
+    // The check runs on the agent's model when it has one (a Token Pass covers only its featured models), else fx's default.
+    expect(fx.verifyCommand("/h/bin/fx", q)).not.toContain("--model");
+    expect(fx.verifyCommand("/h/bin/fx", q, "zai/glm-5.3")).toContain(`--model ${q("zai/glm-5.3")}`);
     const c = { signal: new AbortController().signal, deadline: new Date(Date.now() + 1000).toISOString(), trace: { traceId: "t", spanId: "s" } };
     const ledger = join(h, "auths.json");
     const saved = process.env.CAPCOMD_AUTH_LEDGER;

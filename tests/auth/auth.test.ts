@@ -7,14 +7,15 @@ import { join } from "path";
 import { FakeProvider } from "../../src/providers/fake";
 import { loadAgentConfig, credentialModeFor, egressFor, BASE_EGRESS } from "../../src/agents/config";
 import { TokenFilter, AUTH_SHAPES } from "../../src/auth/interactive";
-import { authLogin, authStatus, authLogout } from "../../src/auth/login";
+import { authLogin, authStatus, authLogout, findBin, verifyLogin } from "../../src/auth/login";
 import { readAuthLedger, writeAuthLedger, authSnapshotName } from "../../src/auth/profiles";
 import { runAgent } from "../../src/agents/runner";
-import { adapterFor, claudeAdapter, codexAdapter } from "../../src/agents/adapters";
-import { FX_CODEX_LOGIN_REFUSED } from "../../src/plugins/agent-fx";
+import { adapterFor, claudeAdapter, codexAdapter, envPins } from "../../src/agents/adapters";
+import { FX_CODEX_LOGIN_REFUSED, FX_VERSION } from "../../src/plugins/agent-fx";
 import { runPreflight } from "../../src/core/preflight";
 import { secretsSync } from "../../src/env/secrets";
 import { envBuild } from "../../src/env/build";
+import { envName, ENV_SCHEMA } from "../../src/env/resolve";
 import { doctor, formatDoctor } from "../../src/env/doctor";
 import { bareRepo } from "../merge/gitfixture";
 import { taskBranch } from "../../src/merge/config";
@@ -135,6 +136,51 @@ function seenFromVm(p: FakeProvider): string[] {
 }
 
 describe("capcomd auth login fx (fx's own Vercel and Grok logins)", () => {
+  test("an env image without fx (built before fx was pinned): the login installs the pinned fx in its VM", async () => {
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_CREDENTIALS: "auto" });
+    const scripts: string[] = [];
+    const vm = (installed: boolean, code = 0) => ({ exec: async (_id: string, cmd: string[]) => {
+      const sh = cmd[2]!;
+      scripts.push(sh);
+      if (sh.includes("releases.fx.sh")) return { code, stdout: code ? "" : FX_VERSION, stderr: code ? "curl: (6) Could not resolve host" : "" };
+      return { code: 0, stdout: installed ? `bin=/w/home/bin/fx\nversion=${FX_VERSION}\nnode=v22.12.0\n` : "node=v22.12.0\n", stderr: "" };
+    } });
+    expect(await findBin(vm(false) as any, "vm", adapterFor("fx"), cfg, {})).toBe("/w/home/bin/fx");
+    expect(scripts.some((sh) => sh.includes(`releases.fx.sh/v${FX_VERSION}/`))).toBe(true);
+    scripts.length = 0;
+    expect(await findBin(vm(true) as any, "vm", adapterFor("fx"), cfg, {})).toBe("/w/home/bin/fx");
+    expect(scripts.some((sh) => sh.includes("releases.fx.sh"))).toBe(false);
+    await expect(findBin(vm(false, 6) as any, "vm", adapterFor("fx"), cfg, {})).rejects.toThrow(`fx ${FX_VERSION} couldn't be installed in the login VM (exit 6)`);
+    // An npm CLI the image lacks is still `capcomd env build`'s to install.
+    const claude = loadAgentConfig({ CAPCOMD_AGENT: "claude-code", CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_CREDENTIALS: "auto" });
+    await expect(findBin(vm(false) as any, "vm", adapterFor("claude-code"), claude, {})).rejects.toThrow("claude is not installed in the env snapshot; run `capcomd env build`");
+  });
+
+  test("the check after a login runs on the agent's model; a billing refusal says the login worked and what to change", async () => {
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_AGENT_WORKDIR: "/w", CAPCOMD_CREDENTIALS: "auto", CAPCOMD_AGENT_MODEL: "moonshotai/kimi-k3" });
+    const ran: string[] = [];
+    const vm = { exec: async (_id: string, cmd: string[]) => {
+      ran.push(cmd[2]!);
+      if (cmd[2]!.includes(" ask ")) return { code: 1, stdout: "", stderr: "fx ask: API request failed · HTTP 502 · insufficient_funds: Your Token Pass only covers requests served by the token-pass provider." };
+      return { code: 0, stdout: "file vercel\n", stderr: "" };
+    } };
+    const v = await verifyLogin(vm as any, "vm", adapterFor("fx"), cfg, "/w/home/bin/fx");
+    expect(ran.at(-1)).toContain("--model 'moonshotai/kimi-k3'");
+    expect(v.ok).toBe(false);
+    expect(v.detail).toContain("insufficient_funds");
+    expect(v.detail).toContain("The login itself worked: the account won't pay for the model moonshotai/kimi-k3.");
+    expect(v.detail).toContain("CAPCOMD_AGENT_MODEL");
+  });
+
+  test("fx's pin names the env image: an image from before fx is another name, so `capcomd env build` builds a new one", () => {
+    const cfg = loadAgentConfig({ CAPCOMD_AGENT: "fx", CAPCOMD_CREDENTIALS: "auto" });
+    const pins = envPins(cfg);
+    expect(pins).toEqual({ claude: cfg.version, codex: cfg.codexVersion, node: cfg.nodeVersion, fx: FX_VERSION });
+    const name = (p: Record<string, string>) => envName({ schema: ENV_SCHEMA, pins: p as any, lockHash: "none", lockFile: "none", repo: "" });
+    const { fx: _, ...before } = pins;
+    expect(name(pins)).not.toBe(name(before));
+  });
+
   test("vercel (the default): fx's device code shown, its session snapshotted like codex's; only booleans leave the VM; status; logout", async () => {
     const s = setup("fx");
     const seen = seenFromVm(s.p);
@@ -151,9 +197,10 @@ describe("capcomd auth login fx (fx's own Vercel and Grok logins)", () => {
     expect(s.p.snapshots.get(res.profile.snapshot!)!.status).toBe("ready");
     const f = join(s.home, ".fx/auth.json");
     expect(statSync(f).mode & 0o777).toBe(0o600);
-    // fx printed its URL instead of opening a browser (the fake exits 6 otherwise), in a VM that reached Vercel's hosts.
+    // fx printed its URL instead of opening a browser (the fake exits 6 otherwise), in a VM that reached Vercel's hosts
+    // (and fx's release host, to install the pinned fx when the image has none).
     const loginVm = [...s.p.egress.values()][0]!;
-    expect(loginVm).toEqual([...new Set([...BASE_EGRESS, "vercel.com", "api.vercel.com", "ai-gateway.vercel.sh"])]);
+    expect(loginVm).toEqual([...new Set([...BASE_EGRESS, "vercel.com", "api.vercel.com", "ai-gateway.vercel.sh", "releases.fx.sh"])]);
     // `fx status --json` said more (a session field); the host only ever got its boolean, and "ok" from the verify call.
     expect(seen.join("\n")).not.toContain("vcr_FAKEREFRESH");
     expect(seen.join("\n")).toContain('{"loggedIn":true}');
@@ -172,7 +219,7 @@ describe("capcomd auth login fx (fx's own Vercel and Grok logins)", () => {
     expect((await authStatus(s.p as any, s.cfg, { ledgerPath: s.ledger, verify: false })).map((l) => l.agent)).toEqual(["claude-code", "codex"]);
   }, 30_000);
 
-  test("grok: the browser URL, then the code pasted through the terminal; Grok's hosts only; fx runs on its grok provider", async () => {
+  test("grok: the browser URL, then the code pasted through the terminal; Grok's hosts (and fx's release host) only; fx runs on its grok provider", async () => {
     const s = setup("fx");
     const t = terminal("XAI-CODE-123\n");
     const logs: string[] = [];
@@ -184,7 +231,7 @@ describe("capcomd auth login fx (fx's own Vercel and Grok logins)", () => {
     expect(res.profile).toMatchObject({ agent: "fx", method: "browser-code", login: "grok", snapshot: "capcomd-auth-fx-2f1eed2b11c528fc" });
     expect(existsSync(join(s.home, ".fx/grok-auth.json"))).toBe(true);
     expect(existsSync(join(s.home, ".fx/auth.json"))).toBe(false);
-    expect([...s.p.egress.values()][0]).toEqual([...new Set([...BASE_EGRESS, "auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai"])]);
+    expect([...s.p.egress.values()][0]).toEqual([...new Set([...BASE_EGRESS, "auth.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com", "api.x.ai", "releases.fx.sh"])]);
     // The verify call ran fx on the provider the login signed in to (the fake answers only with that provider's login).
     expect(logs.join("\n")).toContain("fx answered via plan login");
   }, 30_000);
