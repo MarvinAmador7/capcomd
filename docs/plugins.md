@@ -323,7 +323,7 @@ Keep secrets in `x-secret` settings, never in `entry.env` or the manifest.
 ## Versions
 
 `apiVersion` is the plugin API's major (1). `engines.capcomd` is what you tested. `@capcomd/plugin` is versioned with
-capcomd: `@capcomd/plugin@0.10.0` is the API of capcomd 0.10.0. The process protocol is version 1 (`sessionOpen()` says
+capcomd: `@capcomd/plugin@0.10.1` is the API of capcomd 0.10.1. The process protocol is version 1 (`sessionOpen()` says
 so); a new optional field, frame or route is not a new version, so ignore what you don't know (§9.10). The handshake's
 `SessionOpened.daemon` has the daemon's version and capabilities, for feature detection.
 
