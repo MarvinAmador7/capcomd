@@ -201,6 +201,8 @@ under the one-day pre-gate spike code) resolves to 1 by rivetkit's rule and isn'
 - **Nested loops diverge on replay (rivetkit 2.3.31).** A loop inside another loop's iteration resumes at its saved
   iteration, and the outer iteration's check then finds the retained earlier inner iterations unvisited. Found by the
   first version of this spike; the workflow is one flat loop with a phase per iteration. Upstream report worth filing.
+  rivetkit 3.x's workflow engine marks a loop's finished iterations (and settled `join`/`race` history) visited on
+  replay (`workflow-engine/src/context.ts`), which looks like the fix; the flat loop stays until a test proves it.
 - **Step outputs are history.** Keep them small (the push result is the largest). Loop history is pruned every 20
   iterations; a 60-minute agent at 1 s polls writes ~3600 small entries over its life.
 - **The run is not resumable mid-way**: after a restart the attempt runs again from the start in the same VM (same as
@@ -235,7 +237,9 @@ under the one-day pre-gate spike code) resolves to 1 by rivetkit's rule and isn'
   (`tests/subagents/workflow.test.ts` "restart mid-step", killpoint `workflow.start_agent.mid`, and "restart inside a
   long step", a provider that doesn't answer `ensure`). Cost: one schedule row per step, plus one per 5 s of a long
   step (provisioning).
-- **One alarm per actor; the schedule overwrites the workflow's** (found 2026-10-30 by the live e2e with
+- **One alarm per actor; the schedule overwrites the workflow's** (rivetkit 2.3.31; since rivetkit 3.x the workflow
+  keeps its own wake deadline, `setWakeAt`, and the engine fires at the earlier of it and the next scheduled event, so
+  the overwrite below is gone; `disarmStepWakes` still bounds a crash mid-step) (found 2026-10-30 by the live e2e with
   `CAPCOMD_E2E_RESTART=1`, on the first version of the step wake). In rivetkit 2.3.31 the workflow sets the actor's
   alarm directly for its waits, and every change to the actor's schedule (an event added, fired or cancelled) sets it to
   the earliest scheduled event. The first step wake was left to fire 10 s after its step, during the watch: it replaced

@@ -28,10 +28,11 @@ per-file overrides (`CAPCOMD_AUTH_LEDGER`, `CAPCOMD_ENV_LEDGER`, `CAPCOMD_QUOTA_
 `CAPCOMD_AGENTS_FILE`, `CAPCOMD_BOXD_DB`, `CAPCOMD_MACHINES_LEDGER`, `CAPCOMD_RUNS_INDEX`, `CAPCOMD_RPC_KEY_FILE`) win. Tests that touch these must set their own (a saved login in `.relay/` changes outcomes).
 
 The Rivet engine's data is always under the capcomd home (`~/.capcomd`, or `$CAPCOMD_HOME`), checkout or not, one
-directory per port (`src/engine/data.ts`; `CAPCOMD_ENGINE_DATA` names another): `engine/<port>/db` (RocksDB),
-`engine.pid`, `engine-version.json` (the engine version that last opened it), `backups/<version>-<UTC>/{db,engine-version.json}`
-(taken before a different engine version opens it; newest 3), `.rivetkit/` (rivetkit's engine logs and runtime stamp,
-via `RIVETKIT_STORAGE_PATH`) and, on 6420, `migrated-from-rivetkit.json` (the one-time copy from `~/.rivetkit`).
+directory per port (`src/engine/data.ts`; `CAPCOMD_ENGINE_DATA` names another): `engine/<port>/db` (Rivet 3.x's
+`log/` and `objects/`), `engine.pid`, `engine-version.json` (the engine version that last opened it),
+`backups/<version>-<UTC>/{db,engine-version.json}` (taken before a different engine version opens it; newest 3),
+`.rivetkit/` (rivetkit's engine logs and runtime stamp, via `RIVETKIT_STORAGE_PATH`) and, where a Rivet 2.x engine ran
+before, `rivet-v2/` (what it left, set aside on the first 3.x start: docs/durability.md → Engine data).
 Nothing reads or writes `~/.rivetkit`. When you run a daemon by hand, give it `CAPCOMD_ENGINE_DATA` and its own
 `--port`/`CAPCOMD_ENDPOINT`; `capcomd serve` on 6420 with no override is the user's real data.
 

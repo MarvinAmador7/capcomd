@@ -1,7 +1,7 @@
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
-import { db } from "rivetkit/db";
+import { db } from "./db";
 import { setupLifecycleTables } from "../utils/lifecycle";
 import { getDependencies } from "../dependencies";
 

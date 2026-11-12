@@ -8,7 +8,7 @@ import { actor, UserError } from "rivetkit";
 import { isSandboxUnreachable, isTransientSandboxError, SandboxError } from "../providers/boxd-errors";
 import { sandboxAuthError } from "../plugins/sandboxes";
 import { backoffMs, minutes, withOutageListener, type Outage } from "../providers/resilient";
-import { db } from "rivetkit/db";
+import { db } from "./db";
 import { workerMachine, type WorkerContext } from "../machines/worker";
 import { initialTransition, transition } from "xstate";
 import {
