@@ -1,6 +1,6 @@
 {
   "name": "@capcomd/plugin",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "The capcomd plugin API: manifest schema and loading, context and primitive interfaces, the typed hook registry, the seam interfaces, the out-of-process protocol and its client library (connect), the host's machinery (shared by the kernel's plugin host and the test kit) and the test kit. The normative spec is docs/spec/plugin-api.md. This workspace manifest points at the sources and stays private: the published package is built from it by scripts/pack.ts, at capcomd's version, and published by the release workflow.",

@@ -1,6 +1,6 @@
 {
   "name": "capcomd",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Durable orchestration for swarms of coding agents, driven by your agent: Claude Code and Codex in isolated VMs, landing only verified, reviewed commits",
   "keywords": [
     "agents",
