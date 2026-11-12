@@ -148,7 +148,7 @@ jobs:
   # The npm package (`bun pm pack`) installed the way a user installs it, `bun add -g` with no lockfile, so its
   # dependencies resolve as they would for a user today, and driven with fake agents (scripts/release-smoke.sh): every
   # @rivet-dev/services it resolved is the version package.json pins, and its engine starts rivet-services as on a
-  # user's default port. A dependency release that breaks a fresh install (rivet-services 0.2.5, 2026-11-10) fails here.
+  # user's default port. A dependency release that breaks a fresh install (rivet-services 0.2.5 under rivetkit 2.3.31, 2026-11-10) fails here.
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 15

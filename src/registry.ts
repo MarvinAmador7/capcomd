@@ -14,6 +14,10 @@ import { scopeActor } from "./actors/scope";
 export const MAX_ACTION_MESSAGE_BYTES = 8 * 1024 * 1024;
 
 export const registry = setup({
+  // `capcomd serve` owns its signals: it stops its plugins, drains the actors (registry.shutdown(), 4 s at most, as
+  // rivetkit's own handlers did for a local engine), then stops its engine and rivet-services (src/cli/commands/serve.ts).
+  // rivetkit's handlers would re-raise the signal once they had drained and kill serve halfway through that stop.
+  shutdown: { disableSignalHandlers: true, gracePeriodMs: 4000 },
   maxIncomingMessageSize: MAX_ACTION_MESSAGE_BYTES,
   maxOutgoingMessageSize: MAX_ACTION_MESSAGE_BYTES,
   use: {

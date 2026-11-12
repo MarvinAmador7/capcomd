@@ -3,7 +3,7 @@ import { traceActions } from "../utils/tracing-simple";
 import { isProtectedBranch } from "../utils/protected";
 import type { MergeRecord } from "../machines/task";
 import { actor } from "rivetkit";
-import { db } from "rivetkit/db";
+import { db } from "./db";
 import { taskMachine, type TaskContext } from "../machines/task";
 import { leaseMachine, type LeaseContext } from "../machines/lease";
 import { initialTransition, transition } from "xstate";

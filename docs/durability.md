@@ -46,28 +46,38 @@ workflow tests still use them (`CAPCOMD_KILLPOINT`, DEVELOPMENT.md).
 - **Where:** every engine capcomd starts keeps its data under the capcomd home, one dir per port:
   `<home>/engine/<port>/db` (`<home>` = `~/.capcomd` or `$CAPCOMD_HOME`; `CAPCOMD_ENGINE_DATA` overrides the dir).
   `RIVETKIT_STORAGE_PATH=<home>/engine/<port>` sends rivetkit's own engine logs and runtime stamp to `.rivetkit/` there,
-  and `src/engine/engine-wrapper.sh` points the engine's `RIVET__FILE_SYSTEM__PATH` at `db/`. Nothing uses rivetkit's
-  shared `~/.rivetkit`, so another rivetkit project on the machine can't stamp capcomd's db (or the reverse).
-- **One-time copy (6420, default dir only):** when `<home>/engine/6420/db` is empty and `~/.rivetkit/var/engine/db`
-  exists, `capcomd serve` copies it into a temporary dir, checks that nothing opened the source meanwhile and the copy's
-  file count and bytes against it, renames it into place and writes `migrated-from-rivetkit.json` (source, time, versions). The source is never
-  moved or changed. If any process has the source open (an engine still running on it), or lsof can't tell, serve
-  refuses with a sentence and copies nothing; it checks again after the copy, before the rename. With the marker
-  present it never copies again. `~/.rivetkit` is shared by every rivetkit project: if capcomd never ran on it, what
-  was copied is another project's data; delete `<home>/engine/6420` (and its marker) and start again.
-- **Version guard:** Rivet's engine stamps its version into the db and refuses to open a db stamped by a newer engine
+  and `src/engine/engine-wrapper.sh` points the Rivet 3.x engine's storage at `db/`: its log
+  (`RIVET__STORAGE__LOG_DIRECTORY` → `db/log`) and object store (`RIVET__OBJECT_STORAGE__PRIMARY__FILE_SYSTEM__PATH` →
+  `db/objects`). Nothing uses rivetkit's shared `~/.rivetkit`, so another rivetkit project on the machine can't stamp
+  capcomd's data (or the reverse).
+- **Rivet 2.x data (hard cut):** a Rivet 3.x engine can't read what a 2.x engine kept (a RocksDB), and capcomd doesn't
+  carry it over. The first 3.x `capcomd serve` on a dir whose record names a 2.x engine (or, unrecorded, whose `db/` is
+  a RocksDB: a `CURRENT` file at its top) moves what that engine left, `db/`, `engine-version.json`, `backups/` and the
+  old `migrated-from-rivetkit.json`, together to `<home>/engine/<port>/rivet-v2/` (`rivet-v2-<UTC>/` if that exists),
+  deletes nothing, prints one line saying so, and starts the engine on empty data. The runs index rows created up to
+  that engine's last write (the newest file time in its `db/`) move from `state/runs.jsonl` to
+  `state/runs-rivet-v2.jsonl`, so the run list doesn't fill with runs no engine can show (a row whose run the engine
+  doesn't have is listed as `unknown`, with no agents). Their traces stay in `traces/`. A cut that stopped halfway is
+  finished from `rivet-v2.partial/` on the next start. Going back to a 2.x capcomd: stop capcomd, move `db/` and
+  `engine-version.json` aside and put `rivet-v2/`'s back. capcomd 0.10.x copied `~/.rivetkit/var/engine/db` into
+  `<home>/engine/6420` once; that copy is gone with 2.x (it was 2.x data too).
+- **Version guard:** Rivet's engine stamps its version into its data and refuses to open data stamped by a newer engine
   (`engine/packages/version-management`, "rolled back to a previous version"). Once an engine answers on a dir, serve
   records the version it reports on `/health` in `engine-version.json` (so the record never names an engine that
-  didn't open it). Before an engine of a different (or unrecorded, e.g. the copy from `~/.rivetkit`) version opens it,
-  serve copies `db/` and its record to `backups/<old version>-<UTC time>/{db,engine-version.json}` (newest 3 kept;
-  not again while that backup is newer than the record, i.e. an engine that never came up); if the recorded version
-  is newer than the engine it's about to start, serve refuses, naming both versions and the newest backup. When the
-  engine doesn't come up, serve prints the last lines of its stderr log (`.rivetkit/var/logs/rivet-engine/`).
+  didn't open it). Before an engine of a different (or unrecorded) version of the same major opens it, serve copies
+  `db/` and its record to `backups/<old version>-<UTC time>/{db,engine-version.json}` (newest 3 kept; not again while
+  that backup is newer than the record, i.e. an engine that never came up); if the recorded version is newer than the
+  engine it's about to start, serve refuses, naming both versions and the newest backup. When the engine doesn't come
+  up, serve prints the last lines of its log (`.rivetkit/var/logs/rivet-engine/`: stderr, or stdout when that is
+  empty, as with 3.x).
 - **Restore:** stop capcomd, replace `db/` and `engine-version.json` with the backup's, start capcomd.
   `RIVET__RUNTIME__ALLOW_VERSION_ROLLBACK` is not used: Rivet treats a downgrade as a restore from backup.
 - **Verified (2026-10-27):** a db written by capcomd on rivetkit 2.3.27 and copied this way opens on 2.3.31 with its
   runs and agents intact. After any engine restart (2.3.27 → 2.3.27 too) the first actor call can take ~20 s and
   fail with `internal_error`; the next one works (docs/upstream/rivetkit-cold-restart.md).
+- **Verified (2026-11-12, rivetkit 3.1.1):** a home whose `engine/<port>` a 2.3.31 daemon had written (two runs, one
+  with a finished fake agent) was set aside to `rivet-v2/` on the first 3.1.1 start, both runs left the run list, and
+  a new run's fake agent reached `done` on the empty engine.
 
 ## Off-host backup plan (not implemented)
 1. **Consistent snapshot:** stop capcomd → `tar --zstd` `<home>/engine/<port>/db` → restart. Do this nightly. If the

@@ -1,7 +1,7 @@
 import type { RawAccess } from "rivetkit/db";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
-import { db } from "rivetkit/db";
+import { db } from "./db";
 import { runMachine, type RunContext } from "../machines/run";
 import { initialTransition, transition } from "xstate";
 import type { ModelClient } from "../models/fake";

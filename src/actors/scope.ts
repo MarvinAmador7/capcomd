@@ -13,7 +13,7 @@ import { sameHold, type PluginHold } from "../merge/types";
 import { env as envVar } from "../utils/env";
 import type { RawAccess } from "rivetkit/db";
 import { actor, UserError } from "rivetkit";
-import { db } from "rivetkit/db";
+import { db } from "./db";
 import { traceActions } from "../utils/tracing-simple";
 import { killpoint } from "../utils/killpoint";
 import { ENGINE_INSTANCE } from "../utils/engine-instance";

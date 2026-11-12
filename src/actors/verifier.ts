@@ -1,7 +1,7 @@
 import type { RawAccess } from "rivetkit/db";
 import { traceActions, withSpan } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
-import { db } from "rivetkit/db";
+import { db } from "./db";
 import { setupLifecycleTables, transitionLifecycle, getLifecycle } from "../utils/lifecycle";
 import { mergeTask } from "../merge/service";
 import type { MergeOutcome } from "../merge/types";

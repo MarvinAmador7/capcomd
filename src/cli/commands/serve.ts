@@ -26,6 +26,15 @@ function descendants(pid: number): number[] {
   return kids.flatMap((k) => [k, ...descendants(k)]);
 }
 
+/** True while pid is a live rivet-services (not a zombie, not a pid recycled to another program). */
+function isServices(pid: number): boolean {
+  const ps = (spawnSync("ps", ["-o", "stat=,command=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 }).stdout ?? "").trim();
+  return /rivet-services/.test(ps) && !ps.startsWith("Z");
+}
+
+/** The rivet-services processes among pid's descendants. */
+const servicesUnder = (pid: number) => descendants(pid).filter(isServices);
+
 /** The harness socket path: --harness-socket > CAPCOMD_HARNESS_SOCKET > config harness.socket (unless CAPCOMD_NO_CONFIG) > ~/.capcomd/harness.sock. */
 export async function harnessSocket(flag?: string): Promise<string> {
   const { harnessSocketPath } = await import("../../api/socket");
@@ -79,7 +88,6 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // ~/.rivetkit, which other rivetkit projects also use (a newer one stamps the db and ours then refuses to open it).
   const data = await import("../../engine/data");
   const dataDir = data.engineDataDir(port);
-  const copyLegacy = data.copiesLegacyData(port);   // before CAPCOMD_ENGINE_DATA is set below
   mkdirSync(dataDir, { recursive: true });
   const pidFile = process.env.CAPCOMD_ENGINE_PIDFILE ?? data.pidFileOf(dataDir);
   process.env.CAPCOMD_ENGINE_PIDFILE = pidFile;
@@ -127,24 +135,28 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     }
     if (f !== pidFile) rmSync(f, { force: true });
   }
-  // Once per start (not again in the engine host below): the one-time copy from ~/.rivetkit, then the version guard.
-  // The engine's version is recorded only once it answers (below), so the record never names an engine that didn't open it.
+  // Once per start (not again in the engine host below): the version guard. The engine's version is recorded only once
+  // it answers (below), so the record never names an engine that didn't open it.
   if (process.env.CAPCOMD_SERVE_EXEC !== "1") {
     const real = process.env.CAPCOMD_REAL_ENGINE ?? process.env.CAPCOMD_TEST_REAL_ENGINE ?? process.env.RIVET_ENGINE_BINARY!;
     const engineVersion = data.engineVersionOf(real);
     if (engineVersion) process.env.CAPCOMD_ENGINE_VERSION = engineVersion;
-    const { VERSION } = await import("../../utils/self");
-    if (copyLegacy) {
-      const m = data.migrateLegacyEngineData({ dataDir, legacyDb: data.legacyRivetkitDb(), engineVersion, capcomdVersion: VERSION });
-      if (m.action === "refused") { console.error(`capcomd serve: ${m.message}`); process.exit(1); }
-      if (m.action === "copied") console.log(`  ${m.message}`);
-    }
     const held = data.holdersOf(data.dbDir(dataDir));
     if (held === null || held.length) { console.error(`capcomd serve: ${data.dbDir(dataDir)} is in use by ${data.describeHolders(held)} (another engine on this data dir?); stop it and retry.`); process.exit(1); }
     if (engineVersion === null) console.log(`  couldn't read the engine's version (${real} --version); starting without the version check or backup`);
     const p = data.prepareEngineData({ dataDir, engineVersion });
     if (p.action === "refused") { console.error(`capcomd serve: ${p.message}`); process.exit(1); }
     if (p.action === "backed-up") console.log(`  ${p.message}`);
+    if (p.action === "set-aside") {
+      // Its runs are gone with it: they leave the run list (rows from before that engine's last write; a run another
+      // engine holds is newer), kept beside it in runs-rivet-v2.jsonl.
+      let left = "";
+      try {
+        const r = (await import("../../primitives/ops")).setAsideRuns(data.newestWrite(data.dbDir(p.to)));
+        if (r.moved) left = ` ${r.moved} run${r.moved === 1 ? "" : "s"} from before it left the run list (kept in ${r.to}).`;
+      } catch (e) { left = ` The run list still names its runs (${(e as Error).message}).`; }
+      console.log(`  ${p.message}${left}`);
+    }
   }
   rmSync(pidFile, { force: true });
   // rivet-services (RivetKit starts it on the default port) is a child of this process that only RivetKit's own shutdown
@@ -178,7 +190,12 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   process.on("exit", reap);
   // The plugin host, once it has started (below): plugins dispose in reverse load order before the engine stops (§5.5).
   let plugins: { stop(): Promise<void> } | null = null;
-  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, async () => {
+  // The actors' drain, once the registry has started (below).
+  let drain: (() => Promise<unknown>) | null = null;
+  // The engine host's stop (the outer serve below waits for it). rivetkit's own SIGINT/SIGTERM handlers are off
+  // (src/registry.ts `shutdown.disableSignalHandlers`): they re-raised the signal once rivetkit had drained, which killed
+  // this process before it had stopped the rivet-services it started (rivetkit 3.x, services 0.2.5: still up 5 s later).
+  if (process.env.CAPCOMD_SERVE_EXEC === "1") for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, async () => {
     if (plugins) {
       // §5.5 stop step 1: daemon.stopping, with 5 s for its listeners to finish, then the plugins dispose.
       const { hooks } = await import("../../plugins/hooks");
@@ -189,6 +206,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
       await plugins.stop().catch((e: Error) => console.error(`capcomd serve: stopping plugins: ${e.message}`));
     }
     console.log("\nStopping engine...");
+    if (drain) await Promise.race([drain().catch(() => {}), new Promise((r) => setTimeout(r, 6000))]);
     await stopEngine();
     process.exit(0);
   });
@@ -201,8 +219,25 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     const { spawn } = await import("child_process");
     const [cmd, ...args] = (await import("../../utils/self")).selfArgv(...process.argv.slice(2));
     const child = spawn(cmd!, args, { stdio: "inherit", env: { ...process.env, CAPCOMD_SERVE_EXEC: "1" } });
-    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => child.kill(sig));
+    // On a signal the engine host stops its plugins, its engine and the rivet-services it started, then exits: wait for
+    // it (20 s at most, then SIGKILL), so whoever signalled serve sees it exit only once they're gone. The services under
+    // it are read first: once the host has exited they're reparented out of reach, and any it left are stopped here.
+    let stopping = false, orphans: number[] = [];
+    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => {
+      if (!stopping) {
+        stopping = true;
+        orphans = servicesUnder(child.pid!);
+        setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 20_000).unref();
+      }
+      child.kill(sig);
+    });
     const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((r) => child.on("exit", (c, sg) => r([c, sg])));
+    if (stopping) {
+      for (let i = 0; i < 10 && orphans.some((p) => isServices(p)); i++) await new Promise((r) => setTimeout(r, 100));
+      for (const p of orphans) if (isServices(p)) try { process.kill(p, "SIGKILL"); } catch {}
+      await stopEngine(); // the engine, if the host didn't get to it
+      process.exit(0);
+    }
     if (signal) { process.removeAllListeners(signal); process.kill(process.pid, signal); } // same death (137 for a SIGKILL killpoint)
     process.exit(code ?? 1);
   }
@@ -211,6 +246,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   const { registry } = await import("../../registry");
   try {
     await registry.start();
+    drain = () => registry.shutdown();
   } catch (e) {
     console.error(`capcomd serve: engine failed to start: ${(e as Error).message}`);
     const tail = data.engineLogTail(dataDir);

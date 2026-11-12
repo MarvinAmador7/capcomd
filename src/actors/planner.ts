@@ -3,7 +3,7 @@ import { agentFromEnv, isRealAgent } from "../agents/config";
 import { effectiveAgentRecord, parseAgentDirective } from "../profiles";
 import { traceActions } from "../utils/tracing-simple";
 import { actor } from "rivetkit";
-import { db } from "rivetkit/db";
+import { db } from "./db";
 import { setupLifecycleTables, getLifecycle } from "../utils/lifecycle";
 import { killpoint } from "../utils/killpoint";
 import { getDependencies } from "../dependencies";

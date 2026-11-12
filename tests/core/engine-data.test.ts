@@ -1,26 +1,34 @@
-// Engine data under capcomd's home (src/engine/data.ts): path resolution, the one-time copy from ~/.rivetkit, the
-// per-version backup and the newer-engine refusal. Scratch dirs and a fake engine only: never the real ~/.rivetkit.
+// Engine data under capcomd's home (src/engine/data.ts): path resolution, Rivet 2.x data set aside under a 3.x engine,
+// the per-version backup and the newer-engine refusal. Scratch dirs and a fake engine only: never the real ~/.rivetkit.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 import {
-  copiesLegacyData, dbDir, engineDataDir, engineLogTail, engineVersionOf, holdersOf, isDefaultDataDir, legacyRivetkitDb, listBackups, migrateLegacyEngineData,
-  migrationMarkerOf, pidFileOf, prepareEngineData, readVersionRecord, recordEngineVersion, treeStats, versionFileOf,
+  backupsDirOf, dbDir, engineDataDir, engineLogTail, engineVersionOf, holdersOf, isDefaultDataDir, listBackups, newestWrite, pidFileOf,
+  prepareEngineData, readVersionRecord, recordEngineVersion, setAsideDirOf, treeStats, versionFileOf,
 } from "../../src/engine/data";
+import { setAsideRuns } from "../../src/primitives/ops";
 import { CLI, REPO, testPort } from "../helpers/engine";
 
 const roots: string[] = [];
 const scratch = () => { const d = mkdtempSync(join(tmpdir(), "capcomd-engine-data-")); roots.push(d); return d; };
 afterAll(() => { for (const d of roots) rmSync(d, { recursive: true, force: true }); });
 
-/** A db dir that looks like RocksDB's: a LOCK, a manifest and some table files. */
+/** A db dir that looks like RocksDB's (Rivet 2.x): a LOCK, a manifest and some table files. */
 function fakeDb(dir: string, files = 5, size = 1000): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "LOCK"), "");
   writeFileSync(join(dir, "CURRENT"), "MANIFEST-000001\n");
   for (let i = 0; i < files; i++) writeFileSync(join(dir, `00000${i}.sst`), Buffer.alloc(size, i));
+}
+/** A db dir that looks like Rivet 3.x's: a log and an object store. */
+function fakeDb3(dir: string): void {
+  mkdirSync(join(dir, "log", "shards", "0"), { recursive: true });
+  mkdirSync(join(dir, "objects", "rivet"), { recursive: true });
+  writeFileSync(join(dir, "log", "shards", "0", "FORMAT"), "1\n");
+  writeFileSync(join(dir, "objects", "rivet", "manifest"), "m");
 }
 /** Every file's path, size and mtime: to prove a tree wasn't touched. */
 const fingerprint = (dir: string) => {
@@ -42,21 +50,7 @@ describe("paths", () => {
     expect(dbDir("/c/engine/6420")).toBe("/c/engine/6420/db");
     expect(pidFileOf("/c/engine/6420")).toBe("/c/engine/6420/engine.pid");
     expect(versionFileOf("/c/engine/6420")).toBe("/c/engine/6420/engine-version.json");
-    expect(legacyRivetkitDb({ HOME: "/h" })).toBe("/h/.rivetkit/var/engine/db");
-  });
-
-  test("serve copies from ~/.rivetkit only on 6420 with the default data dir, and decides before it sets CAPCOMD_ENGINE_DATA", () => {
-    expect(copiesLegacyData(6420, {})).toBe(true);
-    expect(copiesLegacyData(6420, { CAPCOMD_HOME: "/c" })).toBe(true);
-    expect(copiesLegacyData(7000, {})).toBe(false);
-    expect(copiesLegacyData(6420, { CAPCOMD_ENGINE_DATA: "/x" })).toBe(false);
-    // serve sets CAPCOMD_ENGINE_DATA for its engine on every start, so asking after that always said no and the
-    // first 2.3.31 start on 6420 opened an empty db (live Mac, 2026-10-28). A serve test can't take 6420, so: the order.
-    const serve = readFileSync(join(REPO, "src", "cli", "commands", "serve.ts"), "utf8");
-    const asked = serve.indexOf("data.copiesLegacyData(port)");
-    expect(asked).toBeGreaterThan(-1);
-    expect(asked).toBeLessThan(serve.indexOf("process.env.CAPCOMD_ENGINE_DATA = dataDir"));
-    expect(serve).not.toContain("isDefaultDataDir()");
+    expect(setAsideDirOf("/c/engine/6420")).toBe("/c/engine/6420/rivet-v2");
   });
 
   test("the engine's version comes from `--version` (a fake engine here)", () => {
@@ -69,95 +63,92 @@ describe("paths", () => {
   });
 });
 
-describe("one-time copy from ~/.rivetkit", () => {
-  const setup = () => {
-    const home = scratch();
-    const legacy = join(home, ".rivetkit", "var", "engine", "db");
-    fakeDb(legacy);
-    return { home, legacy, data: join(home, ".capcomd", "engine", "6420") };
-  };
+test("holdersOf finds a process that holds a file in the dir open (an engine holds its data open for its whole life)", async () => {
+  const dir = join(scratch(), "db");
+  fakeDb(dir);
+  expect(holdersOf(dir)).toEqual([]);
+  const hold = spawn("sh", ["-c", `exec 3<"${join(dir, "LOCK")}"; exec sleep 60`], { stdio: "ignore" });
+  try {
+    let held: number[] = [];
+    for (let i = 0; i < 50 && !held.includes(hold.pid!); i++) { await Bun.sleep(100); held = holdersOf(dir) ?? []; }
+    expect(held).toContain(hold.pid!);
+  } finally { hold.kill("SIGKILL"); }
+  expect(holdersOf(join(dir, "missing"))).toEqual([]);
+}, 30_000);
 
-  test("copies, verifies, writes a marker, and leaves the source untouched", () => {
-    const { legacy, data } = setup();
-    const before = fingerprint(legacy);
-    const r = migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, engineVersion: "2.3.31", capcomdVersion: "0.6.0", holders: () => [] });
-    expect(r.action).toBe("copied");
-    if (r.action !== "copied") return;
-    expect(r.message).toContain(dbDir(data));
-    expect(r.message).toContain("left untouched");
-    expect(treeStats(dbDir(data))).toEqual(treeStats(legacy));
-    expect(readFileSync(join(dbDir(data), "000003.sst"))).toEqual(readFileSync(join(legacy, "000003.sst")));
-    expect(fingerprint(legacy)).toBe(before);
-    const marker = JSON.parse(readFileSync(migrationMarkerOf(data), "utf8"));
-    expect(marker).toMatchObject({ source: legacy, copiedTo: dbDir(data), files: 7, engineVersion: "2.3.31", capcomdVersion: "0.6.0", sourceLeftUntouched: true });
-    expect(typeof marker.copiedAt).toBe("string");
-    expect(readdirSync(data).filter((n) => n.startsWith("db.copying"))).toEqual([]);
+describe("Rivet 2.x data under a 3.x engine: set aside once, start empty", () => {
+  const at = (s: string) => () => new Date(s);
+
+  test("what the 2.x engine left (db, its record, backups, the old copy marker) moves together to rivet-v2/; the next start is fresh", () => {
+    const data = join(scratch(), "e");
+    fakeDb(dbDir(data));
+    recordEngineVersion(data, "2.3.31", "0.10.1", new Date("2026-11-01T00:00:00Z"));
+    mkdirSync(join(backupsDirOf(data), "2.3.30-2026-10-20T00-00-00Z", "db"), { recursive: true });
+    writeFileSync(join(data, "migrated-from-rivetkit.json"), "{}\n");
+    const old = fingerprint(dbDir(data));
+    const r = prepareEngineData({ dataDir: data, engineVersion: "3.1.1", now: at("2026-11-12T00:00:00Z") });
+    expect(r).toMatchObject({ action: "set-aside", from: "2.3.31", to: setAsideDirOf(data) });
+    if (r.action !== "set-aside") return;
+    expect(r.message).toContain("Rivet engine 3.1.1 can't open the data Rivet 2.3.31 kept in");
+    expect(r.message).toContain(setAsideDirOf(data));
+    expect(r.message).toContain("starting with empty engine data");
+    expect(readdirSync(setAsideDirOf(data)).sort()).toEqual(["backups", "db", "engine-version.json", "migrated-from-rivetkit.json"]);
+    expect(fingerprint(join(setAsideDirOf(data), "db"))).toBe(old.replaceAll(`${data}/db/`, `${setAsideDirOf(data)}/db/`)); // moved as it was
+    for (const n of ["db", "engine-version.json", "backups", "migrated-from-rivetkit.json", "rivet-v2.partial"]) expect(existsSync(join(data, n))).toBe(false);
+    expect(listBackups(data)).toEqual([]); // 2.x backups are not offered as this engine's
+    expect(prepareEngineData({ dataDir: data, engineVersion: "3.1.1" }).action).toBe("fresh");
   });
 
-  test("idempotent: never copies twice, even after the copy is gone or the source changed", () => {
-    const { legacy, data } = setup();
-    expect(migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, holders: () => [] }).action).toBe("copied");
-    writeFileSync(join(legacy, "000009.sst"), "new");
-    expect(migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, holders: () => [] })).toEqual({ action: "none", reason: "already copied" });
-    expect(existsSync(join(dbDir(data), "000009.sst"))).toBe(false);
-    rmSync(dbDir(data), { recursive: true });
-    expect(migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, holders: () => [] }).action).toBe("none");
-    expect(existsSync(dbDir(data))).toBe(false);
+  test("an unrecorded RocksDB is 2.x data too; a second cut (2.x run again meanwhile) gets its own dir", () => {
+    const data = join(scratch(), "e");
+    fakeDb(dbDir(data));
+    expect(prepareEngineData({ dataDir: data, engineVersion: "3.1.1", now: at("2026-11-12T00:00:00Z") })).toMatchObject({ action: "set-aside", from: "2.x", to: setAsideDirOf(data) });
+    fakeDb(dbDir(data));
+    recordEngineVersion(data, "2.3.31");
+    expect(prepareEngineData({ dataDir: data, engineVersion: "3.1.1", now: at("2026-11-13T00:00:00Z") })).toMatchObject({ action: "set-aside", to: `${setAsideDirOf(data)}-2026-11-13T00-00-00Z` });
+    expect(existsSync(join(setAsideDirOf(data), "db", "CURRENT"))).toBe(true);
+    expect(existsSync(join(`${setAsideDirOf(data)}-2026-11-13T00-00-00Z`, "engine-version.json"))).toBe(true);
   });
 
-  test("nothing to do when capcomd already has a db, or there's no rivetkit db", () => {
-    const { legacy, data } = setup();
-    fakeDb(dbDir(data), 1);
-    const mine = fingerprint(dbDir(data));
-    expect(migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, holders: () => [] })).toMatchObject({ action: "none" });
-    expect(fingerprint(dbDir(data))).toBe(mine);
-    expect(existsSync(migrationMarkerOf(data))).toBe(false);
-    const other = scratch();
-    expect(migrateLegacyEngineData({ dataDir: join(other, "d"), legacyDb: join(other, "nope"), holders: () => [] })).toMatchObject({ action: "none", reason: "no rivetkit db to copy" });
+  test("a set-aside that stopped halfway is finished by the next start", () => {
+    const data = join(scratch(), "e");
+    fakeDb(join(`${setAsideDirOf(data)}.partial`, "db"));
+    recordEngineVersion(data, "2.3.31");
+    expect(prepareEngineData({ dataDir: data, engineVersion: "3.1.1" })).toMatchObject({ action: "set-aside", from: "2.3.31" });
+    expect(readdirSync(setAsideDirOf(data)).sort()).toEqual(["db", "engine-version.json"]);
+    expect(existsSync(`${setAsideDirOf(data)}.partial`)).toBe(false);
   });
 
-  test("refuses when it can't tell whether the source is held, or when it's opened during the copy", () => {
-    const { legacy, data } = setup();
-    expect(migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, holders: () => null })).toMatchObject({ action: "refused" });
-    let calls = 0;
-    const r = migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, holders: () => (++calls === 1 ? [] : [4242]) });
-    expect(r.action).toBe("refused");
-    if (r.action === "refused") expect(r.message).toContain("4242");
-    expect(existsSync(dbDir(data))).toBe(false);
-    expect(readdirSync(data).filter((n) => n.startsWith("db.copying"))).toEqual([]);
-    expect(existsSync(migrationMarkerOf(data))).toBe(false);
+  test("3.x data is never set aside: unrecorded it is backed up as before, and 3.0 → 3.1 is an ordinary upgrade", () => {
+    const a = join(scratch(), "e");
+    fakeDb3(dbDir(a));
+    expect(prepareEngineData({ dataDir: a, engineVersion: "3.1.1" })).toMatchObject({ action: "backed-up", from: "unknown" });
+    const b = join(scratch(), "e");
+    fakeDb3(dbDir(b));
+    recordEngineVersion(b, "3.0.7");
+    expect(prepareEngineData({ dataDir: b, engineVersion: "3.1.1" })).toMatchObject({ action: "backed-up", from: "3.0.7" });
+    expect(existsSync(setAsideDirOf(a)) || existsSync(setAsideDirOf(b))).toBe(false);
   });
 
-  test("an empty db dir in capcomd's place doesn't block the copy", () => {
-    const { legacy, data } = setup();
-    mkdirSync(dbDir(data), { recursive: true });
-    expect(migrateLegacyEngineData({ dataDir: data, legacyDb: legacy, holders: () => [] }).action).toBe("copied");
-    expect(treeStats(dbDir(data)).files).toBe(7);
-  });
-
-  test("refuses while a process holds the source open (a real holder, found by holdersOf), copying nothing", async () => {
-    const { legacy, data } = setup();
-    const before = fingerprint(legacy);
-    // A fake engine: keeps the db's LOCK open, like rivet-engine does for its whole life.
-    const hold = spawn("sh", ["-c", `exec 3<"${join(legacy, "LOCK")}"; exec sleep 60`], { stdio: "ignore" });
+  test("its runs leave the run list: rows created up to the 2.x engine's last write move to runs-rivet-v2.jsonl", () => {
+    const dir = scratch();
+    const index = join(dir, "runs.jsonl");
+    const row = (runId: string, createdAt: number) => JSON.stringify({ runId, label: null, repo: null, cwd: dir, createdAt });
+    writeFileSync(index, [row("run-old-1", 1000), row("run-old-2", 2000), "not json", row("run-new", 5000)].join("\n") + "\n");
+    const saved = process.env.CAPCOMD_RUNS_INDEX;
+    process.env.CAPCOMD_RUNS_INDEX = index;
     try {
-      let held: number[] = [];
-      for (let i = 0; i < 50 && !held.includes(hold.pid!); i++) { await Bun.sleep(100); held = holdersOf(legacy) ?? []; }
-      expect(held).toContain(hold.pid!);
-      const r = migrateLegacyEngineData({ dataDir: data, legacyDb: legacy });
-      expect(r.action).toBe("refused");
-      if (r.action === "refused") {
-        expect(r.message).toContain(String(hold.pid));
-        expect(r.message).toContain("stop that engine");
-      }
-      expect(existsSync(dbDir(data))).toBe(false);
-      expect(existsSync(migrationMarkerOf(data))).toBe(false);
-      expect(fingerprint(legacy)).toBe(before);
-    } finally { hold.kill("SIGKILL"); }
-    // Once the holder is gone, the next start copies.
-    for (let i = 0; i < 50 && holdersOf(legacy)?.length; i++) await Bun.sleep(100);
-    expect(migrateLegacyEngineData({ dataDir: data, legacyDb: legacy }).action).toBe("copied");
-  }, 30_000);
+      expect(setAsideRuns(2000)).toEqual({ moved: 2, to: join(dir, "runs-rivet-v2.jsonl") });
+      expect(readFileSync(index, "utf8").split("\n").filter(Boolean).map((l) => l.startsWith("{") ? JSON.parse(l).runId : l)).toEqual(["not json", "run-new"]);
+      expect(readFileSync(join(dir, "runs-rivet-v2.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).runId)).toEqual(["run-old-1", "run-old-2"]);
+      expect(setAsideRuns(2000).moved).toBe(0);
+      expect(setAsideRuns(0).moved).toBe(0);
+    } finally { if (saved === undefined) delete process.env.CAPCOMD_RUNS_INDEX; else process.env.CAPCOMD_RUNS_INDEX = saved; }
+    const db = join(dir, "db");
+    fakeDb(db, 2);
+    expect(newestWrite(db)).toBeGreaterThan(0);
+    expect(newestWrite(join(dir, "none"))).toBe(0);
+  });
 });
 
 describe("version guard and backups", () => {
@@ -232,13 +223,16 @@ describe("version guard and backups", () => {
     expect(existsSync(versionFileOf(data))).toBe(false);
   });
 
-  test("the engine's last stderr lines are there to show when it didn't come up", () => {
+  test("the engine's last log lines are there to show when it didn't come up: its stderr, else its stdout (Rivet 3.x)", () => {
     const data = join(scratch(), "e");
     const logs = join(data, ".rivetkit", "var", "logs", "rivet-engine");
     mkdirSync(logs, { recursive: true });
     writeFileSync(join(logs, "engine-1-stderr.log"), "old\n");
     writeFileSync(join(logs, "engine-2-stderr.log"), "a\nRivet Engine has been rolled back to a previous version\n");
     expect(engineLogTail(data)).toContain("rolled back");
+    writeFileSync(join(logs, "engine-3-stderr.log"), "");
+    writeFileSync(join(logs, "engine-3-stdout.log"), "b\nunknown field `file_system`\n");
+    expect(engineLogTail(data)).toContain("unknown field");
     expect(engineLogTail(join(scratch(), "none"))).toBe("");
   });
 });
@@ -261,3 +255,41 @@ test("serve refuses a data dir last opened by a newer engine before starting any
   expect(existsSync(join(home, ".rivetkit"))).toBe(false);
   expect(readVersionRecord(data)?.version).toBe("99.0.0");
 }, 70_000);
+
+// The hard cut, end to end: `capcomd serve` on a dir a Rivet 2.x engine left (a RocksDB and its record) says so in one
+// line, moves it to rivet-v2/, takes that engine's runs out of the run list, and the 3.x engine starts on empty data.
+test("serve sets Rivet 2.x data aside, says so once, and starts the 3.x engine empty", async () => {
+  const home = scratch();
+  const data = join(home, "engine-data");
+  fakeDb(dbDir(data));
+  writeFileSync(versionFileOf(data), JSON.stringify({ version: "2.3.31", openedAt: "2026-11-01T00:00:00Z" }));
+  const index = join(home, "runs.jsonl");
+  const row = (runId: string, createdAt: number) => JSON.stringify({ runId, label: null, repo: null, cwd: home, createdAt });
+  writeFileSync(index, row("run-before", Date.now() - 60_000) + "\n");
+  const port = await testPort();
+  const child = spawn(process.execPath, [CLI, "serve", "--port", String(port)], {
+    cwd: REPO, stdio: ["ignore", "pipe", "pipe"], detached: true,
+    env: { ...process.env, HOME: home, CAPCOMD_HOME: join(home, ".capcomd"), CAPCOMD_ENGINE_DATA: data, CAPCOMD_RUNS_INDEX: index, CAPCOMD_ENDPOINT: `http://127.0.0.1:${port}` },
+  });
+  let out = "";
+  child.stdout!.on("data", (d) => (out += d)); child.stderr!.on("data", (d) => (out += d));
+  const exited = new Promise((r) => child.on("exit", r));
+  try {
+    for (let i = 0; i < 360 && !out.includes("Rivet engine running"); i++) await Bun.sleep(250);
+    expect(out).toContain("Rivet engine running");
+    const said = out.split("\n").filter((l) => l.includes("can't open the data Rivet 2.3.31"));
+    expect(said.length).toBe(1);
+    expect(said[0]).toContain(`moved it to ${setAsideDirOf(data)}`);
+    expect(said[0]).toContain("1 run from before it left the run list");
+    expect(existsSync(join(setAsideDirOf(data), "db", "CURRENT"))).toBe(true);
+    expect(existsSync(join(dbDir(data), "CURRENT"))).toBe(false); // the 3.x engine's own data, nothing mixed in
+    expect(readFileSync(index, "utf8")).toBe("");
+    expect(readFileSync(join(home, "runs-rivet-v2.jsonl"), "utf8")).toContain("run-before");
+    for (let i = 0; i < 40 && readVersionRecord(data)?.version === "2.3.31"; i++) await Bun.sleep(250);
+    expect(readVersionRecord(data)?.version).toMatch(/^3\./);
+  } finally {
+    try { process.kill(child.pid!, "SIGTERM"); } catch {}
+    await Promise.race([exited, Bun.sleep(25_000)]);
+    try { process.kill(-child.pid!, "SIGKILL"); } catch {}
+  }
+}, 120_000);

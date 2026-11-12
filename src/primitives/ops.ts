@@ -9,8 +9,8 @@ import { LIFECYCLE_HINT, lifecycleProblem } from "../plugins/lifecycle";
 // actor. The CLI is a thin client; durable state lives in the scope actor (agent tree, keys,
 // events) and the worker actor (VM, agent run, push). A driver process advances one agent;
 // it holds a renewable lease, so a crashed driver is taken over by the next await/wait-any.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join, resolve } from "path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { basename, dirname, join, resolve } from "path";
 import { tmpdir } from "os";
 import { client, assertEngine, cancelRun, existingActor } from "../core/relay";
 import { RelayError } from "../core/errors";
@@ -428,6 +428,29 @@ export type RunRow = { runId: string; label: string | null; repo: string | null;
 export async function runOrigin(runId: string) {
   const s = await (await import("../core/relay")).existingActor("scope", [runId]);
   return s ? s.getOrigin({}) : null;
+}
+
+/**
+ * Rows of runs created before `before` (ms) move out of the runs index to runs-rivet-v2.jsonl beside it: the runs of
+ * an engine whose data `capcomd serve` set aside (src/engine/data.ts), which no engine can show any more. Rows it can't
+ * read stay. Returns how many moved and where.
+ */
+export function setAsideRuns(before: number): { moved: number; to: string } {
+  const index = runsIndexPath();
+  const to = join(dirname(index), `${basename(index).replace(/\.jsonl$/, "")}-rivet-v2.jsonl`);
+  if (!before || !existsSync(index)) return { moved: 0, to };
+  const keep: string[] = [], moved: string[] = [];
+  for (const l of readFileSync(index, "utf8").split("\n").filter(Boolean)) {
+    let at: unknown = null;
+    try { at = JSON.parse(l)?.createdAt; } catch { /* kept as it is */ }
+    (typeof at === "number" && at <= before ? moved : keep).push(l);
+  }
+  if (!moved.length) return { moved: 0, to };
+  appendFileSync(to, moved.join("\n") + "\n");
+  const tmp = `${index}.${process.pid}.tmp`;
+  writeFileSync(tmp, keep.length ? keep.join("\n") + "\n" : "");
+  renameSync(tmp, index);
+  return { moved: moved.length, to };
 }
 
 export function recentRuns(limit = 20): RunRow[] {

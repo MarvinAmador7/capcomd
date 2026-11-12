@@ -35,7 +35,7 @@ fi
 
 if [ $MODE = npm ]; then
   # A user's install has no lockfile: every copy of rivet-services it resolved must be the version capcomd pins
-  # (rivetkit's ^0.2.3 once took 0.2.5, whose services never registered with the engine: no run could start).
+  # (rivetkit 2.3.31's ^0.2.3 once took 0.2.5, whose services never registered with its engine: no run could start).
   PKG="$BUN_INSTALL/install/global/node_modules/capcomd"
   PIN=$("$BUN" -e "console.log(require(process.argv[1]).dependencies?.['@rivet-dev/services'] ?? '')" "$PKG/package.json")
   case "$PIN" in [0-9]*.[0-9]*.[0-9]*) pass "the package pins @rivet-dev/services $PIN" ;; *) fail "the package doesn't pin @rivet-dev/services to an exact version ('$PIN')" ;; esac
