@@ -25,7 +25,9 @@ commands
                                                   bytes): a deskbench.fixture/1 the bench runs on as --fixture file:FILE
   run <scenario> [options]                        drive one scenario in-process on a fixture, judge it against its budget
   suite [options]                                 every scenario in turn; one line each, exit non-zero if any fails
-  snapshot [--fixture F] [--out DIR] [--at N]     the window as PNG + a view/geometry dump (JSON), no scenario
+  snapshot [--fixture F] [--out DIR] [--at N] [--sidebar] [--select AGENT]
+                                                  the window as PNG + a view/geometry dump (JSON), no scenario;
+                                                  --sidebar opens the sidebar, --select shows that agent in the pane
   profile <scenario> --template hitches|time|swiftui [--out DIR]
                                                   run the scenario under xctrace and summarise the trace as JSON/text
   trace <file.trace> [--process NAME] [--json]     summarise an existing trace (hitches, hangs, time profile) the same way
@@ -99,7 +101,7 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let key = String(a.dropFirst(2))
-        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name", "guards", "guard-param", "diff-out", "gesture", "count", "timeout", "device", "write"] + SamplerConfig.flags
+        let valueFlags = ["fixture", "reps", "set", "out", "baseline", "artifacts", "size", "quiet-check", "hold", "wait-for", "template", "a", "b", "at", "variant", "seconds", "process", "host", "objective", "top", "per", "min-ms", "champion", "order", "seed", "pause-ms", "quiet-wait", "quiet-busy", "knob", "a-knobs", "b-knobs", "from", "run", "token-file", "name", "guards", "guard-param", "diff-out", "gesture", "count", "timeout", "device", "write", "select"] + SamplerConfig.flags
         if valueFlags.contains(key), i + 1 < argv.count { flags[key, default: []].append(argv[i + 1]); i += 2 } else { flags[key, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
@@ -242,6 +244,9 @@ func kv(_ xs: [String]) -> [String: String] {
     _ = await h.ensureActive(!args.has("no-activate"))
     await h.sleep(ms: 600)
     if let at = args.one("at"), let i = Int(at), h.model.columns.indices.contains(i) { h.model.scroll(to: h.model.columns[i], animated: false); _ = await h.nextCommit(); await h.sleep(ms: 150) }
+    // --sidebar: the opened window (the Rex-style sidebar and one agent's pane); --select ID: that agent's row clicked.
+    if args.has("sidebar") { h.model.setSidebar(open: true); _ = await h.nextCommit(); await h.sleep(ms: 400) }
+    if let id = args.one("select") { h.model.selectRow(id: id); _ = await h.nextCommit(); await h.sleep(ms: 400) }
     let paths = h.snapshot(into: dir, name: "window")
     if let hold = args.one("hold").flatMap(Double.init) { await h.sleep(ms: hold * 1000) }
     if json { out(JSONOut.encode(h.dump())) } else {

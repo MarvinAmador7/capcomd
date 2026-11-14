@@ -89,6 +89,22 @@ see *Comparing two builds' call trees* below.
 - `typing`: key events into an on-screen composer. Passes when only `ColumnComposer` bodies ran.
 - `resize`: 1440 → 1100 → 720 → 1440 wide; the column count must follow (3 → 2 → 1 → 3); no stretch over 100 ms.
 - `follow`: an `approval.requested` frame for a far-off agent with Follow on; latency is ask → reel starts moving.
+- `sidebar-toggle`: open and fold the sidebar (design/desktop/rex) as ⌃⌘S does (`animated=1`: as its button does).
+  Budget 50 ms to the frame that shows it. Checks: `opened` (the sidebar's body ran and the pane is in the window),
+  `pane-agent` (the pane shows the model's agent), `folded`, `reel-untouched` (no reel body, the reel's frame unchanged),
+  `drawn` (the share of non-ground pixels in the sidebar's and the pane's rects: a blank one fails).
+- `sidebar-select`: with the sidebar open, rows clicked (mouse events handed to the window at each row, laid out from the
+  fixed line heights) and walked with ↓ ↓ Return (key events to the window). Budget 50 ms; checks `clicked`, `keyboard`,
+  `drawn`.
+- `sidebar-burst`: thread items for the pane's agent and another agent at 20/s with the sidebar open. Passes when no
+  sidebar body ran and the sidebar's slice wasn't assigned (`isolation-sidebar`), and the pane's thread rendered
+  (`delivered-pane`). The pane's views report as `Pane`, `PaneHead`, `PaneThread`, `PaneEntryRow`, `PaneComposer`.
+- `sidebar-scroll`: a long sidebar (every project unfolded, Finished open) scrolled with PerfLoopProbe's synthetic
+  `scroll-down` / `scroll-up` gestures (`gesture`, `gestureBack`: or recordings), delivered to the sidebar's scroll view.
+  Checks `scrolled` and `isolation-pane` (no pane body). Use a fixture with several projects (`crew@projects=8,agents=24`).
+
+The sidebar scenarios aren't in `suite` and leave the window folded. `snapshot --sidebar [--select AGENT]` pictures
+the opened window.
 - `palette-open`, `palette-type`, `palette-keys`: Search ⌘K on the `search` fixture (their default: 60 projects, 250+
   searchable items). ⌘K → the frame with the panel and its results (budget 50 ms); a query typed a key at a time into
   the panel's field (each key → the frame with its results, budget one frame); ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens
@@ -332,7 +348,7 @@ measured steps (a run without `--guards` times exactly as before), and land in `
   placeholder and not hidden. The reel says which view shows each column (`ReelColumnViews`: with reused slots the
   document holds fewer views than columns); an older reel is read by position. `value` is how long after settle the last column
   was built (negative: before).
-- **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `swipe`, `follow`, `resize`; not `burst` or `typing`): after
+- **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `swipe`, `follow`, `resize`, `sidebar-toggle`, `sidebar-select` (both settle folded; their `drawn` check covers the opened window); not `burst`, `typing` or the other sidebar scenarios): after
   settle the run writes `<scenario>-rep<i>.settled.png`, `.layout.json` (where the columns and their threads are, in
   pixels) and `.later.png` 1.1 s later. `snapdiff A.png B.png [--diff-out D.png] [--json]` compares the champion's (A)
   with the candidate's (B), headless, in the champion's binary: pixel by pixel (a channel off by more than 16 of 255)

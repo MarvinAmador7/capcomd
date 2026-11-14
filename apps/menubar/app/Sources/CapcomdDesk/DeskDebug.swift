@@ -171,6 +171,34 @@ import CapcomdStore
         case "hit": if w.count > 1 { hit(String(line.dropFirst(4)), dir) }
         case "click": if w.count > 1 { click(String(line.dropFirst(6)), dir) }
         case "close": deskWindow?.performClose(nil)   // the window's close button
+        // The sidebar (design/desktop/rex): `sidebar open|fold|toggle`, `row <agentId|N>` (a click on that row: N counts
+        // the rows as shown), `cursor up|down|left|right|return` (the list's keys), `needs` (the hand: the Needs you reel), `nextask` (⌘J),
+        // `finished` (a click on its heading), `fold <projectId>` / `unfold <projectId>`.
+        case "sidebar":
+          switch w.dropFirst().first {
+          case "open"?: model.setSidebar(open: true)
+          case "fold"?: model.setSidebar(open: false)
+          default: model.toggleSidebar()
+          }
+        case "row":
+          guard w.count > 1 else { break }
+          let rows = model.sidebarLines.list.compactMap { if case .row(let r, _) = $0 { return r }; return nil }
+          let pinned = model.sidebarLines.pinned.compactMap { if case .row(let r, _) = $0 { return r }; return nil }
+          let all = pinned + rows
+          if let n = Int(w[1]), all.indices.contains(n - 1) { model.selectRow(all[n - 1]) } else { model.selectRow(id: w[1]) }
+        case "cursor":
+          switch w.dropFirst().first {
+          case "up"?: model.moveSidebarCursor(-1)
+          case "down"?: model.moveSidebarCursor(1)
+          case "left"?: model.sidebarUnfold(false)
+          case "right"?: model.sidebarUnfold(true)
+          default: model.sidebarReturn()
+          }
+        case "needs": model.openNeedsReel()
+        case "nextask": model.nextAsk()
+        case "finished": model.toggleFinished()
+        case "fold": if w.count > 1 { model.setProjectFolded(w[1], true) }
+        case "unfold": if w.count > 1 { model.setProjectFolded(w[1], false) }
         default: break
         }
       }
@@ -433,6 +461,17 @@ import CapcomdStore
         + "pending \(t.map { $0.pending.map { "\($0.state)" }.joined(separator: ",") } ?? "-") "
         + "top \(t?.top.map(String.init) ?? "-") earlier \(t?.loadingEarlier == true ? "loading" : "-") unavailable \(t?.unavailable.map { "\($0)" } ?? "-") "
         + "last \(t?.entries.last?.id ?? "-")")
+    }
+    let lines = model.sidebarLines
+    out.append("sidebar open \(model.nav.sidebarOpen) pane \(model.paneAgent ?? "-") selected \(model.selectedAgent ?? "-") cursor \(model.nav.cursor.map { "\($0)" } ?? "-") needs \(model.sidebar.needsCount) overflow \(lines.overflow) height \(Int(model.nav.listHeight))")
+    for l in lines.pinned + lines.list {
+      switch l {
+      case .heading(let sec, let n, _): out.append("side \(sec.rawValue) \(n)")
+      case .calm(let t, _): out.append("side   \(t)")
+      case .label(let g, _, let folded): out.append("side   \(folded ? "▸ " : "")\(g.title) [\(g.sandbox ?? "-")]")
+      case .row(let r, _): out.append("side     \(String(repeating: "  ", count: r.level))\(r.title) \(r.word ?? "") (\(r.id))")
+      case .newProject: out.append("side   + New project")
+      }
     }
     for a in s.pendingApprovals { out.append("approval \(a.id) run \(a.runId ?? "-") agent \(a.agentId ?? "-") \(a.decision)") }
     let n = model.needs

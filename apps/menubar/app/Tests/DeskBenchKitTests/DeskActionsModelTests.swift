@@ -252,6 +252,35 @@ final class DeskActionsModelTests: XCTestCase {
     m.closePalette()
   }
 
+  /// ⌘K (and the sidebar's search glass, which calls the same) works with the sidebar open or folded and in the Needs
+  /// you reel; in the reel an agent it shows is focused there, and a place it doesn't show leaves the reel.
+  @MainActor func testThePaletteOpensEverywhere() {
+    let (m, s) = model()
+    project(s, "run-b", goal: "Fix proration", at: 2_000)
+    ev(s, "run-b", "approval.requested", "run-b-pl", ["approvalId": .string("apr-b"), "kind": .string("question"), "question": .string("Which rounding?"),
+                                                     "requestedBy": .object(["agentId": .string("run-b-pl"), "runId": .string("run-b")])], at: 2_100)
+    for open in [true, false] {
+      if m.nav.sidebarOpen != open { m.toggleSidebar() }
+      XCTAssertEqual(m.nav.sidebarOpen, open)
+      m.togglePalette(query: "proration")
+      XCTAssertTrue(m.paletteOpen)
+      XCTAssertEqual(m.search.sections.first?.group, .needsYou)
+      m.closePalette()
+    }
+    m.openNeedsReel()
+    m.togglePalette(query: "proration")
+    XCTAssertTrue(m.paletteOpen)
+    XCTAssertTrue(m.search.index.commands.contains { $0.action == .needsReel(false) })
+    m.runPaletteSelection()                                  // the asking planner: the reel shows it
+    XCTAssertFalse(m.paletteOpen)
+    XCTAssertTrue(m.needs.isOpen)
+    XCTAssertEqual(m.focusedAgent, "run-b-pl")
+    m.togglePalette(query: "migrate")
+    m.runPaletteSelection()                                  // an agent the reel doesn't show: the reel goes, its project opens
+    XCTAssertFalse(m.needs.isOpen)
+    XCTAssertEqual(m.openRunId, "run-a")
+  }
+
   /// A store change while the palette is closed only marks what's stale; open, the results follow it.
   @MainActor func testThePaletteFollowsTheStore() async throws {
     let (m, s) = model()

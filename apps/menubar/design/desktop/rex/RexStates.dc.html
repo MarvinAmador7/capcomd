@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>C opened, states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0b0b0c}
+a{color:#F2F2F7;text-decoration:none}a:hover{color:#FFFFFF}
+.win,.board{--line:rgba(255,255,255,.08);--text:#F2F2F7;--row:#C9C9CF;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--bluet:#6CB4FF;--amber:#FFB020;--red:#FF6961;--green:#30D158;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.win *,.board *{box-sizing:border-box}
+.board{box-sizing:border-box}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.lights{display:flex;gap:8px;flex:0 0 auto}
+.lights span{width:12px;height:12px;border-radius:6px;background:#3a3a3e}
+.ib{all:unset;box-sizing:border-box;position:relative;width:28px;height:28px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;color:var(--ter);cursor:pointer;flex:0 0 auto}
+.ib.on{background:rgba(255,255,255,.09);color:var(--text)}
+.ib.hov{background:rgba(255,255,255,.06);color:var(--text)}
+.ib.blue{color:var(--bluet)}
+.ib .cnt{position:absolute;top:1px;right:-2px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--amber);color:#1D1D1F;font-size:10px;font-weight:700;line-height:15px;text-align:center;box-shadow:0 0 0 2px #0e0e10}
+.ib.wide{width:auto;padding:0 7px 0 5px;gap:4px}
+.ib .bes{font-size:12px;font-weight:700;color:var(--amber);font-variant-numeric:tabular-nums}
+.ib .dot{position:absolute;top:5px;right:4px;width:6px;height:6px;border-radius:3px;background:var(--blue);box-shadow:0 0 0 1.5px #0e0e10}
+/* sidebar */
+.sb{flex:0 0 248px;width:248px;display:flex;flex-direction:column;padding:0 8px 6px;min-height:0}
+.sbh{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:2px;padding:0 2px 0 12px}
+.sbh .lights{margin-right:14px}
+.sbh .sp{flex:1}
+.sbl{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.place{display:flex;align-items:center;gap:8px;height:30px;flex:0 0 30px;padding:0 8px;font-size:13px;font-weight:500;color:var(--text);margin-top:14px}
+.place.first{margin-top:2px}
+.place svg{color:var(--sec)}
+.place .pm{margin-left:auto;font-size:11px;font-weight:400;color:var(--ter)}
+.sec{display:flex;align-items:center;gap:6px;height:28px;flex:0 0 28px;padding:0 8px;margin-top:16px;font-size:12px;font-weight:600;color:var(--sec);border-radius:7px}
+.sec.first{margin-top:2px}
+.sec .sn{font-weight:400;color:var(--ter)}
+.sec.need{color:var(--amber)}
+.sec.need .sn{color:var(--amber);opacity:.8}
+.sec .chev{display:inline-flex;color:var(--ter)}
+.sec.sel{background:rgba(255,255,255,.10)}
+.sec.hov{background:rgba(255,255,255,.05)}
+.sec.fin{color:var(--ter)}
+.pli{display:inline-flex;color:var(--ter);margin-right:1px}
+.ws{display:flex;align-items:center;gap:6px;height:24px;flex:0 0 24px;padding:0 6px 0 8px;margin-top:4px;font-size:11.5px;font-weight:600;color:var(--ter);white-space:nowrap;border-radius:7px}
+.ws .wn{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ws .wm{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-weight:400;font-size:11px;color:var(--ter)}
+.ws .wm.a{color:var(--amber);font-weight:500}
+.ws.hov{background:rgba(255,255,255,.05);color:var(--sec)}
+.ws.fold{height:28px;flex-basis:28px;margin-top:2px}
+.ws .chev{color:var(--ter);display:inline-flex}
+.row{display:flex;align-items:center;height:28px;flex:0 0 28px;border-radius:8px;padding:0 4px 0 8px;color:var(--row);font-size:13px;white-space:nowrap}
+.row.l1{padding-left:22px}
+.row.l2{padding-left:36px}
+.rb{all:unset;box-sizing:border-box;flex:1;min-width:0;height:28px;display:flex;align-items:center;gap:8px;cursor:pointer}
+.hd{position:relative;width:18px;height:18px;flex:0 0 18px;display:inline-flex;align-items:center;justify-content:center}
+.hd img{width:14px;height:14px;image-rendering:pixelated;display:block}
+.pb{position:absolute;right:-2px;bottom:-2px;width:10px;height:10px;border-radius:3px;background:#2c2c31;color:#D9D9DF;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.st{flex:0 0 auto;font-size:11.5px;color:var(--ter);padding-right:4px;display:inline-flex;align-items:center;gap:4px}
+.st.a{color:var(--amber);font-weight:500}
+.more{all:unset;box-sizing:border-box;width:24px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:var(--sec);flex:0 0 auto;cursor:pointer}
+.more.on{background:rgba(255,255,255,.12);color:var(--text)}
+.row.sel{background:rgba(255,255,255,.10);color:var(--text)}
+.row.hov{background:rgba(255,255,255,.05);color:var(--text)}
+.row.vis{background:rgba(255,255,255,.045)}
+.row.q{color:var(--ter)}
+.row.q img{opacity:.55}
+.row.done{color:var(--sec)}
+.stk{display:inline-flex;align-items:center;flex:0 0 auto}
+.stk span{width:18px;height:18px;border-radius:5px;background:#26262a;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.stk span+span{margin-left:-9px}
+.stk img{width:14px;height:14px;image-rendering:pixelated}
+.sbf{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:2px;padding:0 2px}
+.sbf .sp{flex:1}
+/* panes */
+.main{flex:1;min-width:0;display:flex;gap:8px;padding:8px 8px 8px 0}
+.pane{flex:1 1 0;min-width:0;border-radius:11px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.pane.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)}
+.ph{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:8px;padding:0 8px 0 14px;white-space:nowrap;font-size:13px}
+.ph img{width:24px;height:24px;image-rendering:pixelated}
+.ph .pt{font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ph .pp{color:var(--sec)}
+.ph .pi{color:var(--ter);font-size:11.5px}
+.ph .ps{color:var(--ter)}
+.ph .ps.a{color:var(--amber)}
+.ph .sp{flex:1}
+.ph .pe{color:var(--ter);font-size:11.5px;margin-right:6px}
+.ph .ctl{display:inline-flex;gap:0}
+.ph .ctl .ib{width:26px;height:26px;color:#7d7d85}
+.pbd{flex:1;min-height:0;overflow:hidden;padding:4px 24px 16px;display:flex;flex-direction:column;gap:14px;color:#E6E6EC;line-height:1.55;font-size:13px}
+.pbd p{margin:0;max-width:720px}
+.tool{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--sec);height:22px;max-width:720px}
+.tool svg{color:var(--ter);flex:0 0 auto}
+.tool .d{margin-left:auto;font-size:11px;color:var(--ter)}
+.tool .r{color:var(--red)}
+.tool .g{color:var(--green)}
+.code{font-size:12px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,.07)}
+.card{max-width:720px;border-radius:10px;background:rgba(255,255,255,.045);padding:10px 14px;display:flex;flex-direction:column;gap:4px}
+.card .who{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--sec)}
+.card .who b{color:var(--text);font-weight:600}
+.card .who img{width:14px;height:14px;image-rendering:pixelated}
+.diff{max-width:720px;border-radius:9px;background:#0f0f11;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.08);overflow:hidden;font-size:12px}
+.diff .dh{display:flex;align-items:center;height:34px;padding:0 14px;border-bottom:.5px solid rgba(255,255,255,.07);color:#E6E6EC}
+.diff .dh .n{margin-left:auto;display:inline-flex;gap:8px}
+.diff .dl{height:24px;line-height:24px;padding:0 14px;color:#C9C9CF;white-space:pre}
+.diff .dl.m{background:rgba(255,105,97,.10);color:#FFB3AE}
+.diff .dl.p{background:rgba(48,209,88,.10);color:#9FE8B4}
+.g{color:var(--green)}
+.r{color:var(--red)}
+.frow{max-width:720px;display:flex;align-items:center;gap:9px;height:30px;padding:0 12px;border-radius:8px;background:rgba(255,255,255,.035);font-size:12px;color:#C9C9CF}
+.frow svg{color:var(--ter)}
+.frow .n{margin-left:auto;display:inline-flex;gap:8px}
+.log{border-radius:9px;background:#0f0f11;padding:10px 14px;font-size:12px;line-height:22px;color:#C9C9CF}
+.log .t{color:#6f6f77;margin-right:10px}
+.log .w{color:var(--amber)}
+.prog{display:flex;flex-direction:column;gap:8px}
+.prog .big{font-size:22px;color:var(--text)}
+.prog .big span{font-size:13px;color:var(--ter)}
+.bar{height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:4px;background:var(--blue)}
+.comp{margin:0 12px 12px;display:flex;align-items:center;height:40px;flex:0 0 40px;padding:0 12px;border-radius:10px;background:rgba(255,255,255,.06);color:#7c7c84;font-size:13px}
+.dock{flex:0 0 auto;padding:16px 20px 16px;background:#1d1b17;display:flex;flex-direction:column;gap:6px}
+.dock .q{font-size:15px;font-weight:600;color:var(--text)}
+.dock .s{font-size:12.5px;color:var(--sec)}
+.dock .b{display:flex;align-items:center;gap:8px;margin-top:6px}
+.dock .b .sp{flex:1}
+.btn{all:unset;box-sizing:border-box;height:30px;padding:0 13px;border-radius:7px;font-size:13px;font-weight:500;color:var(--text);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.24);display:inline-flex;align-items:center;gap:7px;cursor:pointer}
+.btn.inv{background:#F2F2F7;color:#1D1D1F;box-shadow:none;font-weight:600;min-width:112px;justify-content:center}
+.btn.text{box-shadow:none;color:var(--sec);padding:0 6px}
+.key{display:inline-flex;align-items:center;justify-content:center;height:18px;padding:0 4px;border-radius:4px;background:rgba(0,0,0,.12)}
+
+.board{width:1440px;height:2780px;padding:56px 64px;background:#0b0b0c;display:flex;flex-direction:column;gap:0}
+.h1{font-family:-apple-system,"SF Pro Display",Inter,system-ui,sans-serif;font-size:30px;font-weight:600;letter-spacing:-.022em;margin:0}
+.draft{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:12px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.25);font-size:12px;font-weight:600;color:var(--sec)}
+.h2{font-size:13px;font-weight:600;margin:0 0 12px;color:var(--text)}
+.cap{margin:14px 0 0;font-size:13px;line-height:1.55;color:var(--sec)}
+.cap b{color:var(--text);font-weight:600}
+.frame{background:#0e0e10;border-radius:12px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);overflow:hidden;position:relative}
+.spec{background:#0e0e10;border-radius:12px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);padding:6px 0 10px;overflow:hidden}
+.ln{display:grid;grid-template-columns:248px minmax(0,1fr);align-items:end}
+.ln .l{padding:0 8px;display:flex;flex-direction:column}
+.ln .n{font-size:11.5px;color:var(--ter);padding-left:10px;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.ln .n::before{content:"";width:12px;height:.5px;background:rgba(255,255,255,.25)}
+.cols{display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:40px}
+.menu{width:252px;margin:4px 0 0 64px;background:rgba(44,44,48,.72);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);border-radius:12px;box-shadow:0 0 0 .5px rgba(0,0,0,.65),inset 0 0 0 .5px rgba(255,255,255,.16),0 14px 40px rgba(0,0,0,.5);padding:5px}
+.mi{display:flex;align-items:center;gap:8px;height:24px;padding:0 10px;border-radius:6px;font-size:13px;color:rgba(255,255,255,.92)}
+.mi svg{color:rgba(235,235,245,.6)}
+.mi .k{margin-left:auto;font-size:13px;color:rgba(235,235,245,.55)}
+.mi.hl{background:#0058D0;color:#FFFFFF}
+.mi.hl svg,.mi.hl .k{color:rgba(255,255,255,.9)}
+.mi.red{color:#FF453A}
+.mi.red svg{color:#FF453A}
+.sepl{height:.5px;background:rgba(255,255,255,.14);margin:5px 10px}
+.calm{padding:2px 8px 6px;font-size:12.5px;color:var(--ter);line-height:1.5}
+.pin{border-bottom:.5px solid rgba(255,255,255,.1);padding-bottom:8px;margin-bottom:0}
+.scroll{position:relative}
+.sbar{position:absolute;right:3px;top:60px;width:4px;height:120px;border-radius:2px;background:rgba(255,255,255,.22)}
+.thumbs{display:flex;gap:14px;margin-top:6px}
+.th{display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:var(--ter)}
+.tb{width:112px;height:70px;border-radius:8px;background:#0e0e10;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);display:flex;gap:3px;padding:4px}
+.tb .s{width:22px;border-radius:3px;background:rgba(255,255,255,.05)}
+.tb .p{flex:1;border-radius:4px;background:#1c1c20;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.tb .p.f{box-shadow:inset 0 0 0 1px rgba(255,255,255,.35)}
+.tb .v{flex:1;display:flex;flex-direction:column;gap:3px}
+.txt3{display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:40px;margin-top:44px}
+.kb{display:grid;grid-template-columns:96px minmax(0,1fr);row-gap:6px;font-size:13px;color:var(--sec)}
+.kb .k{color:var(--text)}
+/* folded window bits (C's rail + approved title bar) */
+.tbar{height:52px;display:flex;align-items:center;gap:8px;padding:0 10px 0 16px}
+.grp{display:flex;align-items:center;gap:4px;height:40px;padding:0 4px 0 10px;border-radius:12px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);font-size:12.5px;white-space:nowrap}
+.tp{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px 0 4px;border-radius:9px;color:var(--sec);font-size:12.5px;white-space:nowrap}
+.tp img{width:18px;height:18px;image-rendering:pixelated}
+.tp.ask{color:var(--text);background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55)}
+.tp.ask b{color:var(--amber);font-weight:500}
+.deck{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 9px;border-radius:12px;background:rgba(255,255,255,.05);font-size:12.5px;color:var(--sec)}
+.deck.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)}
+.follow{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 10px;border-radius:8px;background:rgba(10,132,255,.16);color:var(--bluet);font-size:12px;font-weight:500}
+.rail{width:60px;flex:0 0 60px;display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:4px}
+.badge{position:absolute;top:0;right:-1px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--amber);color:#1D1D1F;font-size:10px;font-weight:700;line-height:15px;text-align:center;box-shadow:0 0 0 2px #0e0e10}
+.colh{flex:1;min-width:0;height:130px;border-radius:11px 11px 0 0;background:#151518;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;align-items:flex-start;gap:8px;padding:12px;font-size:12.5px;white-space:nowrap;color:var(--sec)}
+.colh img{width:20px;height:20px;image-rendering:pixelated}
+.colh b{color:var(--text);font-weight:600}
+.colh.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)}
+
+.pal{--amber:#FFB020;--blue:#0A84FF;--red:#FF6961;--sel:#0058D0;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.3;background:rgba(44,44,48,.64);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);border-radius:18px;box-shadow:0 0 0 .5px rgba(0,0,0,.65),inset 0 0 0 .5px rgba(255,255,255,.16),0 24px 70px rgba(0,0,0,.55),0 4px 14px rgba(0,0,0,.3);overflow:hidden;display:flex;flex-direction:column;color:rgba(255,255,255,.92);font-size:13px}
+.pq{height:56px;flex:0 0 56px;display:flex;align-items:center;gap:12px;padding:0 20px}
+.pq svg{color:rgba(235,235,245,.6)}
+.pq .qt{font-family:-apple-system,"SF Pro Display",Inter,system-ui,sans-serif;font-size:22px;font-weight:400;letter-spacing:-.01em;color:#FFFFFF}
+.pq .ph0{font-family:-apple-system,"SF Pro Display",Inter,system-ui,sans-serif;font-size:22px;font-weight:400;letter-spacing:-.01em;color:rgba(235,235,245,.6)}
+.pq .caret{display:inline-block;width:2px;height:24px;border-radius:1px;background:var(--blue);margin-left:1px}
+.psep{height:.5px;flex:0 0 .5px;background:rgba(255,255,255,.12)}
+.pl{padding:4px 8px 8px;display:flex;flex-direction:column}
+.pgh{height:28px;display:flex;align-items:flex-end;padding:0 10px 6px;font-size:11px;line-height:16px;font-weight:600;color:rgba(235,235,245,.62)}
+.pr{height:32px;flex:0 0 32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;white-space:nowrap;color:rgba(255,255,255,.92)}
+.pr .pic{width:20px;height:20px;flex:0 0 20px;display:inline-flex;align-items:center;justify-content:center;color:rgba(235,235,245,.6)}
+.pr .pic img{width:14px;height:14px;image-rendering:pixelated}
+.pr .pt{flex:0 0 auto;max-width:68%;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pr .ps{flex:0 1000 auto;color:rgba(235,235,245,.62);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pr .sp{flex:1}
+.pr .pk{color:rgba(235,235,245,.6);flex:0 0 auto;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.pr .pk.a{color:var(--amber);font-weight:500;letter-spacing:0;display:inline-flex;align-items:center;gap:6px}
+.pr .hint{display:inline-flex;gap:14px;flex:0 0 auto;color:rgba(255,255,255,.85)}
+.pr.sel{background:var(--sel);color:#FFFFFF}
+.pr.sel .ps,.pr.sel .pic,.pr.sel .hint{color:rgba(255,255,255,.88)}
+.hl{font-weight:600}
+.pf{height:32px;display:flex;align-items:center;padding:0 20px;border-top:.5px solid rgba(255,255,255,.1);font-size:11px;color:rgba(235,235,245,.6)}
+</style>
+</helmet>
+<div class="board">
+<div style="display:flex;align-items:center;gap:14px"><h1 class="h1">C opened · states</h1><span class="draft">DRAFT · the owner's chosen direction, not built</span></div>
+<p class="cap" style="margin-top:8px">Folded is C's rail and the approved Reel, unchanged. Opened is the Rex-style sidebar, organised by what needs you: <b>Needs you</b>, <b>Running</b>, <b>Finished</b>.</p>
+<div style="display:flex;gap:40px;margin-top:36px">
+<div style="flex:0 0 880px"><h2 class="h2">Folded (C, unchanged)</h2>
+<div class="frame" style="width:880px;height:210px">
+<div class="tbar"><div class="lights" style="margin-right:6px"><span></span><span></span><span></span></div><button class="ib" aria-label="Open the sidebar (⌃⌘S)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"></rect><path d="M9 4.5v15"></path></svg></button><div class="grp"><span style="color:#C7C7CE;display:inline-flex"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><b style="font-weight:600;margin:0 2px 0 4px">Migrate matchkey</b><span style="color:var(--ter);display:inline-flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></span><span class="tp "><img src="/_blob/ca2d964b88bb49b95cff91497ef93055" alt="">ids/v1 split</span><span class="tp ask"><img src="/_blob/07464566246c67a0aa3ea8afd67425e2" alt="">fix email join <b>asks</b></span><span class="tp" style="padding:0 8px">+5</span></div><span class="deck ask"><span style="display:inline-flex"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="stk"><span><img src="/_blob/beb4f4a2383003846ae2de98b08d1f1f" alt=""></span><span><img src="/_blob/16ce09b0ec09c90a04d113f1e9435e47" alt=""></span></span></span><span style="flex:1"></span><span class="follow"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>Follow</span><button class="ib" aria-label="Search (⌘K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.5-4.5"></path></svg></button><button class="ib" aria-label="New project"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button></div>
+<div style="display:flex;gap:10px;padding-right:10px">
+<div class="rail"><button class="ib" aria-label="Needs you: 3. Open them as a reel" style="color:var(--text)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0"></path><path d="M14 10V4a2 2 0 0 0-4 0v2"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"></path></svg><span class="cnt">3</span></button><button class="ib" aria-label="Home"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"></path></svg></button><button class="ib" aria-label="Crew"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="8" width="14" height="11" rx="3"></rect><path d="M12 8V5M9.5 13h0M14.5 13h0"></path><path d="M9.5 13.2v.1M14.5 13.2v.1" stroke-width="2.4"></path></svg></button><button class="ib" aria-label="History"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg></button></div>
+<div class="colh"><img src="/_blob/88f8579590bcbdd5ffd8817ac92ee176" alt=""><b>ids/v1 split</b>lead · working</div><div class="colh"><img src="/_blob/5113506296e210467a52c6679f596e30" alt=""><b>v3.2 shards</b>worker · working</div><div class="colh ask"><img src="/_blob/b26d766c0146eeb2d0b16b7e07949948" alt=""><b>fix email join</b><span style="color:var(--amber)">waiting on you</span></div></div>
+</div>
+</div>
+<div style="flex:1;min-width:0"><h2 class="h2">Opened (⌃⌘S, or either sidebar button)</h2>
+<div class="frame" style="width:100%;height:210px;display:flex">
+<div class="sb" style="padding-bottom:0"><div class="sbh"><div class="lights"><span></span><span></span><span></span></div><button class="ib on" aria-label="Fold the sidebar (⌃⌘S)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"></rect><path d="M9 4.5v15"></path></svg></button><span class="sp"></span><button class="ib wide" aria-label="Needs you: 3. Open them as a reel" style="color:var(--text)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0"></path><path d="M14 10V4a2 2 0 0 0-4 0v2"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"></path></svg><span class="bes">3</span></button><button class="ib" aria-label="Search (⌘K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.5-4.5"></path></svg></button><button class="ib" aria-label="New project"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button></div>
+<div class="sbl"><div class="sec first need"><span>Needs you</span><span class="sn">3</span></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+<div class="row sel"><button class="rb"><span class="hd"><img src="/_blob/07464566246c67a0aa3ea8afd67425e2" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">fix email join</span><span class="st a">asks</span></button><button class="more" aria-label="More for fix email join"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">fix proration</span></div>
+</div></div>
+<div style="flex:1;min-width:0;padding:8px 8px 0 0"><div class="colh ask" style="height:202px;flex:none;width:100%"><img src="/_blob/b26d766c0146eeb2d0b16b7e07949948" alt=""><b>fix email join</b></div></div>
+</div>
+</div>
+</div>
+<p class="cap"><b>One button, two states.</b> Folded, the rail's hand carries the Needs you count as an amber badge (3); the title bar keeps the approved Follow. Opened, the decks and crew tabs leave the title bar and the title bar itself goes: the Needs you hand (SF hand.raised, count beside it), search (⌘K) and + sit in the sidebar header, where Rex has its eye, ⌘ and +, and each pane's header is its top line. The sidebar slides in by transform (0.25 s spring, no bounce) and the panes lay out once, at rest; from the keyboard it doesn't animate.</p>
+<div class="cols" style="margin-top:44px">
+<div><h2 class="h2">Rows</h2>
+<div class="spec" style="">
+<div class="ln"><div class="l"><div class="sec first need"><span>Needs you</span><span class="sn">4</span></div>
+</div><div class="n" style="height:28px">the only amber heading</div></div>
+<div class="ln"><div class="l"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+</div><div class="n" style="height:24px">project: quiet label, its place icon</div></div>
+<div class="ln"><div class="l"><div class="row sel"><button class="rb"><span class="hd"><img src="/_blob/07464566246c67a0aa3ea8afd67425e2" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">fix email join</span><span class="st a">asks</span></button><button class="more" aria-label="More for fix email join"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+</div><div class="n" style="height:28px">selected: the pill, ••• stays</div></div>
+<div class="ln"><div class="l"><div class="row"><button class="rb"><span class="hd"><img src="/_blob/61139af1499ed5f06da968d965595971" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">shard 200 standby</span><span class="st a">question</span></button></div>
+</div><div class="n" style="height:28px">a question</div></div>
+<div class="ln"><div class="l"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">fix proration</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row"><button class="rb"><span class="hd"><img src="/_blob/0c601376cfbc233ed22b2cde8c4e70eb" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">review rounding</span><span class="st" style="color:var(--red);font-weight:500">failed</span></button></div>
+</div><div class="n" style="height:28px">an error: red word</div></div>
+<div class="ln"><div class="l"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">nightly bumps</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row"><button class="rb"><span class="hd"><img src="/_blob/68d72e863c761b90cbaa73aac981b754" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">dependency bumps</span><span class="st a">usage limit</span></button></div>
+</div><div class="n" style="height:28px">usage limit: resume or wait</div></div>
+<div class="ln"><div class="l"><div class="sec"><span>Running</span><span class="sn">10</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="ws hov"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">billing test speed</span><button class="more" aria-label="More for billing test speed" style="margin-left:auto"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+</div><div class="n" style="height:24px">label hover: ••• is the project menu</div></div>
+<div class="ln"><div class="l"><div class="row"><button class="rb"><span class="hd"><img src="/_blob/8961f1129f3c6f7f98ed6218ac0a6743" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">test speedup plan</span></button></div>
+</div><div class="n" style="height:28px">running: no word, nothing moves</div></div>
+<div class="ln"><div class="l"><div class="row l1 hov"><button class="rb"><span class="hd"><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">parallel test shards</span></button><button class="more" aria-label="More for parallel test shards"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+</div><div class="n" style="height:28px">hover: •••</div></div>
+<div class="ln"><div class="l"><div class="row l1 q"><button class="rb"><span class="hd"><img src="/_blob/9250086b9390a79aa5401de55e6f30e2" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Codex"><path d="M12 3.8 19 7.9v8.2L12 20.2 5 16.1V7.9z"></path></svg></span></span><span class="tt">review shard timing</span><span class="st">queued</span></button></div>
+</div><div class="n" style="height:28px">queued, paused: dim, a grey word</div></div>
+<div class="ln"><div class="l"><div class="sec fin"><span>Finished</span><span class="sn">4</span><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></span></div>
+</div><div class="n" style="height:28px">finished: a count, folds</div></div>
+<div class="ln"><div class="l"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">usage export</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row done"><button class="rb"><span class="hd"><img src="/_blob/179f200464e99bc3c91f3522bc773a60" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">export writer</span><span class="st">done</span></button></div>
+</div><div class="n" style="height:28px">done, stopped: grey</div></div>
+<div class="ln"><div class="l"><div class="row done"><button class="rb"><span class="hd"><img src="/_blob/18814a7242e8f1e2bf1598d68c4b428b" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">csv import</span><span class="st">stopped</span></button></div>
+</div><div class="n" style="height:0"></div></div>
+</div>
+<p class="cap"><b>One 28 pt line per agent,</b> as in Rex: the catalog head (provider badge on its corner), the agent's own title, and a word at the end only when it matters. Agents step out of the tree into <b>Needs you</b>; the rest stay in tree order under their project.</p></div>
+<div><h2 class="h2">The ••• menu</h2>
+<div class="spec" style="height:460px">
+<div style="width:248px;padding:0 8px;display:flex;flex-direction:column"><div class="sec first need"><span>Needs you</span><span class="sn">3</span></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+<div class="row sel"><button class="rb"><span class="hd"><img src="/_blob/07464566246c67a0aa3ea8afd67425e2" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">fix email join</span><span class="st a">asks</span></button><button class="more on" aria-label="More for fix email join"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+</div>
+<div class="menu" role="menu" aria-label="fix email join"><div class="mi hl"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H10l-4 3.5v-3.5h0a2 2 0 0 1-1.5-2z"></path></svg>Message fix email join…</div><div class="mi"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4v10M3 9h10M15 15h6"></path><circle cx="17" cy="7" r="2.5"></circle></svg>Changes<span class="k">+73 −5 · 3 files</span></div><div class="mi"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M4 12h16M4 18h7"></path></svg>Trace<span class="k">⌘T</span></div><div class="sepl"></div><div class="mi"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 7v10M14.5 7v10"></path></svg>Pause</div><div class="mi red"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>Stop…</div><div class="sepl"></div><div class="mi"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2"></rect><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"></path></svg>Copy agent ID<span class="k mono">4423</span></div></div>
+<div style="width:248px;padding:0 8px;margin-top:14px;display:flex;flex-direction:column"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+<div class="row q"><button class="rb"><span class="hd"><img src="/_blob/31b0d0d807ef7cb08072e44416137661" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">matchkey migration</span><span class="st">paused</span></button><button class="more" aria-label="More for matchkey migration"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+</div>
+<div style="padding:4px 16px 0 82px;font-size:11.5px;color:var(--ter)">Paused, the same place reads Resume.</div>
+</div>
+<p class="cap"><b>Only what the daemon does for one agent:</b> message, its changes, its trace, pause or resume, stop (asks first), copy its ID. Rename is a double-click on the row or the pane title. Approve and Deny stay in the pane, never in a menu. The project label's ••• opens the approved project menu.</p></div>
+<div><h2 class="h2">A swarm, folded and unfolded</h2>
+<div class="spec" style="">
+<div class="ln"><div class="l"><div class="sec first need"><span>Needs you</span><span class="sn">1</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row"><button class="rb"><span class="hd"><img src="/_blob/18814a7242e8f1e2bf1598d68c4b428b" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">replay window</span><span class="st a">asks</span></button></div>
+</div><div class="n" style="height:28px">an asker is out of its stack</div></div>
+<div class="ln"><div class="l"><div class="sec"><span>Running</span><span class="sn">9</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row"><button class="rb"><span class="hd"><img src="/_blob/31b0d0d807ef7cb08072e44416137661" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">matchkey migration</span></button></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/fc43e9c13c620fc48d6e00bcd8ab37d6" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">history backfill</span></button></div>
+</div><div class="n" style="height:28px">lead</div></div>
+<div class="ln"><div class="l"><div class="row l2"><button class="rb"><span class="stk"><span><img src="/_blob/5957d58c131d95d6da7c3733b8bae772" alt=""></span><span><img src="/_blob/16ce09b0ec09c90a04d113f1e9435e47" alt=""></span><span><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""></span><span><img src="/_blob/67da5d052a69b9d72a2891ea9706d398" alt=""></span></span><span class="tt" style="color:var(--sec)">4 workers</span><span style="color:var(--ter);display:inline-flex;padding-right:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span></button></div>
+</div><div class="n" style="height:28px">more than 3 workers: one row</div></div>
+<div class="ln"><div class="l"><div class="row l1 q"><button class="rb"><span class="hd"><img src="/_blob/9e381c4f4b15c7134920970f45edfbf1" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Codex"><path d="M12 3.8 19 7.9v8.2L12 20.2 5 16.1V7.9z"></path></svg></span></span><span class="tt">review join</span><span class="st">queued</span></button></div>
+</div><div class="n" style="height:0"></div></div>
+</div>
+<div style="height:16px"></div>
+<div class="spec" style="">
+<div class="ln"><div class="l"><div class="sec first"><span>Running</span><span class="sn">9</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/fc43e9c13c620fc48d6e00bcd8ab37d6" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">history backfill</span></button></div>
+</div><div class="n" style="height:28px">click or → unfolds</div></div>
+<div class="ln"><div class="l"><div class="row l2"><button class="rb"><span class="hd"><img src="/_blob/5957d58c131d95d6da7c3733b8bae772" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">backfill 2023</span></button></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row l2"><button class="rb"><span class="hd"><img src="/_blob/16ce09b0ec09c90a04d113f1e9435e47" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">backfill 2024</span></button></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row l2"><button class="rb"><span class="hd"><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">dedupe events</span></button></div>
+</div><div class="n" style="height:0"></div></div>
+<div class="ln"><div class="l"><div class="row l2 q"><button class="rb"><span class="hd"><img src="/_blob/67da5d052a69b9d72a2891ea9706d398" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Codex"><path d="M12 3.8 19 7.9v8.2L12 20.2 5 16.1V7.9z"></path></svg></span></span><span class="tt">verify counts</span><span class="st">queued</span></button></div>
+</div><div class="n" style="height:0"></div></div>
+</div>
+<p class="cap"><b>A lead with more than three workers folds</b> to its row and a stack of heads (← folds it again). The one you select stays out; an asker is already in Needs you, so a stack never hides a decision.</p></div>
+</div>
+<div class="cols" style="margin-top:44px">
+<div><h2 class="h2">Needs you, empty</h2>
+<div class="spec"><div style="width:248px;padding:0 8px;display:flex;flex-direction:column"><div class="sec first" style="color:var(--sec)"><span>Needs you</span></div>
+<div class="calm">Nothing needs you.</div><div class="sec"><span>Running</span><span class="sn">5</span></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span><span class="wm">eu-1</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/31b0d0d807ef7cb08072e44416137661" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">matchkey migration</span></button></div>
+<div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/ca2d964b88bb49b95cff91497ef93055" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">ids/v1 split</span></button></div>
+<div class="row l2"><button class="rb"><span class="hd"><img src="/_blob/bf6d5ca0b10e9baa768cd753d49812d5" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">v3.2 shards</span></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">billing test speed</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/8961f1129f3c6f7f98ed6218ac0a6743" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">test speedup plan</span></button></div>
+<div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">parallel test shards</span></button></div>
+<div class="sec fin"><span>Finished</span><span class="sn">4</span><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span></div>
+</div></div>
+<p class="cap"><b>The section keeps its place and says so in one line:</b> grey heading, no count, no illustration, no amber. The hand loses its count and stays grey. When something arrives the heading turns amber and the row appears there.</p></div>
+<div><h2 class="h2">20 projects, scrolled</h2>
+<div class="spec scroll" style="height:560px"><div style="width:248px;padding:0 8px;display:flex;flex-direction:column"><div class="pin" style="display:flex;flex-direction:column"><div class="sec first need"><span>Needs you</span><span class="sn">2</span></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/07464566246c67a0aa3ea8afd67425e2" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">fix email join</span><span class="st a">asks</span></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">fix proration</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/16ce09b0ec09c90a04d113f1e9435e47" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">invoice rounding</span><span class="st a">asks</span></button></div>
+</div><div class="sec" style="margin-top:6px"><span>Running</span><span class="sn">31</span></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">billing test speed</span></div>
+<div class="row sel"><button class="rb"><span class="hd"><img src="/_blob/8961f1129f3c6f7f98ed6218ac0a6743" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">test speedup plan</span></button><button class="more" aria-label="More for test speedup plan"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+<div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">parallel test shards</span></button></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">search reindex</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/179f200464e99bc3c91f3522bc773a60" alt=""></span><span><img src="/_blob/5957d58c131d95d6da7c3733b8bae772" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">docs site move</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/beb4f4a2383003846ae2de98b08d1f1f" alt=""></span><span><img src="/_blob/67da5d052a69b9d72a2891ea9706d398" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">feature flags cleanup</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/8961f1129f3c6f7f98ed6218ac0a6743" alt=""></span><span><img src="/_blob/9250086b9390a79aa5401de55e6f30e2" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">usage export v2</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/fc43e9c13c620fc48d6e00bcd8ab37d6" alt=""></span><span><img src="/_blob/18814a7242e8f1e2bf1598d68c4b428b" alt=""></span><span><img src="/_blob/bf6d5ca0b10e9baa768cd753d49812d5" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">ledger rounding</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/beb4f4a2383003846ae2de98b08d1f1f" alt=""></span><span><img src="/_blob/0c601376cfbc233ed22b2cde8c4e70eb" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">webhook retries</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/31b0d0d807ef7cb08072e44416137661" alt=""></span><span><img src="/_blob/61139af1499ed5f06da968d965595971" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">pdf invoices</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/68d72e863c761b90cbaa73aac981b754" alt=""></span><span><img src="/_blob/67da5d052a69b9d72a2891ea9706d398" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">seat sync</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/ca2d964b88bb49b95cff91497ef93055" alt=""></span><span><img src="/_blob/bf6d5ca0b10e9baa768cd753d49812d5" alt=""></span><span><img src="/_blob/9e381c4f4b15c7134920970f45edfbf1" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">tax regions</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/8961f1129f3c6f7f98ed6218ac0a6743" alt=""></span><span><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""></span></span></div>
+<div class="ws fold"><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">audit log export</span><span class="stk" style="margin-left:auto"><span><img src="/_blob/179f200464e99bc3c91f3522bc773a60" alt=""></span><span><img src="/_blob/18814a7242e8f1e2bf1598d68c4b428b" alt=""></span></span></div>
+<div class="sec fin"><span>Finished</span><span class="sn">12</span><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span></div>
+</div><span class="sbar"></span></div>
+<p class="cap"><b>Needs you is pinned</b> above the scroll, so an ask never scrolls out of sight. Once the list outgrows the window, projects you aren't looking at fold to one line (label, heads); the selected one and anything that needs you never fold. ⌘K finds the rest by title.</p></div>
+<div><h2 class="h2">No projects yet (+ new project)</h2>
+<div class="spec" style="padding-top:0"><div style="width:248px;display:flex;flex-direction:column"><div class="sbh"><div class="lights"><span></span><span></span><span></span></div><button class="ib on" aria-label="Fold the sidebar (⌃⌘S)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"></rect><path d="M9 4.5v15"></path></svg></button><span class="sp"></span><button class="ib" aria-label="Nothing needs you"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0"></path><path d="M14 10V4a2 2 0 0 0-4 0v2"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"></path></svg></button><button class="ib" aria-label="Search (⌘K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.5-4.5"></path></svg></button><button class="ib hov" aria-label="New project"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button></div>
+<div style="padding:0 8px;display:flex;flex-direction:column"><div class="sec first" style="color:var(--sec)"><span>Needs you</span></div>
+<div class="calm">Nothing needs you.</div><div class="sec"><span>Running</span></div>
+<div class="calm">Nothing running.</div><div class="row" style="margin-top:2px"><button class="rb" style="color:var(--sec)"><span class="hd" style="color:var(--ter)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></span><span class="tt">New project</span><span class="st">⇧⌘N</span></button></div></div></div></div>
+<p class="cap"><b>+ is Home with the composer focused</b> (⇧⌘N), as approved; the pane shows Home. Started, the project appears under Running with its planner selected.</p>
+<h2 class="h2" style="margin-top:28px">Splits</h2>
+<div class="thumbs"><div class="th"><div class="tb"><span class="s"></span><span class="p f"></span></div>one agent</div><div class="th"><div class="tb"><span class="s"></span><span class="p"></span><span class="p f"></span></div>split right ⌘D</div><div class="th"><div class="tb"><span class="s"></span><span class="v"><span class="p"></span><span class="p f"></span></span></div>split down ⇧⌘D</div></div>
+<div class="thumbs" style="margin-top:14px"><div class="th"><div class="tb"><span class="s"></span><span class="p f"></span></div>pane, with ⤢</div><div class="th"><div class="tb" style="justify-content:center"><span class="p f" style="flex:none;width:100%;display:flex;justify-content:center;padding:8px 0"><span style="width:46px;border-radius:2px;background:rgba(255,255,255,.12)"></span></span></div>expanded ⇧⌘↩</div></div>
+<p class="cap"><b>Expand / collapse.</b> The arrows-out button at a pane's top right (or ⇧⌘↩) gives that pane the whole window: sidebar hidden, content in a centred 800 pt column, diffs and logs wider, the ask bar at column width. Esc or arrows-in returns to the split or sidebar it came from.</p>
+<p class="cap">⌘-click a row opens it beside the focused pane. A split opens the next agent in tree order. × or ⌘W closes a split; with one pane left, ⌘W folds the project as approved. Splits are kept per project.</p></div>
+</div>
+<h2 class="h2" style="margin-top:44px">Needs you reel</h2>
+<div class="cols">
+<div><div class="thumbs" style="margin-top:0"><div class="th"><div class="tb"><span class="s" style="box-shadow:inset 0 2px 0 rgba(255,176,32,.7)"></span><span class="p"></span><span class="p"></span><span class="p"></span></div>Needs you · 3</div><div class="th"><div class="tb"><span class="s" style="box-shadow:inset 0 2px 0 rgba(255,176,32,.7)"></span><span class="p" style="opacity:.35;transform:translateY(-6px)"></span><span class="p"></span><span class="p"></span></div>approved: it slides out</div><div class="th"><div class="tb"><span class="s"></span><span class="p" style="display:flex;align-items:center;justify-content:center"><span style="width:40px;height:3px;border-radius:2px;background:rgba(255,255,255,.18)"></span></span></div>none left</div></div>
+<p class="cap"><b>The Needs you heading or the hand</b> turns the main area into a reel of the agents that need you, oldest first: the approved Reel columns, each with its ask bar. A row under Needs you still opens just that agent; ⌘J steps through the asks one at a time.</p></div>
+<div><div class="frame" style="height:220px;display:flex;flex-direction:column"><div class="rh" style="height:40px;display:flex;align-items:center;gap:8px;padding:0 10px 0 16px;font-size:13px"><span style="font-weight:600;color:var(--sec)">Needs you</span><span style="color:var(--ter)">· 0</span><span style="flex:1"></span></div><div style="flex:1;margin:0 10px 10px;border-radius:11px;background:#151518;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px"><span style="font-size:13px;color:var(--ter)">Nothing needs you.</span><span style="display:flex;align-items:center;gap:8px"><button class="btn">Back to fix email join</button><span style="font-size:12px;color:var(--ter)">esc</span></span></div></div>
+<p class="cap"><b>The end state:</b> one grey line and the way back to the layout you came from (the agent, the split or the expanded pane). No amber, no illustration.</p></div>
+<div><p class="cap" style="margin-top:0"><b>Answering moves the reel.</b> Approve, Deny, an answer or Resume takes that column out (0.2 s, transform and opacity, no bounce) and the next one slides into its place. A new ask joins at the end, never under the pointer. Every column asks, so the columns drop the amber ring; the warm ask bar carries it. Return answers the focused column only; Esc never denies, it goes back.</p></div>
+</div>
+<h2 class="h2" style="margin-top:44px">Search ⌘K</h2>
+<div class="cols">
+<div><div class="pal" style="width:100%"><div class="pq"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.5-4.5"></path></svg><span class="qt">proration</span><span class="caret"></span></div>
+<div class="psep"></div>
+<div class="pl"><div class="pgh">Needs you</div>
+<div class="pr" role="option"><span class="pic"><img src="/_blob/16ce09b0ec09c90a04d113f1e9435e47" alt=""></span><span class="pt">invoice rounding</span><span class="ps">fix <span class="hl">proration</span></span><span class="sp"></span><span class="pk a"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0"></path><path d="M14 10V4a2 2 0 0 0-4 0v2"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"></path></svg>asks</span></div>
+<div class="pgh">Agents</div>
+<div class="pr sel" role="option"><span class="pic"><img src="/_blob/beb4f4a2383003846ae2de98b08d1f1f" alt=""></span><span class="pt"><span class="hl">proration</span> plan</span><span class="ps">fix proration · planner</span><span class="sp"></span><span class="hint"><span>↩ Open</span><span>⌘↩ Open in split</span></span></div>
+<div class="pgh">Projects</div>
+<div class="pr" role="option"><span class="pic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="pt">fix <span class="hl">proration</span></span><span class="ps">This Mac · 3 agents</span><span class="sp"></span><span class="pk a">asks</span></div>
+<div class="pgh">Commands</div>
+<div class="pr" role="option"><span class="pic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H10l-4 3.5v-3.5h0a2 2 0 0 1-1.5-2z"></path></svg></span><span class="pt">Message the planner of fix <span class="hl">proration</span>…</span><span class="sp"></span><span class="pk">⌘L</span></div>
+</div><div class="pf">↑↓ to move · ↩ to open · ⌘↩ to open in a split · esc to close</div>
+</div></div>
+<div><p class="cap" style="margin-top:0"><b>The magnifying glass in the sidebar header (or ⌘K anywhere)</b> opens one palette for projects, agents and commands: folded, opened, with a pane expanded or in the Needs you reel. A glass, not a field: the 248 pt header already holds the lights, the sidebar button, the hand and +, and a field would need a row of its own.</p><p class="cap"><b>Ranked by attention:</b> Needs you first, then agents (by their own titles), projects, and commands. ↩ opens, ⌘↩ opens beside the focused pane.</p></div>
+<div><p class="cap" style="margin-top:0"><b>Commands are only real actions</b> of the daemon and the app (new project, message, changes, trace, pause or resume, stop, expand, split, sidebar, settings), each with its shortcut. <b>No network search:</b> it searches what the app already holds, so results appear as you type.</p></div>
+</div>
+<div class="txt3">
+<div><h2 class="h2">Keyboard</h2><div class="kb"><span class="k">⌃⌘S</span><span>Open or fold the sidebar (⌘\ too)</span><span class="k">↑ ↓</span><span>Move through the rows; Return shows it</span><span class="k">→ ←</span><span>Unfold or fold a swarm, Finished</span><span class="k">⌘D  ⇧⌘D</span><span>Split right, split down</span><span class="k">⌘1–9 ⌃1–9</span><span>Projects, agents, as approved</span><span class="k">⌘K</span><span>Search projects, agents, commands</span><span class="k">⌘J</span><span>Step to the next ask, one at a time</span><span class="k">⇧⌘↩  Esc</span><span>Expand the focused pane; return</span><span class="k">⇧⌘F</span><span>Follow, from ⌘K and the menus</span></div></div>
+<div><h2 class="h2">What moves</h2><p class="cap" style="margin:0">Nothing loops and nothing glows. Running rows have no spinners: their status is a word. A row moves only when its agent changes section (an ask arrives: it leaves Running and appears in Needs you, 0.2 s opacity and a 6 pt slide), and never under the pointer: the move waits until the pointer leaves the sidebar. The pill and ••• fade in over 120 ms. Reduce Motion: crossfades.</p></div>
+<div><h2 class="h2">Performance</h2><p class="cap" style="margin:0">The sidebar is its own list view with fixed heights (28 pt rows and headings, 24 pt labels), fed by <span class="code mono">.projects</span>, <span class="code mono">.run(id)</span>, <span class="code mono">.agent(id)</span> and <span class="code mono">.approvals</span>, never <span class="code mono">.thread</span>. Scrolling it moves its own clip view and touches no pane. It is a fixed 248 pt while open and titles truncate, so nothing in it can resize a pane; opening and folding move layers, and the panes lay out once, at rest.</p></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"badges":{"editor":"boolean","default":true},"$preview":{"width":1440,"height":2780}}'>
+class Component extends DCLogic {
+renderVals() {
+return { pbd: (this.props.badges ?? true) ? 'inline-flex' : 'none' };
+}
+}
+</script>
+</body>
+</html>

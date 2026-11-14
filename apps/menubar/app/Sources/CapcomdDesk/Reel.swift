@@ -1032,13 +1032,14 @@ struct ColumnHead: View {
 /// re-renders that row only.
 struct ColumnThread: View {
   @Environment(DeskModel.self) private var model
+  @Environment(\.deskPane) private var inPane
   /// The row that was first when the page above was asked for: put back at the top once that page is in.
   @State private var keep: String?
   let runId: String
   let agentId: String
   let thread: ThreadSlice
   var body: some View {
-    DeskProbe.body("ColumnThread", id: agentId)
+    DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
     let entries = thread.entries
     return ScrollViewReader { proxy in ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
@@ -1053,14 +1054,17 @@ struct ColumnThread: View {
             .onTapGesture(perform: loadEarlier)
         }
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
-          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1])).equatable()
+          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane).equatable()
         }
         if case .failed(let why)? = thread.unavailable {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
         }
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
       }
-      .padding(Theme.Desk.bodyPadding)
+      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides).
+      .frame(maxWidth: inPane ? Theme.Desk.paneReading : nil, alignment: .leading)
+      .padding(inPane ? Theme.Desk.paneBodyPadding : Theme.Desk.bodyPadding)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .defaultScrollAnchor(.bottom)
     .scrollIndicators(.never)
@@ -1117,8 +1121,10 @@ struct EntryRow: View, Equatable {
   let agentId: String
   let entry: ThreadEntry
   let above: CGFloat
+  /// In the opened pane (the bench tells its rows from the reel's by name).
+  var inPane = false
   var body: some View {
-    let _ = DeskProbe.body("EntryRow", id: agentId)
+    let _ = DeskProbe.body(inPane ? "PaneEntryRow" : "EntryRow", id: agentId)
     switch entry {
     case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above)
     case .event(let ev): ThreadItemView(runId: runId, agentId: agentId, item: ev).padding(.bottom, Theme.Content.proseBottom)
@@ -1132,12 +1138,13 @@ struct ColumnComposer: View {
   @Environment(DeskModel.self) private var model
   /// A reused reel slot's memory (reel.columns=reuse): the draft is kept there per agent. nil in a kept column.
   @Environment(\.slotMemory) private var memory
+  @Environment(\.deskPane) private var inPane
   let agentId: String
   let name: String
   @State private var draft = ""
   @FocusState private var focused: Bool
   var body: some View {
-    DeskProbe.body("ColumnComposer", id: agentId)
+    DeskProbe.body(inPane ? "PaneComposer" : "ColumnComposer", id: agentId)
     return HStack(spacing: 8) {
       TextField("Tell \(name)…", text: $draft, axis: .vertical)
         .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
@@ -1146,7 +1153,7 @@ struct ColumnComposer: View {
         // Typing here focuses this column, and no decision takes this field's Return.
         .onChange(of: focused) { _, f in model.typing(in: agentId, f) }
         // Message the planner… (⌘L).
-        .task(id: model.agent(agentId)?.boxFocus ?? 0) { if model.takeBoxFocus(agentId) { focused = true } }
+        .task(id: model.agent(agentId)?.boxFocus ?? 0) { if model.nav.sidebarOpen == inPane, model.takeBoxFocus(agentId) { focused = true } }
       if !draft.isEmpty {
         Button(action: send) {
           Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold)).foregroundStyle(Color(white: 0.11))
@@ -1191,6 +1198,7 @@ struct SlotDraft: ViewModifier {
 /// message box, the new project column, the menu or the palette: `DeskModel.returnApproves`). Esc is never bound.
 struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
+  @Environment(\.deskPane) private var inPane
   /// The bar's reel: Return belongs to the reel in front (the project reel stays built, hidden, under the Needs you
   /// reel, and may show the same agent's ask).
   @Environment(\.needsReel) private var inNeeds
@@ -1215,7 +1223,8 @@ struct DecisionBar: View {
           HStack(spacing: 6) { Text("Approve"); Text("↩").font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 4).background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.12))) }
         }
         .buttonStyle(DeskButton(kind: .primary))
-        .keyboardShortcut(focused && model.returnApproves && model.needs.isOpen == inNeeds ? .defaultAction : nil)
+        // Return belongs to the surface in front: the Needs you reel, else the opened pane, else the reel.
+        .keyboardShortcut(focused && model.returnApproves && (model.needs.isOpen ? inNeeds : !inNeeds && model.nav.sidebarOpen == inPane) ? .defaultAction : nil)
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }
