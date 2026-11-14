@@ -607,7 +607,9 @@ package struct ReelRequest: Equatable {
 }
 
 extension DeskModel: ThreadHost {
-  package func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot ?? needs.slice(agentId)?.bot ?? (needs.isOpen ? team(runId)[agentId] : nil) }
+  /// Reads no observed state beyond the agent's slice: a thread row that asks must not re-render when the Needs you reel
+  /// opens or closes (an `isOpen` read here re-rendered every column's rows).
+  package func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot ?? needs.slice(agentId)?.bot ?? team(runId)[agentId] }
   package func agentProvider(runId: String, agentId: String) -> Provider? { (agents[agentId] ?? needs.slice(agentId))?.header.provider }
   package func role(runId: String, agentId: String) -> String? { (agents[agentId] ?? needs.slice(agentId))?.header.name }
   package func media(_ key: MediaKey) -> Fetched<Data>? { mediaSlice.items[key] }

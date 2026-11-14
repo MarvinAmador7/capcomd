@@ -282,6 +282,8 @@ final class ReelView: NSView, ReelColumnViews {
 
   private var blanks: [String: NSView] = [:]
   private var building = false
+  /// The Needs you reel's first frame has gone (its leading column alone); from the next turn on it builds as usual.
+  private var openedLeading = false
 
   /// A column before it is built: its fill and corner, nothing else.
   private static func blank() -> NSView {
@@ -318,6 +320,9 @@ final class ReelView: NSView, ReelColumnViews {
   /// The columns that must exist now: those on screen and one each side.
   private func buildAround(_ i: Int) {
     guard !order.isEmpty, across > 0 else { return }
+    // The Needs you reel opens on its leading column alone; the others follow one a frame, nearest first (buildSoon).
+    // Building the four in view in its first frame took it past 100 ms.
+    if kind == .needs, !openedLeading, !reuseColumns { build(i); buildSoon(); return }
     for j in max(0, i - 1)...min(order.count - 1, i + across) { build(j) }
     if windowing { reveal(near(i)) }
     if reuseColumns { assignSlots(around: i) }
@@ -331,6 +336,7 @@ final class ReelView: NSView, ReelColumnViews {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.building = false
+      self.openedLeading = true
       guard self.across > 0 else { return self.buildSoon() }   // not laid out yet
       for _ in 0..<self.perFrame {
         guard !self.driver.reelMoving, let next = self.order.indices.filter({ self.hosts[self.order[$0]] == nil }).min(by: { abs($0 - self.at) < abs($1 - self.at) }) else { break }

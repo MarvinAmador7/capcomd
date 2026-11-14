@@ -170,8 +170,12 @@ final class NeedsReelTests: XCTestCase {
     XCTAssertEqual(reel.columnCount, 3)
     XCTAssertNotNil(leaving.layer?.animation(forKey: "leave"))
     XCTAssertNotNil(leaving.superview)   // still drawn until its fade ends
-    XCTAssertEqual(next.frame.minX, nextX - pitch, accuracy: 0.5)   // its frame is where it lands
-    let closeUp = try XCTUnwrap(next.layer?.animation(forKey: "closeUp") as? CABasicAnimation)
+    // The next column (its view: a column not built yet may be built as it takes the place) is framed where it lands
+    // and slides there from where it was.
+    let moved = try XCTUnwrap(reel.columnView(at: 0))
+    XCTAssertEqual(moved.frame.minX, nextX - pitch, accuracy: 0.5)
+    _ = next
+    let closeUp = try XCTUnwrap(moved.layer?.animation(forKey: "closeUp") as? CABasicAnimation)
     XCTAssertEqual(closeUp.keyPath, "position.x")
     XCTAssertEqual((closeUp.fromValue as? CGFloat) ?? 0, pitch, accuracy: 0.5)
     XCTAssertLessThan(max(closeUp.duration, ReelRemoval.leave), 0.3)
