@@ -380,6 +380,7 @@ struct PaneHead: View {
         }
       }
       .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.Desk.tertiary)
+      .fixedSize(horizontal: split, vertical: false)   // a split's clock never truncates: the title gives way
       .padding(.trailing, expanded ? 8 : 6)
       PaneControls(slice: slice)
     }

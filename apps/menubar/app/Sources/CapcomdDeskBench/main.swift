@@ -25,9 +25,11 @@ commands
                                                   bytes): a deskbench.fixture/1 the bench runs on as --fixture file:FILE
   run <scenario> [options]                        drive one scenario in-process on a fixture, judge it against its budget
   suite [options]                                 every scenario in turn; one line each, exit non-zero if any fails
-  snapshot [--fixture F] [--out DIR] [--at N] [--sidebar] [--select AGENT]
+  snapshot [--fixture F] [--out DIR] [--at N] [--sidebar] [--select AGENT] [--split N] [--expand]
                                                   the window as PNG + a view/geometry dump (JSON), no scenario;
-                                                  --sidebar opens the sidebar, --select shows that agent in the pane
+                                                  --sidebar opens the sidebar, --select shows that agent in the pane,
+                                                  --split N adds N panes (right, down, …), --expand gives the focused
+                                                  pane the window
   profile <scenario> --template hitches|time|swiftui [--out DIR]
                                                   run the scenario under xctrace and summarise the trace as JSON/text
   trace <file.trace> [--process NAME] [--json]     summarise an existing trace (hitches, hangs, time profile) the same way
@@ -247,6 +249,12 @@ func kv(_ xs: [String]) -> [String: String] {
     // --sidebar: the opened window (the Rex-style sidebar and one agent's pane); --select ID: that agent's row clicked.
     if args.has("sidebar") { h.model.setSidebar(open: true); _ = await h.nextCommit(); await h.sleep(ms: 400) }
     if let id = args.one("select") { h.model.selectRow(id: id); _ = await h.nextCommit(); await h.sleep(ms: 400) }
+    // --split N: N more panes (right, then down); --expand: the focused pane has the window.
+    if let n = args.one("split").flatMap(Int.init) {
+      for i in 0..<n { h.model.split(down: i % 2 == 1) }
+      _ = await h.nextCommit(); await h.sleep(ms: 400)
+    }
+    if args.has("expand") { h.model.expandPane(); _ = await h.nextCommit(); await h.sleep(ms: 400) }
     let paths = h.snapshot(into: dir, name: "window")
     if let hold = args.one("hold").flatMap(Double.init) { await h.sleep(ms: hold * 1000) }
     if json { out(JSONOut.encode(h.dump())) } else {
