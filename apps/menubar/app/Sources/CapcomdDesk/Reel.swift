@@ -1058,7 +1058,8 @@ struct ColumnThread: View {
             .onTapGesture(perform: loadEarlier)
         }
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
-          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane).equatable()
+          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane,
+                   proseWidth: expanded ? PaneMetrics.reading : nil).equatable()
         }
         if case .failed(let why)? = thread.unavailable {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
@@ -1067,7 +1068,6 @@ struct ColumnThread: View {
       }
       // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt). Expanded
       // (RexExpanded `.xb`): prose in a centred 800 pt column, diffs, code and logs 1060 pt.
-      .environment(\.threadProseWidth, expanded ? PaneMetrics.reading : nil)
       .frame(maxWidth: inPane ? (expanded ? PaneMetrics.wide : Theme.Desk.paneReading) : nil, alignment: .leading)
       .padding(inPane ? (expanded ? PaneMetrics.expandedBody : split ? PaneMetrics.splitBody : Theme.Desk.paneBodyPadding) : Theme.Desk.bodyPadding)
       .frame(maxWidth: .infinity, alignment: expanded ? .center : .leading)
@@ -1129,12 +1129,25 @@ struct EntryRow: View, Equatable {
   let above: CGFloat
   /// In the opened pane (the bench tells its rows from the reel's by name).
   var inPane = false
+  /// The reading column when the thread is wider than it (an expanded pane: 800 pt in 1060); nil everywhere else.
+  var proseWidth: CGFloat? = nil
   var body: some View {
     let _ = DeskProbe.body(inPane ? "PaneEntryRow" : "EntryRow", id: agentId)
     switch entry {
-    case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above)
-    case .event(let ev): ThreadItemView(runId: runId, agentId: agentId, item: ev).padding(.bottom, Theme.Content.proseBottom).modifier(ProseColumn())
+    case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
+    case .event(let ev): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
     }
+  }
+}
+
+/// A lifecycle event in the thread, kept to the reading column when the thread is wider (an expanded pane).
+struct EventEntry: View {
+  let runId: String
+  let agentId: String
+  let item: ThreadItem
+  let proseWidth: CGFloat?
+  var body: some View {
+    ThreadItemView(runId: runId, agentId: agentId, item: item).padding(.bottom, Theme.Content.proseBottom).modifier(ProseColumn(proseWidth))
   }
 }
 
