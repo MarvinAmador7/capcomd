@@ -9,8 +9,22 @@ import CapcomdClient
 /// desktop apps before it shared too), and a store wired to the live transport.
 package enum Connection {
   package static var socketPath: String {
-    UserDefaults.standard.string(forKey: "capcomd.socketPath")
-      ?? (NSHomeDirectory() as NSString).appendingPathComponent(".capcomd/harness.sock")
+    socketPath(env: ProcessInfo.processInfo.environment, defaults: UserDefaults.standard.string(forKey: "capcomd.socketPath"), home: NSHomeDirectory())
+  }
+
+  /// The daemon's socket, resolved as the CLI resolves it (src/api/socket.ts), environment first, as `CAPCOMD_TOKEN`
+  /// comes before the Keychain: `CAPCOMD_HARNESS_SOCKET`, else `$CAPCOMD_HOME/harness.sock`, else the app's
+  /// `capcomd.socketPath` default, else ~/.capcomd/harness.sock. A development launch with its own daemon's
+  /// environment therefore never reaches the owner's. A leading `~/` is the home directory.
+  package static func socketPath(env: [String: String], defaults: String?, home: String) -> String {
+    func expand(_ p: String) -> String {
+      let full = p.hasPrefix("~/") ? (home as NSString).appendingPathComponent(String(p.dropFirst(2))) : p
+      return (full as NSString).standardizingPath
+    }
+    if let s = env["CAPCOMD_HARNESS_SOCKET"], !s.isEmpty { return expand(s) }
+    if let h = env["CAPCOMD_HOME"], !h.isEmpty { return (expand(h) as NSString).appendingPathComponent("harness.sock") }
+    if let d = defaults, !d.isEmpty { return expand(d) }
+    return (home as NSString).appendingPathComponent(".capcomd/harness.sock")
   }
 
   @MainActor package static func makeStore(token: String) -> (CapcomdStore, UnixSocketTransport) {

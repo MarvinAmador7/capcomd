@@ -143,7 +143,8 @@ final class SearchTests: XCTestCase {
     let c = SearchCommands.make(SearchCommandContext(menu: menu, projectTitle: "migrate matchkey", focusedAsk: nil, follow: false, homeShown: false))
     XCTAssertEqual(c.map(\.title.text), ["New project", "Message the planner of migrate matchkey…", "Changes in migrate matchkey", "Pause migrate matchkey",
                                          "Stop migrate matchkey…", "Fold migrate matchkey into the title bar", "Copy the run ID of migrate matchkey",
-                                         "Home", "Turn Follow on", "Settings"])
+                                         "Show the sidebar", "Home", "Turn Follow on", "Settings"])
+    XCTAssertEqual(c.first { $0.id == "command.sidebar" }?.trailing, .shortcut("⌃⌘S"))
     XCTAssertEqual(c.first { $0.id == "command.stop" }?.destructive, true)
     XCTAssertEqual(c.filter(\.destructive).count, 1)
     XCTAssertEqual(c.first { $0.id == "command.pause" }?.trailing, .shortcut("⌥⌘P"))

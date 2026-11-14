@@ -313,11 +313,12 @@ extension DeskModel {
   /// The Needs you hand, or the "Needs you" heading: every asking agent as a reel, oldest first.
   package func openNeedsReel() {
     if stopAsked { stopAsked = false }
+    collapsePane()   // the reel takes the pane's place beside the sidebar
     needs.open()
   }
   /// Esc or Back: the window goes back to what it showed before.
   package func closeNeedsReel() { needs.close() }
-  package func toggleNeedsReel() { if needs.isOpen { needs.close() } else { needs.open() } }
+  package func toggleNeedsReel() { if needs.isOpen { needs.close() } else { openNeedsReel() } }
 
   /// ⌘J: the next ask, oldest first, one at a time, from anywhere. Outside the reel it opens that agent in its project
   /// (as a row does); in the reel it focuses the next column. After the newest it starts again from the oldest.

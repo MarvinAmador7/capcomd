@@ -21,8 +21,9 @@ package struct DeskWindowContent: View {
   }
 }
 
-/// Keyboard (SPEC §4): ⌘0 Home, ⌘1–9 projects, ⌃1–9 agents, ⌃← ⌃→ the neighbour column, ⇧⌘N Home with the composer
-/// focused, ⌘K search, and the project menu's ⌘L, ⌥⌘P and ⌘W. None of these animate. An item whose action the open
+/// Keyboard (SPEC §4): ⌘0 Home, ⌘1–9 projects, ⌃1–9 agents, ⌃← ⌃→ the neighbour column (opened with splits: the
+/// neighbouring pane), ⇧⌘N Home with the composer focused, ⌘K search, ⌘D / ⇧⌘D split, ⇧⌘↩ expand, and the project
+/// menu's ⌘L, ⌥⌘P and ⌘W (with splits: closes the focused pane). None of these animate. An item whose action the open
 /// project doesn't have does nothing (⌘W also leaves Home for the open project, and removes a finished project from the
 /// title bar).
 package struct DeskCommands: Commands {
@@ -40,6 +41,10 @@ package struct DeskCommands: Commands {
     // View: the sidebar (⌃⌘S; ⌘\\ too, from the window). Opened, the window is the sidebar and one agent's pane.
     CommandGroup(replacing: .sidebar) {
       Button("Toggle Sidebar") { model.toggleSidebar() }.keyboardShortcut("s", modifiers: [.control, .command])
+      // Opened (SPEC §2.1): splits bring the reel's columns back as panes; the focused pane can take the window.
+      Button("Split Right") { model.split(down: false) }.keyboardShortcut("d", modifiers: .command)
+      Button("Split Down") { model.split(down: true) }.keyboardShortcut("d", modifiers: [.command, .shift])
+      Button("Expand Pane") { model.toggleExpand() }.keyboardShortcut(.return, modifiers: [.command, .shift])
     }
     CommandMenu("Project") {
       Button("Search…") { model.togglePalette() }.keyboardShortcut("k", modifiers: .command)

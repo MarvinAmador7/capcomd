@@ -82,7 +82,10 @@ public struct Manifest: Codable, Sendable, Equatable {
     "needs-open": ["ordered", "columns-shown"], "needs-answer": ["enough-asks", "left", "order-kept", "next-leads"], "needs-arrive": ["joined-at-end", "unmoved"],
     "needs-step": ["in-reel", "oldest-first"], "needs-empty": ["nothing-needs-you", "esc-back"], "needs-swipe": ["reel-scroll-view", "gesture", "snapped"],
     "sidebar-toggle": ["opened", "pane-agent", "folded", "reel-untouched", "drawn"], "sidebar-select": ["clicked", "keyboard", "drawn"],
-    "sidebar-burst": ["agents", "isolation-sidebar", "delivered-pane"], "sidebar-scroll": ["sidebar-scroll-view", "long-sidebar", "gesture", "scrolled", "isolation-pane"],
+    "sidebar-burst": ["agents", "isolation-sidebar", "delivered-pane"],
+    "split-open": ["split-right", "next-in-tree", "split-down", "closed", "drawn"], "split-focus": ["focus-moved", "no-thread-render", "views-kept", "drawn"],
+    "split-burst": ["delivered-pane", "isolation-panes", "isolation-sidebar", "drawn"],
+    "pane-expand": ["thread", "expanded", "collapsed-same", "scroll-kept", "no-rebuild", "drawn"], "expand-switch": ["stays-expanded", "palette-over", "drawn"], "sidebar-scroll": ["sidebar-scroll-view", "long-sidebar", "gesture", "scrolled", "isolation-pane"],
     "palette-open": ["items", "empty-search", "panel-drawn", "esc-closes"], "palette-type": ["typed", "ranking", "panel-drawn"],
     "palette-keys": ["selection", "return-opens", "split-falls-back", "esc-closes", "panel-drawn"],
   ]

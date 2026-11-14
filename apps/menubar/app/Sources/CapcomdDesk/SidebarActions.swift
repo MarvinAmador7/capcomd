@@ -10,10 +10,14 @@ extension DeskModel {
   /// ⌃⌘S, ⌘\, the sidebar button, View › Show Sidebar. The window lays out once, at rest: opening puts the sidebar and
   /// the pane over the reel, which keeps its size (it is never reflowed by a toggle). Animated only when the caller
   /// wraps it (a click); from the keyboard it just happens.
-  package func toggleSidebar() { setSidebar(open: !nav.sidebarOpen) }
+  package func toggleSidebar() {
+    if nav.expanded { return collapsePane() }   // expanded, the sidebar is hidden: ⌃⌘S brings it back
+    setSidebar(open: !nav.sidebarOpen)
+  }
 
   package func setSidebar(open: Bool) {
     guard nav.sidebarOpen != open else { return }
+    if !open { collapsePane() }
     if open {
       refreshSidebar(all: true)
       // The pane shows the open project's focused agent; with none yet, the one that asks, else its planner.
@@ -23,7 +27,7 @@ extension DeskModel {
     if open, !nav.everOpened { nav.everOpened = true }
     if !open { sidebar.pointer(inside: false) }   // hidden, it gets no hover: nothing waits on the pointer
     nav.sidebarOpen = open
-    if open { nav.focusList() }
+    if open { placeFocusInPanes(); nav.focusList() }
     else {
       // The reel stood still under the pane: it comes to the pane's agent now (not animated), and warms again.
       if let f = focusedAgent { scroll(to: f, animated: false) }
@@ -35,9 +39,12 @@ extension DeskModel {
   /// nothing open.
   package var paneAgent: String? {
     guard openRunId != nil else { return nil }
+    if nav.sidebarOpen, let p = panes.focusedAgent { return p }
     if let f = focusedAgent, agent(f) != nil { return f }
     return columns.first
   }
+  /// The agents the panes show (the sidebar marks the ones beside the selected: RexSplit `.row.vis`).
+  package var paneAgents: Set<String> { newProject == nil && nav.sidebarOpen && panes.count > 1 ? Set(panes.agents) : [] }
   /// The sidebar's selected row (its pill): the pane's agent, except while Home shows.
   package var selectedAgent: String? { newProject == nil ? paneAgent : nil }
 

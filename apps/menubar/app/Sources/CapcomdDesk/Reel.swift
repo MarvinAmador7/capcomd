@@ -1033,6 +1033,9 @@ struct ColumnHead: View {
 struct ColumnThread: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.deskPane) private var inPane
+  /// The pane it is in (nil in the reel): a split's thread has narrower sides; an expanded one is a centred 800 pt
+  /// reading column with diffs, code and logs 1060 pt.
+  @Environment(\.paneState) private var pane
   /// The row that was first when the page above was asked for: put back at the top once that page is in.
   @State private var keep: String?
   let runId: String
@@ -1041,6 +1044,7 @@ struct ColumnThread: View {
   var body: some View {
     DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
     let entries = thread.entries
+    let expanded = inPane && pane?.expanded == true, split = inPane && pane?.split == true
     return ScrollViewReader { proxy in ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
         // Read newest first: the top of what is shown asks for the page above as it comes into view (or is clicked).
@@ -1054,17 +1058,19 @@ struct ColumnThread: View {
             .onTapGesture(perform: loadEarlier)
         }
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
-          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane).equatable()
+          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane,
+                   proseWidth: expanded ? PaneMetrics.reading : nil).equatable()
         }
         if case .failed(let why)? = thread.unavailable {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
         }
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
       }
-      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides).
-      .frame(maxWidth: inPane ? Theme.Desk.paneReading : nil, alignment: .leading)
-      .padding(inPane ? Theme.Desk.paneBodyPadding : Theme.Desk.bodyPadding)
-      .frame(maxWidth: .infinity, alignment: .leading)
+      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt). Expanded
+      // (RexExpanded `.xb`): prose in a centred 800 pt column, diffs, code and logs 1060 pt.
+      .frame(maxWidth: inPane ? (expanded ? PaneMetrics.wide : Theme.Desk.paneReading) : nil, alignment: .leading)
+      .padding(inPane ? (expanded ? PaneMetrics.expandedBody : split ? PaneMetrics.splitBody : Theme.Desk.paneBodyPadding) : Theme.Desk.bodyPadding)
+      .frame(maxWidth: .infinity, alignment: expanded ? .center : .leading)
     }
     .defaultScrollAnchor(.bottom)
     .scrollIndicators(.never)
@@ -1123,12 +1129,25 @@ struct EntryRow: View, Equatable {
   let above: CGFloat
   /// In the opened pane (the bench tells its rows from the reel's by name).
   var inPane = false
+  /// The reading column when the thread is wider than it (an expanded pane: 800 pt in 1060); nil everywhere else.
+  var proseWidth: CGFloat? = nil
   var body: some View {
     let _ = DeskProbe.body(inPane ? "PaneEntryRow" : "EntryRow", id: agentId)
     switch entry {
-    case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above)
-    case .event(let ev): ThreadItemView(runId: runId, agentId: agentId, item: ev).padding(.bottom, Theme.Content.proseBottom)
+    case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
+    case .event(let ev): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
     }
+  }
+}
+
+/// A lifecycle event in the thread, kept to the reading column when the thread is wider (an expanded pane).
+struct EventEntry: View {
+  let runId: String
+  let agentId: String
+  let item: ThreadItem
+  let proseWidth: CGFloat?
+  var body: some View {
+    ThreadItemView(runId: runId, agentId: agentId, item: item).padding(.bottom, Theme.Content.proseBottom).modifier(ProseColumn(proseWidth))
   }
 }
 
@@ -1139,6 +1158,8 @@ struct ColumnComposer: View {
   /// A reused reel slot's memory (reel.columns=reuse): the draft is kept there per agent. nil in a kept column.
   @Environment(\.slotMemory) private var memory
   @Environment(\.deskPane) private var inPane
+  /// Expanded, the box sits at the reading column's width, centred (RexExpanded).
+  @Environment(\.paneState) private var pane
   let agentId: String
   let name: String
   @State private var draft = ""
@@ -1165,7 +1186,9 @@ struct ColumnComposer: View {
     .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 8)
     .frame(minHeight: Theme.Desk.composerHeight)
     .background(RoundedRectangle(cornerRadius: Theme.Desk.composerRadius, style: .continuous).fill(Theme.Desk.composerFill))
-    .padding([.horizontal, .bottom], 12)
+    .frame(maxWidth: inPane && pane?.expanded == true ? PaneMetrics.reading : .infinity)
+    .padding([.horizontal, .bottom], inPane && pane?.expanded == true ? 20 : 12)
+    .frame(maxWidth: .infinity)
     .modifier(SlotDraft(memory: memory, agentId: agentId, draft: $draft))
   }
   private func send() {
@@ -1202,10 +1225,14 @@ struct DecisionBar: View {
   /// The bar's reel: Return belongs to the reel in front (the project reel stays built, hidden, under the Needs you
   /// reel, and may show the same agent's ask).
   @Environment(\.needsReel) private var inNeeds
+  /// Expanded (RexExpanded `.xdock`): the bar at the reading column's width, 12 pt corners, the amber ring, 20 pt above
+  /// the window's foot; the pane itself then has no ring.
+  @Environment(\.paneState) private var pane
   let approval: PendingApproval
   let focused: Bool
   var body: some View {
     DeskProbe.body("DecisionBar")
+    let docked = inPane && pane?.expanded == true
     let busy = approval.decision != .idle
     return VStack(alignment: .leading, spacing: 8) {
       Text(verbatim: approval.question.plain).font(Theme.Desk.question).foregroundStyle(Theme.Desk.text)
@@ -1228,9 +1255,13 @@ struct DecisionBar: View {
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }
-    .padding(.horizontal, 14).padding(.vertical, 12)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Theme.Desk.decisionFill)
+    .padding(.horizontal, docked ? 20 : 14).padding(.vertical, docked ? 16 : 12)
+    .frame(maxWidth: docked ? PaneMetrics.reading : .infinity, alignment: .leading)
+    .background(docked ? PaneMetrics.dockFill : Theme.Desk.decisionFill)
+    .clipShape(RoundedRectangle(cornerRadius: docked ? PaneMetrics.dockRadius : 0, style: .continuous))
+    .overlay { if docked { RoundedRectangle(cornerRadius: PaneMetrics.dockRadius, style: .continuous).strokeBorder(Theme.Desk.askStroke, lineWidth: 1) } }
+    .padding(.bottom, docked ? 20 : 0)
+    .frame(maxWidth: .infinity)
   }
 }
 

@@ -13,6 +13,8 @@ extension Theme.Desk {
   enum Side {
     static let row = Color(red: 0xC9 / 255, green: 0xC9 / 255, blue: 0xCF / 255)
     static let selected = Color.white.opacity(0.10), hover = Color.white.opacity(0.05)
+    /// A row a split pane shows, beside the selected one (RexSplit `.row.vis`).
+    static let visible = Color.white.opacity(0.045)
     static let more = Color.white.opacity(0.12)
     static let badgeFill = Color(red: 0x2C / 255, green: 0x2C / 255, blue: 0x31 / 255)
     static let headFill = Color(red: 0x26 / 255, green: 0x26 / 255, blue: 0x2A / 255)
@@ -228,11 +230,12 @@ struct SidebarList: View {
     DeskProbe.body("SidebarList")
     let lines = model.sidebarLines
     let selected = model.selectedAgent
+    let visible = model.paneAgents
     let cursor = focused ? model.nav.cursor : nil
     return VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 0) {
         ForEach(lines.pinned) { l in
-          SidebarLineView(line: l, selected: selected, cursor: cursor).equatable()
+          SidebarLineView(line: l, selected: selected, visible: visible, cursor: cursor).equatable()
             .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6)))
         }
       }
@@ -242,7 +245,7 @@ struct SidebarList: View {
         ScrollView(.vertical) {
           VStack(alignment: .leading, spacing: 0) {
             ForEach(lines.list) { l in
-              SidebarLineView(line: l, selected: selected, cursor: cursor).equatable()
+              SidebarLineView(line: l, selected: selected, visible: visible, cursor: cursor).equatable()
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6)))
             }
           }
@@ -280,11 +283,14 @@ struct SidebarList: View {
 struct SidebarLineView: View, Equatable {
   let line: SidebarLine
   let selected: String?
+  /// The agents the panes show (with splits).
+  var visible: Set<String> = []
   let cursor: SidebarKey?
   static func == (a: Self, b: Self) -> Bool {
-    a.line == b.line && a.isSelected == b.isSelected && a.hasCursor == b.hasCursor
+    a.line == b.line && a.isSelected == b.isSelected && a.isVisible == b.isVisible && a.hasCursor == b.hasCursor
   }
   var isSelected: Bool { if case .row(let r, _) = line { return r.id == selected }; return false }
+  var isVisible: Bool { if case .row(let r, _) = line { return visible.contains(r.id) }; return false }
   var hasCursor: Bool { line.key != nil && line.key == cursor }
   var body: some View {
     switch line {
@@ -294,7 +300,7 @@ struct SidebarLineView: View, Equatable {
         .padding(.horizontal, 8).padding(.top, 2).padding(.bottom, 6)
         .frame(maxWidth: .infinity, minHeight: SidebarMetrics.calm, maxHeight: SidebarMetrics.calm, alignment: .topLeading)
     case .label(let g, let s, let folded): ProjectLabel(group: g, section: s, folded: folded, cursor: hasCursor)
-    case .row(let r, let s): AgentRow(row: r, section: s, selected: isSelected, cursor: hasCursor)
+    case .row(let r, let s): AgentRow(row: r, section: s, selected: isSelected, visible: isVisible, cursor: hasCursor)
     case .newProject: NewProjectRow()
     }
   }
@@ -416,6 +422,7 @@ struct AgentRow: View {
   let row: SidebarRow
   let section: SidebarSection
   let selected: Bool
+  var visible = false
   let cursor: Bool
   @State private var hover = false
   var body: some View {
@@ -423,7 +430,8 @@ struct AgentRow: View {
     let dim = row.tone == .dim
     let titleColor: Color = selected || hover ? Theme.Desk.text : dim ? Theme.Desk.tertiary : row.tone == .done ? Theme.Desk.secondary : Theme.Desk.Side.row
     return HStack(spacing: 0) {
-      Button { model.selectRow(row) } label: {
+      // ⌘-click opens it beside the focused pane (RexStates "Splits").
+      Button { if NSEvent.modifierFlags.contains(.command) { model.openInSplit(runId: row.runId, agentId: row.id) } else { model.selectRow(row) } } label: {
         HStack(spacing: 8) {
           RowHead(bot: row.bot, provider: row.provider).opacity(dim ? 0.55 : 1)
           Text(verbatim: row.title).font(Theme.Desk.Side.rowFont).foregroundStyle(titleColor)
@@ -443,6 +451,7 @@ struct AgentRow: View {
       .accessibilityLabel([row.title, row.word].compactMap { $0 }.joined(separator: ", "))
       .accessibilityAddTraits(selected ? .isSelected : [])
       .accessibilityAction(named: "Rename") { model.renameRow(row) }
+      .accessibilityAction(named: "Open in Split") { model.openInSplit(runId: row.runId, agentId: row.id) }
       if hover || selected {
         RowMore(row: row)
           .transition(.opacity.animation(reduceMotion ? nil : .easeOut(duration: 0.12)))
@@ -450,7 +459,8 @@ struct AgentRow: View {
     }
     .padding(.leading, 8 + CGFloat(row.level) * SidebarMetrics.indent).padding(.trailing, 4)
     .frame(height: SidebarMetrics.row)
-    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selected ? Theme.Desk.Side.selected : hover ? Theme.Desk.Side.hover : .clear))
+    .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+      .fill(selected ? Theme.Desk.Side.selected : hover ? Theme.Desk.Side.hover : visible ? Theme.Desk.Side.visible : .clear))
     .overlay(CursorRing(on: cursor))
     .onHover { hover = $0 }
     .accessibilityElement(children: .contain)

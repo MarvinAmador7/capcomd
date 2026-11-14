@@ -96,6 +96,9 @@ final class DeskTests: XCTestCase {
     ev(s, "run-c", "run.created", nil, ["goal": .string("Cloud one"), "sandbox": .string("boxd")], at: 1)
     ev(s, "run-d", "run.created", nil, ["goal": .string("Older daemon")], at: 2)
     XCTAssertEqual(s.decks().map(\.sandbox), ["boxd", nil])
+    // A run that names no place runs on the daemon's own (run options' default): the project label's icon shows it.
+    s.runOptions = RunOptions(sandboxes: [SandboxInfo(name: "docker", label: "Local", isDefault: true), SandboxInfo(name: "boxd", label: "Cloud", isDefault: false)])
+    XCTAssertEqual(s.decks().map(\.sandbox), ["boxd", "docker"])
   }
 
   /// A column's clock starts when its agent was spawned. A lifecycle snapshot lists agents without their agent.spawned

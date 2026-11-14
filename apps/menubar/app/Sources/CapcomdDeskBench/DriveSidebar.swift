@@ -291,11 +291,13 @@ extension Drive {
     await h.sleep(ms: 150)
   }
 
-  /// The opened pane's AppKit column (NativeColumnView in its pane style) and the agent it shows, if one is in the window.
+  /// The opened pane's AppKit column (NativeColumnView in its pane style) and the agent it shows, if one shows in the
+  /// window (with splits: the focused pane). Folded, the panes keep their views under the hidden opened layer, so what
+  /// counts is whether the view or an ancestor is hidden.
   func paneView() -> (view: NSView, agent: String)? {
     var found: (NSView, String)?
     h.walk(h.window.contentView!) { v in
-      if found == nil, let p = v as? DeskPaneProbe, p.isPane, !v.isHidden { found = (v, p.shownAgent) }
+      if let p = v as? DeskPaneProbe, p.isPane, !v.isHiddenOrHasHiddenAncestor, found == nil || p.paneFocused { found = (v, p.shownAgent) }
     }
     return found
   }

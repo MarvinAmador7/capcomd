@@ -170,7 +170,7 @@ extension Drive {
 
   // MARK: palette-keys
 
-  /// ↓ ↓ ↑ move the selection; ↩ opens it; ⌘↩ opens (until splits, as ↩ does); Esc closes.
+  /// ↓ ↓ ↑ move the selection; ↩ opens it; ⌘↩ opens (folded, as ↩ does; opened, in a split); Esc closes.
   func paletteKeys() async -> ([StepResult], [Check]) {
     await rewind()   // the reel built and its threads warmed: a step measures the palette, not the window settling
     let query = params["query"] ?? "shard"
@@ -186,7 +186,7 @@ extension Drive {
     let target = results.indices.contains(1) ? results[1] : nil
     steps.append(await enter("return", split: false))
     checks.append(Check("return-opens", !h.model.paletteOpen && opened(target), "↩ on \(target.map { "\($0.item.id)" } ?? "-"): focused \(h.model.focusedAgent ?? "-"), run \(h.model.openRunId ?? "-")"))
-    // ⌘↩ on the first result: no splits yet, so it opens it as ↩ does.
+    // ⌘↩ on the first result, folded: it opens it as ↩ does (splits are the opened window's).
     steps.append(await openPalette("reopen"))
     steps += await type(query, prefix: "retype")
     let first = h.model.paletteShown.first

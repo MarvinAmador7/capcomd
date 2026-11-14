@@ -231,8 +231,11 @@ final class SidebarModelTests: XCTestCase {
     let m = DeskModel(store: s)
     XCTAssertEqual(m.sidebar.content.running.count, 1)
     ev("agent.failed", "w2")
-    // A failure has no decision to make: it keeps its place in the tree, with its red word.
+    // A failure has no decision to make: it keeps its place in the tree, with its red word, and the hand's count and
+    // the Needs you heading agree (both leave it out).
     XCTAssertTrue(m.sidebar.content.needs.isEmpty)
+    XCTAssertEqual(m.needs.count, 0)
+    XCTAssertEqual(m.sidebar.needsCount, m.needs.count)
     XCTAssertEqual(m.sidebar.content.running.first?.rows.first { $0.id == "w2" }?.tone, .error)
     ev("agent.done", "w1"); ev("agent.done", "pl")
     ev("run.completed", nil)
