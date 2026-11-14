@@ -68,7 +68,7 @@ public enum Guards {
   /// switches, a resize, Follow, a fresh window. Not `burst` (the arriving items' layout settles on its own clock) and
   /// not `typing` (the caret, the field editor).
   static let snapshotScenarios: Set<String> = ["open", "switch", "step", "jump", "fling", "swipe", "follow", "resize",
-                                                "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe"]
+                                                "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe", "sidebar-toggle", "sidebar-select"]
 
   /// The correctness guards of a scenario, as the manifest lists them.
   public static func forScenario(_ name: String) -> [String] {

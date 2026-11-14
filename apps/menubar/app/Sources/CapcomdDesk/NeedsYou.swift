@@ -503,29 +503,6 @@ struct LimitBar: View {
   }
 }
 
-/// The Needs you hand (SF hand.raised): the amber count beside it while anything asks, grey at zero. Opens the reel.
-/// Until the sidebar lands it sits in the title bar, before Follow.
-struct NeedsYouButton: View {
-  @Environment(DeskModel.self) private var model
-  var body: some View {
-    let n = model.needs.count, open = model.needs.isOpen
-    return Button { model.toggleNeedsReel() } label: {
-      HStack(spacing: 4) {
-        Image(systemName: "hand.raised").font(.system(size: 13, weight: .regular))
-        if n > 0 { Text(verbatim: "\(n)").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.amber).monospacedDigit() }
-      }
-      .foregroundStyle(n > 0 || open ? Theme.Desk.text : Theme.Desk.tertiary)
-      .padding(.leading, n > 0 ? 7 : 0).padding(.trailing, n > 0 ? 8 : 0)
-      .frame(minWidth: Theme.Desk.iconButton, minHeight: Theme.Desk.iconButton)
-      .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(open ? Color.white.opacity(0.10) : .clear))
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(PressableStyle())
-    .help(n > 0 ? "Needs you: \(n). Open them as a reel (⌘J steps through them)" : "Nothing needs you")
-    .accessibilityLabel(n > 0 ? "Needs you: \(n)" : "Needs you: nothing")
-  }
-}
-
 /// View › Needs You and View › Next Ask (⌘J).
 package struct NeedsYouCommands: Commands {
   let model: DeskModel

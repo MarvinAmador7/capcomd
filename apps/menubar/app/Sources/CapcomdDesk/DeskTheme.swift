@@ -36,8 +36,12 @@ extension Theme {
     static let peek: CGFloat = 44
     static let columnRadius: CGFloat = 11
     static let columnHeader: CGFloat = 40
+    /// The opened pane's header (RexMain `.ph`).
+    static let paneHeader: CGFloat = 44
     static let headerBot: CGFloat = 20
     static let bodyPadding = EdgeInsets(top: 6, leading: 16, bottom: 12, trailing: 16)
+    static let paneBodyPadding = EdgeInsets(top: 4, leading: 24, bottom: 16, trailing: 24)
+    static let paneReading: CGFloat = 720
     static let composerHeight: CGFloat = 40, composerRadius: CGFloat = 10, composerFill = Color.white.opacity(0.06)
     static let decisionFill = Color(red: 0x1F / 255, green: 0x1C / 255, blue: 0x17 / 255)
     /// The goal branch's ready card at the planner's foot: a neutral step down from the column (no board yet).

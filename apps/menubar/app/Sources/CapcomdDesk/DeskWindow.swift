@@ -37,6 +37,10 @@ package struct DeskCommands: Commands {
     CommandGroup(replacing: .saveItem) {
       Button("Fold into the Title Bar") { model.foldShortcut() }.keyboardShortcut("w", modifiers: .command)
     }
+    // View: the sidebar (⌃⌘S; ⌘\\ too, from the window). Opened, the window is the sidebar and one agent's pane.
+    CommandGroup(replacing: .sidebar) {
+      Button("Toggle Sidebar") { model.toggleSidebar() }.keyboardShortcut("s", modifiers: [.control, .command])
+    }
     CommandMenu("Project") {
       Button("Actions…") { model.togglePalette() }.keyboardShortcut("k", modifiers: .command)
       Divider()

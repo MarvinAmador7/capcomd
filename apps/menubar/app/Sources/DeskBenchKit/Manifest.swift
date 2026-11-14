@@ -81,10 +81,14 @@ public struct Manifest: Codable, Sendable, Equatable {
     "resize": ["columns-follow-width"], "follow": ["enough-columns", "landed"],
     "needs-open": ["ordered", "columns-shown"], "needs-answer": ["enough-asks", "left", "order-kept", "next-leads"], "needs-arrive": ["joined-at-end", "unmoved"],
     "needs-step": ["in-reel", "oldest-first"], "needs-empty": ["nothing-needs-you", "esc-back"], "needs-swipe": ["reel-scroll-view", "gesture", "snapped"],
+    "sidebar-toggle": ["opened", "pane-agent", "folded", "reel-untouched", "drawn"], "sidebar-select": ["clicked", "keyboard", "drawn"],
+    "sidebar-burst": ["agents", "isolation-sidebar", "delivered-pane"], "sidebar-scroll": ["sidebar-scroll-view", "long-sidebar", "gesture", "scrolled", "isolation-pane"],
   ]
 
   /// Every `DeskProbe.body` name in CapcomdDesk.
-  public static let probes = ["Column", "ColumnComposer", "ColumnHead", "ColumnThread", "CrewTab", "DecisionBar", "EntryRow", "FoldedDeck", "LimitBar", "NeedsReel", "NothingNeedsYou", "OpenGroup", "Reel", "RootView", "TitleBar"]
+  public static let probes = ["AgentRow", "Column", "ColumnComposer", "ColumnHead", "ColumnThread", "CrewTab", "DecisionBar", "EntryRow", "FoldedDeck", "LimitBar",
+                               "NeedsReel", "NothingNeedsYou", "OpenGroup", "Pane", "PaneArea", "PaneComposer", "PaneEntryRow", "PaneHead", "PaneThread",
+                               "ProjectLabel", "Rail", "Reel", "RootView", "SectionHeading", "Sidebar", "SidebarList", "TitleBar"]
 
   /// The manifest as text, for a person.
   public var text: String {

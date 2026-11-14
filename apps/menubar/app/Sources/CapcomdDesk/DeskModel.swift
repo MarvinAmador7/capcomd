@@ -192,6 +192,10 @@ package final class DeskModel {
   @ObservationIgnored private var threads: [String: ThreadSlice] = [:]
   @ObservationIgnored let mediaSlice = MediaSlice()
   @ObservationIgnored package let home = HomeSlice()
+  /// Folded or opened, and the sidebar's view state; the sidebar's content (SidebarModel.swift).
+  @ObservationIgnored package let nav = DeskNav()
+  @ObservationIgnored package let sidebar = SidebarSlice()
+  @ObservationIgnored var sidebarRowsByRun: [String: [(row: SidebarRow, needs: Bool)]] = [:]
   /// The Needs you reel (NeedsYou.swift): every asking agent, across projects.
   @ObservationIgnored package let needs = NeedsReel()
   @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
@@ -207,6 +211,7 @@ package final class DeskModel {
     store = session.store
     setupFlow = ProjectSetupFlow(store: store)
     restoreHidden(from: .standard)
+    nav.restore(from: .standard)
     needs.model = self
     session.onStore { [weak self] s in self?.connect(s) }
   }
@@ -217,6 +222,7 @@ package final class DeskModel {
     store = s; session = nil; autoOpens = a
     setupFlow = ProjectSetupFlow(store: s)
     if let d { restoreHidden(from: d) }
+    nav.restore(from: d)
     needs.model = self
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }
@@ -303,6 +309,7 @@ package final class DeskModel {
       if all || runTouched { home.set(store.homeRuns()) }
       if all { newProjectChanged() } else if runTouched { adoptStartedRun() }
     }
+    refreshSidebar(keys)
     guard let runId = openRunId else { return }
     let touchesRun = all || keys.contains(.run(runId))
     if touchesRun {
@@ -366,7 +373,7 @@ package final class DeskModel {
   private func followAsks(_ asking: Set<String>) {
     let new = asking.subtracting(knownAsks)
     knownAsks = asking
-    guard follow, !needs.isOpen, let first = columns.first(where: new.contains) else { return }
+    guard follow, !needs.isOpen, !nav.sidebarOpen, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
 
@@ -377,7 +384,7 @@ package final class DeskModel {
     guard let known = knownFailures else { if !columns.isEmpty { knownFailures = failed }; return }
     let new = failed.subtracting(known)
     knownFailures = failed
-    guard follow, !needs.isOpen, let first = columns.first(where: new.contains) else { return }
+    guard follow, !needs.isOpen, !nav.sidebarOpen, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
 
@@ -497,6 +504,7 @@ package final class DeskModel {
         try? await Task.sleep(for: .milliseconds(40))
         guard let self else { return }
         if self.reelMoving { continue }
+        if self.nav.sidebarOpen { return }   // hidden under the pane: nothing to warm until it folds (resumeWarming)
         let at = self.columns.firstIndex(of: self.reelPosition ?? "") ?? 0
         let cold = self.columns.indices.filter { self.agents[self.columns[$0]]?.warm == false }
         guard self.warmOrder.count < Self.warmCap, let next = cold.min(by: { abs($0 - at) < abs($1 - at) }) else { return }
@@ -504,6 +512,9 @@ package final class DeskModel {
       }
     }
   }
+
+  /// The sidebar folded: warming picks up where the reel stands.
+  func resumeWarming() { if !columns.isEmpty { warm(around: columns.firstIndex(of: reelPosition ?? "") ?? 0); startWarming() } }
 
   package func goToProject(_ n: Int) { if decks.indices.contains(n) { open(project: decks[n].id) } }
   package func goToAgent(_ n: Int) {

@@ -16,6 +16,8 @@ final class NativeColumnView: NSView {
   private let model: DeskModel
   /// Per-agent state a slot hands from one agent to the next (the message box's draft), when it is a slot.
   private let memory: SlotMemory?
+  /// A reel column, or the opened window's one pane (PaneHead, 44 pt; no focus ring: the pane is the focus).
+  private let style: ColumnStyle
   private let head: NSHostingView<AnyView>
   private let body: NSHostingView<AnyView>
   /// The size the head and body were placed for: placing is skipped until it changes.
@@ -27,13 +29,14 @@ final class NativeColumnView: NSView {
   /// In the Needs you reel: no amber ring (every column there asks).
   private let needs: Bool
 
-  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil, needs: Bool = false) {
+  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil, style: ColumnStyle = .reel, needs: Bool = false) {
     self.agentId = agentId
     self.model = model
     self.memory = memory
+    self.style = style
     self.needs = needs
-    head = NSHostingView(rootView: Self.head(agentId, model, needs))
-    body = NSHostingView(rootView: Self.body(agentId, model, memory, needs))
+    head = NSHostingView(rootView: Self.head(agentId, model, style, needs))
+    body = NSHostingView(rootView: Self.body(agentId, model, memory, style, needs))
     super.init(frame: .zero)
     wantsLayer = true
     layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
@@ -55,21 +58,22 @@ final class NativeColumnView: NSView {
     super.layout()
     guard bounds.size != placed else { return }
     placed = bounds.size
-    let h = Theme.Desk.columnHeader
+    let h = style == .pane ? Theme.Desk.paneHeader : Theme.Desk.columnHeader
     head.frame = CGRect(x: 0, y: 0, width: bounds.width, height: h)
     body.frame = CGRect(x: 0, y: h, width: bounds.width, height: max(0, bounds.height - h))
     edge.frame = bounds
     edge.update()
   }
 
-  private static func head(_ id: String, _ model: DeskModel, _ needs: Bool = false) -> AnyView {
-    AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).environment(\.needsReel, needs).preferredColorScheme(.dark))
+  private static func head(_ id: String, _ model: DeskModel, _ style: ColumnStyle, _ needs: Bool = false) -> AnyView {
+    style == .pane ? AnyView(PaneHeadHost(agentId: id).id(id).environment(model).preferredColorScheme(.dark))
+                   : AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).environment(\.needsReel, needs).preferredColorScheme(.dark))
   }
   /// The body, identified by its agent: a slot configured with another agent starts its views (and their state) anew;
   /// what must follow the agent is in `memory`.
-  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ needs: Bool = false) -> AnyView {
+  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ style: ColumnStyle, _ needs: Bool = false) -> AnyView {
     AnyView(ColumnBody(agentId: id).id(id).environment(model).environment(\.threadHost, ThreadHostBox(host: model))
-      .environment(\.slotMemory, memory).environment(\.needsReel, needs).preferredColorScheme(.dark))
+      .environment(\.slotMemory, memory).environment(\.deskPane, style == .pane).environment(\.needsReel, needs).preferredColorScheme(.dark))
   }
 
   /// A slot shows another agent: its head and body get that agent's views, its stroke that agent's state. Nothing is
@@ -77,10 +81,20 @@ final class NativeColumnView: NSView {
   func configure(_ id: String) {
     guard id != agentId else { return }
     agentId = id
-    head.rootView = Self.head(id, model, needs)
-    body.rootView = Self.body(id, model, memory, needs)
+    head.rootView = Self.head(id, model, style, needs)
+    body.rootView = Self.body(id, model, memory, style, needs)
     stroke = nil
     observe()
+  }
+
+  /// The opened pane leaving the window (the sidebar folds): its SwiftUI trees are emptied first, so they don't render
+  /// the whole thread once more on the way out (a hosting view taken out of its window updates its environment).
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    super.viewWillMove(toWindow: newWindow)
+    guard style == .pane, newWindow == nil, window != nil else { return }
+    head.rootView = AnyView(EmptyView())
+    body.rootView = AnyView(EmptyView())
+    agentId = ""
   }
 
   /// The project changed: the model made new slices for its agents, so whatever this slot shows is stale, even an
@@ -101,15 +115,35 @@ final class NativeColumnView: NSView {
   }
 
   private func apply() {
-    DeskProbe.body("Column", id: agentId)
+    DeskProbe.body(style == .pane ? "Pane" : "Column", id: agentId)
     let a = model.agent(agentId, inNeeds: needs)
-    let asks = a?.approval != nil && !needs, focused = a?.focused ?? false
+    let asks = a?.approval != nil && !needs, focused = style == .reel && (a?.focused ?? false)
     guard stroke.map({ $0 != (asks, focused) }) ?? true else { return }
     stroke = (asks, focused)
     edge.color = NSColor(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke).cgColor
     edge.lineWidth = asks || focused ? 1 : 0.5
     edge.update()
   }
+}
+
+/// Where a column view is: in the reel, or the opened window's pane.
+enum ColumnStyle { case reel, pane }
+
+/// What the bench reads off a column view: whether it is the opened window's pane, and which agent it shows.
+@MainActor package protocol DeskPaneProbe: AnyObject {
+  var isPane: Bool { get }
+  var shownAgent: String { get }
+}
+
+extension NativeColumnView: DeskPaneProbe {
+  package var isPane: Bool { style == .pane }
+  package var shownAgent: String { agentId }
+}
+
+extension EnvironmentValues {
+  /// The view is in the opened window's pane (not the reel kept under it): its decision takes Return and its message
+  /// box takes the focus only while the sidebar is open, the reel's only while it is folded.
+  @Entry var deskPane = false
 }
 
 /// What follows an agent from one reel slot to the next (`reel.columns=reuse`): its message box's draft. The thread's
@@ -171,13 +205,15 @@ struct ColumnHeadHost: View {
 /// The native column's body: the thread (once warm), then the message box or the decision it waits on.
 struct ColumnBody: View {
   @Environment(DeskModel.self) private var model
+  /// The opened pane always shows its thread: it is the one thing on screen (the reel's warm set is for the reel).
+  @Environment(\.deskPane) private var inPane
   @Environment(\.needsReel) private var inNeeds
   let agentId: String
   var body: some View {
     if let a = model.agent(agentId, inNeeds: inNeeds) {
       VStack(spacing: 0) {
         if inNeeds, let p = model.needs.place(agentId) { NeedsPlaceLine(place: p) }
-        if a.warm {
+        if a.warm || inPane {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
         } else {
