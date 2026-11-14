@@ -147,14 +147,16 @@ test("serve stops the rivet-services it started, on the watchdog's exit and on S
   const svcPort = port + 5;
   const env = { RIVET_RUN_SERVICES: "1", RIVET_PORT: String(svcPort) };
   const s1 = runServe(port, 110_000, privateHarnessSocket(), env);
-  let s2: ReturnType<typeof runServe> | null = null, svc1: number | null = null, svc2: number | null = null;
+  let s2: ReturnType<typeof runServe> | null = null, svc1: number | null = null, svc2: number | null = null, hung = 0;
   try {
     expect((await probe(port, { CAPCOMD_READY_DEADLINE_MS: "90000" })).code).toBe(0);
     svc1 = await servicesUnder(s1.child.pid!, svcPort);
     expect(svc1).toBeGreaterThan(1);
-    // The engine dies: the watchdog exits serve after ~20s without an answer; its services must go with it.
+    // The engine hangs (alive, never answering): the watchdog exits serve after ~20s without an answer; its services
+    // must go with it. (An engine that exits is started again in place instead: tests/subagents/sleep.test.ts.)
     for (let i = 0; i < 40 && !s1.out().includes("Rivet engine running"); i++) await Bun.sleep(250); // watchdog saw it up
-    process.kill(s1.enginePid()!, "SIGKILL");
+    hung = s1.enginePid()!;
+    process.kill(hung, "SIGSTOP");
     expect(await s1.exited).toBe(1);
     expect(s1.out()).toContain("stopped answering");
     for (let i = 0; i < 20 && alive(svc1!); i++) await Bun.sleep(250);
@@ -170,6 +172,7 @@ test("serve stops the rivet-services it started, on the watchdog's exit and on S
     for (let i = 0; i < 20 && alive(svc2!); i++) await Bun.sleep(250);
     expect(alive(svc2!)).toBe(false);
   } finally {
+    if (hung) try { process.kill(hung, "SIGCONT"); } catch {}
     await s1.stop(); await s2?.stop();
     for (const p of [svc1, svc2]) if (p && alive(p)) try { process.kill(p, "SIGKILL"); } catch {}
   }

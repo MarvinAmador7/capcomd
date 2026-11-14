@@ -15,4 +15,17 @@ if [ -n "$DATA" ]; then
   export RIVET__OBJECT_STORAGE__PRIMARY__FILE_SYSTEM__PATH="$DATA/db/objects"
 fi
 [ -n "$CAPCOMD_ENGINE_PIDFILE" ] && echo $$ > "$CAPCOMD_ENGINE_PIDFILE"
+# And how rivetkit launched it, so `capcomd serve` can start it again in place when it exits under rivetkit (rivet-engine
+# 3.x fences itself and exits when the machine slept past its topology lease; rivetkit doesn't restart it): this
+# script's argv, and only the RIVET__* settings rivetkit gave it (the rest of the environment, API keys included, is
+# serve's own and never written). NUL-separated, owner-only.
+if [ -n "$DATA" ]; then
+  (
+    umask 077
+    printf '%s\0' "$0" "$@" > "$DATA/engine-launch.argv"
+    for v in $(env | sed -n 's/^\(RIVET__[A-Za-z0-9_]*\)=.*/\1/p' | sort -u); do
+      eval "printf '%s=%s\\0' \"\$v\" \"\${$v}\""
+    done > "$DATA/engine-launch.env"
+  ) 2>/dev/null
+fi
 exec "${CAPCOMD_REAL_ENGINE:-$CAPCOMD_TEST_REAL_ENGINE}" "$@"

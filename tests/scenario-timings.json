@@ -67,6 +67,7 @@
     "tests/subagents/orchestrate-writes.test.ts": 15136,
     "tests/subagents/project-profiles.test.ts": 19744,
     "tests/subagents/restart.test.ts": 70471,
+    "tests/subagents/sleep.test.ts": 71000,
     "tests/subagents/steps.test.ts": 55190,
     "tests/subagents/thread.test.ts": 27519,
     "tests/subagents/titles.test.ts": 21480,
