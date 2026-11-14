@@ -485,6 +485,7 @@ package final class DeskModel {
         try? await Task.sleep(for: .milliseconds(40))
         guard let self else { return }
         if self.reelMoving { continue }
+        if self.nav.sidebarOpen { return }   // hidden under the pane: nothing to warm until it folds (resumeWarming)
         let at = self.columns.firstIndex(of: self.reelPosition ?? "") ?? 0
         let cold = self.columns.indices.filter { self.agents[self.columns[$0]]?.warm == false }
         guard self.warmOrder.count < Self.warmCap, let next = cold.min(by: { abs($0 - at) < abs($1 - at) }) else { return }
@@ -492,6 +493,9 @@ package final class DeskModel {
       }
     }
   }
+
+  /// The sidebar folded: warming picks up where the reel stands.
+  func resumeWarming() { if !columns.isEmpty { warm(around: columns.firstIndex(of: reelPosition ?? "") ?? 0); startWarming() } }
 
   package func goToProject(_ n: Int) { if decks.indices.contains(n) { open(project: decks[n].id) } }
   package func goToAgent(_ n: Int) { if columns.indices.contains(n) { scroll(to: columns[n], animated: false) } }

@@ -113,6 +113,23 @@ final class SidebarModelTests: XCTestCase {
     XCTAssertNotEqual(w.openRunId, m.openRunId)
   }
 
+  /// Opened, a row of the open project shows in the pane without moving the reel kept underneath; folding brings the
+  /// reel to it.
+  @MainActor func testTheReelStaysStillUnderThePane() {
+    let (m, _, _) = model()
+    m.across = 3
+    m.setSidebar(open: true)
+    let request = m.reelRequest
+    let far = m.columns.last!
+    m.selectRow(id: far)
+    XCTAssertEqual(m.paneAgent, far)
+    XCTAssertEqual(m.reelRequest, request)
+    XCTAssertFalse(m.onScreen.contains(far))
+    m.setSidebar(open: false)
+    XCTAssertTrue(m.onScreen.contains(far))
+    XCTAssertEqual(m.reelRequest?.animated, false)
+  }
+
   /// ↑ ↓ move the cursor through the rows; Return shows the cursor's agent.
   @MainActor func testKeyboardCursor() {
     let (m, _, _) = model()

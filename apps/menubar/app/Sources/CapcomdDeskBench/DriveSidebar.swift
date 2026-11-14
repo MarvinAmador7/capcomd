@@ -44,6 +44,7 @@ extension Drive {
       let reelIds = Set(bs.filter { Self.reelViews.contains($0.view) }.compactMap(\.id))
       steps.append(h.end(m, latencyMs: shown - t, notes: ["\(bs.count) bodies: " + Dictionary(grouping: bs, by: \.view).mapValues(\.count).sorted { $0.value > $1.value }.map { "\($0.key)×\($0.value)" }.joined(separator: " "),
                                                          "reel bodies' agents: \(reelIds.sorted().joined(separator: ",").ifEmpty("none"))"]))
+      await h.sleep(ms: 60)   // the checks below in an awakening of their own, never in the step's last stretch
       // The structural state, once the change has landed.
       _ = await settle { opening ? paneView() != nil : paneView() == nil }
       if opening {
@@ -105,6 +106,7 @@ extension Drive {
       let shown = await h.nextCommit()
       await h.sleep(ms: 250)
       let step = h.end(m, latencyMs: shown - start)
+      await h.sleep(ms: 60)
       _ = await settle { paneView()?.agent == t.row.id }
       let ok = h.model.paneAgent == t.row.id && paneView()?.agent == t.row.id
       if !ok { notes.append("click on \(t.row.title) at y \(Int(t.y)): pane shows \(h.model.paneAgent ?? "-")") }
@@ -126,6 +128,7 @@ extension Drive {
       let shown = await h.nextCommit()
       await h.sleep(ms: 250)
       let step = h.end(m, latencyMs: shown - start)
+      await h.sleep(ms: 60)
       if case .agent(let id)? = cursor { _ = await settle { paneView()?.agent == id } }
       var ok = cursor != nil && cursor != before
       if case .agent(let id)? = cursor { ok = ok && h.model.paneAgent == id && paneView()?.agent == id }
@@ -134,6 +137,7 @@ extension Drive {
       steps.append(step)
       await h.sleep(ms: 300)
     }
+    await h.sleep(ms: 60)
     let (side, body) = inkOpened()
     await foldSidebar()
     return (steps, [

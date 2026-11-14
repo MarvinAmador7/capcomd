@@ -24,6 +24,11 @@ extension DeskModel {
     if !open { sidebar.pointer(inside: false) }   // hidden, it gets no hover: nothing waits on the pointer
     nav.sidebarOpen = open
     if open { nav.focusList() }
+    else {
+      // The reel stood still under the pane: it comes to the pane's agent now (not animated), and warms again.
+      if let f = focusedAgent { scroll(to: f, animated: false) }
+      resumeWarming()
+    }
   }
 
   /// The agent the opened pane shows: the open project's focused agent, else its first column. Nil on Home, or with
@@ -126,7 +131,9 @@ extension DeskModel {
   /// underneath, so folding shows the same agent); nothing animates.
   package func selectRow(_ row: SidebarRow) {
     if row.projectId != openProjectId || newProject != nil { open(project: row.projectId) }
-    scroll(to: row.id, animated: false)
+    // Opened, the reel under the pane stays where it is (moving it would build the threads of columns no one sees);
+    // folding brings it to this agent. Folded (⌘J), it scrolls as a tab click does.
+    if nav.sidebarOpen { if focusedAgent != row.id { focusedAgent = row.id } } else { scroll(to: row.id, animated: false) }
     nav.cursor = .agent(row.id)
   }
   package func selectRow(id: String) {
