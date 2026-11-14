@@ -108,9 +108,24 @@ the opened window.
 - `palette-open`, `palette-type`, `palette-keys`: Search ⌘K on the `search` fixture (their default: 60 projects, 250+
   searchable items). ⌘K → the frame with the panel and its results (budget 50 ms); a query typed a key at a time into
   the panel's field (each key → the frame with its results, budget one frame); ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens
-  (falls back to ↩ until splits), Esc closes. Checks read the UI: the empty search's groups, the ranking (groups in
+  (folded, as ↩ does; opened, in a split), Esc closes. Checks read the UI: the empty search's groups, the ranking (groups in
   attention order, by score, what's marked spells the query), the selection, what opened, the panel drawn (its own
   picture has text). Snapshots draw the window's child windows in, so `snapshot-diff` sees the panel.
+- Splits and expand (SPEC §2.1; each rep starts from one pane with the sidebar open and ends with its panes on screen,
+  for `snapshot-diff`; shortcuts are posted to the app's own event queue, so ⌘D goes through View › Split Right):
+  - `split-open`: ⌘D, ⇧⌘D, then ⌘W twice (`cycles` 2), then ⌘D again. Budget 50 ms; checks `split-right`,
+    `next-in-tree` (the new pane is the next agent in tree order no pane shows), `split-down`, `closed`, `drawn` (each
+    pane's thread has ink).
+  - `split-focus`: three panes, ⌃← ⌃← ⌃→ ⌃→ and clicks in other panes. Budget 50 ms; checks `focus-moved`,
+    `no-thread-render` (no `PaneThread` / `PaneEntryRow` body), `views-kept`, `drawn`.
+  - `split-burst`: three panes, thread items for the middle pane's agent at 20/s. Checks `delivered-pane`,
+    `isolation-panes` (no other pane's body), `isolation-sidebar`, `drawn`.
+  - `pane-expand`: two panes, the focused thread scrolled up a screen; ⇧⌘↩ then Esc (`toggles` 4). Budget 50 ms; checks
+    `expanded` (that view fills the window; sidebar and other pane hidden), `collapsed-same` (same panes, same frames),
+    `scroll-kept` (the same scroll view, within 2 pt of the same distance from the foot), `no-rebuild` (same pane views),
+    `drawn`. Ends expanded.
+  - `expand-switch`: expanded, other agents picked as Search's ↩ does (`show(run:agent:)`), then ⌘K over it and Esc.
+    Budget 50 ms; checks `stays-expanded`, `palette-over`, `drawn`.
 
 Fixtures (`list fixtures`): `solo` (1 agent), `trio` (3), `crew17` (SPEC's 17-agent reference, the default),
 `crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32), `search` (60 projects, Search ⌘K's). Same name, same bytes, every

@@ -69,7 +69,7 @@ public enum Scenarios {
     ScenarioSpec(name: "palette-type", summary: "Type a query into Search ⌘K a character at a time (key events to its field): each keystroke to the frame that shows its results.",
                  budget: "Search ⌘K: a keystroke's results within a frame", rule: "median latency from a key to the frame that shows its results ≤ 16.7 ms; checks: typed, ranking, panel-drawn",
                  kind: .latency, latencyBudgetMs: 16.7, params: ["query": "matchkey"]),
-    ScenarioSpec(name: "palette-keys", summary: "Search ⌘K's keys: type a query, ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens the first (splits fall back to ↩), Esc closes.",
+    ScenarioSpec(name: "palette-keys", summary: "Search ⌘K's keys: type a query, ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens the first (folded: as ↩ does), Esc closes.",
                  budget: "Search ⌘K: keys and opening a result ≤ 50 ms", rule: "median latency from a key to the frame that shows what it did ≤ 50 ms; checks: selection, return-opens, split-falls-back, esc-closes, panel-drawn",
                  kind: .latency, latencyBudgetMs: 50, params: ["query": "shard"]),
     // Splits and expand in the opened window (design/desktop/rex RexSplit, RexExpanded; SPEC §2.1). Each rep starts from

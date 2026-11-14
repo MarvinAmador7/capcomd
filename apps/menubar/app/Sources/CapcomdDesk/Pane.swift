@@ -187,14 +187,31 @@ final class PaneDeckView: NSView {
   /// The expand or collapse a click asked to animate, run once the frames are final.
   private var pendingMotion: (expanding: Bool, reduceMotion: Bool)?
 
+  /// Watches mouse-downs in the window: a pane takes the focus on a click anywhere in it, text included (a SwiftUI tap
+  /// gesture loses to text selection and the thread's own controls). It only watches; the click goes on as it was.
+  private var clicks: Any?
+
   init(model: DeskModel) {
     self.model = model
     super.init(frame: .zero)
     wantsLayer = true
     layer?.backgroundColor = NSColor(Theme.Desk.ground).cgColor
     isHidden = true
+    clicks = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] e in
+      nonisolated(unsafe) let event = e   // local monitors run on the main thread
+      MainActor.assumeIsolated { self?.mouseDownSeen(event) }
+      return e
+    }
   }
   required init?(coder: NSCoder) { fatalError() }
+  deinit { if let clicks { NSEvent.removeMonitor(clicks) } }
+
+  private func mouseDownSeen(_ e: NSEvent) {
+    guard e.window === window, window != nil, !isHiddenOrHasHiddenAncestor, slots.count > 1 else { return }
+    let p = convert(e.locationInWindow, from: nil)
+    guard let s = slots.first(where: { !$0.view.isHidden && $0.view.frame.contains(p) }), s.paneId != input.layout.focused else { return }
+    model.focusPane(s.paneId)
+  }
   override var isFlipped: Bool { true }
 
   func update(_ i: PaneDeckInput, animated: Bool, reduceMotion: Bool) {

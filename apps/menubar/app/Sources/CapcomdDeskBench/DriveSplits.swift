@@ -59,13 +59,35 @@ extension Drive {
   func shortcut(_ chars: String, code: UInt16, mods: NSEvent.ModifierFlags, fallback: () -> Void) {
     if h.sceneHosted { post(chars, code: code, mods: mods, to: h.window) } else { fallback() }
   }
-  func splitKey(down: Bool) { shortcut(down ? "D" : "d", code: 2, mods: down ? [.command, .shift] : .command) { h.model.split(down: down) } }
+  func splitKey(down: Bool) {
+    guard h.sceneHosted, down else { return shortcut("d", code: 2, mods: .command) { h.model.split(down: down) } }
+    // ⇧⌘D as the keyboard makes it (the layout gives its characters), matched by the window and then the main menu, as
+    // AppKit routes a key equivalent. Posted to the queue, an in-process ⇧⌘-letter event never reached SwiftUI's menu
+    // items (⇧⌘F neither), while the menu matches the same event when asked (DESKBENCH.md, splits).
+    guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: 2, keyDown: true) else { return }
+    cg.flags = [.maskCommand, .maskShift]
+    guard let e = NSEvent(cgEvent: cg) else { return }
+    if !h.window.performKeyEquivalent(with: e) { _ = NSApp.mainMenu?.performKeyEquivalent(with: e) }
+  }
   func closeKey() { shortcut("w", code: 13, mods: .command) { h.model.foldShortcut() } }
   func expandKey() { shortcut("\r", code: 36, mods: [.command, .shift]) { h.model.toggleExpand() } }
   func escKey() { shortcut("\u{1b}", code: 53, mods: []) { h.model.collapsePane() } }
   func ctrlArrow(_ by: Int) {
     let c = String(UnicodeScalar(by > 0 ? NSRightArrowFunctionKey : NSLeftArrowFunctionKey)!)
     shortcut(c, code: by > 0 ? 124 : 123, mods: [.control, .function, .numericPad]) { h.model.moveFocus(by) }
+  }
+
+  /// A click as the app gets one: mouse-down and -up posted to its own event queue (in-process), so the window hands it
+  /// out as it would a person's, gesture recognisers included. `p` is in points from the content's top left.
+  func postClick(at p: CGPoint) {
+    let w = h.window!
+    let loc = NSPoint(x: p.x, y: w.contentView!.bounds.height - p.y)
+    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+      if let e = NSEvent.mouseEvent(with: type, location: loc, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber,
+                                    context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0) {
+        NSApp.postEvent(e, atStart: false)
+      }
+    }
   }
 
   /// One latency step: `act`, until `done` holds, to the frame that shows it; the step's work and 250 ms after.
@@ -140,7 +162,7 @@ extension Drive {
       let (m2, d2) = panesMatch()
       let stacked = panesShown().filter { abs($0.frame.minX - (panesShown().last?.frame.minX ?? -1)) < 1 }.count == 2
       down = down && ok && m2 && stacked && h.model.panes.columns.last?.count == 2
-      if !(ok && m2 && stacked) { notes.append("⇧⌘D#\(c): \(d2), stacked \(stacked)") }
+      if !(ok && m2 && stacked) { notes.append("⇧⌘D#\(c): \(d2), stacked \(stacked) \(panesShown().map { "\($0.frame)" })") }
       for k in 0..<2 {
         let n = panesShown().count
         (s, ok) = await paneStep("close#\(c).\(k)", { closeKey() }) { panesShown().count == n - 1 }
@@ -193,7 +215,7 @@ extension Drive {
       guard let target = panesShown().first(where: { !$0.focused }) else { break }
       let p = CGPoint(x: target.frame.midX, y: h.window.contentView!.bounds.height - target.frame.midY)
       let t = h.now()
-      let (s, ok) = await paneStep("click#\(i)", { click(at: p) }) { h.model.panes.focusedAgent == target.agent }
+      let (s, ok) = await paneStep("click#\(i)", { postClick(at: p) }) { h.model.panes.focusedAgent == target.agent }
       steps.append(s)
       for b in h.bodies(in: t...h.now()) where b.view == "PaneThread" || b.view == "PaneEntryRow" { threadBodies[b.view, default: 0] += 1 }
       let (m, d) = panesMatch()
