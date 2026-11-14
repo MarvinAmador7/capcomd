@@ -201,11 +201,13 @@ struct ColumnHeadHost: View {
 /// The native column's body: the thread (once warm), then the message box or the decision it waits on.
 struct ColumnBody: View {
   @Environment(DeskModel.self) private var model
+  /// The opened pane always shows its thread: it is the one thing on screen (the reel's warm set is for the reel).
+  @Environment(\.deskPane) private var inPane
   let agentId: String
   var body: some View {
     if let a = model.agent(agentId) {
       VStack(spacing: 0) {
-        if a.warm {
+        if a.warm || inPane {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
         } else {
