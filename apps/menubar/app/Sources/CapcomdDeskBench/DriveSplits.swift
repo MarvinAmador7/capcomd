@@ -118,12 +118,13 @@ extension Drive {
     func px(_ x: Int, _ y: Int) -> (Int, Int, Int) { let o = y * bpr + x * spp; return (Int(data[o]), Int(data[o + 1]), Int(data[o + 2])) }
     return panesShown().map { p in
       // Window coordinates (bottom-left) to the picture's rows (top-left); under the header, inside the corners.
-      let r = CGRect(x: p.frame.minX + 12, y: H - p.frame.maxY + 56, width: p.frame.width - 24, height: p.frame.height - 56 - 70)
-      guard r.width > 20, r.height > 20 else { return 0 }
-      let g = px(Int((p.frame.minX + 4) * scale), Int((H - p.frame.maxY + 50) * scale))   // the pane's fill, at its edge
+      let f = (x: Double(p.frame.minX), top: H - Double(p.frame.maxY), w: Double(p.frame.width), h: Double(p.frame.height))
+      let x0: Double = f.x + 12, y0: Double = f.top + 56, w: Double = f.w - 24, hh: Double = f.h - 126
+      guard w > 20, hh > 20 else { return 0 }
+      let g = px(Int((f.x + 4) * scale), Int((f.top + 50) * scale))   // the pane's fill, at its edge
       var hits = 0, n = 0
-      for y in stride(from: Int(r.minY * scale), to: Int(r.maxY * scale), by: 3) {
-        for x in stride(from: Int(r.minX * scale), to: Int(r.maxX * scale), by: 3) {
+      for y in stride(from: Int(y0 * scale), to: Int((y0 + hh) * scale), by: 3) {
+        for x in stride(from: Int(x0 * scale), to: Int((x0 + w) * scale), by: 3) {
           let c = px(x, y); n += 1
           if abs(c.0 - g.0) + abs(c.1 - g.1) + abs(c.2 - g.2) > 30 { hits += 1 }
         }
