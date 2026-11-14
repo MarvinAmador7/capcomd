@@ -32,7 +32,7 @@ final class NativeColumnView: NSView {
     self.model = model
     self.memory = memory
     self.needs = needs
-    head = NSHostingView(rootView: Self.head(agentId, model))
+    head = NSHostingView(rootView: Self.head(agentId, model, needs))
     body = NSHostingView(rootView: Self.body(agentId, model, memory, needs))
     super.init(frame: .zero)
     wantsLayer = true
@@ -62,8 +62,8 @@ final class NativeColumnView: NSView {
     edge.update()
   }
 
-  private static func head(_ id: String, _ model: DeskModel) -> AnyView {
-    AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).preferredColorScheme(.dark))
+  private static func head(_ id: String, _ model: DeskModel, _ needs: Bool = false) -> AnyView {
+    AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).environment(\.needsReel, needs).preferredColorScheme(.dark))
   }
   /// The body, identified by its agent: a slot configured with another agent starts its views (and their state) anew;
   /// what must follow the agent is in `memory`.
@@ -77,7 +77,7 @@ final class NativeColumnView: NSView {
   func configure(_ id: String) {
     guard id != agentId else { return }
     agentId = id
-    head.rootView = Self.head(id, model)
+    head.rootView = Self.head(id, model, needs)
     body.rootView = Self.body(id, model, memory, needs)
     stroke = nil
     observe()
@@ -102,7 +102,7 @@ final class NativeColumnView: NSView {
 
   private func apply() {
     DeskProbe.body("Column", id: agentId)
-    let a = model.agent(agentId)
+    let a = model.agent(agentId, inNeeds: needs)
     let asks = a?.approval != nil && !needs, focused = a?.focused ?? false
     guard stroke.map({ $0 != (asks, focused) }) ?? true else { return }
     stroke = (asks, focused)
@@ -157,9 +157,10 @@ final class StrokeView: NSView {
 /// The native column's head: `ColumnHead` on the agent's slice. A click focuses the column, as anywhere in it.
 struct ColumnHeadHost: View {
   @Environment(DeskModel.self) private var model
+  @Environment(\.needsReel) private var inNeeds
   let agentId: String
   var body: some View {
-    if let a = model.agent(agentId) {
+    if let a = model.agent(agentId, inNeeds: inNeeds) {
       ColumnHead(slice: a)
         .contentShape(Rectangle())
         .onTapGesture { if model.focusedAgent != agentId { model.focusedAgent = agentId } }
@@ -173,7 +174,7 @@ struct ColumnBody: View {
   @Environment(\.needsReel) private var inNeeds
   let agentId: String
   var body: some View {
-    if let a = model.agent(agentId) {
+    if let a = model.agent(agentId, inNeeds: inNeeds) {
       VStack(spacing: 0) {
         if inNeeds, let p = model.needs.place(agentId) { NeedsPlaceLine(place: p) }
         if a.warm {

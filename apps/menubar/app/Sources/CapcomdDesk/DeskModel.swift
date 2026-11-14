@@ -433,6 +433,9 @@ package final class DeskModel {
   package func openRun(_ runId: String) { show(run: runId) }
 
   package func agent(_ id: String) -> AgentSlice? { agents[id] ?? needs.slice(id) }
+  /// A column's slice in its reel: the Needs you reel keeps its own (cold until it warms them, without an amber ring),
+  /// even for an agent of the open project.
+  package func agent(_ id: String, inNeeds: Bool) -> AgentSlice? { inNeeds ? needs.slice(id) : agents[id] }
   /// The run a column's agent is in: the open run's, or a Needs you column's own.
   func runId(of agentId: String) -> String? { agent(agentId)?.header.runId ?? openRunId }
   /// Every column's slice (renaming closes the others).
@@ -604,9 +607,9 @@ package struct ReelRequest: Equatable {
 }
 
 extension DeskModel: ThreadHost {
-  package func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot }
-  package func agentProvider(runId: String, agentId: String) -> Provider? { agents[agentId]?.header.provider }
-  package func role(runId: String, agentId: String) -> String? { agents[agentId]?.header.name }
+  package func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot ?? needs.slice(agentId)?.bot ?? (needs.isOpen ? team(runId)[agentId] : nil) }
+  package func agentProvider(runId: String, agentId: String) -> Provider? { (agents[agentId] ?? needs.slice(agentId))?.header.provider }
+  package func role(runId: String, agentId: String) -> String? { (agents[agentId] ?? needs.slice(agentId))?.header.name }
   package func media(_ key: MediaKey) -> Fetched<Data>? { mediaSlice.items[key] }
   package func loadMedia(_ key: MediaKey) async { await store.loadMedia(key); mediaSlice.items[key] = store.media[key] }
   package func openAgent(runId: String, agentId: String) { scroll(to: agentId) }

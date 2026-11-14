@@ -936,7 +936,7 @@ struct Column: View {
   let agentId: String
   var body: some View {
     let _ = DeskProbe.body("Column", id: agentId)
-    if let a = model.agent(agentId) {
+    if let a = model.agent(agentId, inNeeds: inNeeds) {
       let asks = a.approval != nil && !inNeeds, focused = a.focused
       VStack(spacing: 0) {
         ColumnHead(slice: a)

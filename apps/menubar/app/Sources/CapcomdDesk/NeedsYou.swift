@@ -152,11 +152,12 @@ package final class NeedsReel {
     follow()
   }
 
-  /// Slices for new columns: the open project's own when the agent is in it (one slice per agent), else new ones.
+  /// Slices for new columns, the reel's own (an agent of the open project too: its column here starts cold and warms
+  /// in turn, and its thread data is the project reel's).
   private func adopt(_ ids: [String]) {
     guard let model, !ids.isEmpty else { return }
     for id in ids where slices[id] == nil {
-      if let s = leaving.removeValue(forKey: id) ?? model.agentSlices[id] { slices[id] = s; continue }
+      if let s = leaving.removeValue(forKey: id) { slices[id] = s; continue }
       guard let a = ask(id), let h = model.store.columnHeader(runId: a.runId, agentId: id) else { continue }
       slices[id] = AgentSlice(h)
     }
