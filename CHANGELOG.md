@@ -5,6 +5,52 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.12.0 (2026-11-14)
+
+Fixes capcomd restarting after every Mac sleep, and gives the desktop window a sidebar, ⌘K Search, a Needs you reel,
+and pane splits.
+
+- capcomd no longer restarts after your Mac sleeps. Since 0.11.0 (Rivet 3.1.1) the engine stopped itself on every wake
+  after a sleep longer than about 30 seconds, and `capcomd serve` exited with it ("engine on :6420 stopped answering")
+  until launchd started it again. Now serve starts the engine again in place, on the same data, and logs one line
+  ("the engine on :6420 exited …; starting it again on the same data"). The harness API stays open, and agents that
+  were running when the Mac went to sleep carry on and finish.
+- The capcomd window has a sidebar. Open it with ⌃⌘S (or ⌘\, View › Toggle Sidebar, or the sidebar button next to the
+  traffic lights): your agents are listed by what needs you (Needs you, Running, Finished), each project as a label with
+  where it runs, and the window shows one agent at a time beside it. Click an agent (or use ↑ ↓ and Return) to show it;
+  its ••• menu messages, pauses or resumes it, or copies its ID. The Needs you hand and the Needs you heading open
+  the Needs you reel in the agent's place. The window remembers whether the sidebar is open.
+- Folded (the default), a rail on the window's left holds Home, the Needs you hand with how many agents need you, and
+  Settings; Home moved there from the title bar, where the sidebar button now sits.
+- Desktop: ⌘K is now **Search**, a native palette in the style of Spotlight (system vibrancy, accent selection). One list finds what needs you (asks
+  and usage limits), agents by their own titles, projects and commands, ranked in that order, as you type. Matching is
+  forgiving: word starts, anywhere in a name, or letters in order (`mkm` finds "matchkey migration"). Before you type,
+  it shows what needs you, what you looked at recently and the common commands. ↩ opens the result (an agent opens
+  its project at its column); ⌘↩ opens it in a split.
+  Commands carry their shortcuts, and Stop… is shown in red. The menu item is now Project › Search… (⌘K).
+- The desktop window has a Needs you reel: every agent waiting on you, across all projects, one column per ask,
+  oldest first, each with its thread and its ask (a merge with its files, a question, a usage limit to resume). Open it
+  with the Needs you hand (on the window's rail, or in the sidebar's header; its amber count says how many) or View › Needs You. Answering an ask slides its
+  column out and the next takes its place; a new ask joins at the end; with none left it says "Nothing needs you.".
+  Esc or Back returns to where you were.
+- ⌘J (View › Next Ask) steps through the asks one at a time, oldest first, from anywhere: it opens each asking agent
+  in its project, or in the Needs you reel focuses the next column.
+- A merge's decision in the desktop window says how many files it changes and its line counts ("3 files, +73 −5").
+- Desktop: with the sidebar open you can **split** the pane. ⌘D splits right and ⇧⌘D splits down, opening the next agent in
+  the tree beside the one you're looking at. ⌘-click a row in the sidebar, or press ⌘↩ on an agent or project in Search
+  ⌘K, to open it in a split. ⌃← and ⌃→ move between panes, and a click in a pane focuses it. ⌘W or a pane's × closes a
+  split (with one pane left, ⌘W folds the project as before). Each project keeps its own splits. Rows shown in other
+  panes are tinted in the sidebar. A split won't make a pane narrower than 340 pt: at 1440 pt three fit side by side.
+- Desktop: **expand** a pane to the whole window with its arrows-out button or ⇧⌘↩. The sidebar hides, prose reads in a
+  centred 800 pt column, code, tables, diffs and tool results get 1060 pt, and an ask sits at the foot at column width
+  with its amber ring. Esc or arrows-in brings back exactly the panes you had, each where you left it. Picking another
+  agent from ⌘K or ⌘J keeps the pane expanded. Search ⌘K lists Split right, Split down, Close this split, Expand / Collapse
+  the pane and Show / Fold the sidebar, with their shortcuts.
+- Desktop: project labels in the sidebar show their place icon (This Mac or boxd) for runs that didn't name a place too,
+  using the daemon's default place.
+- The app now finds the daemon the way the CLI does: `CAPCOMD_HARNESS_SOCKET`, then `$CAPCOMD_HOME/harness.sock`, then
+  the app's `capcomd.socketPath` setting, then `~/.capcomd/harness.sock`.
+
 ## 0.11.0 (2026-11-12)
 
 Moves capcomd to Rivet 3.1.1. Breaking: runs from before the upgrade are set aside, so finish or cancel them first.
