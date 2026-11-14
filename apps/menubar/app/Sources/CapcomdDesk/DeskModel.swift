@@ -124,7 +124,16 @@ package final class DeskModel {
   /// The agent whose rename field is open (one at a time): while it is, Return belongs to the field, never to a decision
   /// (`returnApproves`).
   package private(set) var renamingAgent: String? { didSet { Mutations.record("DeskModel.renamingAgent") } }
-  package var focusedAgent: String? { didSet { Mutations.record("DeskModel.focusedAgent"); if focusedAgent != oldValue { syncFlags(); publishSelection() } } }
+  package var focusedAgent: String? {
+    didSet { Mutations.record("DeskModel.focusedAgent"); if focusedAgent != oldValue { syncFlags(); publishSelection(); placeFocusInPanes() } }
+  }
+  /// The opened window's panes for the open run (PaneSplits.swift): one, or splits. Folded, they wait as they were.
+  package internal(set) var panes = PaneLayout() { didSet { Mutations.record("DeskModel.panes") } }
+  /// Other runs' panes, put away while their project isn't open (splits are kept per project).
+  @ObservationIgnored var savedPanes: [String: PaneLayout] = [:]
+  @ObservationIgnored var nextPaneId = 0
+  /// The pane area's size, as it last laid out (a split refuses to make panes too small).
+  @ObservationIgnored package var paneArea: CGSize = .zero
   /// Follow: an ask or a failure in the open project scrolls the reel to its column (SPEC §3).
   package var follow = true { didSet { Mutations.record("DeskModel.follow") } }
   /// Columns across the window (3, 2 or 1), set by the reel when its width crosses a step.
@@ -333,6 +342,7 @@ package final class DeskModel {
         // A project just opened shows its columns' heads first; their threads warm after, nearest first.
         let opened = columns.isEmpty
         columns = ids
+        prunePanes()
         if !opened { warm(around: columns.firstIndex(of: reelPosition ?? "") ?? 0) }
         startWarming()
       }
@@ -419,11 +429,14 @@ package final class DeskModel {
     openProjectId = deck?.id
     let run = deck?.runId
     guard run != openRunId else { return false }
+    let oldRun = openRunId
     openRunId = run
     agents = [:]; threads = [:]; columns = []; warmOrder = []; typingIn = nil
+    swapPanes(from: oldRun, to: run)
     knownAsks = Set(deck?.askingAgentId.map { [$0] } ?? [])
     knownFailures = nil
-    reelPosition = deck?.askingAgentId; focusedAgent = deck?.askingAgentId; syncFlags()
+    // Opened, a project whose panes were put away shows them as they were; else the one that asks.
+    reelPosition = deck?.askingAgentId; focusedAgent = nav.sidebarOpen ? panes.focusedAgent ?? deck?.askingAgentId : deck?.askingAgentId; syncFlags()
     reelRequest = ReelRequest(agentId: deck?.askingAgentId, animated: false, serial: (reelRequest?.serial ?? 0) + 1)
     store.followThreads(runId: run, holder: CapcomdStore.reelHolder)
     // The run's own stream carries its messages (your steers, agents' messages to each other), which the lifecycle
@@ -523,6 +536,7 @@ package final class DeskModel {
   }
   package func moveFocus(_ by: Int) {
     if needs.isOpen { return needs.moveFocus(by) }
+    if movePaneFocus(by) { return }   // opened with splits: the neighbouring pane
     let i = focusedAgent.flatMap { columns.firstIndex(of: $0) } ?? 0
     let j = min(max(0, i + by), columns.count - 1)
     if columns.indices.contains(j) { scroll(to: columns[j], animated: false) }

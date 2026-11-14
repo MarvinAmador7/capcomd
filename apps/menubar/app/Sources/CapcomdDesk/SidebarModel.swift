@@ -19,6 +19,9 @@ package final class DeskNav {
   /// The sidebar and the pane have been built (the first open): from then on they stay built, and a toggle only moves
   /// layers (the sidebar's transform, the opacities), so it costs no view building or teardown.
   package internal(set) var everOpened = false { didSet { Mutations.record("DeskNav.everOpened") } }
+  /// The focused pane has the whole window (⇧⌘↩; RexExpanded): the sidebar hides until Esc or arrows-in. Not kept
+  /// across launches.
+  package internal(set) var expanded = false { didSet { Mutations.record("DeskNav.expanded") } }
   /// Bumped to hand the sidebar's list the keyboard (↑ ↓ Return ← →).
   package private(set) var listFocus = 0 { didSet { Mutations.record("DeskNav.listFocus") } }
   /// The row the keyboard is on (a `SidebarKey`), ringed while the list has the keyboard; Return shows it.

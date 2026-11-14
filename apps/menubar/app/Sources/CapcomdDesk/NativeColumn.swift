@@ -20,23 +20,26 @@ final class NativeColumnView: NSView {
   private let style: ColumnStyle
   private let head: NSHostingView<AnyView>
   private let body: NSHostingView<AnyView>
-  /// The size the head and body were placed for: placing is skipped until it changes.
-  private var placed: CGSize = .zero
-  private var stroke: (asks: Bool, focused: Bool)?
+  /// The size the head and body were placed for (and whether expanded): placing is skipped until it changes.
+  private var placed: (size: CGSize, expanded: Bool)?
+  private var stroke: StrokeKey?
+  /// The pane it is (pane style): focus among splits, expanded. Nil in the reel.
+  private let pane: PaneState?
   /// The stroke, drawn over the head and body as SwiftUI's `strokeBorder` draws it: the same continuous rounded
   /// rectangle, inset by half the line (a layer border antialiases its corners differently).
   private let edge = StrokeView()
   /// In the Needs you reel: no amber ring (every column there asks).
   private let needs: Bool
 
-  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil, style: ColumnStyle = .reel, needs: Bool = false) {
+  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil, style: ColumnStyle = .reel, needs: Bool = false, pane: PaneState? = nil) {
     self.agentId = agentId
     self.model = model
     self.memory = memory
     self.style = style
     self.needs = needs
-    head = NSHostingView(rootView: Self.head(agentId, model, style, needs))
-    body = NSHostingView(rootView: Self.body(agentId, model, memory, style, needs))
+    self.pane = pane
+    head = NSHostingView(rootView: Self.head(agentId, model, style, needs, pane))
+    body = NSHostingView(rootView: Self.body(agentId, model, memory, style, needs, pane))
     super.init(frame: .zero)
     wantsLayer = true
     layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
@@ -56,24 +59,26 @@ final class NativeColumnView: NSView {
 
   override func layout() {
     super.layout()
-    guard bounds.size != placed else { return }
-    placed = bounds.size
-    let h = style == .pane ? Theme.Desk.paneHeader : Theme.Desk.columnHeader
+    let expanded = pane?.expanded == true
+    guard placed.map({ $0.size != bounds.size || $0.expanded != expanded }) ?? true else { return }
+    placed = (bounds.size, expanded)
+    let h = style == .pane ? (expanded ? PaneMetrics.expandedHeader : Theme.Desk.paneHeader) : Theme.Desk.columnHeader
     head.frame = CGRect(x: 0, y: 0, width: bounds.width, height: h)
     body.frame = CGRect(x: 0, y: h, width: bounds.width, height: max(0, bounds.height - h))
     edge.frame = bounds
     edge.update()
   }
 
-  private static func head(_ id: String, _ model: DeskModel, _ style: ColumnStyle, _ needs: Bool = false) -> AnyView {
-    style == .pane ? AnyView(PaneHeadHost(agentId: id).id(id).environment(model).preferredColorScheme(.dark))
+  private static func head(_ id: String, _ model: DeskModel, _ style: ColumnStyle, _ needs: Bool = false, _ pane: PaneState? = nil) -> AnyView {
+    style == .pane ? AnyView(PaneHeadHost(agentId: id).id(id).environment(model).environment(\.paneState, pane).preferredColorScheme(.dark))
                    : AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).environment(\.needsReel, needs).preferredColorScheme(.dark))
   }
   /// The body, identified by its agent: a slot configured with another agent starts its views (and their state) anew;
   /// what must follow the agent is in `memory`.
-  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ style: ColumnStyle, _ needs: Bool = false) -> AnyView {
+  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ style: ColumnStyle, _ needs: Bool = false, _ pane: PaneState? = nil) -> AnyView {
     AnyView(ColumnBody(agentId: id).id(id).environment(model).environment(\.threadHost, ThreadHostBox(host: model))
-      .environment(\.slotMemory, memory).environment(\.deskPane, style == .pane).environment(\.needsReel, needs).preferredColorScheme(.dark))
+      .environment(\.slotMemory, memory).environment(\.deskPane, style == .pane).environment(\.needsReel, needs)
+      .environment(\.paneState, pane).preferredColorScheme(.dark))
   }
 
   /// A slot shows another agent: its head and body get that agent's views, its stroke that agent's state. Nothing is
@@ -81,8 +86,8 @@ final class NativeColumnView: NSView {
   func configure(_ id: String) {
     guard id != agentId else { return }
     agentId = id
-    head.rootView = Self.head(id, model, style, needs)
-    body.rootView = Self.body(id, model, memory, style, needs)
+    head.rootView = Self.head(id, model, style, needs, pane)
+    body.rootView = Self.body(id, model, memory, style, needs, pane)
     stroke = nil
     observe()
   }
@@ -114,13 +119,21 @@ final class NativeColumnView: NSView {
     }
   }
 
+  /// What the stroke shows: an ask (amber), the focus (blue: a reel column, or the focused pane of a split), and an
+  /// expanded pane has none (it is the window; its ask bar carries the amber).
+  private struct StrokeKey: Equatable { var asks: Bool, focused: Bool, expanded: Bool }
+
   private func apply() {
     DeskProbe.body(style == .pane ? "Pane" : "Column", id: agentId)
     let a = model.agent(agentId, inNeeds: needs)
-    let asks = a?.approval != nil && !needs, focused = style == .reel && (a?.focused ?? false)
-    guard stroke.map({ $0 != (asks, focused) }) ?? true else { return }
-    stroke = (asks, focused)
-    edge.color = NSColor(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke).cgColor
+    let expanded = pane?.expanded == true
+    let asks = a?.approval != nil && !needs && !expanded
+    let focused = !expanded && (style == .reel ? (a?.focused ?? false) : (pane.map { $0.focused && $0.split } ?? false))
+    let key = StrokeKey(asks: asks, focused: focused, expanded: expanded)
+    guard stroke.map({ $0 != key }) ?? true else { return }
+    if stroke?.expanded != expanded { layer?.cornerRadius = expanded ? 0 : Theme.Desk.columnRadius; needsLayout = true }
+    stroke = key
+    edge.color = expanded ? nil : NSColor(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke).cgColor
     edge.lineWidth = asks || focused ? 1 : 0.5
     edge.update()
   }

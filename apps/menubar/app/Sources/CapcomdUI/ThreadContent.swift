@@ -91,6 +91,27 @@ package enum InlineText {
 }
 
 /// A run of blocks: prose, lists, code, tables, quotes, rules, media.
+extension EnvironmentValues {
+  /// A reading column narrower than the thread: the desktop's expanded pane keeps prose to 800 pt while code, tables,
+  /// diffs and tool results take the thread's whole width (1060 pt). Nil everywhere else, where nothing changes.
+  @Entry package var threadProseWidth: CGFloat? = nil
+}
+
+/// Keeps prose to the reading column, centred, when the thread is wider than it (`threadProseWidth`); `wide` content
+/// (code, a table, a diff) keeps the full width. Inside it the width is cleared, so nested blocks don't wrap again.
+package struct ProseColumn: ViewModifier {
+  @Environment(\.threadProseWidth) private var width
+  package var wide = false
+  package init(wide: Bool = false) { self.wide = wide }
+  package func body(content: Content) -> some View {
+    if let width, !wide {
+      content.environment(\.threadProseWidth, nil).frame(maxWidth: width, alignment: .leading).frame(maxWidth: .infinity)
+    } else {
+      content
+    }
+  }
+}
+
 package struct BlocksView: View {
   package let runId: String
   package let agentId: String
@@ -107,9 +128,14 @@ package struct BlocksView: View {
 
   package var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { n, b in block(b, above: n == 0 ? leadingMargin : Self.bottomMargin(blocks[n - 1])) }
+      ForEach(Array(blocks.enumerated()), id: \.offset) { n, b in
+        block(b, above: n == 0 ? leadingMargin : Self.bottomMargin(blocks[n - 1])).modifier(ProseColumn(wide: Self.isWide(b)))
+      }
     }
   }
+
+  /// Code and tables run wider than the prose where the thread has room (`threadProseWidth`).
+  package static func isWide(_ b: Block) -> Bool { switch b { case .code, .table: true; default: false } }
 
   /// The bottom margin each block leaves (what a following heading collapses with).
   package static func bottomMargin(_ b: Block) -> CGFloat {
@@ -362,13 +388,14 @@ package struct ThreadItemRow: View {
         // A reviewer's message that ends in its verdict JSON: the prose, then the verdict as a card.
         if let tail = item.verdictTail {
           if !tail.prose.isEmpty { BlocksView(runId: runId, agentId: agentId, blocks: tail.prose, leadingMargin: above) }
-          VerdictCard(runId: runId, agentId: agentId, verdict: tail.verdict)
+          VerdictCard(runId: runId, agentId: agentId, verdict: tail.verdict).modifier(ProseColumn())
         } else { blocks }
-      case "thinking": ThinkingRow(runId: runId, agentId: agentId, item: item, seconds: item.thinkingSeconds(next: next))
+      case "thinking": ThinkingRow(runId: runId, agentId: agentId, item: item, seconds: item.thinkingSeconds(next: next)).modifier(ProseColumn())
       case "tool": ToolCallRow(item: item)
       case "plan":
         Text("Plan").font(Theme.Content.headingFont).foregroundStyle(Theme.Content.headingText)
           .padding(.top, max(0, Theme.Content.headingTop - above)).padding(.bottom, Theme.Content.headingBottom)
+          .modifier(ProseColumn())
         blocks
       case "error":
         HStack(alignment: .firstTextBaseline, spacing: Theme.Content.toolGap) {
@@ -376,13 +403,16 @@ package struct ThreadItemRow: View {
           Text(verbatim: item.error?.message ?? item.text).textSelection(.enabled)
         }
         .font(Theme.Content.errorFont).foregroundStyle(Theme.Content.errorText).padding(.bottom, Theme.Content.proseBottom)
-      case "handoff": HandoffCard(runId: runId, item: item)
+        .modifier(ProseColumn())
+      case "handoff": HandoffCard(runId: runId, item: item).modifier(ProseColumn())
       default:
         Text(verbatim: item.text).font(Theme.Content.otherFont).foregroundStyle(Theme.Content.otherText).padding(.bottom, Theme.Content.proseBottom)
+          .modifier(ProseColumn())
       }
       if let t = item.truncated, t.blocks > 0 {
         Text("\(t.blocks) more \(t.blocks == 1 ? "block" : "blocks") not shown").font(Theme.Content.truncatedFont).foregroundStyle(Theme.Content.truncatedText)
           .padding(.bottom, Theme.Content.proseBottom)
+          .modifier(ProseColumn())
       }
     }
   }
@@ -392,6 +422,7 @@ package struct ThreadItemRow: View {
     if item.blocks.isEmpty {
       Text(verbatim: item.text).font(Theme.Content.proseFont).foregroundStyle(Theme.Content.proseText).lineSpacing(Theme.Content.proseSpacing)
         .textSelection(.enabled).padding(.bottom, Theme.Content.proseBottom)
+        .modifier(ProseColumn())
     } else {
       BlocksView(runId: runId, agentId: agentId, blocks: item.blocks, leadingMargin: above)
     }
@@ -490,6 +521,7 @@ package struct ToolCallRow: View {
       .buttonStyle(.plain).onHover { hover = $0 }
       .padding(.horizontal, -Theme.Content.toolInset)
       .accessibilityLabel(tool?.summary ?? item.text)
+      .modifier(ProseColumn())
       if open, let tool { detail(tool).transition(.opacity) }
     }
   }

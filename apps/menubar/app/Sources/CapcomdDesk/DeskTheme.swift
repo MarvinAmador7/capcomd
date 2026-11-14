@@ -38,6 +38,8 @@ extension Theme {
     static let columnHeader: CGFloat = 40
     /// The opened pane's header (RexMain `.ph`).
     static let paneHeader: CGFloat = 44
+    /// The pane header's icon buttons (RexSplit `.ph .ctl .ib`).
+    static let paneControl = Color(red: 0x7D / 255, green: 0x7D / 255, blue: 0x85 / 255)
     static let headerBot: CGFloat = 20
     static let bodyPadding = EdgeInsets(top: 6, leading: 16, bottom: 12, trailing: 16)
     static let paneBodyPadding = EdgeInsets(top: 4, leading: 24, bottom: 16, trailing: 24)

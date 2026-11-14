@@ -193,6 +193,20 @@ import CapcomdStore
           case "right"?: model.sidebarUnfold(true)
           default: model.sidebarReturn()
           }
+        // Splits and expand (SPEC §2.1): `split right|down` (⌘D, ⇧⌘D), `split close` (⌘W on a split), `split <agentId>`
+        // (⌘-click on its row: beside the focused pane), `pane <N>` (a click in the Nth pane), `expand` (⇧⌘↩), `collapse`
+        // (Esc).
+        case "split":
+          switch w.dropFirst().first {
+          case "right"?: model.split(down: false)
+          case "down"?: model.split(down: true)
+          case "close"?: model.foldShortcut()
+          case let id?: if let r = model.openRunId { model.openInSplit(runId: r, agentId: id) }
+          case nil: break
+          }
+        case "pane": if let n = w.dropFirst().first.flatMap(Int.init), model.panes.slots.indices.contains(n - 1) { model.focusPane(model.panes.slots[n - 1].id) }
+        case "expand": model.toggleExpand()
+        case "collapse": model.collapsePane()
         case "needs": model.openNeedsReel()
         case "nextask": model.nextAsk()
         case "finished": model.toggleFinished()
@@ -462,6 +476,7 @@ import CapcomdStore
         + "last \(t?.entries.last?.id ?? "-")")
     }
     let lines = model.sidebarLines
+    out.append("panes \(model.panes.columns.map { $0.map { "\($0.id):\($0.agent)" }.joined(separator: "/") }.joined(separator: " | ")) focused \(model.panes.focused) expanded \(model.nav.expanded) area \(Int(model.paneArea.width))x\(Int(model.paneArea.height))")
     out.append("sidebar open \(model.nav.sidebarOpen) pane \(model.paneAgent ?? "-") selected \(model.selectedAgent ?? "-") cursor \(model.nav.cursor.map { "\($0)" } ?? "-") needs \(model.sidebar.needsCount) overflow \(lines.overflow) height \(Int(model.nav.listHeight))")
     for l in lines.pinned + lines.list {
       switch l {

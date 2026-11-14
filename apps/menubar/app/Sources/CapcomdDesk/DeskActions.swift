@@ -44,6 +44,7 @@ extension DeskModel {
   /// project shows as a deck. `focus`: the goal field takes the keyboard.
   package func openHome(focus: Bool) {
     menuOpen = false; paletteOpen = false; stopAsked = false
+    collapsePane()   // Home takes the pane's place beside the sidebar
     needs.close(restore: false)
     if let np = newProject { if focus { np.focusSerial += 1 }; return }
     let np = newProjectDraft ?? NewProjectModel()
@@ -305,6 +306,8 @@ extension DeskModel {
   /// finished one is removed from the title bar.
   package func foldShortcut() {
     if newProject != nil { closeNewProject(); return }
+    // Opened with splits: ⌘W closes the focused pane; with one pane left it folds the project, as approved.
+    if panesShown, panes.count > 1 { closePane(panes.focused); return }
     if let i = menuItem("fold") ?? menuItem("remove") { perform(i) }
   }
   /// ⌥⌘P.
