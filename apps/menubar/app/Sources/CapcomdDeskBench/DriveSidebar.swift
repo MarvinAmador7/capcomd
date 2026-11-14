@@ -87,19 +87,15 @@ extension Drive {
     var steps: [StepResult] = []
     var clicked = true, keyed = true
     var notes: [String] = []
-    // Mouse: rows in view, alternating near and far (another project when there is one).
-    let lines = h.model.sidebarLines
-    var targets: [(row: SidebarRow, y: CGFloat)] = []
-    var y = SidebarMetricsView.header
-    for l in lines.pinned + lines.list {
-      if case .row(let r, _) = l { targets.append((r, y + l.height - SidebarMetricsView.row / 2)) }
-      y += l.height
-    }
-    let visibleHeight = h.window.contentView!.bounds.height - SidebarMetricsView.footer
-    targets = targets.filter { $0.y < visibleHeight - 10 }
+    // Mouse: rows in view, spread over the list. A pick can fold or unfold projects (the selected one never folds), so
+    // the rows are laid out again before each click.
     let picks = int("clicks", 6)
-    let order = stride(from: 0, to: targets.count, by: max(1, targets.count / max(1, picks))).map { targets[$0] }
-    for (i, t) in order.prefix(picks).enumerated() {
+    var clickedCount = 0
+    for i in 0..<picks {
+      let targets = rowTargets()
+      guard !targets.isEmpty else { break }
+      let t = targets[(i * max(1, targets.count / picks)) % targets.count]
+      clickedCount += 1
       let m = h.begin("click#\(i) \(t.row.title)")
       let start = h.now()
       click(at: CGPoint(x: 120, y: t.y))
@@ -141,7 +137,7 @@ extension Drive {
     let (side, body) = inkOpened()
     await foldSidebar()
     return (steps, [
-      Check("clicked", clicked && !order.isEmpty, notes.filter { $0.hasPrefix("click") }.joined(separator: "; ").ifEmpty("every clicked row showed in the pane (\(min(picks, order.count)) clicks)")),
+      Check("clicked", clicked && clickedCount > 0, notes.filter { $0.hasPrefix("click") }.joined(separator: "; ").ifEmpty("every clicked row showed in the pane (\(clickedCount) clicks)")),
       Check("keyboard", keyed, notes.filter { $0.hasPrefix("keys") }.joined(separator: "; ").ifEmpty("↓ ↓ Return showed the cursor's agent every time")),
       Check("drawn", side > 0.02 && body > 0.02, "drawn: sidebar \(Stats.round(side * 100, 1)) %, pane \(Stats.round(body * 100, 1)) %"),
     ])
@@ -251,6 +247,32 @@ extension Drive {
 
   // MARK: helpers
 
+  /// Where each row is now, in points from the window's top: the pinned ones under the header, the rest in the list's
+  /// scroll view at its current offset (only those in view).
+  func rowTargets() -> [(row: SidebarRow, y: CGFloat)] {
+    let lines = h.model.sidebarLines
+    var targets: [(row: SidebarRow, y: CGFloat)] = []
+    var y = SidebarMetricsView.header
+    for l in lines.pinned {
+      if case .row(let r, _) = l { targets.append((r, y + l.height - SidebarMetricsView.row / 2)) }
+      y += l.height
+    }
+    if let sv = sidebarScrollView(scrollable: false) {
+      let H = h.window.contentView!.bounds.height
+      let frame = sv.convert(sv.bounds, to: nil)   // window coordinates, bottom-left origin
+      let top = H - frame.maxY, bottom = H - frame.minY
+      var ly = top - sv.contentView.bounds.origin.y + (lines.overflow ? -8 : 0)
+      for l in lines.list {
+        if case .row(let r, _) = l {
+          let mid = ly + l.height - SidebarMetricsView.row / 2
+          if mid > top + 10, mid < bottom - 10 { targets.append((r, mid)) }
+        }
+        ly += l.height
+      }
+    }
+    return targets
+  }
+
   /// Waits up to `commits` commits for `ok`; returns whether it held.
   func settle(commits: Int = 6, _ ok: () -> Bool) async -> Bool {
     for _ in 0..<commits { if ok() { return true }; _ = await h.nextCommit() }
@@ -284,10 +306,10 @@ extension Drive {
   }
 
   /// The sidebar's list: the vertical scroll view in the window's left 248 pt.
-  func sidebarScrollView() -> NSScrollView? {
+  func sidebarScrollView(scrollable: Bool = true) -> NSScrollView? {
     var best: NSScrollView?
     h.walk(h.window.contentView!) { v in
-      guard let s = v as? NSScrollView, let d = s.documentView, d.frame.height > s.bounds.height else { return }
+      guard let s = v as? NSScrollView, let d = s.documentView, !scrollable || d.frame.height > s.bounds.height, !s.isHiddenOrHasHiddenAncestor else { return }
       let r = s.convert(s.bounds, to: nil)
       if r.minX < 20, r.maxX <= 250, r.width > 150 { best = s }
     }

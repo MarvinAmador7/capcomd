@@ -238,17 +238,23 @@ struct SidebarList: View {
       }
       .padding(.bottom, lines.overflow ? 8 : 0)
       .overlay(alignment: .bottom) { if lines.overflow { Theme.Desk.Side.hairline.frame(height: 0.5) } }
-      ScrollView(.vertical) {
-        VStack(alignment: .leading, spacing: 0) {
-          ForEach(lines.list) { l in
-            SidebarLineView(line: l, selected: selected, cursor: cursor).equatable()
-              .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6)))
+      ScrollViewReader { proxy in
+        ScrollView(.vertical) {
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines.list) { l in
+              SidebarLineView(line: l, selected: selected, cursor: cursor).equatable()
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6)))
+            }
           }
+          .padding(.top, lines.overflow ? -8 : 0)
+          .padding(.bottom, 8)
         }
-        .padding(.top, lines.overflow ? -8 : 0)
-        .padding(.bottom, 8)
+        .scrollIndicators(.automatic)
+        // The keyboard's line stays in view: the least scroll that shows it, not animated.
+        .onChange(of: model.nav.cursor) { _, c in
+          if let c, let l = model.sidebarLines.list.first(where: { $0.key == c }) { proxy.scrollTo(l.id) }
+        }
       }
-      .scrollIndicators(.automatic)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     // A row moves only when the daemon moves it (an ask arrives: it leaves Running for Needs you), 0.2 s opacity and a
