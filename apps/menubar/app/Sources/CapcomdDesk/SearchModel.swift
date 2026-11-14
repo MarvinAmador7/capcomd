@@ -121,11 +121,20 @@ extension DeskModel {
     perform(hit.item.action)
   }
 
-  /// ⌘↩ (or ⌘-click): the result beside the focused pane.
-  // TODO(splits): splits aren't built yet. When the reel gets panes, open an agent or project result in a split beside
-  // the focused pane here. Until then ⌘↩ opens the result exactly as ↩ does; this is the only place that has to change.
+  /// ⌘↩ (or ⌘-click): the result beside the focused pane (`openInSplit(runId:agentId:)`: a new split, or the pane that
+  /// already shows it; another project's agent opens that project). A project opens its asking agent, else its planner,
+  /// the same way. Anything else, and folded, opens as ↩ does.
   package func openInSplit(_ hit: SearchHit) {
-    open(hit)
+    let target: (run: String, agent: String)?
+    switch hit.item.action {
+    case .agent(let r, let a): target = (r, a)
+    case .project(let r): target = decks.first { $0.runId == r }.flatMap { d in (d.askingAgentId ?? d.agentIds.first).map { (r, $0) } }
+    default: target = nil
+    }
+    guard let target, nav.sidebarOpen else { return open(hit) }
+    closePalette()
+    search.remember(hit.item.id)
+    openInSplit(runId: target.run, agentId: target.agent)
   }
 
   func perform(_ a: SearchAction) {
@@ -148,6 +157,10 @@ extension DeskModel {
     case .home: openHome(focus: false)
     case .follow(let on): follow = on
     case .settings: Self.openSettings()
+    case .sidebar(let open): if open { if nav.expanded { collapsePane() } else { setSidebar(open: true) } } else { setSidebar(open: false) }
+    case .split(let down): split(down: down)
+    case .closeSplit: if panes.count > 1 { closePane(panes.focused) }
+    case .expand(let on): if on { expandPane() } else { collapsePane() }
     }
   }
 
@@ -204,7 +217,8 @@ extension DeskModel {
     let focusedAsk = home ? nil : focusedAgent.flatMap { agent($0)?.approval?.id }
     let title = decks.first { $0.id == openProjectId }?.title
     s.index.set(commands: SearchCommands.make(SearchCommandContext(menu: home ? nil : projectMenu, projectTitle: title, focusedAsk: focusedAsk,
-                                                                   follow: follow, homeShown: home, asks: s.index.asks.count, needsReelOpen: needs.isOpen)))
+                                                                   follow: follow, homeShown: home, asks: s.index.asks.count, needsReelOpen: needs.isOpen,
+                                                                   sidebarOpen: nav.sidebarOpen, panes: panesShown ? panes.count : 0, expanded: nav.expanded)))
     s.lastIndexMs = (ProcessInfo.processInfo.systemUptime - t) * 1000
   }
 

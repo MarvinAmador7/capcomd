@@ -35,6 +35,13 @@ public enum SearchAction: Sendable, Hashable {
   /// The Needs you reel: show it (true) or leave it; ⌘J, the next ask.
   case needsReel(Bool)
   case nextAsk
+  /// The opened window's sidebar: open it (true) or fold it.
+  case sidebar(Bool)
+  /// A new pane beside (down: under) the focused one; close the focused pane of a split; the focused pane takes the
+  /// window (true) or gives it back.
+  case split(down: Bool)
+  case closeSplit
+  case expand(Bool)
 }
 
 /// The one icon a row shows.
@@ -352,9 +359,15 @@ public struct SearchCommandContext: Sendable, Hashable {
   /// How many asks wait (the Needs you reel and ⌘J have something to show), and whether the reel is open.
   public var asks: Int
   public var needsReelOpen: Bool
-  public init(menu: ProjectMenu?, projectTitle: String?, focusedAsk: String?, follow: Bool, homeShown: Bool, asks: Int = 0, needsReelOpen: Bool = false) {
+  /// The opened window: whether the sidebar is open, how many panes show (0: none, Home or the Needs you reel has their
+  /// place) and whether the focused one has the window.
+  public var sidebarOpen: Bool
+  public var panes: Int
+  public var expanded: Bool
+  public init(menu: ProjectMenu?, projectTitle: String?, focusedAsk: String?, follow: Bool, homeShown: Bool, asks: Int = 0, needsReelOpen: Bool = false,
+              sidebarOpen: Bool = false, panes: Int = 0, expanded: Bool = false) {
     self.menu = menu; self.projectTitle = projectTitle; self.focusedAsk = focusedAsk; self.follow = follow; self.homeShown = homeShown
-    self.asks = asks; self.needsReelOpen = needsReelOpen
+    self.asks = asks; self.needsReelOpen = needsReelOpen; self.sidebarOpen = sidebarOpen; self.panes = panes; self.expanded = expanded
   }
 }
 
@@ -389,6 +402,16 @@ public enum SearchCommands {
       case .copyRunId(let short): add("copy", "Copy the run ID of \(p)", "doc.on.doc", .code(short), .menu(item))
       }
     }
+    // The opened window's panes (SPEC §2.1): split, close a split, expand; the sidebar either way.
+    if c.expanded {
+      add("collapse", "Collapse the pane", "arrow.down.right.and.arrow.up.left", .shortcut("esc"), .expand(false), common: true)
+    } else if c.panes > 0 {
+      add("split-right", "Split right", "rectangle.split.2x1", .shortcut("⌘D"), .split(down: false))
+      add("split-down", "Split down", "rectangle.split.1x2", .shortcut("⇧⌘D"), .split(down: true))
+      if c.panes > 1 { add("close-split", "Close this split", "xmark", .shortcut("⌘W"), .closeSplit) }
+      add("expand", "Expand the pane", "arrow.up.left.and.arrow.down.right", .shortcut("⇧⌘↩"), .expand(true))
+    }
+    add("sidebar", c.sidebarOpen && !c.expanded ? "Fold the sidebar" : "Show the sidebar", "sidebar.left", .shortcut("⌃⌘S"), .sidebar(!c.sidebarOpen || c.expanded))
     add("home", "Home", "house", .shortcut("⌘0"), .home, common: !c.homeShown)
     add("follow", c.follow ? "Turn Follow off" : "Turn Follow on", "eye", .shortcut("⇧⌘F"), .follow(!c.follow))
     add("settings", "Settings", "gearshape", .shortcut("⌘,"), .settings, common: true)
