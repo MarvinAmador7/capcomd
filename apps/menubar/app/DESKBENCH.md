@@ -89,9 +89,15 @@ see *Comparing two builds' call trees* below.
 - `typing`: key events into an on-screen composer. Passes when only `ColumnComposer` bodies ran.
 - `resize`: 1440 → 1100 → 720 → 1440 wide; the column count must follow (3 → 2 → 1 → 3); no stretch over 100 ms.
 - `follow`: an `approval.requested` frame for a far-off agent with Follow on; latency is ask → reel starts moving.
+- `palette-open`, `palette-type`, `palette-keys`: Search ⌘K on the `search` fixture (their default: 60 projects, 250+
+  searchable items). ⌘K → the frame with the panel and its results (budget 50 ms); a query typed a key at a time into
+  the panel's field (each key → the frame with its results, budget one frame); ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens
+  (falls back to ↩ until splits), Esc closes. Checks read the UI: the empty search's groups, the ranking (groups in
+  attention order, by score, what's marked spells the query), the selection, what opened, the panel drawn (its own
+  picture has text). Snapshots draw the window's child windows in, so `snapshot-diff` sees the panel.
 
 Fixtures (`list fixtures`): `solo` (1 agent), `trio` (3), `crew17` (SPEC's 17-agent reference, the default),
-`crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32). Same name, same bytes, every
+`crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32), `search` (60 projects, Search ⌘K's). Same name, same bytes, every
 time (a seeded generator: markdown with headings/lists/code/tables, tool calls with diffs, thinking, handoffs, errors,
 images as attachments, one or more pending asks). `fixture <name>` describes one.
 

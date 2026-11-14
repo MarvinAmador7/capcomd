@@ -145,7 +145,7 @@ final class HomeModelTests: XCTestCase {
     XCTAssertEqual(m.newProject?.focusSerial, 2)
     XCTAssertTrue(m.homeShown)                                  // + never closes Home (it isn't a toggle any more)
     m.togglePalette(query: "home")
-    XCTAssertEqual(m.paletteShown.first?.action, .home)
+    XCTAssertEqual(m.paletteShown.first?.item.action, .home)
   }
 
   @MainActor func testTheModelMenuOpensClosesAndItsPickReachesTheRun() async throws {

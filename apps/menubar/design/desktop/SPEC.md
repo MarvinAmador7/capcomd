@@ -25,6 +25,7 @@ same PR. Behaviour conflicts go to the owner.
 | Network | one stream per open run, whatever the column count | The run stream with `?thread=1` already carries every agent's thread items; no per-column connections (AsyncHTTPClient caps at 8). |
 | Memory | one 100-item page per column until you scroll up | Older items load on demand, as the menu bar's thread does. |
 | Bots | drawn once per agent and size | `BotImages` cache (CapcomdBot); never re-rendered on state changes. |
+| Search ⌘K | open: first frame ≤ 50 ms; a keystroke's results within a frame (16.7 ms) with 250+ items | Titles only, folded once per source change; a keystroke compares integer arrays and narrows from the last query; at most 24 rows a group in a lazy list. Bench: `palette-open`, `palette-type`, `palette-keys` on the `search` fixture. |
 | Markdown | no parsing on the main thread | The daemon's `blocks/1` tree is already parsed; views only lay it out. |
 
 Measure with Instruments (SwiftUI + Animation Hitches) on a 17-agent fake-host run (live-app-testing recipe) before a
@@ -59,10 +60,36 @@ One window, two parts.
     also after a relaunch, until it has news: a new run, an ask, work again); Copy run ID (shows the short id, copies the whole). Only actions
     the daemon and the app have: Trace and Browse the workspace are hidden until the desktop has views for them, and
     rename, duplicate, archive and export are out on purpose.
-  - **Actions ⌘K** (the ⌘ button): a small palette over the window, the menu's surface: type to filter (every word
-    typed starts a word of the entry; entries that start with it come first), ↑ ↓ move, Return runs, Esc or a click
-    outside closes. Entries: the open project's menu items, New project, Follow on/off, switch to each other project
-    (⌘1–9 shown), focus each agent by its title (⌃1–9 shown), Home (⌘0).
+  - **Search ⌘K** (`rex/CommandK.dc.html`; the owner's "Search ⌘K" in RexNotes): one palette for what needs you, the
+    agents, the projects and the commands, ranked in that order, over what the app already holds (no network search).
+    Native, as Spotlight in macOS 26: a real panel (NSPanel, non-activating, key-capable, a child of the window so it
+    floats over it and never over other apps), the system's vibrancy under a tint that keeps the board's ground
+    (#262628 measured), 18 pt corners, the system window shadow; 640 pt wide (the window less 16 pt each side when
+    narrower), centred, 92 pt from the window's top, over the reel's dim. A 56 pt query row: the magnifying glass, then
+    a 22 pt field with no box ("Search…"). Groups under 11 pt semibold sentence-case headers (28 pt, text at the
+    bottom): Needs you, Agents, Projects, Commands. 32 pt rows, 8 pt corners, one 20 pt icon column (an agent's bot, a
+    project's place, a command's symbol), the title (what matched in semibold; it keeps up to 68 % of the row) then the
+    subtitle (the project and profile, or the place and crew; it truncates first), then the status word, the ask in
+    amber with the hand, or the shortcut as plain glyphs. The selection is the system accent, darkened only as far as
+    white (and 88 % white) text needs for 4.5:1, full width; the selected agent or project shows "↩ Open ⌘↩ Open in
+    split". Stop… is system red. One quiet 32 pt legend: "↑↓ to move · ↩ to open · ⌘↩ to open in a split · esc to
+    close". The list is at most 480 pt and scrolls; at most 24 rows a group once something is typed.
+    - Matching: every word typed must match the title or the subtitle (titles count double): the whole title starting
+      with it, then a word starting with it, then anywhere, then its letters in order from a word start (fuzzy);
+      case and diacritics fold. Only titles and names are indexed, once per change of a source (one run's agents on
+      `.run(id)`, everything on an unnarrowed change; nothing while the palette is closed but marking what's stale),
+      and a longer query looks only at the shorter one's matches.
+    - Needs you: each pending approval on the agent whose column shows it ("asks"), then each agent stopped by a usage
+      limit ("usage limit"); an agent that needs you isn't repeated under Agents. Agents: every shown project's, by
+      their own titles. Projects: the decks. Commands: only what the daemon and the app do now, each with its shortcut,
+      named with the open project ("Pause migrate matchkey" ⌥⌘P, "Message the planner of …" ⌘L, Changes with its
+      counts, Stop… in red, Fold / Remove ⌘W, Copy the run ID), Approve the focused ask (↩), New project (⇧⌘N), Home
+      (⌘0), Follow (⇧⌘F), Settings (⌘,).
+    - Before anything is typed: Needs you, then Recent (what you looked at before, newest first, topped up with other
+      projects; three), then the common commands (six).
+    - ↑ ↓ (⌃P ⌃N) move; ↩ opens (an agent: its project opens at its column; a project: at its ask); ⌘↩ opens in a
+      split, and until splits exist it opens as ↩ does (`DeskModel.openInSplit`); Esc, a click outside or the window
+      losing the keyboard closes. ⌘K works wherever the window is: Home, a project, any later sidebar or reel.
 - **Reel**: the open project's agents as full-height columns in tree order (`Reel`). Three columns at 1440 pt, two at
   1100, one under 760; the neighbours peek 44 pt at both edges. A column is header (bot, then "profile · title · state"
   (a double-click on the title renames it, as the tab does; the bot's name isn't repeated), place, elapsed) · thread (the menu bar's thread renderer) · its own message box. An agent that asks docks the
@@ -123,13 +150,13 @@ overview gets its key when it's built); ⇧⌘↩ zoom one column.
 # 4. Keyboard
 
 ⌘0 Home (again: back to the project) · ⌘1–9 projects · ⌃1–9 agents · ⌃← ⌃→ focus the neighbour column (the reel scrolls
-only when the focused column would leave the window, 180 ms ease-out) · ⇧⌘↩ zoom · ⌘K actions · ⇧⌘N Home with the
+only when the focused column would leave the window, 180 ms ease-out) · ⇧⌘↩ zoom · ⌘K search · ⇧⌘N Home with the
 composer focused · ⌘L message the planner · ⌥⌘P pause / resume the project · ⌘W fold the project into the title bar (a
 finished one: remove it; Home: back to the open project; the window's own Close is replaced) · ⇧⌘F Follow. ⌘T (Trace) is bound once the desktop has a trace
 view. Each is in the app's menus (File, Project, Go). Return approves while an ask has focus and nothing else takes
 Return: never while a text field has the keyboard (a column's message box, a rename field, the new project column's
-composer, the palette), nor while the menu or the Stop question is up; on Home it approves only the focused card's ask.
-Esc never denies; it closes the palette, the menu and the model menu, cancels a folder's setup, and leaves Home for the
+composer, Search ⌘K), nor while the menu or the Stop question is up; on Home it approves only the focused card's ask.
+Esc never denies; it closes Search ⌘K, the menu and the model menu, cancels a folder's setup, and leaves Home for the
 open project while nothing is typed. Keyboard actions never animate otherwise.
 
 # 5. Motion
@@ -138,7 +165,9 @@ Transform and opacity only, ≤ 300 ms, interruptible springs without bounce, Re
 fan-out spring 0.3 s, names fade in over the last 120 ms. Home comes in and goes with a 0.3 s spring (opacity, 8 pt
 rise); a Running card arrives with a 0.35 s spring (opacity, from 6 pt above); the model menu pops in 0.14 s (opacity,
 3 pt); the composer's focus ring fades in 0.18 s. Reduce Motion: crossfades only.
-The menu and the palette: 0.2 s spring, opacity with a 0.98 scale from the top. Menu bar → window: one shape grows from the menu bar icon,
+The menu: 0.2 s spring, opacity with a 0.98 scale from the top. Search ⌘K: at once from the keyboard (⌘K); from a
+click, a 0.18 s ease-out fade of its panel and the dim (Reduce Motion: 0.15 s); it closes at once, and its keys (moving
+the selection, typing) never animate. Menu bar → window: one shape grows from the menu bar icon,
 300 ms (0.32, 0.72, 0, 1), pointer only (`Expand`). Bots: no loops; the menu bar's approved moments only.
 
 # 6. Store work this needs
@@ -155,5 +184,5 @@ The menu and the palette: 0.2 s spring, opacity with a 0.98 scale from the top. 
 1. The window in the `CapcomdApp` app (a regular Dock app with the menu bar item; the shared pieces live in the `CapcomdUI` library), title bar with
    projects and crew tabs, the reel with real threads, message boxes and decisions, Follow, keyboard. Keyed changes
    and many threads in the store.
-2. New project column (now Home), project menu and ⌘K actions (built), then overview and zoom.
+2. New project column (now Home), project menu and Search ⌘K (built), then overview and zoom.
 3. Swarm folding and the strip, menu bar → window motion, voice input of the app's own (Home's mic dictates for now).

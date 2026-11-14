@@ -216,26 +216,51 @@ final class DeskActionsModelTests: XCTestCase {
     XCTAssertFalse(m.takeBoxFocus("run-a-pl"))
   }
 
-  /// The palette: what's typed filters, ↑ ↓ move, Return runs the selection and closes it.
-  @MainActor func testThePaletteRunsWhatsSelected() {
+  /// Search ⌘K: what's typed filters, ↑ ↓ move, ↩ opens the selection and closes it, ⌘↩ falls back to the same open.
+  @MainActor func testThePaletteOpensWhatsSelected() {
     let (m, s) = model()
     project(s, "run-b", goal: "Fix proration", at: 2_000)
-    m.togglePalette(query: "switch")
-    XCTAssertEqual(m.paletteShown.map(\.action), [.project(m.decks[1].id)])
+    m.togglePalette(query: "fix pro")
+    XCTAssertEqual(m.paletteShown.map(\.item.action), [.agent(runId: "run-b", agentId: "run-b-pl"), .project(runId: "run-b")])
+    m.movePaletteSelection(1)
+    XCTAssertEqual(m.paletteSelection, 1)
     m.runPaletteSelection()
     XCTAssertFalse(m.paletteOpen)
     XCTAssertEqual(m.openRunId, "run-b")
     m.togglePalette(query: "follow")
     m.runPaletteSelection()
     XCTAssertFalse(m.follow)
+    // ⌘↩: until splits exist it opens as ↩ does.
+    m.togglePalette(query: "migrate")
+    XCTAssertEqual(m.paletteShown.first?.item.action, .agent(runId: "run-a", agentId: "run-a-pl"))
+    m.runPaletteSelection(split: true)
+    XCTAssertFalse(m.paletteOpen)
+    XCTAssertEqual(m.openRunId, "run-a")
+    XCTAssertEqual(m.focusedAgent, "run-a-pl")
+    // The empty search: what you were looking at before is recent; the focused agent isn't offered back.
     m.togglePalette()
+    XCTAssertEqual(m.search.sections.map(\.group), [.recent, .commands])
+    XCTAssertEqual(m.search.sections[0].hits.map(\.item.id), ["agent.run-b-pl", "project.\(m.decks[1].id)"])
     m.paletteQuery = "new"
     m.movePaletteSelection(5); XCTAssertEqual(m.paletteSelection, m.paletteShown.count - 1)
     m.movePaletteSelection(-9); XCTAssertEqual(m.paletteSelection, 0)
     m.runPaletteSelection()
     XCTAssertNotNil(m.newProject)
-    // While the new project column is open the palette has no open project's actions.
-    XCTAssertFalse(m.paletteEntries.contains { if case .menu = $0.action { return true }; return false })
+    // While Home shows the palette has no open project's commands.
+    m.togglePalette()
+    XCTAssertFalse(m.search.index.commands.contains { if case .menu = $0.action { return true }; return false })
+    m.closePalette()
+  }
+
+  /// A store change while the palette is closed only marks what's stale; open, the results follow it.
+  @MainActor func testThePaletteFollowsTheStore() async throws {
+    let (m, s) = model()
+    m.togglePalette(query: "proration")
+    XCTAssertTrue(m.paletteShown.isEmpty)
+    project(s, "run-b", goal: "Fix proration", at: 2_000)
+    try await until { !m.paletteShown.isEmpty }
+    XCTAssertEqual(m.paletteShown.first?.item.action, .agent(runId: "run-b", agentId: "run-b-pl"))
+    m.closePalette()
   }
   #endif
 }

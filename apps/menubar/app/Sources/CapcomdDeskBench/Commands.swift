@@ -100,6 +100,9 @@ import DeskBenchKit
       case "typing": (steps, checks) = await drive.typing()
       case "resize": (steps, checks) = await drive.resize()
       case "follow": (steps, checks) = await drive.follow()
+      case "palette-open": (steps, checks) = await drive.paletteOpen()
+      case "palette-type": (steps, checks) = await drive.paletteType()
+      case "palette-keys": (steps, checks) = await drive.paletteKeys()
       default: return .failure(.usage("scenario '\(spec.name)' has no driver"))
       }
       if spec.name == "open", rep == 0 {

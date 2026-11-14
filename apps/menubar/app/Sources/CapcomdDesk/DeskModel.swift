@@ -138,9 +138,8 @@ package final class DeskModel {
   package internal(set) var menuOpen = false { didSet { Mutations.record("DeskModel.menuOpen") } }
   package internal(set) var paletteOpen = false { didSet { Mutations.record("DeskModel.paletteOpen") } }
   package internal(set) var stopAsked = false { didSet { Mutations.record("DeskModel.stopAsked") } }
-  /// The palette's query and the entry Return runs (an index into what the query shows).
-  package var paletteQuery = "" { didSet { Mutations.record("DeskModel.paletteQuery"); if paletteQuery != oldValue { paletteSelection = 0 } } }
-  package internal(set) var paletteSelection = 0 { didSet { Mutations.record("DeskModel.paletteSelection") } }
+  /// Search ⌘K's query, results and index (SearchModel.swift), observed on their own.
+  @ObservationIgnored package let search = SearchModel()
   /// Bumped on every unnarrowed store change, for the views that show the store's general state (the menu, the palette,
   /// the new project column) while they are open. Nothing else reads it.
   package internal(set) var actionsRevision = 0 { didSet { Mutations.record("DeskModel.actionsRevision") } }
@@ -265,6 +264,7 @@ package final class DeskModel {
       return
     }
     if keys == [.selection] { return }   // the window's own focus, published (publishSelection)
+    searchStoreChanged(keys)
     let all = keys.contains(.all)
     if all {
       if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }

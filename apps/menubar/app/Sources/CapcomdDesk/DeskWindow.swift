@@ -22,7 +22,7 @@ package struct DeskWindowContent: View {
 }
 
 /// Keyboard (SPEC §4): ⌘0 Home, ⌘1–9 projects, ⌃1–9 agents, ⌃← ⌃→ the neighbour column, ⇧⌘N Home with the composer
-/// focused, ⌘K actions, and the project menu's ⌘L, ⌥⌘P and ⌘W. None of these animate. An item whose action the open
+/// focused, ⌘K search, and the project menu's ⌘L, ⌥⌘P and ⌘W. None of these animate. An item whose action the open
 /// project doesn't have does nothing (⌘W also leaves Home for the open project, and removes a finished project from the
 /// title bar).
 package struct DeskCommands: Commands {
@@ -38,7 +38,7 @@ package struct DeskCommands: Commands {
       Button("Fold into the Title Bar") { model.foldShortcut() }.keyboardShortcut("w", modifiers: .command)
     }
     CommandMenu("Project") {
-      Button("Actions…") { model.togglePalette() }.keyboardShortcut("k", modifiers: .command)
+      Button("Search…") { model.togglePalette() }.keyboardShortcut("k", modifiers: .command)
       Divider()
       Button("Message the Planner…") { model.messagePlannerShortcut() }.keyboardShortcut("l", modifiers: .command)
       Button("Pause or Resume Project") { model.pauseShortcut() }.keyboardShortcut("p", modifiers: [.command, .option])

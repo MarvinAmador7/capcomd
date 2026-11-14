@@ -93,9 +93,9 @@ extension Theme {
       static let header = Font.system(size: 12.5, weight: .semibold), count = Font.system(size: 12)
     }
 
-    // The project menu (ReelMenu) and the ⌘K palette: one surface.
+    // The project menu (ReelMenu). Search ⌘K has its own measurements (SearchMetrics).
     enum Surface {
-      static let width: CGFloat = 360, paletteWidth: CGFloat = 480
+      static let width: CGFloat = 360
       static let fill = Color(red: 0x23 / 255, green: 0x23 / 255, blue: 0x26 / 255), stroke = Color.white.opacity(0.14)
       static let radius: CGFloat = 13, padding: CGFloat = 6
       static let rowHeight: CGFloat = 30, rowRadius: CGFloat = 7, rowPadding: CGFloat = 10, rowGap: CGFloat = 10
