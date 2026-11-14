@@ -430,6 +430,9 @@ struct AgentRow: View {
       }
       .buttonStyle(.plain)
       .simultaneousGesture(TapGesture(count: 2).onEnded { model.renameRow(row) })
+      .accessibilityLabel([row.title, row.word].compactMap { $0 }.joined(separator: ", "))
+      .accessibilityAddTraits(selected ? .isSelected : [])
+      .accessibilityAction(named: "Rename") { model.renameRow(row) }
       if hover || selected {
         RowMore(row: row)
           .transition(.opacity.animation(reduceMotion ? nil : .easeOut(duration: 0.12)))
@@ -440,11 +443,7 @@ struct AgentRow: View {
     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selected ? Theme.Desk.Side.selected : hover ? Theme.Desk.Side.hover : .clear))
     .overlay(CursorRing(on: cursor))
     .onHover { hover = $0 }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel([row.title, row.word].compactMap { $0 }.joined(separator: ", "))
-    .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-    .accessibilityAction { model.selectRow(row) }
-    .accessibilityAction(named: "Rename") { model.renameRow(row) }
+    .accessibilityElement(children: .contain)
   }
 }
 
@@ -512,12 +511,12 @@ struct NewProjectRow: View {
   }
 }
 
-/// The keyboard's place in the list: the system focus ring's colour, 1 pt, only while the list has the keyboard.
+/// The keyboard's place in the list: the focus blue, 1 pt, only while the list has the keyboard.
 struct CursorRing: View {
   let on: Bool
   var body: some View {
     RoundedRectangle(cornerRadius: 8, style: .continuous)
-      .strokeBorder(on ? Color(nsColor: .keyboardFocusIndicatorColor) : .clear, lineWidth: 1)
+      .strokeBorder(on ? Theme.accent : .clear, lineWidth: 1)
       .allowsHitTesting(false)
   }
 }

@@ -85,7 +85,7 @@ extension DeskModel {
   package func sidebarReturn() {
     switch nav.cursor {
     case .agent(let id)?: if let r = sidebar.content.allRows.first(where: { $0.id == id }) { selectRow(r) }
-    case .project(_, let p)?: setProjectFolded(p, false)
+    case .project(let sec, let p)?: unfold(p, in: sec)
     case .finished?: nav.finishedOpen.toggle()
     case nil: moveSidebarCursor(1)
     }
@@ -95,7 +95,7 @@ extension DeskModel {
   package func sidebarUnfold(_ open: Bool) {
     switch nav.cursor {
     case .finished?: if nav.finishedOpen != open { nav.finishedOpen = open }
-    case .project(_, let p)?: setProjectFolded(p, !open)
+    case .project(let sec, let p)?: if open { unfold(p, in: sec) }
     case .agent(let id)?:
       guard !open, let r = sidebar.content.allRows.first(where: { $0.id == id }),
             !sidebar.content.needs.contains(where: { $0.projectId == r.projectId && $0.rows.contains { $0.id == id } }) else { return }
@@ -103,6 +103,12 @@ extension DeskModel {
       nav.cursor = sidebarLines.keys.first { if case .project(_, r.projectId) = $0 { return true }; return false }
     case nil: break
     }
+  }
+
+  /// Unfolds a project from the keyboard: the cursor goes to its first agent, so ↓ carries on from there.
+  private func unfold(_ projectId: String, in section: SidebarSection) {
+    setProjectFolded(projectId, false)
+    if let first = sidebar.content.groups(section).first(where: { $0.projectId == projectId })?.rows.first { nav.cursor = .agent(first.id) }
   }
 
   package func setProjectFolded(_ projectId: String, _ folded: Bool) {

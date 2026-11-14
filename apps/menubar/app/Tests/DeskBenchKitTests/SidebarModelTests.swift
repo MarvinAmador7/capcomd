@@ -84,6 +84,21 @@ final class SidebarModelTests: XCTestCase {
     XCTAssertTrue(m.sidebar.content.needs.flatMap(\.rows).contains { $0.id == agent })
   }
 
+  /// Only a row that moves waits for the pointer: the first fill, new rows and changed words go in at once.
+  @MainActor func testNewRowsDontWaitForThePointer() {
+    let empty = SidebarContent()
+    let (m, _, _) = model()
+    let full = m.sidebar.content
+    XCTAssertFalse(SidebarSlice.moves(empty, full))
+    var worded = full
+    worded.running[0].rows[0].word = "paused"
+    XCTAssertFalse(SidebarSlice.moves(full, worded))
+    var moved = full
+    let r = moved.running[0].rows.removeLast()
+    moved.needs.append(SidebarGroup(projectId: r.projectId, runId: r.runId, title: "x", sandbox: nil, rows: [r]))
+    XCTAssertTrue(SidebarSlice.moves(full, moved))
+  }
+
   /// A row of another project opens that project with the agent in the pane; nothing animates (the reel follows).
   @MainActor func testSelectingARowOpensItsProjectAndShowsTheAgent() {
     let (m, _, w) = model()
@@ -130,6 +145,8 @@ final class SidebarModelTests: XCTestCase {
     XCTAssertEqual(foldedProjects.count, m.decks.count - 1)
     m.nav.cursor = .project(.running, foldedProjects[0])
     m.sidebarUnfold(true)
+    let first = m.sidebar.content.running.first { $0.projectId == foldedProjects[0] }!.rows[0].id
+    XCTAssertEqual(m.nav.cursor, .agent(first))   // ↓ carries on inside the project just unfolded
     XCTAssertTrue(m.sidebarLines.list.contains { if case .label(let g, _, false) = $0 { return g.projectId == foldedProjects[0] }; return false })
   }
 

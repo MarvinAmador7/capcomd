@@ -125,12 +125,16 @@ package final class SidebarSlice {
   }
   private func assign(_ c: SidebarContent) { content = c; assignments += 1 }
 
-  /// Whether a change moves a row (to another section, or another place): only those wait for the pointer.
+  /// Whether a change moves a row the person may be pointing at: an agent shown before and after that changes section,
+  /// or whose order among the rows shown in both changes. New rows and words changing don't wait.
   static func moves(_ a: SidebarContent, _ b: SidebarContent) -> Bool {
-    func layout(_ c: SidebarContent) -> [[String]] {
-      [c.needs, c.running, c.finished].map { $0.flatMap { g in [g.projectId] + g.rows.map(\.id) } }
+    func placed(_ c: SidebarContent) -> [(id: String, section: Int)] {
+      [c.needs, c.running, c.finished].enumerated().flatMap { n, gs in gs.flatMap(\.rows).map { ($0.id, n) } }
     }
-    return layout(a) != layout(b)
+    let old = placed(a), new = placed(b)
+    let common = Set(old.map(\.id)).intersection(new.map(\.id))
+    let o = old.filter { common.contains($0.id) }, n = new.filter { common.contains($0.id) }
+    return !zip(o, n).allSatisfy { $0.id == $1.id && $0.section == $1.section }
   }
 }
 
