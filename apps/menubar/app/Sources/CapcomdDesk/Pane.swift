@@ -140,7 +140,9 @@ struct PaneArea: View {
     DeskProbe.body("PaneArea")
     let open = model.nav.sidebarOpen
     return Group {
-      if open, let np = model.newProject {
+      if open, model.needs.isOpen {
+        NeedsReelScreen()   // the hand or the Needs you heading: the reel takes the pane's place
+      } else if open, let np = model.newProject {
         HomeView(np: np)
       } else if let run = model.openRunId, let id = model.paneAgent {
         PaneHost(model: model, runId: run, agentId: id, open: open)

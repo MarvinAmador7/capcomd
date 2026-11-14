@@ -151,7 +151,7 @@ struct CrewTab: View {
     let _ = DeskProbe.body("CrewTab", id: agentId)
     if let a = model.agent(agentId) {
       let h = a.header, asks = a.approval != nil
-      Button { model.scroll(to: agentId) } label: {
+      Button { model.closeNeedsReel(); model.scroll(to: agentId) } label: {
         HStack(spacing: 5) {
           BotAvatar(traits: a.bot, size: .xs, cell: 1.5)
           if a.renaming == .tab {

@@ -99,7 +99,7 @@ struct NeedsHand: View {
   @Environment(DeskModel.self) private var model
   let style: Style
   var body: some View {
-    let n = model.sidebar.needsCount
+    let n = model.needs.count
     let label = n > 0 ? "Needs you: \(n). Open them as a reel" : "Nothing needs you"
     return Button { model.openNeedsReel() } label: {
       switch style {

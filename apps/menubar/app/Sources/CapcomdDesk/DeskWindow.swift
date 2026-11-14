@@ -50,6 +50,7 @@ package struct DeskCommands: Commands {
       Divider()
       Button("Copy Run ID") { if let i = model.menuItem("copy") { model.perform(i) } }
     }
+    NeedsYouCommands(model: model)
     CommandMenu("Go") {
       Button("Home") { model.toggleHome() }.keyboardShortcut("0", modifiers: .command)
       Divider()
@@ -63,8 +64,6 @@ package struct DeskCommands: Commands {
       Divider()
       Button("Previous Agent") { model.moveFocus(-1) }.keyboardShortcut(.leftArrow, modifiers: .control)
       Button("Next Agent") { model.moveFocus(1) }.keyboardShortcut(.rightArrow, modifiers: .control)
-      Divider()
-      Button("Next Ask") { model.stepToNextAsk() }.keyboardShortcut("j", modifiers: .command)
       Divider()
       Button(model.follow ? "Stop Following" : "Follow") { model.follow.toggle() }.keyboardShortcut("f", modifiers: [.command, .shift])
     }

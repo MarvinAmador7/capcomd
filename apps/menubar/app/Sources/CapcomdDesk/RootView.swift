@@ -15,6 +15,8 @@ package struct RootView: View {
     DeskProbe.body("RootView")
     let np = model.newProject
     let opened = model.nav.sidebarOpen
+    let needs = model.needs.isOpen   // the Needs you reel takes the main area (NeedsYou.swift); opened, the pane's place
+    let reel = np == nil && !needs
     return Group {
       switch model.link {
       case .connecting, .needsToken: ConnectView()
@@ -25,8 +27,9 @@ package struct RootView: View {
           ZStack {
             // The reel stays built under Home, so leaving Home for the open project shows it at once (SPEC §1).
             if model.openRunId != nil {
-              ReelHost().opacity(np == nil ? 1 : 0).allowsHitTesting(np == nil).accessibilityHidden(np != nil)
+              ReelHost().opacity(reel ? 1 : 0).allowsHitTesting(reel).accessibilityHidden(!reel)
             }
+            if needs && !opened { NeedsReelScreen() }
             if model.openRunId == nil && model.unreachable && model.decks.isEmpty { Unreachable() }
             else if let np, !opened { HomeView(np: np).transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))) }
           }

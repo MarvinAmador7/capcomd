@@ -20,8 +20,9 @@ final class SidebarModelTests: XCTestCase {
   @MainActor func testSectionsByAttention() {
     let (m, s, w) = model()
     let c = m.sidebar.content
-    // A merge ask waits on the agent merging it (the lead), whose row steps out.
-    let asking = Set(s.pendingApprovals.compactMap { s.waitingAgent($0) })
+    // The Needs you reel's asks: a merge waits on the agent merging it (the lead), whose row steps out.
+    let asking = Set(s.needsAsks().map(\.agentId))
+    XCTAssertEqual(m.needs.count, asking.count)
     XCTAssertFalse(asking.isEmpty)
     XCTAssertEqual(Set(c.needs.flatMap(\.rows).map(\.id)), asking)
     XCTAssertEqual(m.sidebar.needsCount, asking.count)
@@ -167,19 +168,20 @@ final class SidebarModelTests: XCTestCase {
     XCTAssertTrue(m.sidebarLines.list.contains { if case .label(let g, _, false) = $0 { return g.projectId == foldedProjects[0] }; return false })
   }
 
-  /// ⌘J (and the hand, until the Needs you reel lands) steps through the asks, oldest first, wrapping.
-  @MainActor func testNextAskStepsThroughNeedsYou() {
-    let (m, s, w) = model("swarm64")
-    let asks = m.sidebar.content.needs.flatMap(\.rows).map(\.id)
-    XCTAssertGreaterThanOrEqual(asks.count, 2)
-    let start = m.selectedAgent.flatMap { asks.firstIndex(of: $0) } ?? -1
-    m.stepToNextAsk()
-    XCTAssertEqual(m.selectedAgent, asks[(start + 1) % asks.count])
-    m.stepToNextAsk()
-    XCTAssertEqual(m.selectedAgent, asks[(start + 2) % asks.count])
-    for _ in 0..<(asks.count - 2) { m.openNeedsReel() }
-    XCTAssertEqual(m.selectedAgent, asks[(start + asks.count) % asks.count])
-    _ = (s, w)
+  /// The hand and the Needs you heading open the Needs you reel, in the pane's place while the sidebar is open; a row
+  /// then opens just that agent (the reel closes). Needs you lists the reel's asks.
+  @MainActor func testNeedsYouIsTheReelsAsks() {
+    let (m, s, _) = model("swarm64")
+    m.setSidebar(open: true)
+    let rows = Set(m.sidebar.content.needs.flatMap(\.rows).map(\.id))
+    XCTAssertEqual(rows, Set(s.needsAsks().map(\.agentId)))
+    XCTAssertEqual(m.needs.count, rows.count)
+    m.openNeedsReel()
+    XCTAssertTrue(m.needs.isOpen)
+    let row = m.sidebar.content.running[0].rows.last!
+    m.selectRow(row)
+    XCTAssertFalse(m.needs.isOpen)
+    XCTAssertEqual(m.paneAgent, row.id)
   }
 
   /// Follow never moves the opened pane: the ask shows in Needs you instead.
@@ -229,8 +231,9 @@ final class SidebarModelTests: XCTestCase {
     let m = DeskModel(store: s)
     XCTAssertEqual(m.sidebar.content.running.count, 1)
     ev("agent.failed", "w2")
-    XCTAssertEqual(m.sidebar.content.needs.flatMap(\.rows).map(\.id), ["w2"])
-    XCTAssertEqual(m.sidebar.content.needs.first?.rows.first?.tone, .error)
+    // A failure has no decision to make: it keeps its place in the tree, with its red word.
+    XCTAssertTrue(m.sidebar.content.needs.isEmpty)
+    XCTAssertEqual(m.sidebar.content.running.first?.rows.first { $0.id == "w2" }?.tone, .error)
     ev("agent.done", "w1"); ev("agent.done", "pl")
     ev("run.completed", nil)
     let c = m.sidebar.content

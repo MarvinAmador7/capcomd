@@ -119,6 +119,8 @@ import CapcomdStore
         case "vscroll": if w.count > 2, let n = Int(w[1]), let dy = Double(w[2]) { vscroll(column: n - 1, dy) }
         case "goal": goal(model, w.dropFirst().first ?? "")
         case "openrun": if w.count > 1 { model.openRun(w[1]) }   // as a click on its notification
+        case "needs":   // the Needs you hand; `needs close` (Esc), `needs next` (⌘J)
+          switch w.dropFirst().first { case "close"?: model.closeNeedsReel(); case "next"?: model.nextAsk(); default: model.openNeedsReel() }
         case "rename":
           guard w.count > 1 else { break }
           let id = Int(w[1]).flatMap { n in model.columns.indices.contains(n - 1) ? model.columns[n - 1] : nil } ?? w[1]
@@ -169,7 +171,7 @@ import CapcomdStore
         case "click": if w.count > 1 { click(String(line.dropFirst(6)), dir) }
         case "close": deskWindow?.performClose(nil)   // the window's close button
         // The sidebar (design/desktop/rex): `sidebar open|fold|toggle`, `row <agentId|N>` (a click on that row: N counts
-        // the rows as shown), `cursor up|down|left|right|return` (the list's keys), `needs` (the hand), `nextask` (⌘J),
+        // the rows as shown), `cursor up|down|left|right|return` (the list's keys), `needs` (the hand: the Needs you reel), `nextask` (⌘J),
         // `finished` (a click on its heading), `fold <projectId>` / `unfold <projectId>`.
         case "sidebar":
           switch w.dropFirst().first {
@@ -192,7 +194,7 @@ import CapcomdStore
           default: model.sidebarReturn()
           }
         case "needs": model.openNeedsReel()
-        case "nextask": model.stepToNextAsk()
+        case "nextask": model.nextAsk()
         case "finished": model.toggleFinished()
         case "fold": if w.count > 1 { model.setProjectFolded(w[1], true) }
         case "unfold": if w.count > 1 { model.setProjectFolded(w[1], false) }
@@ -471,6 +473,9 @@ import CapcomdStore
       }
     }
     for a in s.pendingApprovals { out.append("approval \(a.id) run \(a.runId ?? "-") agent \(a.agentId ?? "-") \(a.decision)") }
+    let n = model.needs
+    out.append("needs count \(n.count) open \(n.isOpen) position \(n.reelPosition ?? "-") back \"\(n.backLabel)\" columns \(n.columns.joined(separator: ","))")
+    for a in n.asks { out.append("ask \(a.agentId) run \(a.runId) \(a.approval.map { "approval \($0.id)" } ?? "limit") at \(a.key.askedAtMs)") }
     out.append("folded \(model.folded) hidden \(model.hidden.keys.sorted().joined(separator: ",")) returnApproves \(model.returnApproves) typing \(model.typingIn ?? "-") stopAsked \(model.stopAsked)")
     if let np = model.newProject {
       let f = np.form, g = f.goalSetup

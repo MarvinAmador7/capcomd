@@ -113,6 +113,9 @@ package final class SidebarSlice {
   /// While the pointer is over the sidebar a row never moves under it: a change of sections waits until it leaves.
   @ObservationIgnored var held: SidebarContent?
   @ObservationIgnored package internal(set) var pointerInside = false
+  /// The agents in Needs you: the Needs you reel's asks (`CapcomdStore.needsAsks()`: each undecided approval's waiting
+  /// agent, and one per run a usage limit paused), read again on unnarrowed changes, where approvals and pauses arrive.
+  @ObservationIgnored var needIds: Set<String> = []
   /// How many times `content` was assigned (the bench's check that a thread item changes nothing here).
   @ObservationIgnored package private(set) var assignments = 0
 
@@ -160,20 +163,20 @@ extension DeskModel {
     }
   }
 
-  /// One run's rows, in tree order, each marked whether it steps out into Needs you: it asks, or (while the run is
-  /// still active) it failed or waits at a usage limit. Memoised per run; `apply` recomputes only the runs a change
-  /// names.
+  /// One run's rows, in tree order, each marked whether it steps out into Needs you: it is one of the Needs you reel's
+  /// asks (a decision for the person: an approval it waits on, or its run's usage limit). A failure has no decision to
+  /// make, so it keeps its place in the tree with its red word. Memoised per run; `apply` recomputes only the runs a
+  /// change names.
   func sidebarRows(_ deck: DeckInfo) -> [(row: SidebarRow, needs: Bool)] {
     let runId = deck.runId
     guard let run = store.runs[runId] else { return [] }
-    let active = run.isActive
     let bots = team(runId)
     var asks: [String: PendingApproval] = [:]
     for a in store.approvals(forRun: runId) { if let w = store.waitingAgent(a), asks[w] == nil { asks[w] = a } }
     return store.reelColumns(runId: runId).map { h in
       let limit = run.agents[h.agentId]?.limit
       let (word, tone) = Self.sidebarWord(h, approval: asks[h.agentId], limit: limit)
-      let needs = tone == .ask || (active && tone == .error)
+      let needs = sidebar.needIds.contains(h.agentId)
       let row = SidebarRow(id: h.agentId, runId: runId, projectId: deck.id, title: h.tabLabel, bot: bots[h.agentId], provider: h.provider,
                            level: needs ? 0 : min(h.depth, 2), word: word, tone: tone)
       return (row, needs)

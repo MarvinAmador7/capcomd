@@ -59,6 +59,7 @@ extension DeskModel {
   }
 
   func refreshSidebar(all: Bool = false, runs: Set<String> = []) {
+    if all { sidebar.needIds = Set(store.needsAsks().map(\.agentId)) }
     let want = Set(decks.map(\.runId))
     sidebarRowsByRun = sidebarRowsByRun.filter { want.contains($0.key) }
     let content = sidebarContent { d in
@@ -130,6 +131,7 @@ extension DeskModel {
   /// A click on a row (or Return on it): that agent in the pane. Another project opens first (the reel follows
   /// underneath, so folding shows the same agent); nothing animates.
   package func selectRow(_ row: SidebarRow) {
+    if needs.isOpen { needs.close(restore: false) }   // a row opens just that agent
     if row.projectId != openProjectId || newProject != nil { open(project: row.projectId) }
     // Opened, the reel under the pane stays where it is (moving it would build the threads of columns no one sees);
     // folding brings it to this agent. Folded (⌘J), it scrolls as a tab click does.

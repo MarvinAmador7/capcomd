@@ -68,17 +68,19 @@ import DeskBenchKit
   /// than half of one shows), mapped to the model's columns by position (one view per column: a hosting view, an
   /// AppKit column holding hosting views, or the blank before it is built), each with its thread's scroll view.
   static func onScreen(_ h: Harness) -> [Shown] {
-    let ids = h.model.columns
+    // The Needs you reel, while it is open, is the reel on screen (the project reel stays built, hidden, under it).
+    let needs = h.model.needs.isOpen
+    let ids = needs ? h.model.needs.columns : h.model.columns
     func col(_ id: String, view: String?) -> BuiltWithin.Column {
       BuiltWithin.Column(id: id, expectsRows: !(h.world.threads[id] ?? []).isEmpty, warm: h.model.agent(id)?.warm, view: view)
-    }
-    guard let sv = h.reelScrollView(), let doc = sv.documentView else {
-      return ids.filter(h.model.onScreen.contains).map { Shown(column: col($0, view: "missing"), rectInWindow: nil) }
     }
     // The reel says which view shows each column (a view per column, or a reused slot); an older reel is read by
     // position, one document view per column.
     var reel: ReelColumnViews?
-    h.walk(h.window.contentView!) { if reel == nil, let r = $0 as? ReelColumnViews { reel = r } }
+    h.walk(h.window.contentView!) { if reel == nil, let r = $0 as? ReelColumnViews, r.reelKind == (needs ? .needs : .project) { reel = r } }
+    guard let sv = reel?.reelScrollView ?? h.reelScrollView(), let doc = sv.documentView else {
+      return ids.filter(h.model.onScreen.contains).map { Shown(column: col($0, view: "missing"), rectInWindow: nil) }
+    }
     let views: [NSView?]
     if let reel, reel.columnCount == ids.count {
       views = ids.indices.map { reel.columnView(at: $0) }

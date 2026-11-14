@@ -104,6 +104,12 @@ import DeskBenchKit
       case "sidebar-select": (steps, checks) = await drive.sidebarSelect()
       case "sidebar-burst": (steps, checks) = await drive.sidebarBurst()
       case "sidebar-scroll": (steps, checks) = await drive.sidebarScroll()
+      case "needs-open": (steps, checks) = await drive.needsOpen()
+      case "needs-answer": (steps, checks) = await drive.needsAnswer()
+      case "needs-arrive": (steps, checks) = await drive.needsArrive()
+      case "needs-step": (steps, checks) = await drive.needsStep()
+      case "needs-empty": (steps, checks) = await drive.needsEmpty()
+      case "needs-swipe": (steps, checks) = await drive.needsSwipe()
       default: return .failure(.usage("scenario '\(spec.name)' has no driver"))
       }
       if spec.name == "open", rep == 0 {
