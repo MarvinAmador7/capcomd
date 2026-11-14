@@ -89,6 +89,22 @@ see *Comparing two builds' call trees* below.
 - `typing`: key events into an on-screen composer. Passes when only `ColumnComposer` bodies ran.
 - `resize`: 1440 → 1100 → 720 → 1440 wide; the column count must follow (3 → 2 → 1 → 3); no stretch over 100 ms.
 - `follow`: an `approval.requested` frame for a far-off agent with Follow on; latency is ask → reel starts moving.
+- `sidebar-toggle`: open and fold the sidebar (design/desktop/rex) as ⌃⌘S does (`animated=1`: as its button does).
+  Budget 50 ms to the frame that shows it. Checks: `opened` (the sidebar's body ran and the pane is in the window),
+  `pane-agent` (the pane shows the model's agent), `folded`, `reel-untouched` (no reel body, the reel's frame unchanged),
+  `drawn` (the share of non-ground pixels in the sidebar's and the pane's rects: a blank one fails).
+- `sidebar-select`: with the sidebar open, rows clicked (mouse events handed to the window at each row, laid out from the
+  fixed line heights) and walked with ↓ ↓ Return (key events to the window). Budget 50 ms; checks `clicked`, `keyboard`,
+  `drawn`.
+- `sidebar-burst`: thread items for the pane's agent and another agent at 20/s with the sidebar open. Passes when no
+  sidebar body ran and the sidebar's slice wasn't assigned (`isolation-sidebar`), and the pane's thread rendered
+  (`delivered-pane`). The pane's views report as `Pane`, `PaneHead`, `PaneThread`, `PaneEntryRow`, `PaneComposer`.
+- `sidebar-scroll`: a long sidebar (every project unfolded, Finished open) scrolled with PerfLoopProbe's synthetic
+  `scroll-down` / `scroll-up` gestures (`gesture`, `gestureBack`: or recordings), delivered to the sidebar's scroll view.
+  Checks `scrolled` and `isolation-pane` (no pane body). Use a fixture with several projects (`crew@projects=8,agents=24`).
+
+The sidebar scenarios aren't in `suite` and leave the window folded. `snapshot --sidebar [--select AGENT]` pictures
+the opened window.
 
 Fixtures (`list fixtures`): `solo` (1 agent), `trio` (3), `crew17` (SPEC's 17-agent reference, the default),
 `crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32). Same name, same bytes, every
