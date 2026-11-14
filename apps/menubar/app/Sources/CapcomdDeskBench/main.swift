@@ -181,7 +181,7 @@ func kv(_ xs: [String]) -> [String: String] {
 
   case "run", "suite":
     var o = Runner.Options(scenario: args.positional.dropFirst().first ?? "")
-    if let f = args.one("fixture") { o.fixture = f }
+    if let f = args.one("fixture") ?? Scenarios.defaultFixture(o.scenario) { o.fixture = f }
     if let r = args.one("reps").flatMap(Int.init) { o.reps = r }
     o.params = kv(args.all("set").filter { !KnobArgs.isKnob($0) })
     if args.has("gesture") { o.params["gesture"] = args.all("gesture").joined(separator: ",") }
@@ -381,7 +381,8 @@ let helpOnly = startup.positional.first == "record-gesture" && (startup.has("hel
 let wantsScene = sceneCommands.contains(startup.positional.first ?? "") && (startup.one("host") ?? "scene") == "scene" && !helpOnly
   && !(startup.positional.first == "run" && startup.positional.dropFirst().first == "open")
 MainActor.assumeIsolated {
-  if wantsScene, let w = Fixtures.make(startup.one("fixture") ?? "crew17") {
+  let scenario = startup.positional.first == "run" ? startup.positional.dropFirst().first ?? "" : ""
+  if wantsScene, let w = Fixtures.make(startup.one("fixture") ?? Scenarios.defaultFixture(scenario) ?? "crew17") {
     let h = Harness(world: w); h.sceneHosted = true; Harness.current = h
     if let s = startup.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let hh = Double(p[1]) { BenchScene.size = CGSize(width: w, height: hh) } }
   }

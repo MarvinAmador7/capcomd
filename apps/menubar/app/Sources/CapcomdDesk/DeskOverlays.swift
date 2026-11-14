@@ -4,8 +4,8 @@ import AppKit
 import CapcomdStore
 import CapcomdUI
 
-// Over the window: the open project's menu (ReelMenu), dropped from its name, and the ⌘K palette. One surface for both:
-// the board's menu (#232326, 13 pt corners, 30 pt rows). A click outside closes either; Esc too.
+// Over the window: the open project's menu (ReelMenu), dropped from its name (the board's menu: #232326, 13 pt corners,
+// 30 pt rows), and the scrim under Search ⌘K (its panel is SearchPanel.swift). A click outside closes either; Esc too.
 
 /// The open project's group in the title bar, for the menu to drop from.
 struct ProjectGroupBounds: PreferenceKey {
@@ -35,18 +35,22 @@ struct DeskOverlays: View {
             .offset(x: max(8, r.minX), y: max(4, r.maxY + 6))
             .transition(Self.drop(reduceMotion))
         }
-        if model.paletteOpen {
-          PaletteView()
-            .frame(width: Theme.Desk.Surface.paletteWidth)
+        // Search ⌘K: in the window (SearchView), or its own panel over it (SearchPanel.swift; knob search.host).
+        if DeskKnobs.searchHost.value == .panel {
+          SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
+        } else if model.paletteOpen {
+          SearchView(onHeight: { _ in }, inWindow: true)
+            .frame(width: SearchMetrics.width(for: g.size.width))
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 40)
-            .transition(Self.drop(reduceMotion))
+            .padding(.top, SearchMetrics.top - Theme.Desk.titleBar)
+            .transition(.opacity)
         }
       }
       .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
     }
     .animation(reduceMotion ? Theme.Motion.reduced : .spring(duration: 0.2, bounce: 0), value: model.menuOpen)
-    .animation(reduceMotion ? Theme.Motion.reduced : .spring(duration: 0.2, bounce: 0), value: model.paletteOpen)
+    // The scrim under Search ⌘K: at once from the keyboard (SPEC §4), a short fade otherwise.
+    .animation(NSApp.currentEvent?.type == .keyDown ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
   }
 
   /// Transform and opacity only; a crossfade with Reduce Motion.
@@ -152,7 +156,7 @@ struct ProjectMenuView: View {
   }
 }
 
-/// A row of the menu or the palette: icon, title, what follows it, the shortcut.
+/// A row of the menu: icon, title, what follows it, the shortcut.
 struct MenuRow<Trailing: View>: View {
   var icon: String? = nil
   let title: String
@@ -207,66 +211,6 @@ struct SurfaceChrome: ViewModifier {
       .background(shape.fill(Theme.Desk.Surface.fill))
       .overlay(shape.strokeBorder(Theme.Desk.Surface.stroke, lineWidth: 0.5))
       .shadow(color: .black.opacity(0.5), radius: 20, y: 18)
-  }
-}
-
-/// The ⌘K palette: type to filter; ↑ ↓ move, Return runs, Esc closes.
-struct PaletteView: View {
-  @Environment(DeskModel.self) private var model
-  @FocusState private var focused: Bool
-  var body: some View {
-    @Bindable var m = model
-    let shown = model.paletteShown
-    let sel = min(model.paletteSelection, max(0, shown.count - 1))
-    return VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 8) {
-        Image(systemName: "command").font(.system(size: 12.5)).foregroundStyle(Theme.Desk.tertiary).frame(width: Theme.Desk.Surface.icon)
-        TextField("", text: $m.paletteQuery, prompt: Text("Type an action, a project or an agent").foregroundStyle(Theme.Desk.tertiary))
-          .textFieldStyle(.plain).font(.system(size: 14)).foregroundStyle(Theme.Desk.text)
-          .focused($focused)
-          .onSubmit { model.runPaletteSelection() }
-          .onKeyPress(.downArrow) { model.movePaletteSelection(1); return .handled }
-          .onKeyPress(.upArrow) { model.movePaletteSelection(-1); return .handled }
-          .onKeyPress(.escape) { model.closePalette(); return .handled }
-          .accessibilityLabel("Actions")
-      }
-      .padding(.horizontal, Theme.Desk.Surface.rowPadding).frame(height: 38)
-      SurfaceDivider()
-      if shown.isEmpty {
-        Text("Nothing matches").font(Theme.Desk.Surface.rowFont).foregroundStyle(Theme.Desk.tertiary)
-          .padding(.horizontal, Theme.Desk.Surface.rowPadding).frame(height: Theme.Desk.Surface.rowHeight)
-      } else {
-        ScrollViewReader { proxy in
-          ScrollView {
-            VStack(spacing: 0) {
-              ForEach(Array(shown.enumerated()), id: \.element.id) { n, e in
-                MenuRow(icon: Self.icon(e.action), title: e.title, detail: e.detail, shortcut: e.shortcut, selected: n == sel) { model.run(e.action) }
-                  .id(e.id)
-              }
-            }
-          }
-          .scrollIndicators(.never)
-          .frame(maxHeight: Theme.Desk.Surface.rowHeight * 9)
-          .fixedSize(horizontal: false, vertical: true)
-          .onChange(of: sel) { _, n in if shown.indices.contains(n) { proxy.scrollTo(shown[n].id) } }
-        }
-      }
-    }
-    .padding(Theme.Desk.Surface.padding)
-    .modifier(SurfaceChrome())
-    .onAppear { focused = true }
-    .accessibilityElement(children: .contain).accessibilityLabel("Actions")
-  }
-
-  static func icon(_ a: PaletteAction) -> String {
-    switch a {
-    case .menu(let i): ProjectMenuView.icon(i)
-    case .project: "square.stack"
-    case .newProject: "plus"
-    case .home: "house"
-    case .follow: "eye"
-    case .agent: "rectangle.portrait"
-    }
   }
 }
 

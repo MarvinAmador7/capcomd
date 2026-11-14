@@ -63,6 +63,15 @@ public enum Scenarios {
     ScenarioSpec(name: "sidebar-scroll", summary: "A long sidebar (every project unfolded) scrolled down and back with replayed trackpad gestures.",
                  budget: "Sidebar scroll: no dropped frames, no pane work", rule: "no late frame while it moves; no stretch over 16.7 ms; no pane body",
                  kind: .smooth, latencyBudgetMs: nil, params: ["scrolls": "4", "gesture": "synthetic:scroll-down", "gestureBack": "synthetic:scroll-up"]),
+    ScenarioSpec(name: "palette-open", summary: "Search ⌘K on the empty search, then Esc, repeatedly (fixture `search`: 250+ items): ⌘K to the frame that shows the panel and its results.",
+                 budget: "Search ⌘K opens: first frame ≤ 50 ms", rule: "median latency from ⌘K to the first frame with the panel and its results ≤ 50 ms; checks: items, empty-search, panel-drawn, esc-closes",
+                 kind: .latency, latencyBudgetMs: 50, params: ["opens": "6"]),
+    ScenarioSpec(name: "palette-type", summary: "Type a query into Search ⌘K a character at a time (key events to its field): each keystroke to the frame that shows its results.",
+                 budget: "Search ⌘K: a keystroke's results within a frame", rule: "median latency from a key to the frame that shows its results ≤ 16.7 ms; checks: typed, ranking, panel-drawn",
+                 kind: .latency, latencyBudgetMs: 16.7, params: ["query": "matchkey"]),
+    ScenarioSpec(name: "palette-keys", summary: "Search ⌘K's keys: type a query, ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens the first (splits fall back to ↩), Esc closes.",
+                 budget: "Search ⌘K: keys and opening a result ≤ 50 ms", rule: "median latency from a key to the frame that shows what it did ≤ 50 ms; checks: selection, return-opens, split-falls-back, esc-closes, panel-drawn",
+                 kind: .latency, latencyBudgetMs: 50, params: ["query": "shard"]),
     // The Needs you reel (SPEC, Needs you reel). Run them on `needs5` or `needs20` (asks across projects).
     ScenarioSpec(name: "needs-open", summary: "Open the Needs you reel (the hand): every ask across projects as a column, oldest first.",
                  budget: "Open the Needs you reel: first frame ≤ 50 ms", rule: "median latency from openNeedsReel() to the frame that shows its columns ≤ 50 ms; the columns are the asks oldest first; no stretch over 100 ms",
@@ -85,7 +94,9 @@ public enum Scenarios {
   ]
   public static func spec(_ name: String) -> ScenarioSpec? { all.first { $0.name == name } }
   /// The scenarios `suite` runs, in order.
-  public static let suite = ["open", "switch", "step", "jump", "fling", "burst", "typing", "resize", "follow"]
+  public static let suite = ["open", "switch", "step", "jump", "fling", "burst", "typing", "resize", "follow", "palette-open", "palette-type", "palette-keys"]
+  /// The fixture a scenario runs on unless told otherwise (Search ⌘K's need hundreds of searchable items).
+  public static func defaultFixture(_ scenario: String) -> String? { scenario.hasPrefix("palette-") ? "search" : nil }
 }
 
 public enum Budgets {

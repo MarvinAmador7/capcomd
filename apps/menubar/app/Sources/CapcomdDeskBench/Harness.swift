@@ -141,7 +141,9 @@ import PerfLoopProbe
 
   func windowState() -> WindowState? {
     guard let w = window else { return nil }
-    return WindowState(appActive: NSApp.isActive, keyWindow: w.isKeyWindow, visible: w.isVisible, occluded: !w.occlusionState.contains(.visible),
+    // A child window of the window holding the keyboard (Search ⌘K's panel, search.host=panel) is the window's own.
+    let key = w.isKeyWindow || (w.childWindows ?? []).contains { $0.isVisible && $0.isKeyWindow }
+    return WindowState(appActive: NSApp.isActive, keyWindow: key, visible: w.isVisible, occluded: !w.occlusionState.contains(.visible),
                        activityAsserted: activity != nil, frame: [w.frame.origin.x, w.frame.origin.y, w.frame.width, w.frame.height], backingScale: w.backingScaleFactor)
   }
 
@@ -363,6 +365,24 @@ import PerfLoopProbe
 
   func walk(_ v: NSView, _ f: (NSView) -> Void) { f(v); v.subviews.forEach { walk($0, f) } }
 
+  /// The window's visible child windows (Search ⌘K's panel) drawn over its picture at their places, each drawn by
+  /// itself as the window is (behind-window vibrancy doesn't draw this way; the content does).
+  func drawChildWindows(into rep: NSBitmapImageRep) {
+    guard let w = window, let children = w.childWindows?.filter(\.isVisible), !children.isEmpty,
+          let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return }
+    // The context draws in the picture's points (its `size`), whatever its pixels.
+    let scale = rep.size.width / w.frame.width
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = ctx
+    for c in children {
+      guard let v = c.contentView, let cr = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
+      v.cacheDisplay(in: v.bounds, to: cr)
+      let r = NSRect(x: (c.frame.minX - w.frame.minX) * scale, y: (c.frame.minY - w.frame.minY) * scale, width: c.frame.width * scale, height: c.frame.height * scale)
+      cr.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
+    }
+    NSGraphicsContext.restoreGraphicsState()
+  }
+
   // MARK: observability
 
   struct ViewDump: Codable {
@@ -423,6 +443,7 @@ import PerfLoopProbe
     let frame = window.contentView!.superview ?? window.contentView!
     if let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) {
       frame.cacheDisplay(in: frame.bounds, to: rep)
+      drawChildWindows(into: rep)
       let png = dir.appendingPathComponent("\(name).png")
       if (try? rep.representation(using: .png, properties: [:])?.write(to: png)) != nil { out.append(png.path) }
     }

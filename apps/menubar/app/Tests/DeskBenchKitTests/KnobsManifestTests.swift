@@ -19,7 +19,9 @@ final class KnobsManifestTests: XCTestCase {
     XCTAssertEqual(DeskKnobs.reelCache.defaultValue, .off)
     // The reel ends AppKit's own deceleration when the fingers lift (the fix of 2026-11-04); `appkit` is the old reel.
     XCTAssertEqual(DeskKnobs.reelRelease.defaultValue, .land)
-    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "reel.cache", "reel.columns", "reel.release", "reel.slide"])
+    // Search ⌘K is drawn inside the window; its own key panel stays a knob (it measured slower in every pair).
+    XCTAssertEqual(DeskKnobs.searchHost.defaultValue, .overlay)
+    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "reel.cache", "reel.columns", "reel.release", "reel.slide", "search.host"])
     try XCTSkipIf(ProcessInfo.processInfo.environment[Knobs.variable] != nil, "PERFLOOP_KNOBS is set for this test run")
     XCTAssertEqual(DeskKnobs.reelSlide.value, .ca)
     XCTAssertEqual(DeskKnobs.buildPerFrame.value, 1)
@@ -28,7 +30,9 @@ final class KnobsManifestTests: XCTestCase {
     XCTAssertEqual(DeskKnobs.reelColumns.value, .keep)
     XCTAssertEqual(DeskKnobs.reelCache.value, .off)
     XCTAssertEqual(DeskKnobs.reelRelease.value, .land)
-    XCTAssertEqual(DeskKnobs.vector, ["reel.slide": "ca", "build.perFrame": "1", "desk.layout": "auto", "desk.column": "swiftui", "reel.columns": "keep", "reel.cache": "off", "reel.release": "land"])
+    XCTAssertEqual(DeskKnobs.searchHost.value, .overlay)
+    XCTAssertEqual(DeskKnobs.vector, ["reel.slide": "ca", "build.perFrame": "1", "desk.layout": "auto", "desk.column": "swiftui", "reel.columns": "keep", "reel.cache": "off", "reel.release": "land",
+                                      "search.host": "overlay"])
     XCTAssertEqual(DeskKnobs.problems.filter { !$0.contains("t.") }, [])
   }
 
