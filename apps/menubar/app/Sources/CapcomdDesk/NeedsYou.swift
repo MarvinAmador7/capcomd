@@ -209,7 +209,8 @@ package final class NeedsReel {
     backLabel = home ? "Home" : model.focusedAgent.flatMap { model.agent($0)?.header.tabLabel }
       ?? model.decks.first { $0.id == model.openProjectId }?.title ?? "Back"
     if home { model.leaveHome() }
-    model.menuOpen = false; model.paletteOpen = false
+    if model.menuOpen { model.menuOpen = false }
+    if model.paletteOpen { model.paletteOpen = false }
     asks = model.store.needsAsks()
     if count != asks.count { count = asks.count }
     animatesRemoval = true; keyboardAnswers = []
@@ -241,6 +242,9 @@ package final class NeedsReel {
         let cold = self.columns.indices.filter { self.slices[self.columns[$0]]?.warm == false }
         guard let next = cold.min(by: { abs($0 - at) < abs($1 - at) }) else { return }
         self.slices[self.columns[next]]?.set(warm: true)
+        // One column per frame: the next waits until this one's update has gone out (a busy main thread otherwise
+        // let several sets pile up into one long frame).
+        await withCheckedContinuation { c in DispatchQueue.main.async { c.resume() } }
       }
     }
   }
@@ -308,7 +312,7 @@ extension NeedsReel: ReelDriver {
 extension DeskModel {
   /// The Needs you hand, or the "Needs you" heading: every asking agent as a reel, oldest first.
   package func openNeedsReel() {
-    stopAsked = false
+    if stopAsked { stopAsked = false }
     needs.open()
   }
   /// Esc or Back: the window goes back to what it showed before.

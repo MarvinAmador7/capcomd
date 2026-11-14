@@ -59,7 +59,9 @@ extension Drive {
       let t = h.now()
       h.columnsSince = t
       h.model.openNeedsReel()
-      let committed = await h.nextCommit()
+      // The first frame that shows the reel with its columns (a busy main thread can commit once before it's in).
+      var committed = await h.nextCommit()
+      for _ in 0..<30 where h.needsReel()?.columnCount != expected.count { committed = await h.nextCommit() }
       let cols = needs.columns
       let reel = h.needsReel()
       if cols != expected { ordered = false; detail.append("open#\(i): columns \(cols) vs asks oldest first \(expected)") }
