@@ -131,6 +131,7 @@ extension Drive {
 
   /// ⌘K repeatedly on the empty search, and Esc between: open to first frame, and what the empty search offers.
   func paletteOpen() async -> ([StepResult], [Check]) {
+    await rewind()   // the reel built and its threads warmed: a step measures the palette, not the window settling
     var steps: [StepResult] = [], checks: [Check] = []
     var escOK = true
     var escFailed: [Int] = []
@@ -158,6 +159,7 @@ extension Drive {
 
   /// A query typed a character at a time: each keystroke to the frame that shows its results.
   func paletteType() async -> ([StepResult], [Check]) {
+    await rewind()   // the reel built and its threads warmed: a step measures the palette, not the window settling
     let query = params["query"] ?? "matchkey"
     var steps = [await openPalette("open")]
     steps += await type(query, prefix: "type")
@@ -170,6 +172,7 @@ extension Drive {
 
   /// ↓ ↓ ↑ move the selection; ↩ opens it; ⌘↩ opens (until splits, as ↩ does); Esc closes.
   func paletteKeys() async -> ([StepResult], [Check]) {
+    await rewind()   // the reel built and its threads warmed: a step measures the palette, not the window settling
     let query = params["query"] ?? "shard"
     var steps: [StepResult] = [], checks: [Check] = []
     steps.append(await openPalette("open"))
