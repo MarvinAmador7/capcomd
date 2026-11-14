@@ -64,7 +64,10 @@ extension Drive {
       _ = await h.wait(timeoutMs: 2000) { self.h.events.contains { $0.name == "needs.shown" && $0.value == expected.count && $0.t >= t } }
       let committed = await h.nextCommit()
       let cols = needs.columns
-      let reel = h.needsReel()
+      // SwiftUI can hand the reel its columns a turn before it puts the view in the window: look for it over a few
+      // more commits (the latency above is already taken).
+      var reel = h.needsReel()
+      for _ in 0..<10 where reel == nil { _ = await h.nextCommit(); reel = h.needsReel() }
       if cols != expected { ordered = false; detail.append("open#\(i): columns \(cols) vs asks oldest first \(expected)") }
       if reel?.columnCount != expected.count || needs.reelPosition != expected.first { shown = false; detail.append("open#\(i): the reel has \(reel?.columnCount ?? -1) columns, leading \(needs.reelPosition ?? "-")") }
       await h.sleep(ms: 300)
