@@ -41,6 +41,13 @@ struct ReelRepresentable: NSViewRepresentable {
 /// leading column reported to the model only when it changes. Slides run in the render server (`slide`).
 final class ReelView: NSView, ReelColumnViews {
   private let model: DeskModel
+  /// What the reel shows and reports to: the open project (the model), or the Needs you reel.
+  private let driver: ReelDriver
+  let kind: ReelKind
+  /// The Needs you reel: a removed column slides out and the rest close up (`removeColumns`); the leading column keeps
+  /// its place when columns before it go. Read at each update; the project reel never animates a removal.
+  var animatesRemovals = false
+  var reduceMotion = false
   private let scroll = SnapScrollView()
   private let doc = Flipped()
   private var hosts: [String: NSView] = [:]
@@ -88,8 +95,10 @@ final class ReelView: NSView, ReelColumnViews {
   /// Whether columns away from the screen are hidden or parked while the reel rests.
   private var windowing: Bool { layoutMode == .framesHide || parkColumns }
 
-  init(model: DeskModel) {
+  init(model: DeskModel, driver: ReelDriver? = nil, kind: ReelKind = .project) {
     self.model = model
+    self.driver = driver ?? model
+    self.kind = kind
     super.init(frame: .zero)
     scroll.hasHorizontalScroller = false
     scroll.hasVerticalScroller = false
@@ -124,7 +133,7 @@ final class ReelView: NSView, ReelColumnViews {
 
   /// Whether the reel took the event (the view under the pointer then never sees it).
   private func took(_ e: NSEvent) -> Bool {
-    guard let window, e.window === window else { return false }
+    guard let window, e.window === window, driver.reelActive else { return false }
     let dx = abs(e.scrollingDeltaX), dy = abs(e.scrollingDeltaY)
     if e.phase.isEmpty && e.momentumPhase.isEmpty {   // a mouse wheel (Shift turns it sideways): no gesture to follow
       guard dx > dy, over(e), !overSidewaysScroller(e) else { return false }
@@ -186,6 +195,7 @@ final class ReelView: NSView, ReelColumnViews {
   func show(_ ids: [String]) {
     guard ids != order else { return }
     if reuseColumns { return showSlots(ids) }
+    if kind == .needs, let plan = ReelRemoval.plan(old: order, new: ids, at: at), pitch > 0, window != nil { return removeColumns(ids, plan) }
     for id in Set(hosts.keys).subtracting(ids) { hosts.removeValue(forKey: id)?.removeFromSuperview() }
     for id in Set(blanks.keys).subtracting(ids) { blanks.removeValue(forKey: id)?.removeFromSuperview() }
     for id in Set(standIns.keys).subtracting(ids) { standIns.removeValue(forKey: id)?.removeFromSuperview() }
@@ -198,6 +208,76 @@ final class ReelView: NSView, ReelColumnViews {
     }
     needsLayout = true
     buildSoon()
+  }
+
+  /// Columns left the Needs you reel (asks answered): each leaving column fades and lifts 6 pt (0.18 s; Reduce Motion: a
+  /// 0.15 s fade), and the columns after it slide into the places it leaves (0.24 s, no bounce), all in the render
+  /// server, transform and opacity only. The leading column stays leading unless it left, in which case the next
+  /// column takes its place. From the keyboard (`animatesRemovals` false) nothing slides: the reel is laid out anew.
+  private func removeColumns(_ ids: [String], _ plan: ReelRemoval) {
+    let origin = scroll.contentView.bounds.origin.x
+    var before: [String: CGFloat] = [:]
+    for id in ids { if let v = hosts[id] ?? blanks[id] { before[id] = v.frame.minX - origin } }
+    stopSlide()
+    let animate = animatesRemovals
+    for id in plan.removed {
+      for v in [hosts.removeValue(forKey: id), blanks.removeValue(forKey: id), standIns.removeValue(forKey: id)].compactMap({ $0 }) {
+        if animate { leave(v) } else { v.removeFromSuperview() }
+      }
+    }
+    order = ids
+    at = plan.at
+    for id in ids where hosts[id] == nil && blanks[id] == nil { let b = Self.blank(); doc.addSubview(b); blanks[id] = b }
+    needsLayout = true
+    layoutSubtreeIfNeeded()
+    jump(to: at)
+    reportLanding()
+    DeskProbe.event("reel.removed", plan.removed.count)
+    guard animate, !reduceMotion else { buildSoon(); return }
+    let now = scroll.contentView.bounds.origin.x
+    var moved = 0
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { [weak self] in
+      MainActor.assumeIsolated { guard let self else { return }; self.slides -= 1; self.moving(); self.buildSoon() }
+    }
+    slides += 1; moving()
+    for id in ids {
+      guard let v = hosts[id] ?? blanks[id], let l = v.layer, let was = before[id] else { continue }
+      let d = was - (v.frame.minX - now)
+      guard abs(d) > 0.5 else { continue }
+      let a = CABasicAnimation(keyPath: "position.x")
+      a.isAdditive = true
+      a.fromValue = d
+      a.toValue = 0
+      a.duration = ReelRemoval.closeUp
+      a.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+      l.add(a, forKey: "closeUp")
+      moved += 1
+    }
+    CATransaction.commit()
+    DeskProbe.event("reel.closeUp", moved)
+  }
+
+  /// A column leaving the Needs you reel: it fades (and lifts 6 pt without Reduce Motion), then goes.
+  private func leave(_ v: NSView) {
+    guard let l = v.layer else { return v.removeFromSuperview() }
+    let fade = CABasicAnimation(keyPath: "opacity")
+    fade.fromValue = 1; fade.toValue = 0
+    let g = CAAnimationGroup()
+    g.animations = [fade]
+    if !reduceMotion {
+      let lift = CABasicAnimation(keyPath: "position.y")
+      lift.isAdditive = true; lift.fromValue = 0; lift.toValue = -6
+      g.animations?.append(lift)
+    }
+    g.duration = reduceMotion ? 0.15 : ReelRemoval.leave
+    g.timingFunction = CAMediaTimingFunction(name: .easeOut)
+    g.fillMode = .forwards
+    g.isRemovedOnCompletion = false
+    CATransaction.begin()
+    CATransaction.setCompletionBlock { MainActor.assumeIsolated { v.removeFromSuperview() } }
+    l.add(g, forKey: "leave")
+    CATransaction.commit()
   }
 
   private var blanks: [String: NSView] = [:]
@@ -219,10 +299,10 @@ final class ReelView: NSView, ReelColumnViews {
     let id = order[i]
     let h: NSView
     if nativeColumns {
-      h = NativeColumnView(agentId: id, model: model)
+      h = NativeColumnView(agentId: id, model: model, needs: kind == .needs)
     } else {
       let hv = NSHostingView(rootView: AnyView(Column(agentId: id)
-        .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).preferredColorScheme(.dark)))
+        .environment(model).environment(\.threadHost, ThreadHostBox(host: model)).environment(\.needsReel, kind == .needs).preferredColorScheme(.dark)))
       hv.safeAreaRegions = []
       hv.sizingOptions = []   // the reel sets its frame; nothing to measure
       h = hv
@@ -253,7 +333,7 @@ final class ReelView: NSView, ReelColumnViews {
       self.building = false
       guard self.across > 0 else { return self.buildSoon() }   // not laid out yet
       for _ in 0..<self.perFrame {
-        guard !self.model.reelMoving, let next = self.order.indices.filter({ self.hosts[self.order[$0]] == nil }).min(by: { abs($0 - self.at) < abs($1 - self.at) }) else { break }
+        guard !self.driver.reelMoving, let next = self.order.indices.filter({ self.hosts[self.order[$0]] == nil }).min(by: { abs($0 - self.at) < abs($1 - self.at) }) else { break }
         self.build(next)
       }
       if !self.blanks.isEmpty {
@@ -281,7 +361,7 @@ final class ReelView: NSView, ReelColumnViews {
     if !standIns.isEmpty { for (i, id) in order.enumerated() { standIns[id]?.frame = frame(of: i) } }
     doc.frame = CGRect(x: 0, y: 0, width: max(bounds.width, 2 * inset + CGFloat(order.count) * pitch - gap), height: bounds.height)
     if moved { jump(to: at) }   // a new width keeps the same leading column
-    if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
+    if driver.across != n { DispatchQueue.main.async { [driver] in if driver.across != n { driver.across = n } } }
     if let p = pending, bounds.width > 0 { pending = nil; perform(p) }
     buildAround(at)
     if reuseColumns { placeSlots() }
@@ -308,8 +388,8 @@ final class ReelView: NSView, ReelColumnViews {
   private func reportLanding() {
     let landed = at
     DispatchQueue.main.async { [weak self] in
-      guard let self, self.order.indices.contains(landed), self.at == landed, self.model.reelPosition != self.order[landed] else { return }
-      self.model.reelScrolled(toIndex: landed)
+      guard let self, self.order.indices.contains(landed), self.at == landed, self.driver.reelPosition != self.order[landed] else { return }
+      self.driver.reelScrolled(toIndex: landed)
     }
   }
 
@@ -335,7 +415,7 @@ final class ReelView: NSView, ReelColumnViews {
       if moved { jump(to: at) }   // a new width keeps the same leading column
     }
     let n = across
-    if model.across != n { DispatchQueue.main.async { [model] in if model.across != n { model.across = n } } }
+    if driver.across != n { DispatchQueue.main.async { [driver] in if driver.across != n { driver.across = n } } }
     if let p = pending, bounds.width > 0 { pending = nil; perform(p) }
     buildAround(at)
     if reuseColumns { placeSlots() }
@@ -515,14 +595,14 @@ final class ReelView: NSView, ReelColumnViews {
   }
 
   /// Scrolling yourself to another column turns Follow off (SPEC §3); a swipe that lands back where it began doesn't.
-  private func scrolledByHand() { if model.follow { model.follow = false } }
+  private func scrolledByHand() { driver.scrolledByHand() }
 
   private func moving() {
     let m = gestures + slides > 0
     if !m, windowing { rest() }
     if !m, reuseColumns { slotsAtRest() }
-    guard model.reelMoving != m else { return }
-    model.reelMoving = m
+    guard driver.reelMoving != m else { return }
+    driver.reelMoving = m
     DeskProbe.event("reel.phase", m ? 1 : 0)
   }
 
@@ -533,7 +613,7 @@ final class ReelView: NSView, ReelColumnViews {
     at = i
     buildAround(i)
     DeskProbe.event("reel.position", i)
-    model.reelScrolled(toIndex: i)
+    driver.reelScrolled(toIndex: i)
   }
 
   // MARK: reel.columns=reuse
@@ -702,7 +782,7 @@ final class ReelView: NSView, ReelColumnViews {
     cachedSerial += 1
     let serial = cachedSerial
     cached = (serial, from, to, base)
-    if i != at { at = i; buildAround(i); DeskProbe.event("reel.position", i); model.reelScrolled(toIndex: i) }
+    if i != at { at = i; buildAround(i); DeskProbe.event("reel.position", i); driver.reelScrolled(toIndex: i) }
     slides += 1; moving()
     let a = CABasicAnimation(keyPath: "position.x")
     a.isAdditive = true
@@ -750,6 +830,8 @@ final class ReelView: NSView, ReelColumnViews {
 
   // MARK: ReelColumnViews (the bench's guards and drivers)
 
+  var reelKind: ReelKind { kind }
+  var reelScrollView: NSScrollView { scroll }
   var columnCount: Int { order.count }
   func columnFrame(at i: Int) -> CGRect { frame(of: i) }
   func columnView(at i: Int) -> NSView? {
@@ -849,13 +931,16 @@ package enum ReelRelease {
 /// One agent: header, thread, and its message box (or the decision it waits on, docked at its foot).
 struct Column: View {
   @Environment(DeskModel.self) private var model
+  /// In the Needs you reel every column asks: no amber ring (the ask bar carries it), and a line naming its project.
+  @Environment(\.needsReel) private var inNeeds
   let agentId: String
   var body: some View {
     let _ = DeskProbe.body("Column", id: agentId)
     if let a = model.agent(agentId) {
-      let asks = a.approval != nil, focused = a.focused
+      let asks = a.approval != nil && !inNeeds, focused = a.focused
       VStack(spacing: 0) {
         ColumnHead(slice: a)
+        if inNeeds, let p = model.needs.place(agentId) { NeedsPlaceLine(place: p) }
         if a.warm {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
@@ -863,6 +948,7 @@ struct Column: View {
           Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
+        else if let l = a.limit { LimitBar(limit: l, focused: focused) }
         else if let g = a.goal, g.docks || g.outcome != nil { GoalDock(card: g) }
         else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }
@@ -903,7 +989,7 @@ struct ColumnHead: View {
         }
         if let s = h.suffix { Text(verbatim: " " + s).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary) }
         Text(verbatim: " · " + Self.state(h, asks: slice.approval != nil)).font(Theme.Desk.meta)
-          .foregroundStyle(slice.approval != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
+          .foregroundStyle(slice.approval != nil || slice.limit != nil ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.secondary)
       }
       Spacer(minLength: 0)
       // The planner's column names the goal branch, quietly, so it's plain where the work lands.
@@ -1099,6 +1185,9 @@ struct SlotDraft: ViewModifier {
 /// message box, the new project column, the menu or the palette: `DeskModel.returnApproves`). Esc is never bound.
 struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
+  /// The bar's reel: Return belongs to the reel in front (the project reel stays built, hidden, under the Needs you
+  /// reel, and may show the same agent's ask).
+  @Environment(\.needsReel) private var inNeeds
   let approval: PendingApproval
   let focused: Bool
   var body: some View {
@@ -1107,6 +1196,10 @@ struct DecisionBar: View {
     return VStack(alignment: .leading, spacing: 8) {
       Text(verbatim: approval.question.plain).font(Theme.Desk.question).foregroundStyle(Theme.Desk.text)
         .fixedSize(horizontal: false, vertical: true)
+      // A merge's files, as Home's card says them ("3 files, +73 −5"), then its branches.
+      if let d = approval.diff {
+        Text(verbatim: "\(d.total) \(d.total == 1 ? "file" : "files"), +\(d.added) −\(d.removed)").font(.system(size: 12.5)).foregroundStyle(Theme.Desk.secondary)
+      }
       if let b = approval.branchLine { Text(verbatim: b).font(Theme.Desk.mono).foregroundStyle(Theme.Desk.secondary) }
       HStack(spacing: 8) {
         Spacer(minLength: 0)
@@ -1116,7 +1209,7 @@ struct DecisionBar: View {
           HStack(spacing: 6) { Text("Approve"); Text("↩").font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 4).background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.12))) }
         }
         .buttonStyle(DeskButton(kind: .primary))
-        .keyboardShortcut(focused && model.returnApproves ? .defaultAction : nil)
+        .keyboardShortcut(focused && model.returnApproves && model.needs.isOpen == inNeeds ? .defaultAction : nil)
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }
