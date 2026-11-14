@@ -62,10 +62,15 @@ One window, two parts.
     rename, duplicate, archive and export are out on purpose.
   - **Search ⌘K** (`rex/CommandK.dc.html`; the owner's "Search ⌘K" in RexNotes): one palette for what needs you, the
     agents, the projects and the commands, ranked in that order, over what the app already holds (no network search).
-    Native, as Spotlight in macOS 26: a real panel (NSPanel, non-activating, key-capable, a child of the window so it
-    floats over it and never over other apps), the system's vibrancy under a tint that keeps the board's ground
-    (#262628 measured), 18 pt corners, the system window shadow; 640 pt wide (the window less 16 pt each side when
-    narrower), centred, 92 pt from the window's top, over the reel's dim. A 56 pt query row: the magnifying glass, then
+    Native, as Spotlight in macOS 26: the system's vibrancy (NSVisualEffectView) under a tint that keeps the board's
+    ground (#262628 measured), 18 pt corners, the board's shadow (0 24 70 .55, 0 4 14 .3) and hairlines; 640 pt wide
+    (the window less 16 pt each side when narrower), centred, 92 pt from the window's top, over the reel's dim. It is
+    drawn inside the window (knob `search.host=overlay`, the default), not in a panel of its own: a key NSPanel
+    (`search.host=panel`, kept as a knob) makes the window resign key on every ⌘K and Esc, and every column then
+    re-resolves its key-state styling: 282 ms of main thread a step in a Time Profiler run with 40 columns, and slower
+    than the overlay in every interleaved pair (245–456 ms against 82–220 ms on a busy Mac). Inside the window a local
+    key monitor takes ↑ ↓ ↩ ⌘↩ Esc before anything else, and a character typed before the field has the keyboard
+    goes to the field. A 56 pt query row: the magnifying glass, then
     a 22 pt field with no box ("Search…"). Groups under 11 pt semibold sentence-case headers (28 pt, text at the
     bottom): Needs you, Agents, Projects, Commands. 32 pt rows, 8 pt corners, one 20 pt icon column (an agent's bot, a
     project's place, a command's symbol), the title (what matched in semibold; it keeps up to 68 % of the row) then the
@@ -166,7 +171,7 @@ fan-out spring 0.3 s, names fade in over the last 120 ms. Home comes in and goes
 rise); a Running card arrives with a 0.35 s spring (opacity, from 6 pt above); the model menu pops in 0.14 s (opacity,
 3 pt); the composer's focus ring fades in 0.18 s. Reduce Motion: crossfades only.
 The menu: 0.2 s spring, opacity with a 0.98 scale from the top. Search ⌘K: at once from the keyboard (⌘K); from a
-click, a 0.18 s ease-out fade of its panel and the dim (Reduce Motion: 0.15 s); it closes at once, and its keys (moving
+click, a 0.18 s ease-out fade (Reduce Motion: 0.15 s crossfade); it closes the same way (Esc at once), and its keys (moving
 the selection, typing) never animate. Menu bar → window: one shape grows from the menu bar icon,
 300 ms (0.32, 0.72, 0, 1), pointer only (`Expand`). Bots: no loops; the menu bar's approved moments only.
 
