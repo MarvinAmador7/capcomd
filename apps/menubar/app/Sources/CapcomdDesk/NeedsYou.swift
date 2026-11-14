@@ -450,6 +450,7 @@ struct NeedsReelRepresentable: NSViewRepresentable {
     v.animatesRemovals = needs.animatesRemoval
     v.show(columns)
     if let request { v.perform(request) }
+    DeskProbe.event("needs.shown", columns.count)
   }
 }
 

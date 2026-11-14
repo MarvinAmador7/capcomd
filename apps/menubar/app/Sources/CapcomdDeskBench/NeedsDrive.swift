@@ -59,9 +59,10 @@ extension Drive {
       let t = h.now()
       h.columnsSince = t
       h.model.openNeedsReel()
-      // The first frame that shows the reel with its columns (a busy main thread can commit once before it's in).
-      var committed = await h.nextCommit()
-      for _ in 0..<30 where h.needsReel()?.columnCount != expected.count { committed = await h.nextCommit() }
+      // The first frame that shows the reel with its columns (a busy main thread can commit once before it's in): the
+      // commit after the reel's view took them (its `needs.shown` probe event; no view walk inside the step).
+      _ = await h.wait(timeoutMs: 2000) { self.h.events.contains { $0.name == "needs.shown" && $0.value == expected.count && $0.t >= t } }
+      let committed = await h.nextCommit()
       let cols = needs.columns
       let reel = h.needsReel()
       if cols != expected { ordered = false; detail.append("open#\(i): columns \(cols) vs asks oldest first \(expected)") }
@@ -200,6 +201,9 @@ extension Drive {
   func needsEmpty() async -> ([StepResult], [Check]) {
     await needsReset()
     let project = h.model.openProjectId, focus = h.model.focusedAgent
+    // After Esc the project reel shows again: its columns were built when it opened (they stay built under the Needs
+    // you reel), so the guards count their bodies from then, not from when the Needs you reel opened.
+    let since = h.columnsSince
     await openNeedsSettled()
     var steps: [StepResult] = []; var i = 0
     while !needs.columns.isEmpty, i < 64 {
@@ -219,6 +223,7 @@ extension Drive {
       if !h.window.performKeyEquivalent(with: e), NSApp.mainMenu?.performKeyEquivalent(with: e) != true { h.window.firstResponder?.keyDown(with: e) }
     }
     let shown = await h.nextCommit()
+    h.columnsSince = since
     let back = !needs.isOpen && h.model.openProjectId == project && h.model.focusedAgent == focus
     steps.append(h.end(m, latencyMs: shown - t, notes: ["open \(needs.isOpen); project \(h.model.openProjectId ?? "-"); focus \(h.model.focusedAgent ?? "-") (was \(focus ?? "-"))"]))
     return (steps, [Check("nothing-needs-you", nothing, "after \(i) answers: \(needs.columns.count) columns, \"Nothing needs you.\" drawn \(seen)"),
