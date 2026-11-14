@@ -285,7 +285,8 @@ test("serve sets Rivet 2.x data aside, says so once, and starts the 3.x engine e
     expect(existsSync(join(dbDir(data), "CURRENT"))).toBe(false); // the 3.x engine's own data, nothing mixed in
     expect(readFileSync(index, "utf8")).toBe("");
     expect(readFileSync(join(home, "runs-rivet-v2.jsonl"), "utf8")).toContain("run-before");
-    for (let i = 0; i < 40 && readVersionRecord(data)?.version === "2.3.31"; i++) await Bun.sleep(250);
+    // Recorded once the watchdog has read the new engine's /health, after its ✓ line; the 2.x record was moved away.
+    for (let i = 0; i < 40 && !/^3\./.test(readVersionRecord(data)?.version ?? ""); i++) await Bun.sleep(250);
     expect(readVersionRecord(data)?.version).toMatch(/^3\./);
   } finally {
     try { process.kill(child.pid!, "SIGTERM"); } catch {}

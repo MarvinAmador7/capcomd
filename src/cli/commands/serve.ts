@@ -1,5 +1,6 @@
 import { createServer } from "net";
-import { mkdirSync, readFileSync, rmSync } from "fs";
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from "fs";
+import { join } from "path";
 import { spawnSync } from "child_process";
 import { createRequire } from "module";
 
@@ -283,10 +284,61 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   };
   const url = `http://127.0.0.1:${port}/`;
   const alive = () => fetch(url, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
+  // An engine that exited under us starts again in place, on the same data, with the argv and RIVET__* settings
+  // rivetkit first gave it (src/engine/engine-wrapper.sh records them). rivet-engine 3.x renews a 30 s topology lease;
+  // after the machine slept longer than that it fences itself on wake and exits ("topology fenced this worker: lease
+  // expired …", rivet engine/packages/topology/src/config.rs `LeaseTiming`, not configurable), and rivetkit only logs
+  // the crash. Its actors' state is in the engine's storage; rivetkit's envoy reconnects to the new engine by itself,
+  // and the harness API stays open meanwhile. Before, serve exited ("stopped answering") and launchd restarted it: on
+  // a Mac that sleeps, every wake. At most 5 restarts in 10 minutes; then, or when the new engine never answers, serve
+  // exits as before.
+  const launch = (): { argv: string[]; env: Record<string, string> } | null => {
+    try {
+      const argv = readFileSync(join(dataDir, "engine-launch.argv"), "utf8").split("\0").slice(0, -1);
+      const env = Object.fromEntries(readFileSync(join(dataDir, "engine-launch.env"), "utf8").split("\0").slice(0, -1)
+        .flatMap((kv) => { const i = kv.indexOf("="); return i > 0 && kv.startsWith("RIVET__") ? [[kv.slice(0, i), kv.slice(i + 1)]] : []; }));
+      return argv.length ? { argv, env } : null;
+    } catch { return null; }
+  };
+  const restarts: number[] = [];
+  let restarting = false;
+  const restartEngine = async (old: number) => {
+    const how = launch();
+    const now = Date.now();
+    while (restarts.length && now - restarts[0]! > 600_000) restarts.shift();
+    if (!how) return die(`capcomd serve: the engine on :${port} exited (pid ${old}) and can't be started again in place (no launch record); exiting`);
+    if (restarts.length >= 5) return die(`capcomd serve: the engine on :${port} exited ${restarts.length + 1} times in 10 minutes; exiting`, data.engineLogTail(dataDir));
+    restarts.push(now);
+    restarting = true;
+    console.error(`capcomd serve: the engine on :${port} exited (pid ${old}, as after the machine slept); starting it again on the same data`);
+    killTree(old, "SIGKILL"); // anything left in its process group
+    const logs = join(dataDir, ".rivetkit", "var", "logs", "rivet-engine");
+    mkdirSync(logs, { recursive: true });
+    const stamp = Math.floor(Date.now() / 1000);
+    const { spawn } = await import("child_process");
+    // Its own process group, as rivetkit starts it: a signal to serve's group never reaches it twice; stopEngine and
+    // the exit handler stop it by the pid the wrapper records.
+    const out = openSync(join(logs, `engine-${stamp}-stdout.log`), "a"), err = openSync(join(logs, `engine-${stamp}-stderr.log`), "a");
+    const child = spawn(how.argv[0]!, how.argv.slice(1), { env: { ...process.env, ...how.env }, detached: true, stdio: ["ignore", out, err] });
+    child.on("error", () => {});
+    closeSync(out); closeSync(err);
+    for (let i = 0; i < 45 && !dying; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      if (await alive()) { misses = 0; restarting = false; return; }
+      if (child.exitCode !== null) break;
+    }
+    restarting = false;
+    const tail = data.engineLogTail(dataDir);
+    return die(`capcomd serve: the engine on :${port} didn't come back after a restart; exiting`, tail && `  the engine's last words:\n${tail.replace(/^/gm, "    ")}`);
+  };
   const t0 = Date.now();
-  let up = false, misses = 0;
+  let up = false, misses = 0, lastTick = Date.now();
   setInterval(async () => {
-    if (dying) return;
+    if (dying || restarting) return;
+    // serve itself was suspended (the machine slept): the misses before it say nothing about the engine now.
+    const tick = Date.now();
+    if (tick - lastTick > 10_000) misses = 0;
+    lastTick = tick;
     if (await alive()) {
       if (!up) {
         console.log(`✓ Rivet engine running at http://localhost:${port}`);
@@ -301,6 +353,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
       const tail = data.engineLogTail(dataDir);
       return die(`capcomd serve: engine never answered on :${port} within 90s; exiting`, tail && `  the engine's last words:\n${tail.replace(/^/gm, "    ")}`);
     }
+    // Not answering because it exited (its pid file names a process that is gone): start it again in place.
+    const pid = enginePid();
+    if (up && pid && gone(pid)) return restartEngine(pid);
     if (up && ++misses >= 10) return die(`capcomd serve: engine on :${port} stopped answering; exiting`);
   }, 2000);
 
