@@ -154,12 +154,10 @@ package final class NeedsReel {
   /// Slices for new columns: the open project's own when the agent is in it (one slice per agent), else new ones.
   private func adopt(_ ids: [String]) {
     guard let model, !ids.isEmpty else { return }
-    var fresh: [String] = []
     for id in ids where slices[id] == nil {
       if let s = leaving.removeValue(forKey: id) ?? model.agentSlices[id] { slices[id] = s; continue }
       guard let a = ask(id), let h = model.store.columnHeader(runId: a.runId, agentId: id) else { continue }
       slices[id] = AgentSlice(h)
-      fresh.append(id)
     }
     refresh(ids, bots: true)
     let projects = model.store.projects
@@ -169,7 +167,6 @@ package final class NeedsReel {
       places[id] = NeedsPlace(project: p?.title ?? run.titled?.text ?? RunTitle.untitled, sandbox: run.sandbox,
                               role: slices[id]?.header.name ?? run.agents[id]?.displayName ?? "agent")
     }
-    _ = fresh
   }
 
   /// Header, bot, ask and focus for these columns, read once per run.
@@ -177,7 +174,7 @@ package final class NeedsReel {
     guard let model else { return }
     var headers: [String: [String: ColumnHeader]] = [:]
     for id in ids {
-      guard let s = slices[id], let a = ask(id) ?? asks.first(where: { $0.agentId == id }) else { continue }
+      guard let s = slices[id], let a = ask(id) else { continue }
       if headers[a.runId] == nil {
         headers[a.runId] = Dictionary(model.store.reelColumns(runId: a.runId).map { ($0.agentId, $0) }, uniquingKeysWith: { a, _ in a })
       }
