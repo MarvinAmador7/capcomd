@@ -157,9 +157,11 @@ struct HistoryButton: View {
 /// Settings: the app's Settings window (⌘,).
 struct SettingsButton: View {
   @Environment(\.openSettings) private var openSettings
+  /// Set inside the opened layer's own hosting views, where the scene's action isn't.
+  @Environment(\.deskOpenSettings) private var deskOpenSettings
   let size: CGFloat
   var body: some View {
-    Button { openSettings() } label: {
+    Button { if let deskOpenSettings { deskOpenSettings() } else { openSettings() } } label: {
       Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.Desk.tertiary)
         .frame(width: size, height: size)
     }
@@ -261,7 +263,9 @@ struct SidebarList: View {
     .onKeyPress(.rightArrow) { model.sidebarUnfold(true); return .handled }
     .onKeyPress(.leftArrow) { model.sidebarUnfold(false); return .handled }
     .onKeyPress(.return) { model.sidebarReturn(); return .handled }
-    .task(id: model.nav.listFocus) { if model.nav.listFocus > 0 { focused = true } }
+    .task(id: model.nav.listFocus) { if model.nav.listFocus > 0 && model.nav.sidebarOpen { focused = true } }
+    // Folded, the list (kept built, hidden) gives the keyboard back.
+    .onChange(of: model.nav.sidebarOpen) { _, open in if !open { focused = false } }
   }
 }
 

@@ -25,7 +25,7 @@ package struct RootView: View {
           ZStack {
             // The reel stays built under Home, so leaving Home for the open project shows it at once (SPEC §1).
             if model.openRunId != nil {
-              ReelHost().opacity(np == nil ? 1 : 0).allowsHitTesting(np == nil && !opened).accessibilityHidden(np != nil || opened)
+              ReelHost().opacity(np == nil ? 1 : 0).allowsHitTesting(np == nil).accessibilityHidden(np != nil)
             }
             if model.openRunId == nil && model.unreachable && model.decks.isEmpty { Unreachable() }
             else if let np, !opened { HomeView(np: np).transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8))) }
@@ -37,8 +37,9 @@ package struct RootView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .overlay(alignment: .top) {
+      // Opened, the opened layer covers it (and the reel): neither is hidden or changed, so a toggle touches neither
+      // (SwiftUI would take a hidden view's AppKit views out of the window and put them back).
       TitleBar().alignmentGuide(.top) { $0[.bottom] }
-        .opacity(opened ? 0 : 1).allowsHitTesting(!opened).accessibilityHidden(opened)
     }
     // Opened: the sidebar and the pane, into the title bar's band (the pane's header is the top line).
     .overlay { if model.link == .ready { OpenedLayer().ignoresSafeArea(.container, edges: .top) } }

@@ -35,31 +35,34 @@ extension Drive {
       let t = h.now()
       if animated { withAnimation(.spring(duration: 0.25, bounce: 0)) { h.model.setSidebar(open: opening) } } else { h.model.setSidebar(open: opening) }
       let shown = await h.nextCommit()
-      if animated { await h.sleep(ms: 300) }
+      // The step is the toggle's work: the frame that shows it and whatever follows within 250 ms (300 more while it
+      // animates). The bench's own checks (walking the window's views) run after the step closes.
+      await h.sleep(ms: animated ? 550 : 250)
       let end = h.now()
       let bs = h.bodies(in: t...end)
       reelBodies += bs.filter { Self.reelViews.contains($0.view) }.count
-      // The structural state, once the change has landed (a commit or two after the frame the latency counts).
+      let reelIds = Set(bs.filter { Self.reelViews.contains($0.view) }.compactMap(\.id))
+      steps.append(h.end(m, latencyMs: shown - t, notes: ["\(bs.count) bodies: " + Dictionary(grouping: bs, by: \.view).mapValues(\.count).sorted { $0.value > $1.value }.map { "\($0.key)×\($0.value)" }.joined(separator: " "),
+                                                         "reel bodies' agents: \(reelIds.sorted().joined(separator: ",").ifEmpty("none"))"]))
+      // The structural state, once the change has landed.
       _ = await settle { opening ? paneView() != nil : paneView() == nil }
       if opening {
         let pane = paneView()
-        let shownNow = bs.contains { $0.view == "Sidebar" } && pane != nil
+        let shownNow = pane != nil && h.model.nav.sidebarOpen
         let rightNow = pane?.agent == h.model.paneAgent && h.model.paneAgent != nil
-        if !shownNow || !rightNow { failures.append("toggle#\(i): sidebar body \(bs.contains { $0.view == "Sidebar" }), pane \(pane?.agent ?? "none"), model \(h.model.paneAgent ?? "none")") }
+        if !shownNow || !rightNow { failures.append("toggle#\(i): open \(h.model.nav.sidebarOpen), pane \(pane?.agent ?? "none"), model \(h.model.paneAgent ?? "none")") }
         opensShown = opensShown && shownNow
         paneRight = paneRight && rightNow
-        if i == 0 {
-          let (side, body) = inkOpened()
-          inkNotes.append("drawn: sidebar \(Stats.round(side * 100, 1)) %, pane \(Stats.round(body * 100, 1)) %")
-          ink = ink && side > 0.02 && body > 0.02
-        }
       } else {
         foldsShown = foldsShown && paneView() == nil && !h.model.nav.sidebarOpen
       }
-      let reelIds = Set(bs.filter { Self.reelViews.contains($0.view) }.compactMap(\.id))
-      steps.append(h.end(m, latencyMs: shown - t, notes: ["\(bs.count) bodies: " + Dictionary(grouping: bs, by: \.view).mapValues(\.count).sorted { $0.value > $1.value }.map { "\($0.key)×\($0.value)" }.joined(separator: " "),
-                                                         "pane \(paneView()?.agent ?? "none") model \(h.model.paneAgent ?? "none") focused \(h.model.focusedAgent ?? "-")",
-                                                         "reel bodies' agents: \(reelIds.sorted().joined(separator: ","))"]))
+      // What is drawn after each open, once its step is closed (the picture costs a frame or more): the sidebar and the
+      // pane are kept built and only shown, so a blank one would otherwise pass.
+      if opening {
+        let (side, body) = inkOpened()
+        inkNotes.append("drawn: sidebar \(Stats.round(side * 100, 1)) %, pane \(Stats.round(body * 100, 1)) %")
+        ink = ink && side > 0.02 && body > 0.02
+      }
       await h.sleep(ms: 250)
     }
     await foldSidebar()
@@ -100,11 +103,13 @@ extension Drive {
       let start = h.now()
       click(at: CGPoint(x: 120, y: t.y))
       let shown = await h.nextCommit()
+      await h.sleep(ms: 250)
+      let step = h.end(m, latencyMs: shown - start)
       _ = await settle { paneView()?.agent == t.row.id }
       let ok = h.model.paneAgent == t.row.id && paneView()?.agent == t.row.id
       if !ok { notes.append("click on \(t.row.title) at y \(Int(t.y)): pane shows \(h.model.paneAgent ?? "-")") }
       clicked = clicked && ok
-      steps.append(h.end(m, latencyMs: shown - start, notes: [ok ? "shown" : "NOT shown"]))
+      steps.append(step)
       await h.sleep(ms: 300)
     }
     // Keyboard: the list takes the keyboard (as opening the sidebar gives it), ↓ ↓ then Return.
@@ -119,12 +124,14 @@ extension Drive {
       let start = h.now()
       key(36)   // Return
       let shown = await h.nextCommit()
+      await h.sleep(ms: 250)
+      let step = h.end(m, latencyMs: shown - start)
       if case .agent(let id)? = cursor { _ = await settle { paneView()?.agent == id } }
       var ok = cursor != nil && cursor != before
       if case .agent(let id)? = cursor { ok = ok && h.model.paneAgent == id && paneView()?.agent == id }
       if !ok { notes.append("keys: cursor \(before.map { "\($0)" } ?? "-") → \(cursor.map { "\($0)" } ?? "-"), pane \(h.model.paneAgent ?? "-")") }
       keyed = keyed && ok
-      steps.append(h.end(m, latencyMs: shown - start, notes: [ok ? "shown" : "NOT shown"]))
+      steps.append(step)
       await h.sleep(ms: 300)
     }
     let (side, body) = inkOpened()
@@ -324,22 +331,32 @@ extension Drive {
   }
 
   /// How much of the sidebar (below its header) and of the pane's thread is drawn: the share of pixels that differ from
-  /// the window's ground. A blank sidebar or an empty pane reads near 0.
+  /// the window's ground (read off the window's own picture, raw bytes, against a pixel of the ground in the sidebar's
+  /// footer gap). A blank sidebar or an empty pane reads near 0. Called outside the measured steps.
   func inkOpened() -> (sidebar: Double, pane: Double) {
     let frame = h.window.contentView!.superview ?? h.window.contentView!
     guard let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return (0, 0) }
     frame.cacheDisplay(in: frame.bounds, to: rep)
+    guard let data = rep.bitmapData, rep.bitsPerSample == 8, rep.samplesPerPixel >= 3 else { return (0, 0) }
     let scale = Double(rep.pixelsWide) / Double(frame.bounds.width)
     let H = Double(frame.bounds.height), W = Double(frame.bounds.width)
+    let bpr = rep.bytesPerRow, spp = rep.samplesPerPixel
+    func px(_ x: Int, _ y: Int) -> (Int, Int, Int) {
+      let o = y * bpr + x * spp
+      return (Int(data[o]), Int(data[o + 1]), Int(data[o + 2]))
+    }
+    // The ground: the sidebar's footer, between Home and History.
+    let g = px(Int(130 * scale), Int((H - 20) * scale))
     func share(_ r: CGRect) -> Double {
       var hits = 0, n = 0
-      let x0 = Int(r.minX * scale), x1 = Int(r.maxX * scale), y0 = Int(r.minY * scale), y1 = Int(r.maxY * scale)
-      for y in stride(from: max(0, y0), to: min(rep.pixelsHigh, y1), by: 2) {
-        for x in stride(from: max(0, x0), to: min(rep.pixelsWide, x1), by: 2) {
-          guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+      let x0 = max(0, Int(r.minX * scale)), x1 = min(rep.pixelsWide, Int(r.maxX * scale))
+      let y0 = max(0, Int(r.minY * scale)), y1 = min(rep.pixelsHigh, Int(r.maxY * scale))
+      guard x0 < x1, y0 < y1 else { return 0 }
+      for y in stride(from: y0, to: y1, by: 2) {
+        for x in stride(from: x0, to: x1, by: 2) {
+          let c = px(x, y)
           n += 1
-          let d = abs(c.redComponent - 0x0E / 255) + abs(c.greenComponent - 0x0E / 255) + abs(c.blueComponent - 0x10 / 255)
-          if d > 0.12 { hits += 1 }
+          if abs(c.0 - g.0) + abs(c.1 - g.1) + abs(c.2 - g.2) > 30 { hits += 1 }
         }
       }
       return n == 0 ? 0 : Double(hits) / Double(n)

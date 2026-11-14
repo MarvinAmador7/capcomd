@@ -20,6 +20,8 @@ extension DeskModel {
       if focusedAgent == nil, openRunId != nil, let first = sidebarDefaultAgent() { focusedAgent = first }
       nav.cursor = selectedAgent.map { .agent($0) }
     }
+    if open, !nav.everOpened { nav.everOpened = true }
+    if !open { sidebar.pointer(inside: false) }   // hidden, it gets no hover: nothing waits on the pointer
     nav.sidebarOpen = open
     if open { nav.focusList() }
   }
