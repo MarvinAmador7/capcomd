@@ -220,6 +220,12 @@ final class SidebarModelTests: XCTestCase {
     XCTAssertTrue(c.needs.isEmpty)
     XCTAssertTrue(c.running.isEmpty)
     XCTAssertEqual(c.finished.first?.rows.map(\.word), ["done", "done", "failed"])
+    m.closeNewProject()
+    if m.selectedAgent != nil {
+      // Its selected agent never hides: Finished shows while it holds the selection.
+      XCTAssertTrue(m.sidebarLines.list.contains { if case .row = $0 { return true }; return false })
+      m.openHome(focus: false)
+    }
     XCTAssertFalse(m.sidebarLines.list.contains { if case .row = $0 { return true }; return false })   // Finished starts folded
     m.toggleFinished()
     XCTAssertEqual(m.sidebarLines.list.filter { if case .row = $0 { return true }; return false }.count, 3)

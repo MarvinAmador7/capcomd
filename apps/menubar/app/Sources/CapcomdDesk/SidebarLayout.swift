@@ -89,7 +89,8 @@ extension SidebarLines {
       groups(c.running, .running)
       if !c.finished.isEmpty {
         out.list.append(.heading(.finished, count: c.finishedCount, first: false))
-        if finishedOpen { groups(c.finished, .finished) }
+        // The selected agent never hides: Finished shows while it holds the selection.
+        if finishedOpen || c.finished.contains(where: { $0.projectId == selectedProject }) { groups(c.finished, .finished) }
       }
       return out
     }
