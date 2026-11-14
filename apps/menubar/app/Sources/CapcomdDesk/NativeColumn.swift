@@ -16,6 +16,8 @@ final class NativeColumnView: NSView {
   private let model: DeskModel
   /// Per-agent state a slot hands from one agent to the next (the message box's draft), when it is a slot.
   private let memory: SlotMemory?
+  /// A reel column, or the opened window's one pane (PaneHead, 44 pt; no focus ring: the pane is the focus).
+  private let style: ColumnStyle
   private let head: NSHostingView<AnyView>
   private let body: NSHostingView<AnyView>
   /// The size the head and body were placed for: placing is skipped until it changes.
@@ -25,12 +27,13 @@ final class NativeColumnView: NSView {
   /// rectangle, inset by half the line (a layer border antialiases its corners differently).
   private let edge = StrokeView()
 
-  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil) {
+  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil, style: ColumnStyle = .reel) {
     self.agentId = agentId
     self.model = model
     self.memory = memory
-    head = NSHostingView(rootView: Self.head(agentId, model))
-    body = NSHostingView(rootView: Self.body(agentId, model, memory))
+    self.style = style
+    head = NSHostingView(rootView: Self.head(agentId, model, style))
+    body = NSHostingView(rootView: Self.body(agentId, model, memory, style))
     super.init(frame: .zero)
     wantsLayer = true
     layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
@@ -52,21 +55,22 @@ final class NativeColumnView: NSView {
     super.layout()
     guard bounds.size != placed else { return }
     placed = bounds.size
-    let h = Theme.Desk.columnHeader
+    let h = style == .pane ? Theme.Desk.paneHeader : Theme.Desk.columnHeader
     head.frame = CGRect(x: 0, y: 0, width: bounds.width, height: h)
     body.frame = CGRect(x: 0, y: h, width: bounds.width, height: max(0, bounds.height - h))
     edge.frame = bounds
     edge.update()
   }
 
-  private static func head(_ id: String, _ model: DeskModel) -> AnyView {
-    AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).preferredColorScheme(.dark))
+  private static func head(_ id: String, _ model: DeskModel, _ style: ColumnStyle) -> AnyView {
+    style == .pane ? AnyView(PaneHeadHost(agentId: id).id(id).environment(model).preferredColorScheme(.dark))
+                   : AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).preferredColorScheme(.dark))
   }
   /// The body, identified by its agent: a slot configured with another agent starts its views (and their state) anew;
   /// what must follow the agent is in `memory`.
-  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?) -> AnyView {
+  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ style: ColumnStyle) -> AnyView {
     AnyView(ColumnBody(agentId: id).id(id).environment(model).environment(\.threadHost, ThreadHostBox(host: model))
-      .environment(\.slotMemory, memory).preferredColorScheme(.dark))
+      .environment(\.slotMemory, memory).environment(\.deskPane, style == .pane).preferredColorScheme(.dark))
   }
 
   /// A slot shows another agent: its head and body get that agent's views, its stroke that agent's state. Nothing is
@@ -74,8 +78,8 @@ final class NativeColumnView: NSView {
   func configure(_ id: String) {
     guard id != agentId else { return }
     agentId = id
-    head.rootView = Self.head(id, model)
-    body.rootView = Self.body(id, model, memory)
+    head.rootView = Self.head(id, model, style)
+    body.rootView = Self.body(id, model, memory, style)
     stroke = nil
     observe()
   }
@@ -100,13 +104,22 @@ final class NativeColumnView: NSView {
   private func apply() {
     DeskProbe.body("Column", id: agentId)
     let a = model.agent(agentId)
-    let asks = a?.approval != nil, focused = a?.focused ?? false
+    let asks = a?.approval != nil, focused = style == .reel && (a?.focused ?? false)
     guard stroke.map({ $0 != (asks, focused) }) ?? true else { return }
     stroke = (asks, focused)
     edge.color = NSColor(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke).cgColor
     edge.lineWidth = asks || focused ? 1 : 0.5
     edge.update()
   }
+}
+
+/// Where a column view is: in the reel, or the opened window's pane.
+enum ColumnStyle { case reel, pane }
+
+extension EnvironmentValues {
+  /// The view is in the opened window's pane (not the reel kept under it): its decision takes Return and its message
+  /// box takes the focus only while the sidebar is open, the reel's only while it is folded.
+  @Entry var deskPane = false
 }
 
 /// What follows an agent from one reel slot to the next (`reel.columns=reuse`): its message box's draft. The thread's

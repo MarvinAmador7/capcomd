@@ -12,7 +12,8 @@ struct TitleBar: View {
   var body: some View {
     DeskProbe.body("TitleBar")
     return HStack(spacing: 8) {
-      HomeButton()
+      // Home moved to the rail (C folded); the sidebar button takes its place, where the opened sidebar has it too.
+      SidebarToggleButton(on: false)
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 8) {
           ForEach(model.decks) { deck in

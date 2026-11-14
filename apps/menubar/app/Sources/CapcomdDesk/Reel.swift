@@ -940,6 +940,7 @@ struct ColumnHead: View {
 /// re-renders that row only.
 struct ColumnThread: View {
   @Environment(DeskModel.self) private var model
+  @Environment(\.deskPane) private var inPane
   /// The row that was first when the page above was asked for: put back at the top once that page is in.
   @State private var keep: String?
   let runId: String
@@ -968,7 +969,10 @@ struct ColumnThread: View {
         }
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
       }
-      .padding(Theme.Desk.bodyPadding)
+      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides).
+      .frame(maxWidth: inPane ? Theme.Desk.paneReading : nil, alignment: .leading)
+      .padding(inPane ? Theme.Desk.paneBodyPadding : Theme.Desk.bodyPadding)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .defaultScrollAnchor(.bottom)
     .scrollIndicators(.never)
@@ -1040,6 +1044,7 @@ struct ColumnComposer: View {
   @Environment(DeskModel.self) private var model
   /// A reused reel slot's memory (reel.columns=reuse): the draft is kept there per agent. nil in a kept column.
   @Environment(\.slotMemory) private var memory
+  @Environment(\.deskPane) private var inPane
   let agentId: String
   let name: String
   @State private var draft = ""
@@ -1054,7 +1059,7 @@ struct ColumnComposer: View {
         // Typing here focuses this column, and no decision takes this field's Return.
         .onChange(of: focused) { _, f in model.typing(in: agentId, f) }
         // Message the planner… (⌘L).
-        .task(id: model.agent(agentId)?.boxFocus ?? 0) { if model.takeBoxFocus(agentId) { focused = true } }
+        .task(id: model.agent(agentId)?.boxFocus ?? 0) { if model.nav.sidebarOpen == inPane, model.takeBoxFocus(agentId) { focused = true } }
       if !draft.isEmpty {
         Button(action: send) {
           Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold)).foregroundStyle(Color(white: 0.11))
@@ -1099,6 +1104,7 @@ struct SlotDraft: ViewModifier {
 /// message box, the new project column, the menu or the palette: `DeskModel.returnApproves`). Esc is never bound.
 struct DecisionBar: View {
   @Environment(DeskModel.self) private var model
+  @Environment(\.deskPane) private var inPane
   let approval: PendingApproval
   let focused: Bool
   var body: some View {
@@ -1116,7 +1122,7 @@ struct DecisionBar: View {
           HStack(spacing: 6) { Text("Approve"); Text("↩").font(.system(size: 10.5, weight: .semibold)).padding(.horizontal, 4).background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.12))) }
         }
         .buttonStyle(DeskButton(kind: .primary))
-        .keyboardShortcut(focused && model.returnApproves ? .defaultAction : nil)
+        .keyboardShortcut(focused && model.returnApproves && model.nav.sidebarOpen == inPane ? .defaultAction : nil)
       }
       .disabled(busy).opacity(busy ? 0.5 : 1)
     }

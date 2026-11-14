@@ -37,6 +37,10 @@ package struct DeskCommands: Commands {
     CommandGroup(replacing: .saveItem) {
       Button("Fold into the Title Bar") { model.foldShortcut() }.keyboardShortcut("w", modifiers: .command)
     }
+    // View: the sidebar (⌃⌘S; ⌘\\ too, from the window). Opened, the window is the sidebar and one agent's pane.
+    CommandGroup(replacing: .sidebar) {
+      Button("Toggle Sidebar") { model.toggleSidebar() }.keyboardShortcut("s", modifiers: [.control, .command])
+    }
     CommandMenu("Project") {
       Button("Actions…") { model.togglePalette() }.keyboardShortcut("k", modifiers: .command)
       Divider()
@@ -59,6 +63,8 @@ package struct DeskCommands: Commands {
       Divider()
       Button("Previous Agent") { model.moveFocus(-1) }.keyboardShortcut(.leftArrow, modifiers: .control)
       Button("Next Agent") { model.moveFocus(1) }.keyboardShortcut(.rightArrow, modifiers: .control)
+      Divider()
+      Button("Next Ask") { model.stepToNextAsk() }.keyboardShortcut("j", modifiers: .command)
       Divider()
       Button(model.follow ? "Stop Following" : "Follow") { model.follow.toggle() }.keyboardShortcut("f", modifiers: [.command, .shift])
     }

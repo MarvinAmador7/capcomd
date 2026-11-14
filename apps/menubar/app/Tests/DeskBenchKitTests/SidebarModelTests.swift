@@ -1,0 +1,221 @@
+import XCTest
+@testable import CapcomdStore
+import DeskBenchKit
+#if canImport(SwiftUI) && os(macOS)
+@testable import CapcomdDesk
+#endif
+
+/// The folding rail and the Rex-style sidebar (design/desktop/rex): sections by attention, keyed updates, the pane's
+/// agent, folding idle projects, the keyboard, and the toggle remembered across launches.
+final class SidebarModelTests: XCTestCase {
+  #if canImport(SwiftUI) && os(macOS)
+  @MainActor func model(_ fixture: String = "crew17", defaults: UserDefaults? = nil) -> (DeskModel, CapcomdStore, World) {
+    let w = Fixtures.make(fixture)!
+    let s = CapcomdStore()
+    w.load(into: s)
+    return (DeskModel(store: s, defaults: defaults), s, w)
+  }
+
+  /// Agents that ask step out of their tree into Needs you; the rest stay under their project in Running.
+  @MainActor func testSectionsByAttention() {
+    let (m, s, w) = model()
+    let c = m.sidebar.content
+    // A merge ask waits on the agent merging it (the lead), whose row steps out.
+    let asking = Set(s.pendingApprovals.compactMap { s.waitingAgent($0) })
+    XCTAssertFalse(asking.isEmpty)
+    XCTAssertEqual(Set(c.needs.flatMap(\.rows).map(\.id)), asking)
+    XCTAssertEqual(m.sidebar.needsCount, asking.count)
+    XCTAssertTrue(c.needs.flatMap(\.rows).allSatisfy { $0.tone == .ask && $0.word == "asks" && $0.level == 0 })
+    // Every agent once, in Needs you or Running; every project of the title bar in Running.
+    let all = c.allRows.map(\.id)
+    XCTAssertEqual(all.count, Set(all).count)
+    XCTAssertEqual(Set(all), Set(w.agents.values.flatMap { $0 }))
+    XCTAssertEqual(c.running.map(\.projectId), m.decks.map(\.id))
+    XCTAssertTrue(c.finished.isEmpty)
+    // Tree order and indent kept under the project; the planner first, at level 0.
+    let open = c.running.first { $0.runId == w.openRunId }!
+    XCTAssertEqual(open.rows.first?.level, 0)
+    XCTAssertEqual(open.rows.map(\.id), s.reelColumns(runId: w.openRunId!).map(\.agentId).filter { !asking.contains($0) })
+    XCTAssertTrue(open.rows.allSatisfy { $0.level <= 2 })
+  }
+
+  /// SPEC §1: a thread item arriving changes nothing in the sidebar (it recomputes its run, finds it equal, assigns nothing).
+  @MainActor func testAThreadItemDoesNotTouchTheSidebar() {
+    var (m, s, w) = model()
+    m.setSidebar(open: true)
+    let before = m.sidebar.assignments, content = m.sidebar.content
+    let target = w.agents[w.openRunId!]![2]
+    for n in 0..<10 {
+      let item = Fixtures.liveItem(world: &w, agentId: target, text: "item \(n)")
+      let f = Fixtures.liveFrame(runId: w.openRunId!, item: item)
+      s.receive(.event(f.envelope), scope: f.scope)
+    }
+    XCTAssertGreaterThan(s.threadEntries(agentId: target).count, 0)
+    XCTAssertEqual(m.sidebar.assignments, before)
+    XCTAssertEqual(m.sidebar.content, content)
+  }
+
+  /// An ask arriving moves its agent into Needs you (one assignment), and the hand's count follows.
+  @MainActor func testAnAskMovesTheAgentIntoNeedsYou() {
+    let (m, s, w) = model()
+    let run = w.openRunId!
+    let n = m.sidebar.needsCount
+    let f = Fixtures.askFrame(runId: run, agentId: w.agents[run]![2], approvalId: "apr-new", seq: 900_000)
+    s.receive(.event(f.envelope), scope: f.scope)
+    let agent = s.waitingAgent(s.pendingApprovals.first { $0.id == "apr-new" }!)!
+    XCTAssertEqual(m.sidebar.needsCount, n + 1)
+    XCTAssertTrue(m.sidebar.content.needs.flatMap(\.rows).contains { $0.id == agent })
+    XCTAssertFalse(m.sidebar.content.running.flatMap(\.rows).contains { $0.id == agent })
+  }
+
+  /// While the pointer is over the sidebar a row never moves under it: the change waits until the pointer leaves. The
+  /// hand's count doesn't wait.
+  @MainActor func testMovesWaitForThePointerToLeave() {
+    let (m, s, w) = model()
+    let run = w.openRunId!
+    m.sidebar.pointer(inside: true)
+    let n = m.sidebar.needsCount
+    let f = Fixtures.askFrame(runId: run, agentId: w.agents[run]![3], approvalId: "apr-held", seq: 900_001)
+    s.receive(.event(f.envelope), scope: f.scope)
+    let agent = s.waitingAgent(s.pendingApprovals.first { $0.id == "apr-held" }!)!
+    XCTAssertEqual(m.sidebar.needsCount, n + 1)
+    XCTAssertFalse(m.sidebar.content.needs.flatMap(\.rows).contains { $0.id == agent })
+    m.sidebar.pointer(inside: false)
+    XCTAssertTrue(m.sidebar.content.needs.flatMap(\.rows).contains { $0.id == agent })
+  }
+
+  /// A row of another project opens that project with the agent in the pane; nothing animates (the reel follows).
+  @MainActor func testSelectingARowOpensItsProjectAndShowsTheAgent() {
+    let (m, _, w) = model()
+    m.setSidebar(open: true)
+    let other = m.sidebar.content.running.first { $0.runId != m.openRunId }!
+    let row = other.rows.last!
+    m.selectRow(row)
+    XCTAssertEqual(m.openProjectId, other.projectId)
+    XCTAssertEqual(m.paneAgent, row.id)
+    XCTAssertEqual(m.selectedAgent, row.id)
+    XCTAssertEqual(m.reelRequest?.animated, false)
+    XCTAssertNotEqual(w.openRunId, m.openRunId)
+  }
+
+  /// ↑ ↓ move the cursor through the rows; Return shows the cursor's agent.
+  @MainActor func testKeyboardCursor() {
+    let (m, _, _) = model()
+    m.setSidebar(open: true)
+    let keys = m.sidebarLines.keys
+    m.nav.cursor = keys[0]
+    m.moveSidebarCursor(1); m.moveSidebarCursor(1)
+    XCTAssertEqual(m.nav.cursor, keys[2])
+    m.moveSidebarCursor(-10)
+    XCTAssertEqual(m.nav.cursor, keys[0])
+    m.moveSidebarCursor(2)
+    m.sidebarReturn()
+    guard case .agent(let id) = keys[2] else { return XCTFail("the third line isn't an agent") }
+    XCTAssertEqual(m.paneAgent, id)
+  }
+
+  /// Once the list outgrows the window, projects you aren't looking at fold to one line; the selected one never does,
+  /// and one unfolded by hand stays open. → / Return on a folded project unfolds it.
+  @MainActor func testIdleProjectsFoldOnceTheListOutgrowsTheWindow() {
+    let (m, _, _) = model()
+    m.setSidebar(open: true)
+    m.nav.listHeight = 10_000
+    XCTAssertFalse(m.sidebarLines.overflow)
+    m.nav.listHeight = 300
+    let lines = m.sidebarLines
+    XCTAssertTrue(lines.overflow)
+    let selected = m.sidebar.content.allRows.first { $0.id == m.selectedAgent }!.projectId
+    var foldedProjects: [String] = []
+    for l in lines.list { if case .label(let g, .running, let folded) = l { if folded { foldedProjects.append(g.projectId) } else { XCTAssertEqual(g.projectId, selected) } } }
+    XCTAssertEqual(foldedProjects.count, m.decks.count - 1)
+    m.nav.cursor = .project(.running, foldedProjects[0])
+    m.sidebarUnfold(true)
+    XCTAssertTrue(m.sidebarLines.list.contains { if case .label(let g, _, false) = $0 { return g.projectId == foldedProjects[0] }; return false })
+  }
+
+  /// ⌘J (and the hand, until the Needs you reel lands) steps through the asks, oldest first, wrapping.
+  @MainActor func testNextAskStepsThroughNeedsYou() {
+    let (m, s, w) = model("swarm64")
+    let asks = m.sidebar.content.needs.flatMap(\.rows).map(\.id)
+    XCTAssertGreaterThanOrEqual(asks.count, 2)
+    let start = m.selectedAgent.flatMap { asks.firstIndex(of: $0) } ?? -1
+    m.stepToNextAsk()
+    XCTAssertEqual(m.selectedAgent, asks[(start + 1) % asks.count])
+    m.stepToNextAsk()
+    XCTAssertEqual(m.selectedAgent, asks[(start + 2) % asks.count])
+    for _ in 0..<(asks.count - 2) { m.openNeedsReel() }
+    XCTAssertEqual(m.selectedAgent, asks[(start + asks.count) % asks.count])
+    _ = (s, w)
+  }
+
+  /// Follow never moves the opened pane: the ask shows in Needs you instead.
+  @MainActor func testFollowLeavesTheOpenedPaneAlone() {
+    let (m, s, w) = model()
+    m.setSidebar(open: true)
+    let pane = m.paneAgent
+    let run = w.openRunId!
+    let agent = w.agents[run]!.last { $0 != pane }!
+    let f = Fixtures.askFrame(runId: run, agentId: agent, approvalId: "apr-follow", seq: 900_002)
+    s.receive(.event(f.envelope), scope: f.scope)
+    XCTAssertEqual(m.paneAgent, pane)
+    m.setSidebar(open: false)
+    let g = Fixtures.askFrame(runId: run, agentId: w.agents[run]![2], approvalId: "apr-follow-2", seq: 900_003)
+    s.receive(.event(g.envelope), scope: g.scope)
+    let waiting = s.waitingAgent(s.pendingApprovals.first { $0.id == "apr-follow-2" }!)
+    XCTAssertEqual(m.focusedAgent, waiting)   // folded, Follow works as before
+  }
+
+  /// Folded or opened is remembered across launches.
+  @MainActor func testTheToggleIsRemembered() {
+    let d = UserDefaults(suiteName: "sidebar-tests-\(UUID().uuidString)")!
+    let (m, _, _) = model(defaults: d)
+    XCTAssertFalse(m.nav.sidebarOpen)
+    m.toggleSidebar()
+    XCTAssertTrue(d.bool(forKey: DeskNav.key))
+    let (again, _, _) = model(defaults: d)
+    XCTAssertTrue(again.nav.sidebarOpen)
+    again.toggleSidebar()
+    XCTAssertFalse(d.bool(forKey: DeskNav.key))
+  }
+
+  /// A finished run's project goes under Finished, its agents grey; a failure there doesn't need you.
+  @MainActor func testFinishedProjects() {
+    let s = CapcomdStore()
+    var seq = 0
+    func ev(_ type: String, _ agent: String?, _ d: [String: JSONValue] = [:]) {
+      seq += 1
+      s.receive(.event(Envelope(id: "e\(seq)", scope: "run-a", seq: seq, entity: agent ?? "run-a", type: type, epochMs: 1_000 + seq, projectId: "prj-a",
+                                runId: "run-a", agentId: agent, data: d)), scope: "run-a")
+    }
+    ev("run.created", nil, ["goal": .string("Export usage")])
+    ev("agent.spawned", "pl", ["profile": .string("planner")])
+    ev("agent.spawned", "w1", ["profile": .string("worker"), "parent": .string("pl")])
+    ev("agent.spawned", "w2", ["profile": .string("worker"), "parent": .string("pl")])
+    ev("agent.started", "pl"); ev("agent.started", "w1"); ev("agent.started", "w2")
+    let m = DeskModel(store: s)
+    XCTAssertEqual(m.sidebar.content.running.count, 1)
+    ev("agent.failed", "w2")
+    XCTAssertEqual(m.sidebar.content.needs.flatMap(\.rows).map(\.id), ["w2"])
+    XCTAssertEqual(m.sidebar.content.needs.first?.rows.first?.tone, .error)
+    ev("agent.done", "w1"); ev("agent.done", "pl")
+    ev("run.completed", nil)
+    let c = m.sidebar.content
+    XCTAssertTrue(c.needs.isEmpty)
+    XCTAssertTrue(c.running.isEmpty)
+    XCTAssertEqual(c.finished.first?.rows.map(\.word), ["done", "done", "failed"])
+    XCTAssertFalse(m.sidebarLines.list.contains { if case .row = $0 { return true }; return false })   // Finished starts folded
+    m.toggleFinished()
+    XCTAssertEqual(m.sidebarLines.list.filter { if case .row = $0 { return true }; return false }.count, 3)
+  }
+
+  /// The ••• menu holds only what the daemon does for one agent: no Stop (the daemon refuses it), Pause only with
+  /// agent.pause.
+  @MainActor func testAgentMenuHasOnlyRealActions() {
+    let (m, s, _) = model()
+    let row = m.sidebar.content.running[0].rows[0]
+    XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Copy Agent ID"])
+    s.capabilities.insert(Capability.agentPause)
+    XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Pause", "Copy Agent ID"])
+  }
+  #endif
+}

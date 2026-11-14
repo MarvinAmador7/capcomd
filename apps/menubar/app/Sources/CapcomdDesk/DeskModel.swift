@@ -188,6 +188,10 @@ package final class DeskModel {
   @ObservationIgnored private var threads: [String: ThreadSlice] = [:]
   @ObservationIgnored let mediaSlice = MediaSlice()
   @ObservationIgnored package let home = HomeSlice()
+  /// Folded or opened, and the sidebar's view state; the sidebar's content (SidebarModel.swift).
+  @ObservationIgnored package let nav = DeskNav()
+  @ObservationIgnored package let sidebar = SidebarSlice()
+  @ObservationIgnored var sidebarRowsByRun: [String: [(row: SidebarRow, needs: Bool)]] = [:]
   @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
   @ObservationIgnored private var knownAsks: Set<String> = []
   /// The open run's failed agents, once its columns were first read (nil: not yet).
@@ -201,6 +205,7 @@ package final class DeskModel {
     store = session.store
     setupFlow = ProjectSetupFlow(store: store)
     restoreHidden(from: .standard)
+    nav.restore(from: .standard)
     session.onStore { [weak self] s in self?.connect(s) }
   }
 
@@ -210,6 +215,7 @@ package final class DeskModel {
     store = s; session = nil; autoOpens = a
     setupFlow = ProjectSetupFlow(store: s)
     if let d { restoreHidden(from: d) }
+    nav.restore(from: d)
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }
     link = .ready
@@ -290,6 +296,7 @@ package final class DeskModel {
       if all || runTouched { home.set(store.homeRuns()) }
       if all { newProjectChanged() } else if runTouched { adoptStartedRun() }
     }
+    refreshSidebar(keys)
     guard let runId = openRunId else { return }
     let touchesRun = all || keys.contains(.run(runId))
     if touchesRun {
@@ -353,7 +360,7 @@ package final class DeskModel {
   private func followAsks(_ asking: Set<String>) {
     let new = asking.subtracting(knownAsks)
     knownAsks = asking
-    guard follow, let first = columns.first(where: new.contains) else { return }
+    guard follow, !nav.sidebarOpen, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
 
@@ -364,7 +371,7 @@ package final class DeskModel {
     guard let known = knownFailures else { if !columns.isEmpty { knownFailures = failed }; return }
     let new = failed.subtracting(known)
     knownFailures = failed
-    guard follow, let first = columns.first(where: new.contains) else { return }
+    guard follow, !nav.sidebarOpen, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
 
