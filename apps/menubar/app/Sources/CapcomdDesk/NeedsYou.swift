@@ -464,7 +464,10 @@ struct NeedsPlaceLine: View {
     }
     .font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.horizontal, 16).padding(.top, 2)
+    .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 2)
+    // Opaque and above the thread: a thread rests scrolled to its foot, and nothing of it shows through the line.
+    .background(Theme.Desk.column)
+    .zIndex(1)
     .accessibilityElement(children: .combine)
   }
 }
