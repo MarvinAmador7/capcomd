@@ -143,6 +143,7 @@ package final class NeedsReel {
     }
     adopt(added)
     columns = next
+    if !added.isEmpty { startWarming() }
     if let f = model.focusedAgent, gone.contains(f), let i = old.firstIndex(of: f) {
       // The column that takes the answered one's place takes its focus (Return answers it next).
       let before = old[..<i].filter(now.contains).count
@@ -182,7 +183,6 @@ package final class NeedsReel {
       if bots { s.set(bot: model.team(a.runId)[id]) }
       s.set(approval: a.approval)
       s.set(limit: a.limit)
-      s.set(warm: true)
       s.set(focused: id == model.focusedAgent)
     }
   }
@@ -220,6 +220,28 @@ package final class NeedsReel {
     reelRequest = ReelRequest(agentId: ids.first, animated: false, serial: (reelRequest?.serial ?? 0) + 1)
     model.focusedAgent = ids.first
     follow()
+    startWarming()
+  }
+
+  // MARK: warming
+
+  /// The reel opens with its columns' heads and ask bars; their threads (the costly part) are built after, one column
+  /// per turn while the reel stands still, nearest the leading column first, as the project reel warms its columns
+  /// (DeskModel.startWarming). Building every thread on screen in the opening frame took that frame past 200 ms.
+  @ObservationIgnored private var warmer: Task<Void, Never>?
+  private func startWarming() {
+    warmer?.cancel()
+    warmer = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .milliseconds(40))
+        guard let self, self.isOpen else { return }
+        if self.reelMoving { continue }
+        let at = self.columns.firstIndex(of: self.reelPosition ?? "") ?? 0
+        let cold = self.columns.indices.filter { self.slices[self.columns[$0]]?.warm == false }
+        guard let next = cold.min(by: { abs($0 - at) < abs($1 - at) }) else { return }
+        self.slices[self.columns[next]]?.set(warm: true)
+      }
+    }
   }
 
   /// `restore`: back to what the window showed (Esc, Back); false when something else takes the window (a project
@@ -227,6 +249,7 @@ package final class NeedsReel {
   func close(restore: Bool = true) {
     guard let model, isOpen else { return }
     isOpen = false
+    warmer?.cancel()
     let b = back
     back = nil
     follow()

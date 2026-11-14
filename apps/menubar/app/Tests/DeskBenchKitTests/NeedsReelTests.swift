@@ -70,7 +70,7 @@ final class NeedsReelTests: XCTestCase {
   #if canImport(SwiftUI) && os(macOS)
   // MARK: the reel
 
-  @MainActor func testTheReelOpensOnEveryAskOldestFirstAndCloses() {
+  @MainActor func testTheReelOpensOnEveryAskOldestFirstAndCloses() async throws {
     let s = store()
     ask(s, "run-c", "run-c-w1", "apr-c", at: 3_000)
     ask(s, "run-a", "run-a-w2", "apr-a", at: 2_000)
@@ -82,8 +82,12 @@ final class NeedsReelTests: XCTestCase {
     XCTAssertTrue(m.needs.isOpen)
     XCTAssertEqual(m.needs.columns, ["run-a-w2", "run-b-pl", "run-c-w1"])
     XCTAssertEqual(m.focusedAgent, "run-a-w2")
-    // Every column has its slice (agents of other projects than the open one too), warm, with its ask.
-    for id in m.needs.columns { XCTAssertEqual(m.agent(id)?.warm, true, id); XCTAssertNotNil(m.agent(id)?.approval, id) }
+    // Every column has its slice (agents of other projects than the open one too) with its ask; their threads warm
+    // after the first frame, nearest first.
+    for id in m.needs.columns { XCTAssertNotNil(m.agent(id)?.approval, id) }
+    XCTAssertEqual(m.agent("run-c-w1")?.warm, false)
+    for _ in 0..<60 where !m.needs.columns.allSatisfy({ m.agent($0)?.warm == true }) { try await Task.sleep(for: .milliseconds(25)) }
+    for id in m.needs.columns { XCTAssertEqual(m.agent(id)?.warm, true, id) }
     XCTAssertEqual(m.agent("run-a-w2")?.focused, true)
     XCTAssertEqual(m.needs.place("run-b-pl")?.role, "planner")
     // Each column's run follows its live thread items while the reel is open; closing lets them go.
