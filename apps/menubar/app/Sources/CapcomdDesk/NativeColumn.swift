@@ -84,6 +84,16 @@ final class NativeColumnView: NSView {
     observe()
   }
 
+  /// The opened pane leaving the window (the sidebar folds): its SwiftUI trees are emptied first, so they don't render
+  /// the whole thread once more on the way out (a hosting view taken out of its window updates its environment).
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    super.viewWillMove(toWindow: newWindow)
+    guard style == .pane, newWindow == nil, window != nil else { return }
+    head.rootView = AnyView(EmptyView())
+    body.rootView = AnyView(EmptyView())
+    agentId = ""
+  }
+
   /// The project changed: the model made new slices for its agents, so whatever this slot shows is stale, even an
   /// agent of the same id. The next `configure` rebuilds.
   func forget() { agentId = "" }
@@ -102,7 +112,7 @@ final class NativeColumnView: NSView {
   }
 
   private func apply() {
-    DeskProbe.body("Column", id: agentId)
+    DeskProbe.body(style == .pane ? "Pane" : "Column", id: agentId)
     let a = model.agent(agentId)
     let asks = a?.approval != nil, focused = style == .reel && (a?.focused ?? false)
     guard stroke.map({ $0 != (asks, focused) }) ?? true else { return }
@@ -115,6 +125,17 @@ final class NativeColumnView: NSView {
 
 /// Where a column view is: in the reel, or the opened window's pane.
 enum ColumnStyle { case reel, pane }
+
+/// What the bench reads off a column view: whether it is the opened window's pane, and which agent it shows.
+@MainActor package protocol DeskPaneProbe: AnyObject {
+  var isPane: Bool { get }
+  var shownAgent: String { get }
+}
+
+extension NativeColumnView: DeskPaneProbe {
+  package var isPane: Bool { style == .pane }
+  package var shownAgent: String { agentId }
+}
 
 extension EnvironmentValues {
   /// The view is in the opened window's pane (not the reel kept under it): its decision takes Return and its message

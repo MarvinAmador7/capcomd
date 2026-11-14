@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>C, Rex-style notes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0b0b0c}
+a{color:#F2F2F7;text-decoration:none}a:hover{color:#FFFFFF}
+.win,.board{--line:rgba(255,255,255,.08);--text:#F2F2F7;--row:#C9C9CF;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--bluet:#6CB4FF;--amber:#FFB020;--red:#FF6961;--green:#30D158;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.win *,.board *{box-sizing:border-box}
+.board{box-sizing:border-box}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.lights{display:flex;gap:8px;flex:0 0 auto}
+.lights span{width:12px;height:12px;border-radius:6px;background:#3a3a3e}
+.ib{all:unset;box-sizing:border-box;position:relative;width:28px;height:28px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;color:var(--ter);cursor:pointer;flex:0 0 auto}
+.ib.on{background:rgba(255,255,255,.09);color:var(--text)}
+.ib.hov{background:rgba(255,255,255,.06);color:var(--text)}
+.ib.blue{color:var(--bluet)}
+.ib .cnt{position:absolute;top:1px;right:-2px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--amber);color:#1D1D1F;font-size:10px;font-weight:700;line-height:15px;text-align:center;box-shadow:0 0 0 2px #0e0e10}
+.ib.wide{width:auto;padding:0 7px 0 5px;gap:4px}
+.ib .bes{font-size:12px;font-weight:700;color:var(--amber);font-variant-numeric:tabular-nums}
+.ib .dot{position:absolute;top:5px;right:4px;width:6px;height:6px;border-radius:3px;background:var(--blue);box-shadow:0 0 0 1.5px #0e0e10}
+/* sidebar */
+.sb{flex:0 0 248px;width:248px;display:flex;flex-direction:column;padding:0 8px 6px;min-height:0}
+.sbh{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:2px;padding:0 2px 0 12px}
+.sbh .lights{margin-right:14px}
+.sbh .sp{flex:1}
+.sbl{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.place{display:flex;align-items:center;gap:8px;height:30px;flex:0 0 30px;padding:0 8px;font-size:13px;font-weight:500;color:var(--text);margin-top:14px}
+.place.first{margin-top:2px}
+.place svg{color:var(--sec)}
+.place .pm{margin-left:auto;font-size:11px;font-weight:400;color:var(--ter)}
+.sec{display:flex;align-items:center;gap:6px;height:28px;flex:0 0 28px;padding:0 8px;margin-top:16px;font-size:12px;font-weight:600;color:var(--sec);border-radius:7px}
+.sec.first{margin-top:2px}
+.sec .sn{font-weight:400;color:var(--ter)}
+.sec.need{color:var(--amber)}
+.sec.need .sn{color:var(--amber);opacity:.8}
+.sec .chev{display:inline-flex;color:var(--ter)}
+.sec.sel{background:rgba(255,255,255,.10)}
+.sec.hov{background:rgba(255,255,255,.05)}
+.sec.fin{color:var(--ter)}
+.pli{display:inline-flex;color:var(--ter);margin-right:1px}
+.ws{display:flex;align-items:center;gap:6px;height:24px;flex:0 0 24px;padding:0 6px 0 8px;margin-top:4px;font-size:11.5px;font-weight:600;color:var(--ter);white-space:nowrap;border-radius:7px}
+.ws .wn{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ws .wm{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-weight:400;font-size:11px;color:var(--ter)}
+.ws .wm.a{color:var(--amber);font-weight:500}
+.ws.hov{background:rgba(255,255,255,.05);color:var(--sec)}
+.ws.fold{height:28px;flex-basis:28px;margin-top:2px}
+.ws .chev{color:var(--ter);display:inline-flex}
+.row{display:flex;align-items:center;height:28px;flex:0 0 28px;border-radius:8px;padding:0 4px 0 8px;color:var(--row);font-size:13px;white-space:nowrap}
+.row.l1{padding-left:22px}
+.row.l2{padding-left:36px}
+.rb{all:unset;box-sizing:border-box;flex:1;min-width:0;height:28px;display:flex;align-items:center;gap:8px;cursor:pointer}
+.hd{position:relative;width:18px;height:18px;flex:0 0 18px;display:inline-flex;align-items:center;justify-content:center}
+.hd img{width:14px;height:14px;image-rendering:pixelated;display:block}
+.pb{position:absolute;right:-2px;bottom:-2px;width:10px;height:10px;border-radius:3px;background:#2c2c31;color:#D9D9DF;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.st{flex:0 0 auto;font-size:11.5px;color:var(--ter);padding-right:4px;display:inline-flex;align-items:center;gap:4px}
+.st.a{color:var(--amber);font-weight:500}
+.more{all:unset;box-sizing:border-box;width:24px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:var(--sec);flex:0 0 auto;cursor:pointer}
+.more.on{background:rgba(255,255,255,.12);color:var(--text)}
+.row.sel{background:rgba(255,255,255,.10);color:var(--text)}
+.row.hov{background:rgba(255,255,255,.05);color:var(--text)}
+.row.vis{background:rgba(255,255,255,.045)}
+.row.q{color:var(--ter)}
+.row.q img{opacity:.55}
+.row.done{color:var(--sec)}
+.stk{display:inline-flex;align-items:center;flex:0 0 auto}
+.stk span{width:18px;height:18px;border-radius:5px;background:#26262a;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.stk span+span{margin-left:-9px}
+.stk img{width:14px;height:14px;image-rendering:pixelated}
+.sbf{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:2px;padding:0 2px}
+.sbf .sp{flex:1}
+/* panes */
+.main{flex:1;min-width:0;display:flex;gap:8px;padding:8px 8px 8px 0}
+.pane{flex:1 1 0;min-width:0;border-radius:11px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.pane.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)}
+.ph{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:8px;padding:0 8px 0 14px;white-space:nowrap;font-size:13px}
+.ph img{width:24px;height:24px;image-rendering:pixelated}
+.ph .pt{font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ph .pp{color:var(--sec)}
+.ph .pi{color:var(--ter);font-size:11.5px}
+.ph .ps{color:var(--ter)}
+.ph .ps.a{color:var(--amber)}
+.ph .sp{flex:1}
+.ph .pe{color:var(--ter);font-size:11.5px;margin-right:6px}
+.ph .ctl{display:inline-flex;gap:0}
+.ph .ctl .ib{width:26px;height:26px;color:#7d7d85}
+.pbd{flex:1;min-height:0;overflow:hidden;padding:4px 24px 16px;display:flex;flex-direction:column;gap:14px;color:#E6E6EC;line-height:1.55;font-size:13px}
+.pbd p{margin:0;max-width:720px}
+.tool{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--sec);height:22px;max-width:720px}
+.tool svg{color:var(--ter);flex:0 0 auto}
+.tool .d{margin-left:auto;font-size:11px;color:var(--ter)}
+.tool .r{color:var(--red)}
+.tool .g{color:var(--green)}
+.code{font-size:12px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,.07)}
+.card{max-width:720px;border-radius:10px;background:rgba(255,255,255,.045);padding:10px 14px;display:flex;flex-direction:column;gap:4px}
+.card .who{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--sec)}
+.card .who b{color:var(--text);font-weight:600}
+.card .who img{width:14px;height:14px;image-rendering:pixelated}
+.diff{max-width:720px;border-radius:9px;background:#0f0f11;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.08);overflow:hidden;font-size:12px}
+.diff .dh{display:flex;align-items:center;height:34px;padding:0 14px;border-bottom:.5px solid rgba(255,255,255,.07);color:#E6E6EC}
+.diff .dh .n{margin-left:auto;display:inline-flex;gap:8px}
+.diff .dl{height:24px;line-height:24px;padding:0 14px;color:#C9C9CF;white-space:pre}
+.diff .dl.m{background:rgba(255,105,97,.10);color:#FFB3AE}
+.diff .dl.p{background:rgba(48,209,88,.10);color:#9FE8B4}
+.g{color:var(--green)}
+.r{color:var(--red)}
+.frow{max-width:720px;display:flex;align-items:center;gap:9px;height:30px;padding:0 12px;border-radius:8px;background:rgba(255,255,255,.035);font-size:12px;color:#C9C9CF}
+.frow svg{color:var(--ter)}
+.frow .n{margin-left:auto;display:inline-flex;gap:8px}
+.log{border-radius:9px;background:#0f0f11;padding:10px 14px;font-size:12px;line-height:22px;color:#C9C9CF}
+.log .t{color:#6f6f77;margin-right:10px}
+.log .w{color:var(--amber)}
+.prog{display:flex;flex-direction:column;gap:8px}
+.prog .big{font-size:22px;color:var(--text)}
+.prog .big span{font-size:13px;color:var(--ter)}
+.bar{height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:4px;background:var(--blue)}
+.comp{margin:0 12px 12px;display:flex;align-items:center;height:40px;flex:0 0 40px;padding:0 12px;border-radius:10px;background:rgba(255,255,255,.06);color:#7c7c84;font-size:13px}
+.dock{flex:0 0 auto;padding:16px 20px 16px;background:#1d1b17;display:flex;flex-direction:column;gap:6px}
+.dock .q{font-size:15px;font-weight:600;color:var(--text)}
+.dock .s{font-size:12.5px;color:var(--sec)}
+.dock .b{display:flex;align-items:center;gap:8px;margin-top:6px}
+.dock .b .sp{flex:1}
+.btn{all:unset;box-sizing:border-box;height:30px;padding:0 13px;border-radius:7px;font-size:13px;font-weight:500;color:var(--text);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.24);display:inline-flex;align-items:center;gap:7px;cursor:pointer}
+.btn.inv{background:#F2F2F7;color:#1D1D1F;box-shadow:none;font-weight:600;min-width:112px;justify-content:center}
+.btn.text{box-shadow:none;color:var(--sec);padding:0 6px}
+.key{display:inline-flex;align-items:center;justify-content:center;height:18px;padding:0 4px;border-radius:4px;background:rgba(0,0,0,.12)}
+
+.board{background:#0b0b0c;padding:36px 40px;display:flex;flex-direction:column;gap:0}
+.h1{font-family:-apple-system,"SF Pro Display",Inter,system-ui,sans-serif;font-size:24px;font-weight:600;letter-spacing:-.02em;margin:0}
+.draft{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:11px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.25);font-size:11.5px;font-weight:600;color:var(--sec)}
+.own{margin-top:16px;padding:12px 14px;border-radius:10px;background:rgba(255,255,255,.05);font-size:12.5px;line-height:1.5;color:var(--sec)}
+.own b{color:var(--text);font-weight:600}
+.h2{font-size:12px;font-weight:600;color:var(--text);margin:0 0 8px}
+.two{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:32px;margin-top:22px}
+.map{display:grid;grid-template-columns:150px minmax(0,1fr);column-gap:12px;row-gap:7px;font-size:12px;line-height:1.4}
+.map .a{color:var(--ter)}
+.map .b{color:#E6E6EC}
+ul{margin:0;padding-left:16px;font-size:12px;line-height:1.45;color:var(--sec)}
+li{margin-bottom:4px}
+li b{color:var(--text);font-weight:600}
+.ch{display:grid;grid-template-columns:repeat(2, minmax(0,1fr));column-gap:32px;row-gap:8px;font-size:12px;line-height:1.45;color:var(--sec);margin-top:2px}
+.ch div{display:grid;grid-template-columns:18px minmax(0,1fr)}
+.ch .n{color:var(--ter);font-variant-numeric:tabular-nums}
+.ch b{color:var(--text);font-weight:600}
+</style>
+</helmet>
+<div class="board" style="width: 900px; height: 1140px">
+<div style="display:flex;align-items:center;gap:12px"><h1 class="h1">C, Rex-style · notes</h1><span class="draft">DRAFT</span></div>
+<div class="own"><b>Owner's decisions (2026-11-09).</b> C is the direction: folded, its rail; opened, a Rex-style sidebar. The sidebar is organised by attention, not by machine: <b>Needs you</b>, <b>Running</b>, <b>Finished</b>. "User's attention should be on things that need the user, not just visual entertainment." The Needs you icon is SF <span class="mono">hand.raised</span>, the app's existing ask symbol ("the hand is fine"). <b>All chrome follows macOS native components (NSPanel/NSMenu/vibrancy), never web-UI kits.</b></div>
+<div class="two">
+<div>
+<h2 class="h2">What maps to what (Rex → capcomd)</h2>
+<div class="map"><span class="a">Machine groups</span><span class="b">Sections by attention: Needs you (amber, pinned) · Running · Finished</span><span class="a">Workspace label</span><span class="b">The project: a quiet label inside each section, with its place icon (laptop = This Mac, cloud = boxd)</span><span class="a">Session row, app icon</span><span class="b">One agent: its catalog head (provider badge on the corner) and its own lowercase title</span><span class="a">Selected pill, •••</span><span class="b">The selected agent; ••• holds its daemon actions</span><span class="a">Header eye · ⌘ · +</span><span class="b">Needs you, SF hand.raised (amber count beside it, grey at zero; opens the Needs you reel) · Search ⌘K (projects, agents, commands) · + (Home, composer focused)</span><span class="a">Bottom icons</span><span class="b">Home on the left; History and Settings on the right</span><span class="a">Pane header, splits</span><span class="b">The agent's thread and its ask; ⌘D / ⇧⌘D bring the reel's columns back; arrows-out expands the pane</span></div>
+</div>
+<div>
+<h2 class="h2">What it replaces, opened</h2>
+<ul><li>Decks and crew tabs leave the title bar, and the title bar goes: each pane's header is the top line.</li><li>The reel's three columns become one pane plus splits.</li><li>Crew leaves the rail while open: the rows are the crew.</li><li><b>Folded, nothing changes:</b> C's rail, the approved Reel, Home's asks.</li></ul>
+<h2 class="h2" style="margin-top:14px">Changed from the brief</h2>
+<ul><li>Places are an icon on the project label, once per project: every agent of a project shares its place.</li><li>The project is a label, not a row subtitle: it keeps one 28 pt line per agent and full-width titles.</li><li>Rows show the title only; profile and ID are in the pane header.</li><li>Usage limits and errors sit in Needs you as decisions, not as row badges.</li><li>Rex's eye became the Needs you control (owner). Follow stays a mode, in ⌘K, the menus and ⇧⌘F, and folded in the approved title bar.</li><li>Provider badges are placeholders until the official one-colour marks are added.</li></ul>
+</div>
+</div>
+<div class="two" style="margin-top:20px"><div><h2 class="h2">The Needs you hand</h2><ul><li>SF hand.raised. While anything needs you: the hand in the normal icon colour, the amber count beside it (a badge on the folded rail). At zero: grey, no count.</li><li><b>Click opens the Needs you reel</b>, as the section heading does: one column per asking agent, oldest first, each with its ask bar. Answering slides that column out (under 300 ms) and the next takes its place; with none left, "Nothing needs you." and Back (Esc). A row still opens just that agent; ⌘J steps through the asks one at a time.</li></ul></div><div><h2 class="h2">Expand a pane (owner)</h2><ul><li>Arrows-out at a pane's top right, or ⇧⌘↩ (the approved zoom key): the pane takes the window, sidebar hidden, a centred 800 pt reading column; diffs and logs run wider; the ask bar sits at column width.</li><li>Esc or arrows-in returns to the split or sidebar it came from. Expansion is per pane and keeps its scroll position; switching agents from ⌘K while expanded stays expanded.</li></ul></div></div>
+<div style="margin-top:16px"><h2 class="h2">Search ⌘K (owner)</h2><ul><li>A magnifying glass in the sidebar header replaces Actions ⌘K (a field would need its own row at 248 pt). ⌘K works anywhere: folded, opened, a pane expanded, the Needs you reel.</li><li>One palette for projects, agents and commands, ranked Needs you first, then agents, projects, commands; ↩ opens, ⌘↩ opens in a split. Commands are only real daemon and app actions, with their shortcuts. No network search: it searches what the app already holds.</li></ul></div>
+<h2 class="h2" style="margin-top:22px">Open choices (all within C)</h2>
+<div class="ch"><div><span class="n">1</span><span><b>Section name:</b> Needs you (proposed), Your turn, or Waiting on you.</span></div><div><span class="n">2</span><span><b>Opened pane:</b> one agent plus splits (proposed), or the reel's columns (two at 1440).</span></div><div><span class="n">3</span><span><b>Many projects:</b> fold idle ones once the list outgrows the window (proposed), never fold, or fold all but the open one.</span></div><div><span class="n">4</span><span><b>Sidebar surface:</b> the reel's dark ground (proposed) or Rex's lifted greys (Tweak: surface).</span></div><div><span class="n">5</span><span><b>Thread text:</b> SF 13 with mono code (proposed) or all mono like Rex (Tweak: threadFont).</span></div><div><span class="n">6</span><span><b>Clicking the hand:</b> open the Needs you reel, like the heading (proposed), or step through the asks one at a time.</span></div></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":900,"height":1140}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

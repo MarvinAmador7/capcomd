@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>C opened, Rex-style</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0b0b0c}
+a{color:#F2F2F7;text-decoration:none}a:hover{color:#FFFFFF}
+.win,.board{--line:rgba(255,255,255,.08);--text:#F2F2F7;--row:#C9C9CF;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--bluet:#6CB4FF;--amber:#FFB020;--red:#FF6961;--green:#30D158;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.win *,.board *{box-sizing:border-box}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.lights{display:flex;gap:8px;flex:0 0 auto}
+.lights span{width:12px;height:12px;border-radius:6px;background:#3a3a3e}
+.ib{all:unset;box-sizing:border-box;position:relative;width:28px;height:28px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;color:var(--ter);cursor:pointer;flex:0 0 auto}
+.ib.on{background:rgba(255,255,255,.09);color:var(--text)}
+.ib.hov{background:rgba(255,255,255,.06);color:var(--text)}
+.ib.blue{color:var(--bluet)}
+.ib .cnt{position:absolute;top:1px;right:-2px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--amber);color:#1D1D1F;font-size:10px;font-weight:700;line-height:15px;text-align:center;box-shadow:0 0 0 2px #0e0e10}
+.ib.wide{width:auto;padding:0 7px 0 5px;gap:4px}
+.ib .bes{font-size:12px;font-weight:700;color:var(--amber);font-variant-numeric:tabular-nums}
+.ib .dot{position:absolute;top:5px;right:4px;width:6px;height:6px;border-radius:3px;background:var(--blue);box-shadow:0 0 0 1.5px #0e0e10}
+/* sidebar */
+.sb{flex:0 0 248px;width:248px;display:flex;flex-direction:column;padding:0 8px 6px;min-height:0}
+.sbh{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:2px;padding:0 2px 0 12px}
+.sbh .lights{margin-right:14px}
+.sbh .sp{flex:1}
+.sbl{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.place{display:flex;align-items:center;gap:8px;height:30px;flex:0 0 30px;padding:0 8px;font-size:13px;font-weight:500;color:var(--text);margin-top:14px}
+.place.first{margin-top:2px}
+.place svg{color:var(--sec)}
+.place .pm{margin-left:auto;font-size:11px;font-weight:400;color:var(--ter)}
+.sec{display:flex;align-items:center;gap:6px;height:28px;flex:0 0 28px;padding:0 8px;margin-top:16px;font-size:12px;font-weight:600;color:var(--sec);border-radius:7px}
+.sec.first{margin-top:2px}
+.sec .sn{font-weight:400;color:var(--ter)}
+.sec.need{color:var(--amber)}
+.sec.need .sn{color:var(--amber);opacity:.8}
+.sec .chev{display:inline-flex;color:var(--ter)}
+.sec.sel{background:rgba(255,255,255,.10)}
+.sec.hov{background:rgba(255,255,255,.05)}
+.sec.fin{color:var(--ter)}
+.pli{display:inline-flex;color:var(--ter);margin-right:1px}
+.ws{display:flex;align-items:center;gap:6px;height:24px;flex:0 0 24px;padding:0 6px 0 8px;margin-top:4px;font-size:11.5px;font-weight:600;color:var(--ter);white-space:nowrap;border-radius:7px}
+.ws .wn{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ws .wm{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-weight:400;font-size:11px;color:var(--ter)}
+.ws .wm.a{color:var(--amber);font-weight:500}
+.ws.hov{background:rgba(255,255,255,.05);color:var(--sec)}
+.ws.fold{height:28px;flex-basis:28px;margin-top:2px}
+.ws .chev{color:var(--ter);display:inline-flex}
+.row{display:flex;align-items:center;height:28px;flex:0 0 28px;border-radius:8px;padding:0 4px 0 8px;color:var(--row);font-size:13px;white-space:nowrap}
+.row.l1{padding-left:22px}
+.row.l2{padding-left:36px}
+.rb{all:unset;box-sizing:border-box;flex:1;min-width:0;height:28px;display:flex;align-items:center;gap:8px;cursor:pointer}
+.hd{position:relative;width:18px;height:18px;flex:0 0 18px;display:inline-flex;align-items:center;justify-content:center}
+.hd img{width:14px;height:14px;image-rendering:pixelated;display:block}
+.pb{position:absolute;right:-2px;bottom:-2px;width:10px;height:10px;border-radius:3px;background:#2c2c31;color:#D9D9DF;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.st{flex:0 0 auto;font-size:11.5px;color:var(--ter);padding-right:4px;display:inline-flex;align-items:center;gap:4px}
+.st.a{color:var(--amber);font-weight:500}
+.more{all:unset;box-sizing:border-box;width:24px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:var(--sec);flex:0 0 auto;cursor:pointer}
+.more.on{background:rgba(255,255,255,.12);color:var(--text)}
+.row.sel{background:rgba(255,255,255,.10);color:var(--text)}
+.row.hov{background:rgba(255,255,255,.05);color:var(--text)}
+.row.vis{background:rgba(255,255,255,.045)}
+.row.q{color:var(--ter)}
+.row.q img{opacity:.55}
+.row.done{color:var(--sec)}
+.stk{display:inline-flex;align-items:center;flex:0 0 auto}
+.stk span{width:18px;height:18px;border-radius:5px;background:#26262a;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.stk span+span{margin-left:-9px}
+.stk img{width:14px;height:14px;image-rendering:pixelated}
+.sbf{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:2px;padding:0 2px}
+.sbf .sp{flex:1}
+/* panes */
+.main{flex:1;min-width:0;display:flex;gap:8px;padding:8px 8px 8px 0}
+.pane{flex:1 1 0;min-width:0;border-radius:11px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.pane.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)}
+.ph{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:8px;padding:0 8px 0 14px;white-space:nowrap;font-size:13px}
+.ph img{width:24px;height:24px;image-rendering:pixelated}
+.ph .pt{font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ph .pp{color:var(--sec)}
+.ph .pi{color:var(--ter);font-size:11.5px}
+.ph .ps{color:var(--ter)}
+.ph .ps.a{color:var(--amber)}
+.ph .sp{flex:1}
+.ph .pe{color:var(--ter);font-size:11.5px;margin-right:6px}
+.ph .ctl{display:inline-flex;gap:0}
+.ph .ctl .ib{width:26px;height:26px;color:#7d7d85}
+.pbd{flex:1;min-height:0;overflow:hidden;padding:4px 24px 16px;display:flex;flex-direction:column;gap:14px;color:#E6E6EC;line-height:1.55;font-size:13px}
+.pbd p{margin:0;max-width:720px}
+.tool{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--sec);height:22px;max-width:720px}
+.tool svg{color:var(--ter);flex:0 0 auto}
+.tool .d{margin-left:auto;font-size:11px;color:var(--ter)}
+.tool .r{color:var(--red)}
+.tool .g{color:var(--green)}
+.code{font-size:12px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,.07)}
+.card{max-width:720px;border-radius:10px;background:rgba(255,255,255,.045);padding:10px 14px;display:flex;flex-direction:column;gap:4px}
+.card .who{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--sec)}
+.card .who b{color:var(--text);font-weight:600}
+.card .who img{width:14px;height:14px;image-rendering:pixelated}
+.diff{max-width:720px;border-radius:9px;background:#0f0f11;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.08);overflow:hidden;font-size:12px}
+.diff .dh{display:flex;align-items:center;height:34px;padding:0 14px;border-bottom:.5px solid rgba(255,255,255,.07);color:#E6E6EC}
+.diff .dh .n{margin-left:auto;display:inline-flex;gap:8px}
+.diff .dl{height:24px;line-height:24px;padding:0 14px;color:#C9C9CF;white-space:pre}
+.diff .dl.m{background:rgba(255,105,97,.10);color:#FFB3AE}
+.diff .dl.p{background:rgba(48,209,88,.10);color:#9FE8B4}
+.g{color:var(--green)}
+.r{color:var(--red)}
+.frow{max-width:720px;display:flex;align-items:center;gap:9px;height:30px;padding:0 12px;border-radius:8px;background:rgba(255,255,255,.035);font-size:12px;color:#C9C9CF}
+.frow svg{color:var(--ter)}
+.frow .n{margin-left:auto;display:inline-flex;gap:8px}
+.log{border-radius:9px;background:#0f0f11;padding:10px 14px;font-size:12px;line-height:22px;color:#C9C9CF}
+.log .t{color:#6f6f77;margin-right:10px}
+.log .w{color:var(--amber)}
+.prog{display:flex;flex-direction:column;gap:8px}
+.prog .big{font-size:22px;color:var(--text)}
+.prog .big span{font-size:13px;color:var(--ter)}
+.bar{height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:4px;background:var(--blue)}
+.comp{margin:0 12px 12px;display:flex;align-items:center;height:40px;flex:0 0 40px;padding:0 12px;border-radius:10px;background:rgba(255,255,255,.06);color:#7c7c84;font-size:13px}
+.dock{flex:0 0 auto;padding:16px 20px 16px;background:#1d1b17;display:flex;flex-direction:column;gap:6px}
+.dock .q{font-size:15px;font-weight:600;color:var(--text)}
+.dock .s{font-size:12.5px;color:var(--sec)}
+.dock .b{display:flex;align-items:center;gap:8px;margin-top:6px}
+.dock .b .sp{flex:1}
+.btn{all:unset;box-sizing:border-box;height:30px;padding:0 13px;border-radius:7px;font-size:13px;font-weight:500;color:var(--text);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.24);display:inline-flex;align-items:center;gap:7px;cursor:pointer}
+.btn.inv{background:#F2F2F7;color:#1D1D1F;box-shadow:none;font-weight:600;min-width:112px;justify-content:center}
+.btn.text{box-shadow:none;color:var(--sec);padding:0 6px}
+.key{display:inline-flex;align-items:center;justify-content:center;height:18px;padding:0 4px;border-radius:4px;background:rgba(0,0,0,.12)}
+</style>
+</helmet>
+<div class="win" style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: {{ground}}">
+<aside class="sb" aria-label="Agents by what needs you">
+<div class="sbh"><div class="lights"><span></span><span></span><span></span></div><button class="ib on" aria-label="Fold the sidebar (⌃⌘S)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"></rect><path d="M9 4.5v15"></path></svg></button><span class="sp"></span><button class="ib wide" aria-label="Needs you: 3. Open them as a reel" style="color:var(--text)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0"></path><path d="M14 10V4a2 2 0 0 0-4 0v2"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"></path></svg><span class="bes">3</span></button><button class="ib" aria-label="Search (⌘K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.5-4.5"></path></svg></button><button class="ib" aria-label="New project"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button></div>
+<div class="sbl">
+<div class="sec first need"><span>Needs you</span><span class="sn">3</span></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span></div>
+<div class="row sel"><button class="rb"><span class="hd"><img src="/_blob/07464566246c67a0aa3ea8afd67425e2" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">fix email join</span><span class="st a">asks</span></button><button class="more" aria-label="More for fix email join"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">fix proration</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/16ce09b0ec09c90a04d113f1e9435e47" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">invoice rounding</span><span class="st a">asks</span></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">nightly bumps</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/68d72e863c761b90cbaa73aac981b754" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">dependency bumps</span><span class="st a">usage limit</span></button></div>
+<div class="sec"><span>Running</span><span class="sn">10</span></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 18.5H8.5a5.5 5.5 0 1 1 5.2-7.3h1.3a3.65 3.65 0 0 1 2.5 7.3z"></path></svg></span><span class="wn">migrate matchkey</span><span class="wm">eu-1</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/31b0d0d807ef7cb08072e44416137661" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">matchkey migration</span></button></div>
+<div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/ca2d964b88bb49b95cff91497ef93055" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">ids/v1 split</span></button></div>
+<div class="row l2"><button class="rb"><span class="hd"><img src="/_blob/bf6d5ca0b10e9baa768cd753d49812d5" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">v3.2 shards</span></button></div>
+<div class="row l2 q"><button class="rb"><span class="hd"><img src="/_blob/61139af1499ed5f06da968d965595971" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">shard 200 standby</span><span class="st">queued</span></button></div>
+<div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/fc43e9c13c620fc48d6e00bcd8ab37d6" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">history backfill</span></button></div>
+<div class="row l2"><button class="rb"><span class="stk"><span><img src="/_blob/5957d58c131d95d6da7c3733b8bae772" alt=""></span><span><img src="/_blob/18814a7242e8f1e2bf1598d68c4b428b" alt=""></span><span><img src="/_blob/16ce09b0ec09c90a04d113f1e9435e47" alt=""></span><span><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""></span></span><span class="tt" style="color:var(--sec)">4 workers</span><span style="color:var(--ter);display:inline-flex;padding-right:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span></button></div>
+<div class="row l1 q"><button class="rb"><span class="hd"><img src="/_blob/9e381c4f4b15c7134920970f45edfbf1" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Codex"><path d="M12 3.8 19 7.9v8.2L12 20.2 5 16.1V7.9z"></path></svg></span></span><span class="tt">review join</span><span class="st">queued</span></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">billing test speed</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/8961f1129f3c6f7f98ed6218ac0a6743" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">test speedup plan</span></button></div>
+<div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/892c4d09ed1d9f07cc8e252a7f4fd3d5" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">parallel test shards</span></button></div>
+<div class="row l1"><button class="rb"><span class="hd"><img src="/_blob/9250086b9390a79aa5401de55e6f30e2" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Codex"><path d="M12 3.8 19 7.9v8.2L12 20.2 5 16.1V7.9z"></path></svg></span></span><span class="tt">review shard timing</span></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">fix proration</span></div>
+<div class="row"><button class="rb"><span class="hd"><img src="/_blob/beb4f4a2383003846ae2de98b08d1f1f" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Claude Code"><path d="M12 4v16M4.5 8l15 8M4.5 16l15-8"></path></svg></span></span><span class="tt">proration plan</span></button></div>
+<div class="ws"><span class="pli"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg></span><span class="wn">nightly bumps</span></div>
+<div class="row l1 q"><button class="rb"><span class="hd"><img src="/_blob/67da5d052a69b9d72a2891ea9706d398" alt=""><span class="pb" style="display: {{pbd}}"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Codex"><path d="M12 3.8 19 7.9v8.2L12 20.2 5 16.1V7.9z"></path></svg></span></span><span class="tt">bump eslint 9</span><span class="st">paused</span></button></div>
+<div class="sec fin"><span>Finished</span><span class="sn">4</span><span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 7 5 5-5 5"></path></svg></span></div>
+</div>
+<div class="sbf"><button class="ib" aria-label="Home ⌘0"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"></path></svg></button><span class="sp"></span><button class="ib" aria-label="History"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg></button><button class="ib" aria-label="Settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"></path><circle cx="12" cy="12" r="6.6"></circle></svg></button></div>
+</aside>
+<main class="main">
+<section class="pane ask" style="background: {{pane}}" aria-label="fix email join">
+<div class="ph"><img src="/_blob/b26d766c0146eeb2d0b16b7e07949948" alt=""><span class="pt">fix email join</span><span class="pp">worker</span><span class="pi mono">4423</span><span class="ps a">· waiting on you</span><span class="sp"></span><span class="pe mono">migrate matchkey · eu-1 · 6:15</span><span class="ctl"><button class="ib" aria-label="Split right ⌘D"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"></rect><path d="M12 4.5v15"></path></svg></button><button class="ib" aria-label="Split down ⇧⌘D"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"></rect><path d="M3 12h18"></path></svg></button><button class="ib" aria-label="More"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle></svg></button><button class="ib" aria-label="Expand pane"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-6.5 6.5M10 20H4v-6M4 20l6.5-6.5"></path></svg></button></span></div>
+<div class="pbd" style="font-family: {{bodyFont}}">
+<div class="card"><div class="who"><img src="/_blob/ca2d964b88bb49b95cff91497ef93055" alt=""><b>ids/v1 split</b> lead · handed you this</div><div>Fix the join in <span class="code mono">ids/v1/join_addriva_id.sql</span>: 4,812 rows fell through on staging.</div></div>
+<div class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.5H7a1.5 1.5 0 0 0-1.5 1.5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8z"></path><path d="M14 3.5V8h4.5"></path></svg><span>Read ids/v1/join_addriva_id.sql</span><span class="d mono">0.2s</span></div>
+<div class="tool"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><path d="m7.5 9.5 3 2.5-3 2.5M13 15h3.5"></path></svg><span>Ran test/ids/join.test.ts</span><span class="r">3 failed</span><span class="d mono">2.1s</span></div>
+<p>The join matched on raw email, so rows that differ only in case or whitespace fell through. I normalise both sides first, then join on <span class="code mono">email_norm</span>.</p>
+<div class="diff mono"><div class="dh">ids/v1/join_addriva_id.sql<span class="n"><span class="g">+18</span><span class="r">−3</span></span></div><div class="dl">LEFT JOIN matchkey m</div><div class="dl m">-  ON m.email = i.email</div><div class="dl p">+  ON m.email_norm = lower(i.email)</div><div class="dl p">+  AND m.version = 'v3.2'</div></div>
+<div class="frow mono"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.5H7a1.5 1.5 0 0 0-1.5 1.5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8z"></path><path d="M14 3.5V8h4.5"></path></svg>ids/v1/normalise_email.sql<span class="n"><span class="g">+41</span><span class="r">−0</span></span></div>
+<div class="frow mono" style="margin-top:-8px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.5H7a1.5 1.5 0 0 0-1.5 1.5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8z"></path><path d="M14 3.5V8h4.5"></path></svg>test/ids/join.test.ts<span class="n"><span class="g">+14</span><span class="r">−2</span></span></div>
+<div class="tool"><span class="g" style="display:inline-flex"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg></span><span>Checks passed</span><span class="d mono">31 s</span></div>
+<p>Ready to merge into main. The lead is checking the nulls on its side before it goes in.</p>
+</div>
+<div class="dock"><div class="q">Merge worker 4423's work into main?</div><div class="s">3 files, +73 −5 · lead and planner wait on it</div><div class="b"><button class="btn text">View diff</button><span class="sp"></span><button class="btn">Deny</button><button class="btn inv">Approve <span class="key"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 10.5 4.5 15 9 19.5"></path><path d="M19.5 4.5v6.5a4 4 0 0 1-4 4h-11"></path></svg></span></button></div></div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"surface":{"editor":"enum","options":["reel","rex"],"default":"reel"},"threadFont":{"editor":"enum","options":["sf","mono"],"default":"sf"},"badges":{"editor":"boolean","default":true},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const surf = this.props.surface ?? 'reel';
+const rex = surf === 'rex';
+return {
+  ground: rex ? '#262629' : '#0e0e10',
+  pane: rex ? '#2c2c30' : '#151518',
+  bodyFont: (this.props.threadFont ?? 'sf') === 'mono' ? '"SF Mono", ui-monospace, "JetBrains Mono", monospace' : '-apple-system, "SF Pro Text", Inter, system-ui, sans-serif',
+  pbd: (this.props.badges ?? true) ? 'inline-flex' : 'none'
+};
+}
+}
+</script>
+</body>
+</html>

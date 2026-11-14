@@ -947,7 +947,7 @@ struct ColumnThread: View {
   let agentId: String
   let thread: ThreadSlice
   var body: some View {
-    DeskProbe.body("ColumnThread", id: agentId)
+    DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
     let entries = thread.entries
     return ScrollViewReader { proxy in ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
@@ -962,7 +962,7 @@ struct ColumnThread: View {
             .onTapGesture(perform: loadEarlier)
         }
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
-          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1])).equatable()
+          EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane).equatable()
         }
         if case .failed(let why)? = thread.unavailable {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
@@ -1029,8 +1029,10 @@ struct EntryRow: View, Equatable {
   let agentId: String
   let entry: ThreadEntry
   let above: CGFloat
+  /// In the opened pane (the bench tells its rows from the reel's by name).
+  var inPane = false
   var body: some View {
-    let _ = DeskProbe.body("EntryRow", id: agentId)
+    let _ = DeskProbe.body(inPane ? "PaneEntryRow" : "EntryRow", id: agentId)
     switch entry {
     case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above)
     case .event(let ev): ThreadItemView(runId: runId, agentId: agentId, item: ev).padding(.bottom, Theme.Content.proseBottom)
@@ -1050,7 +1052,7 @@ struct ColumnComposer: View {
   @State private var draft = ""
   @FocusState private var focused: Bool
   var body: some View {
-    DeskProbe.body("ColumnComposer", id: agentId)
+    DeskProbe.body(inPane ? "PaneComposer" : "ColumnComposer", id: agentId)
     return HStack(spacing: 8) {
       TextField("Tell \(name)…", text: $draft, axis: .vertical)
         .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)
