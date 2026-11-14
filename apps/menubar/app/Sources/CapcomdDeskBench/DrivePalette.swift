@@ -9,39 +9,68 @@ import DeskBenchKit
 /// through the panel's key handling), nothing posted to the system. Each step's latency is to the first frame that shows
 /// the change; checks read the UI's own state (the panel, the results, the selection, what opened).
 extension Drive {
-  /// The panel showing now, if any.
+  /// The panel showing now, if any (knob search.host=panel).
   var panel: SearchPanel? { SearchPanelController.shown.flatMap { $0.isVisible ? $0 : nil } }
+  var inPanel: Bool { DeskKnobs.searchHost.value == .panel }
+  /// The palette shows: its panel, or (in the window) the model says so.
+  var shown: Bool { inPanel ? panel != nil : h.model.paletteOpen }
+  /// Where a key goes: the panel (it is key), else the desk window, whose first responder is the palette's field.
+  var keyWindow: NSWindow? { inPanel ? panel : (h.model.paletteOpen ? h.window : nil) }
 
-  /// ⌘K, as the menu runs it, and the frame that shows the panel with its results.
+  /// A key as the app receives one: posted to its own event queue (in-process; nothing goes to the system), so the run
+  /// loop hands it out as input (key equivalents and the menu first, then the key window), `NSApp.currentEvent`
+  /// included.
+  func post(_ chars: String, code: UInt16, mods: NSEvent.ModifierFlags = [], to w: NSWindow?) {
+    guard let w, let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
+                                         windowNumber: w.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
+                                         isARepeat: false, keyCode: code) else { return }
+    NSApp.postEvent(e, atStart: false)
+  }
+
+  /// ⌘K as the app gets it (the menu's Search… item: the scene host has the app's commands; a window built by hand has no
+  /// menu, so there it is the model's call the item makes), and the frame that shows the palette with its results.
   func openPalette(_ name: String) async -> StepResult {
     if h.model.paletteOpen { h.model.closePalette(); _ = await h.nextCommit() }
+    // ⌘K reaches the window only while it has the keyboard: start from there (a busy Mac can leave the bench's window
+    // not key yet, and a key then goes nowhere).
+    if !h.window.isKeyWindow { h.window.makeKeyAndOrderFront(nil); _ = await h.nextCommit() }
     let m = h.begin(name)
     let t = h.now()
-    h.model.togglePalette()
-    // The panel is ordered in on the update that follows the model change.
-    _ = await h.wait(timeoutMs: 2000) { self.panel != nil }
+    if h.sceneHosted { post("k", code: 40, mods: .command, to: h.window) } else { h.model.togglePalette() }
+    let ok = await h.wait(timeoutMs: 2000) { self.h.model.paletteOpen && self.shown }
     let shown = await h.nextCommit()
-    let notes = ["\(h.model.search.index.count) items indexed in \(Stats.round(h.model.search.lastIndexMs, 2)) ms", "\(h.model.paletteShown.count) results"]
+    let notes = ["\(h.model.search.index.count) items indexed in \(Stats.round(h.model.search.lastIndexMs, 2)) ms", "\(h.model.paletteShown.count) results"] + (ok ? [] : ["the palette didn't show within 2 s"])
     return h.end(m, latencyMs: shown - t, notes: notes)
   }
 
-  /// One key handed to the panel (as AppKit would deliver it), and the frame that shows what it did.
-  func key(_ name: String, chars: String, code: UInt16, mods: NSEvent.ModifierFlags = []) async -> StepResult {
+  /// One key, and the frame that shows what it did (`done`: the key has been handled).
+  func key(_ name: String, chars: String, code: UInt16, mods: NSEvent.ModifierFlags = [], done: @escaping () -> Bool) async -> StepResult {
     let m = h.begin(name)
     let t = h.now()
-    if let p = panel, let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
-                                               windowNumber: p.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: chars,
-                                               isARepeat: false, keyCode: code) {
-      p.sendEvent(e)
-    }
+    post(chars, code: code, mods: mods, to: keyWindow)
+    let ok = await h.wait(timeoutMs: 2000, done)
     let shown = await h.nextCommit()
-    return h.end(m, latencyMs: shown - t, notes: ["query \"\(h.model.paletteQuery)\" → \(h.model.paletteShown.count) results in \(Stats.round(h.model.search.lastQueryMs, 3)) ms"])
+    return h.end(m, latencyMs: shown - t, notes: ["query \"\(h.model.paletteQuery)\" → \(h.model.paletteShown.count) results in \(Stats.round(h.model.search.lastQueryMs, 3)) ms"] + (ok ? [] : ["the key had no effect within 2 s"]))
+  }
+  func esc(_ name: String) async -> StepResult { await key(name, chars: "\u{1b}", code: 53) { !self.h.model.paletteOpen } }
+  func arrow(_ name: String, down: Bool) async -> StepResult {
+    let want = max(0, min(h.model.paletteShown.count - 1, h.model.paletteSelection + (down ? 1 : -1)))
+    return await key(name, chars: String(UnicodeScalar(down ? NSDownArrowFunctionKey : NSUpArrowFunctionKey)!), code: down ? 125 : 126, mods: [.function, .numericPad]) {
+      self.h.model.paletteSelection == want
+    }
+  }
+  func enter(_ name: String, split: Bool) async -> StepResult {
+    await key(name, chars: "\r", code: 36, mods: split ? .command : []) { !self.h.model.paletteOpen }
   }
 
-  /// Types `text` one character at a time into the panel's field.
+  /// Types `text` one character at a time into the palette's field.
   func type(_ text: String, prefix: String) async -> [StepResult] {
     var out: [StepResult] = []
-    for (i, c) in text.enumerated() { out.append(await key("\(prefix)#\(i) '\(c)'", chars: String(c), code: 0)) }
+    let start = h.model.paletteQuery
+    for (i, c) in text.enumerated() {
+      let want = start + String(text.prefix(i + 1))
+      out.append(await key("\(prefix)#\(i) '\(c)'", chars: String(c), code: 0) { self.h.model.paletteQuery == want })
+    }
     return out
   }
 
@@ -70,10 +99,21 @@ extension Drive {
 
   /// The panel draws its rows: ink in its own picture (a blank panel is fast and wrong), and the field has the query.
   func drawnCheck() -> Check {
-    guard let p = panel, let v = p.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else {
-      return Check("panel-drawn", false, "no palette panel on screen")
+    // The panel's own picture, or (in the window) the palette's place in the window's picture.
+    let rows = h.model.paletteShown.count
+    let height = SearchMetrics.queryHeight + 0.5 + SearchMetrics.listHeight(h.model.search.sections, query: h.model.paletteQuery) + SearchMetrics.footer
+    let v: NSView?, rect: NSRect
+    if inPanel {
+      v = panel?.contentView; rect = v?.bounds ?? .zero
+    } else {
+      v = h.window.contentView?.superview ?? h.window.contentView
+      let b = v?.bounds ?? .zero, w = SearchMetrics.width(for: b.width)
+      rect = NSRect(x: (b.width - w) / 2, y: b.height - SearchMetrics.top - height, width: w, height: height)
     }
-    v.cacheDisplay(in: v.bounds, to: rep)
+    guard shown, let v, rect.width > 0, let rep = v.bitmapImageRepForCachingDisplay(in: rect) else {
+      return Check("panel-drawn", false, "the palette isn't on screen")
+    }
+    v.cacheDisplay(in: rect, to: rep)
     var ink = 0, n = 0
     let stepX = max(1, rep.pixelsWide / 160), stepY = max(1, rep.pixelsHigh / 120)
     for y in stride(from: 0, to: rep.pixelsHigh, by: stepY) {
@@ -83,9 +123,8 @@ extension Drive {
       }
     }
     let share = Double(ink) / Double(max(n, 1))
-    let rows = h.model.paletteShown.count
-    return Check("panel-drawn", share > 0.005 && rows > 0 && p.frame.height > 120,
-                 "\(Stats.round(share * 100, 2)) % of the panel is text; \(rows) results; panel \(Int(p.frame.width))×\(Int(p.frame.height)) pt, key \(p.isKeyWindow)")
+    return Check("panel-drawn", share > 0.005 && rows > 0 && rect.height > 120,
+                 "\(Stats.round(share * 100, 2)) % of the palette is text; \(rows) results; \(inPanel ? "panel" : "in the window") \(Int(rect.width))×\(Int(rect.height)) pt")
   }
 
   // MARK: palette-open
@@ -94,6 +133,7 @@ extension Drive {
   func paletteOpen() async -> ([StepResult], [Check]) {
     var steps: [StepResult] = [], checks: [Check] = []
     var escOK = true
+    var escFailed: [Int] = []
     for i in 0..<int("opens", 6) {
       steps.append(await openPalette("open#\(i)"))
       if i == 0 {
@@ -104,12 +144,11 @@ extension Drive {
                             "groups \(groups.map(\.title)); \(asks) asks"))
         checks.append(drawnCheck())
       }
-      let esc = await key("esc#\(i)", chars: "\u{1b}", code: 53)
-      steps.append(esc)
-      escOK = escOK && !h.model.paletteOpen && panel == nil
+      steps.append(await esc("esc#\(i)"))
+      if h.model.paletteOpen || shown { escOK = false; escFailed.append(i) }
       await h.sleep(ms: 120)
     }
-    checks.append(Check("esc-closes", escOK, escOK ? "Esc closed the palette and its panel every time" : "the palette or its panel stayed open after Esc"))
+    checks.append(Check("esc-closes", escOK, escOK ? "Esc closed the palette and its panel every time" : "the palette stayed open after Esc at open \(escFailed) (window key \(h.window.isKeyWindow))"))
     // At rest with the palette open, for the snapshot guard.
     _ = await openPalette("reopen")
     return (steps, checks)
@@ -135,25 +174,25 @@ extension Drive {
     var steps: [StepResult] = [], checks: [Check] = []
     steps.append(await openPalette("open"))
     steps += await type(query, prefix: "type")
-    steps.append(await key("down#0", chars: String(UnicodeScalar(NSDownArrowFunctionKey)!), code: 125, mods: [.function, .numericPad]))
-    steps.append(await key("down#1", chars: String(UnicodeScalar(NSDownArrowFunctionKey)!), code: 125, mods: [.function, .numericPad]))
-    steps.append(await key("up#0", chars: String(UnicodeScalar(NSUpArrowFunctionKey)!), code: 126, mods: [.function, .numericPad]))
-    let shown = h.model.paletteShown
-    checks.append(Check("selection", h.model.paletteSelection == 1 && shown.count > 2, "selection \(h.model.paletteSelection) of \(shown.count) after ↓ ↓ ↑"))
+    steps.append(await arrow("down#0", down: true))
+    steps.append(await arrow("down#1", down: true))
+    steps.append(await arrow("up#0", down: false))
+    let results = h.model.paletteShown
+    checks.append(Check("selection", h.model.paletteSelection == 1 && results.count > 2, "selection \(h.model.paletteSelection) of \(results.count) after ↓ ↓ ↑"))
     // ↩: the selected result opens and the palette closes.
-    let target = shown.indices.contains(1) ? shown[1] : nil
-    steps.append(await key("return", chars: "\r", code: 36))
+    let target = results.indices.contains(1) ? results[1] : nil
+    steps.append(await enter("return", split: false))
     checks.append(Check("return-opens", !h.model.paletteOpen && opened(target), "↩ on \(target.map { "\($0.item.id)" } ?? "-"): focused \(h.model.focusedAgent ?? "-"), run \(h.model.openRunId ?? "-")"))
     // ⌘↩ on the first result: no splits yet, so it opens it as ↩ does.
     steps.append(await openPalette("reopen"))
     steps += await type(query, prefix: "retype")
     let first = h.model.paletteShown.first
-    steps.append(await key("cmd-return", chars: "\r", code: 36, mods: .command))
+    steps.append(await enter("cmd-return", split: true))
     checks.append(Check("split-falls-back", !h.model.paletteOpen && opened(first), "⌘↩ on \(first.map { "\($0.item.id)" } ?? "-"): focused \(h.model.focusedAgent ?? "-"), run \(h.model.openRunId ?? "-")"))
     // Esc closes; then the palette again, at rest, for the snapshot guard.
     steps.append(await openPalette("open-esc"))
-    steps.append(await key("esc", chars: "\u{1b}", code: 53))
-    checks.append(Check("esc-closes", !h.model.paletteOpen && panel == nil, "palette open \(h.model.paletteOpen), panel \(panel == nil ? "hidden" : "shown")"))
+    steps.append(await esc("esc"))
+    checks.append(Check("esc-closes", !h.model.paletteOpen && !self.shown, "palette open \(h.model.paletteOpen), shown \(self.shown)"))
     steps.append(await openPalette("rest"))
     steps += await type(query, prefix: "rest-type")
     checks.append(drawnCheck())

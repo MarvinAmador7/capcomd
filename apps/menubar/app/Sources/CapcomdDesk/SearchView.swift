@@ -10,19 +10,19 @@ import CapcomdUI
 // case headers, a full-width accent selection, shortcuts as plain glyphs, one icon column, 4/8 pt spacing.
 
 /// The board's measurements.
-enum SearchMetrics {
-  static let maxWidth: CGFloat = 640, radius: CGFloat = 18, top: CGFloat = 92, gutter: CGFloat = 16
-  static let queryHeight: CGFloat = 56, queryPadding: CGFloat = 20, queryGap: CGFloat = 12
+package enum SearchMetrics {
+  package static let maxWidth: CGFloat = 640, radius: CGFloat = 18, top: CGFloat = 92, gutter: CGFloat = 16
+  package static let queryHeight: CGFloat = 56, queryPadding: CGFloat = 20, queryGap: CGFloat = 12
   static let header: CGFloat = 28, row: CGFloat = 32, rowRadius: CGFloat = 8, rowPadding: CGFloat = 10, rowGap: CGFloat = 10
   static let icon: CGFloat = 20, listTop: CGFloat = 4, listBottom: CGFloat = 8, listSide: CGFloat = 8
-  static let footer: CGFloat = 32, maxList: CGFloat = 480
+  package static let footer: CGFloat = 32, maxList: CGFloat = 480
   static let minHeight = queryHeight + 0.5 + footer
   /// The title keeps up to this share of the row; the subtitle truncates first.
   static let titleShare: CGFloat = 0.68
-  static func width(for window: CGFloat) -> CGFloat { min(maxWidth, max(320, window - gutter * 2)) }
+  package static func width(for window: CGFloat) -> CGFloat { min(maxWidth, max(320, window - gutter * 2)) }
 
   /// The list's height for these results: fixed rows, so it is known without laying them out.
-  static func listHeight(_ sections: [SearchSection], query: String) -> CGFloat {
+  package static func listHeight(_ sections: [SearchSection], query: String) -> CGFloat {
     if sections.isEmpty { return query.allSatisfy(\.isWhitespace) ? 0 : row + listTop + listBottom }
     let h = sections.reduce(listTop + listBottom) { $0 + header + row * CGFloat($1.hits.count) }
     return min(h, maxList)
@@ -68,6 +68,9 @@ enum SearchColors {
 struct SearchView: View {
   @Environment(DeskModel.self) private var model
   let onHeight: (CGFloat) -> Void
+  /// Inside the desk window (knob search.host=overlay): it draws its own glass and shadow, takes its own height, and
+  /// handles its keys itself; in the panel those are the panel's.
+  var inWindow = false
   @FocusState private var focused: Bool
 
   var body: some View {
@@ -77,7 +80,7 @@ struct SearchView: View {
     let list = SearchMetrics.listHeight(sections, query: query)
     let height = SearchMetrics.queryHeight + 0.5 + list + SearchMetrics.footer
     return VStack(spacing: 0) {
-      SearchField(focused: $focused)
+      SearchField(focused: $focused, handlesKeys: inWindow)
       Rectangle().fill(SearchColors.separator).frame(height: 0.5)
       if !sections.isEmpty {
         SearchList(height: list)
@@ -93,10 +96,12 @@ struct SearchView: View {
         .overlay(alignment: .top) { Rectangle().fill(SearchColors.footerLine).frame(height: 0.5) }
         .accessibilityLabel("Up and down arrows move, Return opens, Command Return opens in a split, Escape closes")
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .frame(maxWidth: .infinity, maxHeight: inWindow ? height : .infinity, alignment: .top)
     .background(SearchColors.tint)
+    .background { if inWindow { SearchGlass() } }
     .overlay(RoundedRectangle(cornerRadius: SearchMetrics.radius, style: .continuous).strokeBorder(SearchColors.ring, lineWidth: 0.5))
     .clipShape(RoundedRectangle(cornerRadius: SearchMetrics.radius, style: .continuous))
+    .modifier(SearchWindowChrome(on: inWindow))
     .environment(\.colorScheme, .dark)
     .onChange(of: height, initial: true) { _, h in onHeight(h) }
     .onAppear { focused = true }
@@ -107,8 +112,18 @@ struct SearchView: View {
 
 /// The query: a 22 pt field with no box, after the magnifying glass.
 private struct SearchField: View {
+  static let identifier = "capcomd.search.field"
+  /// The field's AppKit view in a window, by its accessibility identifier.
+  @MainActor static func find(in w: NSWindow) -> NSTextField? {
+    func walk(_ v: NSView) -> NSTextField? {
+      if let f = v as? NSTextField, f.isEditable, f.accessibilityIdentifier() == identifier { return f }
+      return v.subviews.lazy.compactMap(walk).first
+    }
+    return (w.contentView?.superview ?? w.contentView).flatMap(walk)
+  }
   @Environment(DeskModel.self) private var model
   var focused: FocusState<Bool>.Binding
+  var handlesKeys: Bool
   var body: some View {
     let binding = Binding(get: { model.paletteQuery }, set: { model.paletteQuery = $0 })
     HStack(spacing: SearchMetrics.queryGap) {
@@ -127,10 +142,77 @@ private struct SearchField: View {
           }
         }
         .accessibilityLabel("Search agents, projects and commands")
+        .accessibilityIdentifier(Self.identifier)
+        .modifier(SearchKeys(on: handlesKeys))
     }
     .padding(.horizontal, SearchMetrics.queryPadding)
     .frame(height: SearchMetrics.queryHeight)
   }
+}
+
+/// In the window, the palette takes the keys the panel takes in its own `sendEvent` (SearchPanel.key: ↑ ↓ ⌃P ⌃N move, ↩
+/// opens, ⌘↩ opens in a split, Esc closes), before anything else in the window sees them, whether or not the field has
+/// the keyboard yet. Never animated.
+private struct SearchKeys: ViewModifier {
+  @Environment(DeskModel.self) private var model
+  let on: Bool
+  @State private var monitor = Monitor()
+  final class Monitor { var token: Any? }
+  func body(content: Content) -> some View {
+    if on {
+      content
+        .onAppear {
+          guard monitor.token == nil else { return }
+          monitor.token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [model] e in
+            guard model.paletteOpen, let w = e.window, w.isKeyWindow, !(w is SearchPanel) else { return e }
+            guard let k = SearchPanel.key(e, composing: (w.firstResponder as? NSTextView)?.hasMarkedText() == true) else {
+              // A character typed before the field took the keyboard (⌘K then a quick key): the field takes it first.
+              if e.modifierFlags.intersection([.command, .control]).isEmpty, !((w.firstResponder as? NSTextView)?.isFieldEditor ?? false),
+                 let field = SearchField.find(in: w) { w.makeFirstResponder(field) }
+              return e
+            }
+            switch k {
+            case .up: model.movePaletteSelection(-1)
+            case .down: model.movePaletteSelection(1)
+            case .open(let split): model.runPaletteSelection(split: split)
+            case .close: model.closePalette()
+            }
+            return nil
+          }
+        }
+        .onDisappear { if let t = monitor.token { NSEvent.removeMonitor(t) }; monitor.token = nil }
+    } else {
+      content
+    }
+  }
+}
+
+/// In the window: the board's shadow (0 24 70 .55, 0 4 14 .3) and its dark outer hairline, as the panel's window has.
+private struct SearchWindowChrome: ViewModifier {
+  let on: Bool
+  func body(content: Content) -> some View {
+    if on {
+      content
+        .background(RoundedRectangle(cornerRadius: SearchMetrics.radius + 0.5, style: .continuous).fill(Color.black.opacity(0.65)).padding(-0.5))
+        .shadow(color: .black.opacity(0.55), radius: 35, y: 24)
+        .shadow(color: .black.opacity(0.3), radius: 7, y: 4)
+    } else {
+      content
+    }
+  }
+}
+
+/// The system's vibrancy behind the palette inside the window (within-window blending: the reel under it, blurred).
+private struct SearchGlass: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSVisualEffectView {
+    let v = NSVisualEffectView()
+    v.material = .sheet
+    v.blendingMode = .withinWindow
+    v.state = .active
+    v.appearance = NSAppearance(named: .darkAqua)
+    return v
+  }
+  func updateNSView(_ v: NSVisualEffectView, context: Context) {}
 }
 
 /// The results: fixed-height rows in a lazy stack, scrolled to keep the selection in view (never animated).

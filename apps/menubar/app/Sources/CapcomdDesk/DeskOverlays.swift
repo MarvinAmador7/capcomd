@@ -35,8 +35,16 @@ struct DeskOverlays: View {
             .offset(x: max(8, r.minX), y: max(4, r.maxY + 6))
             .transition(Self.drop(reduceMotion))
         }
-        // Search ⌘K is its own panel over the window (SearchPanel.swift); this only shows and hides it.
-        SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
+        // Search ⌘K: in the window (SearchView), or its own panel over it (SearchPanel.swift; knob search.host).
+        if DeskKnobs.searchHost.value == .panel {
+          SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
+        } else if model.paletteOpen {
+          SearchView(onHeight: { _ in }, inWindow: true)
+            .frame(width: SearchMetrics.width(for: g.size.width))
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, SearchMetrics.top - Theme.Desk.titleBar)
+            .transition(.opacity)
+        }
       }
       .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
     }
