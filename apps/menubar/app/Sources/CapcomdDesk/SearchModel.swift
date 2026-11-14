@@ -129,9 +129,19 @@ extension DeskModel {
   }
 
   func perform(_ a: SearchAction) {
+    // In the Needs you reel: an agent it shows is focused there; anything else that opens a place leaves the reel first.
+    if needs.isOpen {
+      switch a {
+      case .agent(_, let agentId) where needs.columns.contains(agentId): needs.focus(agentId); return
+      case .agent, .project, .home, .newProject: closeNeedsReel()
+      default: break
+      }
+    }
     switch a {
     case .agent(let runId, let agentId): show(run: runId, agent: agentId)
     case .project(let runId): show(run: runId)
+    case .needsReel(let open): if open { openNeedsReel() } else { closeNeedsReel() }
+    case .nextAsk: nextAsk()
     case .menu(let item): perform(item)
     case .approve(let id): decide(id, .approve)
     case .newProject: openNewProject()
@@ -194,7 +204,7 @@ extension DeskModel {
     let focusedAsk = home ? nil : focusedAgent.flatMap { agent($0)?.approval?.id }
     let title = decks.first { $0.id == openProjectId }?.title
     s.index.set(commands: SearchCommands.make(SearchCommandContext(menu: home ? nil : projectMenu, projectTitle: title, focusedAsk: focusedAsk,
-                                                                   follow: follow, homeShown: home)))
+                                                                   follow: follow, homeShown: home, asks: s.index.asks.count, needsReelOpen: needs.isOpen)))
     s.lastIndexMs = (ProcessInfo.processInfo.systemUptime - t) * 1000
   }
 

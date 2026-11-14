@@ -59,6 +59,25 @@ public enum Scenarios {
     ScenarioSpec(name: "palette-keys", summary: "Search ⌘K's keys: type a query, ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens the first (splits fall back to ↩), Esc closes.",
                  budget: "Search ⌘K: keys and opening a result ≤ 50 ms", rule: "median latency from a key to the frame that shows what it did ≤ 50 ms; checks: selection, return-opens, split-falls-back, esc-closes, panel-drawn",
                  kind: .latency, latencyBudgetMs: 50, params: ["query": "shard"]),
+    // The Needs you reel (SPEC, Needs you reel). Run them on `needs5` or `needs20` (asks across projects).
+    ScenarioSpec(name: "needs-open", summary: "Open the Needs you reel (the hand): every ask across projects as a column, oldest first.",
+                 budget: "Open the Needs you reel: first frame ≤ 50 ms", rule: "median latency from openNeedsReel() to the frame that shows its columns ≤ 50 ms; the columns are the asks oldest first; no stretch over 100 ms",
+                 kind: .latency, latencyBudgetMs: 50, params: [:]),
+    ScenarioSpec(name: "needs-answer", summary: "Answer the focused ask, again and again: its column slides out (≤ 300 ms, transform and opacity) and the next takes its place.",
+                 budget: "Answer an ask: the column slides out with no dropped frame", rule: "no late frame while the columns close up; no stretch over 16.7 ms; the answered column left, the rest kept their order, the next one leads and has the focus",
+                 kind: .smooth, latencyBudgetMs: nil, params: ["answers": "3"]),
+    ScenarioSpec(name: "needs-arrive", summary: "A new ask arrives while the reel is open, with the reel scrolled to a middle column: it joins at the end.",
+                 budget: "A new ask: joins at the end, nothing moves", rule: "the new column is last, the leading column and its place in the window are unchanged; no late frame",
+                 kind: .isolation, latencyBudgetMs: nil, params: ["arrivals": "3"]),
+    ScenarioSpec(name: "needs-step", summary: "⌘J through the asks: in the reel it focuses the next column; outside it opens each ask's agent in its project, oldest first, round again.",
+                 budget: "⌘J: first frame ≤ 50 ms", rule: "median latency from nextAsk() to the next frame ≤ 50 ms; the asks come oldest first, one at a time",
+                 kind: .latency, latencyBudgetMs: 50, params: [:]),
+    ScenarioSpec(name: "needs-empty", summary: "Answer every ask until \"Nothing needs you.\", then Esc back to where the reel was opened from.",
+                 budget: "Answer an ask: the column slides out with no dropped frame", rule: "no late frame; the end state shows \"Nothing needs you.\"; Esc (a key event to the window) closes the reel and gives the focus back",
+                 kind: .smooth, latencyBudgetMs: nil, params: [:]),
+    ScenarioSpec(name: "needs-swipe", summary: "A recorded (or synthetic) trackpad gesture replayed into the Needs you reel's scroll view, as `swipe` does for the project reel.",
+                 budget: "Reel scroll: no dropped frames at 120 Hz", rule: "no late frame while the reel moves; the content within 1 pt of the fingers (p95) with no stall; it lands on a column edge",
+                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "0", "timestamps": "recorded", "deliver": "window"]),
   ]
   public static func spec(_ name: String) -> ScenarioSpec? { all.first { $0.name == name } }
   /// The scenarios `suite` runs, in order.

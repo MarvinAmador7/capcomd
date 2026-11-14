@@ -32,6 +32,9 @@ public enum SearchAction: Sendable, Hashable {
   case approve(approvalId: String)
   case newProject, home, settings
   case follow(Bool)
+  /// The Needs you reel: show it (true) or leave it; ⌘J, the next ask.
+  case needsReel(Bool)
+  case nextAsk
 }
 
 /// The one icon a row shows.
@@ -310,30 +313,18 @@ extension CapcomdStore {
     }
   }
 
-  /// What needs you across the shown projects, oldest first: each approval, on the agent whose column shows it, then
-  /// each agent stopped by a usage limit.
+  /// What needs you, as the Needs you reel lists it (`needsAsks()`, oldest first): each agent's approval ("asks", or
+  /// "question"), and each run's usage limit ("usage limit"), on the agent whose column shows it.
   public func searchAsks(decks: [DeckInfo]) -> [SearchItem] {
-    var out: [SearchItem] = [], seen = Set<String>()
-    let byRun = Dictionary(decks.map { ($0.runId, $0) }, uniquingKeysWith: { a, _ in a })
-    for a in pendingApprovals {
-      if case .decided = a.decision { continue }
-      guard let runId = a.runId, let deck = byRun[runId], let agentId = waitingAgent(a), seen.insert(agentId).inserted,
-            let h = columnHeader(runId: runId, agentId: agentId) else { continue }
-      out.append(SearchItem(id: "ask.\(a.id)", group: .needsYou, title: h.tabLabel, subtitle: "\(deck.title) · \(h.name)",
-                            icon: .bot(runId: runId, agentId: agentId), trailing: .ask(a.kind == "question" ? "question" : "asks"),
-                            action: .agent(runId: runId, agentId: agentId), agentId: agentId))
+    let titles = Dictionary(decks.map { ($0.runId, $0.title) }, uniquingKeysWith: { a, _ in a })
+    return needsAsks().compactMap { ask in
+      guard let h = columnHeader(runId: ask.runId, agentId: ask.agentId) else { return nil }
+      let project = titles[ask.runId] ?? runs[ask.runId]?.title ?? ""
+      let word = ask.limit != nil ? "usage limit" : ask.approval?.kind == "question" ? "question" : "asks"
+      let id = ask.approval.map { "ask.\($0.id)" } ?? "limit.\(ask.agentId)"
+      return SearchItem(id: id, group: .needsYou, title: h.tabLabel, subtitle: "\(project) · \(h.name)", icon: .bot(runId: ask.runId, agentId: ask.agentId),
+                        trailing: .ask(word), action: .agent(runId: ask.runId, agentId: ask.agentId), agentId: ask.agentId)
     }
-    for deck in decks {
-      guard let run = runs[deck.runId], run.isActive else { continue }
-      for a in run.agents.values.sorted(by: { ($0.spawnedAtMs, $0.id) < ($1.spawnedAtMs, $1.id) })
-      where a.limit == "quota" && !a.status.isTerminal && seen.insert(a.id).inserted {
-        guard let h = columnHeader(runId: deck.runId, agentId: a.id) else { continue }
-        out.append(SearchItem(id: "limit.\(a.id)", group: .needsYou, title: h.tabLabel, subtitle: "\(deck.title) · \(h.name)",
-                              icon: .bot(runId: deck.runId, agentId: a.id), trailing: .ask("usage limit"),
-                              action: .agent(runId: deck.runId, agentId: a.id), agentId: a.id))
-      }
-    }
-    return out
   }
 
   /// The shown projects: name, then where it runs and its crew or how it ended.
@@ -358,8 +349,12 @@ public struct SearchCommandContext: Sendable, Hashable {
   public var focusedAsk: String?
   public var follow: Bool
   public var homeShown: Bool
-  public init(menu: ProjectMenu?, projectTitle: String?, focusedAsk: String?, follow: Bool, homeShown: Bool) {
+  /// How many asks wait (the Needs you reel and ⌘J have something to show), and whether the reel is open.
+  public var asks: Int
+  public var needsReelOpen: Bool
+  public init(menu: ProjectMenu?, projectTitle: String?, focusedAsk: String?, follow: Bool, homeShown: Bool, asks: Int = 0, needsReelOpen: Bool = false) {
     self.menu = menu; self.projectTitle = projectTitle; self.focusedAsk = focusedAsk; self.follow = follow; self.homeShown = homeShown
+    self.asks = asks; self.needsReelOpen = needsReelOpen
   }
 }
 
@@ -375,6 +370,11 @@ public enum SearchCommands {
     }
     add("new", "New project", "plus", .shortcut("⇧⌘N"), .newProject, common: true)
     if let ask = c.focusedAsk { add("approve", "Approve the focused ask", "checkmark", .shortcut("↩"), .approve(approvalId: ask), common: true) }
+    if c.asks > 0 {
+      add("next-ask", "Next ask", "arrow.turn.down.right", .shortcut("⌘J"), .nextAsk, common: true)
+      if !c.needsReelOpen { add("needs", "Show what needs you", "hand.raised", .none, .needsReel(true)) }
+    }
+    if c.needsReelOpen { add("needs-close", "Leave Needs you", "chevron.backward", .shortcut("esc"), .needsReel(false)) }
     let p = c.projectTitle ?? "the project"
     for item in c.menu?.items ?? [] {
       let key = item.shortcut.map(SearchTrailing.shortcut) ?? .none

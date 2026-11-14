@@ -157,14 +157,14 @@ private struct SearchKeys: ViewModifier {
   @Environment(DeskModel.self) private var model
   let on: Bool
   @State private var monitor = Monitor()
-  final class Monitor { var token: Any? }
+  final class Monitor { var token: Any?; weak var window: NSWindow? }
   func body(content: Content) -> some View {
     if on {
       content
         .onAppear {
           guard monitor.token == nil else { return }
           monitor.token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [model] e in
-            guard model.paletteOpen, let w = e.window, w.isKeyWindow, !(w is SearchPanel) else { return e }
+            guard model.paletteOpen, let w = e.window, w === monitor.window else { return e }
             guard let k = SearchPanel.key(e, composing: (w.firstResponder as? NSTextView)?.hasMarkedText() == true) else {
               // A character typed before the field took the keyboard (⌘K then a quick key): the field takes it first.
               if e.modifierFlags.intersection([.command, .control]).isEmpty, !((w.firstResponder as? NSTextView)?.isFieldEditor ?? false),
@@ -181,10 +181,22 @@ private struct SearchKeys: ViewModifier {
           }
         }
         .onDisappear { if let t = monitor.token { NSEvent.removeMonitor(t) }; monitor.token = nil }
+        .background(WindowOf { monitor.window = $0 })
     } else {
       content
     }
   }
+}
+
+/// Tells its window once it is in one (the palette's key monitor answers only that window's keys).
+private struct WindowOf: NSViewRepresentable {
+  let found: (NSWindow?) -> Void
+  final class V: NSView {
+    var found: ((NSWindow?) -> Void)?
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); found?(window) }
+  }
+  func makeNSView(context: Context) -> V { let v = V(); v.found = found; return v }
+  func updateNSView(_ v: V, context: Context) { v.found = found; if let w = v.window { found(w) } }
 }
 
 /// In the window: the board's shadow (0 24 70 .55, 0 4 14 .3) and its dark outer hairline, as the panel's window has.

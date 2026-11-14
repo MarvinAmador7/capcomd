@@ -321,11 +321,12 @@ import PerfLoopProbe
   var lastPhaseEvent: (t: Double, value: Int)? { events.last { $0.name == "reel.phase" }.map { ($0.t, $0.value) } }
 
   /// Waits for the reel to start moving (phase 1) after `since`, then to stop. Returns (startedAt, settledAt).
-  func waitReelSettled(since: Double, timeoutMs: Double = 2500) async -> (started: Double?, settled: Double?) {
+  func waitReelSettled(since: Double, timeoutMs: Double = 2500, moving: (() -> Bool)? = nil) async -> (started: Double?, settled: Double?) {
+    let moving = moving ?? { self.model.reelMoving }
     let began = await wait(timeoutMs: 600) { self.events.contains { $0.name == "reel.phase" && $0.value == 1 && $0.t >= since } }
     guard began else { return (nil, nil) }
     let start = events.first { $0.name == "reel.phase" && $0.value == 1 && $0.t >= since }?.t
-    let ended = await wait(timeoutMs: timeoutMs) { !self.model.reelMoving && (self.lastPhaseEvent?.value ?? 1) == 0 && (self.lastPhaseEvent?.t ?? 0) >= (start ?? since) }
+    let ended = await wait(timeoutMs: timeoutMs) { !moving() && (self.lastPhaseEvent?.value ?? 1) == 0 && (self.lastPhaseEvent?.t ?? 0) >= (start ?? since) }
     let settled = ended ? lastPhaseEvent?.t : nil
     // One more frame so the settle itself is in the step's window.
     _ = await nextCommit()
@@ -333,6 +334,13 @@ import PerfLoopProbe
   }
 
   // MARK: views
+
+  /// The Needs you reel, while it is open.
+  func needsReel() -> ReelColumnViews? {
+    var r: ReelColumnViews?
+    walk(window.contentView!) { if r == nil, let x = $0 as? ReelColumnViews, x.reelKind == .needs { r = x } }
+    return r
+  }
 
   /// The reel's horizontal NSScrollView (the widest scroll view whose document is wider than it).
   func reelScrollView() -> NSScrollView? {

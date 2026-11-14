@@ -46,6 +46,7 @@ package struct DeskCommands: Commands {
       Divider()
       Button("Copy Run ID") { if let i = model.menuItem("copy") { model.perform(i) } }
     }
+    NeedsYouCommands(model: model)
     CommandMenu("Go") {
       Button("Home") { model.toggleHome() }.keyboardShortcut("0", modifiers: .command)
       Divider()

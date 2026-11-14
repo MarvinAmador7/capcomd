@@ -44,6 +44,7 @@ extension DeskModel {
   /// project shows as a deck. `focus`: the goal field takes the keyboard.
   package func openHome(focus: Bool) {
     menuOpen = false; paletteOpen = false; stopAsked = false
+    needs.close(restore: false)
     if let np = newProject { if focus { np.focusSerial += 1 }; return }
     let np = newProjectDraft ?? NewProjectModel()
     newProjectDraft = nil

@@ -20,6 +20,8 @@ same PR. Behaviour conflicts go to the owner.
 | Open the window | first frame ≤ 100 ms after launch | Nothing is fetched to show the window: it opens on Home, and the store fills it (the Running cards, the model menu) as frames arrive. Data that isn't there yet shows as an empty column, never a spinner over the window. |
 | Switch project (click or ⌘1–9) | first frame ≤ 50 ms | The decks are already in memory; the reel shows headers at once, thread pages fill in. Keyboard switches don't animate. |
 | Reel scroll | no dropped frames at 120 Hz with 17 agents | The reel is an AppKit scroll view with one hosting view per column, so a scroll frame moves a layer and runs no SwiftUI (in a SwiftUI ScrollView every frame dirtied all 16 columns' views). Columns stay built while the run is open (a lazy stack rebuilt every column it scrolled past). Threads are built ahead of time, nearest first while the reel stands still, at most 32 kept. A swipe lands on the column edge nearest where its momentum would stop, at most a screen away; the leading column is reported once per column crossed. A jump of more than a screen cuts to one column short and slides the last. |
+| Open the Needs you reel | first frame ≤ 50 ms with 20 asks | Its columns are the reel's own (`ReelView`, one hosting view per column); the first frame builds the leading column alone and the rest follow one a frame, nearest first; every column opens with its head and ask bar and its thread warms after, one a frame. The list is the store's (`needsAsks()`), sorted once on open. Not met yet on a loaded machine (see the PR's numbers). |
+| Answer an ask in it | the column out in ≤ 300 ms, no dropped frame | The leaving column fades and the rest close up in the render server (transform and opacity on layers; nothing re-laid out per frame). |
 | A thread item arrives | re-renders its own column only | Keyed change notifications (§6), not the menu bar's global `revision`. |
 | Typing in a composer | no work outside the composer | The draft is local `@State`; nothing in the store changes until Send. |
 | Network | one stream per open run, whatever the column count | The run stream with `?thread=1` already carries every agent's thread items; no per-column connections (AsyncHTTPClient caps at 8). |
@@ -36,7 +38,7 @@ PR is called done, and put the numbers in the PR.
 One window, two parts.
 
 - **Title bar** (52 pt: the unified toolbar's height, so the traffic lights centre on it; full-size content): traffic lights, then **Home** (a 30 pt
-  icon button, the prototype's house; pressed while Home shows; ⌘0), then the **projects**, then on the right **Follow**, **Actions ⌘K**, **+**. Boards:
+  icon button, the prototype's house; pressed while Home shows; ⌘0), then the **projects**, then on the right the **Needs you hand** (until the sidebar lands; see Needs you reel), **Follow**, **Actions ⌘K**, **+**. Boards:
   `ReelStack`, `ReelTabs`, `Home`.
   - The **open project** is one group: Local/Cloud glyph (`laptopcomputer` / `cloud`), name (no clock or
     status line), then its crew tabs in tree order, with a bracket around the tabs whose columns are on screen. A tab
@@ -145,6 +147,41 @@ One window, two parts.
     Approve ↩ (the approval card's path; Return approves while the card has focus, Esc never denies). A click (or Space,
     or Return on one that doesn't ask) opens the project in the reel. The cards follow `.run` changes only while Home
     shows (`HomeSlice`).
+- **Needs you reel** (`rex/RexNeedsReel.dc.html`; RexStates' "Needs you reel"; RexNotes' "The Needs you hand"). One
+  place to answer every agent that waits on you, across all projects. The Needs you hand (SF `hand.raised`; the amber
+  count beside it while anything asks, grey with no count at zero) and the sidebar's "Needs you" heading open it; until
+  the sidebar lands the hand sits in the title bar before Follow, and View › Needs You opens it too. It takes the main
+  area (the project reel stays built, hidden, underneath; Home, if it showed, goes and comes back on Back).
+  - One column per asking agent, oldest first (when it asked, then the daemon's order): every undecided approval's
+    waiting agent (a merge's asker; its oldest approval), and one per run a usage limit paused (its first paused agent).
+    The columns are the approved Reel's (header, thread, ask bar at the foot) with two differences: no amber ring
+    (every column asks; the warm ask bar carries it) and a context line under the header, tertiary 11.5 pt, the place
+    icon and "project · profile". The ask bar is the decision bar (a merge also says "3 files, +73 −5"; a question is
+    its text with Deny and Approve ↩, since the daemon's approvals carry no choices), or for a usage limit "Usage limit
+    reached. It resumes at 21:40.", "Claude Code · 2 agents are paused" and Resume now ↩ (`POST …/resume`, the menu
+    bar card's Resume now). A failed agent has no daemon decision to make, so it is not an ask here.
+  - Above the columns a 36 pt strip, then 4 pt: "Needs you" (13 pt semibold, amber), " · 3" (secondary), "oldest first"
+    (12 pt tertiary, 12 pt after), and at the right Back (13 pt medium, secondary) and "esc" (12 pt tertiary). Aligned
+    with the columns (the reel's peek and gap in from each side).
+  - Answering slides its column out: it fades and lifts 6 pt (0.18 s, ease-out) while the columns after it close up by
+    one pitch (0.24 s, the reel's curve, no bounce), together under 300 ms, transform and opacity only. The next column
+    takes its place and its focus, so Return answers it next. Answered from the keyboard (Return), nothing slides: the
+    reel is laid out anew. Reduce Motion: the column fades out in 0.15 s and the rest stand in their places at once.
+  - A new ask joins at the end, never under the pointer, and the leading column keeps its place (an ask answered
+    elsewhere before it doesn't move it either).
+  - With none left: the strip says "Needs you · 0" (secondary, then tertiary, no amber) and the area is one empty
+    column (#151518, 11 pt corners, .5 pt ring) with "Nothing needs you." (13 pt tertiary) and, 12 pt under it,
+    "Back to fix email join" (an outlined 30 pt button, 13 pt medium, 7 pt corners) and "esc".
+  - Esc (or Back) leaves at any time, back to what the window showed (the agent and project, or Home), unless the
+    palette, the menu, a rename field or the Stop question takes Esc. Opening a project (a deck, ⌘1–9), a crew tab or
+    Home leaves it for that. ⌃←/⌃→ and ⌃1–9 move among its columns; Return answers the focused column only; Esc never
+    denies.
+  - Each run with a column follows its live thread items while the reel is open (`thread=1`, one stream per run). A
+    column of the open project shares its agent's slice; the others have their own, refreshed by the store's keyed
+    changes (an unnarrowed change re-reads the list; `.agent(id)` and `.thread(id)` touch only their column).
+  - Not built yet: View diff (no diff view), a question's choices, an error's decision, Not now and Stop project… on a
+    usage limit, and the Rex pane chrome (44 pt headers, 30 pt ask-bar buttons): the reel uses the approved Reel's
+    columns and decision bar as they are.
 
 # 3. Follow, overview, zoom
 
@@ -154,19 +191,21 @@ overview gets its key when it's built); ⇧⌘↩ zoom one column.
 
 # 4. Keyboard
 
-⌘0 Home (again: back to the project) · ⌘1–9 projects · ⌃1–9 agents · ⌃← ⌃→ focus the neighbour column (the reel scrolls
+⌘0 Home (again: back to the project) · ⌘J the next ask, oldest first, one at a time (from anywhere: it opens that agent in
+its project; in the Needs you reel it focuses the next column; after the newest, the oldest again) · ⌘1–9 projects · ⌃1–9 agents · ⌃← ⌃→ focus the neighbour column (the reel scrolls
 only when the focused column would leave the window, 180 ms ease-out) · ⇧⌘↩ zoom · ⌘K search · ⇧⌘N Home with the
 composer focused · ⌘L message the planner · ⌥⌘P pause / resume the project · ⌘W fold the project into the title bar (a
 finished one: remove it; Home: back to the open project; the window's own Close is replaced) · ⇧⌘F Follow. ⌘T (Trace) is bound once the desktop has a trace
-view. Each is in the app's menus (File, Project, Go). Return approves while an ask has focus and nothing else takes
+view. Each is in the app's menus (File, Project, View, Go). Return approves while an ask has focus and nothing else takes
 Return: never while a text field has the keyboard (a column's message box, a rename field, the new project column's
 composer, Search ⌘K), nor while the menu or the Stop question is up; on Home it approves only the focused card's ask.
-Esc never denies; it closes Search ⌘K, the menu and the model menu, cancels a folder's setup, and leaves Home for the
-open project while nothing is typed. Keyboard actions never animate otherwise.
+Esc never denies; it closes Search ⌘K, the menu and the model menu, cancels a folder's setup, leaves Home for the
+open project while nothing is typed, and leaves the Needs you reel. Keyboard actions never animate otherwise.
 
 # 5. Motion
 
-Transform and opacity only, ≤ 300 ms, interruptible springs without bounce, Reduce Motion → 150 ms crossfades. Deck
+Transform and opacity only, ≤ 300 ms, interruptible springs without bounce, Reduce Motion → 150 ms crossfades. The Needs you reel: an answered column fades and lifts 6 pt (0.18 s) while the rest
+close up (0.24 s); from the keyboard nothing slides; Reduce Motion: a 0.15 s fade. Deck
 fan-out spring 0.3 s, names fade in over the last 120 ms. Home comes in and goes with a 0.3 s spring (opacity, 8 pt
 rise); a Running card arrives with a 0.35 s spring (opacity, from 6 pt above); the model menu pops in 0.14 s (opacity,
 3 pt); the composer's focus ring fades in 0.18 s. Reduce Motion: crossfades only.
@@ -178,7 +217,8 @@ the selection, typing) never animate. Menu bar → window: one shape grows from 
 # 6. Store work this needs
 
 - **Keyed changes.** `CapcomdStore.onChange` stays for the menu bar; add `onChanges(Set<ChangeKey>)` with
-  `.run(id)`, `.agent(id)`, `.thread(agentId)`, `.approvals`, `.projects`. The desktop model keeps one small
+  `.run(id)`, `.agent(id)`, `.thread(agentId)`, `.approvals`, `.projects`. (Built: `.run`, `.agent`, `.thread`,
+  `.selection`; approvals and pauses arrive unnarrowed, as `.all`, which is when the Needs you list is read again.) The desktop model keeps one small
   `@Observable` per column and updates only the ones named.
 - **Many threads at once.** `openThread` tracks one agent; the reel needs the open run's agents. The stream side is
   already there (`thread=1` covers the run); the store keeps items for every agent of `threadStreamRun` and pages each

@@ -18,6 +18,9 @@ public struct FixtureSpec: Sendable, Codable, Hashable {
   /// The parameters `NAME@key=value,…` may set, each with the range it accepts (the manifest's `parametric`; see
   /// FixtureParams.swift). Nil for a fixture that can't be varied (a captured one).
   public var parametric: [String: [Int]]? = nil
+  /// The Needs you reel's fixtures: every project has `openAgents` agents and the asks are spread across them (merges
+  /// with their files, questions, a usage limit per project at most), at shuffled times. Nil elsewhere.
+  public var needs: Bool? = nil
 }
 
 /// What one fixture generates: lifecycle events per run scope, thread items per agent, media bytes by attachment id.
@@ -34,6 +37,8 @@ public struct World: Sendable {
   public var asking: [String: [String]] = [:]
   /// The highest item seq handed out, so live replays continue after it.
   public var lastSeq = 0
+  /// The asks as generated (the needs fixtures): the frames that make each, so a scenario can ask again what it answered.
+  public var askFrames: [NeedsFixtureAsk] = []
   /// Items exactly as a daemon served them, by item id (a captured fixture): FixtureThread serves these bytes
   /// instead of re-encoding the decoded item, so fields this client doesn't decode still reach the page.
   public var wire: [String: Data] = [:]
@@ -77,6 +82,8 @@ public enum Fixtures {
     FixtureSpec(name: "crew17-long", summary: "crew17 with 400–600 items a thread: the memory and first-page budgets.", openAgents: 17, itemsPerThread: 400...600, projects: 3, asks: 1),
     FixtureSpec(name: "swarm64", summary: "64 agents under 8 leads, three asks, five projects: past warmCap (32), the title bar overflows.", openAgents: 64, itemsPerThread: 30...80, projects: 5, asks: 3),
     FixtureSpec(name: "search", summary: "Search ⌘K's load: 60 projects (~200 agents in all, 40 in the open one, three asks) plus the commands: 250+ searchable items, short threads.", openAgents: 40, itemsPerThread: 8...16, projects: 60, asks: 3),
+    FixtureSpec(name: "needs5", summary: "Needs you: five asks across five projects of 6 agents (merges with their files, questions, a usage limit), at shuffled times.", openAgents: 6, itemsPerThread: 40...80, projects: 5, asks: 5, needs: true),
+    FixtureSpec(name: "needs20", summary: "Needs you: twenty asks across eight projects of 9 agents (merges with their files, questions, usage limits), at shuffled times.", openAgents: 9, itemsPerThread: 40...80, projects: 8, asks: 20, needs: true),
     FixtureSpec(name: "crew", summary: "The family the sweeps vary: crew17's shape (3 projects, one ask, 60–120 items a thread) for `crew@agents=N,items=M` (M ± 20 % a thread; also projects, asks, seed).", openAgents: 17, itemsPerThread: 60...120, projects: 3, asks: 1),
   ].map { var s = $0; s.parametric = Fixtures.parameterRanges; return s }
 
@@ -97,7 +104,7 @@ public enum Fixtures {
     let openIndex = 0
     for p in 0..<spec.projects {
       let runId = "run-\(family)-\(p + 1)"
-      let count = p == openIndex ? spec.openAgents : [1, 3, 5, 2][p % 4]
+      let count = p == openIndex || spec.needs == true ? spec.openAgents : [1, 3, 5, 2][p % 4]
       let start = base + p * 90_000
       let title = Goals.pick(&g, p)
       func ev(_ type: String, _ agent: String?, _ d: [String: JSONValue] = [:], at: Int) {
@@ -137,7 +144,7 @@ public enum Fixtures {
         w.threads[id] = items
       }
       // Asks: pending approvals on workers, the first one deep in the tree so Follow has somewhere to go.
-      let asks = p == openIndex ? spec.asks : 0
+      let asks = p == openIndex && spec.needs != true ? spec.asks : 0
       var asking: [String] = []
       let workers = ids.filter { $0.profile == "worker" }.map(\.id)
       for a in 0..<asks where !workers.isEmpty {
@@ -150,7 +157,33 @@ public enum Fixtures {
       }
       w.runIds.append(runId); w.agents[runId] = order; w.asking[runId] = asking
     }
+    if spec.needs == true { spreadAsks(&w, spec: spec, base: base, seq: &seq, g: &g) }
     return w
+  }
+
+  /// The needs fixtures' asks: ask `a` goes to project `a % P`, to its agents after the planner in turn; every third is
+  /// a question, every third a usage limit (one per project; else a question), the rest merges with their files. Their
+  /// times are shuffled, so oldest first is not project order.
+  static func spreadAsks(_ w: inout World, spec: FixtureSpec, base: Int, seq: inout Int, g: inout Gen) {
+    let runs = w.runIds
+    guard !runs.isEmpty else { return }
+    var limited: Set<String> = []
+    let at = base + 600_000
+    for a in 0..<spec.asks {
+      let runId = runs[a % runs.count]
+      let agents = w.agents[runId] ?? []
+      guard agents.count > 1 else { continue }
+      let who = agents[1 + (a / runs.count) % (agents.count - 1)]
+      let t = at + ((a * 7919) % max(1, spec.asks)) * 1_000 + a
+      var kind = ["merge", "question", "limit"][a % 3]
+      if kind == "limit" && !limited.insert(runId).inserted { kind = "question" }
+      let ask = NeedsFixtureAsk(runId: runId, agentId: who, approvalId: kind == "limit" ? nil : "apr-\(runId)-n\(a + 1)", kind: kind, atMs: t,
+                                repo: Repos.pick(&g))
+      seq += 1
+      w.events.append((runId, ask.envelope(seq: seq, approvalId: ask.approvalId)))
+      w.askFrames.append(ask)
+      if ask.approvalId != nil { w.asking[runId, default: []].append(who) }
+    }
   }
 
   struct Node { var id: String; var profile: String; var parent: String?; var key: String? }
@@ -273,6 +306,12 @@ public enum Fixtures {
                      projectId: nil, runId: runId, agentId: item.agentId, data: ["agentId": .string(item.agentId), "item": data])
     e.durability = "ephemeral"
     return (CapcomdStore.lifecycleKey(runId), e)
+  }
+
+  /// An approval decided (what deciding it in the app leads to): the ask leaves.
+  public static func decidedFrame(runId: String, approvalId: String, seq: Int) -> (scope: String, envelope: Envelope) {
+    (runId, Envelope(id: "dec-\(seq)", scope: runId, seq: seq, entity: runId, type: "approval.decided", epochMs: Int(Date().timeIntervalSince1970 * 1000),
+                     projectId: nil, runId: runId, agentId: nil, data: ["approvalId": .string(approvalId), "status": .string("approved")]))
   }
 
   /// An ask arriving live for `agentId` (what Follow reacts to).
@@ -537,5 +576,49 @@ enum Images {
     var c: UInt32 = 0xFFFF_FFFF
     for b in d { c = table[Int((c ^ UInt32(b)) & 0xFF)] ^ (c >> 8) }
     return c ^ 0xFFFF_FFFF
+  }
+}
+
+
+/// One of a needs fixture's asks, as generated: a merge (with its files), a question, or a usage limit.
+public struct NeedsFixtureAsk: Sendable, Hashable {
+  public var runId: String
+  public var agentId: String
+  /// Nil for a usage limit (an agent paused, not an approval).
+  public var approvalId: String?
+  public var kind: String
+  public var atMs: Int
+  public var repo: String
+
+  /// The frame that makes it: `approval.requested` (merge, question) or `agent.paused` with a quota limit. A scenario
+  /// asking again passes a fresh approval id (the store keeps ids it has seen).
+  public func envelope(seq: Int, approvalId id: String?) -> Envelope {
+    let project = "prj-" + runId.dropFirst(4)
+    if kind == "limit" {
+      return Envelope(id: "ask-\(seq)", scope: runId, seq: seq, entity: agentId, type: "agent.paused", epochMs: atMs, projectId: project, runId: runId, agentId: agentId,
+                      data: ["result": .object(["limit": .string("quota")]), "until": .number(Double(atMs + 2 * 3_600_000))])
+    }
+    var d: [String: JSONValue] = ["approvalId": .string(id ?? approvalId ?? "apr-\(seq)"), "requestedBy": .object(["agentId": .string(agentId), "runId": .string(runId)])]
+    if kind == "merge" {
+      d["kind"] = .string("merge")
+      d["question"] = .string("Merge \(repo)'s change into main?")
+      d["subject"] = .object(["ref": .string("fix/\(agentId.suffix(4))"), "target": .string("main"), "askedBy": .string(agentId),
+                              "files": .array([.object(["path": .string("ids/v1/join.sql"), "added": .number(18), "removed": .number(3)]),
+                                               .object(["path": .string("ids/v1/normalize.ts"), "added": .number(41), "removed": .number(2)])]),
+                              "filesTotal": .number(3), "added": .number(73), "removed": .number(5)])
+    } else {
+      d["kind"] = .string("custom")
+      d["question"] = .string("Round per line or on the invoice total?")
+    }
+    return Envelope(id: "ask-\(seq)", scope: runId, seq: seq, entity: agentId, type: "approval.requested", epochMs: atMs, projectId: project, runId: runId, agentId: agentId, data: d)
+  }
+
+  /// What answers it: the approval decided, or (a usage limit) the agent running again.
+  public func answer(seq: Int, approvalId id: String?) -> Envelope {
+    if kind == "limit" {
+      return Envelope(id: "ans-\(seq)", scope: runId, seq: seq, entity: agentId, type: "agent.resumed", epochMs: Int(Date().timeIntervalSince1970 * 1000), projectId: nil,
+                      runId: runId, agentId: agentId, data: [:])
+    }
+    return Fixtures.decidedFrame(runId: runId, approvalId: id ?? approvalId ?? "", seq: seq).envelope
   }
 }
