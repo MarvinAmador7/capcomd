@@ -141,7 +141,9 @@ import PerfLoopProbe
 
   func windowState() -> WindowState? {
     guard let w = window else { return nil }
-    return WindowState(appActive: NSApp.isActive, keyWindow: w.isKeyWindow, visible: w.isVisible, occluded: !w.occlusionState.contains(.visible),
+    // A child window of the window holding the keyboard (Search ⌘K's panel, search.host=panel) is the window's own.
+    let key = w.isKeyWindow || (w.childWindows ?? []).contains { $0.isVisible && $0.isKeyWindow }
+    return WindowState(appActive: NSApp.isActive, keyWindow: key, visible: w.isVisible, occluded: !w.occlusionState.contains(.visible),
                        activityAsserted: activity != nil, frame: [w.frame.origin.x, w.frame.origin.y, w.frame.width, w.frame.height], backingScale: w.backingScaleFactor)
   }
 
