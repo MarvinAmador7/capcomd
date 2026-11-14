@@ -92,7 +92,7 @@ import CapcomdStore
   /// tryAgain|cancel>` (a button of the folder's setup), `escape` (Esc in the goal field), `start` (Return). The project
   /// menu (ReelMenu): `menu` (a click on the name), `menu <message|changes|pause|resume|stop|fold|remove|copy>` (that
   /// item), `menu confirm|cancel` (the Stop question). The palette: `palette [query]` (⌘K, with that query typed),
-  /// `palette up|down|run|close`. `menus` writes the main menu's items and their shortcuts to <dir>/menus.txt.
+  /// `palette up|down|run|split|close` (split: ⌘↩). `menus` writes the main menu's items and their shortcuts to <dir>/menus.txt.
   /// The app outside the window: `choose` (Choose Project Folder…: the Open panel), `openpanel cancel`, `close` (the
   /// window's close button); state.txt lists the app's activation and its windows front to back. Controls by place:
   /// `hit <label|@X,Y>` (which view a click there lands on, into <dir>/hit.txt), `click <label|@X,Y>` (a mouse-down and
@@ -159,6 +159,7 @@ import CapcomdStore
           case "up"?: model.movePaletteSelection(-1)
           case "down"?: model.movePaletteSelection(1)
           case "run"?: model.runPaletteSelection()
+          case "split"?: model.runPaletteSelection(split: true)   // ⌘↩
           case "close"?: model.closePalette()
           default: model.togglePalette(query: String(line.dropFirst(8)))
           }
@@ -501,7 +502,9 @@ import CapcomdStore
       out.append("window \(Swift.type(of: w)) level \(w.level.rawValue) key \(w.isKeyWindow) main \(w.isMainWindow) onScreen \(w.occlusionState.contains(.visible)) \(w is NSOpenPanel ? "OPENPANEL" : "")")
     }
     if model.paletteOpen {
-      out.append("palette \"\(model.paletteQuery)\" selection \(model.paletteSelection): " + model.paletteShown.map(\.title).joined(separator: " | "))
+      let sr = model.search
+      out.append("palette \"\(model.paletteQuery)\" selection \(model.paletteSelection) items \(sr.index.count) indexMs \(String(format: "%.2f", sr.lastIndexMs)) queryMs \(String(format: "%.2f", sr.lastQueryMs)) panel \(SearchPanelController.shown.map { "\($0.frame) key \($0.isKeyWindow) visible \($0.isVisible) space \($0.isOnActiveSpace) occl \($0.occlusionState.rawValue) parent \($0.parent?.windowNumber ?? -1) number \($0.windowNumber)" } ?? "-")")
+      for sec in sr.sections { out.append("palette \(sec.group.title): " + sec.hits.map(\.item.title.text).joined(separator: " | ")) }
     }
     if let run = model.openRunId, let g = s.goalCard(runId: run) {
       out.append("goal \(g.title) \(g.phase) stopped \(g.stopped) docks \(g.docks) loading \(g.loading) openPR \(g.openPR) confirm \(g.confirm ?? "-") outcome \(g.outcome.map { "\($0)" } ?? "-")")

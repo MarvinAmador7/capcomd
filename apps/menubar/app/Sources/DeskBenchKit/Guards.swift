@@ -65,10 +65,11 @@ public enum Guards {
   ]
 
   /// The scenarios whose end state is deterministic enough to compare pixels: the reel at rest after scrolls,
-  /// switches, a resize, Follow, a fresh window. Not `burst` (the arriving items' layout settles on its own clock) and
+  /// switches, a resize, Follow, a fresh window, Search ⌘K at rest (its panel drawn in). Not `burst` (the arriving items' layout settles on its own clock) and
   /// not `typing` (the caret, the field editor).
   static let snapshotScenarios: Set<String> = ["open", "switch", "step", "jump", "fling", "swipe", "follow", "resize",
-                                                "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe", "sidebar-toggle", "sidebar-select"]
+                                                "needs-open", "needs-answer", "needs-arrive", "needs-step", "needs-empty", "needs-swipe", "sidebar-toggle", "sidebar-select",
+                                                "palette-open", "palette-type", "palette-keys"]
 
   /// The correctness guards of a scenario, as the manifest lists them.
   public static func forScenario(_ name: String) -> [String] {

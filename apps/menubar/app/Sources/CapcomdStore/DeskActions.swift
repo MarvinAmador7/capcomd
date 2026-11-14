@@ -1,7 +1,7 @@
 import Foundation
 
 // The desktop window's actions (design/desktop/SPEC.md §2, boards Home and ReelMenu): Home's composer, the
-// open project's menu and the ⌘K palette, as data. Each offers only what this daemon and app can do; the views draw it.
+// open project's menu, as data (the ⌘K palette's entries are Search.swift). Each offers only what this daemon and app can do; the views draw it.
 
 extension Capability {
   /// `POST /v1/runs/{runId}/pause`, `/resume` and `/cancel`.
@@ -163,67 +163,5 @@ extension CapcomdStore {
     return ProjectMenu(projectId: projectId, runId: runId, goal: run.goal?.plain ?? run.title, repos: repos, sandbox: run.sandbox,
                        agents: run.agents.count, startedAtMs: run.startedAtMs, plannerId: planner?.agentId,
                        sections: [work, control, place].filter { !$0.isEmpty }, control: controlState[runId] ?? .idle)
-  }
-}
-
-// MARK: the ⌘K palette
-
-/// What a palette entry does.
-public enum PaletteAction: Sendable, Hashable {
-  case menu(ProjectMenu.Item)
-  /// Open that project (a deck's id).
-  case project(String)
-  case newProject
-  /// Home (⌘0).
-  case home
-  case follow(Bool)
-  /// Bring that agent's column on screen and focus it.
-  case agent(String)
-}
-
-public struct PaletteEntry: Sendable, Hashable, Identifiable {
-  public var id: String
-  public var title: String
-  /// Dimmed after the title (the project's place in the title bar, an agent's profile).
-  public var detail: String?
-  public var shortcut: String?
-  public var action: PaletteAction
-  public init(id: String, title: String, detail: String? = nil, shortcut: String? = nil, action: PaletteAction) {
-    self.id = id; self.title = title; self.detail = detail; self.shortcut = shortcut; self.action = action
-  }
-}
-
-/// The ⌘K palette's entries: the open project's menu, then new project and Follow, then switching projects and agents.
-public enum Palette {
-  public static func entries(menu: ProjectMenu?, decks: [DeckInfo], openProjectId: String?, agents: [ColumnHeader], follow: Bool) -> [PaletteEntry] {
-    var out: [PaletteEntry] = []
-    for item in menu?.items ?? [] {
-      let detail: String? = if case .copyRunId(let s) = item { s } else { nil }
-      out.append(PaletteEntry(id: "menu.\(item.name)", title: item.title, detail: detail, shortcut: item.shortcut, action: .menu(item)))
-    }
-    out.append(PaletteEntry(id: "home", title: "Home", shortcut: "⌘0", action: .home))
-    out.append(PaletteEntry(id: "new", title: "New project", shortcut: "⇧⌘N", action: .newProject))
-    out.append(PaletteEntry(id: "follow", title: follow ? "Turn Follow off" : "Turn Follow on", shortcut: "⇧⌘F", action: .follow(!follow)))
-    for (n, d) in decks.enumerated() where d.id != openProjectId {
-      out.append(PaletteEntry(id: "project.\(d.id)", title: "Switch to \(d.title)", shortcut: n < 9 ? "⌘\(n + 1)" : nil, action: .project(d.id)))
-    }
-    for (n, h) in agents.enumerated() {
-      out.append(PaletteEntry(id: "agent.\(h.agentId)", title: "Focus \(h.tabLabel)", detail: h.title == nil ? nil : h.name,
-                              shortcut: n < 9 ? "⌃\(n + 1)" : nil, action: .agent(h.agentId)))
-    }
-    return out
-  }
-
-  /// The entries whose words hold every word typed, in order: those whose title starts with what's typed first.
-  public static func filter(_ entries: [PaletteEntry], _ query: String) -> [PaletteEntry] {
-    let q = query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
-    guard !q.isEmpty else { return entries }
-    let hits = entries.filter { e in
-      let words = ([e.title] + (e.detail.map { [$0] } ?? [])).joined(separator: " ").lowercased()
-        .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-      return q.allSatisfy { t in words.contains { $0.hasPrefix(t) } }
-    }
-    let lead = q.joined(separator: " ")
-    return hits.filter { $0.title.lowercased().hasPrefix(lead) } + hits.filter { !$0.title.lowercased().hasPrefix(lead) }
   }
 }

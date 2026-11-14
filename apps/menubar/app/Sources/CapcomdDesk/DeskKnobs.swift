@@ -102,8 +102,21 @@ package enum DeskKnobs {
                                         summary: "land = the reel ends AppKit's own deceleration when the fingers lift, so it rests on the column it chose; appkit = left running (before 2026-11-04: it carried the reel off the column edge)",
                                         since: "0.10")
 
+  package enum SearchHost: String, KnobValue, CaseIterable {
+    /// Its own NSPanel, a child of the window that takes the keyboard (Spotlight's way): opening and closing it change
+    /// the key window, and every column re-resolves its key-state styling.
+    case panel
+    /// A layer over the reel inside the window, the same view on the system's vibrancy: the window keeps the keyboard.
+    case overlay
+  }
+
+  /// What hosts Search ⌘K (SearchPanel.swift, SearchView.swift).
+  package static let searchHost = Knob("search.host", default: SearchHost.overlay, choices: SearchHost.allCases,
+                                       summary: "panel = Search ⌘K in its own key panel over the window; overlay = the same view inside the window, which keeps the keyboard",
+                                       since: "0.12")
+
   /// Every knob of the window. A new knob goes here too, or `describe` won't list it.
-  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns, reelCache, reelRelease] }
+  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns, reelCache, reelRelease, searchHost] }
   /// What `describe` lists, by name.
   package static var all: [KnobInfo] { knobs.map(\.info).sorted { $0.name < $1.name } }
   /// The full knob vector this process runs with, defaults included (a result's `knobs`).

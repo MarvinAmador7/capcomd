@@ -105,9 +105,15 @@ see *Comparing two builds' call trees* below.
 
 The sidebar scenarios aren't in `suite` and leave the window folded. `snapshot --sidebar [--select AGENT]` pictures
 the opened window.
+- `palette-open`, `palette-type`, `palette-keys`: Search ⌘K on the `search` fixture (their default: 60 projects, 250+
+  searchable items). ⌘K → the frame with the panel and its results (budget 50 ms); a query typed a key at a time into
+  the panel's field (each key → the frame with its results, budget one frame); ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens
+  (falls back to ↩ until splits), Esc closes. Checks read the UI: the empty search's groups, the ranking (groups in
+  attention order, by score, what's marked spells the query), the selection, what opened, the panel drawn (its own
+  picture has text). Snapshots draw the window's child windows in, so `snapshot-diff` sees the panel.
 
 Fixtures (`list fixtures`): `solo` (1 agent), `trio` (3), `crew17` (SPEC's 17-agent reference, the default),
-`crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32). Same name, same bytes, every
+`crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32), `search` (60 projects, Search ⌘K's). Same name, same bytes, every
 time (a seeded generator: markdown with headings/lists/code/tables, tool calls with diffs, thinking, handoffs, errors,
 images as attachments, one or more pending asks). `fixture <name>` describes one.
 

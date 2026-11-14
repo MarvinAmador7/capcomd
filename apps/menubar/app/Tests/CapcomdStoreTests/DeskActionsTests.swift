@@ -2,7 +2,7 @@ import XCTest
 @testable import CapcomdStore
 
 /// The desktop's actions as data (design/desktop Home, ReelMenu, ⌘K): Home's composer form, the project
-/// menu's items per capability and run state, and the palette's entries and filtering.
+/// menu's items per capability and run state. Search ⌘K is SearchTests.swift.
 @MainActor
 final class DeskActionsTests: XCTestCase {
   var seq = 0
@@ -184,49 +184,5 @@ final class DeskActionsTests: XCTestCase {
   func testTheRunIdIsShortenedButCopiedWhole() {
     XCTAssertEqual(ProjectMenu.shortId("run-7f3a2c1d-55aa-4e1f"), "run-7f3a2c")
     XCTAssertEqual(ProjectMenu.shortId("run-a"), "run-a")
-  }
-
-  // MARK: the palette
-
-  func header(_ id: String, _ name: String, title: String?) -> ColumnHeader {
-    ColumnHeader(agentId: id, runId: "run-a", name: name, title: title, suffix: nil, kind: .other, status: .running, waiting: false, activity: nil,
-                 repo: nil, spawnedAtMs: 0, startedAtMs: nil, provider: nil, depth: 0)
-  }
-
-  func entries() -> [PaletteEntry] {
-    let decks = [DeckInfo(id: "p1", runId: "r1", title: "Migrate matchkey", isRunning: true, agentIds: []),
-                 DeckInfo(id: "p2", runId: "r2", title: "Fix proration", isRunning: true, agentIds: [])]
-    let menu = ProjectMenu(projectId: "p1", runId: "r1", goal: "g", repos: [], agents: 2, plannerId: "pl",
-                           sections: [[.messagePlanner], [.pause, .stop], [.fold, .copyRunId(short: "r1")]], control: .idle)
-    return Palette.entries(menu: menu, decks: decks, openProjectId: "p1",
-                           agents: [header("pl", "planner", title: "plan the backfill"), header("w1", "worker", title: "login redirect")], follow: true)
-  }
-
-  /// The menu's actions, Home, new project, Follow, the other projects (not the open one) and the agents by title.
-  func testThePalettesEntries() {
-    let e = entries()
-    XCTAssertEqual(e.map(\.title), ["Message the planner…", "Pause project", "Stop project…", "Fold into the title bar", "Copy run ID",
-                                    "Home", "New project", "Turn Follow off", "Switch to Fix proration", "Focus plan the backfill", "Focus login redirect"])
-    XCTAssertEqual(e.first { $0.id == "home" }?.shortcut, "⌘0")
-    XCTAssertEqual(e.first { $0.id == "home" }?.action, .home)
-    XCTAssertEqual(e.first { $0.id == "project.p2" }?.shortcut, "⌘2")
-    XCTAssertEqual(e.first { $0.id == "agent.w1" }?.action, .agent("w1"))
-    XCTAssertEqual(e.first { $0.id == "follow" }?.action, .follow(false))
-    XCTAssertEqual(e.first { $0.id == "menu.copy" }?.detail, "r1")
-  }
-
-  /// Typing filters by word starts, every word; titles that start with what's typed come first.
-  func testFiltering() {
-    let e = entries()
-    XCTAssertEqual(Palette.filter(e, "").count, e.count)
-    XCTAssertEqual(Palette.filter(e, "pro").map(\.title), ["Pause project", "Stop project…", "New project", "Switch to Fix proration"])
-    XCTAssertEqual(Palette.filter(e, "login").map(\.action), [.agent("w1")])
-    XCTAssertEqual(Palette.filter(e, "f o").map(\.title), ["Turn Follow off"])
-    XCTAssertEqual(Palette.filter(e, "fold").map(\.action), [.menu(.fold)])
-    XCTAssertEqual(Palette.filter(e, "switch fix").map(\.action), [.project("p2")])
-    XCTAssertEqual(Palette.filter(e, "worker").map(\.action), [.agent("w1")])    // its profile, when it has a title
-    XCTAssertTrue(Palette.filter(e, "zzz").isEmpty)
-    // A title that starts with the query leads.
-    XCTAssertEqual(Palette.filter(e, "new").first?.action, .newProject)
   }
 }

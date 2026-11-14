@@ -8,8 +8,8 @@ import CapcomdUI
 import PerfLoopProbe
 
 // The desktop's own actions (SPEC §2, §4; boards Home and ReelMenu): Home and starting a project from its composer,
-// the open project's menu, the ⌘K palette, and folding projects into the title bar. What each offers is decided in the
-// store (NewProjectForm, ProjectMenu, Palette); this is the model's side: state, and the calls the views make.
+// the open project's menu, and folding projects into the title bar. What each offers is decided in the
+// store (NewProjectForm, ProjectMenu; Search ⌘K is SearchModel.swift); this is the model's side: state, and the calls the views make.
 
 /// Home's composer while Home shows (Home.dc.html): its form, and the planner-to-be (named in the debug state).
 @Observable @MainActor
@@ -349,48 +349,6 @@ extension DeskModel {
       if d.runId == r, !d.isRunning, d.askingAgentId == nil { return false }
       hidden[d.id] = nil
       return true
-    }
-  }
-
-  // MARK: the ⌘K palette
-
-  /// ⌘K or the title bar's ⌘ button: opens on an empty query (`query` from the debug control file).
-  package func togglePalette(query: String = "") {
-    if paletteOpen && query.isEmpty { paletteOpen = false; return }
-    menuOpen = false; stopAsked = false
-    paletteQuery = query; paletteSelection = 0
-    paletteOpen = true
-  }
-  /// What the query shows, in order.
-  package var paletteShown: [PaletteEntry] { Palette.filter(paletteEntries, paletteQuery) }
-  /// ↑ ↓: the selection moves, and stops at either end.
-  package func movePaletteSelection(_ by: Int) {
-    let n = paletteShown.count
-    paletteSelection = n == 0 ? 0 : min(max(0, paletteSelection + by), n - 1)
-  }
-  /// Return: the selected entry runs (nothing when nothing matches).
-  package func runPaletteSelection() {
-    let shown = paletteShown
-    guard shown.indices.contains(paletteSelection) else { return }
-    run(shown[paletteSelection].action)
-  }
-  package func closePalette() { paletteOpen = false }
-
-  package var paletteEntries: [PaletteEntry] {
-    _ = actionsRevision
-    return Palette.entries(menu: newProject == nil ? projectMenu : nil, decks: decks, openProjectId: newProject == nil ? openProjectId : nil,
-                           agents: newProject == nil ? columns.compactMap { agent($0)?.header } : [], follow: follow)
-  }
-
-  package func run(_ a: PaletteAction) {
-    paletteOpen = false
-    switch a {
-    case .menu(let item): perform(item)
-    case .project(let id): open(project: id)
-    case .newProject: openNewProject()
-    case .home: openHome(focus: false)
-    case .follow(let on): follow = on
-    case .agent(let id): scroll(to: id, animated: false)
     }
   }
 }

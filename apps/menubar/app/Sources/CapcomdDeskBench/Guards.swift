@@ -128,6 +128,7 @@ import DeskBenchKit
   static func png(_ h: Harness, _ url: URL) -> String? {
     guard let frame = h.window.contentView?.superview ?? h.window.contentView, let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return nil }
     frame.cacheDisplay(in: frame.bounds, to: rep)
+    h.drawChildWindows(into: rep)
     try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     guard (try? rep.representation(using: .png, properties: [:])?.write(to: url)) != nil else { return nil }
     return url.path
