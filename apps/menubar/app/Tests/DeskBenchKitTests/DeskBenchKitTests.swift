@@ -60,7 +60,30 @@ final class DeskBenchKitTests: XCTestCase {
       XCTAssertEqual(w.runIds.count, spec.projects, spec.name)
       XCTAssertEqual(w.agents[w.openRunId!]?.count, spec.openAgents, spec.name)
       for (_, items) in w.threads { XCTAssertTrue(spec.itemsPerThread.contains(items.count), spec.name) }
-      XCTAssertEqual(w.asking[w.openRunId!]?.count, spec.asks, spec.name)
+      if spec.needs == true {
+        // Spread across projects: every ask is its own agent's (one column each), kinds mixed.
+        XCTAssertEqual(w.askFrames.count, spec.asks, spec.name)
+        XCTAssertEqual(Set(w.askFrames.map(\.agentId)).count, spec.asks, spec.name)
+        XCTAssertEqual(Set(w.askFrames.map(\.runId)).count, min(spec.asks, spec.projects), spec.name)
+        XCTAssertEqual(Set(w.askFrames.map(\.kind)), ["merge", "question", "limit"], spec.name)
+      } else {
+        XCTAssertEqual(w.asking[w.openRunId!]?.count, spec.asks, spec.name)
+      }
+    }
+  }
+
+  /// The needs fixtures in a store: one ask per column, oldest first, not in project order.
+  @MainActor func testTheNeedsFixturesAskAcrossProjects() {
+    for name in ["needs5", "needs20"] {
+      let w = Fixtures.make(name)!
+      let s = CapcomdStore()
+      w.load(into: s)
+      let asks = s.needsAsks()
+      XCTAssertEqual(asks.count, w.spec.asks, name)
+      XCTAssertEqual(asks.map(\.key), asks.map(\.key).sorted(), name)
+      XCTAssertNotEqual(asks.map(\.runId), asks.map(\.runId).sorted(), name)
+      XCTAssertTrue(asks.contains { $0.limit != nil }, name)
+      XCTAssertTrue(asks.contains { $0.approval?.diff?.total == 3 }, name)
     }
   }
 

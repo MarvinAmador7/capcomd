@@ -24,13 +24,16 @@ final class NativeColumnView: NSView {
   /// The stroke, drawn over the head and body as SwiftUI's `strokeBorder` draws it: the same continuous rounded
   /// rectangle, inset by half the line (a layer border antialiases its corners differently).
   private let edge = StrokeView()
+  /// In the Needs you reel: no amber ring (every column there asks).
+  private let needs: Bool
 
-  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil) {
+  init(agentId: String, model: DeskModel, memory: SlotMemory? = nil, needs: Bool = false) {
     self.agentId = agentId
     self.model = model
     self.memory = memory
-    head = NSHostingView(rootView: Self.head(agentId, model))
-    body = NSHostingView(rootView: Self.body(agentId, model, memory))
+    self.needs = needs
+    head = NSHostingView(rootView: Self.head(agentId, model, needs))
+    body = NSHostingView(rootView: Self.body(agentId, model, memory, needs))
     super.init(frame: .zero)
     wantsLayer = true
     layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
@@ -59,14 +62,14 @@ final class NativeColumnView: NSView {
     edge.update()
   }
 
-  private static func head(_ id: String, _ model: DeskModel) -> AnyView {
-    AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).preferredColorScheme(.dark))
+  private static func head(_ id: String, _ model: DeskModel, _ needs: Bool = false) -> AnyView {
+    AnyView(ColumnHeadHost(agentId: id).id(id).environment(model).environment(\.needsReel, needs).preferredColorScheme(.dark))
   }
   /// The body, identified by its agent: a slot configured with another agent starts its views (and their state) anew;
   /// what must follow the agent is in `memory`.
-  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?) -> AnyView {
+  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ needs: Bool = false) -> AnyView {
     AnyView(ColumnBody(agentId: id).id(id).environment(model).environment(\.threadHost, ThreadHostBox(host: model))
-      .environment(\.slotMemory, memory).preferredColorScheme(.dark))
+      .environment(\.slotMemory, memory).environment(\.needsReel, needs).preferredColorScheme(.dark))
   }
 
   /// A slot shows another agent: its head and body get that agent's views, its stroke that agent's state. Nothing is
@@ -74,8 +77,8 @@ final class NativeColumnView: NSView {
   func configure(_ id: String) {
     guard id != agentId else { return }
     agentId = id
-    head.rootView = Self.head(id, model)
-    body.rootView = Self.body(id, model, memory)
+    head.rootView = Self.head(id, model, needs)
+    body.rootView = Self.body(id, model, memory, needs)
     stroke = nil
     observe()
   }
@@ -99,8 +102,8 @@ final class NativeColumnView: NSView {
 
   private func apply() {
     DeskProbe.body("Column", id: agentId)
-    let a = model.agent(agentId)
-    let asks = a?.approval != nil, focused = a?.focused ?? false
+    let a = model.agent(agentId, inNeeds: needs)
+    let asks = a?.approval != nil && !needs, focused = a?.focused ?? false
     guard stroke.map({ $0 != (asks, focused) }) ?? true else { return }
     stroke = (asks, focused)
     edge.color = NSColor(asks ? Theme.Desk.askStroke : focused ? Theme.accent.opacity(0.45) : Theme.Desk.columnStroke).cgColor
@@ -154,9 +157,10 @@ final class StrokeView: NSView {
 /// The native column's head: `ColumnHead` on the agent's slice. A click focuses the column, as anywhere in it.
 struct ColumnHeadHost: View {
   @Environment(DeskModel.self) private var model
+  @Environment(\.needsReel) private var inNeeds
   let agentId: String
   var body: some View {
-    if let a = model.agent(agentId) {
+    if let a = model.agent(agentId, inNeeds: inNeeds) {
       ColumnHead(slice: a)
         .contentShape(Rectangle())
         .onTapGesture { if model.focusedAgent != agentId { model.focusedAgent = agentId } }
@@ -167,17 +171,21 @@ struct ColumnHeadHost: View {
 /// The native column's body: the thread (once warm), then the message box or the decision it waits on.
 struct ColumnBody: View {
   @Environment(DeskModel.self) private var model
+  @Environment(\.needsReel) private var inNeeds
   let agentId: String
   var body: some View {
-    if let a = model.agent(agentId) {
+    if let a = model.agent(agentId, inNeeds: inNeeds) {
       VStack(spacing: 0) {
+        if inNeeds, let p = model.needs.place(agentId) { NeedsPlaceLine(place: p) }
         if a.warm {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
         } else {
           Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) } else { ColumnComposer(agentId: agentId, name: a.header.name) }
+        if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) }
+        else if let l = a.limit { LimitBar(limit: l, focused: a.focused) }
+        else { ColumnComposer(agentId: agentId, name: a.header.name) }
       }
       .contentShape(Rectangle())
       .onTapGesture { if model.focusedAgent != agentId { model.focusedAgent = agentId } }

@@ -10,9 +10,11 @@ import PerfLoopProbe
 /// under a hand; the smoothness meter (PerfLoopProbe) compares where the document layer showed at each display tick
 /// with where the fingers put it.
 extension Drive {
-  func swipe() async -> ([StepResult], [Check]) {
-    await rewind()
-    guard let sv = h.reelScrollView() else { return ([], [Check("reel-scroll-view", false, "no horizontal NSScrollView found under the window")]) }
+  /// `needs`: into the Needs you reel (open) instead of the project reel.
+  func swipe(needs: Bool = false) async -> ([StepResult], [Check]) {
+    if !needs { await rewind() }
+    let moving: () -> Bool = needs ? { h.model.needs.reelMoving } : { h.model.reelMoving }
+    guard let sv = needs ? h.needsReel()?.reelScrollView : h.reelScrollView() else { return ([], [Check("reel-scroll-view", false, "no horizontal NSScrollView found under the window")]) }
     let specs = (params["gesture"] ?? "synthetic:flick-forward").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
     var gestures: [Gesture] = []
     for s in specs {
@@ -26,8 +28,8 @@ extension Drive {
     let route = GestureReplay.Route(rawValue: params["deliver"] ?? "window")
     guard let route else { return ([], [Check("gesture", false, "deliver=\(params["deliver"] ?? ""): one of window, view")]) }
     AppKitScrollTrace.installIfAsked()
-    let cols = h.model.columns
-    let from: Int = params["from"].flatMap(Int.init) ?? max(0, (cols.count - h.model.across) / 2)
+    let cols = needs ? h.model.needs.columns : h.model.columns
+    let from: Int = params["from"].flatMap(Int.init) ?? max(0, (cols.count - (needs ? h.model.needs.across : h.model.across)) / 2)
     guard cols.indices.contains(from) else { return ([], [Check("gesture", false, "from=\(from): the fixture has \(cols.count) columns")]) }
     let views = sv.documentView!.subviews.map(\.frame.minX).sorted()
     let pitch = views.count == cols.count && views.count > 1 ? Double(views[1] - views[0]) : Double(sv.documentView!.frame.width) / Double(max(1, cols.count))
@@ -35,7 +37,7 @@ extension Drive {
     for i in 0..<int("swipes", 4) {
       let g = gestures[i % gestures.count]
       // From the same column every time, at rest: the gesture has room on both sides, away from the rubber band.
-      h.model.scroll(to: cols[from], animated: false)
+      if needs { h.model.needs.lead(cols[from]) } else { h.model.scroll(to: cols[from], animated: false) }
       _ = await h.nextCommit()
       _ = await h.waitQuiet(quietMs: 150)
       let m = h.begin("swipe#\(i) \(g.name)")
@@ -43,10 +45,10 @@ extension Drive {
       let replay = GestureReplay(sv: sv, window: h.window, gesture: g, stamps: stamps, route: route)
       replay.blockMs = params["inject-block-ms"].flatMap(Double.init) ?? 0
       async let done: Void = replay.run()
-      let (_, settled) = await h.waitReelSettled(since: t, timeoutMs: max(2500, g.durationMs + 1500))
+      let (_, settled) = await h.waitReelSettled(since: t, timeoutMs: max(2500, g.durationMs + 1500), moving: moving)
       await done
       // The reel may still be moving when the last momentum event lands (the reel swallows momentum, so it shouldn't).
-      if h.model.reelMoving { _ = await h.waitReelSettled(since: h.now(), timeoutMs: 1500) }
+      if moving() { _ = await h.waitReelSettled(since: h.now(), timeoutMs: 1500, moving: moving) }
       // AppKit's own deceleration can carry the clip view on after the reel's slide ended (DESKBENCH.md, Recorded
       // gestures): at rest is when its offset stopped changing.
       var lastX = sv.contentView.bounds.origin.x, lastMove = h.now()

@@ -100,6 +100,12 @@ import DeskBenchKit
       case "typing": (steps, checks) = await drive.typing()
       case "resize": (steps, checks) = await drive.resize()
       case "follow": (steps, checks) = await drive.follow()
+      case "needs-open": (steps, checks) = await drive.needsOpen()
+      case "needs-answer": (steps, checks) = await drive.needsAnswer()
+      case "needs-arrive": (steps, checks) = await drive.needsArrive()
+      case "needs-step": (steps, checks) = await drive.needsStep()
+      case "needs-empty": (steps, checks) = await drive.needsEmpty()
+      case "needs-swipe": (steps, checks) = await drive.needsSwipe()
       default: return .failure(.usage("scenario '\(spec.name)' has no driver"))
       }
       if spec.name == "open", rep == 0 {

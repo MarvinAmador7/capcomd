@@ -41,7 +41,10 @@ package final class AgentSlice {
   package private(set) var renaming: RenamePlace? { didSet { Mutations.record("AgentSlice.renaming", id: id) } }
   /// Why its last rename didn't go through (the old title is back); nil once a later one does.
   package private(set) var renameFailure: String? { didSet { Mutations.record("AgentSlice.renameFailure", id: id) } }
+  /// The usage-limit pause its run is in, when its column shows it as an ask (the Needs you reel).
+  package private(set) var limit: NeedsLimit? { didSet { Mutations.record("AgentSlice.limit", id: id) } }
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
+  func set(limit l: NeedsLimit?) { if limit != l { limit = l } }
   func set(renaming r: RenamePlace?) { if renaming != r { renaming = r } }
   func set(renameFailure f: String?) { if renameFailure != f { renameFailure = f } }
   func set(goal g: GoalCard?) { if goal != g { goal = g } }
@@ -182,12 +185,15 @@ package final class DeskModel {
   private func syncFlags() {
     let seen = onScreen
     for (id, a) in agents { a.set(onScreen: seen.contains(id)); a.set(focused: id == focusedAgent) }
+    needs.syncFocus(focusedAgent)
   }
 
   @ObservationIgnored private var agents: [String: AgentSlice] = [:]
   @ObservationIgnored private var threads: [String: ThreadSlice] = [:]
   @ObservationIgnored let mediaSlice = MediaSlice()
   @ObservationIgnored package let home = HomeSlice()
+  /// The Needs you reel (NeedsYou.swift): every asking agent, across projects.
+  @ObservationIgnored package let needs = NeedsReel()
   @ObservationIgnored private var teams: [String: (sig: String, bots: [String: BotTraits])] = [:]
   @ObservationIgnored private var knownAsks: Set<String> = []
   /// The open run's failed agents, once its columns were first read (nil: not yet).
@@ -201,6 +207,7 @@ package final class DeskModel {
     store = session.store
     setupFlow = ProjectSetupFlow(store: store)
     restoreHidden(from: .standard)
+    needs.model = self
     session.onStore { [weak self] s in self?.connect(s) }
   }
 
@@ -210,6 +217,7 @@ package final class DeskModel {
     store = s; session = nil; autoOpens = a
     setupFlow = ProjectSetupFlow(store: s)
     if let d { restoreHidden(from: d) }
+    needs.model = self
     setupFlow.onChange = { [weak self] in self?.newProjectChanged() }
     s.onChanges = { [weak self] keys in self?.apply(keys) }
     link = .ready
@@ -239,7 +247,10 @@ package final class DeskModel {
   }
 
   /// The window's focus is the store's selection, which the menu bar panel reads (no copy to keep in step).
-  private func publishSelection() { store.select(runId: openRunId, agentId: openRunId == nil ? nil : focusedAgent) }
+  private func publishSelection() {
+    if needs.isOpen { return store.select(runId: focusedAgent.flatMap { agent($0)?.header.runId }, agentId: focusedAgent) }
+    store.select(runId: openRunId, agentId: openRunId == nil ? nil : focusedAgent)
+  }
 
   /// A panel row or a notification: the run's project, at the agent's column (its nearest shown ancestor's, else the
   /// planner's). A project put away from the title bar comes back.
@@ -265,6 +276,8 @@ package final class DeskModel {
       return
     }
     if keys == [.selection] { return }   // the window's own focus, published (publishSelection)
+    // After the open run's slices: an asking agent of the open project shares its slice with the Needs you reel.
+    defer { needs.apply(keys) }
     let all = keys.contains(.all)
     if all {
       if unreachable != store.daemonUnreachable { unreachable = store.daemonUnreachable }
@@ -281,7 +294,7 @@ package final class DeskModel {
       }
       else if let deck = d.first(where: { $0.id == openProjectId }), deck.runId != openRunId { select(deck.id) }
       // Nothing open: Home (the window's first screen, and where folding the last project leaves you).
-      if openProjectId == nil, newProject == nil { openHome(focus: false) }
+      if openProjectId == nil, newProject == nil, !needs.isOpen { openHome(focus: false) }
     }
     // Home: its cards follow the runs; its composer redraws on general changes, and a run it started takes over once the
     // run's planner is listed (which may arrive as that run's own change).
@@ -353,7 +366,7 @@ package final class DeskModel {
   private func followAsks(_ asking: Set<String>) {
     let new = asking.subtracting(knownAsks)
     knownAsks = asking
-    guard follow, let first = columns.first(where: new.contains) else { return }
+    guard follow, !needs.isOpen, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
 
@@ -364,7 +377,7 @@ package final class DeskModel {
     guard let known = knownFailures else { if !columns.isEmpty { knownFailures = failed }; return }
     let new = failed.subtracting(known)
     knownFailures = failed
-    guard follow, let first = columns.first(where: new.contains) else { return }
+    guard follow, !needs.isOpen, let first = columns.first(where: new.contains) else { return }
     scroll(to: first)
   }
 
@@ -386,6 +399,7 @@ package final class DeskModel {
   /// Show a project (a deck click, ⌘1–9). Keyboard switches don't animate; the reel starts at its ask, if any.
   package func open(project id: String?) {
     menuOpen = false; stopAsked = false
+    if id != nil { needs.close(restore: false) }
     if newProject != nil, id != nil { leaveHome() }
     if id != nil { folded = false }
     guard select(id) else { return }
@@ -418,7 +432,12 @@ package final class DeskModel {
   /// A notification's run: its project, at its planner's column (where a goal card docks).
   package func openRun(_ runId: String) { show(run: runId) }
 
-  package func agent(_ id: String) -> AgentSlice? { agents[id] }
+  package func agent(_ id: String) -> AgentSlice? { agents[id] ?? needs.slice(id) }
+  /// A column's slice in its reel: the Needs you reel keeps its own (cold until it warms them, without an amber ring),
+  /// even for an agent of the open project.
+  package func agent(_ id: String, inNeeds: Bool) -> AgentSlice? { inNeeds ? needs.slice(id) : agents[id] }
+  /// The run a column's agent is in: the open run's, or a Needs you column's own.
+  func runId(of agentId: String) -> String? { agent(agentId)?.header.runId ?? openRunId }
   /// Every column's slice (renaming closes the others).
   var agentSlices: [String: AgentSlice] { agents }
   /// The column's thread slice if its column made one (DeskDebug), without making it.
@@ -487,8 +506,12 @@ package final class DeskModel {
   }
 
   package func goToProject(_ n: Int) { if decks.indices.contains(n) { open(project: decks[n].id) } }
-  package func goToAgent(_ n: Int) { if columns.indices.contains(n) { scroll(to: columns[n], animated: false) } }
+  package func goToAgent(_ n: Int) {
+    if needs.isOpen { if needs.columns.indices.contains(n) { needs.focus(needs.columns[n]) }; return }
+    if columns.indices.contains(n) { scroll(to: columns[n], animated: false) }
+  }
   package func moveFocus(_ by: Int) {
+    if needs.isOpen { return needs.moveFocus(by) }
     let i = focusedAgent.flatMap { columns.firstIndex(of: $0) } ?? 0
     let j = min(max(0, i + by), columns.count - 1)
     if columns.indices.contains(j) { scroll(to: columns[j], animated: false) }
@@ -497,6 +520,7 @@ package final class DeskModel {
   /// The column's thread, created when the column first shows (its pages load then, not before).
   package func thread(_ agentId: String) -> ThreadSlice {
     if let t = threads[agentId] { return t }
+    if agents[agentId] == nil, let t = needs.thread(agentId) { return t }
     let t = ThreadSlice(agentId: agentId); threads[agentId] = t
     ThreadSlice.trace?(agentId, [])   // the column's thread opened
     t.set(entries: store.threadEntries(agentId: agentId), pending: store.pendingSteers(agentId: agentId), unavailable: store.threadUnavailable[agentId],
@@ -506,7 +530,7 @@ package final class DeskModel {
 
   /// Read the column's thread from the route, then again slowly in case the stream dropped a frame.
   package func keepThreadFresh(agentId: String) async {
-    guard let runId = openRunId else { return }
+    guard let runId = runId(of: agentId) else { return }
     while !Task.isCancelled {
       await store.refreshThread(runId: runId, agentId: agentId)
       try? await Task.sleep(for: .seconds(15))
@@ -516,22 +540,25 @@ package final class DeskModel {
   /// The column scrolled up to the top of what it shows: the page above it loads, and shows above without moving what
   /// is on screen (the thread's scroll keeps its bottom where it was).
   package func loadEarlier(agentId: String) async {
-    guard let runId = openRunId else { return }
+    guard let runId = runId(of: agentId) else { return }
     await store.loadEarlierThread(runId: runId, agentId: agentId)
   }
 
   package func steer(agentId: String, body: String) {
-    guard let runId = openRunId else { return }
+    guard let runId = runId(of: agentId) else { return }
     Task { await store.steer(runId: runId, agentId: agentId, body: body) }
   }
 
   package func retrySteer(agentId: String, _ p: PendingSteer) {
-    guard let runId = openRunId else { return }
+    guard let runId = runId(of: agentId) else { return }
     Task { await store.steer(runId: runId, agentId: agentId, body: p.body, skills: p.skills, retrying: p.id) }
   }
   package func discardSteer(agentId: String, id: String) { store.discardSteer(agentId: agentId, id: id) }
 
-  package func decide(_ approvalId: String, _ d: ApprovalDecision) { Task { _ = await store.decide(approvalId, d) } }
+  package func decide(_ approvalId: String, _ d: ApprovalDecision) {
+    if let a = store.approvals[approvalId], let id = store.waitingAgent(a) { needs.answered(agentId: id) }
+    Task { _ = await store.decide(approvalId, d) }
+  }
 }
 
 /// Where an agent is renamed inline: its crew tab, or its column header.
@@ -580,9 +607,12 @@ package struct ReelRequest: Equatable {
 }
 
 extension DeskModel: ThreadHost {
-  package func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot }
-  package func agentProvider(runId: String, agentId: String) -> Provider? { agents[agentId]?.header.provider }
-  package func role(runId: String, agentId: String) -> String? { agents[agentId]?.header.name }
+  /// The agent's slice only: no observed state (an `isOpen` read here re-rendered every column's rows when the Needs you
+  /// reel opened or closed) and nothing computed per call (a `team(runId)` fallback cost the project reel ~9 % CPU per
+  /// step: the bench's rows name agents that have no slice).
+  package func bot(runId: String, agentId: String) -> BotTraits? { agents[agentId]?.bot ?? needs.slice(agentId)?.bot }
+  package func agentProvider(runId: String, agentId: String) -> Provider? { (agents[agentId] ?? needs.slice(agentId))?.header.provider }
+  package func role(runId: String, agentId: String) -> String? { (agents[agentId] ?? needs.slice(agentId))?.header.name }
   package func media(_ key: MediaKey) -> Fetched<Data>? { mediaSlice.items[key] }
   package func loadMedia(_ key: MediaKey) async { await store.loadMedia(key); mediaSlice.items[key] = store.media[key] }
   package func openAgent(runId: String, agentId: String) { scroll(to: agentId) }

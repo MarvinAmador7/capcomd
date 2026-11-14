@@ -15,9 +15,38 @@ import CapcomdUI
 /// where column `i` is in the document, and the view showing it (nil: none, the placeholder shows). With a view per
 /// column that is the column's view; with reused slots (`reel.columns=reuse`) the slot configured with it.
 @MainActor package protocol ReelColumnViews: AnyObject {
+  /// Which reel: the open project's, or the Needs you reel (both can be in the window; the second only while open).
+  var reelKind: ReelKind { get }
+  /// The reel's own horizontal scroll view.
+  var reelScrollView: NSScrollView { get }
   var columnCount: Int { get }
   func columnFrame(at i: Int) -> CGRect
   func columnView(at i: Int) -> NSView?
+}
+
+package enum ReelKind: String, Sendable { case project, needs }
+
+/// Columns leaving the Needs you reel (answered asks): which go, and which column leads after. The leading column keeps
+/// its place when it stays (asks answered elsewhere, before it, don't move what you are reading); when it goes, the
+/// column after it takes its place (the same index). Nil when nothing was removed (columns only added, or none
+/// before): the reel then lays out as it always does.
+package struct ReelRemoval: Equatable, Sendable {
+  package var removed: [String]
+  package var at: Int
+  /// The leaving column's fade and lift, and the others closing up behind it: both start at once, under 300 ms.
+  package static let leave: Double = 0.18
+  package static let closeUp: Double = 0.24
+
+  package static func plan(old: [String], new: [String], at: Int) -> ReelRemoval? {
+    let keep = Set(new)
+    let removed = old.filter { !keep.contains($0) }
+    guard !removed.isEmpty, !new.isEmpty else { return removed.isEmpty ? nil : ReelRemoval(removed: removed, at: 0) }
+    let lead = old.indices.contains(at) ? old[at] : nil
+    if let lead, let j = new.firstIndex(of: lead) { return ReelRemoval(removed: removed, at: j) }
+    // The leading column left: the first survivor after it takes its place.
+    let survivorsBefore = old[..<min(at, old.count)].filter(keep.contains).count
+    return ReelRemoval(removed: removed, at: min(survivorsBefore, new.count - 1))
+  }
 }
 
 struct ReelGeometry: Equatable {
