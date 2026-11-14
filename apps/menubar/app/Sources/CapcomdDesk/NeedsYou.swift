@@ -233,7 +233,9 @@ package final class NeedsReel {
     let b = back
     back = nil
     follow()
-    columns = []; slices = [:]; leaving = [:]; threads = [:]; places = [:]
+    // `columns` stays as it was: the reel's view goes with `isOpen`, and emptying it first made the reel slide every
+    // column out (and show "Nothing needs you.") on its way out. The next open sets it.
+    slices = [:]; leaving = [:]; threads = [:]; places = [:]
     guard restore, let b else { return }
     if b.home { model.openHome(focus: false) }
     model.focusedAgent = b.focused
