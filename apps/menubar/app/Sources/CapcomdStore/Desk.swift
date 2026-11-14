@@ -60,12 +60,14 @@ extension CapcomdStore {
   public func decks() -> [DeckInfo] {
     let ps = projects.filter { $0.isActive || $0.latestRun.map { !$0.isActive } == true }
     let firstStart: (Project) -> Int = { $0.runs.compactMap(\.startedAtMs).min() ?? $0.lastEventMs }
+    // A run started without a place (`capcomd run` with no --sandbox) runs on the daemon's own: its place is that one.
+    let daemonPlace = runOptions.sandboxes.first { $0.isDefault == true }?.name
     return ps.sorted { (firstStart($0), $0.id) < (firstStart($1), $1.id) }.compactMap { p in
       guard let run = p.activeRuns.max(by: { ($0.recencyMs, $0.id) < ($1.recencyMs, $1.id) }) ?? p.latestRun else { return nil }
       let ids = agentTree(runId: run.id).flatMap(\.subtreeIds)
       let asking = approvals(forRun: run.id).compactMap { waitingAgent($0) }.first
       return DeckInfo(id: p.id, runId: run.id, title: p.title, startedAtMs: run.startedAtMs,
-                      endedHead: run.endedHead, isRunning: run.isRunning, sandbox: run.sandbox,
+                      endedHead: run.endedHead, isRunning: run.isRunning, sandbox: run.sandbox ?? daemonPlace,
                       askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map(\.label),
                       agentIds: ids)
     }

@@ -478,6 +478,19 @@ import CapcomdStore
     }
     let lines = model.sidebarLines
     out.append("panes \(model.panes.columns.map { $0.map { "\($0.id):\($0.agent)" }.joined(separator: "/") }.joined(separator: " | ")) focused \(model.panes.focused) expanded \(model.nav.expanded) area \(Int(model.paneArea.width))x\(Int(model.paneArea.height))")
+    if let root = deskWindow?.contentView {
+      func walk(_ v: NSView, _ f: (NSView) -> Void) { f(v); v.subviews.forEach { walk($0, f) } }
+      walk(root) { v in
+        guard let p = v as? DeskPaneProbe, p.isPane, !v.isHiddenOrHasHiddenAncestor else { return }
+        var scrolls: [String] = []
+        walk(v) { s in
+          if let sv = s as? NSScrollView, let d = sv.documentView, sv.bounds.height > 100 {
+            scrolls.append("doc \(Int(d.frame.height)) clip \(Int(sv.contentView.bounds.minY))+\(Int(sv.contentView.bounds.height)) flipped \(sv.contentView.isFlipped)")
+          }
+        }
+        out.append("paneview \(p.paneId) \(p.shownAgent) frame \(v.frame.integral) \(scrolls.joined(separator: "; "))")
+      }
+    }
     out.append("sidebar open \(model.nav.sidebarOpen) pane \(model.paneAgent ?? "-") selected \(model.selectedAgent ?? "-") cursor \(model.nav.cursor.map { "\($0)" } ?? "-") needs \(model.sidebar.needsCount) overflow \(lines.overflow) height \(Int(model.nav.listHeight))")
     for l in lines.pinned + lines.list {
       switch l {
