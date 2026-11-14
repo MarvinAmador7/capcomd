@@ -342,7 +342,7 @@ measured steps (a run without `--guards` times exactly as before), and land in `
   placeholder and not hidden. The reel says which view shows each column (`ReelColumnViews`: with reused slots the
   document holds fewer views than columns); an older reel is read by position. `value` is how long after settle the last column
   was built (negative: before).
-- **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `swipe`, `follow`, `resize`; not `burst` or `typing`): after
+- **`snapshot-diff`** (`open`, `switch`, `step`, `jump`, `fling`, `swipe`, `follow`, `resize`, `sidebar-toggle`, `sidebar-select` (both settle folded; their `drawn` check covers the opened window); not `burst`, `typing` or the other sidebar scenarios): after
   settle the run writes `<scenario>-rep<i>.settled.png`, `.layout.json` (where the columns and their threads are, in
   pixels) and `.later.png` 1.1 s later. `snapdiff A.png B.png [--diff-out D.png] [--json]` compares the champion's (A)
   with the candidate's (B), headless, in the champion's binary: pixel by pixel (a channel off by more than 16 of 255)

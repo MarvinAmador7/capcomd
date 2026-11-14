@@ -79,10 +79,14 @@ public struct Manifest: Codable, Sendable, Equatable {
     "open": ["columns-at-first-frame"], "switch": ["two-projects", "switched"], "step": ["landed"], "jump": ["enough-columns", "landed"],
     "fling": ["reel-scroll-view", "snapped"], "swipe": ["reel-scroll-view", "gesture", "snapped"], "burst": ["isolation-*", "delivered-*"], "typing": ["composer-found", "typed", "isolation"],
     "resize": ["columns-follow-width"], "follow": ["enough-columns", "landed"],
+    "sidebar-toggle": ["opened", "pane-agent", "folded", "reel-untouched", "drawn"], "sidebar-select": ["clicked", "keyboard", "drawn"],
+    "sidebar-burst": ["agents", "isolation-sidebar", "delivered-pane"], "sidebar-scroll": ["sidebar-scroll-view", "long-sidebar", "gesture", "scrolled", "isolation-pane"],
   ]
 
   /// Every `DeskProbe.body` name in CapcomdDesk.
-  public static let probes = ["Column", "ColumnComposer", "ColumnHead", "ColumnThread", "CrewTab", "DecisionBar", "EntryRow", "FoldedDeck", "OpenGroup", "Reel", "RootView", "TitleBar"]
+  public static let probes = ["AgentRow", "Column", "ColumnComposer", "ColumnHead", "ColumnThread", "CrewTab", "DecisionBar", "EntryRow", "FoldedDeck", "OpenGroup",
+                               "Pane", "PaneArea", "PaneComposer", "PaneEntryRow", "PaneHead", "PaneThread", "ProjectLabel", "Rail", "Reel", "RootView",
+                               "SectionHeading", "Sidebar", "SidebarList", "TitleBar"]
 
   /// The manifest as text, for a person.
   public var text: String {

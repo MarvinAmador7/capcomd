@@ -161,7 +161,7 @@ struct SettingsButton: View {
   @Environment(\.deskOpenSettings) private var deskOpenSettings
   let size: CGFloat
   var body: some View {
-    Button { if let deskOpenSettings { deskOpenSettings() } else { openSettings() } } label: {
+    Button { if let deskOpenSettings { deskOpenSettings.open() } else { openSettings() } } label: {
       Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.Desk.tertiary)
         .frame(width: size, height: size)
     }

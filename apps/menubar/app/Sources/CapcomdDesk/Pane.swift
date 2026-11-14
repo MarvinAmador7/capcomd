@@ -61,7 +61,7 @@ final class OpenedLayerView: NSView {
   init(model: DeskModel, openSettings: @escaping () -> Void, threadHost: ThreadHostBox?, open: Bool) {
     func root<V: View>(_ v: V) -> AnyView {
       AnyView(v.environment(model).environment(\.threadHost, threadHost ?? ThreadHostBox(host: model))
-        .environment(\.deskOpenSettings, openSettings).preferredColorScheme(.dark))
+        .environment(\.deskOpenSettings, DeskSettingsOpener(open: openSettings)).preferredColorScheme(.dark))
     }
     sidebar = NSHostingView(rootView: root(SidebarView()))
     pane = NSHostingView(rootView: root(PaneArea()))
@@ -124,7 +124,13 @@ final class OpenedLayerView: NSView {
 
 extension EnvironmentValues {
   /// The app's Settings window, handed into the opened layer's own hosting views (they aren't in the app's scene).
-  @Entry var deskOpenSettings: (() -> Void)? = nil
+  @Entry var deskOpenSettings: DeskSettingsOpener? = nil
+}
+
+/// The Settings action, compared as always equal (it never changes), so carrying it in the environment invalidates nothing.
+struct DeskSettingsOpener: Equatable {
+  let open: () -> Void
+  static func == (_: Self, _: Self) -> Bool { true }
 }
 
 /// The main area: one agent's pane, or Home (+ and ⌘0 show Home here, as folded; only while open, so there is one Home).
