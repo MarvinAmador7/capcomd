@@ -14,7 +14,7 @@ import { PluginError } from "../../packages/plugin/src/errors";
 import { launch, look, signal, tails, type JobMachine } from "../../src/jobs/machine";
 import { fitJobRecord } from "../../src/jobs/record";
 import { valueBytes } from "../../src/primitives/board";
-import { jobLimits, jobMessage, resetJobs, resumeTimers, startJob, useDaemonEvents, type JobRecord } from "../../src/jobs/service";
+import { attachMachine, jobLimits, jobMessage, resetJobs, resumeTimers, startJob, useDaemonEvents, type JobRecord } from "../../src/jobs/service";
 import * as relay from "../../src/core/relay";
 import { kernelHost } from "../../src/plugins/host";
 import { hooks, useHooks } from "../../src/plugins/hooks";
@@ -380,13 +380,15 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
   /** A run in memory, as the jobs service reads and writes it: the agent runs, its jobs' records are kept here. */
   function fakeRun() {
     const records = new Map<string, JobRecord>();
+    const messages: Array<{ to: string; from: string }> = [];
     const scope = {
+      sendMessage: async ({ to, from }: { to: string; from: string }) => { messages.push({ to, from }); },
       kvGet: async ({ k }: { k: string }) => { const r = records.get(k.slice("_jobs/".length)); return r ? { value: r, deleted: false } : null; },
       kvList: async () => [...records.values()].map((value) => ({ value })),
       getAgent: async () => ({ status: "running", spec: {} }),
       jobWrite: async ({ job }: { job: JobRecord }) => { const was = records.get(job.jobId); if (was && !["running", "stopping"].includes(was.state)) return { ended: true }; records.set(job.jobId, job); return { ended: false }; },
     };
-    return { records, client: { scope: { getOrCreate: () => scope } } };
+    return { records, messages, client: { scope: { getOrCreate: () => scope } } };
   }
   /** The host machine, counting each kind of exec the jobs service runs in it (with when it started). */
   function countingMachine() {
@@ -455,6 +457,34 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
       // Nothing lost or repeated: the frames are its output from the start, in order.
       expect(`${"x".repeat(40960)}${Array.from({ length: 30 }, (_, i) => `l${i + 1}\n`).join("")}`.startsWith(frames.map((f) => f.stdout).join(""))).toBe(true);
       expect(told.map((c): string => c.payload.change.kind)).toEqual(["started", ...frames.map(() => "output"), "ended"]);
+    });
+  }, 30_000);
+  test("an agent's job killed as the agent ends sends it no message, even when a look under way sees it exit", async () => {
+    await withRun({ changes: ["fired"] }, async ({ run }) => {
+      // The driver detaches as soon as the agent's process exits, before the agent is marked ended (getAgent still says
+      // running). A tick's look already under way is held until the job is gone, and the looks after it (the stop's)
+      // wait for it, so the tick sees the exit first: its settle must be as quiet as the stop's.
+      const m = hostMachine(), exec0 = m.exec;
+      let hold: Promise<void> | null = null, release = () => {}, held = false, tickLooked: Promise<void> | null = null;
+      m.exec = async (cmd, o) => {
+        if (!(cmd[2] ?? "").includes("@@J") || !hold) return exec0(cmd, o);
+        if (!held) { held = true; let done = () => {}; tickLooked = new Promise((r) => { done = r; }); await hold; const r = await exec0(cmd, o); done(); return r; }
+        await tickLooked; await sleep(500); return exec0(cmd, o);
+      };
+      const job = await startJob(exec("exec sleep 600"), { by: "agt-t", machine: m });
+      expect(job.state).toBe("running");
+      hold = new Promise((r) => { release = r; });
+      await until(async () => held);
+      const { detach } = await attachMachine(m);
+      const ending = detach({ ended: true });
+      const direct = { ...m, exec: exec0 };
+      await until(async () => (await look(direct, [job.jobId])).get(job.jobId)?.state === "exited");
+      release();
+      await ending;
+      await until(async () => run.records.get(job.jobId)?.state === "killed");
+      await sleep(300);
+      expect(run.records.get(job.jobId)).toMatchObject({ state: "killed", reason: "its agent ended" });
+      expect(run.messages).toEqual([]);
     });
   }, 30_000);
 });
