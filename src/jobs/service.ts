@@ -229,6 +229,8 @@ interface Attached {
   m: JobMachine; watches: Map<string, Watch>; loop: ReturnType<typeof setInterval> | null; busy: boolean;
   /** When it was attached here: an agent's last step is never taken as earlier (a restarted daemon saw none). */
   since: number;
+  /** Its agent ended (detach): every job of it settles quietly, also one a tick under way sees exit first. */
+  ended?: boolean;
   /** The run's job machine: held while any job runs in it, released (destroyed) after; starts on their way to it. */
   run?: { held: HeldRunMachine; starting: number; checkedAt: number };
 }
@@ -388,12 +390,13 @@ async function settleExec(at: Attached, w: Watch, state: "done" | "failed" | "ki
     unwatch(at, rec.jobId);
     if (ended) return; // another watcher settled it first
     tell(rec, { kind: "ended", state });
-    const fg = w.fg, message = !fg && !o.quiet && !w.quiet && rec.by === recipient(rec);
+    const quiet = o.quiet || at.ended;
+    const fg = w.fg, message = !fg && !quiet && !w.quiet && rec.by === recipient(rec);
     if (fg) fg(rec);
     else if (message) await notifyAgent(rec).catch((e) => console.error(`[jobs] ${rec.jobId}: telling ${rec.by}: ${(e as Error)?.message ?? e}`));
     // No message comes for it: its supervisor doesn't hold the agent's input open waiting for one (an agent that is
-    // ending, o.quiet, has nobody waiting). Never awaited: at worst the supervisor waits as if one might come.
-    if (!message && !o.quiet) void noMessage(at.m, rec.jobId).catch(() => {});
+    // ending, quiet, has nobody waiting). Never awaited: at worst the supervisor waits as if one might come.
+    if (!message && !quiet) void noMessage(at.m, rec.jobId).catch(() => {});
     settled(rec);
   } catch (e) {
     w.settling = false; // next tick tries again
@@ -443,6 +446,7 @@ async function detach(key: string, o: { ended: boolean }) {
   lastSteps.delete(key);
   if (!o.ended) return; // a restart attaches again
   // The agent ended: its jobs end with it (§16.2 rule 4), its timers too; its run-owned ones don't.
+  at.ended = true;
   await endAgentTimers(at.m.runId, at.m.agentId);
   const ws = [...at.watches.values()].filter((w) => !w.settling);
   if (ws.length) await stopAll(at, ws, AGENT_ENDED);
