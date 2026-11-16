@@ -223,6 +223,8 @@ enum Commands {
     var exit: Int32
     /// The objective's value for this run (filled in once the objective is known).
     var objective: Double?
+    /// Its window as the run reported it (active, key, unoccluded): perfloop's trust check reads it per side.
+    var window: WindowState?
   }
 
   /// A and B in pairs, one process each, `reps` pairs; within a pair the first side is counterbalanced (seeded, recorded),
@@ -251,6 +253,7 @@ enum Commands {
         FileHandle.standardError.write(Data("ab: pair \(i + 1)/\(order.count) \(first) · \(label)\(q.quiet ? "" : "  (not quiet after \(Int(q.waitedS)) s: \(q.busyPct) % busy\(q.builds.isEmpty ? "" : ", " + q.builds.joined(separator: ", ")))")\n".utf8))
         let (r, code, text) = try child(exe, args, env: env.merging(label == "A" ? envA : envB) { $1 })
         runs.append(ABRun(pair: i, side: label, position: pos + 1, busyPct: q.busyPct, builds: q.builds, waitedS: q.waitedS, quiet: q.quiet, exit: code))
+        runs[runs.count - 1].window = r?.window
         guard let r, let rep = r.reps.first else { failures.append("\(label) pair \(i + 1): exit \(code): \(text.prefix(300))"); continue }
         got[i, default: [:]][label] = rep
         if let b = r.tool.build { builds[label] = b }
