@@ -179,7 +179,11 @@ longest main-thread stretches (what SwiftUI evaluated inside each, and where the
   (next section): the top inclusive frames that are ours or SwiftUI/AppKit hot spots, the hottest path through the
   stack, and the leaf frames. A long stretch with no bodies is AppKit layout, text, or the fixture; its stacks say which.
 - **noise** and **window**: the idle floor measured before the scenario, the load average, thermal state, busy
-  processes, and whether the window was active, key and unoccluded. SwiftUI flushes timer-driven state changes
+  processes, and whether the window was active, key and unoccluded. The floor starts once the app's own setup after
+  the window appeared (building columns, warming threads: most of a second on a Mac mini) has gone quiet
+  (`noise.idleSettleMs`, null when it never did within 5 s), and lasts 1 s, or 60 frames under `--quiet-check 0`.
+  It is not quiet when over 2 % of its frames were late; with fewer than 30 ticks, too few to judge, a main-thread
+  stretch over 3 frames counts instead. A preempted main thread fails it either way. SwiftUI flushes timer-driven state changes
   late (seconds) when the app is in the background, so the bench activates itself; `window.trustworthy` in the JSON
   says whether that held. **One run proves nothing on a shared machine**; use `--reps 5` and medians, or `ab`.
 

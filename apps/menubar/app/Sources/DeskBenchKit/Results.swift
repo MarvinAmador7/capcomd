@@ -295,18 +295,39 @@ public struct Machine: Codable, Sendable, Equatable {
   }
 }
 
-/// The noise floor measured before the scenario: the window shown and idle for a second. Late ticks while nothing
-/// happens are the machine's, not the reel's.
+/// The noise floor measured before the scenario: once the app has gone idle after the window was shown, the window
+/// left alone for at least 60 frames. Late ticks while nothing of ours runs are the machine's, not the reel's.
 public struct Noise: Codable, Sendable, Equatable {
   public var idleTicks: Int
   public var idleLate: Int
   public var idleLongestStretchMs: Double
+  /// How long the floor waited for the app's own work (building columns, warming threads) to finish before it started:
+  /// nil when the main thread didn't go quiet within the harness's timeout (the floor then overlapped our own work), and
+  /// in results from before it.
+  public var idleSettleMs: Double?
   public var quiet: Bool
   public var reasons: [String]
-  public init(idle: FrameStats, idleMain: MainThreadStats, machine: Machine, window: WindowState?) {
+
+  /// Fewer ticks than this and late ticks aren't judged: one late interval in a handful is over 2 % by itself, and a
+  /// floor that few ticks reached says nothing about the machine (the main thread was held, by whatever held it, and the
+  /// main-thread rules below say whether that was the machine).
+  public static let minTicksToJudge = 30
+  /// With too few ticks to judge, a main-thread stretch over this many frames (at the screen's top rate) while idle
+  /// held vsyncs the machine should have let the main thread service.
+  public static let heldFrames = 3.0
+
+  public init(idle: FrameStats, idleMain: MainThreadStats, machine: Machine, window: WindowState?, settleMs: Double? = nil) {
     idleTicks = idle.ticks; idleLate = idle.late; idleLongestStretchMs = idleMain.longestMs
+    idleSettleMs = settleMs.map { Stats.round($0, 1) }
     var r: [String] = []
-    if idle.ticks > 0, Double(idle.late) / Double(idle.ticks) > 0.02 { r.append("\(idle.late) of \(idle.ticks) idle frames were late before the scenario started") }
+    if idle.ticks >= Self.minTicksToJudge {
+      if Double(idle.late) / Double(idle.ticks) > 0.02 { r.append("\(idle.late) of \(idle.ticks) idle frames were late before the scenario started") }
+    } else if idle.ticks > 0 || idleMain.stretches > 0 {
+      let held = Self.heldFrames * 1000 / max(idle.nominalHz, 1)
+      if idleMain.longestMs > held {
+        r.append("the main thread was held \(idleMain.longestMs) ms at a time while idle (over \(Int(Self.heldFrames)) frames; only \(idle.ticks) idle frames, too few to judge late ones)")
+      }
+    }
     if machine.loadPerCore > 0.75 { r.append("load average \(machine.loadAvg1) on \(machine.cores) cores") }
     if machine.thermalState != "nominal" { r.append("thermal state \(machine.thermalState)") }
     if machine.lowPowerMode { r.append("Low Power Mode is on") }

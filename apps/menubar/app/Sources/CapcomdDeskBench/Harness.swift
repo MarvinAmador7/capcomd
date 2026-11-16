@@ -307,12 +307,18 @@ import PerfLoopProbe
   /// A clean slate between reps: samples kept (indices are per rep), waiters cleared.
   func mark() -> (tick: Int, stretch: Int, body: Int) { (ticks.count, stretches.count, bodies.count) }
 
-  /// The noise floor: the window shown, nothing happening, for `seconds`.
-  func idle(seconds: Double) async -> (FrameStats, MainThreadStats) {
+  /// The noise floor: the window shown and nothing of ours happening, for `seconds` and at least 60 frames at the
+  /// screen's top rate. It first waits (up to 5 s) for the app's own work after the window appeared (building columns,
+  /// warming threads: back-to-back main-thread stretches for most of a second on a Mac mini) to finish; measured during
+  /// that work, the display link ticked only between our stretches and the gaps read as the machine's late frames.
+  /// `settleMs` is that wait, nil when the main thread never went quiet.
+  func idle(seconds: Double) async -> (frames: FrameStats, main: MainThreadStats, settleMs: Double?) {
+    let settle = await waitQuiet(quietMs: 300, maxCpuMs: 4, timeoutMs: 5000)
+    if settle == nil { log.info("noise floor: the main thread didn't go quiet within 5 s; measuring anyway") }
     let m = mark()
-    await sleep(ms: seconds * 1000)
+    await sleep(ms: max(seconds * 1000, 60 * 1000 / nominalHz))
     let st = stretches[m.stretch...]
-    return (FrameStats(intervalsMs: intervals(from: m.tick), nominalHz: nominalHz), MainThreadStats(stretchesMs: st.map(\.dur), cpuMs: st.map(\.cpu)))
+    return (FrameStats(intervalsMs: intervals(from: m.tick), nominalHz: nominalHz), MainThreadStats(stretchesMs: st.map(\.dur), cpuMs: st.map(\.cpu)), settle)
   }
 
   // MARK: reel helpers
