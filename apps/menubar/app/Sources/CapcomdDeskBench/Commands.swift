@@ -64,7 +64,7 @@ import DeskBenchKit
     runParams["host"] = h.hostName
 
     // The window, the noise floor, then (for profile) the wait for the parent to attach.
-    var noiseFrames = FrameStats.empty, noiseMain = MainThreadStats.empty
+    var noiseFrames = FrameStats.empty, noiseMain = MainThreadStats.empty, noiseSettle: Double?
     if spec.name == "open" {
       // open makes its own windows; the noise floor comes from the first one after its measurement.
     } else {
@@ -72,8 +72,8 @@ import DeskBenchKit
       h.showWindow(size: size, activate: o.activate)
       _ = await h.nextCommit()
       _ = await h.ensureActive(o.activate)
-      await h.sleep(ms: 500)   // warming finishes; the first layout settles
-      (noiseFrames, noiseMain) = await h.idle(seconds: o.quietCheck ? 1.0 : 0.3)
+      await h.sleep(ms: 500)   // warming starts; `idle` waits for it to finish
+      (noiseFrames, noiseMain, noiseSettle) = await h.idle(seconds: o.quietCheck ? 1.0 : 0.3)
     }
     if let wf = o.waitFor {
       FileHandle.standardError.write(Data("waiting for \(wf.path) (attach a profiler to pid \(ProcessInfo.processInfo.processIdentifier))\n".utf8))
@@ -123,7 +123,7 @@ import DeskBenchKit
       if spec.name == "open", rep == 0 {
         _ = await h.ensureActive(o.activate)
         if let ms = sinceProcessStartMs() { runParams["processLaunchToFirstFrameMs"] = String(Stats.round(ms - (steps.first?.durationMs ?? 0) + (steps.first?.latencyMs ?? 0), 0)) }
-        (noiseFrames, noiseMain) = await h.idle(seconds: o.quietCheck ? 1.0 : 0.3)
+        (noiseFrames, noiseMain, noiseSettle) = await h.idle(seconds: o.quietCheck ? 1.0 : 0.3)
       }
       // Whole-rep stats cover the steps only (not the pauses between them), so idle ticks don't dilute the frame numbers.
       var its: [Double] = [], st: [Double] = [], cpu: [Double] = []
@@ -150,7 +150,7 @@ import DeskBenchKit
     let summary = Summary(reps: repResults, objective: o.objective ?? .default(for: spec))
     let machine = MachineInfo.capture(screenHz: h.nominalHz)
     let windowState = h.windowState()
-    let noise = Noise(idle: noiseFrames, idleMain: noiseMain, machine: machine, window: windowState)
+    let noise = Noise(idle: noiseFrames, idleMain: noiseMain, machine: machine, window: windowState, settleMs: noiseSettle)
     let budget = Budgets.evaluate(spec, reps: repResults, summary: summary)
     var comparison: [Regression]?
     if let b = o.baseline {

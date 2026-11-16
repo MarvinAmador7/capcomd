@@ -72,7 +72,8 @@ run options
   --artifacts DIR       write window PNG + view dump after every rep
   --size WxH            window size (default 1440x900)
   --no-activate         don't bring this process to the front (SwiftUI flushes late in the background; recorded in the result)
-  --quiet-check 0|1     measure the noise floor for 1 s before the scenario (default 1)
+  --quiet-check 0|1     measure the noise floor for 1 s before the scenario (default 1; 0: 60 frames, for a runner that
+                        gates on a quiet machine itself). Either way it starts once the app's own setup has gone quiet
   --host scene|window   scene (default): the window comes from a SwiftUI Window scene, as in the app; window: an NSWindow
                         made by hand (the default for `open`, which needs a fresh window per rep)
   --hold S              keep the window up S seconds after the run (to look at it)

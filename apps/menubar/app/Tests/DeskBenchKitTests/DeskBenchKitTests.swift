@@ -129,6 +129,40 @@ final class DeskBenchKitTests: XCTestCase {
     XCTAssertFalse(Budgets.evaluate(open, reps: two, summary: Summary(reps: two)).pass)
   }
 
+  func testNoiseFloorJudgesLateTicksOnlyWithEnoughOfThem() throws {
+    let machine = Machine(model: "test", cores: 12, memoryGB: 24, os: "x", screenHz: 60, loadAvg1: 1.8, thermalState: "nominal", lowPowerMode: false, heavyProcesses: [])
+    let idleMain = MainThreadStats(stretchesMs: Array(repeating: 0.3, count: 40) + [12], cpuMs: Array(repeating: 0.3, count: 40) + [11.5])
+    // What a Mac mini's floor recorded while the app was still warming: 8 sparse ticks, 5 of the gaps "late". Too few
+    // ticks to judge, and the main thread was never held over 3 frames or preempted: quiet.
+    let sparse = FrameStats(intervalsMs: [16.7, 70, 85, 16.7, 95, 64, 120, 16.7], nominalHz: 60)
+    XCTAssertGreaterThan(Double(sparse.late) / Double(sparse.ticks), 0.02)
+    let fromSparse = Noise(idle: sparse, idleMain: MainThreadStats(stretchesMs: [37.77, 20, 30], cpuMs: [37, 19.8, 29.5]), machine: machine, window: nil, settleMs: 812.34)
+    XCTAssertTrue(fromSparse.quiet, fromSparse.reasons.joined(separator: "; "))
+    XCTAssertEqual(fromSparse.idleSettleMs, 812.3)
+    // A quiet floor at 60 Hz: one late tick in 60 is the base rate, not noise.
+    let quietFloor = FrameStats(intervalsMs: Array(repeating: 16.7, count: 59) + [33.4], nominalHz: 60)
+    XCTAssertTrue(Noise(idle: quietFloor, idleMain: idleMain, machine: machine, window: nil).quiet)
+    // A busy machine with plenty of ticks: the late ones still fail it.
+    let busy = FrameStats(intervalsMs: Array(repeating: 16.7, count: 55) + Array(repeating: 50, count: 5), nominalHz: 60)
+    let fromBusy = Noise(idle: busy, idleMain: idleMain, machine: machine, window: nil)
+    XCTAssertFalse(fromBusy.quiet); XCTAssertEqual(fromBusy.reasons, ["5 of 60 idle frames were late before the scenario started"])
+    // Too few ticks because the main thread was held: the main-thread measure fails it instead.
+    let held = Noise(idle: sparse, idleMain: MainThreadStats(stretchesMs: [0.3, 180, 0.3], cpuMs: [0.3, 175, 0.3]), machine: machine, window: nil)
+    XCTAssertFalse(held.quiet); XCTAssertTrue(held.reasons[0].hasPrefix("the main thread was held 180.0 ms at a time while idle"), held.reasons[0])
+    // ... or because it was preempted.
+    let preempted = Noise(idle: sparse, idleMain: MainThreadStats(stretchesMs: [30, 40, 20], cpuMs: [3, 4, 2]), machine: machine, window: nil)
+    XCTAssertFalse(preempted.quiet); XCTAssertTrue(preempted.reasons.contains { $0.contains("being preempted") }, preempted.reasons.joined(separator: "; "))
+    // At 120 Hz three frames are 25 ms: a 30 ms stretch is held there, not at 60 Hz.
+    let sparse120 = FrameStats(intervalsMs: [8.3, 40, 8.3], nominalHz: 120)
+    XCTAssertFalse(Noise(idle: sparse120, idleMain: MainThreadStats(stretchesMs: [30], cpuMs: [29]), machine: machine, window: nil).quiet)
+    XCTAssertTrue(Noise(idle: sparse, idleMain: MainThreadStats(stretchesMs: [30], cpuMs: [29]), machine: machine, window: nil).quiet)
+    // The settle wait round-trips; results from before it decode with none.
+    let back = try JSONOut.decode(Noise.self, from: Data(JSONOut.encode(fromSparse).utf8))
+    XCTAssertEqual(back, fromSparse)
+    let old = try JSONOut.decode(Noise.self, from: Data(#"{"idleTicks":8,"idleLate":5,"idleLongestStretchMs":37.77,"quiet":false,"reasons":["x"]}"#.utf8))
+    XCTAssertNil(old.idleSettleMs); XCTAssertFalse(old.quiet)
+  }
+
   func testResultRoundTripsAndPicksExitCodes() throws {
     let frames = FrameStats(intervalsMs: [8.3, 8.3, 30], nominalHz: 120)
     let rep = RepResult(index: 0, steps: [], frames: frames, mainThread: .empty, bodies: ["Column": 3], checks: [], worstStretches: [], window: nil)
