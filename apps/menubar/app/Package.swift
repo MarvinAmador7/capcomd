@@ -13,7 +13,7 @@ let package = Package(
   ],
   // PerfLoop (github.com/MarvinAmador7/perfloop): the performance loop's probe library (runtime knobs), linked by the
   // desktop window itself. Pinned to a commit until PerfLoop tags releases.
-  dependencies: [.package(path: "../client"), .package(url: "https://github.com/MarvinAmador7/perfloop", revision: "90da439b6fa29ef7348110a1b457f0d2f7eb683b")],
+  dependencies: [.package(path: "../client"), .package(url: "https://github.com/MarvinAmador7/perfloop", revision: "d6d095ea47543a2d3728cc3d8c629cddfb2eff80")],
   targets: [
     // Thread items (format blocks/1): decoding, merge by id/rev, link and code presentation. Foundation only.
     .target(name: "CapcomdThread"),
