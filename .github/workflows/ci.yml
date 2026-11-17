@@ -45,7 +45,7 @@ jobs:
         run: bun scripts/gen-context-limits.ts --check
 
       - name: Type check
-        run: bun run typecheck
+        run: timeout 5s bun run typecheck
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
         run: bun run test:fast --parallel="$(nproc)"
@@ -57,6 +57,7 @@ jobs:
   # sub-agents, the primitives, the agent adapters (fake CLIs) and the merge paths (local bare repos, a fake GitHub
   # and forge): `bun run test:scenarios`. Over 35 minutes on one runner, so it runs as seven shards balanced by
   # tests/scenario-timings.json (per-file times measured on this runner; a file missing from it gets an estimate).
+  # Within a shard, run isolated files in parallel across the available runner cores.
   # Each shard uploads the times it measured (scenario-timings-N): `bun scripts/scenario-timings.ts <run id>` merges
   # a run's into the file. `--isolate` (in the script) gives every file a fresh global, environment and preload.
   scenarios:
@@ -83,7 +84,7 @@ jobs:
       - name: Scenario suite, shard ${{ matrix.shard }} of 7 (regression gate)
         run: |
           cp tests/scenario-timings.json "$RUNNER_TEMP/scenario-timings.json"
-          bun run test:scenarios --shard=${{ matrix.shard }}/7 --timings="$RUNNER_TEMP/scenario-timings.json" --update-timings
+          bun run test:scenarios --parallel="$(nproc)" --shard=${{ matrix.shard }}/7 --timings="$RUNNER_TEMP/scenario-timings.json" --update-timings
 
       - name: Upload the times this shard measured
         if: always()

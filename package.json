@@ -45,7 +45,7 @@
   },
   "scripts": {
     "setup": "bun install && cd apps/canvas && bun install && cd ../tui && bun install",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p apps/canvas && tsc --noEmit -p apps/tui && tsc --noEmit -p packages/agent-thread && tsc --noEmit -p packages/bot-avatar && tsc --noEmit -p packages/plugin",
+    "typecheck": "bun check --build tsconfig.check.json",
     "test": "bun test",
     "test:fast": "bun test --isolate packages/agent-thread packages/bot-avatar packages/plugin tests/api tests/machines tests/config tests/unit tests/cli tests/tracing tests/core tests/auth tests/env tests/mcp tests/providers tests/plugins",
     "test:scenarios": "bun test --isolate tests/scenarios tests/subagents tests/primitives tests/agents tests/merge",
