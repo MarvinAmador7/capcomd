@@ -45,7 +45,7 @@ jobs:
         run: bun scripts/gen-context-limits.ts --check
 
       - name: Type check
-        run: bun run typecheck
+        run: timeout 5s bun run typecheck
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
         run: bun run test:fast --parallel="$(nproc)"
