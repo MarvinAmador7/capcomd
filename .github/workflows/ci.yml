@@ -45,7 +45,7 @@ jobs:
         run: bun run typecheck
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
-        run: bun run test:fast
+        run: bun run test:fast --parallel="$(nproc)"
 
       - name: The canvas and the TUI (apps/canvas, apps/tui)
         run: bun run test:apps
