@@ -117,6 +117,25 @@ if (/how we define an active customer/.test(prompt)) {
   write("src/index.js", `${index}export * from "./refunds.js";\n`);
   summary = "Added refundCents.";
 }
+// The watcher needs to see the emitted tool calls and deliver the real message before this fake turn ends.
+if (prompt.includes("[eval-wait-for-context-push]")) {
+  if (!input) throw new Error("context push probe requires streamed input");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const message = await Promise.race([
+      nextLine(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("no context push reached the fake agent")), 10_000);
+      }),
+    ]);
+    const text = JSON.parse(message ?? "null")?.message?.content;
+    if (typeof text !== "string" || !text.includes("\n\nRecalled context (capcomd): you touched ")) {
+      throw new Error("expected a recalled context push");
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
 emit({ type: "result", subtype: "success", is_error: false, num_turns: n, total_cost_usd: 0, usage, result: summary });
 // Fed on stdin (the supervisor's stream-json): answer later messages until the input ends, as claude does.
-if (input) while ((await nextLine()) !== null) emit({ type: "result", subtype: "success", is_error: false, num_turns: 1, total_cost_usd: 0, result: "noted" });
+if (input) while ((await nextLine()) !== null) emit({ type: "result", subtype: "success", is_error: false, num_turns: 1, total_cost_usd: 0, usage, result: "noted" });

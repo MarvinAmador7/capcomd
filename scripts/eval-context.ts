@@ -179,7 +179,10 @@ async function runStep(env: Record<string, string>, runId: string, step: Step, p
   }
   const t0 = Date.now();
   const inline = arm.inline ? inlineTask(step.prompt, items, files, arm.inline) : null;
-  const sp = await cli(["spawn", runId, "--profile", profile, "--task", inline?.text ?? step.prompt, "--title", title(step), "--key", step.id, ...(step.report ? ["--report"] : []),
+  const task = inline?.text ?? step.prompt;
+  // These fake steps assert that a context push reached a running agent.
+  const waitForPush = !LIVE && arm.triggered && (step.id === "business-fee" || step.id === "stale-tier");
+  const sp = await cli(["spawn", runId, "--profile", profile, "--task", waitForPush ? `${task}\n[eval-wait-for-context-push]` : task, "--title", title(step), "--key", step.id, ...(step.report ? ["--report"] : []),
     ...(arm.noSkills ? ["--overrides", JSON.stringify(briefWithoutSkills(brief))] : [])], env);
   const agentId: string | null = sp.j?.agentId ?? null;
   if (!agentId) return { agentId, status: "not-spawned", verdict: { success: false }, metrics: null, harnessError: `spawn failed: ${sp.text.slice(-400)}` };
