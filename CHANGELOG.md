@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Contributors can run `bun run setup:hooks` to check formatting, lint and types before a branch push.
+
 ## 0.12.1 (2026-11-17)
 
 Fixes a stray "background job stopped" message sent to an agent as it finished.
