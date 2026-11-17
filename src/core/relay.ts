@@ -277,7 +277,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
     let worker = await workerHandle.getWorker({ workerId });
     if (!worker || worker.state === "provisioning" || worker.state === "failed") {
       const firstAgent = agentOf(tasks[0]!);
-      await workerHandle.provisionWorker({ workerId, runId, epoch: 1, ...(firstAgent ?? {}) });
+      await workerHandle.provisionWorker({ workerId, runId, epoch: 1, scopeBacked: false, ...(firstAgent ?? {}) });
       worker = await workerHandle.getWorker({ workerId });
     }
     emit("worker.ready", { workerId, state: worker?.state ?? "unknown" }, `✓ Worker ${workerId} ready (${worker?.state ?? "unknown"})`);
@@ -322,7 +322,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
             throw new Error(`Worker ${workerId} is busy on ${worker.context.taskId}, expected ${taskId}`);
           }
           const pushed = await workerHandle.pushBranch({
-            workerId, taskId, epoch, branch, runId, target, rework: !!task.context.conflict,
+            workerId, taskId, epoch, branch, runId, target, scopeBacked: false, rework: !!task.context.conflict,
             goal: String(task.context.goal ?? goalOf(taskId)), conflictFiles: task.context.conflict?.files,
             ...(agentOf(taskId) ?? {}),
           });
@@ -343,7 +343,7 @@ async function executeRunInner(opts: RunOptions): Promise<RunResult> {
           const { landUnlessMemory } = await import("../plugins/recipe-hierarchical");
           const outcome = await landUnlessMemory(mergeCfg, { branch, target }, async (judged) => (await c.verifier.getOrCreate([runId, taskId]).verify({
             verifierId: `${taskId}-${approved ? "merge" : "verify"}-e${epoch}`,
-            taskId, branch, runId, target, testOnly, ...(judged ? { expectSha: judged } : {}),
+            taskId, branch, runId, target, testOnly, scopeBacked: false, ...(judged ? { expectSha: judged } : {}),
           })).outcome as MergeOutcome);
           if (outcome.status === "conflict") {
             await taskBoardHandle.mergeConflict({ taskId, files: outcome.files, targetSha: outcome.targetSha, epoch });

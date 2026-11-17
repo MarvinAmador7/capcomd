@@ -53,6 +53,8 @@ export const verifierActor = actor({
         branch: string;
         commitSha?: string;
         runId: string;
+        /** Legacy runs have no scope actor and use the daemon settings. */
+        scopeBacked?: false;
         target?: string;
         testOnly?: boolean;
         testCommand?: string;
@@ -93,7 +95,7 @@ export const verifierActor = actor({
         params.testOnly ? "git.verify" : "git.merge",
         { "relay.run_id": runId, "git.operation": params.testOnly ? "verify" : "merge", "git.ref": branch, "git.target": params.target ?? "" },
         async () => mergeTask({ runId, taskId, branch, target: params.target ?? "main", testOnly: params.testOnly, ...(params.testCommand ? { testCommand: params.testCommand } : {}), ...(params.expectSha ? { expectSha: params.expectSha } : {}), ...(params.mode ? { mode: params.mode } : {}), ...(params.verified ? { verified: params.verified } : {}), ...(params.branchSha ? { branchSha: params.branchSha } : {}), ...(params.gate ? { gate: params.gate } : {}) },
-          await (await import("../merge/run-config")).mergeConfigFor(runId)) // the run's repository, not the engine's env
+          await (await import("../merge/run-config")).mergeConfigFor(params.scopeBacked === false ? undefined : runId))
       );
 
       // Held by a plugin for a person's approval: nothing landed and it isn't over (the approved merge calls again).
