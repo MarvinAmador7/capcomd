@@ -75,7 +75,7 @@ const stepsOf = async (run: string, agentId: string) =>
 
 let doneRun = "", doneAgent = "";
 
-test("a finished agent's steps, in order: read 2 files, edited a file, ran the tests (all inside one second); before agent.done", async () => {
+beforeAll(async () => {
   const run = (await cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
   const sp = await cj(["spawn", run, "--profile", "worker", "--task", "[steps] make the failing test pass", "--key", "w"]);
@@ -83,7 +83,12 @@ test("a finished agent's steps, in order: read 2 files, edited a file, ran the t
   if (!id) console.log(sp.stdout, sp.stderr);
   expect(id).toMatch(/^agt-/);
   expect((await cj(["await", run, id, "--timeout-ms", "90000"])).j?.agents?.[0]?.status).toBe("done");
-  doneRun = run; doneAgent = id;
+  doneRun = run;
+  doneAgent = id;
+}, 180_000);
+
+test("a finished agent's steps, in order: read 2 files, edited a file, ran the tests (all inside one second); before agent.done", async () => {
+  const run = doneRun, id = doneAgent;
 
   const all = (await (await get(`/v1/events?scope=${run}`)).json()) as any[];
   const steps = all.filter((e) => e.type === "agent.step");

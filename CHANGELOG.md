@@ -5,6 +5,8 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+- Desktop Search responds faster as you type when hundreds of agents or projects are open.
+
 ## 0.12.1 (2026-11-17)
 
 Fixes a stray "background job stopped" message sent to an agent as it finished.

@@ -46,14 +46,15 @@ test("task board: claim, fencing, expiry takeover, keyed replay, done", async ()
   expect((await cj(["task", "add", runId, "--title", "write tests", "--data", '{"files":["a.ts"]}', "--key", "t1"])).j).toMatchObject({ created: false, task: { taskId: tid } });
   expect((await cj(["task", "add", runId, "--title", "other", "--key", "t1"])).j).toMatchObject({ ok: false, error: { code: "conflict" } });
 
-  const c1 = await cj(["task", "claim", runId, "--holder", "w1", "--lease-ms", "1500", "--key", "c-w1"]);
+  // Keep the lease live across the separate CLI invocations that check its holder.
+  const c1 = await cj(["task", "claim", runId, "--holder", "w1", "--lease-ms", "60000", "--key", "c-w1"]);
   expect(c1.j).toMatchObject({ claimed: true, taskId: tid, holder: "w1", epoch: 1, takeover: null });
-  expect((await cj(["task", "claim", runId, "--holder", "w1", "--lease-ms", "1500", "--key", "c-w1"])).j).toMatchObject({ epoch: 1, replayed: true });
+  expect((await cj(["task", "claim", runId, "--holder", "w1", "--lease-ms", "60000", "--key", "c-w1"])).j).toMatchObject({ epoch: 1, replayed: true });
   expect((await cj(["task", "claim", runId, tid, "--holder", "w2"])).j).toMatchObject({ ok: false, error: { code: "conflict" } });
   expect((await cj(["task", "claim", runId, "--holder", "w2"])).j).toMatchObject({ claimed: false });
   expect((await cj(["task", "renew", runId, tid, "--holder", "w1", "--epoch", "1", "--lease-ms", "1500"])).j).toMatchObject({ ok: true, epoch: 1 });
 
-  await Bun.sleep(1700); // w1's lease expires; w2 takes over
+  await Bun.sleep(1700); // w1's short renewal expires; w2 takes over
   const c2 = await cj(["task", "claim", runId, "--holder", "w2", "--lease-ms", "60000", "--key", "c-w2"]);
   expect(c2.j).toMatchObject({ claimed: true, taskId: tid, holder: "w2", epoch: 2, takeover: { holder: "w1", epoch: 1 } });
   // w1 comes back late: fenced out of renew and done

@@ -8,7 +8,7 @@
 //    forge is plain git, so no pull request: tests/plugins/context-groundray-write.test.ts has the forge's side);
 //  - under `review: lint` the kernel sends it as the consolidator's staging ends, as capcomd.
 // The brain's own branch, what agents read, never changes.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -33,6 +33,9 @@ let dir = "";
 let agentsFile = "";
 let brain: Awaited<ReturnType<typeof bareRepo>>;
 let brainTip = "";
+function writeAgents(review: "human" | "lint") {
+  writeFileSync(agentsFile, JSON.stringify({ ...PROFILES, agents: { ...PROFILES.agents, [CONSOLIDATOR_PROFILE]: consolidatorProfile(review) } }));
+}
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "capcomd-ctxbrain-"));
   brain = await bareRepo();
@@ -46,9 +49,13 @@ beforeAll(async () => {
   writeFileSync(cli, `#!/bin/sh\nFAKE_GROUNDRAY_LOG=${JSON.stringify(join(dir, "groundray.log"))}\nexport FAKE_GROUNDRAY_LOG\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(new URL("../plugins/fixtures/fake-groundray.ts", import.meta.url).pathname)} "$@"\n`);
   chmodSync(cli, 0o755);
   agentsFile = join(dir, "agents.json");
-  writeFileSync(agentsFile, JSON.stringify({ ...PROFILES, agents: { ...PROFILES.agents, [CONSOLIDATOR_PROFILE]: consolidatorProfile("human") } }));
+  writeAgents("human");
   w = await world("ctxbrain", { CAPCOMD_AGENTS_FILE: agentsFile, CAPCOMD_GROUNDRAY: cli });
 }, 120_000);
+beforeEach(() => {
+  writeAgents("human");
+  writeFileSync(join(dir, "groundray.log"), "");
+});
 afterAll(async () => {
   try { await w?.stop(); } finally { for (const d of [dir, brain?.root]) if (d) rmSync(d, { recursive: true, force: true }); }
 });
@@ -86,7 +93,7 @@ async function events(run: string, type: string, n = 1) {
   }
   return (await trajectory(w, run, (e) => e.type === type)).map((e) => e.data);
 }
-const groundrayCalls = () => readFileSync(join(dir, "groundray.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { argv: string[] });
+const groundrayCalls = () => readFileSync(join(dir, "groundray.log"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { argv: string[] });
 
 test("review: human: the fact waits for a person, who sends it as themselves; the brain's branch is untouched", async () => {
   const run = await runWithBrain();
@@ -194,7 +201,7 @@ test("a brain the run's project doesn't map is refused as the consolidator's ans
 }, 240_000);
 
 test("review: lint: the kernel sends the fact as the staging ends, as capcomd", async () => {
-  writeFileSync(agentsFile, JSON.stringify({ ...PROFILES, agents: { ...PROFILES.agents, [CONSOLIDATOR_PROFILE]: consolidatorProfile("lint") } }));
+  writeAgents("lint");
   const run = await runWithBrain();
   const worker = await proposer(run, [{ title: "Invoices", text: "Invoices are due 30 days after issue." }]);
   const appliedBefore = groundrayCalls().filter((x) => x.argv.includes("--apply")).length;
