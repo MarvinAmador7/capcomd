@@ -117,7 +117,7 @@ function agentSetup(profile: string | undefined, pinned: unknown, source: Record
  * it got passed the threshold. A run never waits for a build. Null: nothing to do (no template here, or the machine's
  * image was chosen otherwise).
  */
-async function templateHooks(provider: SandboxProvider, source: Record<string, string | undefined>, cfg: MergeConfig, setup: ReturnType<typeof agentSetup>, runId: string) {
+async function templateHooks(provider: SandboxProvider, source: Record<string, string | undefined>, cfg: MergeConfig, setup: ReturnType<typeof agentSetup>, runId: string | undefined) {
   if (!setup.template || !setup.config) return null;
   const T = await import("../env/templates");
   const { isSnapshotPlatform } = await import("../env/platform");
@@ -287,6 +287,8 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
 
 export type PushBranchParams = {
   workerId: string; taskId: string; epoch: number; branch: string; runId?: string; parentAgentId?: string | null; target?: string; rework?: boolean; resumed?: boolean;
+  /** Legacy runs have no scope actor and use the daemon settings. */
+  scopeBacked?: false;
   /** `spawn --continue`: the stopped agent whose work this branch starts from. */
   from?: { agentId: string; ref: string; stopped: string };
   /** Task goal for a real agent (claude-code). */
@@ -327,6 +329,7 @@ export async function pushBranchImpl(c: { db: any; key: string[]; client: () => 
 
 async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, params: PushBranchParams) {
   const { workerId, taskId, epoch, branch } = params;
+  const scopeRunId = params.scopeBacked === false ? undefined : params.runId;
   const idemKey = `worker-${workerId}-push-${taskId}-e${epoch}`;
   const already = await c.db.execute(
     "SELECT idem_key, event FROM lifecycle_events WHERE idem_key = ?",
@@ -346,11 +349,11 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   };
   // The machine is where provisionWorker made it (recorded on the worker): its profile's sandbox, else the run's.
   const own = params.machine?.sandbox ?? null;
-  const { provider, sandbox } = await providerForAgent(params.runId, own ?? (workerContext as { sandbox?: string }).sandbox ?? null);
+  const { provider, sandbox } = await providerForAgent(scopeRunId, own ?? (workerContext as { sandbox?: string }).sandbox ?? null);
   const runSource = withSandbox(process.env, sandbox);
   const vmKey = workerContext.idemKey ?? `relay-worker-${workerId}`;
   // The run's idle machine lifetime: the VM's delete deadline, renewed while the agent runs.
-  const lifeSeconds = await agentIdleLifetime(params.runId, own, sandbox);
+  const lifeSeconds = await agentIdleLifetime(scopeRunId, own, sandbox);
 
   // Acquire the push lock (or wait out a live push by another call).
   await c.db.execute(PUSH_LOCKS_SQL);
@@ -390,7 +393,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   killpoint("push.mid");
 
   // The run's repository (recorded at `run new`), so an engine without CAPCOMD_REPO still clones the right one.
-  const cfg = await (await import("../merge/run-config")).mergeConfigFor(params.runId);
+  const cfg = await (await import("../merge/run-config")).mergeConfigFor(scopeRunId);
   const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine, cfg?.remote);
   recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
   const { id: vmId } = await provider.ensure({
@@ -432,7 +435,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
     if (!params.runId) throw new Error(`pushBranch needs runId for ${agent}`);
     const adapter = adapterFor(agent);
-    const templates = await templateHooks(provider, runSource, cfg, setup, params.runId);
+    const templates = await templateHooks(provider, runSource, cfg, setup, scopeRunId);
     // Optional: with a boxd host-bound secret the VM holds a bxds_ placeholder and this is unused.
     const apiKey = process.env[adapter.secretName];
     const runId = params.runId;
@@ -607,6 +610,8 @@ export const workerActor = actor({
         workerId: string;
         runId: string;
         epoch: number;
+        /** Legacy runs have no scope actor and use the daemon settings. */
+        scopeBacked?: false;
         /** Agent profile name (.capcomd/agents.json) for this worker's task. */
         agent?: string;
         /** The spec the agent was spawned with (its scope record): wins over `agent` looked up by name. */
@@ -616,13 +621,14 @@ export const workerActor = actor({
       }
     ) {
       const { workerId, runId, epoch } = params;
+      const scopeRunId = params.scopeBacked === false ? undefined : runId;
       return withOutageListener(outageNotice(() => c.client(), runId, workerId), async () => {
       // Its profile's sandbox (ADR-024 `sandbox.provider`), else the run's, else the daemon's.
       const own = params.machine?.sandbox ?? null;
-      const { provider, sandbox } = await providerForAgent(runId, own);
+      const { provider, sandbox } = await providerForAgent(scopeRunId, own);
       const runSource = withSandbox(process.env, sandbox);
       // The run's idle machine lifetime (recorded at `run new`), else its place's current setting.
-      const lifeSeconds = await agentIdleLifetime(runId, own, sandbox);
+      const lifeSeconds = await agentIdleLifetime(scopeRunId, own, sandbox);
 
       const existing = await getLifecycle(c.db, workerId);
       if (existing && existing.state !== "provisioning" && existing.state !== "failed") {
@@ -630,7 +636,7 @@ export const workerActor = actor({
         return { workerId, vmId: ctx.vmId as string, state: existing.state };
       }
       // The run's repository, as recorded at `run new`: its project's template, when the place keeps them.
-      const repo = (await (await import("../merge/run-config")).mergeConfigFor(runId))?.remote;
+      const repo = (await (await import("../merge/run-config")).mergeConfigFor(scopeRunId))?.remote;
       const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine, repo);
 
       const idemKey =
