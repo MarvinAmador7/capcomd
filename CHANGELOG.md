@@ -5,6 +5,13 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 
 ## Unreleased
 
+## 0.12.1 (2026-11-17)
+
+Fixes a stray "background job stopped" message sent to an agent as it finished.
+
+- A background job that capcomd stops because its agent ended no longer sends that agent a "your background job was
+  stopped" message now and then. It could happen when the job's exit was seen at the moment the agent finished.
+
 ## 0.12.0 (2026-11-14)
 
 Fixes capcomd restarting after every Mac sleep, and gives the desktop window a sidebar, ⌘K Search, a Needs you reel,
