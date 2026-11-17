@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.json" },
+    { "path": "./apps/canvas" },
+    { "path": "./apps/tui" },
+    { "path": "./packages/agent-thread" },
+    { "path": "./packages/bot-avatar" },
+    { "path": "./packages/plugin" }
+  ]
+}
