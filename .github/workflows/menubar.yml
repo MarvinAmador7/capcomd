@@ -37,7 +37,7 @@ on:
   workflow_dispatch:
 # A new revision of the same PR supersedes its previous results.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: capcomd-menubar-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
