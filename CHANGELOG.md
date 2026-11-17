@@ -6,6 +6,7 @@ minor versions may break things (marked **Breaking:**). Releases are built by CI
 ## Unreleased
 
 - Contributors can run `bun run setup:hooks` to check formatting, lint and types before a branch push.
+- Desktop Search responds faster as you type when hundreds of agents or projects are open.
 
 ## 0.12.1 (2026-11-17)
 
