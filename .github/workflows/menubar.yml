@@ -47,6 +47,9 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
       - run: echo "BUN_BIN=$(which bun)" >> "$GITHUB_ENV"
       # Most of this job was compiling the Swift dependencies (NIO, the OpenAPI generator, …) from scratch. The build

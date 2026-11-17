@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -50,7 +53,7 @@ jobs:
         run: bun run typecheck
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
-        run: bun run test:fast
+        run: bun run test:fast --parallel="$(nproc)"
 
       - name: The canvas and the TUI (apps/canvas, apps/tui)
         run: bun run test:apps
@@ -70,6 +73,9 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -98,10 +104,17 @@ jobs:
   evals:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [primitives, recipe-parity, context]
     env:
       CAPCOMD_NO_CONFIG: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -111,15 +124,18 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Primitives eval
+        if: matrix.suite == 'primitives'
         run: bun evals/primitives/run.ts --report-latency
 
       - name: Recipe parity eval
+        if: matrix.suite == 'recipe-parity'
         run: bun evals/recipe-parity/run.ts
 
       # ADR-025 §12: the context eval's harness on the fake sandbox with its scripted agent (every runnable arm, every
       # task chain, the hidden checkers through `capcomd check`, the metrics); --expect fails on any verdict the fake
       # agent's policy doesn't produce. The live baselines per model are in docs/evidence/context/.
       - name: Context eval (fake sandbox and agent)
+        if: matrix.suite == 'context'
         run: bun scripts/eval-context.ts --seed 1 --expect --port 6571 --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered,index-noskills
 
   # @capcomd/plugin as it would be published (packages/plugin/scripts/pack.ts): installed from its tarball into a fresh
@@ -132,6 +148,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -159,6 +178,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -179,6 +201,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
