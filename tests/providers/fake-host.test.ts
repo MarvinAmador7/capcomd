@@ -22,7 +22,8 @@ test("timeout -k: a command that ends at the TERM ends the wait with 124 then, n
 
 test("timeout -k: a command that ignores TERM is killed the kill delay after it; one that ends in time keeps its code", async () => {
   const { p, id } = await machine();
-  const r = await timed(() => p.exec(id, ["timeout", "-k", "1", "1", "sh", "-c", "trap '' TERM; sleep 60"]));
+  // Short sleeps: a long one would inherit the ignored TERM and hold the output open after GNU's KILL of the shell.
+  const r = await timed(() => p.exec(id, ["timeout", "-k", "1", "1", "sh", "-c", "trap '' TERM; while :; do sleep 0.1; done"]));
   expect(r.code).not.toBe(0);
   expect(r.ms).toBeGreaterThanOrEqual(1900);
   expect(r.ms).toBeLessThan(8000);
