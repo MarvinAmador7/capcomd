@@ -18,6 +18,10 @@ bun run setup
 
 Run the CLI from the checkout with `bun capcomd …` (or `bun src/cli/index.ts …`).
 
+Run `bun run setup:hooks` to activate the versioned pre-push hook. It checks changed JavaScript and TypeScript
+files with Oxfmt and Oxlint and runs TSRS across the six TypeScript projects so edits and deletions are checked in
+their dependents too. Push from a clean checkout of the commit you are sending.
+
 ### Where state lives
 
 A git checkout keeps state next to the code: `.relay/` (auth profiles, env snapshot ledger, boxd VM ledger, run
