@@ -5,9 +5,9 @@
 //   opened.json    what its handshake answered (the secrets as their names only);
 //   frames.ndjson  one line per frame: frame, hook, callId, idempotencyKey, mode, subject (the merge, agent or run id).
 // and does what control.json there says, read again for every call (absent: deny every merge, allow the rest):
-//   { "<hook>": "allow" | "deny" | "hold" | "invalid" | "widen" | "slow" | "crash" | "none", "slowMs": n,
+//   { "<hook>": "allow" | "deny" | "hold" | "invalid" | "widen" | "slow" | "crash" | "none" | "wait", "slowMs": n,
 //     "atStart": "exit" | "hang" | "badHash" | "badHooks", "emit": true, "store": true, "print": true, "child": true }
-// "none" never answers; "slow" answers after slowMs; "crash" exits with the call in flight; "print" writes its token
+// "none" never answers; "wait" answers allow when the control changes; "slow" answers after slowMs; "crash" exits with the call in flight; "print" writes its token
 // and secrets to stdout and stderr once it is open (the host must redact them from its log); "child" starts a helper
 // (`sleep`) at start and writes its pid to child.pid (what the process started must go with it). It exits 0 on
 // session.closing, and when its stdin closes (the daemon is gone).
@@ -70,8 +70,14 @@ async function handle(f: HookFrame) {
   log({ frame: f.frame, seq: f.seq, hook: call.hook, callId: call.callId, key: call.idempotencyKey, mode: call.mode, subject: subject(call), runId: call.runId });
   if (call.mode === "observe") return;
   const c = control();
-  const want = (c[call.hook] as string | undefined) ?? (call.hook === "merge.landing" ? "deny" : "allow");
+  let want = (c[call.hook] as string | undefined) ?? (call.hook === "merge.landing" ? "deny" : "allow");
   if (want === "none") return;
+  if (want === "wait") {
+    const deadline = Date.parse(call.deadline);
+    while (Date.now() < deadline && control()[call.hook] === "wait") await Bun.sleep(50);
+    if (Date.now() >= deadline) return;
+    want = "allow";
+  }
   if (want === "crash") process.exit(5);
   if (want === "slow") await new Promise((r) => setTimeout(r, c.slowMs ?? 1000));
   const result = want === "deny" ? { decision: "deny", reason: "the process gate lands nothing" }

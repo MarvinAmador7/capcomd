@@ -19,6 +19,13 @@ rules an agent must follow in this repository; `CLAUDE.md` imports it.
 - Don't touch `version` in `package.json` outside a release (CI checks it against the changelog).
 - Never commit secrets, keys, logins or anything under `.relay/`, `.traces/` or `~/.capcomd`.
 
+## Test fixtures
+
+- Give each file its own temporary directories, engine port block, database and sockets. Stop its engines and child
+  processes and remove its temporary data in teardown, including when assertions fail.
+- Restore process-wide state such as environment variables, mocks and timers after each file. Initialize mutable
+  fixtures before each test so a file can run in a random order.
+
 ## Releases
 
 Releases follow [Semantic Versioning](https://semver.org) and a [Keep a Changelog](https://keepachangelog.com)
