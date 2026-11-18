@@ -30,7 +30,7 @@ by PerfLoop's `PerfLoopStamp` plugin, so a copied binary run from anywhere still
 
 ## What comes from PerfLoopHost, what is deskbench's
 
-| | PerfLoopHost (perfloop 6f190bb) | deskbench |
+| | PerfLoopHost (perfloop 1481468) | deskbench |
 |---|---|---|
 | The contract | `list`, `describe`, `run`, `snapdiff`, `knobs`, `profile`, `diff`, `gestures`, `record-gesture`, the window lock, exit codes | `describe` adds `fixtureSchemes: ["file"]` and `appearances: ["dark"]` (`DeskBenchKit/BenchCatalog.swift`) |
 | A rep | the window, the stretch clock, the main-thread sampler, frames, bodies and their causes per step, the trust fields (`window`, quiet, frames), `perfloop.result/2` | a fresh desk per rep (`Desk.swift`): the fixture loaded into a store, the app's `DeskModel` and `DeskWindowContent`, the probe forwarded to PerfLoop's |
