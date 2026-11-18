@@ -69,10 +69,10 @@ import DeskBenchKit
       }
       let s = Summary(path: dest.path, anonymised: anonymise, runs: f.runs.count, agents: f.runs.map(\.agents.count).reduce(0, +), items: f.runs.flatMap(\.threads.values).map(\.count).reduce(0, +),
                       events: f.runs.map(\.events.count).reduce(0, +), attachments: f.attachments.count, fixture: CapturedFixture.prefix + dest.path)
-      if args.has("json") { out(JSONOut.encode(s)) } else {
+      if args.has("json") { out(jsonText(s)) } else {
         out("captured \(s.runs) run(s): \(s.agents) agents, \(s.items) thread items, \(s.events) events, \(s.attachments) attachment(s) (shape only)\(anonymise ? ", anonymised" : ", NOT anonymised")")
         out("written: \(dest.path)")
-        out("run the bench on it: deskbench run step --fixture \(s.fixture)")
+        out("run the bench on it: perfloop run BENCH --scenario step --fixture \(s.fixture)")
       }
       return 0
     } catch let f as Failure { err("deskbench: \(f.description)"); return Int32(f.code) }
