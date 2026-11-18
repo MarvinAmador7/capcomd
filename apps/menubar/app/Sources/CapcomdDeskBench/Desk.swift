@@ -232,17 +232,19 @@ import PerfLoopProbe
   /// The opened window's sidebar list, and the pane's thread.
   var sidebarRegion: InkRegion { .find("sidebar") { [unowned self] in sidebarScrollView(scrollable: false) } }
   var paneRegion: InkRegion { .find("pane") { [unowned self] in paneView().flatMap { threadScroll(in: $0.view) } } }
-  /// Waits (up to 2 s, between steps) until every pane on screen has thread rows to draw: a pane just switched to an
-  /// agent whose thread hasn't been read yet is blank until its first page lands, which the ink guard would read as a
-  /// blank pane. Returns how long it waited (ms), for the rep's notes.
+  /// Waits (up to 3 s, between steps) until every pane on screen whose agent has a thread has rendered a row of it
+  /// (a `PaneEntryRow` body for that agent): a pane just switched to an agent whose thread hasn't been read yet is
+  /// blank until its first page lands, which the ink guard would read as a blank pane. A wait over 300 ms is noted.
   @discardableResult
-  func threadsDrawn() async -> Double {
+  func threadsDrawn(_ label: String) async -> Double {
     let t = run.now
-    _ = await run.wait(timeoutMs: 2000) { [unowned self] in
-      panesShown().allSatisfy { p in threadScroll(in: p.view).map { ($0.documentView?.frame.height ?? 0) > 40 && !($0.documentView?.subviews.isEmpty ?? true) } ?? false }
+    let ok = await run.wait(timeoutMs: 3000) { [unowned self] in
+      panesShown().allSatisfy { p in (world.threads[p.agent] ?? []).isEmpty || bodies.contains { $0.view == "PaneEntryRow" && $0.id == p.agent } }
     }
     _ = await nextCommit()
-    return run.now - t
+    let waited = run.now - t
+    if waited > 300 || !ok { run.note("\(label): the panes' threads had rows \(ok ? "after \(Int(waited)) ms" : "not within 3 s")") }
+    return waited
   }
 
   /// Each pane's thread, by its place (pane-1 the first, left to right, top to bottom).

@@ -52,7 +52,7 @@ import PerfLoopKit
     let ok = done()
     // A pane that now shows an agent whose thread isn't read yet is blank until its first page lands: judge the ink
     // once the threads have rows (or 2 s on).
-    await d.threadsDrawn()
+    await d.threadsDrawn(name)
     await d.run.ink(d.paneRegions(panes), after: name)
     return ok
   }

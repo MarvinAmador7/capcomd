@@ -99,7 +99,7 @@ import PerfLoopKit
       clickedCount += 1
       let p = CGPoint(x: 120, y: d.content.bounds.height - t.y)   // AppKit's window coordinates: from the bottom
       await run.click(at: p, name: "click#\(i) \(t.row.title)", until: { d.paneView()?.agent == t.row.id })
-      await d.threadsDrawn()
+      await d.threadsDrawn("click#\(i)")
       await run.ink([d.sidebarRegion, d.paneRegion], after: "click#\(i)")
       let ok = d.model.paneAgent == t.row.id && d.paneView()?.agent == t.row.id
       if !ok { notes.append("click on \(t.row.title) at y \(Int(t.y)): pane shows \(d.model.paneAgent ?? "-")") }
@@ -118,7 +118,7 @@ import PerfLoopKit
       var want: String?
       if case .agent(let id)? = cursor { want = id }
       await run.key(.return, name: "key#\(i) return", until: { want == nil || d.paneView()?.agent == want })
-      await d.threadsDrawn()
+      await d.threadsDrawn("key#\(i) return")
       await run.ink([d.paneRegion], after: "key#\(i) return")
       var ok = cursor != nil && cursor != before
       if let id = want { ok = ok && d.model.paneAgent == id && d.paneView()?.agent == id }

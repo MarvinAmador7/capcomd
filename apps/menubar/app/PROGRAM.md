@@ -36,7 +36,7 @@ Start each session with `perfloop session start` and `perfloop exp status`. Then
 1. **Look.** `perfloop exp status` says what is open and what each experiment needs next. The newest
    `~/.perfloop/capcomd-desktop/exp/<id>/explain.txt` says where the candidate's time went (its worst stretch: our
    frames, framework frames and the app frame they ran `under`). For a whole-run picture, `deskbench diff A B` on two
-   time profiles. Pick the largest subtree that is ours or attributable to one of our frames. When the stretch is
+   time profiles (`perfloop profile`). Pick the largest subtree that is ours or attributable to one of our frames. When the stretch is
    bodies (`Column×34`), its `causes:` line says which model properties were set before them;
    `perfloop causes <result.json>` prints the whole table, per step.
 2. **Say it in one sentence.** The hypothesis names the subtree and why your change removes it: "the representable
@@ -79,8 +79,9 @@ A screen is promising when the candidate wins every pair and the median gain is 
 when Mann-Whitney gives p < 0.05, the effect is ≥ the band, and the frame guards (hitch time ratio, longest stretch;
 on `swipe` also the position error and stalls, DESKBENCH.md *Recorded gestures*) are not worse beyond theirs; jerk is
 information. Correctness guards veto any win (DESKBENCH.md, *Correctness guards*): the scenario's checks
-(`landed`, …), `built-within` (the columns in view built once the window is at rest) and `snapshot-diff` (the window then
-looks like the champion's; over tolerance it is `needsReview`, never a win). They come from the champion's manifest, so
+(`landed`, …, each in every trusted rep), `ink` (the scenario's main view drawn after its steps), `built-within` (the
+columns in view built once the window is at rest) and `snapshot-diff` (the window then looks like the champion's, region
+by region; a change is `needsReview`, never a win). They come from the champion's manifest, so
 a candidate can't drop one. Once a full has won, the isolation scenarios (`burst`, `typing`) run one pair each, whatever
 you climb; a broken one loses the experiment. A win must not be worse
 on the second fixture (`swarm64`). Late-frame counts and frame p95 are information: when the frame rate changed
@@ -88,8 +89,8 @@ between builds, `explain` says so, and they mean nothing on their own (a 48 Hz b
 
 ## What you may not touch inside an experiment
 
-- The bench: `Sources/CapcomdDeskBench` (scenarios, drivers, guards), `Sources/DeskBenchKit` (budgets, stats,
-  fixtures), PerfLoop itself, this file. Changes there are their own PR, reviewed by the owner (anti-Goodhart: the
+- The bench: `Sources/CapcomdDeskBench` (drivers, guards), `Sources/DeskBenchKit` (scenarios, fixtures, the
+  catalog PerfLoopHost registers), PerfLoop itself, this file. Changes there are their own PR, reviewed by the owner (anti-Goodhart: the
   rules are read from the champion's manifest, so a candidate that changes them needs `--owner` anyway).
 - No bench-only paths in the app: no `DESKBENCH_`/`PERFLOOP_` checks outside knobs, no fixture names, no "if
   measured" branches. A fast blank column is still a blank column.
@@ -122,7 +123,7 @@ it can). Results carry their runner and machine: a stage never mixes runners, so
 
 - Anything that changes behaviour: declare it with `--behaviour-change`; promotion then needs the owner.
 - Feel: a new animation curve, spring or gesture handling is judged on a real trackpad, not by the bench.
-- A recorded gesture: only a hand makes one (`deskbench record-gesture --name NAME`, DESKBENCH.md *Recorded gestures*).
+- A recorded gesture: only a hand makes one (`deskbench record-gesture swipe --name NAME`, DESKBENCH.md *Recorded gestures*).
   Ask for one when `swipe` on the synthetic gestures isn't enough to judge a change; never commit a recording.
 - Taste: anything that looks different (spacing, what a column shows while it builds).
 - A `needsReview` verdict, a guard you think is wrong, a scenario or fixture you think is missing.
