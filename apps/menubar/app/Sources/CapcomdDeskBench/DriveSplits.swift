@@ -48,8 +48,13 @@ import PerfLoopKit
   /// panes' threads judged for ink after it.
   static func paneStep(_ d: Desk, _ name: String, panes: Int, _ act: @escaping () -> Void, done: @escaping () -> Bool) async -> Bool {
     if !d.window.isKeyWindow { d.window.makeKeyAndOrderFront(nil); _ = await d.nextCommit() }
-    await d.run.step(name, timeoutMs: 3000, until: done, ink: d.paneRegions(panes)) { act() }
-    return done()
+    await d.run.step(name, timeoutMs: 3000, until: done) { act() }
+    let ok = done()
+    // A pane that now shows an agent whose thread isn't read yet is blank until its first page lands: judge the ink
+    // once the threads have rows (or 2 s on).
+    await d.threadsDrawn()
+    await d.run.ink(d.paneRegions(panes), after: name)
+    return ok
   }
 
   /// The panes on screen are the model's, in its order, with the focus where the model has it.

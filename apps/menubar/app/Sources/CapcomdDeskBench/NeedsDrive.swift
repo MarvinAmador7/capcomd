@@ -83,13 +83,13 @@ import PerfLoopKit
   // MARK: needs-answer
 
   /// Answers the focused column's ask; its column slides out, the next takes its place and the focus.
-  static func answerFocused(_ d: Desk, _ i: Int, label: String) async -> (ok: (left: Bool, order: Bool, next: Bool), note: String)? {
+  static func answerFocused(_ d: Desk, _ i: Int, label: String, region: InkRegion? = nil) async -> (ok: (left: Bool, order: Bool, next: Bool), note: String)? {
     let needs = d.model.needs
     let before = needs.columns
     guard let target = d.model.focusedAgent.flatMap({ before.contains($0) ? $0 : nil }) ?? before.first, let ask = needs.ask(target) else { return nil }
     let lead = needs.reelPosition
     var t = 0.0
-    await d.run.step("\(label)#\(i) \(ask.approval?.kind ?? "limit")", until: Drive.reelCycle(d, since: { t }, moving: { needs.reelMoving }), ink: [d.needsRegion]) {
+    await d.run.step("\(label)#\(i) \(ask.approval?.kind ?? "limit")", until: Drive.reelCycle(d, since: { t }, moving: { needs.reelMoving }), ink: [region ?? d.needsRegion]) {
       t = d.run.now
       answer(d, ask)
     }
@@ -206,13 +206,13 @@ import PerfLoopKit
     await openSettled(d)
     var i = 0
     while !d.model.needs.columns.isEmpty, i < 64 {
-      guard await answerFocused(d, i, label: "needs-empty") != nil else { break }
+      guard await answerFocused(d, i, label: "needs-empty", region: d.needsRegion(min: 0.0005)) != nil else { break }
       i += 1
     }
     _ = await run.wait(timeoutMs: 1000) { d.bodies.contains { $0.view == "NothingNeedsYou" } }
     let seen = d.bodies.contains { $0.view == "NothingNeedsYou" }
     let nothing = d.model.needs.isOpen && d.model.needs.columns.isEmpty && seen
-    await run.ink([d.needsRegion], after: "answered all")
+    await run.ink([d.needsRegion(min: 0.0005)], after: "answered all")
     // Esc: a real key on the app's queue (the reel's cancel shortcut takes it).
     await run.key(.escape, ink: [d.reelRegion], name: "needs-empty esc", timeoutMs: 3000, until: { !d.model.needs.isOpen })
     d.columnsSince = since

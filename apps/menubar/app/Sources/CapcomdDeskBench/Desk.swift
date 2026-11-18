@@ -136,8 +136,10 @@ import PerfLoopProbe
 
   func walk(_ v: NSView, _ f: (NSView) -> Void) { f(v); v.subviews.forEach { walk($0, f) } }
 
-  /// The reel's horizontal NSScrollView (the widest scroll view whose document is wider than it).
+  /// The project reel's horizontal NSScrollView: the reel's own, else the widest scroll view whose document is wider
+  /// than it.
   func reelScrollView() -> NSScrollView? {
+    if let r = reel(.project), !r.reelScrollView.isHiddenOrHasHiddenAncestor { return r.reelScrollView }
     var best: NSScrollView?
     walk(content) { v in
       if let s = v as? NSScrollView, let d = s.documentView, d.frame.width > s.bounds.width + 1, s.bounds.width > (best?.bounds.width ?? 0), !s.isHiddenOrHasHiddenAncestor { best = s }
@@ -224,11 +226,25 @@ import PerfLoopProbe
 
   /// The project reel: its columns' scroll view.
   var reelRegion: InkRegion { .find("reel") { [unowned self] in reelScrollView() } }
-  /// The Needs you reel, while it is open.
-  var needsRegion: InkRegion { .find("needs-reel") { [unowned self] in reel(.needs)?.reelScrollView } }
+  /// The Needs you reel, while it is open (`min`: its floor, for a reel left with one line, "Nothing needs you.").
+  var needsRegion: InkRegion { needsRegion() }
+  func needsRegion(min: Double? = nil) -> InkRegion { .find("needs-reel", min: min) { [unowned self] in reel(.needs)?.reelScrollView } }
   /// The opened window's sidebar list, and the pane's thread.
   var sidebarRegion: InkRegion { .find("sidebar") { [unowned self] in sidebarScrollView(scrollable: false) } }
   var paneRegion: InkRegion { .find("pane") { [unowned self] in paneView().flatMap { threadScroll(in: $0.view) } } }
+  /// Waits (up to 2 s, between steps) until every pane on screen has thread rows to draw: a pane just switched to an
+  /// agent whose thread hasn't been read yet is blank until its first page lands, which the ink guard would read as a
+  /// blank pane. Returns how long it waited (ms), for the rep's notes.
+  @discardableResult
+  func threadsDrawn() async -> Double {
+    let t = run.now
+    _ = await run.wait(timeoutMs: 2000) { [unowned self] in
+      panesShown().allSatisfy { p in threadScroll(in: p.view).map { ($0.documentView?.frame.height ?? 0) > 40 && !($0.documentView?.subviews.isEmpty ?? true) } ?? false }
+    }
+    _ = await nextCommit()
+    return run.now - t
+  }
+
   /// Each pane's thread, by its place (pane-1 the first, left to right, top to bottom).
   func paneRegions(_ n: Int) -> [InkRegion] {
     (0..<n).map { i in .find("pane-\(i + 1)") { [unowned self] in let p = panesShown(); return p.indices.contains(i) ? threadScroll(in: p[i].view) : nil } }

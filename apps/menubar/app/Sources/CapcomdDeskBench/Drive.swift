@@ -290,8 +290,12 @@ import PerfLoopProbe
       var t = 0.0
       await run.step("follow#\(i)→\(cols.firstIndex(of: who) ?? -1)", until: { d.events.contains { $0.name == "reel.phase" && $0.value == 1 && $0.t >= t } }, ink: [d.reelRegion]) {
         t = run.now
-        let f = Fixtures.askFrame(runId: runId, agentId: who, approvalId: "bench-ask-\(seq)", seq: seq)
-        d.store.receive(.event(f.envelope), scope: f.scope)
+        // A question of the agent's own (`custom`): the agent itself waits on it (a merge ask waits on its parent).
+        let e = Envelope(id: "ask-\(seq)", scope: runId, seq: seq, entity: who, type: "approval.requested", epochMs: Int(Date().timeIntervalSince1970 * 1000),
+                         projectId: nil, runId: runId, agentId: who,
+                         data: ["approvalId": .string("bench-ask-\(seq)"), "kind": .string("custom"), "question": .string("Ship the backfill now or after the freeze?"),
+                                "requestedBy": .object(["agentId": .string(who), "runId": .string(runId)])])
+        d.store.receive(.event(e), scope: runId)
       }
       _ = await d.reelSettled(since: t)
       landed = landed && d.model.onScreen.contains(who)
