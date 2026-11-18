@@ -90,7 +90,7 @@ package final class AppSession {
       guard let cli = await locate(again: true) else { token = .needsCLI; return }
       guard let r = await CLIRunner.run(cli, FirstRun.pairArguments) else { token = .failed("capcomd didn't answer."); return }
       // Exit 2 is a usage error: a capcomd from before `clients pair` (0.9 and older).
-      if r.code == 2 { token = .failed("This capcomd\(cliVersion.map { " (\($0))" } ?? "") can't connect apps by itself. Update it: brew upgrade capcomd"); return }
+      if r.code == 2 { token = .failed("This capcomd\(cliVersion.map { " (\($0))" } ?? "") can't connect apps by itself. Update it: \(FirstRun.upgradeCommand)"); return }
       guard r.code == 0, let p = FirstRun.parsePair(r.out) else { token = .failed(Self.why(r)); return }
       if let v = p.version { cliVersion = v }
       guard Keychain.save(p.token) else { token = .failed("Couldn't save the token to the Keychain."); return }
@@ -125,7 +125,8 @@ package final class AppSession {
     }
   }
 
-  /// Finds the CLI: the usual install places, then a login shell's PATH. `again`: look even if it was found missing.
+  /// Finds the CLI: the one the login service runs, the usual install places, then a login shell's PATH (CLIRunner.find).
+  /// `again`: look even if it was found missing.
   @discardableResult
   package func locate(again: Bool = false) async -> String? {
     if let cli, FileManager.default.isExecutableFile(atPath: cli) { return cli }
@@ -162,7 +163,7 @@ package final class AppSession {
       guard let r = await CLIRunner.run(cli, FirstRun.serviceArguments(atLogin: atLogin), timeout: 60) else { return "capcomd didn't answer." }
       // Exit 2 with --no-login: a capcomd from before it (0.9 and older).
       if r.code == 2 && !atLogin {
-        return "This capcomd\(cliVersion.map { " (\($0))" } ?? "") can only start at login. Turn the switch on, or update it: brew upgrade capcomd"
+        return "This capcomd\(cliVersion.map { " (\($0))" } ?? "") can only start at login. Turn the switch on, or update it: \(FirstRun.upgradeCommand)"
       }
       switch FirstRun.parseService(r.out, exitCode: r.code) {
       case .running: return nil
@@ -216,11 +217,13 @@ package enum CLIRunner {
     }
   }
 
-  /// The first candidate that runs and says it's capcomd, else the one a login shell finds.
+  /// The first candidate that runs and says it's capcomd, else the one a login shell finds. The login service's own
+  /// CLI comes first when it's installed (its launchd agent, read only), so the app and its daemon use the same capcomd.
   package static func find() async -> (path: String, version: String)? {
-    let env = ProcessInfo.processInfo.environment
-    for p in FirstRun.candidates(home: NSHomeDirectory(), environment: env) where FileManager.default.isExecutableFile(atPath: p) {
-      if let v = await version(p) { return (p, v) }
+    let env = ProcessInfo.processInfo.environment, home = NSHomeDirectory()
+    let service = FileManager.default.contents(atPath: FirstRun.servicePlist(home: home)).flatMap(FirstRun.serviceCLI(plist:))
+    if let found = await FirstRun.firstAnswering(FirstRun.candidates(home: home, environment: env, service: service), version: { await version($0) }) {
+      return found
     }
     let shell = env["SHELL"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
     guard let r = await run(shell, ["-l", "-i", "-c", "command -v capcomd"], timeout: 8), r.code == 0 else { return nil }
