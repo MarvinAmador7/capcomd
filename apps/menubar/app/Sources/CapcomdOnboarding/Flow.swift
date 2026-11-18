@@ -32,6 +32,10 @@ public struct Boot: Equatable, Sendable {
   public var cliMissing = false
   /// Start capcomd when I log in.
   public var atLogin = true
+  /// capcomd already answered before Boot started it (its login service, or `capcomd serve`): there's nothing to start
+  /// or install, so the switch is gone and Boot runs by itself (`startsByItself`). `atLogin` then says whether its
+  /// login service is installed.
+  public var alreadyRunning = false
   /// What was found: "0.9.0" and its path ("~/…" for one under the home folder).
   public var version: String?
   public var path: String?
@@ -40,7 +44,8 @@ public struct Boot: Equatable, Sendable {
   public init() {}
 
   public static func == (a: Boot, b: Boot) -> Bool {
-    a.stage == b.stage && a.cliMissing == b.cliMissing && a.atLogin == b.atLogin && a.version == b.version && a.path == b.path
+    a.stage == b.stage && a.cliMissing == b.cliMissing && a.atLogin == b.atLogin && a.alreadyRunning == b.alreadyRunning
+      && a.version == b.version && a.path == b.path
       && a.failure?.stage == b.failure?.stage && a.failure?.message == b.failure?.message
   }
 
@@ -81,7 +86,9 @@ public struct Boot: Equatable, Sendable {
     case .done:
       switch i {
       case 0: return [version, path].compactMap { $0 }.joined(separator: " · ")
-      case 1: return atLogin ? "in the background, and whenever you log in" : "in the background, until you quit it"
+      case 1:
+        if alreadyRunning { return atLogin ? "already running, and it starts whenever you log in" : "already running" }
+        return atLogin ? "in the background, and whenever you log in" : "in the background, until you quit it"
       default: return "its key is kept in your Keychain"
       }
     case .waiting, .running: return nil
@@ -96,6 +103,16 @@ public struct Boot: Equatable, Sendable {
   public var fill: Double { Double(min(120, max(0, stage - 1) * 60)) }
   /// The switch can change until capcomd has been started.
   public var switchEnabled: Bool { stage <= 1 || (failure?.stage == 2) }
+  /// "Start capcomd when I log in" shows only when Boot would start capcomd: not when it already runs.
+  public var showsSwitch: Bool { !alreadyRunning }
+  /// Found capcomd already running, not booted yet: Boot runs without waiting for its button (nothing in it asks).
+  public var startsByItself: Bool { alreadyRunning && !cliMissing && stage == 0 && failure == nil }
+  /// What Boot found before it ran: capcomd answering (`running`), and whether its login service is installed (nil:
+  /// the CLI couldn't say). Not running brings the switch back, on (as it starts).
+  public mutating func found(running: Bool, serviceInstalled: Bool?) {
+    if running { atLogin = serviceInstalled == true } else if alreadyRunning { atLogin = true }
+    alreadyRunning = running
+  }
 }
 
 // MARK: The primary button

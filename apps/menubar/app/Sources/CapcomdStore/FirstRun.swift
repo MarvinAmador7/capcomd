@@ -1,8 +1,9 @@
 import Foundation
 
-// The app's first run without a terminal (CapcomdUI/AppSession.swift does the work): find the capcomd CLI, pair with
-// it (`capcomd clients pair --app mac-app --json`), start the daemon as a login service (`capcomd service install
-// --json`), and say when the app and the daemon are far enough apart in version to matter. The pure parts live here.
+// The app's first run without a terminal (CapcomdUI/AppSession.swift does the work): find the capcomd CLI (the one the
+// login service runs, when there is one), pair with it (`capcomd clients pair --app mac-app --json`), start the daemon
+// as a login service (`capcomd service install --json`) when nothing runs it yet, and say when the app and the daemon
+// are far enough apart in version to matter. The pure parts live here.
 
 public enum FirstRun {
   /// The name the app pairs as (`capcomd clients list` shows it; a new pairing revokes the previous one).
@@ -17,25 +18,77 @@ public enum FirstRun {
     guard let d = out.data(using: .utf8), let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return nil }
     return o["installed"] as? Bool
   }
-  /// What to tell someone without the CLI (Homebrew installs it with the app; this is for everyone else).
+  /// What to tell someone without the CLI. The app's cask doesn't install it (people often have it already, from
+  /// install.sh, Bun or npm), so the app says this when it finds none; the cask's caveats say the same
+  /// (scripts/homebrew-cask.ts).
   public static let installCommand = "brew install MarvinAmador7/tap/capcomd"
+  /// How the window says to update the CLI, however it was installed (`capcomd upgrade` names brew's or Bun's command
+  /// when one of those installed it).
+  public static let upgradeCommand = "capcomd upgrade"
   /// The paste fallback's command: the same pairing, printed for a person to copy.
   public static let pairCommand = "capcomd clients pair --app \(appName)"
 
   /// Where a GUI app looks for `capcomd`, in order. Apps don't get the login shell's PATH, so these are the usual
   /// install places: `CAPCOMD_CLI` (an explicit path), Homebrew (Apple silicon, Intel), install.sh's ~/.capcomd/bin, Bun's
   /// and npm's global bins, ~/.local/bin. A login shell is asked after these (AppSession).
-  public static func candidates(home: String, environment env: [String: String]) -> [String] {
+  ///
+  /// `service`: the capcomd the login service runs (`serviceCLI`). It comes right after `CAPCOMD_CLI`: first the usual
+  /// places that are that same file (an install's bin is a link to it: Bun's ~/.bun/bin/capcomd to the package's entry,
+  /// Homebrew's bin to its keg), then its own path. So with two CLIs installed, the app pairs with, starts and restarts
+  /// the daemon through the one that runs it, never splitting from it. `resolve` follows links (`realPath`).
+  public static func candidates(home: String, environment env: [String: String], service: String? = nil,
+                                resolve: (String) -> String = realPath) -> [String] {
+    var usual = ["/opt/homebrew/bin/capcomd", "/usr/local/bin/capcomd"]
+    let h = home.hasSuffix("/") ? String(home.dropLast()) : home
+    if let d = env["CAPCOMD_INSTALL_DIR"], !d.isEmpty { usual.append("\(d)/capcomd") }
+    usual += ["\(h)/.capcomd/bin/capcomd", "\(h)/.bun/bin/capcomd"]
+    if let p = env["NPM_CONFIG_PREFIX"] ?? env["npm_config_prefix"], !p.isEmpty { usual.append("\(p)/bin/capcomd") }
+    usual += ["\(h)/.npm-global/bin/capcomd", "\(h)/.local/bin/capcomd"]
+    if let service, !service.isEmpty {
+      let target = resolve(service)
+      let same = usual.filter { resolve($0) == target }
+      usual = same + [service] + usual.filter { resolve($0) != target }
+    }
     var out: [String] = []
     if let p = env["CAPCOMD_CLI"], !p.isEmpty { out.append(p) }
-    out += ["/opt/homebrew/bin/capcomd", "/usr/local/bin/capcomd"]
-    let h = home.hasSuffix("/") ? String(home.dropLast()) : home
-    if let d = env["CAPCOMD_INSTALL_DIR"], !d.isEmpty { out.append("\(d)/capcomd") }
-    out += ["\(h)/.capcomd/bin/capcomd", "\(h)/.bun/bin/capcomd"]
-    if let p = env["NPM_CONFIG_PREFIX"] ?? env["npm_config_prefix"], !p.isEmpty { out.append("\(p)/bin/capcomd") }
-    out += ["\(h)/.npm-global/bin/capcomd", "\(h)/.local/bin/capcomd"]
+    out += usual
     var seen = Set<String>()
     return out.filter { seen.insert($0).inserted }
+  }
+
+  /// The first of `candidates` that can run and says it's capcomd (`version`: its `--version`, parsed), with that
+  /// version. AppSession runs each; the tests run fake CLIs.
+  public static func firstAnswering(_ candidates: [String], isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+                                    version: (String) async -> String?) async -> (path: String, version: String)? {
+    for p in candidates where isExecutable(p) {
+      if let v = await version(p) { return (p, v) }
+    }
+    return nil
+  }
+
+  /// A path with its links followed (itself when it doesn't exist).
+  public static func realPath(_ path: String) -> String {
+    guard let r = realpath(path, nil) else { return path }
+    defer { free(r) }
+    return String(cString: r)
+  }
+
+  // MARK: The login service
+
+  /// The login service's launchd agent (`capcomd service install`, src/cli/commands/service.ts), read only.
+  public static let serviceLabel = "dev.capcomd.engine"
+  public static func servicePlist(home: String) -> String {
+    let h = home.hasSuffix("/") ? String(home.dropLast()) : home
+    return "\(h)/Library/LaunchAgents/\(serviceLabel).plist"
+  }
+
+  /// The capcomd the login service runs, from its agent's ProgramArguments: `<capcomd> serve …` for the single
+  /// executable (install.sh, Homebrew), `<bun> <capcomd's entry> serve …` for Bun and npm installs; either way the
+  /// argument before `serve`. Nil: not a plist, or not a capcomd service.
+  public static func serviceCLI(plist: Data) -> String? {
+    guard let o = (try? PropertyListSerialization.propertyList(from: plist, format: nil)) as? [String: Any],
+          let argv = o["ProgramArguments"] as? [String], let i = argv.firstIndex(of: "serve"), i > 0, !argv[i - 1].isEmpty else { return nil }
+    return argv[i - 1]
   }
 
   /// The PATH the CLI runs with: its own folder first (an npm install is a `#!/usr/bin/env bun` script), then the
@@ -118,7 +171,7 @@ public enum VersionSkew: Equatable, Sendable {
     switch self {
     case .daemonOlder(let a, let d, let restart):
       return restart ? "capcomd \(d) is still running. Restart it to use \(a) with this app."
-                     : "This app is \(a), capcomd is \(d). Update capcomd: brew upgrade capcomd"
+                     : "This app is \(a), capcomd is \(d). Update capcomd: \(FirstRun.upgradeCommand)"
     case .appOlder(let a, let d):
       return "capcomd is \(d), this app is \(a). Update the app: brew upgrade capcomd-app"
     }

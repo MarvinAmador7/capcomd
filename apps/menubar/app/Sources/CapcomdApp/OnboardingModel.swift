@@ -137,16 +137,25 @@ final class OnboardingModel {
 
   // MARK: Boot
 
-  /// On the boot screen: is there a CLI? (The session looked at launch; this looks once more if it found none.)
+  /// On the boot screen: is there a CLI? (The session looked at launch; this looks once more if it found none.) With
+  /// one, whether capcomd already runs.
   private func lookForCLI() {
     Task {
       let found = await session.locate()
-      if found == nil, !session.lookingForCLI { flow.boot.cliMissing = true } else { flow.boot.cliMissing = false; noteCLI() }
+      if found == nil, !session.lookingForCLI { flow.boot.cliMissing = true } else { flow.boot.cliMissing = false; noteCLI(); await noteRunning() }
     }
   }
   private func noteCLI() {
     flow.boot.version = session.cliVersion
     flow.boot.path = session.cli.map { RepoScan.display($0, home: NSHomeDirectory()) }
+  }
+  /// capcomd already answering (its login service, usually) needs nothing started or installed: the switch goes and
+  /// Boot runs by itself, pairing (or keeping the pairing the session made at launch) without a question. Its start
+  /// step asks whether the login service is installed, for its row.
+  private func noteRunning() async {
+    guard !flow.boot.done, !flow.boot.running else { return }
+    flow.boot.found(running: await SocketProbe.answers(Connection.socketPath), serviceInstalled: nil)
+    if flow.step == .boot && flow.boot.startsByItself { boot() }
   }
 
   /// Copy (the brew command).
@@ -162,7 +171,7 @@ final class OnboardingModel {
     Task {
       let found = await session.locate(again: true)
       flow.boot.cliMissing = found == nil
-      if found != nil { noteCLI() }
+      if found != nil { noteCLI(); await noteRunning() }
     }
   }
 
@@ -211,11 +220,11 @@ final class OnboardingModel {
     return .ok
   }
 
-  /// Already answering: nothing to start (the switch shows whether its login service is installed). Else the login
-  /// service, at login or now only.
+  /// Already answering: nothing to start or install (the row says whether its login service is installed). Else the
+  /// login service, at login or now only.
   private func start() async -> StepResult {
     if await SocketProbe.answers(Connection.socketPath) {
-      if let installed = await session.serviceInstalled() { flow.boot.atLogin = installed }
+      flow.boot.found(running: true, serviceInstalled: await session.serviceInstalled())
       return .ok
     }
     if let why = await session.startDaemon(atLogin: flow.boot.atLogin) { return .failed(why) }
