@@ -13,7 +13,7 @@ let package = Package(
   ],
   // PerfLoop (github.com/MarvinAmador7/perfloop): the performance loop's probe library (runtime knobs), linked by the
   // desktop window itself. Pinned to a commit until PerfLoop tags releases.
-  dependencies: [.package(path: "../client"), .package(url: "https://github.com/MarvinAmador7/perfloop", revision: "d6d095ea47543a2d3728cc3d8c629cddfb2eff80")],
+  dependencies: [.package(path: "../client"), .package(url: "https://github.com/MarvinAmador7/perfloop", revision: "e32718480d8f3b3bb01213df95feb31ff0f03a01")],
   targets: [
     // Thread items (format blocks/1): decoding, merge by id/rev, link and code presentation. Foundation only.
     .target(name: "CapcomdThread"),
@@ -41,7 +41,9 @@ let package = Package(
     .executableTarget(name: "CapcomdApp", dependencies: ["CapcomdDesk", "CapcomdStore", "CapcomdLive", "CapcomdThread", "CapcomdBot", "CapcomdUI", "CapcomdOnboarding"],
                       resources: [.copy("Fonts")]),
     // The bench's pure parts (fixtures, statistics, budgets, xctrace summaries), tested without a window.
-    .target(name: "DeskBenchKit", dependencies: ["CapcomdStore", "CapcomdThread", .product(name: "PerfLoopProbe", package: "perfloop")]),
+    // PerfLoopKit (pure, Foundation only): the trace environment's allowlist (TraceEnv), the same one `perfloop profile` uses.
+    .target(name: "DeskBenchKit", dependencies: ["CapcomdStore", "CapcomdThread", .product(name: "PerfLoopProbe", package: "perfloop"),
+                                                 .product(name: "PerfLoopKit", package: "perfloop")]),
     // The bench: hosts the desktop window in-process against fixture data and measures it (DESKBENCH.md).
     // BuildStamp embeds the commit, dirty flag and build time, so a copied binary still says what it was built from.
     .executableTarget(name: "CapcomdDeskBench", dependencies: ["DeskBenchKit", "CapcomdDesk", "CapcomdStore", "CapcomdThread", "CapcomdBot", "CapcomdUI",
@@ -59,5 +61,7 @@ let package = Package(
     .testTarget(name: "CapcomdOnboardingTests", dependencies: ["CapcomdOnboarding"], exclude: ["Fixtures"]),
     // Fixtures/ holds hand-made xctrace exports, read in place.
     // CapcomdDesk for its knobs' defaults (no window is made).
-    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", "CapcomdDesk", .product(name: "PerfLoopProbe", package: "perfloop")], exclude: ["Fixtures"]),
+    // PerfLoopKit: the manifest read back the way the runner reads it.
+    .testTarget(name: "DeskBenchKitTests", dependencies: ["DeskBenchKit", "CapcomdStore", "CapcomdDesk", .product(name: "PerfLoopProbe", package: "perfloop"),
+                                                          .product(name: "PerfLoopKit", package: "perfloop")], exclude: ["Fixtures"]),
   ])

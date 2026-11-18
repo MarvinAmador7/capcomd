@@ -5,6 +5,10 @@ You are an agent improving the capcomd desktop window's performance. This file i
 change the app's code, one idea at a time, and keep a change only when the loop says it won and nothing visible broke.
 The owner checks what the bench can't: feel, taste and behaviour.
 
+Verifying a feature rather than making the window faster (it works, it costs nothing)? That is DESKBENCH.md *Verifying
+a feature* (`perfloop run`, `perfloop baseline`, `perfloop exp new … --expect same`), not this loop: a feature never
+gets "rejected, drop it".
+
 ## Setup (once per machine)
 
 ```sh
@@ -14,7 +18,7 @@ export PERFLOOP_APP=capcomd-desktop                       # the store: ~/.perflo
 cd apps/menubar/app
 swift build -c release --product CapcomdDeskBench          # on a clean checkout of main
 perfloop store add .build/release/CapcomdDeskBench
-perfloop champion set <hash from store add> --merged --scenario step --fixture crew17   # the owner does this
+perfloop champion set <hash from store add> --merged --scenario step --fixture crew17   # the owner only: refused (exit 6) without them
 ```
 
 `perfloop describe --bench .build/release/CapcomdDeskBench` shows what the bench offers: scenarios, which number each
@@ -45,15 +49,19 @@ Start each session with `perfloop session start` and `perfloop exp status`. Then
    interleaved pairs, ~40 s). For a knob instead of code: `perfloop exp new "<hypothesis>" --knobs reel.slide=clip`.
 5. **Read `exp/<id>/explain.txt`** (or `perfloop explain exp/<id>`). Its last line is the next command.
    - `rejected`: the idea didn't pay. Drop the commit (`git reset --hard HEAD~1` on the work branch), go to 1.
+   - `inconclusive` (mixed signs, or a band wider than the gain): `perfloop exp screen <id> --more 3`, or the full;
+     never drop it on that screen alone.
    - `promising`: `perfloop exp full <id>` (5 + 5 pairs, ~3 min; extends itself to 8 + 8, 10 + 10 while unsure).
    - `won`: `perfloop exp promote <id>`, then open a PR with explain.txt and the patch. The champion moves now; you may
-     climb on it before the PR merges. After the merge, the owner runs `perfloop champion merged <sha>`.
+     climb on it before the PR merges. Once the PR is on main, `git fetch` and `perfloop champion merged <sha>` (it
+     checks the champion's commit is on main; a squash-merged PR or a champion built dirty is the owner's to settle).
    - `lost`, `needsReview`: drop it, or ask the owner (needsReview means no decision at 10 + 10, or a snapshot that
      doesn't look like the champion's: the guards lines in explain.txt name both PNGs and the diff).
    - `perfloop guards --exp <id>` re-runs the correctness guards alone (one pair, plus `burst` and `typing`). Only the
      owner passes `--guard-tolerance`; no `exp` verb takes it.
 6. **Stop** when `exp status` prints a `stop:` line (SPEC §5.3): the scenario meets its budget, no attributable subtree
-   ≥ 5 % remains, 5 non-promising candidates in a row, or the session's 2 h / 20 candidates are spent. Say what you
+   ≥ 5 % remains, 5 non-promising candidates in a row, or the session's 2 h / 20 candidates are spent (its `time
+   budget:` line says how much is left; `--json` is `perfloop.status/1`, `{ open, timeBudget, stop }`). Say what you
    tried and what's left, from `perfloop ledger`.
 
 ## What decides

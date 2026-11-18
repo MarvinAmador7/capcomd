@@ -16,6 +16,9 @@ public struct ScenarioSpec: Codable, Sendable, Hashable {
   public var latencyBudgetMs: Double?
   /// Parameters the scenario takes (`--set key=value`), with defaults.
   public var params: [String: String]
+  /// The fixture it runs on when nobody names one (nil: `Scenarios.defaultFixture`). The manifest's `scenarios[].fixture`:
+  /// perfloop always passes `--fixture`, this one unless told otherwise; `deskbench run` without `--fixture` uses it too.
+  public var fixture: String? = nil
 }
 
 public enum Scenarios {
@@ -65,13 +68,13 @@ public enum Scenarios {
                  kind: .smooth, latencyBudgetMs: nil, params: ["scrolls": "4", "gesture": "synthetic:scroll-down", "gestureBack": "synthetic:scroll-up"]),
     ScenarioSpec(name: "palette-open", summary: "Search ⌘K on the empty search, then Esc, repeatedly (fixture `search`: 250+ items): ⌘K to the frame that shows the panel and its results.",
                  budget: "Search ⌘K opens: first frame ≤ 50 ms", rule: "median latency from ⌘K to the first frame with the panel and its results ≤ 50 ms; checks: items, empty-search, panel-drawn, esc-closes",
-                 kind: .latency, latencyBudgetMs: 50, params: ["opens": "6"]),
+                 kind: .latency, latencyBudgetMs: 50, params: ["opens": "6"], fixture: "search"),
     ScenarioSpec(name: "palette-type", summary: "Type a query into Search ⌘K a character at a time (key events to its field): each keystroke to the frame that shows its results.",
                  budget: "Search ⌘K: a keystroke's results within a frame", rule: "median latency from a key to the frame that shows its results ≤ 16.7 ms; checks: typed, ranking, panel-drawn",
-                 kind: .latency, latencyBudgetMs: 16.7, params: ["query": "matchkey"]),
+                 kind: .latency, latencyBudgetMs: 16.7, params: ["query": "matchkey"], fixture: "search"),
     ScenarioSpec(name: "palette-keys", summary: "Search ⌘K's keys: type a query, ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens the first (folded: as ↩ does), Esc closes.",
                  budget: "Search ⌘K: keys and opening a result ≤ 50 ms", rule: "median latency from a key to the frame that shows what it did ≤ 50 ms; checks: selection, return-opens, split-falls-back, esc-closes, panel-drawn",
-                 kind: .latency, latencyBudgetMs: 50, params: ["query": "shard"]),
+                 kind: .latency, latencyBudgetMs: 50, params: ["query": "shard"], fixture: "search"),
     // Splits and expand in the opened window (design/desktop/rex RexSplit, RexExpanded; SPEC §2.1). Each rep starts from
     // one pane and ends with its panes on screen.
     ScenarioSpec(name: "split-open", summary: "With the sidebar open, ⌘D (split right), ⇧⌘D (split down), then ⌘W twice, as key events to the app; each shows the panes.",
@@ -89,31 +92,34 @@ public enum Scenarios {
     ScenarioSpec(name: "expand-switch", summary: "A pane expanded: other agents picked as the palette's ↩ picks them, then ⌘K over it and Esc.",
                  budget: "Switch agent: first frame ≤ 50 ms (expanded stays expanded)", rule: "median latency from the pick to the frame that shows the agent ≤ 50 ms; still expanded, full window, every pick shown",
                  kind: .latency, latencyBudgetMs: 50, params: ["switches": "4"]),
-    // The Needs you reel (SPEC, Needs you reel). Run them on `needs5` or `needs20` (asks across projects).
+    // The Needs you reel (SPEC, Needs you reel), on `needs5` (their own fixture) or `needs20` (asks across projects).
     ScenarioSpec(name: "needs-open", summary: "Open the Needs you reel (the hand): every ask across projects as a column, oldest first.",
                  budget: "Open the Needs you reel: first frame ≤ 50 ms", rule: "median latency from openNeedsReel() to the frame that shows its columns ≤ 50 ms; the columns are the asks oldest first; no stretch over 100 ms",
-                 kind: .latency, latencyBudgetMs: 50, params: [:]),
+                 kind: .latency, latencyBudgetMs: 50, params: [:], fixture: "needs5"),
     ScenarioSpec(name: "needs-answer", summary: "Answer the focused ask, again and again: its column slides out (≤ 300 ms, transform and opacity) and the next takes its place.",
                  budget: "Answer an ask: the column slides out with no dropped frame", rule: "no late frame while the columns close up; no stretch over 16.7 ms; the answered column left, the rest kept their order, the next one leads and has the focus",
-                 kind: .smooth, latencyBudgetMs: nil, params: ["answers": "3"]),
+                 kind: .smooth, latencyBudgetMs: nil, params: ["answers": "3"], fixture: "needs5"),
     ScenarioSpec(name: "needs-arrive", summary: "A new ask arrives while the reel is open, with the reel scrolled to a middle column: it joins at the end.",
                  budget: "A new ask: joins at the end, nothing moves", rule: "the new column is last, the leading column and its place in the window are unchanged; no late frame",
-                 kind: .isolation, latencyBudgetMs: nil, params: ["arrivals": "3"]),
+                 kind: .isolation, latencyBudgetMs: nil, params: ["arrivals": "3"], fixture: "needs5"),
     ScenarioSpec(name: "needs-step", summary: "⌘J through the asks: in the reel it focuses the next column; outside it opens each ask's agent in its project, oldest first, round again.",
                  budget: "⌘J: first frame ≤ 50 ms", rule: "median latency from nextAsk() to the next frame ≤ 50 ms; the asks come oldest first, one at a time",
-                 kind: .latency, latencyBudgetMs: 50, params: [:]),
+                 kind: .latency, latencyBudgetMs: 50, params: [:], fixture: "needs5"),
     ScenarioSpec(name: "needs-empty", summary: "Answer every ask until \"Nothing needs you.\", then Esc back to where the reel was opened from.",
                  budget: "Answer an ask: the column slides out with no dropped frame", rule: "no late frame; the end state shows \"Nothing needs you.\"; Esc (a key event to the window) closes the reel and gives the focus back",
-                 kind: .smooth, latencyBudgetMs: nil, params: [:]),
+                 kind: .smooth, latencyBudgetMs: nil, params: [:], fixture: "needs5"),
     ScenarioSpec(name: "needs-swipe", summary: "A recorded (or synthetic) trackpad gesture replayed into the Needs you reel's scroll view, as `swipe` does for the project reel.",
                  budget: "Reel scroll: no dropped frames at 120 Hz", rule: "no late frame while the reel moves; the content within 1 pt of the fingers (p95) with no stall; it lands on a column edge",
-                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "0", "timestamps": "recorded", "deliver": "window"]),
+                 kind: .smooth, latencyBudgetMs: nil, params: ["gesture": "synthetic:flick-forward", "swipes": "4", "from": "0", "timestamps": "recorded", "deliver": "window"], fixture: "needs5"),
   ]
   public static func spec(_ name: String) -> ScenarioSpec? { all.first { $0.name == name } }
   /// The scenarios `suite` runs, in order.
   public static let suite = ["open", "switch", "step", "jump", "fling", "burst", "typing", "resize", "follow", "palette-open", "palette-type", "palette-keys"]
-  /// The fixture a scenario runs on unless told otherwise (Search ⌘K's need hundreds of searchable items).
-  public static func defaultFixture(_ scenario: String) -> String? { scenario.hasPrefix("palette-") ? "search" : nil }
+  /// The fixture every scenario without one of its own runs on (the manifest's `defaultFixture`).
+  public static let defaultFixture = "crew17"
+  /// The fixture `scenario` runs on unless told otherwise: its own (Search ⌘K's need hundreds of searchable items, the
+  /// Needs you reel's need asks across projects), else the default.
+  public static func fixture(for scenario: String) -> String { spec(scenario)?.fixture ?? defaultFixture }
 }
 
 public enum Budgets {

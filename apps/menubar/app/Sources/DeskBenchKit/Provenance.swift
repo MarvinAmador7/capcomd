@@ -99,28 +99,3 @@ public enum ProcessCounters {
   static let selfCounts: SelfCountsFn? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "thread_selfcounts").map { unsafeBitCast($0, to: SelfCountsFn.self) }
   #endif
 }
-
-/// A `.trace` embeds the recorded process's environment (tokens included: FEASIBILITY.md §1.6), so a profiled child
-/// gets only what it needs to run.
-public enum TracePrivacy {
-  public static let allowedKeys: Set<String> = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "LANG", "TERM", "__CF_USER_TEXT_ENCODING", "DEVELOPER_DIR"]
-  /// PERFLOOP_KNOBS carries the run's knob settings, nothing secret.
-  public static let allowedPrefixes = ["LC_", "DESKBENCH_", "PERFLOOP_"]
-  public static func scrub(_ env: [String: String]) -> [String: String] {
-    env.filter { k, _ in allowedKeys.contains(k) || allowedPrefixes.contains { k.hasPrefix($0) } }
-  }
-  /// The git checkout a path is inside, if any (a trace there is one `git add .` from being published).
-  public static func checkout(containing path: String) -> String? {
-    var u = URL(fileURLWithPath: path).standardizedFileURL.deletingLastPathComponent()
-    while u.path != "/" && !u.path.isEmpty {
-      if FileManager.default.fileExists(atPath: u.appendingPathComponent(".git").path) { return u.path }
-      u = u.deletingLastPathComponent()
-    }
-    return nil
-  }
-  public static func warning(trace: String) -> String {
-    var s = "deskbench: warning: \(trace) holds the recorded process's environment and paths (a trace can carry tokens): never commit, publish or attach it"
-    if let c = checkout(containing: trace) { s += "; it is inside the git checkout \(c), move it out" }
-    return s
-  }
-}

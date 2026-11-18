@@ -30,7 +30,7 @@ import DeskBenchKit
 
   struct Options {
     var scenario: String
-    var fixture = "crew17"
+    var fixture = Scenarios.defaultFixture
     var reps = 3
     var params: [String: String] = [:]
     var width: CGFloat = 1440, height: CGFloat = 900

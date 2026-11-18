@@ -17,7 +17,7 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// The scenarios a whole-suite run covers, in order.
   public var suite: [String]
   public var fixtures: [FixtureSpec]
-  public var defaultFixture = "crew17"
+  public var defaultFixture = Scenarios.defaultFixture
   public var knobs: [KnobInfo]
   /// The objectives a comparison can decide on (`--objective`); each scenario names its default.
   public var objectives: [String]
@@ -31,6 +31,12 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// The gestures `swipe` has built in (`--set gesture=synthetic:NAME`); recorded ones are files (`perfloop.gesture/1`,
   /// `--set gesture=PATH`, `perfloop gestures list`).
   public var gestures: [String]? = Gestures.synthetic.map(Gestures.spec)
+  /// The `scheme:` forms `--fixture` takes besides the listed names: `file:PATH`, a captured fixture
+  /// (CapturedFixture.swift). perfloop refuses any other scheme, and a `file:` one that isn't on the Mac the reps run on.
+  public var fixtureSchemes: [String]? = ["file"]
+  /// What `profile` needs beyond PerfLoop's allowlist for the recorded process's environment (TracePrivacy.swift):
+  /// `perfloop profile` starts the bench with those and nothing else, and the bench passes on no more.
+  public var profileEnv: [String]? = TracePrivacy.profileEnv
 
   public struct Scenario: Codable, Sendable, Equatable {
     public var name: String
@@ -53,6 +59,9 @@ public struct Manifest: Codable, Sendable, Equatable {
     public var checks: [String]
     /// A host the scenario always uses, whatever `--host` says (`open` needs a fresh window per rep).
     public var host: String?
+    /// The fixture it runs on when nobody names one, before `defaultFixture` (absent: the default). perfloop always
+    /// passes `--fixture`, so a scenario whose data isn't the default's says so here.
+    public var fixture: String? = nil
   }
 
   public init(build: BuildInfo, knobs: [KnobInfo]) {
@@ -63,7 +72,7 @@ public struct Manifest: Codable, Sendable, Equatable {
       return Scenario(name: s.name, summary: s.summary, kind: s.kind.rawValue, budget: s.budget, rule: s.rule, latencyBudgetMs: s.latencyBudgetMs,
                       params: s.params, objective: o.metric, guards: Guards.forScenario(s.name), guardParams: Guards.params(for: s.name),
                       frameGuards: (o == .frames ? [] : [Objective.frames.metric]) + ["longestStretchMs"] + (s.name == "swipe" ? ["positionErrorP95Pt", "stalls"] : []),
-                      checks: Self.checks[s.name] ?? [], host: s.name == "open" ? "window" : nil)
+                      checks: Self.checks[s.name] ?? [], host: s.name == "open" ? "window" : nil, fixture: s.fixture)
     }
     suite = Scenarios.suite
     fixtures = Fixtures.all
@@ -101,9 +110,10 @@ public struct Manifest: Codable, Sendable, Equatable {
     var o = ["\(app) via \(adapter), protocol \(`protocol`) · \(build.line)", "scenarios (objective; correctness guards; frame guards; checks):"]
     for s in scenarios {
       o.append("  \(s.name.padding(toLength: 8, withPad: " ", startingAt: 0)) \(s.kind): \(s.objective); \(s.guards.joined(separator: ", ")); \((s.frameGuards ?? []).joined(separator: ", ")); \(s.checks.joined(separator: ", "))"
-               + (s.params.isEmpty ? "" : "  params " + s.params.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")))
+               + (s.params.isEmpty ? "" : "  params " + s.params.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))
+               + (s.fixture.map { "  fixture \($0)" } ?? ""))
     }
-    o.append("fixtures: " + fixtures.map(\.name).joined(separator: ", ") + " (default \(defaultFixture))")
+    o.append("fixtures: " + fixtures.map(\.name).joined(separator: ", ") + " (default \(defaultFixture))" + (fixtureSchemes ?? []).map { ", \($0):PATH" }.joined())
     o.append("knobs (--knob name=value, PERFLOOP_KNOBS):")
     for k in knobs {
       let values = k.choices?.joined(separator: "|") ?? k.range.map { "\($0[0])…\($0[1])" } ?? k.type

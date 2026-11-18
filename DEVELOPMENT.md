@@ -204,6 +204,10 @@ Every `*.test.ts` in the repository is in one of them. Gated off by default, bec
 `tests/agents/egress.live.test.ts` (`CAPCOMD_BOXD_LIVE=1` and `BOXD_API_KEY`: a boxd VM's egress allowlist), and the
 live scripts below. A new test file goes in a directory one of the scripts lists (or the script gets the directory).
 
+A change to the desktop window is also verified in the window itself, not only by `swift test`: its own bench
+scenarios run through PerfLoop (`perfloop run`, `perfloop baseline`) and the existing ones are checked to cost nothing
+(`perfloop exp new … --expect same`); see `apps/menubar/app/DESKBENCH.md`, *Verifying a feature*.
+
 Each scenarios shard uploads the per-file times it measured (artifact `scenario-timings-N`);
 `bun scripts/scenario-timings.ts <run id>` merges a CI run's into `tests/scenario-timings.json`, so the shards are
 balanced by the runner's times (a file without one gets an estimate; `--check` lists those).

@@ -58,8 +58,9 @@ commands
   help
 
 run options
-  --fixture NAME        solo | trio | crew17 (default) | crew17-long | swarm64 | crew; NAME@agents=N,items=M[,projects=P,
-                        asks=A,seed=S] varies one (what perfloop sweep sends); file:PATH runs on a captured fixture
+  --fixture NAME        solo | trio | crew17 (default) | crew17-long | swarm64 | crew | search | needs5 | needs20;
+                        NAME@agents=N,items=M[,projects=P,asks=A,seed=S] varies one (what perfloop sweep sends); file:PATH
+                        runs on a captured fixture. Without it, the scenario's own (palette-*: search, needs-*: needs5)
   --reps N              repetitions (default 3; medians are reported, one rep proves nothing)
   --set key=value       a scenario parameter (see `list --json` → params)
   --gesture FILE        swipe: the gesture to replay (perfloop.gesture/1, or synthetic:flick-forward | flick-back |
@@ -184,7 +185,7 @@ func kv(_ xs: [String]) -> [String: String] {
 
   case "run", "suite":
     var o = Runner.Options(scenario: args.positional.dropFirst().first ?? "")
-    if let f = args.one("fixture") ?? Scenarios.defaultFixture(o.scenario) { o.fixture = f }
+    o.fixture = args.one("fixture") ?? Scenarios.fixture(for: o.scenario)
     if let r = args.one("reps").flatMap(Int.init) { o.reps = r }
     o.params = kv(args.all("set").filter { !KnobArgs.isKnob($0) })
     if args.has("gesture") { o.params["gesture"] = args.all("gesture").joined(separator: ",") }
@@ -271,7 +272,7 @@ func kv(_ xs: [String]) -> [String: String] {
   case "profile":
     guard let sc = args.positional.dropFirst().first else { err("usage: deskbench profile <scenario> --template hitches|time|swiftui [--out DIR]"); return Int32(ExitCode.usage) }
     do {
-      let (r, code) = try Commands.profile(scenario: sc, fixture: args.one("fixture") ?? "crew17", template: args.one("template") ?? "hitches",
+      let (r, code) = try Commands.profile(scenario: sc, fixture: args.one("fixture") ?? Scenarios.fixture(for: sc), template: args.one("template") ?? "hitches",
                                            out: URL(fileURLWithPath: args.one("out") ?? "deskbench-profile"), reps: args.one("reps").flatMap(Int.init) ?? 2,
                                            params: args.all("set"), seconds: args.one("seconds").flatMap(Double.init), activate: !args.has("no-activate"), host: args.one("host"))
       out(json ? JSONOut.encode(r) : Commands.profileText(r))
@@ -317,7 +318,7 @@ func kv(_ xs: [String]) -> [String: String] {
       let genv: [String: String] = gc.names.isEmpty ? [:] : [GuardConfig.namesVariable: gc.names.sorted().joined(separator: ","),
         GuardConfig.paramsVariable: gc.params.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ","), GuardConfig.dirVariable: gc.dir?.path ?? ""].filter { !$0.value.isEmpty }
       // Knobs reach the children in PERFLOOP_KNOBS, never as --set: a side's setting must not be overridden.
-      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? "crew17", params: args.all("set").filter { !KnobArgs.isKnob($0) },
+      let (r, code) = try Commands.ab(a: a, b: b, scenario: sc, fixture: args.one("fixture") ?? Scenarios.fixture(for: sc), params: args.all("set").filter { !KnobArgs.isKnob($0) },
                                       activate: !args.has("no-activate"), objective: objective, options: ao,
                                       envA: genv.merging([Knobs.variable: Knobs.format(ka)]) { $1 }, envB: genv.merging([Knobs.variable: Knobs.format(kb)]) { $1 })
       if let p = args.one("out") { try? JSONOut.encode(r).write(toFile: p, atomically: true, encoding: .utf8) }
@@ -391,7 +392,7 @@ let wantsScene = sceneCommands.contains(startup.positional.first ?? "") && (star
   && !(startup.positional.first == "run" && startup.positional.dropFirst().first == "open")
 MainActor.assumeIsolated {
   let scenario = startup.positional.first == "run" ? startup.positional.dropFirst().first ?? "" : ""
-  if wantsScene, let w = Fixtures.make(startup.one("fixture") ?? Scenarios.defaultFixture(scenario) ?? "crew17") {
+  if wantsScene, let w = Fixtures.make(startup.one("fixture") ?? Scenarios.fixture(for: scenario)) {
     let h = Harness(world: w); h.sceneHosted = true; Harness.current = h
     if let s = startup.one("size") { let p = s.lowercased().split(separator: "x"); if p.count == 2, let w = Double(p[0]), let hh = Double(p[1]) { BenchScene.size = CGSize(width: w, height: hh) } }
   }
