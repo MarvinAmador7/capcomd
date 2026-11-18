@@ -55,6 +55,7 @@ true. Results from before the stamp have no `build` and often no `commit`.
 | What can a runner drive, decide on, sweep? | `describe --json` | `scenarios[]` (`objective`, `guards`, `checks`, `params`), `fixtures`, `knobs` |
 | Did my change leave a column blank or change the look? | `run switch --guards built-within,snapshot-diff --artifacts DIR`, then `snapdiff A.png B.png` | `reps[].guards[]`; see *Correctness guards* |
 | Gate in a script | `run … --baseline saved.json` or `compare a.json b.json` | exit code |
+| Does my feature work, and does it cost nothing? (before a desktop PR says "done") | `perfloop run`, `perfloop baseline`, `perfloop exp new … --expect same`: see *Verifying a feature* | the checks over trusted reps; the `noRegression` / `regressed` / `inconclusive` line |
 
 Exit codes: `0` pass · `1` usage · `2` harness error · `3` budget failed · `4` regression beyond noise · `5` untrusted
 (the budget failed **and** the machine was noisy: the run says nothing about the reel; run it again when quiet) ·
@@ -126,11 +127,19 @@ the opened window.
     `drawn`. Ends expanded.
   - `expand-switch`: expanded, other agents picked as Search's ↩ does (`show(run:agent:)`), then ⌘K over it and Esc.
     Budget 50 ms; checks `stays-expanded`, `palette-over`, `drawn`.
+- The Needs you reel (`needs-open`, `needs-answer`, `needs-arrive`, `needs-step` (⌘J), `needs-empty`, `needs-swipe`), on
+  the `needs5` fixture (their default: five asks across five projects; `needs20` for twenty across eight). Each rep
+  starts with every fixture ask asking again and the reel closed; `list` has each one's rule and checks.
 
 Fixtures (`list fixtures`): `solo` (1 agent), `trio` (3), `crew17` (SPEC's 17-agent reference, the default),
-`crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32), `search` (60 projects, Search ⌘K's). Same name, same bytes, every
+`crew17-long` (400–600 items a thread), `swarm64` (64 agents: past the warm cap of 32), `search` (60 projects, Search
+⌘K's), `needs5` and `needs20` (the Needs you reel's asks). Same name, same bytes, every
 time (a seeded generator: markdown with headings/lists/code/tables, tool calls with diffs, thinking, handoffs, errors,
 images as attachments, one or more pending asks). `fixture <name>` describes one.
+
+A scenario whose data isn't `crew17`'s has its own fixture (`palette-*`: `search`, `needs-*`: `needs5`): `run`,
+`profile` and `ab` use it when `--fixture` is absent, and the manifest says so (`scenarios[].fixture`), so perfloop,
+which always passes `--fixture`, passes that one unless you name another.
 
 ## Reading a result
 
@@ -269,6 +278,54 @@ an update: one ends where a stretch closes, and mutations whose update SwiftUI d
 bodies. `perfloop causes <result.json>` prints the whole table (all reps, per step, the longest stretches); results
 from before it have no causes. Add a record when you add an observed property that a body reads.
 
+## Verifying a feature: `perfloop run`, `baseline` and `--expect same`
+
+A desktop change that adds or alters a feature (a sidebar, a palette, a split) is verified through
+[PerfLoop](https://github.com/MarvinAmador7/perfloop) before its PR says "done", per its
+[docs/VERIFICATION.md](https://github.com/MarvinAmador7/perfloop/blob/main/docs/VERIFICATION.md) (Agentic Verification)
+and AGENTS.md. `swift test` checks the model; this checks the window: the feature's own scenarios pass their checks in
+every trusted rep, and the scenarios that were already there cost no more than before. Build the `perfloop` CLI from a
+clone at the revision `Package.swift` pins, and give yourself a `PERFLOOP_HOME` of your own (`PERFLOOP_APP=capcomd-desktop`).
+
+```sh
+B=.build/release/CapcomdDeskBench            # your branch's bench, built from a commit (a dirty build can't be promoted or checked)
+perfloop doctor --bench $B                   # headless: the manifest as the runner reads it
+# Your feature's own new scenario (one the champion doesn't have): numbers and checks, no verdict.
+perfloop run $B --scenario sidebar-toggle --reps 5 --reference switch
+perfloop baseline sidebar-toggle --bench $B --reference switch   # once, in the PR: first numbers + a reference picture
+# Does it cost anything on the scenarios main already has? (a feature check: never promotes, never "drop it")
+perfloop exp new "the sidebar toggle" --build-cmd "swift build -c release --product CapcomdDeskBench" --bench $B --expect same
+perfloop exp screen <id> --more 3            # when it says inconclusive; or perfloop exp full <id>
+perfloop exp status --json                   # perfloop.status/1: { open, timeBudget, stop }; read .open (no longer a bare array)
+```
+
+- **`run` and `baseline`** measure one build through the same gate as an experiment (screen-lock wait, quiet gate,
+  window lock, one process per rep) and write a ledger line. Use them, never `deskbench run` by hand, for a scenario
+  only your branch has. Exit 3: the scenario's own checks failed (fix the feature first); exit 5: no rep could be
+  trusted. `--reference S2` runs a champion scenario beside each rep, so a reader can tell a slow feature from a slow
+  Mac. A scenario's fixture is its own (`palette-*`: `search`, `needs-*`: `needs5`) unless you pass `--fixture`;
+  `--fixture file:PATH` (a captured fixture) must be on the Mac the reps run on.
+- **`--expect same`** answers `noRegression` (quote its line: `change +0.4 % (90 % interval -0.8 % … +1.6 %, margin
+  5 %)`), `regressed` (a guard failed, or slower beyond the metric's margin: the feature's to fix, then a new
+  experiment), or `inconclusive` (this Mac's noise is wider than the margin: add pairs; still inconclusive at 10 + 10,
+  say exactly that in the PR, never "no regression"). A snapshot unlike the champion's is listed as a `look:` for the
+  reviewer, not a verdict.
+- **Untrusted reps are named, never quoted.** A busy or locked Mac gives `UNTRUSTED`: rerun when it is quiet. The
+  owner's Mac is usually busy, so its numbers are checks, not verdicts; deciding stages run on the Mac mini runner only
+  with the owner's OK.
+- **New scenarios, fixtures and checks** for your own feature may go in the feature's PR; mark each `written in this
+  PR` in the evidence: they judge nothing until merged into the champion's manifest. Changing an existing scenario,
+  guard, band or fixture is its own PR.
+- **The PR body** carries the evidence (VERIFICATION.md §3): the champion and candidate builds, the trust line, a
+  `noRegression`/`regressed`/`inconclusive` line per existing scenario, the new scenarios' baselines and checks
+  (`N/N trusted reps`), and what wasn't verified (feel, motion and taste stay the owner's). Never a `.trace`, a store or
+  a path from your home.
+- Anything else that opens a window (`deskbench ab`, a `deskbench run` by hand) goes inside `perfloop lock --
+  <command>` with `PERFLOOP_LOCK_OWNER=<your name>`, and the PR says those numbers are outside the ledger.
+- The CLI refuses an argument a command doesn't take (exit 1, with its usage): pass a flag and its value as two
+  arguments (a zsh variable holding `--bench PATH` is one). Never pass `--force`, `--owner`, `--allow-dirty` or
+  `--guard-tolerance`, never run `champion set`, and never set `PERFLOOP_OWNER`: those are the owner's.
+
 ## Comparing two builds
 
 Noise on this machine has swung identical builds between 26 and 709 hitches in 20 s. Single runs are meaningless;
@@ -345,8 +402,12 @@ stdout, `--wait-for FILE` holds the window until FILE exists and writes FILE.don
 that may not get worse, `checks` the driver records, `host` when it is fixed), `isolationGuards` (scenarios whose checks
 run on every promotion),
 `suite`, `fixtures`, `defaultFixture`, `knobs[]` (`name`, `type`, `default`, `choices` or `range`, numbers for numeric
-knobs), `objectives`, `hosts`, `defaultHost`, `probes` (the view bodies counted) and `exitCodes`. Without `--json` it
-is the same as text. `describe` and `knobs` run headless (no NSApplication, no window).
+knobs), `objectives`, `hosts`, `defaultHost`, `probes` (the view bodies counted) and `exitCodes`. A scenario whose data
+isn't the default's has `fixture` (the one perfloop passes unless told otherwise); `fixtureSchemes` (`["file"]`) says
+`--fixture` also takes `file:PATH`, a captured fixture (perfloop refuses any other scheme, and a `file:` one that isn't
+on the Mac the reps run on); `profileEnv` lists what `profile` passes beyond PerfLoop's allowlist (*Traces are
+private*). Without `--json` it is the same as text. `describe` and `knobs` run headless (no NSApplication, no window).
+`perfloop doctor --bench .build/release/CapcomdDeskBench` checks the manifest the way the runner reads it.
 
 ## Correctness guards
 
@@ -411,8 +472,14 @@ marked `"profiled": true`: a profiler's cost is in those numbers, so `compare` a
 `run --wait-for` (attaching a profiler by hand) marks its result the same way.
 
 **Traces are private.** A `.trace` can hold the recorded process's environment (tokens included) and your paths.
-`profile` launches the child and xctrace with an allowlisted environment (`HOME`, `PATH`, `USER`, `TMPDIR`, locale,
-`DESKBENCH_*` …) and prints a warning with the trace's path (louder when it is inside a git checkout). Never commit,
+`profile` launches the child and xctrace with the environment it was given, filtered to PerfLoop's allowlist (its
+`TraceEnv`: `HOME`, `USER`, `LOGNAME`, `PATH`, `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `TZ`, `DEVELOPER_DIR`, the
+bench's `PERFLOOP_KNOBS`, `PERFLOOP_GUARDS`, … but never `PERFLOOP_OWNER`) plus the manifest's `profileEnv` (the bench's
+own switches: `DESKBENCH_SAMPLER`, `DESKBENCH_SIZING`, `DESKBENCH_NO_COMMANDS`, `DESKBENCH_SWIPE_TRACE`,
+`DESKBENCH_APPKIT_TRACE`); a name that looks like a secret (`TOKEN`, `KEY`, `AUTH`, `SESSION`, …) never passes, declared
+or not. It is the rule `perfloop profile` starts the bench with, so a profile run by hand records no more than one run
+by perfloop; nothing is read from a login shell or a config file. It prints a warning with the trace's path (louder
+when it is inside a git checkout). Never commit,
 publish or attach a trace to an issue; keep `--out` outside the repo (`*.trace` is gitignored here as a backstop).
 The bench emits `os_signpost` intervals (`dev.capcomd.deskbench`, points of interest, one interval named `step` per
 scenario step with the step's name as its message), so steps line up on the Instruments timeline.
@@ -769,8 +836,9 @@ ago, and the threads are served from the captured items' own bytes.
 
 ## Adding to the bench
 
-- A scenario: a `ScenarioSpec` in `DeskBenchKit/Scenarios.swift` (name, budget, rule, kind, params) and a driver in
-  `CapcomdDeskBench/Drive.swift` returning `([StepResult], [Check])`; add its name to `Scenarios.suite`.
+- A scenario: a `ScenarioSpec` in `DeskBenchKit/Scenarios.swift` (name, budget, rule, kind, params, and `fixture` when
+  its data isn't `crew17`'s) and a driver in `CapcomdDeskBench/Drive.swift` returning `([StepResult], [Check])`; add its
+  name to `Scenarios.suite`. In a feature PR, a new scenario is your own claim, not a judge (*Verifying a feature*).
 - A fixture: a `FixtureSpec` in `Fixtures.swift`; the generator takes care of the rest.
 - A knob: a `static let` `Knob(…)` in `CapcomdDesk/DeskKnobs.swift`, added to `DeskKnobs.knobs`, read once into a
   stored property where it is used (never a lookup per frame), with the default reproducing today's behaviour.
