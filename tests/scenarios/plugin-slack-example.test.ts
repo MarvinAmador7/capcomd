@@ -44,7 +44,10 @@ test("the Slack example runs against a daemon on the fake sandbox: it posts what
       if (!r.json?.agentId) throw new Error(`spawn ${key}: ${r.stdout} ${r.stderr}`);
       return r.json.agentId as string;
     };
-    const ok = await spawn("parser", "true"), bad = await spawn("tests", "exit 1"), slow = await spawn("docs", "sleep 120");
+    // The slow one first: a run whose agents have all ended has ended, and the next spawn starts it again (src/api/
+    // lifecycle.ts), so with it spawned last a busy machine could end the run between two spawns and post that too.
+    // Spawned first, it keeps the run going until the person stops it, however long each spawn takes.
+    const slow = await spawn("docs", "sleep 120"), ok = await spawn("parser", "true"), bad = await spawn("tests", "exit 1");
     const awaited = (await d.cli(["await", run, ok, bad, "--timeout-ms", "60000", "--json"])).json;
     expect(awaited.agents.map((a: { status: string }) => a.status).sort()).toEqual(["done", "failed"]);
     await until("the run's start on Slack", () => said(`Run ${run} started.`));
@@ -55,6 +58,8 @@ test("the Slack example runs against a daemon on the fake sandbox: it posts what
     expect((await d.fetch(`/v1/runs/${run}/cancel`, { method: "POST", idempotencyKey: "slack-example-cancel" })).status).toBe(200);
     await until("the run's end on Slack", () => posts.find((p) => p.body.text.startsWith(`Run ${run} cancelled`)));
     expect(posts.some((p) => p.body.text.includes(ok) || p.body.text.includes(slow))).toBe(false);
+    // The run's start and end, each once, and the failed agent: nothing else.
+    expect(posts.map((p) => p.body.text).sort()).toEqual([`Agent ${bad} (worker) failed in run ${run}.`, `Run ${run} cancelled.`, `Run ${run} started.`].sort());
 
     // Each post is recorded on the run's stream as the plugin's own event.
     const events = await until("the posted events", async () => {
