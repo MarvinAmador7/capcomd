@@ -139,9 +139,12 @@ private struct BootScreen: View {
         if b.cliMissing { MissingCLI(model: model).padding(.top, 30).enter(2) }
         else {
           BootSteps(boot: b, reduceMotion: model.reduceMotion).padding(.top, 30).enter(2)
-          OnboardSwitch(label: "Start capcomd when I log in", on: Binding(get: { model.flow.boot.atLogin }, set: { model.setAtLogin($0) }))
-            .disabled(!b.switchEnabled)
-            .padding(.top, 14).enter(3)
+          // Already running: nothing to start, so nothing to choose (Boot says whether it starts at login).
+          if b.showsSwitch {
+            OnboardSwitch(label: "Start capcomd when I log in", on: Binding(get: { model.flow.boot.atLogin }, set: { model.setAtLogin($0) }))
+              .disabled(!b.switchEnabled)
+              .padding(.top, 14).enter(3)
+          }
         }
       }
       .frame(width: 568, alignment: .leading)

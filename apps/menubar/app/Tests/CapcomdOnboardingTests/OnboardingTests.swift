@@ -355,6 +355,35 @@ final class BootTests: XCTestCase {
   func testMissingCLI() {
     var b = Boot(); b.cliMissing = true
     XCTAssertEqual(b.bubble, "Hmm, I can't find capcomd.")
+    b.found(running: true, serviceInstalled: true)
+    XCTAssertFalse(b.startsByItself)   // pairing needs the CLI: the install command stays
+  }
+
+  /// capcomd already running as its login service (installed earlier with `capcomd service install`): no switch, no
+  /// button to press, and the row says it already starts at login.
+  func testAlreadyRunningOffersNothingAndBootsByItself() {
+    var b = Boot()
+    XCTAssertTrue(b.showsSwitch); XCTAssertFalse(b.startsByItself)
+    b.found(running: true, serviceInstalled: true)
+    XCTAssertFalse(b.showsSwitch); XCTAssertTrue(b.startsByItself); XCTAssertTrue(b.atLogin)
+    b.begin()
+    XCTAssertFalse(b.startsByItself)   // once
+    b.advance(); b.advance()
+    XCTAssertEqual(b.detail(1), "already running, and it starts whenever you log in")
+    b.advance()
+    XCTAssertTrue(b.done); XCTAssertEqual(b.label(1), "capcomd is running")
+
+    // Running without the service (`capcomd serve` in a terminal): nothing installed or offered either.
+    var t = Boot(); t.found(running: true, serviceInstalled: false)
+    XCTAssertFalse(t.showsSwitch); XCTAssertTrue(t.startsByItself); XCTAssertFalse(t.atLogin)
+    t.stage = 4
+    XCTAssertEqual(t.detail(1), "already running")
+
+    // Nothing running: the switch, on, and Boot waits for its button (it installs the login service).
+    var n = Boot(); n.found(running: false, serviceInstalled: nil)
+    XCTAssertTrue(n.showsSwitch); XCTAssertFalse(n.startsByItself); XCTAssertTrue(n.atLogin)
+    t.found(running: false, serviceInstalled: nil)
+    XCTAssertTrue(t.showsSwitch); XCTAssertTrue(t.atLogin)
   }
 }
 

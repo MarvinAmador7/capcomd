@@ -13,10 +13,12 @@ open.
 
 ## Install
 
-`brew install --cask MarvinAmador7/tap/capcomd-app` (it installs the `capcomd` CLI too), or the
-`capcomd-app-X.Y.Z.zip` on each [release](https://github.com/MarvinAmador7/capcomd/releases). It isn't notarized by
-Apple yet (it's signed ad hoc), so the first open is blocked: click **Done**, then **System Settings › Privacy &
-Security › Open Anyway** next to "capcomd", and confirm.
+`brew install --cask MarvinAmador7/tap/capcomd-app`, or the `capcomd-app-X.Y.Z.zip` on each
+[release](https://github.com/MarvinAmador7/capcomd/releases). The cask installs the app only: it runs the `capcomd` CLI
+you already have (install.sh, Homebrew, Bun or npm), and a second CLI could split the app from the daemon the first one
+runs. Without one, install it first (`brew install MarvinAmador7/tap/capcomd`, as the cask's caveats and the app's
+first run say). It isn't notarized by Apple yet (it's signed ad hoc), so the first open is blocked: click **Done**,
+then **System Settings › Privacy & Security › Open Anyway** next to "capcomd", and confirm.
 
 ## First run
 
@@ -24,19 +26,23 @@ The app connects by itself (`CapcomdUI/AppSession.swift`, the pure parts in `Cap
 
 1. The token: `CAPCOMD_TOKEN`, else the login Keychain (generic password, service `capcomd`, account your user name:
    the same item the separate menu bar and desktop apps used, so they don't paste again), else it pairs.
-2. Pairing: it finds the `capcomd` CLI (`CAPCOMD_CLI`, Homebrew's bins, `~/.capcomd/bin`, Bun's and npm's global bins,
-   `~/.local/bin`, then a login shell's PATH; GUI apps don't get the shell's PATH) and runs
-   `capcomd clients pair --app mac-app --json` as you. The CLI writes the client and prints the token; the app keeps it
+2. Pairing: it finds the `capcomd` CLI and runs `capcomd clients pair --app mac-app --json` as you. It looks in
+   `CAPCOMD_CLI`, then the CLI the login service runs (read from its LaunchAgent,
+   `~/Library/LaunchAgents/dev.capcomd.engine.plist`: the program before `serve`, or for a Bun or npm install the
+   package entry bun runs, matched to its bin link such as `~/.bun/bin/capcomd`), then Homebrew's bins,
+   `~/.capcomd/bin`, Bun's and npm's global bins, `~/.local/bin`, and a login shell's PATH (GUI apps don't get the
+   shell's PATH). With two CLIs installed, the app therefore pairs with, starts and restarts the daemon through the
+   one that already runs it. The CLI writes the client and prints the token; the app keeps it
    in the Keychain. Without the CLI the window says how to install it and checks again; pasting a token made with
    `capcomd clients pair --app mac-app` in Terminal always works too.
 3. The daemon: when it can't be reached, **Start capcomd** runs `capcomd service install --json` (a LaunchAgent: now
-   and at every login).
+   and at every login). When it already answers (the login service, or `capcomd serve`), nothing is offered.
 4. Versions: when the app and the daemon differ in their minor version (0.x), the window and the panel say which to
    update; **Restart capcomd** when the CLI is already new and the old daemon still runs.
 
 The first launch shows the onboarding ([design/onboarding](design/onboarding/onboarding.dc.html)): a borderless
 window with the intro, then Boot (the steps above, with "Start capcomd when I log in" choosing `service install` or
-`service install --no-login`), Crew (logins and where agents work), Project, Goal and Launch. Finishing or skipping is
+`service install --no-login`; when capcomd already runs, the switch is gone and Boot runs by itself), Crew (logins and where agents work), Project, Goal and Launch. Finishing or skipping is
 stored (`capcomd.onboarding.finished`); until then it comes back, at Boot, when the app can't reach or pair with
 capcomd. Settings › General › Show Onboarding Again replays it. In development builds,
 `CAPCOMD_ONBOARDING_CONTROL=<dir>` drives it without the screen (OnboardingDebug.swift: `<dir>/cmd`, `<dir>/state.txt`,
