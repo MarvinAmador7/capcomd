@@ -181,6 +181,20 @@ Added to the orchestration skill and the planner's brief: write each brief for a
 out of scope, the command that proves it's done); more than three deliverables is two tasks; no two tasks change the
 same files; dependencies stated (`needs`); post milestones, not heartbeats; never wait inside a tool call.
 
+### 9. Decided while drawing the states (owner, 2026-11-19)
+
+1. **A worker's question** goes to its parent first; a parent that can't decide passes it up (to the user at the root).
+   The user can always answer from the thread, and the user's answer wins.
+2. **Outcomes stay visible.** Child rows keep landed / stopped / passed; the sidebar section stays "Finished". Idle
+   describes the agent, not the run.
+3. **Machines are infrastructure.** Parked machines are hidden in the pane and the sidebar, and listed only in
+   Settings › Machines, for cost control.
+4. **A message to a waiting agent** starts a turn and leaves its wake armed. **A plain message to an asked agent** is its
+   answer.
+5. **Archived** is the one state that doesn't take messages: the composer gives way to Restore, one click.
+6. **"Waking…" shows only after 1 s**, so the parked path (~0.2 s) never flashes. "Restoring the conversation" is a new
+   setup phase the daemon reports (`agents.setup`).
+
 ## Phases
 
 | Phase | What | Effort (spikes' estimates) | Fixes |
