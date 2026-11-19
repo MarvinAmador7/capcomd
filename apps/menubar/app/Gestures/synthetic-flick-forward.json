@@ -1037,6 +1037,6 @@
   "hz" : 120,
   "name" : "synthetic-flick-forward",
   "schema" : "perfloop.gesture/1",
-  "source" : "deskbench fling curve: 6 frames to 2400 pt/s forward, momentum −4 %/frame to 20 pt/s, 120 Hz",
+  "source" : "flick on x: 6 frames to 2400 pt/s forward, momentum −4 %/frame to 20 pt/s, 120 Hz",
   "synthetic" : true
 }
