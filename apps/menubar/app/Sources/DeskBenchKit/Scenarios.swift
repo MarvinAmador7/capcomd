@@ -90,7 +90,7 @@ public enum Scenarios {
                  budget: "Expand or collapse a pane: first frame ≤ 50 ms, no thread rebuilt", rule: "median latency from the key to the frame that shows it ≤ 50 ms; expanded fills the window; back: same panes, frames, scroll position and views",
                  kind: .latency, latencyBudgetMs: 50, params: ["toggles": "4"]),
     ScenarioSpec(name: "expand-switch", summary: "A pane expanded: other agents picked as the palette's ↩ picks them, then ⌘K over it and Esc.",
-                 budget: "Switch agent: first frame ≤ 50 ms (expanded stays expanded)", rule: "median latency from the pick to the frame that shows the agent ≤ 50 ms; still expanded, full window, every pick shown",
+                 budget: "Switch agent: first frame ≤ 50 ms (expanded stays expanded)", rule: "median latency from the pick to the frame that shows the agent ≤ 50 ms; still expanded, full window, every pick shown; Esc after ⌘K gives the keyboard back to the pane (focus palette-esc)",
                  kind: .latency, latencyBudgetMs: 50, params: ["switches": "4"]),
     // The Needs you reel (SPEC, Needs you reel), on `needs5` (their own fixture) or `needs20` (asks across projects).
     ScenarioSpec(name: "needs-open", summary: "Open the Needs you reel (the hand): every ask across projects as a column, oldest first.",

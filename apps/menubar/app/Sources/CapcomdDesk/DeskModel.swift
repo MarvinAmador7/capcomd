@@ -149,6 +149,9 @@ package final class DeskModel {
   /// The open project's menu (ReelMenu) and the ⌘K palette are open; Stop project… is asking first.
   package internal(set) var menuOpen = false { didSet { Mutations.record("DeskModel.menuOpen") } }
   package internal(set) var paletteOpen = false { didSet { Mutations.record("DeskModel.paletteOpen") } }
+  /// The palette closed because a result opened (↩, ⌘↩, a click), not dismissed (Esc, a click outside): the opened place
+  /// decides where the keyboard goes, so it isn't given back (`PaletteFocusReturn`).
+  @ObservationIgnored var paletteOpenedResult = false
   package internal(set) var stopAsked = false { didSet { Mutations.record("DeskModel.stopAsked") } }
   /// Search ⌘K's query, results and index (SearchModel.swift), observed on their own.
   @ObservationIgnored package let search = SearchModel()

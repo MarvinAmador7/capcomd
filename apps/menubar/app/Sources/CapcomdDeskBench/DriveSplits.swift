@@ -267,9 +267,12 @@ import PerfLoopKit
       stayed = stayed && good
       if !good { notes.append("switch#\(i) to \(target): \(p.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), model expanded \(d.model.nav.expanded)") }
     }
-    // ⌘K over the expanded pane (its menu item's action), and Esc (a real key: the palette's own key handling).
+    // ⌘K over the expanded pane (its menu item's action), and Esc (a real key: the palette's own key handling). Esc gives
+    // the keyboard back to the pane the palette opened over (the check `focus palette-esc`, written in this PR).
+    let paneView = d.paneView()?.view
     let ok1 = await paneStep(d, "palette", panes: 1, { d.model.togglePalette() }) { d.model.paletteOpen }
-    await run.key(.escape, name: "palette-esc", timeoutMs: 3000, until: { !d.model.paletteOpen })
+    await run.key(.escape, expectFocus: paneView.map { FocusTarget.view($0) } ?? .identifier("the expanded pane"), name: "palette-esc", timeoutMs: 3000,
+                  until: { !d.model.paletteOpen })
     let ok2 = !d.model.paletteOpen
     run.regions(d.paneRegions(1))
     run.record([

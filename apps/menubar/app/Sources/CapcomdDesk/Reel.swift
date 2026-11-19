@@ -1045,6 +1045,11 @@ struct ColumnThread: View {
     DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
     let entries = thread.entries
     let expanded = inPane && pane?.expanded == true, split = inPane && pane?.split == true
+    var inset = inPane ? (expanded ? PaneMetrics.expandedBody : split ? PaneMetrics.splitBody : Theme.Desk.paneBodyPadding) : Theme.Desk.bodyPadding
+    // In the pane, the thread's foot (its bottom margin) is a row of the stack, so it can be scrolled to (below) with the
+    // margin in view.
+    let foot = inPane ? inset.bottom : nil
+    if inPane { inset.bottom = 0 }
     return ScrollViewReader { proxy in ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
         // Read newest first: the top of what is shown asks for the page above as it comes into view (or is clicked).
@@ -1065,15 +1070,21 @@ struct ColumnThread: View {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
         }
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
+        if let foot { Color.clear.frame(height: foot).id(Self.footId) }
       }
       // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt). Expanded
       // (RexExpanded `.xb`): prose in a centred 800 pt column, diffs, code and logs 1060 pt.
       .frame(maxWidth: inPane ? (expanded ? PaneMetrics.wide : Theme.Desk.paneReading) : nil, alignment: .leading)
-      .padding(inPane ? (expanded ? PaneMetrics.expandedBody : split ? PaneMetrics.splitBody : Theme.Desk.paneBodyPadding) : Theme.Desk.bodyPadding)
+      .padding(inset)
       .frame(maxWidth: .infinity, alignment: expanded ? .center : .leading)
     }
-    .defaultScrollAnchor(.bottom)
+    .modifier(ThreadAnchor(placesItself: foot != nil))
     .scrollIndicators(.never)
+    // The pane opens a thread at its foot by scrolling to the foot row, not with the bottom anchor's initial offset: on a
+    // lazy stack that offset left some threads blank (their last rows built, onAppear called, nothing drawn, until
+    // another agent was picked). Once as it appears, again after its first layout, and when its first page lands.
+    .onAppear { if foot != nil { scrollToFoot(proxy) } }
+    .onChange(of: entries.isEmpty) { _, empty in if foot != nil, !empty { scrollToFoot(proxy) } }
     // The page above is in: the row that was first goes back to the top, once the update that added the page is laid out.
     .onChange(of: entries.first?.id) { _, _ in
       guard let k = keep else { return }
@@ -1083,6 +1094,12 @@ struct ColumnThread: View {
     }
     }
   }
+  static let footId = "capcomd.thread.foot"
+  private func scrollToFoot(_ proxy: ScrollViewProxy) {
+    proxy.scrollTo(Self.footId, anchor: .bottom)
+    DispatchQueue.main.async { proxy.scrollTo(Self.footId, anchor: .bottom) }
+  }
+
   static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
     switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
   }
@@ -1093,6 +1110,21 @@ struct ColumnThread: View {
     Task {
       await model.loadEarlier(agentId: agentId)
       if thread.entries.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
+    }
+  }
+}
+
+/// The thread's bottom anchor. In the reel: every role (where it starts, how it follows new rows, where a short thread
+/// sits). In the pane (`placesItself`), which scrolls to its foot itself, the anchor keeps the foot in view as rows arrive
+/// and sits a short thread at the bottom, but no longer sets where it starts (macOS 15 and later; macOS 14 has only the
+/// anchor for every role).
+struct ThreadAnchor: ViewModifier {
+  let placesItself: Bool
+  func body(content: Content) -> some View {
+    if placesItself, #available(macOS 15, *) {
+      content.defaultScrollAnchor(.bottom, for: .alignment).defaultScrollAnchor(.bottom, for: .sizeChanges)
+    } else {
+      content.defaultScrollAnchor(.bottom)
     }
   }
 }

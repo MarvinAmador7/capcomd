@@ -140,6 +140,13 @@ final class NativeColumnView: NSView {
     agentId = ""
   }
 
+  /// The keyboard comes to this column (Search ⌘K dismissed with nothing else to give it back to): its body, the thread
+  /// and the message box, as a click in it does.
+  func takeKeyboard() -> Bool {
+    guard let w = window, !isHiddenOrHasHiddenAncestor else { return false }
+    return w.makeFirstResponder(body)
+  }
+
   /// The project changed: the model made new slices for its agents, so whatever this slot shows is stale, even an
   /// agent of the same id. The next `configure` rebuilds.
   func forget() { agentId = "" }

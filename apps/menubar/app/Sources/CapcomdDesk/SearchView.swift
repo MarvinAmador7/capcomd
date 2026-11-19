@@ -111,7 +111,7 @@ struct SearchView: View {
 }
 
 /// The query: a 22 pt field with no box, after the magnifying glass.
-private struct SearchField: View {
+struct SearchField: View {
   static let identifier = "capcomd.search.field"
   /// The field's AppKit view in a window, by its accessibility identifier.
   @MainActor static func find(in w: NSWindow) -> NSTextField? {

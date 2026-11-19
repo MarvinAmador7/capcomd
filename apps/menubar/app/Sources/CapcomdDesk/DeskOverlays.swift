@@ -51,6 +51,7 @@ struct DeskOverlays: View {
     .animation(reduceMotion ? Theme.Motion.reduced : .spring(duration: 0.2, bounce: 0), value: model.menuOpen)
     // The scrim under Search ⌘K: at once from the keyboard (SPEC §4), a short fade otherwise.
     .animation(NSApp.currentEvent?.type == .keyDown ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
+    .background(PaletteFocusReturn(model: model, open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true))
   }
 
   /// Transform and opacity only; a crossfade with Reduce Motion.
@@ -238,6 +239,80 @@ struct FlowRow: Layout {
       } else { rows.append(([i], s.width, s.height)) }
     }
     return rows
+  }
+}
+/// Search ⌘K dismissed (Esc, a click outside, ⌘K again) gives the keyboard back to what had it before it opened: a
+/// pane's or a column's message box, the sidebar's list, a field. SwiftUI otherwise leaves it with the closed field's
+/// editor (keys typed next went nowhere) or with nobody. When that view is gone or hidden (the pane shows another
+/// agent, the sidebar folded), or nothing had the keyboard, the pane you are in takes it (folded: the focused column).
+/// A result opened (↩, ⌘↩, a click) leaves the keyboard where the opened place puts it.
+struct PaletteFocusReturn: NSViewRepresentable {
+  let model: DeskModel
+  let open: Bool
+  func makeNSView(context: Context) -> Keeper { Keeper(model: model) }
+  func updateNSView(_ v: Keeper, context: Context) { v.set(open: open) }
+
+  final class Keeper: NSView {
+    private let model: DeskModel
+    private var open = false
+    /// What had the keyboard when the palette opened (a field, not its shared editor), and when it closed (its field).
+    private weak var before: NSView?
+    private weak var during: NSView?
+    init(model: DeskModel) { self.model = model; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func set(open o: Bool) {
+      guard o != open else { return }
+      open = o
+      if o {
+        let had = window.flatMap { Self.owner($0.firstResponder) }
+        before = had.flatMap { Self.isSearchField($0) ? nil : $0 }
+      } else {
+        during = window.flatMap { Self.owner($0.firstResponder) }
+        // After the update that closes it.
+        DispatchQueue.main.async { [weak self] in self?.giveBack() }
+      }
+    }
+
+    private func giveBack() {
+      guard let w = window, !open else { return }
+      defer { before = nil; during = nil }
+      if model.paletteOpenedResult { return }
+      // Something other than the palette's field has the keyboard (something took it meanwhile): leave it there.
+      if let now = Self.owner(w.firstResponder), now !== during, !Self.isSearchField(now), now.window === w, !now.isHiddenOrHasHiddenAncestor { return }
+      if let b = before, b.window === w, !b.isHiddenOrHasHiddenAncestor, b.acceptsFirstResponder, w.makeFirstResponder(b) { return }
+      if takeIntoPane(w) { return }
+      w.makeFirstResponder(nil)   // out of the closed field, at least
+    }
+
+    /// The focused pane (opened), else the reel's focused column (folded).
+    private func takeIntoPane(_ w: NSWindow) -> Bool {
+      guard let root = w.contentView else { return false }
+      var pane: NativeColumnView?, reel: ReelColumnViews?
+      func walk(_ v: NSView) {
+        guard !v.isHidden else { return }
+        if let c = v as? NativeColumnView, c.isPane {
+          if pane == nil || c.paneFocused { pane = c }
+          return
+        }
+        if reel == nil, let r = v as? ReelColumnViews, r.reelKind == .project { reel = r }
+        v.subviews.forEach(walk)
+      }
+      walk(root)
+      if let pane { return pane.takeKeyboard() }
+      guard !model.nav.sidebarOpen, !model.needs.isOpen, let reel, let f = model.focusedAgent, let i = model.columns.firstIndex(of: f),
+            let column = reel.columnView(at: i), !column.isHiddenOrHasHiddenAncestor else { return false }
+      if let c = column as? NativeColumnView { return c.takeKeyboard() }
+      return w.makeFirstResponder(column)
+    }
+
+    /// The view a responder stands for: a field editor's field, else the view itself.
+    static func owner(_ r: NSResponder?) -> NSView? {
+      if let t = r as? NSTextView, t.isFieldEditor { return t.delegate as? NSView }
+      return r as? NSView
+    }
+    static func isSearchField(_ v: NSView) -> Bool { (v as? NSTextField)?.accessibilityIdentifier() == SearchField.identifier }
   }
 }
 #endif

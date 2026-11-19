@@ -78,6 +78,7 @@ extension DeskModel {
     refreshSearchIndex()
     search.query = query
     runSearch()
+    paletteOpenedResult = false
     paletteOpen = true
   }
 
@@ -115,6 +116,7 @@ extension DeskModel {
 
   /// ↩ on a result, or a click.
   package func open(_ hit: SearchHit) {
+    if paletteOpen { paletteOpenedResult = true }
     closePalette()
     if case .agent = hit.item.action { search.remember(hit.item.id) }
     if case .project = hit.item.action { search.remember(hit.item.id) }
@@ -132,6 +134,7 @@ extension DeskModel {
     default: target = nil
     }
     guard let target, nav.sidebarOpen else { return open(hit) }
+    if paletteOpen { paletteOpenedResult = true }
     closePalette()
     search.remember(hit.item.id)
     openInSplit(runId: target.run, agentId: target.agent)
