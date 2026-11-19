@@ -16,6 +16,7 @@
 #   [failing] or [failing:N] edit, then N times (default 30) run the same failing command and try another edit, the
 #           error differing only in numbers, then finish normally (stuck: failing)
 #   [listen] edit, then work for ~8s ([listen:N]: ~N s), writing each message it reads on stdin to messages.txt (send mid-run)
+#   [listen-once:N] the same, but done listening once it has heard one message (at most ~N s)
 #   [steps] read two files (thinking in between) before the edit and run the tests after it, all inside a second (agent.step)
 #   [chat] its final message reads like chat, not like a commit subject
 #   [review-check] (a reviewer) run sh check.sh in the checkout; the final message is a verdict saying whether it passed
@@ -39,7 +40,7 @@ if [ "$stream" = 1 ]; then IFS= read -r first; prompt=$(printf '%s' "$first" | t
 printf '%s' "$prompt" > ../prompt-seen.txt
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
 printf '%s' "$ANTHROPIC_API_KEY" > ../keyseen.txt
-# The variables agent.preparing's plugins set (tests/subagents/prepare-skills.test.ts): PLUGIN_*.
+# The variables agent.preparing's plugins set (tests/subagents/profile-skills.test.ts): PLUGIN_*.
 env | grep '^PLUGIN_' | sort > ../plugin-env.txt
 echo "oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} apikey=${ANTHROPIC_API_KEY:+set}" > ../authseen.txt
 emit() { printf '%s\n' "$1"; }
@@ -152,8 +153,9 @@ esac
 case "$prompt" in *"[command-lost]"*)
   emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"npm test"}}]}}';;
 esac
-case "$prompt" in *"[listen]"*|*"[listen:"*)
-  n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen:\([0-9]*\)\].*/\1/p')
+case "$prompt" in *"[listen]"*|*"[listen:"*|*"[listen-once:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[listen\(-once\)\{0,1\}:\([0-9]*\)\].*/\2/p')
+  once=0; case "$prompt" in *"[listen-once:"*) once=1;; esac
   for i in $(seq 1 "${n:-8}"); do
     # Wait up to 1 s for a message's first byte, then read the rest of its line without a timeout: a timeout in the
     # middle of a line throws away what it read, and a long line can arrive in pieces (or just take a while to read).
@@ -162,6 +164,7 @@ case "$prompt" in *"[listen]"*|*"[listen:"*)
       IFS= read -r line; line="$c$line"
       printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
       emit '{"type":"assistant","message":{"content":[{"type":"text","text":"heard a message"}]}}'
+      [ "$once" = 1 ] && break
     else [ "$stream" = 1 ] || sleep 1; emit '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}'; fi
   done;;
 esac
