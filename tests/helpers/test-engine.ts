@@ -3,7 +3,8 @@ import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { createRequire } from "module";
 import { join, resolve } from "path";
 import { tmpdir, userInfo } from "os";
-import { openSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "fs";
+import { mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "fs";
+import { createServer } from "net";
 import { privateHarnessSocket } from "./harness-socket";
 
 /**
@@ -38,6 +39,55 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** True when 127.0.0.1:port can be listened on now, the same check `capcomd serve` makes before it starts. */
+export function portFree(port: number): Promise<boolean> {
+  return new Promise((res) => {
+    const srv = createServer().once("error", () => res(false)).once("listening", () => srv.close(() => res(true)));
+    srv.listen(port, "127.0.0.1");
+  });
+}
+/** An engine's whole block: its port, port+1 (api-peer) and port+10 (metrics). */
+export async function portBlockFree(port: number): Promise<boolean> {
+  for (const p of [port, port + 1, port + 10]) if (!(await portFree(p))) return false;
+  return true;
+}
+
+let ephemeralLow: number | undefined;
+/**
+ * The first port of the OS's ephemeral range (Linux 32768, macOS 49152). An outgoing connection can take any port from
+ * there as its local port, and on Linux a socket on 127.0.0.1:N, even a closed one in TIME_WAIT for 60s, keeps
+ * `listen(N)` failing with no process owning it: an engine port in that range can be taken from under a restart.
+ */
+export function ephemeralPortFloor(): number {
+  if (ephemeralLow !== undefined) return ephemeralLow;
+  let low = NaN;
+  try {
+    low = process.platform === "linux"
+      ? Number(readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").trim().split(/\s+/)[0])
+      : Number(sh("sysctl", ["-n", "net.inet.ip.portrange.first"]).trim());
+  } catch { /* unknown: below */ }
+  return (ephemeralLow = Number.isInteger(low) && low > 1024 ? low : 32768);
+}
+
+/**
+ * A free port block for a private engine: the engine binds port, port+1 (api-peer) and port+10 (metrics). Fixed
+ * per-file ports overlapped (e2e 7661+10 = verify-merge 7671, ...: the 2/20 primitives flake), so blocks are picked at
+ * random and checked before use: five interleaved blocks per 20 ports (base 20k+2j, j<5: 2j, 2j+1, 2j+10), from 20000
+ * up to the OS's ephemeral range, which they stay below (ephemeralPortFloor: CI's scenarios (4), 2026-11-19, lost
+ * :55480 to a socket no process owned).
+ */
+export async function testPort(): Promise<number> {
+  const top = Math.min(ephemeralPortFloor(), 60_000);
+  // A range too small to pick from (an odd ephemeral setting): the old 20000-59999.
+  const groups = top - 20_000 >= 4_000 ? Math.floor((top - 20_000) / 20) : 2_000;
+  for (let i = 0; i < 50; i++) {
+    const n = Math.floor(Math.random() * groups * 5);
+    const base = 20_000 + Math.floor(n / 5) * 20 + (n % 5) * 2;
+    if (await portBlockFree(base)) return assertPrivatePort(base, "testPort");
+  }
+  throw new Error("no free engine port block");
+}
+
 // Linux reads /proc (fast, and what CI runs); other platforms (macOS) fall back to ps and lsof.
 const HAS_PROC = process.platform === "linux";
 const sh = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: "utf8" }).stdout ?? "";
@@ -60,6 +110,20 @@ function processTable(): Array<{ pid: number; ppid: number }> {
     }
   }
   return entries;
+}
+
+/** pid is a running process: not gone, not a zombie (exited, not yet reaped: nothing left to kill, no environ to read). */
+function liveProcess(pid: number): boolean {
+  if (!HAS_PROC) {
+    const stat = sh("ps", ["-o", "stat=", "-p", String(pid)]).trim();
+    return stat !== "" && !stat.startsWith("Z");
+  }
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return !/^[ZX]/.test(stat.slice(stat.lastIndexOf(")") + 2));
+  } catch {
+    return false;
+  }
 }
 
 function descendantPids(root: number): number[] {
@@ -170,6 +234,12 @@ export interface EngineOpts {
   /** Which `capcomd run` path the client drives. Default legacy: the killpoint gate was written
    *  against the legacy loop, so it is pinned there even though the recipe is the CLI default. */
   runPath?: "legacy" | "recipe";
+  /**
+   * A first start that fails and can't have its port block back (something else holds it) moves to a fresh private
+   * port (testPort()) and a fresh data dir inside dataDir instead of failing. The caller reads engine.port or
+   * engine.endpoint after start(). A restart (after a start that answered) never moves: its data is on that port's engine.
+   */
+  movable?: boolean;
 }
 
 /** Merge env for a repo-backed case. Shared by the runner (verifier merges) and the client. */
@@ -208,22 +278,44 @@ export function engineEnv(opts: EngineOpts): NodeJS.ProcessEnv {
   return env;
 }
 
+/** stop() left the engine's ports or data files to processes that aren't this engine's (left alone, never killed). */
+export class PortTakenError extends Error {}
+
+const commandOf = (pid: number) => sh("ps", ["-o", "command=", "-p", String(pid)]).trim().slice(0, 120);
+
 export class Engine {
   readonly logPath: string;
-  readonly port: number;
   readonly opts: EngineOpts;
   /** This engine's own harness.v1 socket (opts.env may name one): parallel engines never share or steal one. */
   readonly harnessSocket: string;
   private child: ChildProcess | null = null;
   private dataFiles: string[] = [];
   private stopping = false;
+  /** Where it runs: opts' port and data dir, unless a failed first start moved it (opts.movable). */
+  private at: { port: number; dataDir: string };
+  /** It answered once: from then on its data matters, so it only ever comes back on the same port and data dir. */
+  private wasReady = false;
+  /** Pids a kill was refused for in this stop(), each said once. */
+  private refused = new Set<number>();
   sawKill = false;
 
   constructor(label: string, opts: EngineOpts = {}) {
     this.opts = opts;
-    this.port = assertPrivate(opts, `engine ${label}`).port;
+    this.at = assertPrivate(opts, `engine ${label}`);
     this.harnessSocket = opts.env?.CAPCOMD_HARNESS_SOCKET ?? privateHarnessSocket();
     this.logPath = `/tmp/relay-test-${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180)}.log`;
+  }
+
+  /** The guard port. With opts.movable, read it (or endpoint) after start(): a failed first start may have moved it. */
+  get port(): number {
+    return this.at.port;
+  }
+  /** The engine's data dir now (opts.dataDir, or a fresh one inside it after a move). */
+  get dataDir(): string {
+    return this.at.dataDir;
+  }
+  get endpoint(): string {
+    return `http://127.0.0.1:${this.port}`;
   }
 
   /** Every port this engine instance owns (guard, api-peer, metrics). */
@@ -257,6 +349,8 @@ export class Engine {
    * In isolated (fast) mode, only SIGKILL processes that belong to this instance: the
    * runner and its engine both carry RIVET_RUN_ENGINE_PORT=<port> in their environment.
    * Guards every non-group kill against PID reuse and path/port mistakes hitting a sibling worker.
+   * Ask it of a live process: a killed one's environ can't be read (on Linux, from the moment it exits), so it is
+   * never "owned", which is why stop() asks before its group kill.
    */
   private owns(pid: number): boolean {
     if (!HAS_PROC) {
@@ -264,9 +358,7 @@ export class Engine {
       // serve runner for this exact port (stragglers from an earlier start of this instance).
       const root = this.child?.pid;
       if (root && (pid === root || descendantPids(root).includes(pid))) return true;
-      if (this.opts.dataDir) {
-        try { if (Number(readFileSync(join(this.opts.dataDir, "engine.pid"), "utf8").trim()) === pid) return true; } catch {}
-      }
+      try { if (Number(readFileSync(join(this.at.dataDir, "engine.pid"), "utf8").trim()) === pid) return true; } catch {}
       return new RegExp(`src/cli/index\\.ts serve --port ${this.port}( |$)`).test(sh("ps", ["-o", "command=", "-p", String(pid)]).trim());
     }
     try {
@@ -276,9 +368,12 @@ export class Engine {
     }
   }
 
+  /** SIGKILL pid if it is still running and this engine's; a gone or zombie one has nothing left to kill. */
   private kill(pid: number): void {
+    if (!liveProcess(pid)) return;
     if (!this.owns(pid)) {
-      console.log(`    refusing to kill pid ${pid}: not owned by engine :${this.port}`);
+      if (!this.refused.has(pid)) console.log(`    refusing to kill pid ${pid}: not owned by engine :${this.port} (${commandOf(pid)})`);
+      this.refused.add(pid);
       return;
     }
     try { process.kill(pid, "SIGKILL"); } catch {}
@@ -293,12 +388,20 @@ export class Engine {
   async start(killpoint: string | null): Promise<void> {
     this.stopping = false;
     this.sawKill = false;
-    const env: NodeJS.ProcessEnv = { ...process.env, ...engineEnv(this.opts), CAPCOMD_HARNESS_SOCKET: this.harnessSocket };
+    await this.spawnUntilReady(killpoint);
+    this.wasReady = true;
+  }
+
+  private env(killpoint: string | null): NodeJS.ProcessEnv {
+    // Port and engine data where it runs now; a repo-backed case's git stays under the data dir it was made in.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, ...engineEnv({ ...this.opts, ...this.at }), ...repoEnv(this.opts), ...(this.opts.env ?? {}),
+      CAPCOMD_HARNESS_SOCKET: this.harnessSocket,
+    };
     delete env.CAPCOMD_KILLPOINT;
     delete env.RELAY_KILLPOINT;
     if (killpoint) env.CAPCOMD_KILLPOINT = killpoint;
-
-    await this.spawnUntilReady(env);
+    return env;
   }
 
   /**
@@ -306,20 +409,58 @@ export class Engine {
    * (`actor_ready_timeout` for 45s+, seen in a crash drill). That's a readiness
    * problem, not data loss, so cold-restart the engine on the same data dir
    * (no wipe) up to twice before giving up. Each retry is logged.
+   *
+   * A cold restart never goes into a port block it can't have: what holds it may be another process (never killed), or
+   * no process at all (on Linux, a socket left on 127.0.0.1:port, even a closed one in TIME_WAIT for 60s, fails the next
+   * serve's listen: CI scenarios (4), 2026-11-19, two restarts into :55480 that "already in use"). Then an engine that
+   * never answered (a first start: no data to keep) and is opts.movable moves to a fresh private port and data dir;
+   * any other fails here, saying what holds its port.
    */
-  private async spawnUntilReady(env: NodeJS.ProcessEnv): Promise<void> {
+  private async spawnUntilReady(killpoint: string | null): Promise<void> {
     for (let attempt = 1; ; attempt++) {
       try {
-        await this.spawnOnce(env);
+        await this.spawnOnce(this.env(killpoint));
         return;
       } catch (error) {
         if (attempt >= 3) throw error;
         const msg = error instanceof Error ? error.message : String(error);
         console.log(`    engine-not-ready attempt=${attempt}, cold restart: ${msg.replace(/\s+/g, " ").slice(0, 160)}`);
-        await this.stop();
+        let taken: PortTakenError | null = null;
+        try {
+          await this.stop();
+        } catch (e) {
+          if (!(e instanceof PortTakenError)) throw e; // its own processes outlived the stop: never leave them behind
+          taken = e;
+        }
         this.stopping = false;
+        if (!taken && !(await portBlockFree(this.port))) {
+          taken = new PortTakenError(`engine :${this.port}: its ports (${this.ports().join(", ")}) are still taken after it stopped, by no process of its own (on Linux, e.g. a socket on 127.0.0.1:${this.port} in TIME_WAIT)`);
+        }
+        if (!taken) continue;
+        if (!this.opts.movable || this.wasReady) throw taken;
+        await this.move(taken.message);
       }
     }
+  }
+
+  /** The port block can be listened on again, within ms. */
+  private async blockFreeSoon(ms = 3_000): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      if (await portBlockFree(this.port)) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(200);
+    }
+  }
+
+  /** A fresh private port, and a fresh data dir inside opts.dataDir (private, and removed with it). */
+  private async move(why: string): Promise<void> {
+    const port = await testPort();
+    const dataDir = join(this.opts.dataDir!, `moved-${port}`);
+    this.at = assertPrivate({ port, dataDir }, `engine :${this.port} moving`);
+    mkdirSync(dataDir, { recursive: true });
+    this.dataFiles = [];
+    console.log(`    engine moves to :${port} (data ${dataDir}): ${why.replace(/\s+/g, " ").slice(0, 200)}`);
   }
 
   private async spawnOnce(env: NodeJS.ProcessEnv): Promise<void> {
@@ -347,7 +488,7 @@ export class Engine {
     // (e.g. the rivetkit napi .node / rivet-engine binary), and treating those as "locks"
     // made stop() SIGKILL every other parallel worker's runner and engine.
     // Trailing slash: "/w1" must not prefix-match "/w10".."/w15" (fast attempt 2, run 1).
-    const root = `${this.opts.dataDir!.replace(/\/$/, "")}/`;
+    const root = `${this.at.dataDir.replace(/\/$/, "")}/`;
     this.dataFiles = [...files].filter((path) => path.startsWith(root));
   }
 
@@ -418,19 +559,23 @@ export class Engine {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.refused.clear();
     await this.killing?.catch(() => {});
     this.killing = null;
     const pid = this.child?.pid;
-    const victims = new Set<number>();
     if (pid) {
-      victims.add(pid);
-      for (const child of descendantPids(pid)) victims.add(child);
+      const victims = [pid, ...descendantPids(pid)];
+      // Which are ours, asked while they still run: after the group kill their environ can't be read (before this,
+      // every stop logged "refusing to kill" for its own dead serve process).
+      const ours = new Set(victims.filter((v) => this.owns(v)));
       try {
         process.kill(-pid, "SIGKILL");
       } catch {
         // group already gone
       }
-      for (const victim of victims) this.kill(victim);
+      for (const victim of victims) {
+        if (ours.has(victim)) { try { process.kill(victim, "SIGKILL"); } catch {} } else this.kill(victim);
+      }
     }
 
     // Defense in depth: no runner from an earlier engine may outlive stop(). A
@@ -440,15 +585,29 @@ export class Engine {
     }
 
     const deadline = Date.now() + 8_000;
+    let othersOnlySince: number | null = null;
     while (Date.now() < deadline) {
       const listeners = (await Promise.all(this.ports().map((p) => pidsListening(p)))).flat();
       const lockers = pidsHolding(this.dataFiles);
+      // Every pid still listed, zombie or not: a multi-threaded engine's leader is a zombie while its other threads exit,
+      // and its sockets stay open until the last one has.
       const holders = [...new Set([...listeners, ...lockers])];
       if (holders.length === 0) {
         this.child = null;
+        // lsof can't see all of it: a dying engine whose leader is already a zombie lists no sockets, and still holds
+        // them until its last thread exits (Linux, ~1s seen). The next start gets the block back, or decides why not.
+        await this.blockFreeSoon();
         return;
       }
       for (const holder of holders) this.kill(holder);
+      // Only other processes' (live, not ours: never killed) for a second: waiting longer won't free them.
+      if (holders.every((h) => this.refused.has(h))) {
+        othersOnlySince ??= Date.now();
+        if (Date.now() - othersOnlySince >= 1_000) {
+          this.child = null;
+          throw new PortTakenError(`engine :${this.port}: its ports or data are held by ${holders.map((h) => `pid ${h} (${commandOf(h)})`).join(", ")}, not this engine's: left alone`);
+        }
+      } else othersOnlySince = null;
       await sleep(50);
     }
 
