@@ -104,7 +104,7 @@ jobs:
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
         if: matrix.part == 'fast'
-        run: bun run test:fast
+        run: CAPCOMD_TEST_JOBS="$(getconf _NPROCESSORS_ONLN)" bun run test:fast
 
       - name: The canvas and the TUI
         if: matrix.part == 'fast'
@@ -112,9 +112,8 @@ jobs:
 
       - name: Scenario suite (scenarios, sub-agents, primitives, agent adapters, merges), ${{ matrix.part }} of 4
         if: startsWith(matrix.part, 'scenarios-')
-        run: |
-          cp tests/scenario-timings.json "$RUNNER_TEMP/scenario-timings.json"
-          bun run test:scenarios --shard=${PART#scenarios-}/4 --timings="$RUNNER_TEMP/scenario-timings.json"
+        # The script orders files by tests/scenario-timings.json; one file per core (getconf: macOS has no nproc).
+        run: CAPCOMD_TEST_JOBS="$(getconf _NPROCESSORS_ONLN)" bun run test:scenarios --shard=${PART#scenarios-}/4
         env:
           PART: ${{ matrix.part }}
         timeout-minutes: 35
