@@ -63,7 +63,7 @@ test("serve --port N binds N even when a foreign process holds :6420; on stop it
   try {
     const p = await probe(port, { CAPCOMD_READY_DEADLINE_MS: "90000" });
     expect(p.code).toBe(0);
-    await Bun.sleep(2500); // let the watchdog log its first ✓ line
+    for (let i = 0; i < 120 && !s.out().includes("Rivet engine running"); i++) await Bun.sleep(250); // the watchdog's first ✓ line
     expect(s.out()).not.toContain("Address already in use");
     expect(s.out()).not.toContain("127.0.0.1:6420");
     expect(s.out()).toContain(String(port));
@@ -145,15 +145,16 @@ async function servicesUnder(root: number, port: number): Promise<number | null>
 test("serve stops the rivet-services it started, on the watchdog's exit and on SIGTERM; the next serve gets its own", async () => {
   const port = await testPort();
   const svcPort = port + 5;
-  const env = { RIVET_RUN_SERVICES: "1", RIVET_PORT: String(svcPort) };
+  // The watchdog checks every 500 ms instead of 2 s: a hung engine exits serve after ~5 s of misses instead of ~20 s.
+  const env = { RIVET_RUN_SERVICES: "1", RIVET_PORT: String(svcPort), CAPCOMD_TEST_WATCHDOG_MS: "500" };
   const s1 = runServe(port, 110_000, privateHarnessSocket(), env);
   let s2: ReturnType<typeof runServe> | null = null, svc1: number | null = null, svc2: number | null = null, hung = 0;
   try {
     expect((await probe(port, { CAPCOMD_READY_DEADLINE_MS: "90000" })).code).toBe(0);
     svc1 = await servicesUnder(s1.child.pid!, svcPort);
     expect(svc1).toBeGreaterThan(1);
-    // The engine hangs (alive, never answering): the watchdog exits serve after ~20s without an answer; its services
-    // must go with it. (An engine that exits is started again in place instead: tests/subagents/sleep.test.ts.)
+    // The engine hangs (alive, never answering): the watchdog exits serve after 10 checks without an answer; its
+    // services must go with it. (An engine that exits is started again in place instead: tests/subagents/sleep.test.ts.)
     for (let i = 0; i < 40 && !s1.out().includes("Rivet engine running"); i++) await Bun.sleep(250); // watchdog saw it up
     hung = s1.enginePid()!;
     process.kill(hung, "SIGSTOP");
