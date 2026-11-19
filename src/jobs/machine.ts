@@ -2,7 +2,7 @@
 // scripted agent, reached through the same exec its spool pump uses (src/subagents/driver.ts). Each job is a directory
 // in the machine, next to the agent's spool, that outlives the daemon:
 //   <dir>/<jobId>/spec.json   what to run (argv, cwd, env); runner.cjs, the runner (runner.log: what it said starting)
-//   <dir>/<jobId>/rpid        the runner's pid; pid: the job's (its own process group)
+//   <dir>/<jobId>/rpid        the runner's pid (lpid: the one its start spawned); pid: the job's (its own process group)
 //   <dir>/<jobId>/out, err    its output, as it goes
 //   <dir>/<jobId>/exit        `<code>:<ms epoch>`: its exit code and when it ended (written by the runner)
 //   <dir>/<jobId>/killed      why it was stopped, when capcomd stopped it
@@ -30,7 +30,7 @@ export interface JobMachine {
 /** The runner, as `node <job dir>/runner.cjs <job dir>` (CommonJS; no dependencies). */
 export const RUNNER = [
   `const fs=require("fs"),cp=require("child_process"),d=process.argv[2];`,
-  `if(!process.env.CAPCOMD_JOB_RUNNER){cp.spawn(process.execPath,[__filename,d],{detached:true,stdio:"ignore",env:Object.assign({},process.env,{CAPCOMD_JOB_RUNNER:"1"})}).unref();process.exit(0)}`,
+  `if(!process.env.CAPCOMD_JOB_RUNNER){const k=cp.spawn(process.execPath,[__filename,d],{detached:true,stdio:"ignore",env:Object.assign({},process.env,{CAPCOMD_JOB_RUNNER:"1"})});if(k.pid)fs.writeFileSync(d+"/lpid",String(k.pid));k.unref();process.exit(0)}`,
   `const s=JSON.parse(fs.readFileSync(d+"/spec.json","utf8")),env=Object.assign({},process.env,s.env||{});delete env.CAPCOMD_JOB_RUNNER;`,
   `fs.writeFileSync(d+"/rpid",String(process.pid));`,
   `const o=fs.openSync(d+"/out","a"),e=fs.openSync(d+"/err","a");`,
@@ -47,11 +47,14 @@ export const RUNNER = [
 // The node is looked for first (a job's directory with no runner in it would read as one just launched), and run by its
 // path: nohup looks a bare name up on its own default PATH, which an exec with no PATH of its own doesn't extend. The
 // launch waits (up to 5 s) for the runner to write its pid, so a runner that didn't start is a failed start, not a job
-// that runs forever.
+// that runs forever; it stops waiting at once when the runner is gone without one (the node it started exited and its
+// detached copy, named in lpid, is not running, or never started).
 const LAUNCH = `set -e; n=$(command -v "$4" 2>/dev/null) || { echo "no node in this machine: a job needs the node capcomd runs on" >&2; exit 127; }
 mkdir -p "$1"; printf %s "$2" > "$1/spec.json"; printf %s "$3" > "$1/runner.cjs"; cd "$1"
 nohup "$n" "$1/runner.cjs" "$1" >"$1/runner.log" 2>&1 </dev/null &
-i=0; while [ ! -s "$1/rpid" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done
+l=$!; i=0; while [ ! -s "$1/rpid" ] && [ $i -lt 100 ]; do
+  if ! kill -0 "$l" 2>/dev/null; then c=$(cat "$1/lpid" 2>/dev/null || true); { [ -n "$c" ] && kill -0 "$c" 2>/dev/null; } || break; fi
+  sleep 0.05; i=$((i+1)); done
 [ -s "$1/rpid" ] || { echo "the job's runner didn't start: $(head -c 300 "$1/runner.log" 2>/dev/null)" >&2; exit 1; }
 echo started`;
 
