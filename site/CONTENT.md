@@ -76,12 +76,17 @@ no human step, and the planner asks whether to open the pull request. No sample 
 | Swarms, made human | One shot in the desktop window, title bar included, on a plum stage. Lumen, the planner, is docked at the left and the crew's columns slide in under it. Its composer types the goal and sends it; Lumen reads the repo, writes a three-step plan and spawns a lead per step, and each lead spawns four workers and a critic (19 agents, in tree order) while the camera follows to the last column (motion blur from the camera's speed). Then workers finish, critics approve their diffs, leads merge their steps into the goal branch, and Lumen's thread logs each spawn, approval and merge before asking the one decision: open the pull request (Approve or Deny). The title bar folds subtrees off screen into stacks. The plan, file count, names, ids, diff sizes and branch name are sample content | SPEC.md §2; Home.dc.html, ReelSwarm; the goal-branch flow |
 | Tiles | one column per agent with its whole thread and the question docked at its foot; ⌘1 opens a project, ⌃→ the next agent, ↩ approves; moves never wait on an animation; one project open, the rest folded into decks that say when one needs you | SPEC.md §2, §4; Reel.png, ReelStack; the goal-branch flow |
 | Native. Fast. Measured. | 0 web views (Swift from the first pixel to the socket: 81 Swift files, no other sources in the app); 120 Hz slides drawn by Core Animation on ProMotion; ⅔ less main-thread work (10.1 → 3.6 s main-thread CPU on DeskBench, 3a6b5b7 → 9bcd41a) | apps/menubar/app on feat/desktop-shell (Package.swift, Reel.swift); the perf log of 30 Oct 2026 |
+| Home, with your projects | the home screen with five demo projects running (one asks to merge), shown before the window today | apps/menubar/design/desktop/Home.dc.html; Home.swift (demo projects are made up) |
 | The window today | a capture of the real window | `CapcomdDeskBench snapshot --fixture crew17 --at 0` on feat/desktop-shell 9bcd41a (generated data) |
 
 Pictures:
 
 - `public/desktop/real-window.jpg`: the real window, drawn by DeskBench from the `crew17` fixture. Its text is
   generated, and some of it repeats. Retake it when the app has a demo run.
+- `public/desktop/home-window.jpg`: the home screen at 2x (2880 × 1800). Rendered from `Home.dc.html` (its own markup,
+  styles and bot sprites, with its `sc-for`/`sc-if` expanded by a throwaway script and five demo runs as the state) in
+  headless Chromium on Linux, not captured from the app (no Swift there). The projects (names, crew sizes, times, the
+  ask) are demo content. Retake it with DeskBench's home snapshot on a Mac when the app has demo projects.
 - The bots are the engine's own. Their seeds (`dk-*`) were picked so the names match the boards (Lumen, Nugget,
   Tinker, Volt, Mica, Loop, Radar).
 

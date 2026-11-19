@@ -56,6 +56,14 @@ export default function DesktopPage() {
           <p className="dt-more" data-reveal><a href="/desktop/perf/">Read the perf log</a> <span aria-hidden="true">·</span> <a href="/perfloop/">Meet PerfLoop</a></p>
         </section>
 
+        <section className="dt-today" id="home" aria-labelledby="home-h">
+          <h2 id="home-h" className="dt-h2" data-reveal>Home, with your projects.</h2>
+          <p className="dt-sub" data-reveal style={delay(60)}>Describe a project once, and every run in flight sits below it, with the one that needs you ringed in amber.</p>
+          <figure className="dt-today__pic" data-reveal style={delay(120)}>
+            <img src="/desktop/home-window.jpg" width={2880} height={1800} alt="The capcomd Desktop home screen: the prompt “What are we building?” with its composer, and five demo projects running below it, one asking to merge into main." loading="lazy" decoding="async" />
+          </figure>
+        </section>
+
         <section className="dt-today" id="today" aria-labelledby="today-h">
           <h2 id="today-h" className="dt-h2" data-reveal>The window today.</h2>
           <p className="dt-sub" data-reveal style={delay(60)}>From the current build, with 17 agents of generated work.</p>
