@@ -56,9 +56,11 @@ extension ColumnHeader {
 
 extension CapcomdStore {
   /// The projects with something to show, oldest first: a project keeps its place as others start and finish
-  /// (SPEC §2: nothing jumps). Finished projects drop out once they're no longer the newest outcome.
+  /// (SPEC §2: nothing jumps). Finished projects drop out once they're no longer the newest outcome. A run with no goal
+  /// and no agents (`capcomd run new` with nothing spawned yet) has no column to show: it gets a deck once it has one.
   public func decks() -> [DeckInfo] {
     let ps = projects.filter { $0.isActive || $0.latestRun.map { !$0.isActive } == true }
+      .filter { p in p.runs.contains { $0.goal != nil || !$0.agents.isEmpty || $0.waitingApprovals > 0 } }
     let firstStart: (Project) -> Int = { $0.runs.compactMap(\.startedAtMs).min() ?? $0.lastEventMs }
     // A run started without a place (`capcomd run` with no --sandbox) runs on the daemon's own: its place is that one.
     let daemonPlace = runOptions.sandboxes.first { $0.isDefault == true }?.name
