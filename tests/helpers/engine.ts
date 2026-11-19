@@ -1,4 +1,4 @@
-import { Engine } from "./test-engine";
+import { Engine, testPort } from "./test-engine";
 
 export const REPO = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 export const CLI = `${REPO}/src/cli/index.ts`;
@@ -29,24 +29,8 @@ export async function ensureEngine(label: string, env: Record<string, string> = 
   throw lastErr;
 }
 
-/**
- * A free port block for a private engine: the engine binds port, port+1 (api-peer) and
- * port+10 (metrics). Fixed per-file ports overlapped (e2e 7661+10 = verify-merge 7671,
- * verify-merge 7671+10 = state-e2e 7681, and any 7660 engine holds e2e's 7661), which is
- * the 2/20 primitives flake. Blocks are 20 apart in 20000-59999 and checked before use.
- */
-export async function testPort(): Promise<number> {
-  const { createServer } = await import("net");
-  const free = (port: number) => new Promise<boolean>((res) => {
-    const srv = createServer().once("error", () => res(false)).once("listening", () => srv.close(() => res(true)));
-    srv.listen(port, "127.0.0.1");
-  });
-  for (let i = 0; i < 50; i++) {
-    const base = 20000 + Math.floor(Math.random() * 2000) * 20;
-    if ((await free(base)) && (await free(base + 1)) && (await free(base + 10))) return base;
-  }
-  throw new Error("no free engine port block");
-}
+// testPort(): a free private port block, below the OS's ephemeral range (tests/helpers/test-engine.ts).
+export { testPort } from "./test-engine";
 
 export async function capcomd(args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", CLI, ...args], {
