@@ -44,8 +44,17 @@ jobs:
       - name: src/context/limits.gen.ts matches docs/evidence/context
         run: bun scripts/gen-context-limits.ts --check
 
+      # The budget is 5 s (about 3 s on a normal runner). Going over it is a warning, not a failure: a slow runner
+      # once took just over 5 s and failed a release PR. Only a hang (60 s) fails the step.
       - name: Type check
-        run: timeout 5s bun run typecheck
+        run: |
+          start=$(date +%s%N)
+          timeout 60s bun run typecheck
+          ms=$(( ($(date +%s%N) - start) / 1000000 ))
+          echo "typecheck took ${ms} ms"
+          if [ "$ms" -gt 5000 ]; then
+            echo "::warning title=Typecheck over its 5 s budget::bun run typecheck took ${ms} ms"
+          fi
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
         run: bun run test:fast --parallel="$(nproc)"

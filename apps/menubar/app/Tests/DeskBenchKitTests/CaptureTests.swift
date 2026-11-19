@@ -2,6 +2,9 @@ import XCTest
 @testable import DeskBenchKit
 import CapcomdStore
 import CapcomdThread
+#if os(macOS)
+import PerfLoopHost
+#endif
 
 /// C8 on the adapter's side: parametric fixtures (`crew@agents=24`), and captured ones: anonymisation leaks none of
 /// the original text, ids or URLs and keeps the structure, and the bench loads the file as a World.
@@ -180,6 +183,14 @@ final class CaptureTests: XCTestCase {
       XCTAssertNotNil(s.decks().first?.askingAgentId)
     }
     XCTAssertNotNil(Fixtures.problem("file:" + dir.appendingPathComponent("missing.json").path))
+    #if os(macOS)
+    // The bench takes it as --fixture file:PATH: listed under that name for the run (PerfLoopHost takes listed names).
+    await MainActor.run {
+      let b = BenchCatalog.make(stamp: nil, knobs: { [] }, body: { _ in nil }, builtWithin: { _, _ in GuardResult(name: Guards.builtWithin, pass: true, detail: "") })
+      XCTAssertNil(BenchCatalog.register(fixture: name, on: b))
+      XCTAssertTrue(b.fixtures.contains { $0.name == name })
+    }
+    #endif
     // A bare name looks in the default directory.
     XCTAssertEqual(CapturedFixture.path("file:crew-real").lastPathComponent, "crew-real.json")
     XCTAssertEqual(CapturedFixture.path("file:crew-real").deletingLastPathComponent().path, CapturedFixture.defaultDirectory.path)
