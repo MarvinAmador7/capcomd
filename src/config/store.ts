@@ -57,6 +57,12 @@ export interface CapcomdConfig {
    * .capcomd/config.json, then CAPCOMD_PLUGIN_<NAME>_<KEY>, win.
    */
   plugins?: Record<string, Record<string, unknown>>;
+  /**
+   * Agents' CLI sessions (ADR-026 §2; user config only): `replica`, a session store that gets a copy of every saved
+   * session besides this Mac's own (`icloud-drive`: iCloud Drive files, encrypted on this Mac first), or null (the
+   * default: this Mac only). CAPCOMD_SESSIONS_REPLICA wins. See src/sessions/store.ts.
+   */
+  sessions?: { replica?: "icloud-drive" | (string & {}) | null };
 }
 
 /** A brain a project maps (`capcomd context brain add <name> <repo>`): where it is, the commit its agents read, and the

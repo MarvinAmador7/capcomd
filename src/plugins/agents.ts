@@ -94,6 +94,7 @@ export function adapterOf(p: AgentProvider): AgentAdapter {
     verifyCommand: (bin, q, model) => (model === undefined ? p.verifyCommand(bin, q) : p.verifyCommand(bin, q, model)),
     outcome: (state, exitCode) => p.outcome(state, exitCode),
     ...(p.refusal ? { refusal: (line, r) => p.refusal!(line, (s) => r.text(s)) } : {}),
+    ...(p.session ? { session: { ...p.session, cli: d.name } } : {}),
   };
   adapters.set(p, a);
   return a;

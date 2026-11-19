@@ -14,6 +14,8 @@ import { stateDir } from "../utils/home";
 import { join as joinPath } from "path";
 import { addSpanEvent, agentSpanId, setSpanAttributes, withSpan } from "../utils/tracing-simple";
 import { readFileSync } from "fs";
+import { randomUUID } from "crypto";
+import { SessionSync } from "./session-sync";
 import { StuckWatch, type Stuck } from "./stuck";
 import { namingCalls, threadBuilder, type ItemDraft } from "../../packages/agent-thread/src/index";
 import type { ThreadAttachment } from "../actors/scope";
@@ -64,6 +66,14 @@ export interface AgentTask {
   resumed?: boolean;
   /** `spawn --continue`: start the branch from another agent's stopped work (its branch or checkpoint ref). */
   from?: { agentId: string; ref: string; stopped: string };
+  /**
+   * ADR-026 §5 paths 2 and 3: continue this CLI session (its id, as `restoreSession` returned it, the file already in
+   * the machine) instead of starting a new one: the CLI runs with its provider's `session.resumeArgs(id)` and the
+   * prompt as the session's next user turn (the system prompt is the session's own, frozen at its first run). A CLI
+   * that can't find it fails with SessionMissingError. Unset: a new session (under an id capcomd picks, when the CLI
+   * takes one), saved as it grows when the agent has an id (src/agents/session-sync.ts).
+   */
+  resumeSession?: string;
 }
 
 export interface AgentResult {
@@ -195,6 +205,15 @@ export class AgentError extends Error {
   constructor(readonly kind: "cancelled" | "failed" | "no_changes" | "install" | "git" | "credentials" | "limit", message: string, readonly resultText?: string) {
     super(message);
     this.name = "AgentError";
+  }
+}
+
+/** ADR-026 §5 path 4: the CLI couldn't find the session it was asked to continue (AgentTask.resumeSession): Claude Code's
+ *  "No conversation found", codex's "no rollout found". A failure (kind `failed`) whose caller starts a fresh session. */
+export class SessionMissingError extends AgentError {
+  constructor(readonly sessionId: string, message: string) {
+    super("failed", message);
+    this.name = "SessionMissingError";
   }
 }
 
@@ -943,7 +962,17 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Plugin API §16.1: a planner or lead that sees everything and runs nothing; whatever it writes is never committed.
     const orchestrate = cfg.toolMode === "orchestrate";
     const inboxFile = `${W}/inbox.jsonl`;
-    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(mcpCtx ? { mcp: mcpCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}) }, sq)}`;
+    // ADR-026 §2: its CLI session, kept as it grows (an agent of a run, not a reviewer: nothing ever continues a review).
+    // A new one under an id capcomd picks (a CLI that names its own reports it), or the saved one it continues.
+    const sessionSeam = adapter.session && task.agentId && !task.review ? adapter.session : undefined;
+    const sessionCtx = sessionSeam ? { id: task.resumeSession ?? randomUUID(), resume: !!task.resumeSession } : undefined;
+    const sessionSync = sessionSeam && sessionCtx ? new SessionSync({
+      runId: task.runId, agentId: task.agentId!, session: sessionSeam, sh: (x) => sh(x), download: (path) => provider.download(vmId, path),
+      redactor: r, home, cwd: repo, scratch: W, now, onLog: opts.onLog,
+    }) : null;
+    if (sessionSync && sessionCtx) await sessionSync.begin(sessionCtx.resume || sessionSeam!.firstRunArgs(sessionCtx.id).length ? sessionCtx.id : null, sessionCtx.resume);
+    if (sessionCtx) setSpanAttributes(span, { "agent.session_id": sessionCtx.id, "agent.session_resumed": sessionCtx.resume });
+    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(mcpCtx ? { mcp: mcpCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}), ...(sessionCtx ? { session: sessionCtx } : {}) }, sq)}`;
     if (supervised) {
       await provider.upload(vmId, `${W}/agent.sh`, new TextEncoder().encode(`${agentLine}\n`));
       await provider.upload(vmId, `${W}/supervisor.mjs`, new TextEncoder().encode(SUPERVISOR_SOURCE));
@@ -1052,6 +1081,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       addSpanEvent(span, "agent.checkpoint", { "git.sha": c.sha, "agent.checkpoint_reason": c.reason, "agent.checkpoint_files": c.files, ...(res.code ? { "agent.checkpoint_error": r.text(res.stderr).slice(-300) } : {}) });
       if (!res.code) opts.onReport?.({ type: "checkpoint", sha: c.sha, ref: ckptRef, reason: c.reason, files: c.files });
     };
+    // A turn ended since the session was last saved: it is saved at once (src/agents/session-sync.ts).
+    let sessionTurn = false;
     const drain = async (final: boolean) => {
       // A CLI that reports refusals only on stderr (adapter.refusal): its new stderr lines too.
       const errTail = adapter.refusal ? `printf '\\n__CAPCOMD_ERR__\\n'; tail -n +${errConsumed + 1} ${sq(errFile)} 2>/dev/null | head -n 2000; ` : "";
@@ -1119,6 +1150,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         logLines.push(...logLinesOf(ev));
         if (thread) for (const d of thread.event(ev.raw)) items.set(d.id, d);
         if (orchestrate && TURN_ENDS.has(ev.type)) turnEnded = true;
+        if (TURN_ENDS.has(ev.type)) sessionTurn = true;
       }
       if (logLines.length) { opts.onLog?.(logLines.splice(0)); }
       if (thread && final) for (const d of thread.finish()) items.set(d.id, d);
@@ -1128,6 +1160,12 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       if (state.events > beatEvents) { beatEvents = state.events; opts.onReport?.({ type: "heartbeat", events: state.events, lastEventAt: now(), source: "events" }); }
       const code = (exitPart ?? "").trim();
       if (code !== "") exitCode = Number(code);
+      // ADR-026 §2: its CLI session, copied out as it grows; all of it once the CLI has stopped (`final`, or exited).
+      if (sessionSync) {
+        const turn = sessionTurn;
+        sessionTurn = false;
+        await sessionSync.step({ final: final || exitCode !== null, turnEnded: turn, ...(state.sessionId ? { sessionId: state.sessionId } : {}) });
+      }
     };
     // While the sandbox provider doesn't answer (an outage), the agent keeps working in its VM: the runner keeps
     // looking, for up to the outage window, instead of failing it (src/providers/resilient.ts).
@@ -1292,6 +1330,14 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // §16.1: what an orchestrate agent wrote ends it failed whatever else happened (stopped at a turn's end, a limit, an
     // error of its CLI): that is the reason it gives.
     if (orchestrate) wrote ??= await orchestrateChanges("end");
+    // ADR-026 §5: the session it was to continue isn't there (path 4: its caller starts a fresh one).
+    if (sessionCtx?.resume && !limit && !out.ok && !wrote) {
+      const tailOut = await sh(`tail -c 4000 ${sq(errFile)} 2>/dev/null; tail -c 4000 ${sq(jsonl)} 2>/dev/null`).catch(() => null);
+      if (tailOut && sessionSeam!.detectMissing(tailOut.stdout)) {
+        addSpanEvent(span, "agent.session_missing", { "agent.session_id": sessionCtx.id });
+        throw new SessionMissingError(sessionCtx.id, `${name} couldn't find the session ${sessionCtx.id} it was to continue for ${key}: ${r.text(tailOut.stdout.trim().split("\n").slice(-1)[0] ?? "").slice(0, 300)}`);
+      }
+    }
     if (!limit && !out.ok && !wrote) {
       const err = await sh(`tail -c 2000 ${sq(errFile)} 2>/dev/null`);
       throw new AgentError("failed", `${name} stopped (${out.stopReason}, exit ${exitCode}) for ${key}: ${r.text(state.error ?? "")} ${r.text(err.stdout).slice(-800)}`.trim());
