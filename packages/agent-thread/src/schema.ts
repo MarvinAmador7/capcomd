@@ -133,7 +133,12 @@ export const ThreadItem = z.object({
 	error: z.object({ message: agentText("what failed"), code: z.string().nullable().describe("The CLI's code when it gave one (error_max_turns, rate_limit, turn_failed)") }).nullable(),
 	truncated: z.object({ blocks: z.number().int().nonnegative().describe("Trailing blocks dropped"), bytes: z.number().int().nonnegative().describe("Size of the original text") }).nullable()
 		.describe("Over the per-item cap: whole trailing blocks were dropped (never cut inside a code block or table)"),
-	child: z.object({ agentId: z.string(), status: z.string() }).nullable().describe("handoff: the child agent that handed back (its summary is the blocks; artifacts are links and media)"),
+	child: z.object({
+		agentId: z.string(),
+		status: z.string(),
+		verdict: z.object({ passed: z.boolean(), reasons: z.array(agentText("one of the reviewer's reasons")) }).optional()
+			.describe("A reviewer's verdict, when the child was one. The blocks then start with a paragraph that says it (\"Passed review\" / \"Didn't pass review\"), then the reasons as a list, for clients that don't read this field"),
+	}).nullable().describe("handoff: the child agent that handed back (its summary is the blocks; artifacts are links and media)"),
 });
 export type ThreadItemT = z.infer<typeof ThreadItem>;
 /** What an adapter produces: everything but the storage cursor fields (seq, order) and agentId, which the daemon sets. */

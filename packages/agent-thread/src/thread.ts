@@ -48,11 +48,19 @@ function reportedMs(r: any): number | null {
 }
 
 /**
- * Claude Code system events that are its own bookkeeping, not something the agent did: the session's start and status,
- * and a background task starting or ending (`task_started`, `task_notification`: the tool call that ran it and the
- * child's hand-back already show both). Any other system event still shows ("System: <subtype>").
+ * Claude Code system events: most are its own bookkeeping (the session's start and status, thinking-token estimates,
+ * background tasks, hooks, UI and session state; Claude Code 2.1.311 has some seventy), not something the agent did,
+ * and the thread leaves them out. The few a reader should see are said in plain words (SYSTEM_SAID); a refused tool
+ * call (`permission_denied`) is folded into that call's row (its error code "refused") rather than shown on its own.
  */
-const QUIET_SYSTEM = new Set(["init", "status", "task_started", "task_progress", "task_notification"]);
+const SYSTEM_SAID: Record<string, (raw: any) => string> = {
+	compact_boundary: () => "Compacted the conversation",
+	api_retry: (raw) => {
+		const at = Number(raw.attempt), of = Number(raw.max_retries);
+		return `Retrying the model request${at > 0 ? ` (attempt ${at}${of > 0 ? ` of ${of}` : ""})` : ""}`;
+	},
+	model_fallback: (raw) => str(raw.content) || "Switched to a fallback model",
+};
 
 export function threadBuilder(o: ThreadOptions) {
 	const now = o.now ?? Date.now;
@@ -63,6 +71,8 @@ export function threadBuilder(o: ThreadOptions) {
 	const ignoredCalls = new Set<string>(); // calls shown as something else (TodoWrite → plan), or not at all (naming the tab)
 	const seenBlocks = new Set<string>();
 	const editPaths = new Map<string, unknown>(); // claude file-editing call id → its input's path
+	const callItems = new Map<string, string>(); // CLI call id → item id, kept after the call closes
+	const deniedCalls = new Set<string>(); // open claude calls its permission rules refused: closed with code "refused"
 	let n = 0, lastText: string | null = null;
 	const rel = (p: unknown) => { const s = str(p); return workspacePath(s, ctx.root) ?? s; };
 
@@ -102,6 +112,7 @@ export function threadBuilder(o: ThreadOptions) {
 		const tool: ToolInfoT = { callId, name: oneLine(t.name, 200), kind: t.kind, summary: t.summary, isError: false, args: t.args, output: null, files: t.files, diff: t.diff };
 		const item = create({ kind: "tool", status: "open", text: tool.summary, tool });
 		tools.set(callId, item.id);
+		callItems.set(callId, item.id);
 		return item;
 	};
 	const closeTool = (callId: string, r: { isError: boolean; output: string | null; durationMs: number | null; blocks?: BlockNode[]; error?: string | null; code?: string | null; diff?: ToolDiffT | null }): ItemDraft | null => {
@@ -191,7 +202,8 @@ export function threadBuilder(o: ThreadOptions) {
 				// The applied change, with context, replaces the input's; a failed call keeps what it proposed.
 				const diff = editPaths.has(callId) && !r.is_error ? claudeResultDiff(one, editPaths.get(callId), ctx.root) : undefined;
 				editPaths.delete(callId);
-				const closed = closeTool(callId, { isError: !!r.is_error, output: res.text, durationMs: one !== undefined ? reportedMs(one) : null, blocks: res.blocks, error: r.is_error ? res.text : null, diff });
+				const refused = deniedCalls.delete(callId) && !!r.is_error;
+				const closed = closeTool(callId, { isError: !!r.is_error, output: res.text, durationMs: one !== undefined ? reportedMs(one) : null, blocks: res.blocks, error: r.is_error ? res.text : null, code: refused ? "refused" : null, diff });
 				out.push(closed ?? other("A tool result for a call this thread didn't see"));
 			}
 		} else if (type === "result") {
@@ -199,15 +211,30 @@ export function threadBuilder(o: ThreadOptions) {
 			const text = str(raw.result).trim();
 			if (raw.is_error) { if (!text || text !== lastText) out.push(errorItem(text || str(raw.subtype) || "error", str(raw.subtype) || null)); }
 			else if (text && text !== lastText) out.push(markdownItem("result", str(raw.result)));
-		} else if (type === "system") {
-			if (raw.subtype === "compact_boundary") out.push(other("Compacted the conversation"));
-			else if (!QUIET_SYSTEM.has(str(raw.subtype)) && !str(raw.subtype).startsWith("hook_")) out.push(other(`System: ${str(raw.subtype) || "event"}`));
-		} else if (type === "rate_limit_event") {
+		} else if (type === "system") out.push(...claudeSystem(raw)); else if (type === "rate_limit_event") {
 			if (raw.rate_limit_info?.status === "rejected") out.push(other("Usage limit reached"));
 		} else if (["stream_event", "tool_progress", "tool_use_summary", "auth_status", "keep_alive", "user", "assistant"].includes(type)) {
 			// Known and not shown: partial-message deltas (token streaming is a follow-up), progress ticks, echoed input.
 		} else out.push(other(`Unknown event: ${type || "?"}`));
 		return out;
+	};
+
+	/** A Claude Code system event: plain words for the few a reader should see, nothing for its bookkeeping. */
+	const claudeSystem = (raw: any): ItemDraft[] => {
+		const subtype = str(raw.subtype);
+		if (subtype === "permission_denied") {
+			// The refused call's own row says it (red, "not allowed"): an open call closes refused, a closed one is marked.
+			const callId = str(raw.tool_use_id);
+			if (callId && ignoredCalls.has(callId)) return [];
+			if (callId && tools.has(callId)) { deniedCalls.add(callId); return []; }
+			const id = callId ? callItems.get(callId) : undefined;
+			const prev = id ? items.get(id) : undefined;
+			if (id && prev?.error) return prev.error.code === "refused" ? [] : [update(id, { error: { ...prev.error, code: "refused" } })];
+			const name = oneLine(str(raw.tool_name), 200);
+			return [other(name ? `Not allowed: ${name}` : "A tool call wasn't allowed")];
+		}
+		const said = SYSTEM_SAID[subtype];
+		return said ? [other(said(raw))] : [];
 	};
 
 	const codex = (raw: any): ItemDraft[] => {

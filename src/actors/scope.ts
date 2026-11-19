@@ -82,12 +82,20 @@ function itemRow(r: any) {
   return { ...it, seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string };
 }
 
-/** A finished child's hand-back card for its parent's thread. */
-function handoffOf(parent: string, child: string, status: string, result: Record<string, unknown>): ItemDraft {
+/**
+ * A finished child's hand-back card for its parent's thread. A reviewer declares no summary (its final message is its
+ * verdict): its card is the verdict, `{"passed", "reasons"}` on its result, never a bare "Finished.".
+ */
+export function handoffOf(parent: string, child: string, status: string, result: Record<string, unknown>): ItemDraft {
   const s = (x: unknown) => (typeof x === "string" ? x : "");
-  const summary = s(result.summary) || s(result.report) || s(result.error) || (status === "done" ? "Finished." : "Failed.");
+  const v = result.verdict as { passed?: unknown; reasons?: unknown } | null | undefined;
+  const verdict = v && typeof v === "object" && typeof v.passed === "boolean"
+    ? { passed: v.passed, reasons: Array.isArray(v.reasons) ? v.reasons.filter((r): r is string => typeof r === "string") : [] } : null;
+  // A reviewer that ended without a verdict says so (its gate fails closed on it).
+  const fallback = status !== "done" ? "Failed." : "verdict" in result && !verdict ? "Finished without a verdict." : "Finished.";
+  const summary = s(result.summary) || s(result.report) || s(result.error) || (verdict ? "" : fallback);
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts.filter((a: any) => a && typeof a.ref === "string").map((a: any) => ({ name: s(a.name), ref: s(a.ref) })) : [];
-  return handoffDraft({ id: `itm-${parent}-handoff-${child}`, at: Date.now(), child: { agentId: child, status }, summary, artifacts });
+  return handoffDraft({ id: `itm-${parent}-handoff-${child}`, at: Date.now(), child: { agentId: child, status }, summary, verdict, artifacts });
 }
 
 export type KvEntry = ReturnType<typeof kvRow>;

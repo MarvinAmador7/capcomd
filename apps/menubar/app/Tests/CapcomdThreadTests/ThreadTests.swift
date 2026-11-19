@@ -22,7 +22,7 @@ final class ThreadTests: XCTestCase {
 
   func testEveryGoldenSessionDecodes() throws {
     let names = try FileManager.default.contentsOfDirectory(atPath: Self.golden.path).filter { $0.hasSuffix(".items.json") }
-    XCTAssertEqual(names.count, 7)
+    XCTAssertEqual(names.count, 8)
     for n in names {
       let items = try goldenItems(String(n.dropLast(".items.json".count)))
       XCTAssertFalse(items.isEmpty, n)
@@ -38,6 +38,14 @@ final class ThreadTests: XCTestCase {
     XCTAssertEqual(Set(book.items.map(\.id)).count, book.items.count)
     XCTAssertTrue(book.items.filter { $0.kind == "tool" }.allSatisfy { !$0.open && $0.tool != nil })
     XCTAssertEqual(book.items.map(\.order), book.items.map(\.order).sorted())
+  }
+
+  /// Claude Code's system bookkeeping is no item; a call its permission rules refused is its own row, closed refused.
+  func testClaudeSystemEvents() throws {
+    var book = Book(); book.apply(try goldenItems("claude-2.1.311-system"))
+    XCTAssertFalse(book.items.contains { $0.text.hasPrefix("System:") || $0.isSystemBookkeeping })
+    XCTAssertEqual(book.items.filter { $0.kind == "tool" && $0.error?.code == "refused" }.count, 1)
+    XCTAssertEqual(book.items.filter { $0.kind == "other" }.map(\.text), ["Retrying the model request (attempt 1 of 10)", "Compacted the conversation"])
   }
 
   func testFxSessionShapes() throws {

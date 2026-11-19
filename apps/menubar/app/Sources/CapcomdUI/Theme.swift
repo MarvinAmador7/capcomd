@@ -361,6 +361,7 @@ package enum Theme {
     package static let toolHeight: CGFloat = 26, toolGap: CGFloat = 8, toolIcon: CGFloat = 16, toolChevron: CGFloat = 10, toolRadius: CGFloat = 6, toolInset: CGFloat = 6
     package static let toolFont = Font.system(size: 12.5), toolText = label.opacity(0.7), toolHover = Color.white.opacity(0.05)
     package static let toolDuration = Font.system(size: 10.5, design: .monospaced), toolDurationText = label.opacity(0.4)
+    package static let toolNote = Font.system(size: 11), toolRefusedText = errorText.opacity(0.7)
     package static let detailFill = Color.black.opacity(0.22), detailRadius: CGFloat = 7, detailPadding = EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 9)
     package static let detailMargin = EdgeInsets(top: 0, leading: 24, bottom: 8, trailing: 0)
     package static let detailFont = Font.system(size: 10.5, design: .monospaced), detailText = label.opacity(0.7), detailSpacing: CGFloat = 2.5
@@ -377,6 +378,9 @@ package enum Theme {
     package static let handoffNote = Font.system(size: 11), handoffNoteText = label.opacity(0.45)
     package static let handoffSummary = Font.system(size: 12.5), handoffSummaryText = Color.white.opacity(0.8), handoffSummarySpacing: CGFloat = 3
     package static let handoffSummaryMargin = EdgeInsets(top: 5, leading: 0, bottom: 7, trailing: 0)
+    /// A long hand-back shows about six lines, fading out, then Show more (slack: a line or so over isn't clamped).
+    package static let handoffClamp: CGFloat = 120, handoffClampSlack: CGFloat = 16, handoffFade: CGFloat = 28
+    package static let handoffMoreText = label.opacity(0.55), handoffMoreBottom: CGFloat = 4
     package static let artFont = Font.system(size: 10.5, design: .monospaced), artText = label.opacity(0.6), artFill = Color.white.opacity(0.07)
     package static let artRadius: CGFloat = 5, artPadding = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6), artGap: CGFloat = 4
     // The agent's task above its thread, folded like a thought; its first line trails the label, quieter.

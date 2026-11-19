@@ -509,6 +509,9 @@ package struct ToolCallRow: View {
           Text(verbatim: tool?.summary ?? item.text).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
           if item.open {
             Image(systemName: "smallcircle.filled.circle").font(.system(size: 10)).foregroundStyle(Theme.accent).accessibilityLabel("Running")
+          } else if item.error?.code == "refused" {
+            // Its permission rules refused it (it never ran): said quietly on its own row.
+            Text("Not allowed").font(Theme.Content.toolNote).foregroundStyle(Theme.Content.toolRefusedText)
           } else if let d = item.durationMs {
             Text(verbatim: callDuration(ms: d)).font(Theme.Content.toolDuration).foregroundStyle(Theme.Content.toolDurationText)
           }
@@ -521,7 +524,7 @@ package struct ToolCallRow: View {
       }
       .buttonStyle(.plain).onHover { hover = $0 }
       .padding(.horizontal, -Theme.Content.toolInset)
-      .accessibilityLabel(tool?.summary ?? item.text)
+      .accessibilityLabel(item.error?.code == "refused" ? "\(tool?.summary ?? item.text), not allowed" : tool?.summary ?? item.text)
       .modifier(ProseColumn(proseWidth))
       if open, let tool { detail(tool).transition(.opacity) }
     }
@@ -671,17 +674,26 @@ package struct VerdictCard: View {
   }
 }
 
+/// The card: the child's bot, name and "role · handed back" (a click opens its thread, the chevron says so); a reviewer's
+/// verdict as its own thread shows it (seal, "Passed review" / "Didn't pass review", the reasons); the summary as
+/// markdown blocks, clamped to `handoffClamp` with Show more; its artifacts as chips. The text is selectable.
 package struct HandoffCard: View {
   @Environment(\.threadHost) private var host
   package let runId: String
   package let item: CapcomdThread.Item
   package init(runId: String, item: CapcomdThread.Item) { self.runId = runId; self.item = item }
+  @State private var more = false
+  /// The body's own height, measured unclamped: Show more only when it runs past the clamp.
+  @State private var fullHeight: CGFloat = 0
 
   package var body: some View {
     let childId = item.child?.agentId
     let h = host?.host
-    Button { if let childId { h?.openAgent(runId: runId, agentId: childId) } } label: {
-      VStack(alignment: .leading, spacing: 0) {
+    let verdict = item.handoffVerdict
+    let (summary, artifacts) = Self.split(verdict?.rest ?? item.blocks)
+    let clamps = fullHeight > Theme.Content.handoffClamp + Theme.Content.handoffClampSlack
+    VStack(alignment: .leading, spacing: 0) {
+      Button { if let childId { h?.openAgent(runId: runId, agentId: childId) } } label: {
         HStack(spacing: Theme.Content.handoffGap) {
           let bot = childId.flatMap { h?.bot(runId: runId, agentId: $0) }
           ProvidedBot(traits: bot, size: .small, provider: childId.flatMap { h?.agentProvider(runId: runId, agentId: $0) })
@@ -694,22 +706,57 @@ package struct HandoffCard: View {
           Spacer(minLength: 0)
           Chevron(open: false)
         }
-        let (summary, artifacts) = Self.split(item.blocks)
-        BlocksView(runId: runId, agentId: childId ?? "", blocks: summary, font: Theme.Content.handoffSummary,
-                   color: Theme.Content.handoffSummaryText, spacing: Theme.Content.handoffSummarySpacing)
-          .padding(Theme.Content.handoffSummaryMargin).padding(.bottom, -Theme.Content.proseBottom)
-        if !artifacts.isEmpty {
-          HStack(spacing: Theme.Content.artGap) { ForEach(Array(artifacts.enumerated()), id: \.offset) { _, l in ArtifactChip(link: l) } }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain).disabled(childId == nil)
+      .help(childId == nil ? "" : "Open its thread")
+      VStack(alignment: .leading, spacing: 0) {
+        if let v = verdict?.verdict {
+          HStack(spacing: Theme.Content.handoffGap) {
+            Image(systemName: v.passed ? "checkmark.seal.fill" : "xmark.seal.fill").font(Theme.Content.verdictIcon)
+              .foregroundStyle(v.passed ? Theme.green : Theme.red)
+            Text(v.passed ? "Passed review" : "Didn't pass review").font(Theme.Content.handoffName).foregroundStyle(.white)
+          }
+          .padding(.bottom, Theme.Content.verdictGap)
+          .accessibilityElement(children: .combine)
+        }
+        if !summary.isEmpty {
+          BlocksView(runId: runId, agentId: childId ?? "", blocks: summary, font: Theme.Content.handoffSummary,
+                     color: Theme.Content.handoffSummaryText, spacing: Theme.Content.handoffSummarySpacing)
+            .padding(.bottom, -Theme.Content.proseBottom)
         }
       }
-      .multilineTextAlignment(.leading)
-      .padding(Theme.Content.handoffPadding)
-      .background(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).fill(Theme.Content.handoffFill))
-      .overlay(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).strokeBorder(Theme.Content.handoffStroke, lineWidth: 0.5))
-      .contentShape(Rectangle())
+      .fixedSize(horizontal: false, vertical: true)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }
+      .frame(maxHeight: clamps && !more ? Theme.Content.handoffClamp : nil, alignment: .top)
+      .clipped()
+      .mask { Self.fade(clamps && !more) }
+      .padding(Theme.Content.handoffSummaryMargin)
+      if clamps {
+        Button(more ? "Show less" : "Show more") { withTransaction(Transaction(animation: nil)) { more.toggle() } }   // snaps, as a thought unfolds
+          .buttonStyle(.plain).font(Theme.Content.handoffNote).foregroundStyle(Theme.Content.handoffMoreText)
+          .padding(.bottom, Theme.Content.handoffMoreBottom)
+      }
+      if !artifacts.isEmpty {
+        HStack(spacing: Theme.Content.artGap) { ForEach(Array(artifacts.enumerated()), id: \.offset) { _, l in ArtifactChip(link: l) } }
+      }
     }
-    .buttonStyle(.plain).disabled(childId == nil)
+    .multilineTextAlignment(.leading)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(Theme.Content.handoffPadding)
+    .background(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).fill(Theme.Content.handoffFill))
+    .overlay(RoundedRectangle(cornerRadius: Theme.Content.handoffRadius, style: .continuous).strokeBorder(Theme.Content.handoffStroke, lineWidth: 0.5))
     .padding(.bottom, Theme.Content.handoffBottom)
+  }
+
+  /// A clamped body fades out over its last lines, so it reads as cut, not ended.
+  @ViewBuilder static func fade(_ on: Bool) -> some View {
+    if on {
+      VStack(spacing: 0) {
+        Color.black
+        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: Theme.Content.handoffFade)
+      }
+    } else { Color.black }
   }
 
   /// The daemon puts a handoff's artifacts last, as a list of one-link items (handoffDraft): those become `.art` chips.

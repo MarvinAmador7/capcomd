@@ -117,6 +117,7 @@ public enum Highlight {
 public struct Verdict: Sendable, Hashable {
   public var passed: Bool
   public var reasons: [String]
+  public init(passed: Bool, reasons: [String]) { self.passed = passed; self.reasons = reasons }
 
   /// The verdict in `raw` when it is that JSON and nothing else (a ```json fence around it is fine).
   public static func parse(_ raw: String) -> Verdict? {
@@ -135,6 +136,22 @@ public struct Verdict: Sendable, Hashable {
 }
 
 extension Item {
+  /// A Claude Code system event an older daemon wrote as a line ("System: thinking_tokens", "System: permission_denied"):
+  /// its bookkeeping, which newer daemons leave out (a refused call's own row says it was refused). Not shown.
+  public var isSystemBookkeeping: Bool {
+    guard kind == "other", text.hasPrefix("System: ") else { return false }
+    let subtype = text.dropFirst("System: ".count)
+    return !subtype.isEmpty && subtype.allSatisfy { $0 == "_" || ($0.isASCII && ($0.isLowercase || $0.isNumber)) }
+  }
+
+  /// A reviewer's hand-back: its verdict and the blocks after the paragraph that says it (the daemon writes that one
+  /// for clients that don't read `child.verdict`); nil for any other item.
+  public var handoffVerdict: (verdict: Verdict, rest: [Block])? {
+    guard kind == "handoff", let v = child?.verdict else { return nil }
+    guard case .paragraph? = blocks.first else { return (v, blocks) }
+    return (v, Array(blocks.dropFirst()))
+  }
+
   /// A message that ends in a verdict: the prose before it (maybe none) and the verdict; nil for any other message.
   public var verdictTail: (prose: [Block], verdict: Verdict)? {
     guard kind == "say" || kind == "result" else { return nil }

@@ -95,6 +95,38 @@ final class RunTitleTests: XCTestCase {
     XCTAssertEqual(s.projects[0].goalLine, "Rework onboarding")
   }
 
+  /// A goal bigger than a title: a multi-paragraph prompt and a 16 KB one. Every place the run's title shows (the deck,
+  /// the sidebar group, Search, the pane's tooltip) gets the short title; the tooltip the first line, at most 400.
+  func testAGoalBiggerThanATitleIsCutWhereverTheTitleShows() {
+    let paragraphs = """
+    Lets update the desktop page
+
+    Add a screenshot of the home screen with a few demo projects, one asking to merge. Keep the existing sections.
+
+    - reuse the dt-today markup
+    - note in CONTENT.md how the picture was made
+    """
+    let words = Array(repeating: "update the desktop page with a home screenshot and demo projects", count: 260).joined(separator: " ")
+    let huge = String(words.prefix(16_384))
+    let noSpaces = String(repeating: "x", count: 16_384)
+    for (goal, title, full) in [
+      (paragraphs, "Lets update the desktop page", "Lets update the desktop page"),
+      (huge, "update the desktop page with a home screenshot", String(huge.prefix(399)) + "…"),
+      (noSpaces, String(repeating: "x", count: 49) + "…", String(repeating: "x", count: 399) + "…"),
+    ] {
+      let s = CapcomdStore()
+      ev(s, "run.created", nil, ["goal": .string(goal)])
+      let p = s.projects[0]
+      XCTAssertEqual(p.title, title, "\(goal.prefix(40))")
+      XCTAssertLessThanOrEqual(p.title.count, RunTitle.max, "a title fits a git subject line")
+      XCTAssertEqual(p.fullTitle, full)
+      XCTAssertFalse(p.fullTitle.contains("\n"), "the tooltip is one line")
+      let deck = s.decks().first
+      XCTAssertEqual(deck?.title, title, "the deck, the sidebar's group and Search take the deck's title")
+      XCTAssertEqual(deck?.fullTitle, full, "the pane title's tooltip")
+    }
+  }
+
   func testARunWithNothingToNameItIsUntitledNotItsId() {
     let s = CapcomdStore()
     ev(s, "run.created", nil, [:])

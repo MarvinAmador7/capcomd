@@ -150,7 +150,7 @@ extension CapcomdStore {
     // The agent's own output is in the book; keep only messages from someone else (steers, other agents).
     let messages = events.filter { if case .message(let from, _, _, _) = $0.kind { return from != agentId }; return false }
     // Read newest first, the thread shows from its top down; messages from before its first item wait with it.
-    let items = Array(book.shown)
+    let items = book.shown.filter { !$0.isSystemBookkeeping }
     let from = book.hasEarlier ? items.first?.atMs ?? Int.max : Int.min
     var out: [ThreadEntry] = []; out.reserveCapacity(items.count + messages.count)
     var m = messages.filter { $0.epochMs >= from }.sorted { ($0.epochMs, $0.seq) < ($1.epochMs, $1.seq) }[...]

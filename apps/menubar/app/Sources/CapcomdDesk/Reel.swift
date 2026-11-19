@@ -1066,11 +1066,12 @@ struct ColumnThread: View {
         }
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
       }
-      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt). Expanded
-      // (RexExpanded `.xb`): prose in a centred 800 pt column, diffs, code and logs 1060 pt.
+      // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt), centred in a
+      // wider pane, with its message box under it at the same width. Expanded (RexExpanded `.xb`): prose in a centred
+      // 800 pt column, diffs, code and logs 1060 pt.
       .frame(maxWidth: inPane ? (expanded ? PaneMetrics.wide : Theme.Desk.paneReading) : nil, alignment: .leading)
       .padding(inPane ? (expanded ? PaneMetrics.expandedBody : split ? PaneMetrics.splitBody : Theme.Desk.paneBodyPadding) : Theme.Desk.bodyPadding)
-      .frame(maxWidth: .infinity, alignment: expanded ? .center : .leading)
+      .frame(maxWidth: .infinity, alignment: inPane ? .center : .leading)
     }
     .defaultScrollAnchor(.bottom)
     .scrollIndicators(.never)
@@ -1186,7 +1187,8 @@ struct ColumnComposer: View {
     .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 8)
     .frame(minHeight: Theme.Desk.composerHeight)
     .background(RoundedRectangle(cornerRadius: Theme.Desk.composerRadius, style: .continuous).fill(Theme.Desk.composerFill))
-    .frame(maxWidth: inPane && pane?.expanded == true ? PaneMetrics.reading : .infinity)
+    // In a pane the box keeps to the thread's column, centred under it: the reading column expanded, else the pane's.
+    .frame(maxWidth: inPane ? (pane?.expanded == true ? PaneMetrics.reading : Theme.Desk.paneReading) : .infinity)
     .padding([.horizontal, .bottom], inPane && pane?.expanded == true ? 20 : 12)
     .frame(maxWidth: .infinity)
     .modifier(SlotDraft(memory: memory, agentId: agentId, draft: $draft))
