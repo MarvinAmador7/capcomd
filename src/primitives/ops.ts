@@ -1507,7 +1507,7 @@ async function vmRpcFor(runId: string, a: ScopeAgent, w: any, agentId: string, p
   const effective = await (async () => { try { return (await import("../agents/config")).loadAgentConfig(withSandbox(process.env, sandbox), a.ref, a.spec); } catch { return null; } })();
   const jobs = mayRunJobs(a.spec, effective);
   const orchestrate = (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate";
-  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ mcp: true, jobs: jobs && !orchestrate });
+  const skill = maySpawn ? await unpreparedSkill(runId, a, prepared) : workerSkill({ mcp: true, jobs: jobs && !orchestrate, wake: (a.spec as { provider?: string } | null)?.provider !== "codex" });
   const params = { kind, rpcDir, ...(skill ? { skill } : {}), ...(maySpawn ? {} : { maySpawn: false }) };
   return { params, run: <T>(fn: () => Promise<T>) => withVmRpc(runId, a, provider, vmId, undefined, fn, rpcDir, { jobs }) };
 }

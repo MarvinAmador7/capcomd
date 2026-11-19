@@ -1499,6 +1499,12 @@ export const scopeActor = actor({
         const r = (await c.db.execute("SELECT * FROM wakes WHERE idem_key = ?", idem)) as any[];
         if (r.length) return { wake: wakeRow(r[0]), replayed: true };
       }
+      // The same wait armed again while it still waits (`await --wake` in a turn another message started): that one.
+      // Once it fired (or was cancelled), the same wait is a new wake. A check-in is its own each time.
+      if (filter.kind !== "timer") {
+        const same = ((await c.db.execute("SELECT * FROM wakes WHERE agent_id = ? AND state = 'armed' AND filter = ?", params.agentId, JSON.stringify(filter))) as any[])[0];
+        if (same) return { wake: wakeRow(same), replayed: true };
+      }
       const wakeId = stableId("job", `${params.agentId}:wake`, idem ?? undefined).replace(/^job-/, "wk-");
       let fired: number | null = null;
       await txn(c, async (tx: RawAccess) => {

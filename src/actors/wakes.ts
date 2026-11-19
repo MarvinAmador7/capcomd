@@ -69,7 +69,7 @@ export const opKindOf = (op: string): "verify" | "check" | "merge" => (op.starts
 
 /** What fired a wake: the daemon's short sentence (trusted: ids, kinds, states), and the longer detail for the agent's
  *  message (a check's failure reason: may quote agent or check output, so it never goes in an event's text). */
-interface Why { text: string; detail?: string; by: "event" | "time" | "deadline" }
+interface Why { text: string; detail?: string; by: "event" | "time" | "deadline"; hint?: string }
 
 /** How an op ended, in a few words: "verify vfy-… passed", "merge mrg-… is waiting for a person's approval". */
 function opWhy(op: string, type: string, data: Record<string, any> | null): Why {
@@ -96,7 +96,13 @@ async function satisfies(tx: RawAccess, f: WakeFilter, ev: { seq: number; type: 
     return opWhy(f.op, ev.type, ev.data);
   }
   if (f.kind === "agents") {
-    if (!AGENT_END.has(ev.type) || !ev.agentId || !f.agents.includes(ev.agentId)) return null;
+    if (!ev.agentId || !f.agents.includes(ev.agentId)) return null;
+    // As a blocking await returns early with notices: one of them looks stuck while it waits (it still runs).
+    if (ev.type === "AGENT_NOTICE") {
+      const kind = typeof ev.data?.kind === "string" && /^[a-z_]{1,20}$/.test(ev.data.kind) ? ev.data.kind : "stuck";
+      return { text: `${ev.agentId} looks stuck (${kind})`, by: "event", hint: `It still runs: \`capcomd inspect ${ev.agentId}\` shows why. Send it a hint, cancel it, or wait on it again (\`capcomd await ${f.agents.join(" ")} --wake\`).` };
+    }
+    if (!AGENT_END.has(ev.type)) return null;
     const rows = (await tx.execute(`SELECT agent_id, status FROM agents_v2 WHERE agent_id IN (${f.agents.map(() => "?").join(",")})`, ...f.agents)) as any[];
     return agentsWhy(f, rows, ev.agentId);
   }
@@ -120,9 +126,20 @@ function agentsWhy(f: Extract<WakeFilter, { kind: "agents" }>, rows: any[], ende
   return first ? { text: `${first.agent_id} ended: ${first.status}`, by: "event" } : null;
 }
 
-const nextHint = (f: WakeFilter): string => f.kind === "op"
-  ? `\`capcomd ${opKindOf(f.op) === "verify" ? "verify --id" : opKindOf(f.op) === "check" ? "check --id" : "merge --id"} ${f.op}\` shows its full record.`
-  : f.kind === "agents" ? "`capcomd status <agt>` shows each one's result." : "";
+/** What the woken agent can do next: where the full record is (an op's agent, read from the op in the transaction). */
+async function nextHint(tx: RawAccess, f: WakeFilter, why: Why): Promise<string> {
+  if (why.hint) return why.hint;
+  if (f.kind === "agents") return "`capcomd status <agt>` shows each one's result.";
+  if (f.kind !== "op") return "";
+  if (opKindOf(f.op) === "check") return `\`capcomd check --id ${f.op}\` shows its full output.`;
+  const r = ((await tx.execute("SELECT data FROM ops WHERE op_id = ?", f.op)) as any[])[0];
+  const d = r ? JSON.parse(String(r.data)) : {};
+  const agt = typeof d.agentId === "string" ? d.agentId : typeof d.ref === "string" && d.ref.startsWith("agt-") ? d.ref : null;
+  if (!agt) return "";
+  return opKindOf(f.op) === "verify"
+    ? `\`capcomd status ${agt}\` shows it on the agent's result (verification). When it passed: \`capcomd merge --ref ${agt} --require ${f.op}\`.`
+    : `\`capcomd status ${agt}\` shows it on the agent's result (merge).`;
+}
 
 /** Every wake change's event goes through this (scope.ts addEvent, which skips matching for these types). */
 export type AddEvent = (tx: RawAccess, type: "AGENT_WAKE_ARMED" | "AGENT_WOKEN" | "AGENT_WAKE_CANCELLED", agentId: string, data: Record<string, unknown>, key: string) => Promise<void>;
@@ -159,7 +176,7 @@ export async function fireWake(tx: RawAccess, w: WakeRow, why: Why, seq: number 
   let m = dup.length ? Number(dup[0].seq) : 0;
   if (!m) {
     m = Number(((await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM messages")) as any[])[0]?.m ?? 0) + 1;
-    const body = [`Wake-up ${w.wakeId}: ${why.text}${why.detail ? `: ${why.detail}` : ""}.`, w.note ? `Your note when you asked for it: ${w.note}` : "", nextHint(w.filter)].filter(Boolean).join("\n");
+    const body = [`Wake-up ${w.wakeId}: ${why.text}${why.detail ? `: ${why.detail}` : ""}.`, w.note ? `Your note when you asked for it: ${w.note}` : "", await nextHint(tx, w.filter, why)].filter(Boolean).join("\n");
     await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key, skills) VALUES (?, ?, ?, ?, ?, ?, NULL)", m, w.agentId, `wake-${w.wakeId}`, body, now, key);
   }
   await tx.execute("UPDATE wakes SET message_seq = ? WHERE wake_id = ?", m, w.wakeId);

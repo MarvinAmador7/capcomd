@@ -169,7 +169,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       const targets = ids(args);
       await assertReadable(c, targets);
       // ADR-026 §3: `await … --wake` doesn't wait: the agent ends its turn and is woken when they end.
-      if (isWake(args)) return armWake(c, { kind: "agents", agents: targets, mode: op === "wait-any" ? "any" : "all" }, args, { agents: targets });
+      if (isWake(args)) return armWake(c, reqId, { kind: "agents", agents: targets, mode: op === "wait-any" ? "any" : "all" }, args, { agents: targets });
       if (args.end) { await s.awaitEnd({ waiter: c.sub }); return { ended: true }; }
       const agents = await O.peekAgents(run, targets);
       const live = agents.filter((a) => !TERMINAL_AGENT.has(a.status)).map((a) => a.agentId);
@@ -321,7 +321,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
           if (early && "e" in early) throw early.e;
           if (early && "v" in early) return early.v;
         }
-        return armWake(c, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "verify", state: "running", ref });
+        return armWake(c, reqId, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "verify", state: "running", ref });
       }
       const held = await Promise.race([p.catch((e) => { if (transportTimeout(e)) return null; throw e; }), new Promise((r) => setTimeout(() => r(null), ctx.holdMs ?? VERIFY_HOLD_MS))]);
       return held ?? { id: O.verifyIdFor(run, ref, key), kind: "verify", state: "running", ref };
@@ -347,7 +347,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
         ...(args.key !== undefined ? { key: String(args.key) } : {}), askedBy: c.sub,
       });
       // ADR-026 §3: `check --wake` holds nothing: the check runs on, and its end wakes the agent.
-      if (isWake(args)) { done.catch(() => {}); return armWake(c, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "check", state: "running" }); }
+      if (isWake(args)) { done.catch(() => {}); return armWake(c, reqId, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "check", state: "running" }); }
       return holdCheck(id, done, ctx.holdMs);
     }
     case "wake": {
@@ -366,19 +366,19 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
         const o = await s.getOp({ opId: id });
         if (!o) throw new RelayError("not_found", `${id.slice(0, 80)} not found in this run`, "Pass a vfy-/chk-/mrg- id that verify, check or merge returned.");
         await assertOpVisible(c, o);
-        return armWake(c, { kind: "op", op: id }, args, {});
+        return armWake(c, reqId, { kind: "op", op: id }, args, {});
       }
       if (args.agents !== undefined) {
         const agents = list(args.agents);
         await assertReadable(c, agents);
-        return armWake(c, { kind: "agents", agents, mode: args.all === true || args.all === "true" ? "all" : "any" }, args, {});
+        return armWake(c, reqId, { kind: "agents", agents, mode: args.all === true || args.all === "true" ? "all" : "any" }, args, {});
       }
       if (args.events !== undefined) {
         const { me } = await readable(c);
         if (args.agent !== undefined) await assertReadable(c, [String(args.agent)]);
-        return armWake(c, { kind: "events", types: list(args.events), ...(args.agent !== undefined ? { agent: String(args.agent) } : {}), after: Number(args.after ?? 0) || 0, within: me.parent ?? c.sub }, args, {});
+        return armWake(c, reqId, { kind: "events", types: list(args.events), ...(args.agent !== undefined ? { agent: String(args.agent) } : {}), after: Number(args.after ?? 0) || 0, within: me.parent ?? c.sub }, args, {});
       }
-      return armWake(c, { kind: "timer" }, args, {});
+      return armWake(c, reqId, { kind: "timer" }, args, {});
     }
     case "merge": {
       const ref = String(args.ref ?? "");
@@ -487,7 +487,7 @@ function wakeView(w: import("../actors/wakes").WakeRow) {
  * message reaches it as its next turn. `in` (a duration) or `at` (an ISO time or epoch ms) is the time (a check-in),
  * or an event wake's deadline (default and most WAKE_MAX_MS).
  */
-async function armWake(c: Claims, filter: Record<string, any>, args: Record<string, any>, extra: Record<string, unknown>) {
+async function armWake(c: Claims, reqId: string, filter: Record<string, any>, args: Record<string, any>, extra: Record<string, unknown>) {
   await assertWakeable(c);
   const inMs = args.inMs !== undefined ? Number(args.inMs) : args.in !== undefined ? parseDuration(args.in) : undefined;
   if (inMs === null || (inMs !== undefined && !(Number.isFinite(inMs) && inMs >= 0))) throw new RelayError("usage", `--in ${String(args.in).slice(0, 40)}: not a duration`, "e.g. --in 10m, --in 90s, --in 2h.");
@@ -498,9 +498,9 @@ async function armWake(c: Claims, filter: Record<string, any>, args: Record<stri
   const max = WAKE_MAX_MS();
   if (asked !== undefined && asked > Date.now() + max + 1000) throw new RelayError("usage", `a wake can be set at most ${Math.round(max / 3600_000)} hours ahead`, "Wake sooner and arm another one then if you still need to wait.");
   const at = Math.min(asked ?? Date.now() + max, Date.now() + max);
-  // Idempotent: a retried call (the CLI retries a transient failure) arms one wake. An op or agents wake without a key
-  // of its own is one per agent and what it waits for.
-  const key = args.key !== undefined ? `wake:${String(args.key)}` : filter.kind === "op" ? `op:${filter.op}` : filter.kind === "agents" ? `agents:${filter.mode}:${[...filter.agents].sort().join(",")}` : undefined;
+  // Idempotent: a retried call (the CLI retries a transient failure with the same request id) arms one wake; the same
+  // wait armed again while it still waits is that wake (scope wakeArm).
+  const key = args.key !== undefined ? `wake:${String(args.key)}` : `req:${reqId}`;
   const r: any = await client().scope.getOrCreate([c.run]).wakeArm({ agentId: c.sub, filter, at, note: args.note !== undefined ? String(args.note).slice(0, 2000) : null, ...(key ? { key } : {}) }).catch(O.asRelay);
   const w = r.wake;
   // An op it waits on is restarted when the daemon starts again (src/primitives/wake-sweep.ts): nobody polls it.

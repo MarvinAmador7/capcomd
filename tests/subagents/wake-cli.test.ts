@@ -303,3 +303,26 @@ test("the contract: the wake events on the lifecycle feed, and a waiting agent's
   const a = waitActivity({ wakeId: "wk-2", kind: "agents", agents: ["agt-1", "agt-2", "agt-3"], mode: "all", armedAt: 1000, at: null });
   expect(a).toMatchObject({ kind: "wait", text: "Waiting for 3 agents", wake: { id: "wk-2", kind: "agents", armedAt: new Date(1000).toISOString(), at: null } });
 });
+
+test("an agents wake also wakes on a stuck notice, as a blocking await returns on one; the same wait armed again is a new wake", async () => {
+  const run = await newRun();
+  const s = await scope(run);
+  const kid = (await cj(["spawn", run, "--profile", "lead", "--task", "[wip] long work", "--key", "wip"])).j?.agentId as string;
+  for (let i = 0; i < 100 && (await s.getAgent({ agentId: kid }))?.status !== "running"; i++) await Bun.sleep(100);
+  const f = { kind: "agents", agents: [kid], mode: "all" };
+  const first = (await s.wakeArm({ agentId: "agt-watcher", filter: f, at: Date.now() + 60_000, key: "n1" })).wake;
+  // Armed again while it waits (another turn of the same agent): the same wake.
+  expect((await s.wakeArm({ agentId: "agt-watcher", filter: f, at: Date.now() + 60_000, key: "n2" })).wake.wakeId).toBe(first.wakeId);
+  await s.notice({ agentId: kid, notice: { kind: "idle", detail: "no output for a while" } });
+  const msg = (await s.inbox({ agentId: "agt-watcher" }))[0]!;
+  expect(msg.body).toContain(`Wake-up ${first.wakeId}: ${kid} looks stuck (idle)`);
+  expect(msg.body).toContain(`capcomd inspect ${kid}`);
+  expect(msg.body).not.toContain("no output for a while"); // the agent's own words stay in inspect
+  // Once it fired, the same wait is a new wake.
+  const again = (await s.wakeArm({ agentId: "agt-watcher", filter: f, at: Date.now() + 60_000, key: "n3" })).wake;
+  expect(again.wakeId).not.toBe(first.wakeId);
+  expect(again.state).toBe("armed");
+  await cj(["cancel", run, kid]);
+  for (let i = 0; i < 100 && (await s.wakeList({ agentId: "agt-watcher", state: "armed" })).length; i++) await Bun.sleep(100);
+  expect((await s.inbox({ agentId: "agt-watcher" })).at(-1)!.body).toContain(`${kid} ended: cancelled`);
+}, 60_000);

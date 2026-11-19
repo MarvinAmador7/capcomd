@@ -46,6 +46,8 @@ export async function skillText(runId: string, a: ScopeAgent): Promise<string> {
   return orchestrationSkill({
     agentId: a.agentId, limits: a.limits, budget: a.budget, mcp: true, goal: (await skillKernel.goal(runId)) ?? null, root: !a.parent,
     orchestrate: (a.spec as { toolMode?: string } | null)?.toolMode === "orchestrate",
+    // ADR-026 §3: a Codex agent can't be woken (it reads no message after its prompt): it waits in the call.
+    wake: (a.spec as { provider?: string } | null)?.provider !== "codex",
   });
 }
 
