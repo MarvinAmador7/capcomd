@@ -96,7 +96,7 @@ describe("a remote's branches come from its forge (§7.4 listBranches)", () => {
     await r.seed.ok(["push", "-q", "origin", "main:develop"]);
     fake.branches = { defaultBranch: "develop", branches: ["develop", "main"], source: "service", note: null };
     const got = await resolveGoalBranch({ goal: "Add x", remote: r.bare, merge: { ...r.cfg, forge: "fake" }, cwd: scratch, env: {} });
-    expect(got).toMatchObject({ base: "develop", baseSource: "remote", goalBranch: "capcomd/add-x", listing: { source: "fake" } });
+    expect(got).toMatchObject({ base: "develop", baseSource: "remote", goalBranch: "feat/x", listing: { source: "fake" } });
     // A base the forge doesn't list is refused with the field.
     expect(await resolveGoalBranch({ goal: "Add x", base: "nope", remote: r.bare, merge: { ...r.cfg, forge: "fake" }, cwd: scratch, env: {} }).catch((e) => [e.code, e.reason])).toEqual(["not_found", "base"]);
   });

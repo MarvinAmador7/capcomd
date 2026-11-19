@@ -131,8 +131,11 @@ One window, folded (the default) or opened (§2.1). Folded, it has three parts: 
     keyboard): the folder chip (the remembered project checkout, × back to the default project; Default project
     chooses a folder), then with `runs.goal_branch` and a project folder the base menu beside it (the repository's
     branches, the daemon's `suggestedBase` preselected; never a guessed main: with no suggestion nothing is picked,
-    Start waits and "Pick the branch this work starts from" shows), and on a line of its own under them the goal
-    branch's name (the daemon's suggestion for the goal until edited), with the daemon's sentences under it. Older
+    Start waits and "Pick the branch this work starts from" shows), and after it the goal branch's name as a quiet
+    chip (→ feat/csv-export, mono, dimmed; nothing before a goal): the daemon's name for the goal, in the repository's
+    own branch convention, until renamed. A click turns it into a field (Return keeps the name, Esc puts it back,
+    an emptied name follows the suggestion again); orange when the daemon refuses it, with its sentences under the
+    chips. No naming step. Older
     daemons: no branch row. Then the goal (15 pt), then one tool row, the menu bar composer's (the same views,
     `CapcomdUI/ComposerToolRow.swift`, at its sizes; it supersedes Home.dc.html's row): the round filled + (30 pt;
     Choose Project Folder…, Use the Default Project), Local / Cloud as icon segments (laptop, cloud; the name is the

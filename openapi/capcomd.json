@@ -1809,7 +1809,7 @@
                       ]
                     },
                     "suggestedGoalBranch": {
-                      "description": "With `goal`: capcomd/<goal-slug> (lowercase, hyphens, at most 40 characters of slug), with -2, -3… when the repository has that branch already; null without `goal`",
+                      "description": "With `goal`: a name for the goal's branch in the repository's own convention, learned from its branches (its type prefixes and their spelling, such as feature/ or bugfix/, or one prefix most branches share, such as a person's marvin/), else the common `<type>/<slug>` (feat/csv-export, fix/login-crash; the type from the goal's words). The slug: a few of the goal's meaningful words, lowercase ASCII with hyphens, at most 40 characters; a ticket id in the goal (ABC-123) leads it. -2, -3… when the repository has that branch already. Instant: no model call. null without `goal`",
                       "type": [
                         "string",
                         "null"
@@ -1979,7 +1979,7 @@
                         "properties": {
                           "branch": {
                             "type": "string",
-                            "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                            "description": "The goal branch, e.g. feat/multiply (ref-safe: letters, digits, . _ - /)"
                           },
                           "base": {
                             "type": "string",
@@ -2212,7 +2212,7 @@
                         "const": false
                       }
                     ],
-                    "description": "Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (capcomd/<goal-slug>, never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"
+                    "description": "Capability runs.goal_branch. The run's goal branch (`capcomd run --goal-branch`): verified, reviewed work lands on it with no approval, and the user decides on a pull request into `base` when the planner is done. Omitted: the daemon's suggestion for the goal (named the way the repository names its branches, else `<type>/<slug>` such as feat/csv-export; never an existing branch). 422 with `field` goalBranch when it isn't a branch name capcomd can create, is the base, is protected, or exists on the remote. false: no goal branch (merges go into the target as before; for a run with a planner only, else ignored)"
                   },
                   "driver": {
                     "enum": [
@@ -2344,7 +2344,7 @@
                       "properties": {
                         "branch": {
                           "type": "string",
-                          "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                          "description": "The goal branch, e.g. feat/multiply (ref-safe: letters, digits, . _ - /)"
                         },
                         "base": {
                           "type": "string",
@@ -2615,7 +2615,7 @@
                       "properties": {
                         "branch": {
                           "type": "string",
-                          "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                          "description": "The goal branch, e.g. feat/multiply (ref-safe: letters, digits, . _ - /)"
                         },
                         "base": {
                           "type": "string",
@@ -18247,7 +18247,7 @@
                 "properties": {
                   "branch": {
                     "type": "string",
-                    "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+                    "description": "The goal branch, e.g. feat/multiply (ref-safe: letters, digits, . _ - /)"
                   },
                   "base": {
                     "type": "string",

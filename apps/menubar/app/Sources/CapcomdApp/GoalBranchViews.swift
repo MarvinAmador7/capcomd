@@ -7,8 +7,9 @@ import CapcomdStore
 // work lands on, and the base it's cut from), and the run's compact "Ready" bar once the planner is done. What they
 // say comes from GoalBranchSetup and GoalCard (CapcomdStore); these only lay it out.
 
-/// The composer's goal branch row: ⎇ [goal branch field] from [base ▾], then a line under it when there is something
-/// to say (the daemon's sentence about a field, "Pick the branch this work starts from", where the branches came from).
+/// The composer's goal branch row: ⎇ feat/csv-export from [base ▾] (the name is the daemon's for the goal, renamed with
+/// a click; before a goal only "Starts from [base ▾]"), then a line under it when there is something to say (the
+/// daemon's sentence about the name or the base, "Pick the branch this work starts from", where the branches came from).
 struct GoalBranchRows: View {
   @Environment(AppModel.self) private var model
 
@@ -19,10 +20,11 @@ struct GoalBranchRows: View {
     let branchLine = s.branchLine(refusedField: field, refusal: refusal), baseLine = s.baseLine(refusedField: field, refusal: refusal)
     VStack(alignment: .leading, spacing: Theme.Goal.lineGap) {
       HStack(spacing: Theme.Goal.rowGap) {
-        Image(systemName: "arrow.triangle.branch").font(Theme.Goal.icon).foregroundStyle(Theme.Setup.labelText).accessibilityHidden(true)
-        GoalBranchField(text: Binding(get: { s.goalBranch }, set: { v in edit { model.goalSetup.typeBranch(v) } }),
-                        placeholder: s.placeholder, error: branchLine?.warn == true)
-        Text("from").font(Theme.Setup.labelFont).foregroundStyle(Theme.Setup.labelText).fixedSize()
+        if s.shownBranch != nil {
+          GoalBranchChip(name: s.shownBranch, suggestion: s.suggestion, refused: branchLine?.warn == true) { v in edit { model.goalSetup.typeBranch(v) } }
+            .layoutPriority(1)
+        }
+        Text(s.shownBranch == nil ? "Starts from" : "from").font(Theme.Setup.labelFont).foregroundStyle(Theme.Setup.labelText).fixedSize()
         SetupPopup(text: s.base ?? "Pick a branch", accessibility: s.base.map { "Starts from \($0)" } ?? "Pick the branch this work starts from") {
           if s.branches.isEmpty {
             Button(s.awaitingFirstAnswer ? "Reading the branches…" : "No branches") {}.disabled(true)

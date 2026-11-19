@@ -65,9 +65,10 @@ Usage:
                                        (agents schema: agents.json's; agents list --json: the rows under "agents")
   Primitives (ADR-016; all --json, stable ids, --key idempotent):
   capcomd run <goal> [--planner PROFILE]   a planner agent splits the goal into child agents, verifies and merges their work
-                                           onto the run's goal branch: --goal-branch G (default: capcomd/<goal-slug>), cut
-                                           from --base B (default: the project's target, else origin's default branch);
-                                           reviewed work lands on it with no approval. --no-goal-branch: merge into the
+                                           onto the run's goal branch: --goal-branch G (default: named from the goal in
+                                           the repository's branch convention, else <type>/<slug> like feat/csv-export),
+                                           cut from --base B (default: the project's target, else origin's default
+                                           branch); reviewed work lands on it with no approval. --no-goal-branch: merge into the
                                            target (--target-branch) as before
   capcomd goal <runId> [--json]            the goal branch against its base: what landed, what didn't, the planner's summary
   capcomd pr open <runId> [--yes]          open a pull request from the goal branch into its base (your gh login; idempotent;

@@ -4,7 +4,7 @@ import Foundation
 
 /// The run setup's goal branch rows and the ready card's model (GoalSetup.swift, GoalCard.swift).
 final class GoalSetupTests: XCTestCase {
-  func answer(base: String? = "dev", suggested: String? = "capcomd/add-x", problem: String? = nil, baseProblem: String? = nil, source: String = "github", note: String? = nil) -> ProjectBranches {
+  func answer(base: String? = "dev", suggested: String? = "feat/x", problem: String? = nil, baseProblem: String? = nil, source: String = "github", note: String? = nil) -> ProjectBranches {
     var a = ProjectBranches(path: "/src/app", root: "/src/app", source: source, defaultBranch: "main", branches: ["dev", "main"], projectTarget: base,
                             suggestedBase: base, suggestedGoalBranch: suggested, goalBranchProblem: problem, baseProblem: baseProblem)
     a.note = note
@@ -17,32 +17,49 @@ final class GoalSetupTests: XCTestCase {
     s.setGoal("Add x")
     XCTAssertEqual(s.query, .init(path: "/src/app", goal: "Add x"))
     s.receive(.loaded(answer()), for: s.query!)
-    XCTAssertEqual(s.goalBranch, "capcomd/add-x"); XCTAssertTrue(s.followsSuggestion)
-    // The goal changes: the field follows the new suggestion.
-    s.setGoal("Add x and y"); s.receive(.loaded(answer(suggested: "capcomd/add-x-and-y")), for: s.query!)
-    XCTAssertEqual(s.goalBranch, "capcomd/add-x-and-y")
+    XCTAssertEqual(s.goalBranch, "feat/x"); XCTAssertTrue(s.followsSuggestion)
+    // The goal changes: the name follows the new suggestion.
+    s.setGoal("Add x and y"); s.receive(.loaded(answer(suggested: "feat/x-and-y")), for: s.query!)
+    XCTAssertEqual(s.goalBranch, "feat/x-and-y")
     // Typed: it stays, whatever the daemon suggests next; the name is checked against the base.
     s.typeBranch("feature/mine")
     XCTAssertEqual(s.query, .init(path: "/src/app", goal: "Add x and y", goalBranch: "feature/mine", base: "dev"))
-    s.setGoal("Something else"); s.receive(.loaded(answer(suggested: "capcomd/something-else")), for: s.query!)
+    s.setGoal("Something else"); s.receive(.loaded(answer(suggested: "feat/something-else")), for: s.query!)
     XCTAssertEqual(s.goalBranch, "feature/mine"); XCTAssertFalse(s.followsSuggestion)
     XCTAssertEqual(s.choice.goalBranch, "feature/mine")
-    // Emptied: the field stays empty with the suggestion as its placeholder, and Start lets the daemon name it.
+    // Emptied: back to the suggestion, which it follows again; the name isn't sent to be checked.
     s.typeBranch("  ")
-    XCTAssertEqual(s.goalBranch, ""); XCTAssertEqual(s.placeholder, "capcomd/something-else")
-    XCTAssertNil(s.choice.goalBranch); XCTAssertNil(s.query?.goalBranch)
+    XCTAssertTrue(s.followsSuggestion); XCTAssertNil(s.typedBranch)
+    XCTAssertEqual(s.goalBranch, "feat/something-else"); XCTAssertEqual(s.shownBranch, s.suggestion)
+    XCTAssertEqual(s.choice.goalBranch, "feat/something-else"); XCTAssertNil(s.query?.goalBranch)
+    s.setGoal("Fix y"); s.receive(.loaded(answer(suggested: "fix/y")), for: s.query!)
+    XCTAssertEqual(s.goalBranch, "fix/y")
   }
 
-  func testTheRowShowsBeforeAGoalWithAPlaceholder() {
-    // A folder is chosen, no goal yet: the base menu fills, the field waits with a dimmed shape of a name.
+  func testNoNameBeforeAGoal() {
+    // A folder is chosen, no goal yet: the base menu fills, and there is no name to show (no placeholder shape).
     var s = GoalBranchSetup(); s.open(path: "/src/app")
     XCTAssertEqual(s.query, .init(path: "/src/app"))
     s.receive(.loaded(answer(suggested: nil)), for: s.query!)
-    XCTAssertEqual(s.base, "dev"); XCTAssertEqual(s.goalBranch, ""); XCTAssertEqual(s.placeholder, "capcomd/…")
+    XCTAssertEqual(s.base, "dev"); XCTAssertNil(s.shownBranch); XCTAssertNil(s.suggestion); XCTAssertEqual(s.goalBranch, "")
     XCTAssertNil(s.choice.goalBranch)
-    // Then the goal: the field follows the suggestion.
+    // Then the goal: the name is the suggestion.
     s.setGoal("Add x"); s.receive(.loaded(answer()), for: s.query!)
-    XCTAssertEqual(s.goalBranch, "capcomd/add-x"); XCTAssertTrue(s.followsSuggestion)
+    XCTAssertEqual(s.shownBranch, "feat/x"); XCTAssertTrue(s.followsSuggestion)
+  }
+
+  func testARefusedNameShowsItsProblemUntilRenamedOrCleared() {
+    var s = GoalBranchSetup(); s.open(path: "/src/app"); s.setGoal("Add x")
+    s.receive(.loaded(answer()), for: s.query!)
+    s.typeBranch("main")
+    XCTAssertEqual(s.query?.goalBranch, "main")
+    s.receive(.loaded(answer(problem: "main is a protected branch")), for: s.query!)
+    XCTAssertEqual(s.shownBranch, "main")
+    XCTAssertEqual(s.branchLine(refusedField: nil, refusal: nil), GoalSetupLine("main is a protected branch", warn: true))
+    XCTAssertFalse(s.canStart)
+    // Cleared: the suggestion again, and no problem.
+    s.typeBranch("")
+    XCTAssertEqual(s.shownBranch, "feat/x"); XCTAssertNil(s.branchLine(refusedField: nil, refusal: nil)); XCTAssertTrue(s.canStart)
   }
 
   func testNeverMainByItselfAndStartWaitsForAPick() {
