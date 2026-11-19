@@ -13,6 +13,7 @@ const DIR = process.env.CAPCOMD_RPC_DIR || "/tmp/capcomd-rpc";
 const TOKEN_FILE = process.env.CAPCOMD_TOKEN_FILE || join(DIR, "token");
 const RPC_TIMEOUT = Number(process.env.CAPCOMD_RPC_TIMEOUT_MS || 120000);
 const AWAIT_POLL = Number(process.env.CAPCOMD_AWAIT_POLL_MS || 1000);
+const HOLD_MARGIN = Number(process.env.CAPCOMD_RPC_HOLD_MARGIN_MS || 30000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TRANSIENT = new Set(["unavailable", "engine_unreachable", "internal"]);
@@ -35,7 +36,9 @@ async function callOnce(id, op, args, timeoutMs) {
   mkdirSync(join(DIR, "res"), { recursive: true });
   const token = existsSync(TOKEN_FILE) ? readFileSync(TOKEN_FILE, "utf8").trim() : "";
   const tmp = join(DIR, "req", `.${id}.tmp`);
-  writeFileSync(tmp, JSON.stringify({ id, token, op, args }));
+  // holdMs: how long a held answer (verify, check) may take and still find this call waiting, the spool's round trip
+  // (the orchestrator polls for requests, then writes the answer back) left aside.
+  writeFileSync(tmp, JSON.stringify({ id, token, op, args, holdMs: Math.max(0, timeoutMs - HOLD_MARGIN) }));
   renameSync(tmp, join(DIR, "req", `${id}.json`));
   const res = join(DIR, "res", `${id}.json`);
   const deadline = Date.now() + timeoutMs;

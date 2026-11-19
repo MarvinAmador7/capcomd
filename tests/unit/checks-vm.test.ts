@@ -102,6 +102,38 @@ mkdir -p "$prefix/bin"; printf '#!/bin/sh\\ncase "$1" in install) mkdir -p node_
     expect(checksFailReason({})).toBe("tests failed on branch merged with latest target");
   }, 30_000);
 
+  test("a check that outlives CAPCOMD_CHECKS_TIMEOUT_MS fails with its output and says so, even where the exec rejects past its deadline (boxd)", async () => {
+    const ids = { CAPCOMD_RUN_ID: "run-t", CAPCOMD_TASK_ID: "agt-t", CAPCOMD_TARGET: "main" };
+    process.env.CAPCOMD_CHECKS_TIMEOUT_MS = "2000";
+    try {
+      // The in-VM limit stops it: a failed check (never a throw, which made the verifier run it again on every poll).
+      const slow = await runTests(git, "echo started-slow; sleep 30; echo $((40 + 2))", ids);
+      expect(slow).toMatchObject({ passed: false, where: "vm" });
+      expect(slow.output).toContain("started-slow");
+      expect(slow.output).not.toContain("42");
+      expect(slow.output).toContain("didn't finish within 2 s");
+      // A provider that rejects an exec past its deadline (boxd's SDK: "exec timed out after N ms"): the same failed check.
+      const real = provider.exec.bind(provider);
+      provider.exec = (async (id: string, cmd: string[], o?: { timeoutMs?: number }) => {
+        if (cmd.join(" ").includes("sleep 31")) throw Object.assign(new Error(`exec failed (vm ${id}): exec timed out after ${o?.timeoutMs}ms`), { kind: "timeout" });
+        return real(id, cmd, o as any);
+      }) as any;
+      try {
+        const rejected = await runTests(git, "sleep 31", ids);
+        expect(rejected).toMatchObject({ passed: false, where: "vm" });
+      } finally { provider.exec = real; }
+      // An outage is still thrown (the verifier tries it again), and a command's own exit 124 is its own failure.
+      const quick = await runTests(git, "exit 124", ids);
+      expect(quick).toMatchObject({ passed: false, where: "vm" });
+      expect(quick.output).not.toContain("didn't finish");
+    } finally { delete process.env.CAPCOMD_CHECKS_TIMEOUT_MS; }
+    const { execTimedOut } = await import("../../src/merge/verify");
+    expect(execTimedOut(Object.assign(new Error("exec failed (vm x): exec timed out after 1200000ms"), { kind: "timeout" }))).toBe(true);
+    expect(execTimedOut(Object.assign(new Error("x"), { kind: "exec_timeout" }))).toBe(true);
+    expect(execTimedOut(Object.assign(new Error("machines.exec failed: Deadline exceeded after 60.000s"), { kind: "timeout" }))).toBe(false);
+    expect(execTimedOut(Object.assign(new Error("connect ECONNREFUSED"), { kind: "unavailable" }))).toBe(false);
+  }, 60_000);
+
   test("host mode keeps the old behavior (the worktree itself, on the host)", async () => {
     process.env.CAPCOMD_CHECKS = "host";
     try {

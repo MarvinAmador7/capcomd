@@ -87,6 +87,13 @@ export function hostCheckEnv(source: Record<string, string | undefined> = proces
 
 const CHECKS_TIMEOUT_MS = () => Number(process.env.CAPCOMD_CHECKS_TIMEOUT_MS ?? 20 * 60_000);
 
+/** An exec that ran past the deadline it was given (the sandbox kept answering): the command's doing, never an outage.
+ *  boxd's SDK rejects such an exec ("exec timed out after N ms") where the seam contract says exit 124 (seam.ts). */
+export function execTimedOut(e: unknown): boolean {
+  const kind = (e as { kind?: string } | null)?.kind;
+  return kind === "exec_timeout" || ((kind === "timeout" || e instanceof Error) && /exec timed out after \d+ ?ms/.test(String((e as Error)?.message ?? "")));
+}
+
 /**
  * The VM path: a fresh VM from the env snapshot (CLIs and baked deps, no credentials: never an auth
  * snapshot), only the package registries as egress, the exact tree under test (`git archive` of HEAD,
@@ -122,7 +129,10 @@ async function runInVm(git: Git, command: string, env: Record<string, string>, s
       ...(snap ? { fromSnapshot: snap } : {}),
     }));
   } catch (e) { release(); throw e; }
-  const sh = (script: string, timeoutMs = 300_000) => provider.exec(id, ["sh", "-c", script], { env: { PATH: agentPath(home), HOME: home }, timeoutMs });
+  // An exec past its deadline is exit 124 here, whatever the provider does (boxd's rejects): a check that never ends must
+  // fail the verification, not throw out of it (the verifier then re-runs it, forever: every poll starts it again).
+  const sh = (script: string, timeoutMs = 300_000) => provider.exec(id, ["sh", "-c", script], { env: { PATH: agentPath(home), HOME: home }, timeoutMs })
+    .catch((e): { code: number; stdout: string; stderr: string } => { if (execTimedOut(e)) return { code: 124, stdout: "", stderr: `timed out after ${timeoutMs} ms` }; throw e; });
   try {
     await provider.waitReady(id, 120_000);
     const archive = Bun.spawn(["git", "archive", "--format=tar", "HEAD"], { cwd: git.cwd, stdout: "pipe", stderr: "pipe" });
@@ -156,8 +166,19 @@ echo "deps: install $F"`);
       if (deps.code !== 0) return { passed: false, stage: deps.code === 127 ? "setup" : "deps", output: `checks VM: installing dependencies failed (\`${cmd}\`, exit ${deps.code})${deps.code === 127 ? `: a command is missing from the agent environment image; run \`${rebuild}\`` : ""}: ${(deps.stdout + deps.stderr).slice(-1500)}` };
     }
     const ids = Object.entries(env).map(([k, v]) => `${k}=${sq(v)}`).join(" ");
-    const run = await sh(`cd ${sq(W)} && env ${ids} sh -c ${sq(command)}`, CHECKS_TIMEOUT_MS());
-    return { passed: run.code === 0, output: (run.stdout + run.stderr).slice(-keep) };
+    // The command's own limit runs in the VM (GNU timeout, its process group), so a check that runs too long still ends
+    // with its output; the exec's deadline, a minute later, is the backstop.
+    const limitMs = CHECKS_TIMEOUT_MS();
+    const secs = Math.max(1, Math.ceil(limitMs / 1000));
+    const r0 = Date.now();
+    const run = await sh(`T=; command -v timeout >/dev/null 2>&1 && T="timeout -k 10 ${secs}"; cd ${sq(W)} && env ${ids} $T sh -c ${sq(command)}`, limitMs + 60_000);
+    const out = run.stdout + run.stderr;
+    // 124 is timeout's (or the backstop's) only when the limit was reached: a command may exit 124 of its own.
+    if (run.code === 124 && Date.now() - r0 >= limitMs - 1000) {
+      const took = limitMs % 60_000 ? `${secs} s` : `${limitMs / 60_000} min`;
+      return { passed: false, output: `${out.slice(-Math.max(0, keep - 400))}\nchecks VM: \`${command}\` didn't finish within ${took} (CAPCOMD_CHECKS_TIMEOUT_MS), so it was stopped. A check must end on its own: name a faster command for it (the project's \`run.checks\`), or raise the limit.`.slice(-keep) };
+    }
+    return { passed: run.code === 0, output: out.slice(-keep) };
   } finally {
     await provider.destroy(id).catch(() => {});
     release();
