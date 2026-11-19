@@ -3,8 +3,11 @@
 // (src/plugins/host.ts) records it as a scope event of the run, and harness.v1 serves it back, replayed and on the SSE
 // stream, as a valid envelope with the plugin's entity and sentence; a subscription to the run's
 // stream (src/plugins/events.ts, reading through the engine) hears the same envelopes. The pattern itself: tests/plugins/event-types.test.ts.
+// And a run's own plugin settings (§10.2 layer 5): `capcomd run new --plugin-config <plugin>.<key>=<value>` checks the
+// setting against the plugin's schema (x-per-run only) before the run exists, and keeps it in the plugin's run storage
+// under `config`, where the plugin reads it (ctx.storage / GET /v1/plugins/{name}/storage) and can't write it.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { HarnessEventEnvelope, PluginContext, PluginModule } from "../../packages/plugin/src/context";
@@ -16,6 +19,7 @@ import { harnessApp } from "../../src/api/server";
 import { harnessState } from "../../src/api/state";
 import { eventSinks, scopeEvents } from "../../src/plugins/events";
 import { pluginEventWriter } from "../../src/plugins/host";
+import { pluginStore } from "../../src/plugins/storage";
 import { VERSION } from "../../src/utils/self";
 import { sleep } from "../helpers/engine";
 import { world, newRun, trajectory, type World } from "./harness";
@@ -26,8 +30,17 @@ let ctx!: PluginContext;
 let app: ReturnType<typeof harnessApp>;
 let token = "";
 const tmp = mkdtempSync(join(tmpdir(), "capcomd-plugin-events-"));
+// A user's plugin with a per-run setting, in this file's capcomd home (the preload's).
+const home = process.env.CAPCOMD_HOME!;
+const notifyDir = join(home, "plugins", "notify");
 
 beforeAll(async () => {
+  mkdirSync(notifyDir, { recursive: true });
+  writeFileSync(join(notifyDir, "plugin.json"), JSON.stringify({
+    schema: "capcomd.plugin/v1", name: "notify", version: "1.0.0", description: "a notifier with per-run settings", apiVersion: 1, engines: { capcomd: ">=0.0.0" },
+    entry: { runtime: "process", command: ["true"] }, contributes: { hooks: { "run.changed": {} } },
+    config: { type: "object", additionalProperties: false, properties: { channel: { type: "string", default: "#general", "x-per-run": true }, digestEvery: { type: "integer", default: 10 } } },
+  }));
   w = await world("plugin-events");
   const clients = join(tmp, "harness-clients.json");
   token = addClient("reader", ["read"], clients).token;
@@ -42,8 +55,10 @@ beforeAll(async () => {
       engines: { capcomd: ">=0.0.0" }, entry: { runtime: "in-process", module: "./index.ts" }, scopes: ["read", "steer"], contributes: { events: ["noted"] } },
     module: { activate(c) { ctx = c; } } as PluginModule<never>,
   }]);
-}, 120_000);
-afterAll(async () => { await host?.stop(); await w?.stop(); });
+}, 180_000);
+afterAll(async () => {
+  try { await host?.stop(); await w?.stop(); } finally { rmSync(notifyDir, { recursive: true, force: true }); }
+});
 
 const auth = () => ({ authorization: `Bearer ${token}` });
 async function readUntil(res: Response, until: (t: string) => boolean, ms = 20_000) {
@@ -127,3 +142,21 @@ test("a subscription to the run's stream hears its events through the engine, in
   expect(got.length).toBe(3);
   await expect(ctx.events.replay("run-doesnotexist", 0)).rejects.toMatchObject({ code: "not_found" });
 }, 60_000);
+
+test("a run's per-run plugin setting is kept in the plugin's run storage; any other is refused before the run exists", async () => {
+  const made = await w.cj(["run", "new", "--budget", "usd=1", "--key", `cfg-${Date.now()}`, "--plugin-config", "notify.channel=#release"]);
+  expect(made.code).toBe(0);
+  const runId = made.j.runId as string;
+  expect((await w.cj(["kv", "get", runId, "plugin/notify/config"])).j).toMatchObject({ value: { channel: "#release" }, writer: "operator" });
+  const store = pluginStore("notify", join(home, "state", "plugins", "notify"));
+  expect((await store.get({ runId }, "config"))?.value).toEqual({ channel: "#release" });
+  await expect(store.put({ runId }, "config", { channel: "#mine" })).rejects.toThrow(/written by capcomd/);
+  // Not per-run, not valid, not a plugin: refused (usage), and no run was made.
+  for (const [flag, text] of [["notify.digestEvery=5", "can't be set per run"], ["notify.channel=5", "plugins.notify.channel"], ["ghost.x=1", "no plugin ghost"]] as const) {
+    const key = `cfg-bad-${Math.random().toString(36).slice(2)}`;
+    const r = await w.cj(["run", "new", "--budget", "usd=1", "--key", key, "--plugin-config", flag]);
+    expect(r.code).toBe(2);
+    expect(r.j).toMatchObject({ ok: false, error: { code: "usage", reason: "plugins" } });
+    expect(r.j.error.message).toContain(text);
+  }
+}, 120_000);

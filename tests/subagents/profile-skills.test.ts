@@ -101,7 +101,8 @@ test("a project's profile skills wait for the operator's trust: a spawn before i
 
 test("a lead gets its profile's prompt, its profile's skill, then the orchestration skill once, then a plugin's", async () => {
   const run = (await cj(["run", "new", "--key", `pfs-${Date.now()}`])).j.runId as string;
-  const lead = await finished(run, await spawn(run, "lead", "lead"));
+  const leadId = await spawn(run, "lead", "lead");
+  const lead = await finished(run, leadId);
   const own = lead.system.indexOf("Keep the team small."), plan = lead.system.indexOf('<skill name="plan">');
   const orch = lead.system.indexOf('<skill name="capcomd-orchestration">'), cite = lead.system.indexOf('<skill name="cite-files">');
   expect(own).toBe(0);
@@ -109,6 +110,10 @@ test("a lead gets its profile's prompt, its profile's skill, then the orchestrat
   expect(orch).toBeGreaterThan(plan);
   expect(cite).toBeGreaterThan(orch);
   expect(lead.system).toContain(`<skill name="plan">\n${PLAN}\n</skill>`);
+  expect(lead.system).toContain(`You are agent ${leadId}.`);
+  // Each skill in a block named for it, as a message's (src/agents/skills.ts skillBlock).
+  expect(lead.system).toContain('<skill name="capcomd-orchestration">\n# Name your tab (capcomd)');
+  expect(lead.system).toContain(`<skill name="cite-files">\n${SKILL_TEXT}\n</skill>`);
   // Once each, though the profile names capcomd-orchestration and the built-in plugin attaches it.
   expect(times(lead.system, body(PLAN))).toBe(1);
   expect(times(lead.system, '<skill name="capcomd-orchestration">')).toBe(1);

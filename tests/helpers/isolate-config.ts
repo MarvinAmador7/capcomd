@@ -32,6 +32,10 @@ process.env.CAPCOMD_NO_ENGINE_AUTOSTART = "1";
 // Nor ask the developer's own GitHub CLI (it reads its login from the keychain): the forges ask gh only through
 // CAPCOMD_GH_CLI, so a test that needs gh names its fake there. The live GitHub test (CAPCOMD_GH_LIVE=1) keeps the real one.
 if (process.env.CAPCOMD_GH_LIVE !== "1") process.env.CAPCOMD_GH_CLI ??= "/nonexistent/capcomd-test-gh";
+// The agent workflow's watch (src/actors/agent-workflow.ts WATCH_MS, 60 s by default) bounds how long an agent whose
+// run was lost with its engine host waits after a restart: 20 s here, still past the 10 s step wake (STEP_WAKE_MS) so a
+// test can tell the watch's alarm from a step's. A test that needs another sets its own.
+process.env.CAPCOMD_AGENT_WORKFLOW_POLL_MS ??= "20000";
 
 // The guard, here and in every bun process a test starts (BUN_OPTIONS: bun reads it as command-line flags).
 const log = join(scratch, "guard-violations.log");

@@ -3,8 +3,8 @@
 // 10 minutes between checkpoints. The in-VM supervisor fingerprints each checkout at its heartbeats, the runner reads
 // the CLI's Bash calls, and the worker hands both to the scope as `worked` (src/actors/worker.ts), which the watchdog
 // hears as agent.changed. One worker edits a file for 16 s, one waits on a 10 s command, one sits silent for 16 s: only
-// the silent one gets `stalled`, and its notice says what was seen. (tests/scenarios/watchdog-progress.test.ts has the
-// same with the reports faked and a 90 s limit.)
+// the silent one gets `stalled`, and its notice says what was seen. (A job and its polls holding the clock:
+// tests/scenarios/watchdog-progress.test.ts.)
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";

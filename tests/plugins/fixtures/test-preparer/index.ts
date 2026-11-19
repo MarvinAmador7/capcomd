@@ -1,4 +1,4 @@
-// Test plugin (tests/subagents/prepare-skills.test.ts and profile-skills.test.ts, loaded by the daemon with
+// Test plugin (tests/subagents/profile-skills.test.ts, loaded by the daemon with
 // CAPCOMD_TEST_PLUGINS): at agent.preparing it adds a skill of its own (pinned by the sha256 of its text) and the variable
 // PLUGIN_TEAM to every real agent (plugin API §6.6.7, §17.2 step 8), and PLUGIN_SAW_SKILLS, the names of the skills the
 // payload already had (the profile's, then earlier plugins'). It runs after the built-in orchestration skill (by name, §6.3).
