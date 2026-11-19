@@ -497,6 +497,21 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       ...(activity ? { onEvent: (ev: import("../agents/types").AgentEvent) => { prep?.stop(); activity.event(ev); } } : {}),
       ...(prep ? { onSetup: prep.report } : {}),
       ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
+      // ADR-026 §3: its mailbox, pushed (the scope's messagesChanged), with the durable delivery cursor.
+      ...(scope ? { messages: {
+        pull: async (after: number) => (await scope.pullMessages({ agentId: workerId, after })) as { seq: number; from: string; body: string; skills?: AttachedSkill[] }[],
+        delivered: (seq: number) => { scope.messagesDelivered({ agentId: workerId, seq }).catch(() => {}); },
+        subscribe: (onChange: () => void) => {
+          try {
+            const conn: any = scope.connect();
+            conn.on("messagesChanged", (d: { to?: unknown }) => { if (!Array.isArray(d?.to) || d.to.includes(workerId)) onChange(); });
+            // A (re)connect may have missed a push: look once.
+            conn.onOpen?.(onChange);
+            conn.onError?.(() => {});
+            return () => { try { void conn.dispose?.(); } catch { /* gone */ } };
+          } catch { return () => {}; } // no push: the runner's slow look delivers
+        },
+      } } : {}),
       // Every agent's tool calls, refusals and words; one with the in-VM capcomd also gets a `[capcomd] <op> → …` line per
       // capcomd call from its spool pump (driver.ts).
       ...(scope ? { onLog: (lines: string[]) => { scope.appendLog({ agentId: workerId, stream: "agent", lines }).catch(() => {}); } } : {}),

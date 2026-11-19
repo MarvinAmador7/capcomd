@@ -99,6 +99,17 @@ export const AgentActivity = z.object({
 		bytes: z.number().int().nonnegative().nullable().describe("copy: bytes sent to the machine so far; null otherwise"),
 		totalBytes: z.number().int().nonnegative().nullable().describe("copy: the bytes it sends in all, when known; null otherwise"),
 	}).optional().describe("Capability agents.setup. Only with kind setup: the agent is being set up and its CLI hasn't reported a step yet (its thread is empty until it does). Replaced by the agent's own activity at its first step. Older daemons don't send it"),
+	wake: z.object({
+		id: z.string().describe("The wake (wk-…): agent.wake_armed armed it, agent.woken or agent.wake_cancelled ends it"),
+		kind: z.string().describe("op, agents, events or timer, as agent.wake_armed's. More may be added: show `text` for one you don't know"),
+		op: z.string().optional().describe("kind op: the verify, check or merge it waits on (vfy-…, chk-…, mrg-…)"),
+		opKind: z.string().optional().describe("kind op: verify, check or merge"),
+		agents: z.array(z.string()).optional().describe("kind agents: the agents it waits on"),
+		mode: z.string().optional().describe("kind agents: any or all"),
+		types: z.array(z.string()).optional().describe("kind events: the event types it waits for"),
+		armedAt: Timestamp.describe("When it started waiting: a client's elapsed clock (\"waiting for verify vfy-… · 4:12\") counts from here"),
+		at: Timestamp.nullable().describe("When it is woken at the latest: a timer's time, else its deadline"),
+	}).optional().describe("Capability agents.wake. Only with kind wait, while the agent waits between turns for what it armed a wake on (its turn ended; its status stays running): show it as waiting, not as a running tool call. Replaced by its own activity when it is woken. Older daemons don't send it"),
 });
 export const Agent = z.object({
 	id: z.string(),
@@ -274,6 +285,7 @@ export const ACTIVITY_DOC = `Agent activity: \`?activity=1\` on a run stream (wi
 They are ephemeral (\`durability: "ephemeral"\`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no \`id:\`, so they never move the Last-Event-ID cursor.
 Their envelope \`seq\` is the last durable seq at the time (not a cursor), \`entitySeq\` is 0 and \`id\` is unique per frame; the latest frame per agent wins.
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Capability agents.wake: while an agent waits between turns for what it armed a wake on (a verify, a check, a merge, its children, a time), its activity has kind \`wait\` and \`wake\` says what it waits for and since when (\`armedAt\`): a client shows "waiting for verify vfy-… · 4:12" rather than a running tool call. agent.woken (durable, on the lifecycle feed) says what woke it.
 Capability agents.setup: while an agent is being set up, before its CLI's first step (its thread is empty until then), its activity has kind \`setup\` and \`setup.phase\` says what the daemon is doing (starting its machine, preparing its workspace, copying the repository to it with \`bytes\` of \`totalBytes\`, installing and starting its CLI): a client shows that in the agent's empty thread. Its first step replaces it.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.`;
 
@@ -604,6 +616,7 @@ export const CAPABILITIES = {
 	"plugins.seam_stats": "GET /v1/plugins (and GET /v1/plugins/{name}) `stats.seams`: the daemon's calls to each seam a plugin provides (sandbox, agent, forge, context) since it started, and the failed ones by their error kind (plugin API §13.5)",
 	"logins.fx": "GET /v1/logins takes `provider` (claude, codex or fx): only that AI's logins; fx's (a Vercel or Grok plan login with `capcomd auth login fx`, or AI_GATEWAY_API_KEY) are listed only when asked for with `provider=fx`",
 	"agents.setup": "Agent.activity of kind setup, with `setup` (phase, bytes, totalBytes): while an agent is being set up (its machine starting, its workspace prepared, the repository copied to it, its CLI installed and started), before its first step, live on agent.activity_changed",
+	"agents.wake": "Waits between turns (ADR-026 §3): an agent ends its turn with a wake armed instead of waiting inside a tool call. agent.wake_armed, agent.woken and agent.wake_cancelled on run streams and the lifecycle feed (causes waiting, woken, wake_cancelled), and Agent.activity of kind wait with `wake` (what it waits for, since when) while it waits",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +

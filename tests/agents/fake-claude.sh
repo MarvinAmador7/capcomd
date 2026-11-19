@@ -65,7 +65,7 @@ case "$prompt" in *"[job:"*)
   else capcomd job start --label build --foreground-ms 500 -- "sleep $n; echo built-ok" > job-start.txt 2>&1; fi
   emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"j1","content":"started"}]}}';;
 esac
-# [wake-in:N] / [wake-check] / [wake-await] (SPIKE, durable wakes): a Bash call that arms a wake and returns at once (its
+# [wake-in:N] / [wake-check] / [wake-await] (ADR-026 §3, waits between turns): a Bash call that arms a wake and returns at once (its
 # answer and the time it took in wake-start.txt): a check-in N seconds from now, the end of a `capcomd check` of the
 # run's target, or the end of a child it spawns (`capcomd await <child> --wake`).
 # Then the turn ends; the wake-up message (on stdin) is written to messages.txt, as any message is

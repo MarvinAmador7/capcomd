@@ -72,9 +72,9 @@ async function awaitLoop(op, args) {
 }
 
 /**
- * SPIKE (durable wakes): a call that armed a wake (`wake`, or verify/check/await with --wake) leaves a marker the
- * supervisor reads: while a wake is pending it keeps the agent CLI's input open after its turn ends, so the wake-up
- * message starts its next turn instead of finding it gone.
+ * ADR-026 §3: a call that armed a wake (`wake`, or verify/check/await with --wake) leaves a marker the supervisor reads:
+ * while a wake is pending it keeps the agent CLI's input open after its turn ends (warm), so the wake-up message starts
+ * its next turn instead of finding it gone.
  */
 function noteWake(r) {
   const id = r?.ok ? r.result?.wake : null;
@@ -163,9 +163,11 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
         that must outlive you (a server kept for review): it runs in a machine of the run's own (the run's
         environment image, without your checkout or credentials) until the run ends or its --timeout-ms.
   job output <job> [--tail BYTES]   job list   job kill <job> [--reason R]
-  wake --op <vfy|chk|mrg> | --agents a,b [--all] | --events TYPE,… --after SEQ | --in-ms N | --at ISO  [--note "…"]
-        don't wait: end your turn, and the event (or the time) comes to you as a message that starts your next one.
-        verify/check/await/wait-any --wake: the same, for what they would wait on.   wake --list   wake --cancel <wk>
+  wake --op <vfy|chk|mrg-id> | --agents a,b [--all] | --events agent.done,… [--agent agt] [--after SEQ] | --in 10m | --at ISO
+        [--note "what you'll do then"] [--key K]   don't wait: end your turn, and the event (or the time) comes to you
+        as a message that starts your next one (at the latest 6 h out).   wake --list   wake --cancel <wk>
+  verify|check|await|wait-any … --wake [--note "…"]   the same, for what they would wait on: they answer at once with
+        the op or agents; then end your turn. Never wait inside a tool call (no sleep loops, no blocking await).
   mcp   (serve these as MCP tools over stdio)`;
 
 export function toCall(argv) {
@@ -192,9 +194,9 @@ export function toCall(argv) {
     case "wake": {
       if (fl.cancel) return { op: "wake", args: { cancel: fl.cancel } };
       if (fl.list !== undefined) return { op: "wake", args: { list: true } };
-      const a = { ...(fl.op ? { op: fl.op } : {}), ...(fl.agents ? { agents: String(fl.agents).split(",") } : {}), ...(fl.all !== undefined ? { all: true } : {}),
-        ...(fl.events ? { events: String(fl.events).split(","), after: Number(fl.after ?? 0) } : {}), ...wakeArgs(fl), key };
-      if (!a.op && !a.agents && !a.events && a.inMs === undefined && a.at === undefined) usage("wake needs --op ID, --agents a,b, --events TYPE,… or a time (--in-ms N, --at ISO)");
+      const a = { ...(fl.op ? { op: fl.op } : {}), ...(fl.agents ? { agents: arr(fl.agents).join(",").split(",").filter(Boolean) } : pos.length ? { agents: pos } : {}), ...(fl.all !== undefined ? { all: true } : {}),
+        ...(fl.events ? { events: arr(fl.events).join(",").split(",").filter(Boolean), ...(fl.agent ? { agent: fl.agent } : {}), after: Number(fl.after ?? fl["since-seq"] ?? 0) } : {}), ...wakeArgs(fl), ...(key !== undefined ? { key } : {}) };
+      if (!a.op && !a.agents && !a.events && a.in === undefined && a.inMs === undefined && a.at === undefined) usage("wake needs --op ID, --agents a,b, --events TYPE,… or a time (--in 10m, --at ISO)");
       return { op: "wake", args: a, wake: true };
     }
     case "status": return { op: "status", args: pos.length ? { agents: pos } : {} };
@@ -268,9 +270,9 @@ export function toCall(argv) {
   return usage(cmd ? `unknown command ${cmd}` : "no command");
 }
 
-/** A wake's time and note: --in-ms N | --at ISO, --note "…". */
+/** A wake's time and note: --in 10m (90s, 2h, 1500ms; a bare number is seconds) | --in-ms N | --at ISO, --note "…". */
 function wakeArgs(fl) {
-  return { ...(fl["in-ms"] !== undefined ? { inMs: Number(fl["in-ms"]) } : {}), ...(fl.at !== undefined ? { at: fl.at } : {}), ...(fl.note !== undefined ? { note: String(fl.note) } : {}) };
+  return { ...(fl.in !== undefined ? { in: String(fl.in) } : {}), ...(fl["in-ms"] !== undefined ? { inMs: Number(fl["in-ms"]) } : {}), ...(fl.at !== undefined ? { at: fl.at } : {}), ...(fl.note !== undefined ? { note: String(fl.note) } : {}) };
 }
 
 /** Where a job runs and the PATH it gets: this shell's (its foreground wait is kept inside one call's time). */
@@ -292,8 +294,8 @@ const str = { type: "string" }, num = { type: "number" }, ids = { type: "array",
 export const TOOLS = [
   ["title", "Name your tab: 2-4 lowercase words for what you're working on (e.g. \"login redirect\"). Rename only when your focus really changes. `agent`: one of your children instead; `run: true` (the planner): the run.", S({ title: str, agent: str, run: { type: "boolean" }, key: str }, ["title"])],
   ["spawn", "Spawn a child agent under you. Set its fan-out with `children` (narrow-only, ≤ your own limits). `title`: its tab's name (2-4 lowercase words).", S({ task: str, title: str, profile: str, key: str, budget: str, check: str, report: { type: "boolean" }, continue: str, contract: { type: "object" }, children: S({ maxChildren: num, maxDepth: num, maxTotalDescendants: num, allowedChildProfiles: ids, budgetShare: num }) }, ["task"])],
-  ["await", "Block until all given children finish; returns their structured results (fenced).", S({ agents: ids, timeoutMs: num, wake: { type: "boolean" } }, ["agents"])],
-  ["wait_any", "Block until any given child finishes.", S({ agents: ids, timeoutMs: num, wake: { type: "boolean" } }, ["agents"])],
+  ["await", "Wait until all given children finish; returns their structured results (fenced). wake: true (prefer it) answers at once and wakes you with a message when they have all ended: end your turn after it.", S({ agents: ids, timeoutMs: num, wake: { type: "boolean" }, note: str }, ["agents"])],
+  ["wait_any", "Wait until any given child finishes. wake: true (prefer it) answers at once and wakes you with a message when one ends: end your turn after it.", S({ agents: ids, timeoutMs: num, wake: { type: "boolean" }, note: str }, ["agents"])],
   ["status", "Status of agents (default: you; to an agent that may spawn the consolidator, the run's lessons too).", S({ agents: ids })],
   ["tree", "Your subtree with cost/turn rollups and stuck flags.", S({ root: str })],
   ["cancel", "Cancel a descendant and its whole subtree (VMs torn down).", S({ agent: str, reason: str }, ["agent"])],
@@ -305,12 +307,12 @@ export const TOOLS = [
   ["grant", "Give one of your children more budget while it runs, from what you have left (only units it has a budget in); it also restarts its stuck window.", S({ agent: str, budget: str, key: str }, ["agent", "budget"])],
   ["task", "Shared task board: action add|list|show|claim|renew|release|done.", S({ action: str, title: str, task: str, epoch: num, leaseMs: num, after: ids, data: {}, result: {}, status: str, key: str }, ["action"])],
   ["kv", "Shared blackboard: action get|put|cas|del|list (cas needs expect=version).", S({ action: str, k: str, value: {}, expect: num, prefix: str, key: str }, ["action"])],
-  ["verify", "Run the run's checks on a child's branch (never self-reported); a child pinned with spawn check uses that check.", S({ ref: str, check: str, acceptance: {}, key: str, wake: { type: "boolean" } }, ["ref"])],
+  ["verify", "Run the run's checks on a child's branch (never self-reported); a child pinned with spawn check uses that check. wake: true (prefer it: a review takes minutes) answers at once with its vfy- id and wakes you with a message when it ends: end your turn after it.", S({ ref: str, check: str, acceptance: {}, key: str, wake: { type: "boolean" }, note: str }, ["ref"])],
   ["merge", "Merge a child's verified commit (needs require=vfy id). Its result says whether the checks ran on the combined code (result.combined).", S({ ref: str, require: str, key: str }, ["ref", "require"])],
   ["fetch", "Fetch the latest branches (all, or `branches`) into your checkout as origin/<branch>, e.g. the target after a merge; read them with git log/show/diff, or `git switch --detach origin/<branch>` and the file tools. Changes no code.", S({ branches: ids })],
-  ["check", "Run the run's checks on a branch's commit as it is (ref: a branch or a child's agent id; default: the run's target, i.e. the combined code after the merges), in a sandbox: the full output and pass/fail (result.pass, result.text, result.checks.output). Merges and reviews nothing; how you know the combined code works without running it yourself. Identical checks of one commit are shared.", S({ ref: str, check: str, key: str, wake: { type: "boolean" } })],
+  ["check", "Run the run's checks on a branch's commit as it is (ref: a branch or a child's agent id; default: the run's target, i.e. the combined code after the merges), in a sandbox: the full output and pass/fail (result.pass, result.text, result.checks.output). Merges and reviews nothing; how you know the combined code works without running it yourself. Identical checks of one commit are shared. wake: true answers at once with its id and wakes you with a message when it ends: end your turn after it.", S({ ref: str, check: str, key: str, wake: { type: "boolean" }, note: str })],
   ["job_start", "Run a long command (tests, a build, a server) in the background in your machine. It answers with the result when the command ends within `foregroundMs` (default: your profile's, 60 s), else state \"running\" and a job id: the result then comes to you as a message. `cmd`: a shell line, or argv. `run: true`: the run's job instead, for one that must outlive you (a server kept for review): it runs in a machine of the run's own (the run's environment image, without your checkout or credentials) until the run ends or its `timeoutMs`.", S({ cmd: { anyOf: [str, ids] }, label: str, foregroundMs: num, timeoutMs: num, run: { type: "boolean" }, key: str }, ["cmd"])],
-  ["wake", "Don't wait: be woken instead. Arms a durable wake for you: when the op settles (op: vfy-/chk-/mrg- id), the agents end (agents, all), or at a time (inMs), a message reaches you as your next turn. End your turn after it; never poll or sleep.", S({ op: str, agents: ids, all: { type: "boolean" }, inMs: num, at: str, note: str, key: str })],
+  ["wake", "Don't wait: be woken instead. Arms a durable wake for you: when the op settles (op: a vfy-/chk-/mrg- id), the agents end (agents; all: every one), events of these types happen (events: e.g. [\"agent.done\"], agent, after: an event seq), or at a time (in: \"10m\", or at: ISO; at most 6 h out), a message reaches you as your next turn. note: what you'll do then. End your turn after it; never poll, sleep or wait in a tool call. list: true lists yours; cancel: a wk- id takes one back.", S({ op: str, agents: ids, all: { type: "boolean" }, events: ids, agent: str, after: num, in: str, at: str, note: str, key: str, list: { type: "boolean" }, cancel: str })],
   ["job_output", "The output of one of your background jobs so far (or its result once it ended).", S({ job: str, tail: num }, ["job"])],
   ["job_list", "Your background jobs, newest first, with their state.", S({})],
   ["job_kill", "Stop one of your background jobs (SIGTERM, then SIGKILL after 5 s).", S({ job: str, reason: str }, ["job"])],

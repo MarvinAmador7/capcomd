@@ -83,6 +83,7 @@ export const SCOPE_EVENT_TYPES = [
 	"RUN_NEW", "RUN_GRANTED", "RUN_ENDED", "RUN_GOAL_COMPLETED", "RUN_PR_OPENED", "RUN_BRANCH_KEPT", "RUN_TITLED",
 	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_TITLED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
+	"AGENT_WAKE_ARMED", "AGENT_WOKEN", "AGENT_WAKE_CANCELLED",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
 	"MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED",
@@ -174,6 +175,33 @@ export const LegacyEventShapes = {
 	"check.started": checkStart,
 	"check.passed": checkEnd,
 	"check.failed": checkEnd,
+	// Capability agents.wake (ADR-026 §3): an agent ended its turn to be woken by what it waits for, instead of waiting
+	// inside a tool call. Daemon-written, except `note` (the agent's own words).
+	"agent.wake_armed": {
+		wakeId: S.describe("The wake (wk-…)"),
+		kind: z.enum(["op", "agents", "events", "timer"]).describe("What it waits for: op (a verify, check or merge to settle), agents (agents to end), events (event types after a point), timer (only its time: a check-in). More may be added: show an unknown kind as waiting"),
+		op: S.optional().describe("kind op: the verify, check or merge (vfy-…, chk-…, mrg-…)"),
+		opKind: z.enum(["verify", "check", "merge"]).optional().describe("kind op: which kind of op it is"),
+		agents: z.array(S).optional().describe("kind agents: the agents it waits on"),
+		mode: z.enum(["any", "all"]).optional().describe("kind agents: woken when any of them ends, or when all have"),
+		types: z.array(S).optional().describe("kind events: the event types (dotted names) it waits for"),
+		agent: S.optional().describe("kind events: only events about this agent"),
+		at: N.nullable().describe("When it fires at the latest (epoch ms): a timer's time, else its deadline (by default 6 hours ahead, at most that); null when it has none"),
+		note: nT.describe("Agent-written text: render as plain text. What the agent will do when woken, in its own words; null when it gave none"),
+	},
+	"agent.woken": {
+		wakeId: S.describe("The wake (wk-…) agent.wake_armed armed"),
+		kind: z.enum(["op", "agents", "events", "timer"]).describe("As agent.wake_armed's"),
+		by: z.enum(["event", "time", "deadline"]).describe("What fired it: event (what it waited for happened, or had already), time (a timer's time came), deadline (its deadline passed first)"),
+		text: S.describe("Daemon-written (trusted): what happened, in a few words (\"verify vfy-… passed\", \"agt-… ended: done\", \"its check-in time came\")"),
+		causeSeq: N.nullable().describe("The seq of the event that fired it, on this run's stream; null when its time did, or it had happened before it was armed and the event isn't known"),
+		messageSeq: N.describe("The message it put in the agent's mailbox (Message.seq): the agent reads it as its next turn"),
+		armedAt: N.describe("When it was armed (epoch ms)"),
+	},
+	"agent.wake_cancelled": {
+		wakeId: S.describe("The wake (wk-…)"),
+		reason: z.enum(["agent", "ended"]).describe("agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up)"),
+	},
 	"job.started": {
 		jobId: S.describe("The job (job-…): background work an agent or a plugin started (`capcomd job start`, plugin API §16.2)"),
 		kind: z.enum(["exec", "timer"]).describe("exec: a command in its owner's machine; timer: a clock that fires. More may be added"),

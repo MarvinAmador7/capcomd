@@ -406,6 +406,9 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   // The timers of the daemon and its runs, from their records (§16.2 rule 6), now that their listeners are loaded. (A
   // place that doesn't delete idle machines by itself, Docker, sweeps on its plugin's own timer.)
   await J.resumeTimers().catch((e) => console.error(`capcomd serve: re-arming timers: ${(e as Error).message}`));
+  // ADR-026 §3: the verifies, checks and merges an agent's armed wake waits on, restarted now that the plugins that judge
+  // them are loaded (nobody polls them; a restart mid-op would leave the wake waiting for its deadline). In the background.
+  void import("../../primitives/wake-sweep").then((W) => W.resumeWaitedOps()).catch((e) => console.error(`capcomd serve: restarting waited-on ops: ${(e as Error).message}`));
   // And the agent providers are the ones its plugins registered (§7.3, §17.2 step 4); a host that didn't start leaves
   // the built-ins.
   if (started) (await import("../../plugins/agents")).useAgentSeams(host.contributions);

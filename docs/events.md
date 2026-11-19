@@ -1632,6 +1632,183 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 }
 ```
 
+## `agent.wake_armed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "wakeId": {
+      "type": "string",
+      "description": "The wake (wk-…)"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "op",
+        "agents",
+        "events",
+        "timer"
+      ],
+      "description": "What it waits for: op (a verify, check or merge to settle), agents (agents to end), events (event types after a point), timer (only its time: a check-in). More may be added: show an unknown kind as waiting"
+    },
+    "op": {
+      "description": "kind op: the verify, check or merge (vfy-…, chk-…, mrg-…)",
+      "type": "string"
+    },
+    "opKind": {
+      "description": "kind op: which kind of op it is",
+      "type": "string",
+      "enum": [
+        "verify",
+        "check",
+        "merge"
+      ]
+    },
+    "agents": {
+      "description": "kind agents: the agents it waits on",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "mode": {
+      "description": "kind agents: woken when any of them ends, or when all have",
+      "type": "string",
+      "enum": [
+        "any",
+        "all"
+      ]
+    },
+    "types": {
+      "description": "kind events: the event types (dotted names) it waits for",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "agent": {
+      "description": "kind events: only events about this agent",
+      "type": "string"
+    },
+    "at": {
+      "description": "When it fires at the latest (epoch ms): a timer's time, else its deadline (by default 6 hours ahead, at most that); null when it has none",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "note": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "x-untrusted": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "wakeId",
+    "kind",
+    "at",
+    "note"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.woken`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "wakeId": {
+      "type": "string",
+      "description": "The wake (wk-…) agent.wake_armed armed"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "op",
+        "agents",
+        "events",
+        "timer"
+      ],
+      "description": "As agent.wake_armed's"
+    },
+    "by": {
+      "type": "string",
+      "enum": [
+        "event",
+        "time",
+        "deadline"
+      ],
+      "description": "What fired it: event (what it waited for happened, or had already), time (a timer's time came), deadline (its deadline passed first)"
+    },
+    "text": {
+      "type": "string",
+      "description": "Daemon-written (trusted): what happened, in a few words (\"verify vfy-… passed\", \"agt-… ended: done\", \"its check-in time came\")"
+    },
+    "causeSeq": {
+      "description": "The seq of the event that fired it, on this run's stream; null when its time did, or it had happened before it was armed and the event isn't known",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message it put in the agent's mailbox (Message.seq): the agent reads it as its next turn"
+    },
+    "armedAt": {
+      "type": "number",
+      "description": "When it was armed (epoch ms)"
+    }
+  },
+  "required": [
+    "wakeId",
+    "kind",
+    "by",
+    "text",
+    "causeSeq",
+    "messageSeq",
+    "armedAt"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.wake_cancelled`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "wakeId": {
+      "type": "string",
+      "description": "The wake (wk-…)"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "ended"
+      ],
+      "description": "agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up)"
+    }
+  },
+  "required": [
+    "wakeId",
+    "reason"
+  ],
+  "additionalProperties": {}
+}
+```
+
 ## `job.started`
 
 ```json
@@ -2156,6 +2333,79 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
             "bytes",
             "totalBytes"
           ]
+        },
+        "wake": {
+          "description": "Capability agents.wake. Only with kind wait, while the agent waits between turns for what it armed a wake on (its turn ended; its status stays running): show it as waiting, not as a running tool call. Replaced by its own activity when it is woken. Older daemons don't send it",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The wake (wk-…): agent.wake_armed armed it, agent.woken or agent.wake_cancelled ends it"
+            },
+            "kind": {
+              "type": "string",
+              "description": "op, agents, events or timer, as agent.wake_armed's. More may be added: show `text` for one you don't know"
+            },
+            "op": {
+              "description": "kind op: the verify, check or merge it waits on (vfy-…, chk-…, mrg-…)",
+              "type": "string"
+            },
+            "opKind": {
+              "description": "kind op: verify, check or merge",
+              "type": "string"
+            },
+            "agents": {
+              "description": "kind agents: the agents it waits on",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "mode": {
+              "description": "kind agents: any or all",
+              "type": "string"
+            },
+            "types": {
+              "description": "kind events: the event types it waits for",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "armedAt": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                },
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ],
+              "description": "When it started waiting: a client's elapsed clock (\"waiting for verify vfy-… · 4:12\") counts from here"
+            },
+            "at": {
+              "description": "When it is woken at the latest: a timer's time, else its deadline",
+              "type": [
+                "string",
+                "null"
+              ],
+              "allOf": [
+                {
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                },
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "armedAt",
+            "at"
+          ]
         }
       },
       "required": [
@@ -2399,7 +2649,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2503,7 +2756,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2550,7 +2806,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2609,7 +2868,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2668,7 +2930,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2727,7 +2992,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2786,7 +3054,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2845,7 +3116,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -2904,7 +3178,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "planner_done",
         "pull_request_opened",
         "branch_kept",
-        "titled"
+        "titled",
+        "waiting",
+        "woken",
+        "wake_cancelled"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3917,7 +4194,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 # Lifecycle feed
 
-Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, agent.wake_armed, agent.woken, agent.wake_cancelled, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 Activity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).
 
@@ -3927,6 +4204,7 @@ Agent activity: `?activity=1` on a run stream (with or without `feed=lifecycle`)
 They are ephemeral (`durability: "ephemeral"`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no `id:`, so they never move the Last-Event-ID cursor.
 Their envelope `seq` is the last durable seq at the time (not a cursor), `entitySeq` is 0 and `id` is unique per frame; the latest frame per agent wins.
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Capability agents.wake: while an agent waits between turns for what it armed a wake on (a verify, a check, a merge, its children, a time), its activity has kind `wait` and `wake` says what it waits for and since when (`armedAt`): a client shows "waiting for verify vfy-… · 4:12" rather than a running tool call. agent.woken (durable, on the lifecycle feed) says what woke it.
 Capability agents.setup: while an agent is being set up, before its CLI's first step (its thread is empty until then), its activity has kind `setup` and `setup.phase` says what the daemon is doing (starting its machine, preparing its workspace, copying the repository to it with `bytes` of `totalBytes`, installing and starting its CLI): a client shows that in the agent's empty thread. Its first step replaces it.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.
 
@@ -4338,6 +4616,79 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                   "phase",
                   "bytes",
                   "totalBytes"
+                ]
+              },
+              "wake": {
+                "description": "Capability agents.wake. Only with kind wait, while the agent waits between turns for what it armed a wake on (its turn ended; its status stays running): show it as waiting, not as a running tool call. Replaced by its own activity when it is woken. Older daemons don't send it",
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "The wake (wk-…): agent.wake_armed armed it, agent.woken or agent.wake_cancelled ends it"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "op, agents, events or timer, as agent.wake_armed's. More may be added: show `text` for one you don't know"
+                  },
+                  "op": {
+                    "description": "kind op: the verify, check or merge it waits on (vfy-…, chk-…, mrg-…)",
+                    "type": "string"
+                  },
+                  "opKind": {
+                    "description": "kind op: verify, check or merge",
+                    "type": "string"
+                  },
+                  "agents": {
+                    "description": "kind agents: the agents it waits on",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "mode": {
+                    "description": "kind agents: any or all",
+                    "type": "string"
+                  },
+                  "types": {
+                    "description": "kind events: the event types it waits for",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "armedAt": {
+                    "type": "string",
+                    "allOf": [
+                      {
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                      },
+                      {
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ],
+                    "description": "When it started waiting: a client's elapsed clock (\"waiting for verify vfy-… · 4:12\") counts from here"
+                  },
+                  "at": {
+                    "description": "When it is woken at the latest: a timer's time, else its deadline",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "allOf": [
+                      {
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                      },
+                      {
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "armedAt",
+                  "at"
                 ]
               }
             },

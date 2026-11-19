@@ -23,7 +23,7 @@ const ROOT = join(import.meta.dir, "..", "..");
 const json = (p: string) => JSON.parse(readFileSync(join(ROOT, p), "utf8"));
 const openapi = json("openapi/capcomd.json");
 // The kernel's naming rule for its own types (decision 9), as tests/api/legacy-events.test.ts states it.
-const PAST = /(ed|done|sent|put|kept)$/;
+const PAST = /(ed|done|sent|put|kept|woken)$/;
 const NOUNS = new Set(["agent.step", "sandbox.resource_action"]);
 
 describe("every kernel event type matches the one pattern", () => {

@@ -14,7 +14,7 @@ export const ALL_OPS = [
   "budget", "task", "kv", "verify", "merge", "inspect", "logs", "heartbeat", "result", "grant", "title", "fetch", "check",
   // Plugin API §16.2: background jobs in the agent's own machine.
   "job.start", "job.output", "job.list", "job.kill",
-  // SPIKE (durable wakes): end the turn and be woken by an event or at a time.
+  // ADR-026 §3: end the turn and be woken by an event or at a time (`capcomd wake`, `verify|check|await --wake`).
   "wake",
 ] as const;
 export type Op = (typeof ALL_OPS)[number];

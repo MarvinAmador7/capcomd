@@ -1617,7 +1617,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
  * its plugins judge it; with no daemon it runs here once nothing this process can't ask must judge it. Never run again
  * here past the daemon's judges, which a verify the daemon runs may still be waiting on. A check fires no gate (§6.1).
  */
-function resumeOp(runId: string, op: import("../actors/scope").ScopeOp): Promise<unknown> {
+export function resumeOp(runId: string, op: import("../actors/scope").ScopeOp): Promise<unknown> {
   if (op.kind === "check") return checkRef({ runId, id: op.id });
   if (inDaemon()) return op.kind === "verify" ? verifyRef({ runId, ref: op.data.ref as string, id: op.id }) : mergeRef({ runId, ref: op.data.ref as string, id: op.id });
   return import("./front-door").then((F) => {

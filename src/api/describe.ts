@@ -39,6 +39,10 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "agent.adopted": return `Agent ${d.to} took over from ${d.from}.`;
 		case "agent.reaped": return `${a} was stopped because its parent ${d.orphanOf} ended.`;
 		case "agent.cancelled": return `${a} was cancelled.`;
+		// Capability agents.wake: ids, kinds and the daemon's own sentence only (the agent's note stays in data).
+		case "agent.wake_armed": return `${a} ended its turn, ${waitLine(d).replace(/^W/, "w")}.`;
+		case "agent.woken": return d.by === "time" ? `${a} was woken: its check-in time came.` : d.by === "deadline" ? `${a} was woken: its wait ran out.` : `${a} was woken: what it waited for happened.`;
+		case "agent.wake_cancelled": return d.reason === "ended" ? `${a} ended while it waited.` : `${a} stopped waiting.`;
 		case "agent.status_changed": return `${a} is now ${d.status}.`;
 		// The server sets this event's text to the activity line itself (built from the stored kind and count).
 		case "agent.activity_changed": return `${a} is ${d.status === "running" ? "working" : `now ${d.status ?? "idle"}`}.`;
@@ -169,6 +173,30 @@ export function describeSetup(s: { phase?: unknown; bytes?: unknown; total?: unk
 	if (s.phase !== "copy" || bytes === null) return t[0];
 	if (total === null) return `${t[0]} (${mbText(bytes)} MB)`;
 	return `${t[0]} · ${Math.min(100, Math.floor((bytes / total) * 100))}% (${mbText(Math.min(bytes, total))} of ${mbText(total)} MB)`;
+}
+
+/** What an agent waits for between turns (capability agents.wake), from its wake's trusted fields: "Waiting for verify
+ *  vfy-…", "Waiting for 3 agents", "Waiting for its check-in". */
+export function waitLine(w: { kind?: unknown; op?: unknown; opKind?: unknown; agents?: unknown; mode?: unknown; types?: unknown }): string {
+	if (w.kind === "op" && typeof w.op === "string") return `Waiting for ${typeof w.opKind === "string" ? w.opKind : "op"} ${w.op}`;
+	if (w.kind === "agents" && Array.isArray(w.agents)) {
+		const n = w.agents.length;
+		return n === 1 ? `Waiting for ${String(w.agents[0])}` : w.mode === "all" ? `Waiting for ${n} agents` : `Waiting for one of ${n} agents`;
+	}
+	if (w.kind === "events" && Array.isArray(w.types)) return `Waiting for ${w.types.length === 1 ? String(w.types[0]) : `${w.types.length} kinds of event`}`;
+	if (w.kind === "timer") return "Waiting for its check-in";
+	return "Waiting";
+}
+
+/** Agent.activity while the agent waits between turns: kind wait, and its wake (capability agents.wake). */
+export function waitActivity(w: { wakeId: string; kind: string; op?: string; opKind?: string; agents?: string[]; mode?: string; types?: string[]; armedAt: number; at: number | null }) {
+	return {
+		text: waitLine(w), kind: "wait", at: new Date(w.armedAt).toISOString(),
+		wake: {
+			id: w.wakeId, kind: w.kind, ...(w.op ? { op: w.op } : {}), ...(w.opKind ? { opKind: w.opKind } : {}), ...(w.agents ? { agents: w.agents } : {}),
+			...(w.mode ? { mode: w.mode } : {}), ...(w.types ? { types: w.types } : {}), armedAt: new Date(w.armedAt).toISOString(), at: w.at === null ? null : new Date(w.at).toISOString(),
+		},
+	};
 }
 
 /** Agent.activity from what the scope actor stores ({kind, n, at}, and a setup's phase) and the agent's status. */
