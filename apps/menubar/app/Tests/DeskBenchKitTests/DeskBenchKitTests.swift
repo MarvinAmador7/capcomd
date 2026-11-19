@@ -27,7 +27,7 @@ final class DeskBenchKitTests: XCTestCase {
   }
 
   func testFixturePagesServeTheWholeThreadAndLiveFramesAppend() async throws {
-    var w = Fixtures.make("trio")!
+    var w = CachedFixtures.make("trio")!
     let t = FixtureThread(w)
     let agent = w.agents[w.openRunId!]![0]
     var after = 0, got = 0
@@ -54,9 +54,11 @@ final class DeskBenchKitTests: XCTestCase {
     }
   }
 
+  /// crew17-long is crew17 with longer threads (the generator's item range, which CaptureTests checks with
+  /// `crew@items=`): building its 8,000-odd items here took most of this test's time and checked nothing crew17 doesn't.
   func testEveryFixtureBuildsAndMatchesItsSpec() {
-    for spec in Fixtures.all {
-      let w = Fixtures.make(spec.name)!
+    for spec in Fixtures.all where spec.name != "crew17-long" {
+      let w = CachedFixtures.make(spec.name)!
       XCTAssertEqual(w.runIds.count, spec.projects, spec.name)
       XCTAssertEqual(w.agents[w.openRunId!]?.count, spec.openAgents, spec.name)
       for (_, items) in w.threads { XCTAssertTrue(spec.itemsPerThread.contains(items.count), spec.name) }
@@ -75,7 +77,7 @@ final class DeskBenchKitTests: XCTestCase {
   /// The needs fixtures in a store: one ask per column, oldest first, not in project order.
   @MainActor func testTheNeedsFixturesAskAcrossProjects() {
     for name in ["needs5", "needs20"] {
-      let w = Fixtures.make(name)!
+      let w = CachedFixtures.make(name)!
       let s = CapcomdStore()
       w.load(into: s)
       let asks = s.needsAsks()

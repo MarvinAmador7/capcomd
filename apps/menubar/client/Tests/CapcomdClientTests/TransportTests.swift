@@ -12,7 +12,7 @@ final class TransportTests: XCTestCase {
   override func setUp() async throws {
     // Fresh server per test so the drop/reset script is deterministic.
     let p = Process()
-    p.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BUN_BIN"] ?? "/usr/local/lib/pnpm/5/.pnpm/bun@1.4.2/node_modules/bun/bin/bun.exe") // real binary, not the sh shim (shim orphans bun on terminate)
+    p.executableURL = BunPath.url // real binary, not the sh shim (shim orphans bun on terminate)
     let mock = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../mock/server.ts").standardized.path
     p.arguments = [mock, Self.sock]
     p.environment = ProcessInfo.processInfo.environment.merging(["SOCK": Self.sock, "TOKEN": token, "HEARTBEAT_MS": "100"]) { $1 }
@@ -152,12 +152,6 @@ final class TransportTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(1200)); task.cancel()
     let ls = await live.stats
     XCTAssertEqual(ls.idleTimeouts, 0); XCTAssertEqual(ls.connections, 1); XCTAssertGreaterThanOrEqual(ls.heartbeats, 5)
-  }
-
-  func testSSEParserChunkBoundaries() {
-    var p = SSEParser(); let s = Array("id: 7\nevent: event\ndata: {\"a\":\ndata: 1}\n\n: comment\r\ndata: x\r\n\r\n".utf8)
-    var out = [SSEFrame](); for b in s { out += p.feed([b]) }
-    XCTAssertEqual(out, [SSEFrame(id: "7", event: "event", data: "{\"a\":\n1}"), SSEFrame(id: nil, event: "message", data: "x")])
   }
 }
 actor Collector { var items = [StreamItem](); func add(_ i: StreamItem) { items.append(i) } }

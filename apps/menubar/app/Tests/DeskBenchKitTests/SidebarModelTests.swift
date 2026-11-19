@@ -10,7 +10,7 @@ import DeskBenchKit
 final class SidebarModelTests: XCTestCase {
   #if canImport(SwiftUI) && os(macOS)
   @MainActor func model(_ fixture: String = "crew17", defaults: UserDefaults? = nil) -> (DeskModel, CapcomdStore, World) {
-    let w = Fixtures.make(fixture)!
+    let w = CachedFixtures.make(fixture)!
     let s = CapcomdStore()
     w.load(into: s)
     return (DeskModel(store: s, defaults: defaults), s, w)

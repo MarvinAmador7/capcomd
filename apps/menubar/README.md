@@ -75,7 +75,10 @@ daemon, and `CAPCOMD_CLI=/path/to/capcomd` at another CLI (it inherits the app's
 it). Against your real `~/.capcomd`, a development build that pairs replaces the installed app's token (the installed
 app picks the new one up from the Keychain on its next 401), and Start installs the real LaunchAgent.
 
-Tests: `BUN_BIN=$HOME/.bun/bin/bun swift test` in `app/` and in `client/`.
+Tests: `swift test --parallel` in `app/` (a test per process, across the cores: a fraction of the serial time) and
+`swift test` in `client/`. Both start the mock daemon (`client/mock/`) with Bun: `BUN_BIN`, else `bun` on the `PATH`,
+else `~/.bun/bin/bun`. `bun client/mock/validate.ts` (after `bun install` at the repository root, for ajv) checks the
+mock's answers against `openapi/capcomd.json`; CI runs it when the client or the contract changes.
 
 ## Build the app
 

@@ -16,7 +16,7 @@ final class CausesTests: XCTestCase {
     func drive(_ sink: CauseRecorder?) -> [String] {
       Mutations.sink = sink
       defer { Mutations.sink = nil }
-      let w = Fixtures.make("crew17")!
+      let w = CachedFixtures.make("crew17")!
       let s = CapcomdStore(thread: FixtureThread(w))
       w.load(into: s)
       let m = DeskModel(store: s)

@@ -12,20 +12,14 @@ final class LiveMockTests: XCTestCase {
   var transport: UnixSocketTransport!
 
   override func setUp() async throws {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BUN_BIN"] ?? "/usr/local/lib/pnpm/5/.pnpm/bun@1.4.2/node_modules/bun/bin/bun.exe")
-    let mock = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../client/mock/server.ts").standardized.path
-    p.arguments = [mock, Self.sock]
-    p.environment = ProcessInfo.processInfo.environment.merging(["SOCK": Self.sock, "TOKEN": "test-token"]) { $1 }
-    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-    try p.run(); server = p
+    try startServer()
     for _ in 0..<100 where !FileManager.default.fileExists(atPath: Self.sock) { try await Task.sleep(for: .milliseconds(50)) }
     try await Task.sleep(for: .milliseconds(100))
     transport = UnixSocketTransport(socketPath: Self.sock, token: "test-token")
   }
   func startServer() throws {
     let p = Process()
-    p.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BUN_BIN"] ?? "/usr/local/lib/pnpm/5/.pnpm/bun@1.4.2/node_modules/bun/bin/bun.exe")
+    p.executableURL = BunPath.url
     p.arguments = [URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../client/mock/server.ts").standardized.path, Self.sock]
     p.environment = ProcessInfo.processInfo.environment.merging(["SOCK": Self.sock, "TOKEN": "test-token"]) { $1 }
     p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
@@ -33,11 +27,13 @@ final class LiveMockTests: XCTestCase {
   }
 
   /// A feed outlives the daemon: the daemon going away for longer than a few quick retries (a restart) and coming back
-  /// must not end the subscription (it used to give up after 10 tries in ~3 s, and for good on a clean close).
+  /// must not end the subscription (it used to give up after 10 tries in ~3 s, and for good on a clean close). The
+  /// retry timing is the subscriber's parameters, short here: at most 80 ms between tries (jittered), so the daemon
+  /// stays away for well over ten of them.
   func testSubscriptionReconnectsAfterTheDaemonRestarts() async throws {
     final class Count: @unchecked Sendable { var resets = 0; let lock = NSLock(); func add() { lock.lock(); resets += 1; lock.unlock() }; var n: Int { lock.lock(); defer { lock.unlock() }; return resets } }
     let c = Count()
-    let h = LiveSubscriber(transport: transport, maxBackoff: .milliseconds(500)).subscribe(scope: "daemon", after: 0) { f in
+    let h = LiveSubscriber(transport: transport, backoff: .milliseconds(10), maxBackoff: .milliseconds(80)).subscribe(scope: "daemon", after: 0) { f in
       if case .reset = f { c.add() }
     }
     defer { h.cancel() }
@@ -47,7 +43,7 @@ final class LiveMockTests: XCTestCase {
     server.terminate(); server.waitUntilExit()
     let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill"); k.arguments = ["-f", Self.sock]; try? k.run(); k.waitUntilExit()
     try? FileManager.default.removeItem(atPath: Self.sock)
-    try await Task.sleep(for: .seconds(4))   // longer than the old retry budget
+    try await Task.sleep(for: .seconds(1))   // ~25 tries at the 40 ms mean wait: more than the old budget of 10
     try startServer()
     deadline = Date().addingTimeInterval(15)
     while c.n < 2, Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }

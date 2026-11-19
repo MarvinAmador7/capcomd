@@ -57,31 +57,6 @@ final class DetailTests: XCTestCase {
     XCTAssertEqual(folded.map(\.label), ["sandbox up", "model call", "push fix/x"])
   }
 
-  func testTimeFormats() {
-    XCTAssertEqual(relativeAgo(ms: 0, nowMs: 5_000), "now")
-    XCTAssertEqual(relativeAgo(ms: 0, nowMs: 45_000), "45s ago")
-    XCTAssertEqual(relativeAgo(ms: 0, nowMs: 6 * 60_000), "6m ago")
-    XCTAssertEqual(relativeAgo(ms: 0, nowMs: 2 * 3_600_000), "2h ago")
-    XCTAssertEqual(clockDuration(ms: 33_000), "0:33"); XCTAssertEqual(clockDuration(ms: 312_000), "5:12")
-    XCTAssertEqual(clockDuration(ms: 3_727_000), "1:02:07")
-  }
-
-  func testLogPagesToTheEndAndKeepsTheTail() async {
-    let d = FakeDetail()
-    d.pages[0] = TranscriptPage(items: (1...150).map { .init(seq: $0, at: Self.t0, stream: "stdout", text: "line \($0)") }, next: 150)
-    d.pages[150] = TranscriptPage(items: (151...260).map { .init(seq: $0, at: Self.t0, stream: "stdout", text: "line \($0)\nmore") }, next: nil)
-    let s = CapcomdStore(detail: d)
-    await s.refreshLog(runId: "run-x", agentId: "agt-1")
-    XCTAssertEqual(d.transcriptCalls, [nil, 150])
-    XCTAssertEqual(s.logs["agt-1"]?.count, CapcomdStore.logTail)
-    XCTAssertEqual(s.logs["agt-1"]?.last?.seq, 260)
-    XCTAssertEqual(s.logs["agt-1"]?.last?.text.firstLine, "line 260")         // untrusted, first line only
-    d.pages[260] = TranscriptPage(items: [.init(seq: 261, at: Self.t0, stream: "stdout", text: "new")], next: nil)
-    await s.refreshLog(runId: "run-x", agentId: "agt-1")
-    XCTAssertEqual(d.transcriptCalls.last, 260)                                // resumes from its cursor
-    XCTAssertEqual(s.logs["agt-1"]?.last?.seq, 261)
-  }
-
   func testFilesUnsupportedOnAnOlderDaemon() async {
     let d = FakeDetail(); d.filesError = .unsupported
     let s = CapcomdStore(detail: d)

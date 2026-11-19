@@ -22,26 +22,9 @@ public enum MediaKey: Sendable, Hashable {
 extension CapcomdStore {
   public static let threadPage = 100
 
-  /// The thread view opened: follow its run's thread items live (`thread=1` on that run's lifecycle feed, resumed from
-  /// its cursor) and read the thread from where we are. Contract order: stream first, then the route; the highest rev
-  /// of an id wins, so an item that arrives both ways is shown once.
-  public func openThread(runId: String, agentId: String) {
-    openThreadAgent = agentId
-    followThreads(runId: runId, holder: Self.panelHolder)
-    changed()
-  }
-
-  /// The thread view closed: the run's lifecycle feed goes back to lifecycle frames only (unless the reel still
-  /// follows it). Items already read stay.
-  public func closeThread() {
-    openThreadAgent = nil
-    followThreads(runId: nil, holder: Self.panelHolder)
-  }
-
-  public static let panelHolder = "panel"
   public static let reelHolder = "reel"
 
-  /// `holder` (the panel's thread view, the desktop reel) now follows `runId`'s live thread items for all its agents,
+  /// `holder` (the desktop reel, a bench fixture) now follows `runId`'s live thread items for all its agents,
   /// or nothing. A run's feed is reopened only when whether anyone follows it changes.
   public func followThreads(runId: String?, holder: String) {
     let before = threadStreamRuns
@@ -130,8 +113,6 @@ extension CapcomdStore {
     }
   }
 
-  /// Whether the thread has items above what it shows (read newest first, `agents.thread_tail`).
-  public func threadHasEarlier(agentId: String) -> Bool { books[agentId]?.hasEarlier ?? false }
   /// Where the shown thread starts (the `before` of the page above it); nil when it shows everything.
   public func threadTop(agentId: String) -> Int? { books[agentId]?.top }
 

@@ -20,7 +20,7 @@ final class CaptureTests: XCTestCase {
     let r = try XCTUnwrap(Fixtures.make("crew@items=40-60,projects=2,asks=0"))
     XCTAssertEqual(r.runIds.count, 2); XCTAssertTrue(r.threads.values.allSatisfy { (40...60).contains($0.count) }); XCTAssertEqual(r.asking[r.openRunId!], [])
     // A named fixture with its own numbers is the same world: parameters change only what they say.
-    let a = try XCTUnwrap(Fixtures.make("crew17")), b = try XCTUnwrap(Fixtures.make("crew17@agents=17"))
+    let a = try XCTUnwrap(CachedFixtures.make("crew17")), b = try XCTUnwrap(Fixtures.make("crew17@agents=17"))
     XCTAssertEqual(a.events.map(\.envelope.id), b.events.map(\.envelope.id))
     XCTAssertEqual(a.threads.mapValues { $0.map(\.text) }, b.threads.mapValues { $0.map(\.text) })
     XCTAssertNotEqual(Fixtures.make("crew@seed=3")!.threads.mapValues { $0.map(\.text) }, Fixtures.make("crew")!.threads.mapValues { $0.map(\.text) })
