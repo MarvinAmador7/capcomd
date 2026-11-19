@@ -20,6 +20,7 @@ import type { ThreadAttachment } from "../actors/scope";
 import { withSkills, type AttachedSkill } from "./skills";
 import { isTransientSandboxError } from "../providers/boxd-errors";
 import { outageWindowMs, providerLabel, reportOutage, unreachable } from "../providers/resilient";
+import type { SetupState } from "./activity";
 import { chooseWorkspace, LOCKFILES, parseTemplateMarker, startRef, TEMPLATE_CLAIM, TEMPLATE_LOCKHASH, TEMPLATE_MARKER, type WorkspaceChoice } from "./workspace";
 
 /** Where an agent's checkpoints are pushed (ADR-019 §3); deleted once its work merges. */
@@ -128,6 +129,11 @@ export interface AgentRunOptions {
   heartbeatMs?: number;
   /** What the agent does, a line per tool call, failed result, message and result (`capcomd logs`). */
   onLog?: (lines: string[]) => void;
+  /**
+   * Getting it ready, before its CLI runs (Agent.activity kind setup): each phase as it starts, and the repository's
+   * copy to the machine as it goes (bytes, of total). Unthrottled: the listener throttles (activity.ts setupReporter).
+   */
+  onSetup?: (s: SetupState) => void;
   /**
    * harness.v1 thread items (packages/agent-thread) built from the same events: new items and new revs of open ones
    * (a tool call open → done), with the images tools returned to store as attachments.
@@ -645,6 +651,12 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
     opts.onLog?.([`[capcomd] ${line}`]);
     console.error(`[agent] ${task.agentId ?? task.taskId}: ${line}`);
   };
+  // Its setup as its activity (onSetup), until its CLI runs: each phase, and the repository's copy as it goes.
+  const setup = (st: SetupState) => { try { opts.onSetup?.(st); } catch { /* best effort */ } };
+  const tick: OnTransferProgress = (p) => {
+    if (p.phase === "fetch") setup({ phase: "fetch" });
+    else if (p.phase === "upload") setup({ phase: "copy", bytes: p.bytes, total: p.total });
+  };
   const key = taskKey(task.runId, task.taskId);
   const attrs = {
     "agent.kind": name, "agent.profile": cfg.profile ?? "", "relay.run_id": task.runId, "relay.task_id": task.taskId, "relay.epoch": task.epoch,
@@ -654,6 +666,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
 
   let live: AgentRunState | null = null; // for cost/turns on failed or timed-out spans (TUI contract)
   return withSpan(`agent.${name.replace("-", "_")}`, attrs, async (span) => { try {
+    setup({ phase: "workspace" });
     must(await sh(`mkdir -p ${sq(W)} ${sq(home)}`), "mkdir");
     // A run of this attempt whose runner died (the daemon stopped or restarted, a host crash) may still be going here:
     // stop it before starting over, so two agent CLIs never work in one checkout or race on its exit file.
@@ -687,7 +700,7 @@ export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider,
       const early = chooseWorkspace({ ...facts, fetched: true, ancestor: true, startFound: true, startLockHash: facts.marker?.lockHash ?? "none" });
       if (early.path === "clone" || !facts.marker) return early;
       // The refs a fresh clone has (every branch, as remote-tracking refs), and the continued agent's work.
-      const fetched = await sendToSandbox(host, box, T, { branches: "all", onProgress: progress("git fetch (warm template)") }).then(async (res) => { wsBytes += res.bytes; if (startFrom) await bringFrom(T); return true; }, () => false);
+      const fetched = await sendToSandbox(host, box, T, { branches: "all", onProgress: progress("git fetch (warm template)"), onTick: tick }).then(async (res) => { wsBytes += res.bytes; if (startFrom) await bringFrom(T); return true; }, () => false);
       if (!fetched) return chooseWorkspace({ ...facts, fetched });
       const ref = start(startRef(task, branchExists));
       const look = await sh(`cd ${sq(T)} || exit 1
@@ -711,8 +724,9 @@ if git cat-file -e ${sq(`${ref}^{commit}`)} 2>/dev/null; then echo start=yes; L=
       // target checked out tracking origin/<target>, origin's URL without credentials.
       // On a VM booted from its project's template that can't be used in place (a retry in the same VM, a changed
       // lockfile, a rewritten target), the clone borrows the template's objects: only what they lack is sent.
-      wsBytes += (await viaHost("git clone", () => sendToSandbox(host, box, repo, { branches: "all", checkout: task.target, onProgress: progress("git clone"), ...(opts.warmTemplate === "vm" ? { seed: T } : {}) }, { fresh: true }))).bytes;
+      wsBytes += (await viaHost("git clone", () => sendToSandbox(host, box, repo, { branches: "all", checkout: task.target, onProgress: progress("git clone"), onTick: tick, ...(opts.warmTemplate === "vm" ? { seed: T } : {}) }, { fresh: true }))).bytes;
     }
+    setup({ phase: "workspace" });   // copied: the rest of the workspace (its branch, dependencies, context)
 
     if (task.review) {
       must(await git(["checkout", "-q", "--detach", task.review.sha], repo), "git checkout (review)");
@@ -777,6 +791,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       const det = parseDetect((await sh(detectScript(adapter, home))).stdout);
       if (detectedUsable(adapter, cfg, det)) { bin = det.bin!; version = det.version ?? "unknown"; addSpanEvent(span, "agent.detected", { "agent.bin": det.bin!, "agent.version": version }); }
       else {
+        setup({ phase: "install" });
         const install = await withSpan("agent.install", { "agent.version": adapter.pinnedVersion(cfg), "agent.node_version": cfg.nodeVersion }, async () =>
           sh(installScript(cfg, home, adapter), {}, 600_000));
         must(install, `${name} install`, "install");
@@ -785,6 +800,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       }
     }
     setSpanAttributes(span, { "agent.version": version, "agent.deps_reused": depsReused });
+    // Its credential, instructions and tools, then its CLI: until the CLI's first event.
+    setup({ phase: "agent" });
 
     // 3. Credential: a boxd host-bound secret shows up as a bxds_ placeholder (the real key is substituted
     //    only on egress to the API host). Fall back to injecting the key into the start exec's env.

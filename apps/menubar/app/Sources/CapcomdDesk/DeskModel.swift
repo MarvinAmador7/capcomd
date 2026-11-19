@@ -43,8 +43,11 @@ package final class AgentSlice {
   package private(set) var renameFailure: String? { didSet { Mutations.record("AgentSlice.renameFailure", id: id) } }
   /// The usage-limit pause its run is in, when its column shows it as an ask (the Needs you reel).
   package private(set) var limit: NeedsLimit? { didSet { Mutations.record("AgentSlice.limit", id: id) } }
+  /// Getting it ready (capability agents.setup), while it has reported no step of its own: what its empty thread shows.
+  package private(set) var preparing: Preparing? { didSet { Mutations.record("AgentSlice.preparing", id: id) } }
   init(_ h: ColumnHeader) { id = h.agentId; header = h }
   func set(limit l: NeedsLimit?) { if limit != l { limit = l } }
+  func set(preparing p: Preparing?) { if preparing != p { preparing = p } }
   func set(renaming r: RenamePlace?) { if renaming != r { renaming = r } }
   func set(renameFailure f: String?) { if renameFailure != f { renameFailure = f } }
   func set(goal g: GoalCard?) { if goal != g { goal = g } }
@@ -333,6 +336,7 @@ package final class DeskModel {
       for h in cols where all || keys.contains(.agent(h.agentId)) {
         let s = agents[h.agentId] ?? added[h.agentId] ?? { let n = AgentSlice(h); added[h.agentId] = n; return n }()
         s.set(h)
+        s.set(preparing: store.preparing(runId: runId, agentId: h.agentId, name: h.name))
         if let bots { s.set(bot: bots[h.agentId]) }
         if let asks { s.set(approval: asks[h.agentId]) }
       }

@@ -126,6 +126,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `ops.front_door` | POST /v1/runs/{runId}/verifications, /merges and /merges/{mergeId}/decision: a kernel front door's verify, merge and approval of a merge (the CLI's and `capcomd mcp`'s), run in the daemon so every plugin's gate judges them (plugin API §6.1). Only the one-call tokens the CLI and `capcomd mcp` make for them (403 `forbidden` for any other token, a plugin's or an app's) |
 | `plugins.seam_stats` | GET /v1/plugins (and GET /v1/plugins/{name}) `stats.seams`: the daemon's calls to each seam a plugin provides (sandbox, agent, forge, context) since it started, and the failed ones by their error kind (plugin API §13.5) |
 | `logins.fx` | GET /v1/logins takes `provider` (claude, codex or fx): only that AI's logins; fx's (a Vercel or Grok plan login with `capcomd auth login fx`, or AI_GATEWAY_API_KEY) are listed only when asked for with `provider=fx` |
+| `agents.setup` | Agent.activity of kind setup, with `setup` (phase, bytes, totalBytes): while an agent is being set up (its machine starting, its workspace prepared, the repository copied to it, its CLI installed and started), before its first step, live on agent.activity_changed |
 
 ## Event envelope
 
@@ -253,6 +254,7 @@ Agent activity: `?activity=1` on a run stream (with or without `feed=lifecycle`)
 They are ephemeral (`durability: "ephemeral"`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no `id:`, so they never move the Last-Event-ID cursor.
 Their envelope `seq` is the last durable seq at the time (not a cursor), `entitySeq` is 0 and `id` is unique per frame; the latest frame per agent wins.
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Capability agents.setup: while an agent is being set up, before its CLI's first step (its thread is empty until then), its activity has kind `setup` and `setup.phase` says what the daemon is doing (starting its machine, preparing its workspace, copying the repository to it with `bytes` of `totalBytes`, installing and starting its CLI): a client shows that in the agent's empty thread. Its first step replaces it.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.
 
 ## Agent threads

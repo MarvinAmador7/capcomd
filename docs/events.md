@@ -842,7 +842,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
   "properties": {
     "kind": {
       "type": "string",
-      "description": "What the agent did (icon hint): read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, tool. More may be added: treat an unknown kind as tool. Never think"
+      "description": "What the agent did (icon hint): read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, tool, setup. More may be added: treat an unknown kind as tool. Never think"
     },
     "n": {
       "type": "integer",
@@ -2110,7 +2110,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         },
         "kind": {
           "type": "string",
-          "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool. More may be added: treat an unknown kind as tool"
+          "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool, setup. More may be added: treat an unknown kind as tool"
         },
         "at": {
           "type": "string",
@@ -2123,6 +2123,39 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
             }
           ],
           "description": "When the activity last changed"
+        },
+        "setup": {
+          "description": "Capability agents.setup. Only with kind setup: the agent is being set up and its CLI hasn't reported a step yet (its thread is empty until it does). Replaced by the agent's own activity at its first step. Older daemons don't send it",
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
+            },
+            "bytes": {
+              "description": "copy: bytes sent to the machine so far; null otherwise",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "totalBytes": {
+              "description": "copy: the bytes it sends in all, when known; null otherwise",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "phase",
+            "bytes",
+            "totalBytes"
+          ]
         }
       },
       "required": [
@@ -3894,6 +3927,7 @@ Agent activity: `?activity=1` on a run stream (with or without `feed=lifecycle`)
 They are ephemeral (`durability: "ephemeral"`): sent only live, never replayed, not in GET /v1/runs/{runId}/lifecycle or /v1/events, and their SSE frames carry no `id:`, so they never move the Last-Event-ID cursor.
 Their envelope `seq` is the last durable seq at the time (not a cursor), `entitySeq` is 0 and `id` is unique per frame; the latest frame per agent wins.
 Coalesced: at most one per agent per second, and only when the line changes. On connect, snapshot.agents carries the current activity; after a resume without a snapshot, each agent's current activity is sent once right away.
+Capability agents.setup: while an agent is being set up, before its CLI's first step (its thread is empty until then), its activity has kind `setup` and `setup.phase` says what the daemon is doing (starting its machine, preparing its workspace, copying the repository to it with `bytes` of `totalBytes`, installing and starting its CLI): a client shows that in the agent's empty thread. Its first step replaces it.
 Why opt-in on the run stream: the lifecycle feed stays state changes only for clients that don't ask, the daemon stream stays one frame per run, and a client that follows a run's lifecycle gets the line on the same connection.
 
 # Stream frames
@@ -4259,7 +4293,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               },
               "kind": {
                 "type": "string",
-                "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool. More may be added: treat an unknown kind as tool"
+                "description": "Icon hint: read, edit, write, search, run, test, build, install, check, git, web, spawn, wait, message, verify, merge, report, delegate, plan, think, tool, setup. More may be added: treat an unknown kind as tool"
               },
               "at": {
                 "type": "string",
@@ -4272,6 +4306,39 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                   }
                 ],
                 "description": "When the activity last changed"
+              },
+              "setup": {
+                "description": "Capability agents.setup. Only with kind setup: the agent is being set up and its CLI hasn't reported a step yet (its thread is empty until it does). Replaced by the agent's own activity at its first step. Older daemons don't send it",
+                "type": "object",
+                "properties": {
+                  "phase": {
+                    "type": "string",
+                    "description": "What the daemon is doing to get the agent ready: machine, workspace, fetch, copy, install, agent (starting its machine, preparing its workspace, the host fetching the repository, copying it to the machine, installing the agent's CLI, starting it). More may be added: show `text` for a phase you don't know"
+                  },
+                  "bytes": {
+                    "description": "copy: bytes sent to the machine so far; null otherwise",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "totalBytes": {
+                    "description": "copy: the bytes it sends in all, when known; null otherwise",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "phase",
+                  "bytes",
+                  "totalBytes"
+                ]
               }
             },
             "required": [

@@ -36,7 +36,7 @@ function opsChanged(c: any, opId: string): void {
 import { stableId, available, budgetUsed, checkGrant, checkSpawn, type Grant, growRun, overBudget, profileDefaults, TERMINAL_AGENT, treeSpend, UNIT_LIMIT, UNITS, type AgentRow, type AgentStatus, type Budget, type Limits } from "../primitives/policy";
 import type { AgentSpec, ProfileLayer } from "../profiles";
 import type { AttachedSkill } from "../agents/skills";
-import { ACTIVITY_KINDS, type StoredActivity } from "../agents/activity";
+import { ACTIVITY_KINDS, SETUP_PHASES, setupMayReplace, type SetupState, type StoredActivity } from "../agents/activity";
 import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../../packages/agent-thread/src/index";
 import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, type TitleState } from "../primitives/agent-title";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
@@ -113,6 +113,14 @@ async function remember(tx: any, key: string | undefined, kind: string, hash: st
 }
 
 const fail = (code: string, message: string): never => { throw new UserError(message, { code }); };
+/** A setup activity's phase and bytes as stored: a known phase, whole non-negative byte counts; null otherwise. */
+function cleanSetup(s: unknown): SetupState | null {
+  const o = s && typeof s === "object" ? s as Record<string, unknown> : null;
+  if (!o || !(SETUP_PHASES as readonly string[]).includes(String(o.phase))) return null;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null);
+  const bytes = n(o.bytes), total = n(o.total);
+  return { phase: o.phase as SetupState["phase"], ...(bytes !== null ? { bytes } : {}), ...(total !== null ? { total } : {}) };
+}
 /** A message row's attached skills ([{name, content}] JSON, or NULL). */
 const skillsOf = (v: unknown): AttachedSkill[] => { try { return v ? (JSON.parse(String(v)) as AttachedSkill[]) : []; } catch { return []; } };
 
@@ -1465,8 +1473,22 @@ export const scopeActor = actor({
    */
   async setActivity(c, params: { agentId: string; activity: StoredActivity | null }) {
     const a = params.activity;
-    const v = a && (ACTIVITY_KINDS as readonly string[]).includes(a.kind) ? JSON.stringify({ kind: a.kind, n: Math.max(1, Math.min(9999, Math.floor(Number(a.n) || 1))), at: Number(a.at) || Date.now() }) : null;
-    await c.db.execute("UPDATE agents_v2 SET activity = ? WHERE agent_id = ? AND status IN ('pending','running')", v, params.agentId);
+    const at = Number(a?.at) || Date.now();
+    const setup = a?.kind === "setup" ? cleanSetup(a.setup) : null;
+    const v = a && (ACTIVITY_KINDS as readonly string[]).includes(a.kind) && (a.kind !== "setup" || setup)
+      ? JSON.stringify({ kind: a.kind, n: Math.max(1, Math.min(9999, Math.floor(Number(a.n) || 1))), at, ...(setup ? { setup } : {}) }) : null;
+    if (!setup) {
+      await c.db.execute("UPDATE agents_v2 SET activity = ? WHERE agent_id = ? AND status IN ('pending','running')", v, params.agentId);
+      return { ok: true };
+    }
+    // A setup phase never replaces what the agent itself reported after it (setupMayReplace).
+    await c.db.transaction(async (tx: RawAccess) => {
+      const row = await tx.execute("SELECT activity FROM agents_v2 WHERE agent_id = ? AND status IN ('pending','running')", params.agentId);
+      if (!row.length) return;
+      const cur = row[0]!.activity ? (() => { try { return JSON.parse(String(row[0]!.activity)) as StoredActivity; } catch { return null; } })() : null;
+      if (!setupMayReplace(cur, at)) return;
+      await tx.execute("UPDATE agents_v2 SET activity = ? WHERE agent_id = ?", v, params.agentId);
+    }, { name: "scopeSetupActivity" });
     return { ok: true };
   },
 
@@ -1478,7 +1500,7 @@ export const scopeActor = actor({
    * like setActivity.
    */
   async recordStep(c, params: { agentId: string; kind: string; n: number; startedAt: number; endedAt: number }) {
-    if (params.kind === "think") return { recorded: false };
+    if (params.kind === "think" || params.kind === "setup") return { recorded: false };
     const kind = (ACTIVITY_KINDS as readonly string[]).includes(params.kind) ? params.kind : "tool";
     const startedAt = Math.floor(Number(params.startedAt)), end = Math.floor(Number(params.endedAt));
     if (!Number.isFinite(startedAt) || startedAt <= 0) return { recorded: false };

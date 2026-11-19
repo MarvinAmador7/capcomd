@@ -96,7 +96,11 @@ public struct SnapshotApproval: Codable, Sendable, Hashable {
 }
 /// `Agent.activity`: `text` is a daemon-written plain line ("Reading 4 files"); `kind` is an icon hint.
 public struct SnapshotWorkspace: Codable, Sendable, Hashable { public var repo: String; public var path: String?; public var label: String }
-public struct SnapshotActivity: Codable, Sendable, Hashable { public var text: String; public var kind: String?; public var at: String? }
+public struct SnapshotActivity: Codable, Sendable, Hashable {
+  public var text: String; public var kind: String?; public var at: String?
+  /// Kind `setup` only (capability agents.setup): what the daemon is doing to get the agent ready.
+  public var setup: AgentSetup?
+}
 struct SnapshotRunFrame: Codable { var run: SnapshotRun }
 struct SnapshotAgentsFrame: Codable { var agents: [SnapshotAgent] }
 struct SnapshotApprovalsFrame: Codable { var approvals: [SnapshotApproval] }

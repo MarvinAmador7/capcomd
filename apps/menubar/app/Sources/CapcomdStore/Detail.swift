@@ -135,7 +135,7 @@ extension StepKind {
     case "read", "search", "report": self = .fileRead
     case "edit", "write": self = .fileWrite
     case "run": self = .shell
-    case "install": self = .sandbox
+    case "install", "setup": self = .sandbox   // setup: the machine and workspace getting ready (agents.setup)
     case "git", "merge": self = .git
     case "web": self = .network
     case "plan": self = .plan

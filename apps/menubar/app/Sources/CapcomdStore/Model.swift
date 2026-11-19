@@ -59,6 +59,8 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var activity: String? = nil
   /// `Agent.activity.kind`: icon hint for the activity line (read, edit, test, …).
   public var activityKind: String? = nil
+  /// `Agent.activity.setup` (kind `setup`, capability agents.setup): the daemon is getting it ready, before its first step.
+  public var setup: AgentSetup? = nil
   /// `taskAttachment`: the full task is stored by the daemon; only its metadata is shown.
   public var taskAttachment: AttachmentRef? = nil
   /// `result.summary` once the agent finished (agent-written, untrusted).
@@ -473,4 +475,17 @@ public enum Notice: Sendable, Hashable {
   case runFinished(runId: String, type: String, title: String)
   /// A goal branch run is ready, or stopped with work landed (GoalNotice): once per run.
   case goalReady(GoalNotice)
+}
+
+/// `Agent.activity.setup` (capability agents.setup): what the daemon is doing to get an agent ready, before its CLI's
+/// first step. Daemon-written (trusted). `bytes` / `totalBytes` only while it copies the repository to the machine.
+public struct AgentSetup: Codable, Sendable, Hashable {
+  public var phase: String
+  public var bytes: Int?
+  public var totalBytes: Int?
+  public init(phase: String, bytes: Int? = nil, totalBytes: Int? = nil) { self.phase = phase; self.bytes = bytes; self.totalBytes = totalBytes }
+  init?(_ v: JSONValue?) {
+    guard let p = v?["phase"]?.string else { return nil }
+    self.init(phase: p, bytes: v?["bytes"]?.int, totalBytes: v?["totalBytes"]?.int)
+  }
 }
