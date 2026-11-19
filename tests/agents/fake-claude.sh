@@ -65,6 +65,24 @@ case "$prompt" in *"[job:"*)
   else capcomd job start --label build --foreground-ms 500 -- "sleep $n; echo built-ok" > job-start.txt 2>&1; fi
   emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"j1","content":"started"}]}}';;
 esac
+# [wake-in:N] / [wake-check] / [wake-await] (ADR-026 §3, waits between turns): a Bash call that arms a wake and returns at once (its
+# answer and the time it took in wake-start.txt): a check-in N seconds from now, the end of a `capcomd check` of the
+# run's target, or the end of a child it spawns (`capcomd await <child> --wake`).
+# Then the turn ends; the wake-up message (on stdin) is written to messages.txt, as any message is
+case "$prompt" in *"[wake-in:"*|*"[wake-check]"*|*"[wake-await]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"Bash","input":{"command":"capcomd wake"}}]}}'
+  t0=$(node -e 'process.stdout.write(String(Date.now()))')
+  case "$prompt" in *"[wake-in:"*)
+    n=$(printf '%s' "$prompt" | sed -n 's/.*\[wake-in:\([0-9]*\)\].*/\1/p')
+    capcomd wake --in-ms "$((n * 1000))" --note "look at the build again" > wake-start.txt 2>&1;;
+  *"[wake-await]"*)
+    kid=$(capcomd spawn --profile lead --task "[steady] child work" --key kid | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>process.stdout.write(JSON.parse(s).agentId||""))')
+    capcomd await "$kid" --wake --note "verify and merge it" > wake-start.txt 2>&1;;
+  *) capcomd check --wake --note "merge it if green" > wake-start.txt 2>&1;; esac
+  t1=$(node -e 'process.stdout.write(String(Date.now()))')
+  echo "took-ms $((t1 - t0))" >> wake-start.txt
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"armed"}]}}';;
+esac
 # [title-chained:WORDS]: a Bash call that names the tab and does something else too (never run): not a rename
 case "$prompt" in *"[title-chained:"*)
   t=$(printf '%s' "$prompt" | sed -n 's/.*\[title-chained:\([^]]*\)\].*/\1/p')

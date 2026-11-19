@@ -1010,7 +1010,8 @@ struct ColumnHead: View {
         .help("Reviewed work lands on \(g.branch), cut from \(g.base)")
         .accessibilityElement(children: .combine).accessibilityLabel("Goal branch \(g.branch), from \(g.base)")
       } else if let r = h.repo { Text(verbatim: r).font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary).lineLimit(1) }
-      if h.status == .running, let start = h.startedAtMs {
+      if h.status == .running, let start = h.waitSinceMs ?? h.startedAtMs {
+        // Waiting: how long it has waited; else how long it has worked.
         Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer)
           .font(Theme.Desk.mono).foregroundStyle(Theme.Desk.tertiary).monospacedDigit()
       }
@@ -1022,6 +1023,8 @@ struct ColumnHead: View {
   }
   static func state(_ h: ColumnHeader, asks: Bool) -> String {
     if asks { return "waiting on you" }
+    // Between turns, a wake armed (agents.wake): what it waits for, not "working" on a tool call.
+    if h.status == .running, let w = h.waitLine { return w }
     switch h.status {
     case .running: return "working"; case .pending: return "queued"; case .done: return "done"
     case .failed: return "failed"; case .paused: return "paused"; case .cancelled: return "stopped"

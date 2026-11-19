@@ -100,6 +100,8 @@ public struct SnapshotActivity: Codable, Sendable, Hashable {
   public var text: String; public var kind: String?; public var at: String?
   /// Kind `setup` only (capability agents.setup): what the daemon is doing to get the agent ready.
   public var setup: AgentSetup?
+  /// Kind `wait` only (capability agents.wake): what the agent waits for between turns, and since when.
+  public var wake: JSONValue?
 }
 struct SnapshotRunFrame: Codable { var run: SnapshotRun }
 struct SnapshotAgentsFrame: Codable { var agents: [SnapshotAgent] }

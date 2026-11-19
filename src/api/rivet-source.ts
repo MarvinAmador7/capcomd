@@ -9,7 +9,8 @@ import { mergeConfigFor } from "../merge/run-config";
 import { tracePath } from "../utils/tracing-simple";
 import { VERSION } from "../utils/self";
 import { isoTs } from "./envelope";
-import { agentActivity, describeEvent } from "./describe";
+import { agentActivity, describeEvent, waitActivity } from "./describe";
+import { armedData } from "../actors/wakes";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
 import { approvalIdFor, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
 import { applyRunPatch, hooks, principalOf, untrusted } from "../plugins/hooks";
@@ -296,7 +297,14 @@ export function rivetSource(): HarnessSource {
 			// A run in the index whose scope this engine doesn't have (another engine's): listed as "unknown", no agents.
 			if (!s) return indexed ? [] : null;
 			if (!indexed && !(await s.getScope({}).catch(() => null))) return null;
-			const all = (await s.listAgents({})) as any[];
+			const [all, armed] = await Promise.all([s.listAgents({}) as Promise<any[]>, (s.wakeList({ state: "armed" }) as Promise<any[]>).catch(() => [] as any[])]);
+			// Capability agents.wake: a running agent waiting between turns shows what it waits for, not its last tool call.
+			const waits = new Map<string, any>();
+			for (const w of armed) if (!waits.has(w.agentId)) waits.set(w.agentId, w);
+			const activityOf = (a: any) => {
+				const w = a.status === "running" ? waits.get(a.agentId) : undefined;
+				return w ? waitActivity({ wakeId: w.wakeId, ...armedData(w), armedAt: w.createdAt } as any) : agentActivity(a.activity, a.status);
+			};
 			// Agents spawned before the workspace was recorded: the run's repository, where every agent works today.
 			const runRepo = all.some((a) => !a.workspace)
 				? ((await s.kvGet({ k: RUN_REPO_KV }).catch(() => null))?.value as Record<string, string> | undefined)?.CAPCOMD_REPO ?? runsIndex().find((r) => r.runId === runId)?.repo ?? null
@@ -306,7 +314,7 @@ export function rivetSource(): HarnessSource {
 				return {
 					id: a.agentId, runId, parent: a.parent, depth: a.depth, profile: lower(a.profile),
 					profileVersion: a.profileVersion ?? null, profileSource: a.profileSource ?? null, status: a.status,
-					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: agentActivity(a.activity, a.status),
+					text: describeEvent("agent.status_changed", { status: a.status }, a.agentId), activity: activityOf(a),
 					task: inl.text, taskAttachment: inl.attachment, result: a.result ?? null, workspace: a.workspace ?? workspaceOf(runRepo),
 					...agentRuntime(a.spec), createdAt: a.createdAt ? isoTs(a.createdAt) : null, updatedAt: a.updatedAt ? isoTs(a.updatedAt) : null,
 					...shownTitle(a.titleState, inl.text ?? redactShapes(String(a.task ?? ""))),

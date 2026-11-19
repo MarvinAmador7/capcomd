@@ -18,6 +18,8 @@ import type { ScopeAgent } from "../actors/scope";
 import { verifyToken, type Claims, type Op } from "./token";
 import { capText, fence, MESSAGE_MAX_BYTES, normalizeResult, subtree, type Truncation } from "./results";
 import type { JobMachine } from "../jobs/machine";
+import { WAKE_MAX_MS } from "../actors/wakes";
+import { noteOpWake } from "../primitives/wake-sweep";
 
 /** `holdMs`: how long the caller still waits for this answer, less a margin for the spool's round trip (the CLI sends it;
  *  a verify or check is held no longer than that, so a retry with little time left isn't answered after it gave up). */
@@ -129,7 +131,7 @@ function ids(args: Record<string, any>, key = "agents"): string[] {
 async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string, ctx: RpcContext): Promise<unknown> {
   const run = c.run;
   // Writes are idempotent per request: the CLI retries a transient failure with the same id.
-  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title", "job.start"].includes(op)) args = { ...args, key: `r:${reqId}` };
+  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title", "job.start", "wake"].includes(op)) args = { ...args, key: `r:${reqId}` };
   const s = client().scope.getOrCreate([run]);
   switch (op) {
     case "spawn": {
@@ -166,6 +168,8 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       // where a cycle (or awaiting an ancestor) is refused as a deadlock.
       const targets = ids(args);
       await assertReadable(c, targets);
+      // ADR-026 §3: `await … --wake` doesn't wait: the agent ends its turn and is woken when they end.
+      if (isWake(args)) return armWake(c, reqId, { kind: "agents", agents: targets, mode: op === "wait-any" ? "any" : "all" }, args, { agents: targets });
       if (args.end) { await s.awaitEnd({ waiter: c.sub }); return { ended: true }; }
       const agents = await O.peekAgents(run, targets);
       const live = agents.filter((a) => !TERMINAL_AGENT.has(a.status)).map((a) => a.agentId);
@@ -301,10 +305,24 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       // whole verify path, which can outlast a short hold and would answer "running" forever).
       const done = await O.finishedVerify(run, O.verifyIdFor(run, ref, key));
       if (done) return done;
+      // ADR-026 §3: `verify --wake` holds nothing: it starts the verification and arms a wake on its end.
+      const wake = isWake(args);
+      if (wake) await assertWakeable(c);
       // A review takes minutes, longer than one RPC: answer "running" after VERIFY_HOLD_MS; the CLI polls
       // with the same key, and the in-flight verify is shared (never re-run) until it finishes.
       const p = O.verifyRef({ runId: run, ref, ...(pinned ? { check: pinned } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key, reviewParent: c.sub });
       p.catch(() => {}); // a later poll gets the error
+      if (wake) {
+        const id = O.verifyIdFor(run, ref, key);
+        // Its op record is written as it starts: wait for that (a moment), so the wake's arming sees it. A verify that
+        // fails before it has one (its child has no branch) answers with that failure.
+        for (let i = 0; i < 100 && !(await s.getOp({ opId: id })); i++) {
+          const early = await Promise.race([p.then((v) => ({ v }), (e) => ({ e })), new Promise<null>((r) => setTimeout(() => r(null), 100))]);
+          if (early && "e" in early) throw early.e;
+          if (early && "v" in early) return early.v;
+        }
+        return armWake(c, reqId, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "verify", state: "running", ref });
+      }
       const held = await Promise.race([p.catch((e) => { if (transportTimeout(e)) return null; throw e; }), new Promise((r) => setTimeout(() => r(null), ctx.holdMs ?? VERIFY_HOLD_MS))]);
       return held ?? { id: O.verifyIdFor(run, ref, key), kind: "verify", state: "running", ref };
     }
@@ -323,11 +341,44 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       let pinned = false;
       if (ref?.startsWith("agt-")) { await assertReadable(c, [ref]); pinned = typeof (await O.getAgentOrThrow(run, ref)).contract?.check === "string"; }
       const oc = args.check === undefined && !pinned ? await operatorChecks(c) : undefined;
+      if (isWake(args)) await assertWakeable(c);
       const { id, done } = await O.startCheck({
         runId: run, ...(ref ? { ref } : {}), ...(args.check !== undefined ? { check: String(args.check) } : oc ? { checks: oc } : {}),
         ...(args.key !== undefined ? { key: String(args.key) } : {}), askedBy: c.sub,
       });
+      // ADR-026 §3: `check --wake` holds nothing: the check runs on, and its end wakes the agent.
+      if (isWake(args)) { done.catch(() => {}); return armWake(c, reqId, { kind: "op", op: id }, { ...args, key: undefined }, { id, kind: "check", state: "running" }); }
       return holdCheck(id, done, ctx.holdMs);
+    }
+    case "wake": {
+      // ADR-026 §3: `capcomd wake --op ID | --agents a,b [--all] | --events T,… [--agent agt] [--after SEQ] | --in 5m | --at ISO [--note …]`.
+      if (args.cancel) {
+        const w = await s.wakeCancel({ agentId: c.sub, wakeId: String(args.cancel) });
+        if (!w) throw new RelayError("not_found", `${String(args.cancel).slice(0, 80)} isn't one of your wakes`, "capcomd wake --list shows yours.");
+        return { wake: wakeView(w) };
+      }
+      if (args.list === true || args.list === "true") return { wakes: (await s.wakeList({ agentId: c.sub })).map(wakeView) };
+      const list = (v: unknown) => [].concat(v as any).flatMap((x: unknown) => String(x).split(",")).map((x) => x.trim()).filter(Boolean);
+      // Only what the agent may see (its subtree and its siblings', as status, events and inspect): an op of one of them
+      // (or one it asked for itself), those agents, events about them.
+      if (args.op !== undefined) {
+        const id = String(args.op);
+        const o = await s.getOp({ opId: id });
+        if (!o) throw new RelayError("not_found", `${id.slice(0, 80)} not found in this run`, "Pass a vfy-/chk-/mrg- id that verify, check or merge returned.");
+        await assertOpVisible(c, o);
+        return armWake(c, reqId, { kind: "op", op: id }, args, {});
+      }
+      if (args.agents !== undefined) {
+        const agents = list(args.agents);
+        await assertReadable(c, agents);
+        return armWake(c, reqId, { kind: "agents", agents, mode: args.all === true || args.all === "true" ? "all" : "any" }, args, {});
+      }
+      if (args.events !== undefined) {
+        const { me } = await readable(c);
+        if (args.agent !== undefined) await assertReadable(c, [String(args.agent)]);
+        return armWake(c, reqId, { kind: "events", types: list(args.events), ...(args.agent !== undefined ? { agent: String(args.agent) } : {}), after: Number(args.after ?? 0) || 0, within: me.parent ?? c.sub }, args, {});
+      }
+      return armWake(c, reqId, { kind: "timer" }, args, {});
     }
     case "merge": {
       const ref = String(args.ref ?? "");
@@ -398,6 +449,66 @@ function jobView(j: import("../../packages/plugin/src/shapes").Job) {
   return {
     jobId: j.jobId, state: j.state, label: j.spec.label, startedAt: j.startedAt, endedAt: j.endedAt, reason: j.reason,
     ...("run" in j.spec.owner ? { run: true } : {}), ...(j.spec.kind === "exec" ? { cmd: j.spec.cmd } : {}), ...(res ? { code: res.code, stdout: res.stdout, stderr: res.stderr, truncated: res.truncated } : {}),
+  };
+}
+
+const isWake = (args: Record<string, any>) => args.wake === true || args.wake === "true";
+
+/** A duration: "90s", "5m", "2h", "1500ms", or a bare number of seconds. */
+export function parseDuration(v: unknown): number | null {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|sec|m|min|h|hr)?\s*$/i.exec(String(v ?? ""));
+  if (!m) return null;
+  const n = Number(m[1]), u = (m[2] ?? "s").toLowerCase();
+  return Math.round(n * (u === "ms" ? 1 : u === "s" || u === "sec" ? 1000 : u === "m" || u === "min" ? 60_000 : 3600_000));
+}
+
+/** An agent can be woken only when it reads messages while it runs: a Codex agent reads none after its prompt. */
+async function assertWakeable(c: Claims) {
+  const me = await O.getAgentOrThrow(c.run, c.sub);
+  if ((me.spec as { provider?: string } | null)?.provider === "codex")
+    throw new RelayError("usage", "a Codex agent can't be woken: it reads no message after its prompt, so its turn ending ends it", "Wait without --wake (capcomd await, verify, check), or poll capcomd inbox.");
+}
+
+/** An op the agent may wait on: one it asked for, or one about an agent it may see. */
+async function assertOpVisible(c: Claims, op: { id: string; data: Record<string, unknown> }) {
+  if (op.data.askedBy === c.sub) return;
+  const about = typeof op.data.agentId === "string" ? op.data.agentId : typeof op.data.ref === "string" && op.data.ref.startsWith("agt-") ? op.data.ref : null;
+  const { ids } = await readable(c);
+  if (!about || !ids.has(about)) deny(`${op.id} is not visible to ${c.sub}: it is about an agent outside your subtree and your siblings'`, "Wait on the verify, check or merge ids your own calls returned.");
+}
+
+/** A wake as the agent that armed it reads it (its note is its own). */
+function wakeView(w: import("../actors/wakes").WakeRow) {
+  return { wake: w.wakeId, state: w.state, kind: w.filter.kind, filter: w.filter.kind === "events" ? { ...w.filter, within: undefined } : w.filter, at: w.at, note: w.note, createdAt: w.createdAt, firedAt: w.firedAt, reason: w.reason };
+}
+
+/**
+ * ADR-026 §3: arm a wake for the caller (src/actors/wakes.ts) and answer at once. The agent's turn can end: the wake's
+ * message reaches it as its next turn. `in` (a duration) or `at` (an ISO time or epoch ms) is the time (a check-in),
+ * or an event wake's deadline (default and most WAKE_MAX_MS).
+ */
+async function armWake(c: Claims, reqId: string, filter: Record<string, any>, args: Record<string, any>, extra: Record<string, unknown>) {
+  await assertWakeable(c);
+  const inMs = args.inMs !== undefined ? Number(args.inMs) : args.in !== undefined ? parseDuration(args.in) : undefined;
+  if (inMs === null || (inMs !== undefined && !(Number.isFinite(inMs) && inMs >= 0))) throw new RelayError("usage", `--in ${String(args.in).slice(0, 40)}: not a duration`, "e.g. --in 10m, --in 90s, --in 2h.");
+  const atArg = args.at !== undefined ? (/^\d+$/.test(String(args.at)) ? Number(args.at) : Date.parse(String(args.at))) : undefined;
+  const asked = atArg !== undefined ? atArg : inMs !== undefined ? Date.now() + inMs : undefined;
+  if (asked !== undefined && !(Number.isFinite(asked) && asked > Date.now() - 1000)) throw new RelayError("usage", "a wake's time must be in the future", "--in 10m (from now) or --at <ISO time>.");
+  if (filter.kind === "timer" && asked === undefined) throw new RelayError("usage", "wake needs what to wait for (--op, --agents, --events) or a time (--in, --at)", "e.g. capcomd wake --in 10m --note \"look at the deploy\".");
+  const max = WAKE_MAX_MS();
+  if (asked !== undefined && asked > Date.now() + max + 1000) throw new RelayError("usage", `a wake can be set at most ${Math.round(max / 3600_000)} hours ahead`, "Wake sooner and arm another one then if you still need to wait.");
+  const at = Math.min(asked ?? Date.now() + max, Date.now() + max);
+  // Idempotent: a retried call (the CLI retries a transient failure with the same request id) arms one wake; the same
+  // wait armed again while it still waits is that wake (scope wakeArm).
+  const key = args.key !== undefined ? `wake:${String(args.key)}` : `req:${reqId}`;
+  const r: any = await client().scope.getOrCreate([c.run]).wakeArm({ agentId: c.sub, filter, at, note: args.note !== undefined ? String(args.note).slice(0, 2000) : null, ...(key ? { key } : {}) }).catch(O.asRelay);
+  const w = r.wake;
+  // An op it waits on is restarted when the daemon starts again (src/primitives/wake-sweep.ts): nobody polls it.
+  if (filter.kind === "op" && w.state === "armed") noteOpWake(c.run);
+  return {
+    ...extra, wake: w.wakeId, wakeState: w.state, wakeKind: w.filter.kind, wakeAt: w.at,
+    hint: w.state === "fired" ? "It already happened: the wake-up message is in your inbox (capcomd inbox), and reaches you as your next message."
+      : "End your turn now (don't poll, sleep or wait in a tool call): the wake-up comes to you as a message when it happens, or at its time.",
   };
 }
 

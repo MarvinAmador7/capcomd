@@ -14,6 +14,8 @@ export const ALL_OPS = [
   "budget", "task", "kv", "verify", "merge", "inspect", "logs", "heartbeat", "result", "grant", "title", "fetch", "check",
   // Plugin API §16.2: background jobs in the agent's own machine.
   "job.start", "job.output", "job.list", "job.kill",
+  // ADR-026 §3: end the turn and be woken by an event or at a time (`capcomd wake`, `verify|check|await --wake`).
+  "wake",
 ] as const;
 export type Op = (typeof ALL_OPS)[number];
 
@@ -81,7 +83,7 @@ export const JOB_OPS: readonly Op[] = ["job.start", "job.output", "job.list", "j
 /** What an agent that may not spawn may call: name its tab, read what it sees of the tree (its own subtree and its
  *  siblings'), keep notes and coordinate (kv, task, send, inbox), report progress and declare its result (where its
  *  lessons go, ADR-025). Nothing that starts, stops, lands or pays for another agent's work. */
-export const LEAF_OPS: readonly Op[] = ["title", "status", "tree", "inspect", "logs", "events", "budget", "heartbeat", "kv", "task", "inbox", "send", "result"];
+export const LEAF_OPS: readonly Op[] = ["title", "status", "tree", "inspect", "logs", "events", "budget", "heartbeat", "kv", "task", "inbox", "send", "result", "wake"];
 
 /**
  * Ops an agent's token carries: everything for spawners (merge stays verify-gated, never operator), LEAF_OPS and the job

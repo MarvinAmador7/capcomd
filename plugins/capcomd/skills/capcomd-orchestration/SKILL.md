@@ -106,6 +106,15 @@ waits for its login's usage limit to reset, so plan around it rather than spawni
    and start as others finish (not an error).
 4. **Ask "could any consumer start now against the contract?"** If yes, move it into the current step.
 
+### Writing each agent's task
+- Write it for a stranger: the agent knows nothing you know. Say the files it owns, what is out of scope, the
+  acceptance, and the command that proves it is done (e.g. `bun test tests/login.test.ts`).
+- More than three deliverables is two tasks: split it.
+- No two tasks change the same files: split by file or module, or land the shared part first (shape 3).
+- State dependencies: a task that builds on another's work says what it builds on, and starts once that work landed.
+- Ask for milestones, not heartbeats: something decided, landed or blocked, never "still working".
+- Never ask an agent to wait inside a tool call: planners and leads end their turn with a wake (below).
+
 Cost matters: every agent and every level adds turns, money and verify time, and the patterns below say when a shape
 costs more than it gives. Use those warnings to choose between shapes that all give what was asked; they never
 override an explicit request for parallel work.
@@ -115,6 +124,12 @@ override an explicit request for parallel work.
 - Waits are bounded: `capcomd_await`, `capcomd_verify` and `capcomd_merge` return `pending` / `state: "running"` (with
   the `id`) after `timeoutMs` (max 55 s; 0 answers at once). The work goes on in between.
 - Never poll with `sleep` or `docker ps`: `capcomd_await` is the wait.
+- Agents in their VMs (planners, leads) don't wait inside a tool call: they end their turn with a wake
+  (`capcomd await|wait-any|verify|check … --wake`, `capcomd wake --op|--agents|--events|--in|--at`, or `wake: true` and
+  `capcomd_wake` as MCP tools there) and the event comes to them as a message that starts their next turn. Their skill
+  teaches it; don't brief them to poll. A waiting agent shows as `waiting for verify vfy-…` in the apps
+  (`agent.wake_armed`, Agent.activity kind `wait`) and stays `running`; `agent.woken` says what woke it. (A Codex agent
+  can't be woken: it waits inside the call.)
 - Wait on everything you have running at once: `capcomd_await {runId, agents: [...], ops: [vfy-…, mrg-…], mode: "any"}`
   returns as soon as one agent, verify or merge finishes.
 - Verify several in parallel, then await any: start each `capcomd_verify` with `timeoutMs: 0`, put its id in `ops`,
@@ -190,7 +205,10 @@ propagates); profiles come from `capcomd profiles list --json` (or `capcomd_prof
   `cas --expect` it; on conflict re-read and retry.
 - Sub-agents (ADR-017): `send <runId> agt text`, `inspect <runId> agt`, `logs <runId> agt`,
   `budget show <runId> [agt]`. Inside a VM, agents allowed to spawn get the same verbs as `capcomd …` (no runId: the
-  token fixes run and identity) and as `capcomd_*` MCP tools, plus `handoff`, `inbox`, `heartbeat` and `result`.
+  token fixes run and identity) and as `capcomd_*` MCP tools, plus `handoff`, `inbox`, `heartbeat` and `result`, and
+  `wake` (ADR-026): `verify|check|await|wait-any … --wake` and `wake --op ID | --agents a,b [--all] | --events T,…
+  [--agent agt] | --in 10m | --at ISO [--note "…"]` answer at once; the agent ends its turn and is woken by a message
+  when it happens (at the latest 6 h out). `wake --list`, `wake --cancel <wk>`.
 - Always pass `--key` on spawn, so retries after a crash are safe.
 
 **Tab titles.** Every agent names its tab: once it understands its task it runs `capcomd title "<2-4 lowercase
@@ -273,7 +291,8 @@ Use for: high-variance, high-value changes. It costs n times as much: skip it wh
 default a name made from the goal in the repository's own branch convention, else `<type>/<slug>` such as
 `feat/csv-export`, cut from `--base B`, default the project's target, else origin's default branch;
 `--no-goal-branch` merges into the target as before), and spawns that planner with the goal: it splits the work into
-children, verifies and merges them onto the goal branch from its VM, and ends with a summary. Then
+children, verifies and merges them onto the goal branch from its VM (ending its turn with a wake while children work
+and verifies run, never waiting inside a tool call), and ends with a summary. Then
 `capcomd goal <runId>` shows the branch against its base and `capcomd pr open <runId>` opens the pull request (a run
 whose planner stopped asks y/N first; `--yes` without a terminal). The command shows each agent's status as it
 changes (`src/recipes/planner-agent.ts`).

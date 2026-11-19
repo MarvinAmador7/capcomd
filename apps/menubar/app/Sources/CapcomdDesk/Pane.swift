@@ -374,7 +374,8 @@ struct PaneHead: View {
         if !split {
           if let place { Text(verbatim: place).lineLimit(1).truncationMode(.tail) }
         }
-        if h.status == .running, let start = h.startedAtMs {
+        // Waiting between turns (agents.wake): how long it has waited ("waiting for verify vfy-… · 4:12"); else how long it has worked.
+        if h.status == .running, let start = h.waitSinceMs ?? h.startedAtMs {
           if !split, place != nil { Text(verbatim: " · ") }
           Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer).monospacedDigit()
         }

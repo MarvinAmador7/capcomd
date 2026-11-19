@@ -182,6 +182,18 @@ test("in-VM CLI argv → op mapping (incl. parent-set children grants)", async (
   expect(toCall(["job", "start", "--run", "--label", "server", "--", "npm", "start"])).toMatchObject({ op: "job.start", args: { cmd: ["npm", "start"], label: "server", run: true } });
   expect(toCall(["job", "start", "--run", "npm", "start"])).toMatchObject({ op: "job.start", args: { cmd: ["npm", "start"], run: true } });
   expect(toCall(["job", "start", "--", "npm", "test"]).args.run).toBeUndefined();
+  // ADR-026 §3: waits between turns. --wake answers at once (no loop); `wake` takes what to wait for or a time.
+  expect(toCall(["verify", "--ref", "agt-1", "--wake", "--note", "merge it"])).toMatchObject({ op: "verify", args: { ref: "agt-1", wake: true, note: "merge it" }, wake: true });
+  expect(toCall(["verify", "--ref", "agt-1", "--wake"]).verifyLoop).toBeUndefined();
+  expect(toCall(["check", "--wake"])).toMatchObject({ op: "check", args: { wake: true }, wake: true });
+  expect(toCall(["await", "agt-1", "agt-2", "--wake"])).toMatchObject({ op: "await", args: { agents: ["agt-1", "agt-2"], wake: true }, wake: true });
+  expect(toCall(["wake", "--in", "10m", "--note", "look again"])).toMatchObject({ op: "wake", args: { in: "10m", note: "look again" }, wake: true });
+  expect(toCall(["wake", "--agents", "agt-1,agt-2", "--all"])).toMatchObject({ op: "wake", args: { agents: ["agt-1", "agt-2"], all: true } });
+  expect(toCall(["wake", "--events", "agent.done,check.passed", "--agent", "agt-1", "--after", "12"])).toMatchObject({ op: "wake", args: { events: ["agent.done", "check.passed"], agent: "agt-1", after: 12 } });
+  expect(toCall(["wake", "--cancel", "wk-1"])).toMatchObject({ op: "wake", args: { cancel: "wk-1" } });
+  expect(() => toCall(["wake"])).toThrow(/wake needs/);
+  const { parseDuration } = await import("../../src/subagents/rpc");
+  expect([parseDuration("10m"), parseDuration("90s"), parseDuration("2h"), parseDuration("1500ms"), parseDuration("30"), parseDuration("soon")]).toEqual([600_000, 90_000, 7_200_000, 1500, 30_000, null]);
 });
 
 /** A pump that answers every request with its own op + args (no engine). */

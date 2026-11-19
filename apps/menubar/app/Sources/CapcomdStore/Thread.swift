@@ -14,6 +14,9 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
     case steer(bytes: Int?)
     /// `message.sent` / `snapshot.threads` message with agent-written text (untrusted) and/or a stored attachment.
     case message(from: String, to: String, text: UntrustedText?, attachment: AttachmentRef?)
+    /// `agent.woken` (capability agents.wake): what woke it, as a quiet line ("verify passed · woke planner").
+    /// Client-composed from daemon-written fields.
+    case woke(String)
     /// Child handed back: `agent.done.result` (ChildResult {summary, artifacts[{name,ref}]}).
     case handoff(childId: String, childName: String, summary: UntrustedText?, artifacts: [UntrustedText])
   }
@@ -53,6 +56,9 @@ extension CapcomdStore {
         let item = ThreadItem(id: mid, seq: e.seq, epochMs: e.epochMs, kind: .message(from: from, to: to, text: text, attachment: att))
         appendThread(runId, to, item); if from != to { appendThread(runId, from, item) }
       }
+    case "agent.woken":
+      let name = runs[runId]?.agents[agentId]?.displayName ?? agentId
+      appendThread(runId, agentId, .init(id: id, seq: e.seq, epochMs: e.epochMs, kind: .woke(Self.wokeLine(d, name: name))))
     case "agent.done":
       appendThread(runId, agentId, .init(id: id, seq: e.seq, epochMs: e.epochMs, kind: .status("Finished")))
       guard let a = runs[runId]?.agents[agentId], let parent = a.parent else { return }
@@ -74,6 +80,21 @@ extension CapcomdStore {
   }
 
   public func thread(agentId: String) -> [ThreadItem] { threads[agentId] ?? [] }
+
+  /// agent.woken as one quiet line: what happened, without the op's id ("verify passed", "check failed", "its check-in
+  /// came"), then who it woke. `text` is daemon-written ("verify vfy-… passed").
+  nonisolated static func wokeLine(_ d: [String: JSONValue], name: String) -> String {
+    let what: String
+    switch d["by"]?.string {
+    case "time": what = "check-in time"
+    case "deadline": what = "wait ran out"
+    default:
+      let t = d["text"]?.string ?? "what it waited for happened"
+      // "verify vfy-k12 passed" → "verify passed": the id is on the record, the line says what happened.
+      what = t.replacingOccurrences(of: #"^(verify|check|merge) (vfy|chk|mrg)-\S+ "#, with: "$1 ", options: .regularExpression)
+    }
+    return "\(what) · woke \(name)"
+  }
 }
 
 extension CapcomdStore {
