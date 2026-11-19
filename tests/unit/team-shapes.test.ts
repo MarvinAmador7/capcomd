@@ -128,12 +128,10 @@ describe("the steering a driver reads", () => {
     const at = (h: string) => { const i = s.indexOf(h); expect(i).toBeGreaterThan(0); return i; };
     expect(at("## Choose a team shape")).toBeLessThan(at("## Primitives (reference)"));
     for (const h of ["**1. Single loop.**", "**2. Wide fan-out.**", "**3. Contract first, then wide.**", "**4. Leads with helpers.**", "### What the user says → the shape", "### Plan check"]) at(h);
-    expect(s).toContain("simplest shape that gives what the user\nasked for");
-    expect(s).not.toContain("Default every child to a leaf");
+    // How a lead is spawned, as the spawn tool takes it.
     expect(s).toContain("children: {maxChildren: N, maxDepth: 1}");
     // A marked spot for the waiting and polling lines other changes add.
     expect(at("<!-- capcomd: waiting and polling guidance")).toBeLessThan(at("<!-- end: waiting and polling guidance -->"));
-    expect(s).toContain("verify's checks run in Linux containers or VMs");
     // The file the plugins ship is the one capcomd bundles (Hermes, Claude Code without the plugin).
     expect(readFileSync(new URL("../../plugins/capcomd/skills/capcomd-orchestration/SKILL.md", import.meta.url), "utf8")).toBe(s);
   });

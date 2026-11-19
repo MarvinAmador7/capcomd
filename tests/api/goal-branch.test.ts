@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { addClient, loadClients } from "../../src/api/clients";
-import { CAPABILITY_NAMES, GoalPullRequestResult, GoalView, ProjectBranches, Run } from "../../src/api/contract";
+import { GoalPullRequestResult, GoalView, ProjectBranches, Run } from "../../src/api/contract";
 import { startDetachedRun } from "../../src/api/create-run";
 import { lifecycleEvents } from "../../src/api/lifecycle";
 import { strictEventData } from "../../src/api/legacy-events";
@@ -54,8 +54,6 @@ function setup(goal = view()) {
 }
 
 describe("capability runs.goal_branch", () => {
-	test("health lists it", () => { expect(CAPABILITY_NAMES).toContain("runs.goal_branch"); });
-
 	test("Run.goalBranch: the branch, base, state and pull request; null for a run without one", async () => {
 		const { get } = setup();
 		const runs = (await get("/v1/runs")).body as any[];

@@ -1,7 +1,8 @@
 // The context eval's pieces without an engine (ADR-025 §12, step 0): the world generator is deterministic and keeps each
-// fact where its arm puts it, every hidden checker classifies a right, a stale and a wrong answer, the fake agent scores
-// what --expect says it must, the metrics read logs and spans, and the committed limits files are well-formed. The full
-// harness (engine, fake sandbox, capcomd check) runs in CI's evals job: `bun scripts/eval-context.ts --seed 1 --expect`.
+// fact where its arm puts it, every hidden checker classifies a right, a stale and a wrong answer, the metrics read logs
+// and spans, and the committed limits files are well-formed. The full harness (engine, fake sandbox, capcomd check, the
+// fake agent scored in every runnable arm against FAKE_EXPECTED) runs in CI's evals job:
+// `bun scripts/eval-context.ts --seed 1 --expect`.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -10,7 +11,7 @@ import { dirname, join } from "path";
 import { ARMS, armNamed } from "../../scripts/eval-context/arms";
 import { actionsFromLogs, admission, decidedLimits, spendFromSpans, startingLimits, summarize, type Row } from "../../scripts/eval-context/report";
 import { briefItems, briefWithoutSkills, inlineTask, pushText, skillBlocks, triggered } from "../../scripts/eval-context/deliver";
-import { checkCommand, FAKE_EXPECTED, parseVerdict, suite, type Step } from "../../scripts/eval-context/tasks";
+import { checkCommand, parseVerdict, suite, type Step } from "../../scripts/eval-context/tasks";
 import { agentsMd, brainFiles, contextFiles, facts, generateWorld, memoryFiles, otherRecords, repoFiles, worldHash, type MemorySize } from "../../scripts/eval-context/world";
 import { samplePayload, testkit } from "../../packages/plugin/src/testkit";
 import { skillBlock } from "../../src/agents/skills";
@@ -108,34 +109,6 @@ describe("the world", () => {
 describe("the checkers", () => {
   const w = generateWorld(11);
   const base = repoFiles(w);
-
-  /** The brief the router gives an agent of the arm's profile over these files (what the runner appends for it). */
-  const briefOf = async (arm: string, files: Record<string, string>) => {
-    const context = armNamed(arm)!.context;
-    if (!context) return [];
-    const read = async () => ({ sha: "f".repeat(40), date: "2026-11-06T00:00:00.000Z", truncated: false, files: Object.entries(files).filter(([f]) => f.startsWith(".capcomd/context/")).map(([path, text]) => ({ path, text })) });
-    const p = memoryProvider({ read });
-    const b = await buildBrief({ context, model: null, role: "work", scope: { projectId: null, repo: "/srv/eval.git", ref: "main", profile: { name: "eval", version: 1 }, runId: null, agentId: null }, providers: new Map([["memory", { name: "memory", plugin: "context-memory", kinds: ["memory", "fact"], provider: p }]]) });
-    return ["--append-system-prompt", b.text];
-  };
-
-  test("the fake agent scores what --expect requires, in every runnable arm", async () => {
-    for (const arm of ["none", "agents-md", "index", "index-paths", "index-k1", "index-k3", "index-noskills"]) {
-      for (const chain of suite(w).chains) {
-        const files = { ...base, ...armNamed(arm)!.files!(w) };
-        const dir = checkout(files);
-        const appended = await briefOf(arm, files);
-        const k = armNamed(arm)!.inline;
-        for (const step of chain.steps) {
-          const prompt = k ? inlineTask(step.prompt, briefItems(appended[1] ?? ""), files, k).text : step.prompt;
-          const r = spawnSync(process.execPath, [FAKE, "-p", prompt, "--output-format", "stream-json", ...appended], { cwd: dir, encoding: "utf8" });
-          const result = r.stdout.trim().split("\n").map((l) => JSON.parse(l)).find((e) => e.type === "result");
-          const v = step.checker ? check(dir, step) : step.scoreSummary!(String(result?.result ?? ""));
-          expect(`${arm} ${step.id} ${v.success ? "pass" : "fail"}:${v.class}`).toBe(`${arm} ${step.id} ${FAKE_EXPECTED[arm]![step.id]}`);
-        }
-      }
-    }
-  }, 60_000);
 
   test("business-fee: the current record and its citation pass; the superseded one is named as such", () => {
     const s = w.shipping;
