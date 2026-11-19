@@ -18,6 +18,9 @@ struct DeskOverlays: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let group: Anchor<CGRect>?
+  /// Search ⌘K in the window stays built once it has shown, hidden while closed (`SearchOverlayHost.show`): opening it
+  /// again shows a view that is already there instead of making a hosting view, its field and its list each time.
+  @State private var paletteBuilt = false
   var body: some View {
     let open = model.menuOpen || model.paletteOpen
     GeometryReader { g in
@@ -38,19 +41,20 @@ struct DeskOverlays: View {
         // Search ⌘K: in the window (SearchView), or its own panel over it (SearchPanel.swift; knob search.host).
         if DeskKnobs.searchHost.value == .panel {
           SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
-        } else if model.paletteOpen {
-          SearchOverlaySlot(width: SearchMetrics.width(for: g.size.width))
+        } else if model.paletteOpen || paletteBuilt {
+          SearchOverlaySlot(width: SearchMetrics.width(for: g.size.width), open: model.paletteOpen)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, SearchMetrics.top - Theme.Desk.titleBar)
-            .transition(.opacity)
+            .opacity(model.paletteOpen ? 1 : 0)
         }
       }
       .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
     }
     .animation(reduceMotion ? Theme.Motion.reduced : .spring(duration: 0.2, bounce: 0), value: model.menuOpen)
     // The scrim under Search ⌘K: at once from the keyboard (SPEC §4), a short fade otherwise.
-    .animation(NSApp.currentEvent?.type == .keyDown ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
+    .animation(model.paletteByKey ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
     .background(PaletteFocusReturn(model: model, open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true))
+    .onChange(of: model.paletteOpen) { _, o in if o && !paletteBuilt && DeskKnobs.searchHost.value != .panel { paletteBuilt = true } }
   }
 
   /// Transform and opacity only; a crossfade with Reduce Motion.
@@ -64,9 +68,10 @@ struct DeskOverlays: View {
 struct SearchOverlaySlot: View {
   @Environment(DeskModel.self) private var model
   let width: CGFloat
+  let open: Bool
   var body: some View {
     let s = model.search
-    SearchOverlay(model: model)
+    SearchOverlay(model: model, open: open)
       .frame(width: width, height: SearchMetrics.queryHeight + 0.5 + SearchMetrics.listHeight(s.sections, query: s.query) + SearchMetrics.footer)
   }
 }
@@ -76,6 +81,7 @@ struct SearchOverlaySlot: View {
 /// reel behind it). Its shadow reaches past it (the view doesn't clip).
 struct SearchOverlay: NSViewRepresentable {
   let model: DeskModel
+  let open: Bool
   func makeNSView(context: Context) -> SearchOverlayHost {
     let h = SearchOverlayHost(rootView: SearchOverlayRoot(model: model))
     h.sizingOptions = []
@@ -84,6 +90,7 @@ struct SearchOverlay: NSViewRepresentable {
   }
   func updateNSView(_ h: SearchOverlayHost, context: Context) {
     if h.rootView.model !== model { h.rootView = SearchOverlayRoot(model: model) }
+    h.show(open, fading: context.transaction.animation != nil)
   }
 }
 
@@ -94,7 +101,23 @@ package struct SearchOverlayRoot: View {
 }
 
 /// The in-window palette's hosting view (the bench's ink region `palette`, DESKBENCH.md).
-package final class SearchOverlayHost: NSHostingView<SearchOverlayRoot> {}
+package final class SearchOverlayHost: NSHostingView<SearchOverlayRoot> {
+  private var hiding: DispatchWorkItem?
+
+  /// Open: shown. Closed: hidden, after the fade when the close fades (a click outside). The field gives up the keyboard
+  /// first: AppKit hands a hidden first responder's keyboard to the next key view, and the palette gives it back to
+  /// what had it before (`PaletteFocusReturn`).
+  func show(_ open: Bool, fading: Bool) {
+    hiding?.cancel(); hiding = nil
+    if open { if isHidden { isHidden = false }; return }
+    guard !isHidden else { return }
+    if let w = window, let v = PaletteFocusReturn.Keeper.owner(w.firstResponder), v.isDescendant(of: self) { w.makeFirstResponder(nil) }
+    guard fading else { isHidden = true; return }
+    let work = DispatchWorkItem { [weak self] in self?.isHidden = true }
+    hiding = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+  }
+}
 
 /// The menu: the goal, its repos and where it runs, then the actions the daemon and the app have.
 struct ProjectMenuView: View {

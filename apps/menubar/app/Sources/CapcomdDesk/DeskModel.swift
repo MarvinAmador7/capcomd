@@ -148,7 +148,12 @@ package final class DeskModel {
   @ObservationIgnored var newProjectDraft: NewProjectModel?
   /// The open project's menu (ReelMenu) and the ⌘K palette are open; Stop project… is asking first.
   package internal(set) var menuOpen = false { didSet { Mutations.record("DeskModel.menuOpen") } }
-  package internal(set) var paletteOpen = false { didSet { Mutations.record("DeskModel.paletteOpen") } }
+  package internal(set) var paletteOpen = false {
+    didSet { Mutations.record("DeskModel.paletteOpen"); paletteByKey = NSApp.currentEvent?.type == .keyDown }
+  }
+  /// The palette last opened or closed from the keyboard (⌘K, Esc, ↩): it shows and goes at once, never faded (SPEC §4).
+  /// Read when the change happens, not when the window updates: by then the event being handled may be another one.
+  @ObservationIgnored package private(set) var paletteByKey = false
   /// The palette closed because a result opened (↩, ⌘↩, a click), not dismissed (Esc, a click outside): the opened place
   /// decides where the keyboard goes, so it isn't given back (`PaletteFocusReturn`).
   @ObservationIgnored var paletteOpenedResult = false
