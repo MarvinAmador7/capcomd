@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { Git } from "../../src/merge/git";
 import { hostCheckEnv, runTests } from "../../src/merge/verify";
-import { withoutEngine } from "./gitfixture";
+import { withoutEngine } from "../merge/gitfixture";
 
 withoutEngine();
 
