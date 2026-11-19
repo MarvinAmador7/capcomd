@@ -39,8 +39,7 @@ struct DeskOverlays: View {
         if DeskKnobs.searchHost.value == .panel {
           SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
         } else if model.paletteOpen {
-          SearchView(onHeight: { _ in }, inWindow: true)
-            .frame(width: SearchMetrics.width(for: g.size.width))
+          SearchOverlaySlot(width: SearchMetrics.width(for: g.size.width))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, SearchMetrics.top - Theme.Desk.titleBar)
             .transition(.opacity)
@@ -59,6 +58,43 @@ struct DeskOverlays: View {
     reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)).combined(with: .offset(y: -4))
   }
 }
+
+/// Search ⌘K in the window, at its height for the results it shows (fixed rows: known without laying them out). Its
+/// own view, so only it follows the results as they change.
+struct SearchOverlaySlot: View {
+  @Environment(DeskModel.self) private var model
+  let width: CGFloat
+  var body: some View {
+    let s = model.search
+    SearchOverlay(model: model)
+      .frame(width: width, height: SearchMetrics.queryHeight + 0.5 + SearchMetrics.listHeight(s.sections, query: s.query) + SearchMetrics.footer)
+  }
+}
+
+/// Search ⌘K in the window, drawn in a hosting view of its own (`SearchOverlayHost`), as its panel is: a view that is
+/// the palette and nothing else, which the bench finds and judges by itself (its ink drawn alone, not through to the
+/// reel behind it). Its shadow reaches past it (the view doesn't clip).
+struct SearchOverlay: NSViewRepresentable {
+  let model: DeskModel
+  func makeNSView(context: Context) -> SearchOverlayHost {
+    let h = SearchOverlayHost(rootView: SearchOverlayRoot(model: model))
+    h.sizingOptions = []
+    h.clipsToBounds = false
+    return h
+  }
+  func updateNSView(_ h: SearchOverlayHost, context: Context) {
+    if h.rootView.model !== model { h.rootView = SearchOverlayRoot(model: model) }
+  }
+}
+
+/// The palette's content in its own hosting view: SearchView on the model (a hosting view starts a new environment).
+package struct SearchOverlayRoot: View {
+  let model: DeskModel
+  package var body: some View { SearchView(onHeight: { _ in }, inWindow: true).environment(model) }
+}
+
+/// The in-window palette's hosting view (the bench's ink region `palette`, DESKBENCH.md).
+package final class SearchOverlayHost: NSHostingView<SearchOverlayRoot> {}
 
 /// The menu: the goal, its repos and where it runs, then the actions the daemon and the app have.
 struct ProjectMenuView: View {
@@ -241,6 +277,7 @@ struct FlowRow: Layout {
     return rows
   }
 }
+
 /// Search ⌘K dismissed (Esc, a click outside, ⌘K again) gives the keyboard back to what had it before it opened: a
 /// pane's or a column's message box, the sidebar's list, a field. SwiftUI otherwise leaves it with the closed field's
 /// editor (keys typed next went nowhere) or with nobody. When that view is gone or hidden (the pane shows another

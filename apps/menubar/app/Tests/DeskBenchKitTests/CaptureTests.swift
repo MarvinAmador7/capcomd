@@ -3,7 +3,7 @@ import XCTest
 import CapcomdStore
 import CapcomdThread
 #if os(macOS)
-import PerfLoopHost
+@testable import PerfLoopHost
 #endif
 
 /// C8 on the adapter's side: parametric fixtures (`crew@agents=24`), and captured ones: anonymisation leaks none of
@@ -184,11 +184,10 @@ final class CaptureTests: XCTestCase {
     }
     XCTAssertNotNil(Fixtures.problem("file:" + dir.appendingPathComponent("missing.json").path))
     #if os(macOS)
-    // The bench takes it as --fixture file:PATH: listed under that name for the run (PerfLoopHost takes listed names).
-    await MainActor.run {
+    // The bench takes it as --fixture file:PATH (its `file` scheme): the run's fixture is the spec as asked.
+    try await MainActor.run {
       let b = BenchCatalog.make(stamp: nil, knobs: { [] }, body: { _ in nil }, builtWithin: { _, _ in GuardResult(name: Guards.builtWithin, pass: true, detail: "") })
-      XCTAssertNil(BenchCatalog.register(fixture: name, on: b))
-      XCTAssertTrue(b.fixtures.contains { $0.name == name })
+      XCTAssertEqual(try b.resolveFixture(name).name, name)
     }
     #endif
     // A bare name looks in the default directory.

@@ -9,7 +9,9 @@ import PerfLoopProbe
 
 /// One rep's desktop window: the fixture loaded into a store, the app's own model and window content (CapcomdDesk), and
 /// PerfLoopHost's `Run` around it (the window, the clock, the steps, the guards). Made fresh for every rep, so every rep
-/// starts from the same state, as perfloop's runner measures (one rep per process).
+/// starts from the same state, as perfloop's runner measures (one rep per process). The window is the bench app's
+/// `Window` scene (BenchApp.swift: the app's commands, so its shortcuts go through the real menu bar), adopted by the
+/// rep and showing this rep's desk (`DeskStage`).
 ///
 /// The views report their bodies and the reel its phases to `DeskProbe`; the desk forwards both to PerfLoopProbe's
 /// `Probe` (what the rep records: bodies per step and stretch, causes) and keeps its own log with times on the rep's
@@ -20,7 +22,6 @@ import PerfLoopProbe
   let store: CapcomdStore
   let model: DeskModel
   let thread: FixtureThread
-  let hosting: NSHostingView<DeskWindowContent>
   var bodies: [(t: Double, view: String, id: String?)] = []
   var events: [(t: Double, name: String, value: Int)] = []
   /// Sequence numbers for events the scenarios make up (asks, decisions): never reused, the store drops duplicate ids.
@@ -39,10 +40,6 @@ import PerfLoopProbe
     store = CapcomdStore(thread: thread, clientId: "deskbench")
     w.load(into: store)
     model = DeskModel(store: store)
-    hosting = NSHostingView(rootView: DeskWindowContent(model: model))
-    // The app's scene sizes its window from the content (NSHostingView's default sizing options); the bench sizes the
-    // window itself, so it needs none. DESKBENCH_SIZING=1 keeps the defaults, to compare.
-    if ProcessInfo.processInfo.environment["DESKBENCH_SIZING"] == nil { hosting.sizingOptions = [] }
     DeskProbe.sink = self
     Desk.current = self
     run.atClose { DeskProbe.sink = nil; Desk.current = nil }
@@ -61,12 +58,29 @@ import PerfLoopProbe
     return w
   }
 
-  /// Shows the window (the app's content and chrome: `WindowChrome` dresses whatever window it lands in), at `size`.
-  /// The run waits for its first frames and for the window to come to rest.
+  /// Adopts the scene's window as the rep's (`run.show(window:)`: activated, at `size`, drawing and at rest), then puts
+  /// this rep's desk in it and waits until it has drawn and come to rest. The desk goes in after the window is up: an
+  /// app that isn't active yet holds SwiftUI's updates back.
   func show(size: CGSize? = nil) async throws {
+    let w = try await run.appWindow { DeskBenchApp.isScene($0) }
+    try await run.show(window: w, size: size ?? Desk.size(run))
+    w.contentMinSize = DeskWindowContent.minSize
     columnsSince = run.now
-    try await run.show(view: hosting, size: size ?? Desk.size(run), title: "capcomd (bench)")
-    run.window?.contentMinSize = DeskWindowContent.minSize
+    DeskStage.shared.model = model
+    guard await run.wait(timeoutMs: 5000, { [unowned self] in bodies.contains { $0.view == "RootView" } }) else {
+      throw DeskError("the scene's window didn't show the rep's desk within 5 s")
+    }
+    _ = await nextCommit()
+    await quiet(quietMs: 100, timeoutMs: 3000)
+  }
+
+  /// A window of its own for `open` (`run.open` makes it inside the measured step): a hosting view of the app's window
+  /// content, with no sizing options (the bench sizes the window; DESKBENCH_SIZING=1 keeps NSHostingView's defaults, as
+  /// the app's scene has them, to compare).
+  func makeHosting() -> NSView {
+    let h = NSHostingView(rootView: DeskWindowContent(model: model))
+    if ProcessInfo.processInfo.environment["DESKBENCH_SIZING"] == nil { h.sizingOptions = [] }
+    return h
   }
 
   /// `--set size=WxH` (default 1440×900, the app's default window).
@@ -231,7 +245,10 @@ import PerfLoopProbe
   func needsRegion(min: Double? = nil) -> InkRegion { .find("needs-reel", min: min) { [unowned self] in reel(.needs)?.reelScrollView } }
   /// The opened window's sidebar list, and the pane's thread.
   var sidebarRegion: InkRegion { .find("sidebar") { [unowned self] in sidebarScrollView(scrollable: false) } }
-  var paneRegion: InkRegion { .find("pane") { [unowned self] in paneView().flatMap { threadScroll(in: $0.view) } } }
+  /// A thread rests at a different offset run to run (after a switch, a split), so snapshots compare its viewport by how
+  /// much of it is drawn: the candidate keeps at least a fifth of the champion's ink (PerfLoop's default is half).
+  var paneRegion: InkRegion { .find("pane") { [unowned self] in paneView().flatMap { threadScroll(in: $0.view) } }.comparedByInk(atLeast: Desk.threadInk) }
+  static let threadInk = 0.2
   /// Waits (up to 3 s, between steps) until every pane on screen whose agent has a thread has rendered a row of it
   /// (a `PaneEntryRow` body for that agent): a pane just switched to an agent whose thread hasn't been read yet is
   /// blank until its first page lands, which the ink guard would read as a blank pane. A wait over 300 ms is noted.
@@ -249,7 +266,9 @@ import PerfLoopProbe
 
   /// Each pane's thread, by its place (pane-1 the first, left to right, top to bottom).
   func paneRegions(_ n: Int) -> [InkRegion] {
-    (0..<n).map { i in .find("pane-\(i + 1)") { [unowned self] in let p = panesShown(); return p.indices.contains(i) ? threadScroll(in: p[i].view) : nil } }
+    (0..<n).map { i in
+      InkRegion.find("pane-\(i + 1)") { [unowned self] in let p = panesShown(); return p.indices.contains(i) ? threadScroll(in: p[i].view) : nil }.comparedByInk(atLeast: Desk.threadInk)
+    }
   }
 }
 
@@ -270,17 +289,7 @@ struct Check {
 extension HostRun {
   /// Records the scenario's checks, in the order the driver made them.
   func record(_ checks: [Check]) { for c in checks { check(c.name, c.pass, c.detail) } }
-
-  /// One measured step whose action is async work over time (a burst of items, a fling's events): the step starts it
-  /// and ends once it has finished and the window has come to rest. Its latency is the first frame after the work.
-  @discardableResult
-  func work(_ name: String, timeoutMs: Double = 20_000, quietMs: Double = 100, ink: [InkRegion] = [], _ body: @escaping @MainActor () async -> Void) async -> StepRecord {
-    let done = Flag()
-    return await step(name, timeoutMs: timeoutMs, quietMs: quietMs, until: { done.set }, ink: ink) { Task { @MainActor in await body(); done.set = true } }
-  }
 }
-
-@MainActor final class Flag { var set = false }
 
 extension CGRect { var center: CGPoint { CGPoint(x: midX, y: midY) } }
 extension String { func ifEmpty(_ s: String) -> String { isEmpty ? s : self } }

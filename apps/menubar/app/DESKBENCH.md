@@ -6,8 +6,10 @@ drives it the way a user would: tab clicks, project switches, swipes, typing, cl
 arriving. It is a [PerfLoop](https://github.com/MarvinAmador7/perfloop) bench built on **PerfLoopHost**, PerfLoop's
 in-app bench library: PerfLoopHost answers the runner's whole contract (its ADAPTER.md) and gives every scenario its
 clock, steps, checks, the ink guard, real input with focus records, region-by-region snapshots and the profiler.
-deskbench says what to measure (the scenarios, fixtures, knobs, guards) and how to drive the window. Everything is
-in-process: no daemon, no screen-recording permission, no synthetic input to the system.
+deskbench says what to measure (the scenarios, fixtures, knobs, guards) and how to drive the window. The bench is a
+SwiftUI app as the desktop app is (`BenchApp.swift`): a `Window` scene in the app's style with the app's own commands,
+so shortcuts go through the real menu bar. Everything is in-process: no daemon, no screen-recording permission, no
+synthetic input to the system.
 
 You are its user, through `perfloop` (`perfloop run`, `baseline`, `exp`): a bench run by hand skips the gates, the
 window lock and the ledger (PerfLoop's AGENTS.md). Its own verbs are for looking:
@@ -30,33 +32,22 @@ by PerfLoop's `PerfLoopStamp` plugin, so a copied binary run from anywhere still
 
 ## What comes from PerfLoopHost, what is deskbench's
 
-| | PerfLoopHost (perfloop 1481468) | deskbench |
+| | PerfLoopHost (perfloop 87a79db) | deskbench |
 |---|---|---|
-| The contract | `list`, `describe`, `run`, `snapdiff`, `knobs`, `profile`, `diff`, `gestures`, `record-gesture`, the window lock, exit codes | `describe` adds `fixtureSchemes: ["file"]` and `appearances: ["dark"]` (`DeskBenchKit/BenchCatalog.swift`) |
-| A rep | the window, the stretch clock, the main-thread sampler, frames, bodies and their causes per step, the trust fields (`window`, quiet, frames), `perfloop.result/2` | a fresh desk per rep (`Desk.swift`): the fixture loaded into a store, the app's `DeskModel` and `DeskWindowContent`, the probe forwarded to PerfLoop's |
-| Steps | `run.step(name, until:, ink:)`, `run.wait`, `run.settle`, `run.check`, `run.ink` (off the clock) | the drivers (`Drive*.swift`, `NeedsDrive.swift`): what a user does, what each check reads |
-| Input | `run.type`, `run.key`, `run.click`, `run.press` on the app's own queue, each step's input and focus record, `--pictures` | which keys and clicks each scenario sends |
-| Gestures | `run.swipe` (replay, smoothness meter), the synthetic gestures, `record-gesture SCENARIO` | `fling`, `swipe`, `needs-swipe`, `sidebar-scroll`; `Gestures/` (the synthetic ones as files); `DESKBENCH_APPKIT_TRACE` |
-| Guards | `checks` (per trusted rep: `flaky N/M` fails), `ink` (built in), `snapshot-diff` (regions, child windows, the look) | `built-within` (`Guards.swift`), each scenario's ink regions |
-| Fixtures | listed names and `NAME@k=v` within their `parametric` ranges | the generator (`Fixtures.swift`), captured fixtures (`fixture capture`, `--fixture file:PATH`) |
+| The contract | `list`, `describe`, `run`, `snapdiff`, `knobs`, `profile`, `diff`, `gestures`, `record-gesture`, the window lock, exit codes | `describe` adds `appearances: ["dark"]` (`DeskBenchKit/BenchCatalog.swift`); `main.swift` answers the windowless verbs, `run` and `record-gesture` start the app |
+| The app | `bench.attach()` from a SwiftUI `App`'s `init` (the verb starts once the app has launched), `run.appWindow()`, `run.show(window:)`, `host: app` | `BenchApp.swift`: a `Window` scene in the app's style with `DeskCommands`; each rep's desk shown in it (`DeskStage`), the commands acting on that desk's model |
+| A rep | the window (adopted, or `run.open`'s own), the stretch clock, the main-thread sampler, frames, bodies and their causes per step, the trust fields (`window`, quiet, frames), `perfloop.result/2` | a fresh desk per rep (`Desk.swift`): the fixture loaded into a store, the app's `DeskModel` and `DeskWindowContent`, the probe forwarded to PerfLoop's |
+| Steps | `run.step(name, until:, ink:)` (an async action is the step's: a burst at a rate), `run.wait`, `run.settle`, `run.check`, `run.ink` (off the clock) | the drivers (`Drive*.swift`, `NeedsDrive.swift`): what a user does, what each check reads |
+| Input | `run.press` through the menu bar (the item that fired), `run.type`, `run.key`, `run.click` on the app's own queue, each step's input and focus record, `--pictures` | which keys and clicks each scenario sends |
+| Gestures | `run.swipe` (replay, smoothness meter; `delivery: .window`), the synthetic gestures, `record-gesture SCENARIO` | `fling`, `swipe`, `needs-swipe` (through the window), `sidebar-scroll`; `Gestures/` (the synthetic ones as files); `DESKBENCH_APPKIT_TRACE` |
+| Guards | `checks` (per trusted rep: `flaky N/M` fails), `ink` (built in; a region drawn alone), `snapshot-diff` (regions, compared by ink where asked, child windows, the look) | `built-within` (`Guards.swift`), each scenario's ink regions |
+| Fixtures | listed names, `NAME@k=v` within their `parametric` ranges, the schemes and values a bench registers (`bench.fixtureScheme`, `bench.fixtureValues`) | the generator (`Fixtures.swift`), `items=LO-HI`, captured fixtures (`fixture capture`, `--fixture file:PATH`) |
 
-### What PerfLoopHost can't host (yet)
+### What PerfLoopHost can't see (yet)
 
-- **The app's scene and menu.** The app's window is a SwiftUI `Window` scene, and its shortcuts (⌘K, ⌘D, ⇧⌘D, ⌘W, ⇧⌘↩,
-  ⌘J, ⌃← ⌃→) are a SwiftUI `Commands` (`DeskCommands`), which only a SwiftUI app has. PerfLoopHost runs the bench as a
-  plain NSApplication and shows the content in a window it makes (`run.show`), so the bench has no app menu: a
-  scenario calls what the menu item calls (`model.togglePalette()`, `model.split(down:)`, …) and real input starts
-  after it (the palette's keys, a click, a key the view tree itself handles: Esc, Return, ↓). Before this bench ran as
-  a SwiftUI app (`--host scene`, the default) and posted those shortcuts through the menu. The window is the app's
-  content with its chrome (`WindowChrome` dresses any window it lands in), sized by the bench.
-- **`open`** needs a window before its clock starts (PerfLoopHost's display link runs on it): the window is up first
-  and the step is the desk's content arriving in it, to the first frame with the reel. Window creation and the
-  WindowServer's first frame are no longer in the number.
-- **Thread viewports in snapshots.** The old snapdiff compared threads by their ink, not their pixels (the same build
-  rests a thread at different offsets after a switch). PerfLoopHost compares every region's pixels: a look that differs
-  only inside a thread is listed for review.
-- **Materials.** Snapshots and ink crops draw views with `cacheDisplay`: vibrancy and blur draw flat, so the Search ⌘K
-  overlay's crop shows the threads under it, and its ink can't tell a blank palette from the window behind.
+- **Materials.** Snapshots and ink crops draw views with `cacheDisplay`: vibrancy and blur draw flat. The Search ⌘K
+  overlay is its own hosting view (`SearchOverlayHost`) judged drawn alone, so its ink is its own text and rows, not the
+  reel behind it; its glass and shadow don't show in the crop.
 
 ## Scenarios and their budgets
 
@@ -66,7 +57,9 @@ it waits for held), the others on `mainThreadCpuMsPerStep`; `hitchTimeRatioMsPer
 guards everywhere (`swipe` adds `positionErrorP95Pt` and `stalls`). A latency scenario with `latencyBudgetMs` fails
 its run when the median is over it; the frame budgets are information.
 
-- `open`: the desk's content shown in a window on a filled store → the first frame with the reel. Budget 100 ms.
+- `open`: a window opening on a filled store (`run.open`: the clock starts before the window exists, so the content, the
+  window, its first layout and frames are in the number) → the first frame with the reel. Budget 100 ms. The window is
+  its own; the scene's (empty) is ordered out first.
 - `switch`: `model.open(project:)` between the two largest projects → the frame after the new columns are in. 50 ms.
 - `step` / `jump`: animated scrolls as a crew-tab click does (one screen at a time; first ↔ last). No late frame while
   the reel moves.
@@ -93,16 +86,17 @@ its run when the median is over it; the frame budgets are information.
   `scroll-up` (`gesture`, `gestureBack`) replayed into its scroll view. Checks `scrolled`, `isolation-pane`. Use a
   fixture with several projects (`--fixture crew@projects=8,agents=24`).
 - `palette-open`, `palette-type`, `palette-keys`: Search ⌘K on the `search` fixture (their default: 60 projects, 250+
-  items). ⌘K's action → the frame with the panel and its results (50 ms); a query typed a key at a time (`run.type`,
+  items). ⌘K through the menu bar → the frame with the panel and its results (50 ms); a query typed a key at a time (`run.type`,
   each key → the frame with its results, one frame); ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens (folded, as ↩ does), Esc
   closes (`run.key`). Checks read the UI: the empty search's groups, the ranking, the selection, what opened; ink: the
-  palette (its place in the window; its panel with `search.host=panel`).
-- Splits and expand (SPEC §2.1; each rep starts from one pane with the sidebar open and ends with its panes on screen):
+  palette (its own hosting view in the window, drawn alone; its panel with `search.host=panel`).
+- Splits and expand (SPEC §2.1; each rep starts from one pane with the sidebar open and ends with its panes on screen;
+  the shortcuts go through the menu bar, and each step names the item that fired):
   `split-open` (⌘D, ⇧⌘D, ⌘W ×2, `cycles` 2), `split-focus` (⌃← ⌃← ⌃→ ⌃→, then real clicks in other panes), `split-burst`,
-  `pane-expand` (⇧⌘↩ then Esc, `toggles` 4), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
+  `pane-expand` (⇧⌘↩, then Esc as the model's collapse, `toggles` 4), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
   Esc, which must give the keyboard back to the pane: `focus palette-esc`). Ink: every pane's thread, once its rows are
   in.
-- The Needs you reel (`needs-open`, `needs-answer`, `needs-arrive`, `needs-step` (⌘J's action), `needs-empty` (ends with
+- The Needs you reel (`needs-open`, `needs-answer`, `needs-arrive`, `needs-step` (⌘J through the menu bar), `needs-empty` (ends with
   a real Esc), `needs-swipe`), on `needs5` (their default; `needs20` for twenty across eight). Each rep starts with
   every fixture ask asking and the reel closed. Ink: the reel.
 
@@ -117,11 +111,14 @@ After the steps that should leave it drawn, PerfLoopHost draws the region by its
 blank or nearly (under 0.5 % of its pixels unlike its background; the empty Needs you reel's one line has 0.05 %). The
 crops are in the run's `ink/` folder: `perfloop run` prints `look at (ink): …`. Open them: a region can pass with the
 wrong content. A pane just switched to an agent whose thread isn't read yet is blank until its first page lands, so
-the drivers judge panes once their threads have rows (up to 2 s after the step).
+the drivers judge panes once their threads have rows (up to 2 s after the step). The palette in the window is judged
+drawn alone (`drawnAlone`: its own hosting view by itself), so a blank palette fails even over a busy reel.
 
 The same regions are the snapshots' (`snapshot-diff`): `snapdiff` reports each region `same`, `moved`, `differs`,
 `missing`, plus `rest`, with before, after and diff pictures; `--expect-look palette` declares a change you meant
-(PerfLoop's AGENTS.md, *Looks*). The app draws dark whatever the system's appearance (`.preferredColorScheme(.dark)`),
+(PerfLoop's AGENTS.md, *Looks*). A thread rests at a different offset run to run (after a switch, a split), so the
+pane regions are compared by their ink, not their pixels (`comparedByInk(atLeast: 0.2)`: the candidate keeps at least a
+fifth of the champion's ink; PerfLoop's default is half). The app draws dark whatever the system's appearance (`.preferredColorScheme(.dark)`),
 so the bench draws dark and lists only `dark` (`--set appearance=light` is refused rather than measured under a name
 it isn't).
 
@@ -135,8 +132,9 @@ thinking, handoffs, errors, images as attachments, asks). Generated worlds are m
 its own copy into a fresh store.
 
 **Parametric**: `--fixture crew17@agents=40`, `crew@agents=24,items=100`, plus `projects`, `asks` and `seed`, each within
-the range `describe` lists (`parametric`); whole numbers only (the generator's `items=40-60` form isn't taken through
-PerfLoopHost). Parameters keep the base name's seed, so `crew17@agents=17` is `crew17` byte for byte.
+the range `describe` lists (`parametric`); `items` also takes a range a thread, `crew@items=40-60` (`accepts` in the
+manifest; checked by the generator's own parser before a rep runs). Parameters keep the base name's seed, so
+`crew17@agents=17` is `crew17` byte for byte.
 
 **Captured** (real daemon data): `fixture capture` reads runs from a daemon the way the app does
 (`GET /v1/events?scope=<run>`, `/v1/runs/<run>/agents`, every agent's `/thread` pages; never attachment bytes):
@@ -155,8 +153,9 @@ keep their kind, mime and size. The file is written 0600, never inside a git che
 for a file that never leaves the Mac. The token is `--token-file`, `$CAPCOMD_TOKEN`, or `--keychain`. On an `ssh://`
 runner the file must be on that Mac, at an absolute path: perfloop copies builds there, never fixtures.
 
-PerfLoopHost takes listed names only; deskbench registers a `file:` fixture under exactly the name it was given before
-the run (`BenchCatalog.register`), so the result says the fixture the runner asked for.
+deskbench registers the `file` scheme with PerfLoopHost (`bench.fixtureScheme`, `BenchCatalog.make`): the manifest
+lists it (`fixtureSchemes: ["file"]`), perfloop refuses any other scheme before a rep runs, a missing or unreadable file
+is refused with the reason, and the result's fixture is the spec as asked.
 
 ## Verifying a feature: `perfloop run`, `baseline` and `--expect same`
 
@@ -290,9 +289,10 @@ content didn't, plus missed vsyncs), `jerkP95` (information). `--set inject-bloc
 mid-gesture: the meter's self-check. `DESKBENCH_APPKIT_TRACE=1` (`swipe`, `needs-swipe`, `record-gesture swipe`) prints a
 line each time AppKit's private scrolling animator begins a deceleration of its own or stops one.
 
-The replay now goes to the scroll view itself (PerfLoopHost's); deskbench's sent each event to the application for the
-reel's window, so the reel's local event monitor routed it as a hand's (`deliver=window`). The history below found
-that route changed no landing; it is a PerfLoopHost option to add if a reel's routing ever matters.
+`fling`, `swipe` and `needs-swipe` replay through the window (`run.swipe(…, delivery: .window)`): each event goes to the
+app for the reel's window, so the reel's local event monitor routes it as a hand's (as deskbench's own replay did,
+`deliver=window`); `sidebar-scroll` replays into the sidebar's scroll view. Each swipe's notes say how many of the
+gesture's finger and momentum events reached the reel's scroll view (`GestureTap.seen`).
 
 ## Sweeps
 
@@ -311,9 +311,10 @@ else a scenario param. Points run in a fixed shuffled order, one `run --reps N` 
 
 - A scenario: a `ScenarioSpec` in `DeskBenchKit/Scenarios.swift` (name, budget, rule, kind, params, and `fixture` when
   its data isn't `crew17`'s), its guards in `Guards.swift`, and a driver (a `HostRun` body: `let d = try Desk(run)`,
-  `try await d.show()`, then `run.step`s, ink regions, `run.record(checks)`) registered in `main.swift`. Measure the
-  change with `until:` (the frame that shows it), put a check that costs anything behind `run.check` or after the step,
-  use real input (`run.type`, `run.key`, `run.click`) where the view tree handles it.
+  `try await d.show()` (the scene's window, adopted, with this rep's desk), then `run.step`s, ink regions,
+  `run.record(checks)`) registered in `main.swift`. Measure the change with `until:` (the frame that shows it), put a
+  check that costs anything behind `run.check` or after the step, use real input where a user would: `run.press` for a
+  menu shortcut (with the item it must fire), `run.type`, `run.key`, `run.click` where the view tree handles it.
 - A fixture: a `FixtureSpec` in `Fixtures.swift`; the generator takes care of the rest.
 - A knob: a `static let` `Knob(…)` in `CapcomdDesk/DeskKnobs.swift`, added to `DeskKnobs.knobs`, read once into a stored
   property where it is used, with the default reproducing today's behaviour.
