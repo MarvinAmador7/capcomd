@@ -30,13 +30,10 @@ public final class CapcomdStore {
   /// Agents whose page above the shown thread (`agents.thread_tail`) is on its way.
   public internal(set) var threadLoadingEarlier: Set<String> = []
   public internal(set) var media: [MediaKey: Fetched<Data>] = [:]
-  /// Who follows which run's live thread items: the panel's open thread ("panel") and the desktop reel ("reel") each
-  /// hold at most one run. Those runs' lifecycle feeds carry `thread=1`; it covers every agent of the run.
+  /// Who follows which run's live thread items, by holder (the desktop reel, "reel"; a bench fixture, "fixture:RUN"):
+  /// each holds at most one run. Those runs' lifecycle feeds carry `thread=1`; it covers every agent of the run.
   var threadHolders: [String: String] = [:]
   public var threadStreamRuns: Set<String> { Set(threadHolders.values) }
-  /// The panel's open thread: its run, and the agent shown.
-  public var threadStreamRun: String? { threadHolders[Self.panelHolder] }
-  public internal(set) var openThreadAgent: String?
   public let prefs: UIPreferences
   /// Something changed (the menu bar's whole-model refresh).
   public var onChange: (@MainActor () -> Void)?
@@ -50,10 +47,6 @@ public final class CapcomdStore {
   // Run detail (drill-down): fetched over REST while a run is open; see StoreDetail.swift.
   public internal(set) var traces: [String: Fetched<[TraceSpan]>] = [:]
   public internal(set) var files: [String: Fetched<RunFiles>] = [:]
-  /// Log tail per agent (newest last, at most `logTail` lines), the transcript cursor, and whether the route works.
-  public internal(set) var logs: [String: [LogLine]] = [:]
-  public internal(set) var logUnavailable: [String: DetailUnavailable] = [:]
-  var logCursor: [String: Int] = [:]
   public internal(set) var controlState: [String: ControlState] = [:]
   /// Pause / resume of one agent (and its subtree), keyed by agent id; settles on agent.paused / agent.resumed.
   public internal(set) var agentControlState: [String: ControlState] = [:]

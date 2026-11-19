@@ -16,7 +16,7 @@ final class ActiveCardLiveMockTests: XCTestCase {
   override func setUp() async throws {
     try? FileManager.default.removeItem(atPath: Self.sock)
     let p = Process()
-    p.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BUN_BIN"] ?? "/usr/local/lib/pnpm/5/.pnpm/bun@1.4.2/node_modules/bun/bin/bun.exe")
+    p.executableURL = BunPath.url
     p.arguments = [URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../client/mock/scenarios.ts").standardized.path, Self.sock]
     p.environment = ProcessInfo.processInfo.environment.merging(["SCENARIO": "cards", "TOKEN": "test-token"]) { $1 }
     p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice

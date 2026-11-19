@@ -1,4 +1,4 @@
-// Validates every mock response against openapi/capcomd.json with ajv (dev check; not run by CI).
+// Validates every mock response against openapi/capcomd.json with ajv (CI: .github/workflows/menubar.yml).
 // Usage: AJV_DIR=/path/with/node_modules bun validate.ts   (needs ajv + ajv-formats)
 // Starts server.ts on a temp socket, hits every route plus the SSE stream (run-demo conn #1 + resume, compacted cursor,
 // daemon, run-silent), and checks bodies, envelopes, and each frame's `data` against the *Data / *Frame schema

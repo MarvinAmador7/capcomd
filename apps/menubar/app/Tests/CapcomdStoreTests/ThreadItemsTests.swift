@@ -71,7 +71,7 @@ final class ThreadItemsTests: XCTestCase {
     t.pages[0] = page([itemJSON("i1", seq: 3, order: 0), itemJSON("i2", seq: 5, order: 1)], next: 5)
     t.pages[5] = page([itemJSON("i3", seq: 9, order: 2)], next: nil)
     let s = CapcomdStore(thread: t); spawn(s)
-    s.openThread(runId: "run-x", agentId: "agt-1")
+    s.followThreads(runId: "run-x", holder: CapcomdStore.reelHolder)
     frame(s, itemJSON("i9", seq: 40, order: 8))   // live, ahead of the route
     await s.refreshThread(runId: "run-x", agentId: "agt-1")
     XCTAssertEqual(t.afters, [0, 5])               // never after=40
@@ -103,7 +103,7 @@ final class ThreadItemsTests: XCTestCase {
     t.base.pages[0] = page([itemJSON("i1", seq: 3, order: 0), itemJSON("i2", seq: 5, order: 1)], next: 5)
     t.base.pages[5] = page([itemJSON("i3", seq: 9, order: 2)], next: nil)
     let s = CapcomdStore(thread: t); spawn(s)
-    s.openThread(runId: "run-x", agentId: "agt-1")
+    s.followThreads(runId: "run-x", holder: CapcomdStore.reelHolder)
     var midway: [String]?
     t.between = { [unowned self] in
       self.frame(s, self.itemJSON("i9", seq: 40, order: 8))   // a live item while the second page is on its way
@@ -120,20 +120,7 @@ final class ThreadItemsTests: XCTestCase {
     XCTAssertNil(s.books["agt-1"])
   }
 
-  func testOpeningAThreadAddsThreadToItsRunsLifecycleFeed() {
-    let sub = RecordingSub(); let s = CapcomdStore(subscriber: sub, thread: FakeThread())
-    s.start(); spawn(s)
-    s.receive(.event(Envelope(id: "rc", scope: "daemon", seq: 2, entity: "run-x", type: "run.created", epochMs: 1, projectId: "prj-x", runId: "run-x",
-                              agentId: nil, data: [:])), scope: "daemon")
-    XCTAssertEqual(sub.opened.last.map { "\($0.scope) \($0.feed ?? "-") \($0.thread)" }, "run-x lifecycle false")
-    s.openThread(runId: "run-x", agentId: "agt-1")
-    XCTAssertEqual(sub.opened.last.map { "\($0.scope) \($0.feed ?? "-") \($0.thread)" }, "run-x lifecycle true")
-    s.closeThread()
-    XCTAssertEqual(sub.opened.last.map { "\($0.scope) \($0.feed ?? "-") \($0.thread)" }, "run-x lifecycle false")
-    XCTAssertEqual(sub.opened.filter { $0.scope == "run-x" }.count, 3)
-  }
-
-  func testPanelAndReelFollowRunsIndependently() {
+  func testHoldersFollowRunsIndependently() {
     let sub = RecordingSub(); let s = CapcomdStore(subscriber: sub, thread: FakeThread())
     s.start(); spawn(s)
     s.receive(.event(Envelope(id: "rc", scope: "daemon", seq: 2, entity: "run-x", type: "run.created", epochMs: 1, projectId: "prj-x", runId: "run-x",
@@ -142,9 +129,9 @@ final class ThreadItemsTests: XCTestCase {
     s.followThreads(runId: "run-x", holder: CapcomdStore.reelHolder)
     XCTAssertEqual(sub.opened.last?.thread, true)
     let reopened = runX()
-    s.openThread(runId: "run-x", agentId: "agt-1")   // already followed by the reel: the feed isn't reopened
+    s.followThreads(runId: "run-x", holder: "fixture:run-x")   // already followed by the reel: the feed isn't reopened
     XCTAssertEqual(runX(), reopened)
-    s.closeThread()                                 // the reel still follows it
+    s.followThreads(runId: nil, holder: "fixture:run-x")       // the reel still follows it
     XCTAssertEqual(runX(), reopened)
     XCTAssertEqual(s.threadStreamRuns, ["run-x"])
     frame(s, itemJSON("i1", seq: 1, order: 0))
@@ -207,7 +194,6 @@ final class ThreadItemsTests: XCTestCase {
     XCTAssertEqual(t.befores, [nil])
     XCTAssertEqual(t.afters, [31])                         // from the tail's cursor, never from the start
     XCTAssertEqual(s.threadEntries(agentId: "agt-1").map(\.id), ["itm:i8", "itm:i9", "itm:i10"])
-    XCTAssertTrue(s.threadHasEarlier(agentId: "agt-1"))
     XCTAssertEqual(s.threadTop(agentId: "agt-1"), 8)
     // Scrolled up: the page above, with i1 at the rev it had when that page was read (older than the one we have).
     t.tails[8] = tail([itemJSON("i1", seq: 2, order: 1), itemJSON("i5", seq: 20, order: 5)], before: nil, cursor: 33)
@@ -215,7 +201,7 @@ final class ThreadItemsTests: XCTestCase {
     XCTAssertEqual(t.befores, [nil, 8])
     XCTAssertEqual(s.threadEntries(agentId: "agt-1").map(\.id), ["itm:i1", "itm:i5", "itm:i8", "itm:i9", "itm:i10"])
     XCTAssertEqual(s.books["agt-1"]?.items.first?.rev, 2)
-    XCTAssertFalse(s.threadHasEarlier(agentId: "agt-1"))
+    XCTAssertNil(s.threadTop(agentId: "agt-1"))
     await s.loadEarlierThread(runId: "run-x", agentId: "agt-1")   // at the start: nothing more to ask
     XCTAssertEqual(t.befores, [nil, 8])
     // Later refreshes go on from the cursor.
@@ -248,7 +234,7 @@ final class ThreadItemsTests: XCTestCase {
     XCTAssertEqual(t.befores, [])
     XCTAssertEqual(t.afters, [0])
     XCTAssertEqual(s.threadEntries(agentId: "agt-1").map(\.id), ["itm:i1"])
-    XCTAssertFalse(s.threadHasEarlier(agentId: "agt-1"))
+    XCTAssertNil(s.threadTop(agentId: "agt-1"))
 
     let t2 = FakeThread()
     t2.pages[0] = page([itemJSON("i1", seq: 1, order: 1)], next: nil)

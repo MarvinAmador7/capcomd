@@ -6,4 +6,4 @@ Contract: MarvinAmador7/capcomd `feat/harness-phase0-contract` @ 710e41d (`opena
 - `SSE.swift`: an incremental SSE parser. `EventStream.swift`: a resumable stream (Last-Event-ID, stream.reset leads to a reconnect and a fresh snapshot, dedupe by seq).
 - `mock/server.ts`: a Bun mock. PROVISIONAL parts are marked there: the SSE route, the snapshot frame, stream.reset and the 401 body.
 
-Run: `PATH=~/swift/usr/bin:$PATH swift test` (Bun is required; set BUN_BIN if the Bun binary lives somewhere else).
+Run: `PATH=~/swift/usr/bin:$PATH swift test` (Bun is required: `BUN_BIN`, else `bun` on the `PATH`, else `~/.bun/bin/bun`).
