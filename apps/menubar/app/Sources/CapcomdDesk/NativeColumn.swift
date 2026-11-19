@@ -20,8 +20,10 @@ final class NativeColumnView: NSView {
   private let style: ColumnStyle
   private let head: NSHostingView<AnyView>
   private let body: NSHostingView<AnyView>
-  /// The size the head and body were placed for (and whether expanded): placing is skipped until it changes.
+  /// The size the head and body were placed for (and whether expanded): placing is skipped until it changes. And the
+  /// agent they showed then ("" once the views start anew: another agent, another run, out of the window).
   private var placed: (size: CGSize, expanded: Bool)?
+  private var placedAgent = ""
   private var stroke: StrokeKey?
   /// The pane it is (pane style): focus among splits, expanded. Nil in the reel.
   private let pane: PaneState?
@@ -55,14 +57,21 @@ final class NativeColumnView: NSView {
     observe()
   }
   required init?(coder: NSCoder) { fatalError() }
+  deinit {
+    heldObservers.forEach(NotificationCenter.default.removeObserver)
+    if let heldWheel { NSEvent.removeMonitor(heldWheel) }
+  }
   override var isFlipped: Bool { true }
 
   override func layout() {
     super.layout()
     let expanded = pane?.expanded == true
     guard placed.map({ $0.size != bounds.size || $0.expanded != expanded }) ?? true else { return }
-    let resized = placed != nil
+    // Resized while showing the same thread: a thread made since opens at its own foot (ColumnThread), not at the old
+    // one's place.
+    let resized = placed != nil && placedAgent == agentId
     placed = (bounds.size, expanded)
+    placedAgent = agentId
     let h = style == .pane ? (expanded ? PaneMetrics.expandedHeader : Theme.Desk.paneHeader) : Theme.Desk.columnHeader
     // A pane resized (a split, a close, expand, collapse) keeps its thread where it was, measured from the foot: SwiftUI's
     // bottom anchor kept the offset from the top instead when the pane got shorter, and the lazy rows of the new place
@@ -74,10 +83,91 @@ final class NativeColumnView: NSView {
     edge.update()
     if let foot {
       body.layoutSubtreeIfNeeded()
-      restore(foot)
-      // Once more after the rows the new place needs are made (their heights replace estimates).
-      RunLoop.main.perform { MainActor.assumeIsolated { [weak self] in self?.restore(foot) } }
+      if foot > Self.nearFoot {
+        hold(foot)
+      } else {
+        // At the foot: put back now and once more after the rows the new place needs are made; SwiftUI's bottom anchor
+        // keeps it there as the rest are measured.
+        release()
+        restore(foot)
+        RunLoop.main.perform { MainActor.assumeIsolated { [weak self] in self?.restore(foot) } }
+      }
     }
+  }
+
+  // MARK: the thread's place across a resize
+
+  /// After a resize the thread's lazy stack measures its rows again at the new width, over the next layouts: its document
+  /// height moves by thousands of points as measured rows replace estimates (collapsing an expanded pane, 16,469 pt to
+  /// 4,142), and SwiftUI's anchor didn't keep the reader's place through that: it ended at the foot, or far above where
+  /// it was. So the distance from the foot is held: put back each time the document or the offset moves, for `holdFor`
+  /// after the resize, until a hand scrolls the thread or the pane shows another thread.
+  ///
+  /// A reader at the foot (within `nearFoot`) isn't held: SwiftUI's bottom anchor keeps it there as the rows are
+  /// measured, as it did before, and a thread opened at its foot (ColumnThread, the #277 blank-pane fix) stays SwiftUI's
+  /// to place.
+  static let nearFoot: CGFloat = 4
+  private var held: (foot: CGFloat, until: CFTimeInterval, agent: String)?
+  private weak var heldScroll: NSScrollView?
+  private var heldObservers: [NSObjectProtocol] = []
+  private var heldWheel: Any?
+  private var heldPending = false
+  static let holdFor: CFTimeInterval = 1.0
+
+  private func hold(_ foot: CGFloat) {
+    guard let sv = threadScroll(), let doc = sv.documentView else { return }
+    if heldScroll !== sv { release() }
+    held = (foot, CACurrentMediaTime() + Self.holdFor, agentId)
+    restore(foot)
+    if heldObservers.isEmpty {
+      heldScroll = sv
+      doc.postsFrameChangedNotifications = true
+      sv.contentView.postsBoundsChangedNotifications = true
+      let nc = NotificationCenter.default
+      // Posted inside SwiftUI's layout: the offset is put back once that layout is done (the run loop's next blocks).
+      let changed: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.keepHeldSoon() } }
+      heldObservers = [
+        nc.addObserver(forName: NSView.frameDidChangeNotification, object: doc, queue: nil, using: changed),
+        nc.addObserver(forName: NSView.boundsDidChangeNotification, object: sv.contentView, queue: nil, using: changed),
+        nc.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: sv, queue: nil) { [weak self] _ in
+          MainActor.assumeIsolated { self?.release() }
+        },
+      ]
+      // A mouse wheel over the thread is a hand too (it starts no live scroll).
+      heldWheel = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+        nonisolated(unsafe) let event = e   // local monitors run on the main thread
+        MainActor.assumeIsolated {
+          guard let self, let sv = self.heldScroll, event.window === sv.window,
+                sv.bounds.contains(sv.convert(event.locationInWindow, from: nil)) else { return }
+          self.release()
+        }
+        return e
+      }
+    }
+    keepHeldSoon()
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdFor + 0.05) { [weak self] in self?.keepHeld() }
+  }
+
+  /// Once per turn of the run loop, after the layout that moved the document.
+  private func keepHeldSoon() {
+    guard held != nil, !heldPending else { return }
+    heldPending = true
+    RunLoop.main.perform { MainActor.assumeIsolated { [weak self] in self?.heldPending = false; self?.keepHeld() } }
+  }
+
+  private func keepHeld() {
+    guard let h = held else { return }
+    guard h.agent == agentId, CACurrentMediaTime() < h.until, window != nil, let sv = heldScroll, sv === threadScroll() else { return release() }
+    restore(h.foot)
+  }
+
+  private func release() {
+    held = nil
+    heldObservers.forEach(NotificationCenter.default.removeObserver)
+    heldObservers = []
+    if let w = heldWheel { NSEvent.removeMonitor(w) }
+    heldWheel = nil
+    heldScroll = nil
   }
 
   /// The thread's scroll view (the body's tallest vertical one), kept while it is in the body.
@@ -124,6 +214,8 @@ final class NativeColumnView: NSView {
   func configure(_ id: String) {
     guard id != agentId else { return }
     agentId = id
+    thread = nil
+    release()
     head.rootView = Self.head(id, model, style, needs, pane)
     body.rootView = Self.body(id, model, memory, style, needs, pane)
     stroke = nil
@@ -138,6 +230,9 @@ final class NativeColumnView: NSView {
     head.rootView = AnyView(EmptyView())
     body.rootView = AnyView(EmptyView())
     agentId = ""
+    placedAgent = ""
+    thread = nil
+    release()
   }
 
   /// The keyboard comes to this column (Search ⌘K dismissed with nothing else to give it back to): its body, the thread
@@ -149,7 +244,7 @@ final class NativeColumnView: NSView {
 
   /// The project changed: the model made new slices for its agents, so whatever this slot shows is stale, even an
   /// agent of the same id. The next `configure` rebuilds.
-  func forget() { agentId = "" }
+  func forget() { agentId = ""; placedAgent = "" }
 
   /// Bumped by each `observe`: a callback from an earlier observation (an earlier agent's) is dropped.
   private var generation = 0
