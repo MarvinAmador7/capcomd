@@ -6,11 +6,11 @@ import PerfLoopHost
 import PerfLoopKit
 
 /// Search ⌘K's scenarios (`palette-open`, `palette-type`, `palette-keys`), on a fixture with hundreds of searchable items
-/// (`search`: 60 projects, ~200 agents, asks, the commands). The palette opens as its menu item's action does (the bench
-/// has no app menu: see DESKBENCH.md, What PerfLoopHost can't host); every key after that is real input on the app's
-/// own event queue (`run.type`, `run.key`), to whatever has the keyboard: the palette's field editor, its key handling.
-/// Each step's latency is to the first frame after what the key did held; checks read the UI's own state, and the
-/// palette is an ink region (its own panel with `search.host=panel`, its place in the window otherwise).
+/// (`search`: 60 projects, ~200 agents, asks, the commands). ⌘K is pressed through the app's menu bar (`run.press`:
+/// Project › Search…); every key after that is real input on the app's own event queue (`run.type`, `run.key`), to
+/// whatever has the keyboard: the palette's field editor, its key handling. Each step's latency is to the first frame
+/// after what the key did held; checks read the UI's own state, and the palette is an ink region (its own panel with
+/// `search.host=panel`, its own hosting view in the window otherwise, drawn alone).
 @MainActor struct Palette {
   let d: Desk
   var run: HostRun { d.run }
@@ -22,21 +22,23 @@ import PerfLoopKit
   /// The palette shows: its panel, or (in the window) the model says so.
   var shown: Bool { inPanel ? panel != nil : model.paletteOpen }
 
-  /// The palette as an ink region: the panel's content, or the palette's rect in the window (fixed metrics: its width
-  /// for the window, its height for these results), placed when called.
+  /// The palette as an ink region: the panel's content, or in the window the palette's own hosting view drawn by
+  /// itself (`drawnAlone`: its ink is its own, not the reel's behind it).
   func region() -> InkRegion {
     if inPanel { return .find("palette") { [self] in panel?.contentView } }
-    let b = d.content.bounds, w = SearchMetrics.width(for: b.width)
-    let h = SearchMetrics.queryHeight + 0.5 + SearchMetrics.listHeight(model.search.sections, query: model.paletteQuery) + SearchMetrics.footer
-    return .rect("palette", CGRect(x: (b.width - w) / 2, y: SearchMetrics.top, width: w, height: h))
+    return InkRegion.find("palette") { [d] in
+      var found: NSView?
+      d.walk(d.content) { if found == nil, $0 is SearchOverlayHost, !$0.isHiddenOrHasHiddenAncestor { found = $0 } }
+      return found
+    }.drawnAlone()
   }
 
-  /// ⌘K's action (the menu item calls `togglePalette`), and the frame that shows the palette with its results.
+  /// ⌘K through the menu bar (Project › Search…), and the frame that shows the palette with its results.
   func open(_ name: String) async {
     if model.paletteOpen { model.closePalette(); _ = await d.nextCommit() }
     // The keys after it reach the palette only while the window has the keyboard: start from there.
     if !d.window.isKeyWindow { d.window.makeKeyAndOrderFront(nil); _ = await d.nextCommit() }
-    await run.step(name, timeoutMs: 3000, until: { model.paletteOpen && shown }) { model.togglePalette() }
+    await run.press("⌘K", expect: "Search…", name: name, timeoutMs: 3000, until: { model.paletteOpen && shown })
     await run.ink([region()], after: name)
   }
 

@@ -9,28 +9,24 @@ import PerfLoopProbe
 
 /// The reel's scenarios (DeskBenchKit/Scenarios.swift): what a user does to the desktop window, driven through the
 /// model's own entry points (as the title bar calls them) and real input on the app's own event queue (PerfLoopHost:
-/// `run.type`, `run.swipe`). Each measured thing is a `run.step`; each scenario's main view is an ink region, judged
-/// after the steps that should leave it drawn, and a region of its snapshots.
+/// `run.type`, `run.swipe` through the window, so the reel's own event monitor routes the gestures as a hand's). Each
+/// measured thing is a `run.step`; each scenario's main view is an ink region, judged after the steps that should leave
+/// it drawn, and a region of its snapshots.
 @MainActor enum Drive {
   // MARK: open
 
-  /// The window's content shown on a filled store; latency to the first frame with the reel in it. The window itself
-  /// is up first (PerfLoopHost's clock runs on it), its content arrives in the step. Rep 0 is the cold one (fonts,
-  /// Metal, SwiftUI's first graph) when one process runs several reps.
+  /// A window opening on a filled store, measured from before it exists (`run.open`): making the window content, the
+  /// window, its first layout and frames, to the first frame with the reel in it. The window is one of its own (the
+  /// scene's empty one is ordered out first, so it neither shows behind nor takes the keyboard). Rep 0 is the cold one
+  /// (fonts, Metal, SwiftUI's first graph) when one process runs several reps.
   static func open(_ run: HostRun) async throws {
     let d = try Desk(run)
-    let ground = NSView()
-    ground.wantsLayer = true
-    try await run.show(view: ground, size: Desk.size(run), title: "capcomd (bench)")
-    run.window?.contentMinSize = DeskWindowContent.minSize
+    if let scene = try? await run.appWindow(timeoutMs: 3000, where: { DeskBenchApp.isScene($0) }) { scene.orderOut(nil) }
     run.regions([d.reelRegion])
-    let t = run.now
-    d.columnsSince = t
-    await run.step("open#\(run.rep)", until: { d.bodies.contains { $0.view == "Reel" } && d.reelScrollView() != nil }, ink: [d.reelRegion]) {
-      d.hosting.frame = ground.bounds
-      d.hosting.autoresizingMask = [.width, .height]
-      ground.addSubview(d.hosting)
-    }
+    d.columnsSince = run.now
+    try await run.open("open#\(run.rep)", size: Desk.size(run), title: "capcomd (bench)",
+                       until: { d.bodies.contains { $0.view == "Reel" } && d.reelScrollView() != nil }, ink: [d.reelRegion], view: { d.makeHosting() })
+    run.window?.contentMinSize = DeskWindowContent.minSize
     let cols = d.model.columns.count
     run.record([Check("columns-at-first-frame", cols > 0, "\(cols) columns in the first frame")])
   }
@@ -107,8 +103,8 @@ import PerfLoopProbe
   }
 
   /// A synthetic swipe with momentum (`fling`'s curve: 6 frames to `velocity` pt/s, momentum −4 %/frame), every event
-  /// stamped 0 as the old fling sent them (AppKit can't read a release velocity then), replayed into the reel's scroll
-  /// view by PerfLoopHost's gesture replay. `swipe` is the faithful one.
+  /// stamped 0 as the old fling sent them (AppKit can't read a release velocity then), replayed through the window by
+  /// PerfLoopHost's gesture replay. `swipe` is the faithful one.
   static func fling(_ run: HostRun) async throws {
     let d = try Desk(run)
     try await d.show()
@@ -120,7 +116,7 @@ import PerfLoopProbe
     let pitch = d.pitch(sv, columns: d.model.columns.count, reel: d.reel())
     var snapped = true, offs: [Double] = []
     for i in 0..<run.int("flings", 6) {
-      await run.swipe(i % 2 == 0 ? forward : back, in: sv, name: "fling#\(i) \(i % 2 == 0 ? "→" : "←")", timestamps: false)
+      await run.swipe(i % 2 == 0 ? forward : back, in: sv, name: "fling#\(i) \(i % 2 == 0 ? "→" : "←")", timestamps: false, delivery: .window)
       await d.quiet(quietMs: 150, timeoutMs: 2000)
       let off = d.restOffset(sv, pitch: pitch)
       offs.append(Stats.round(off, 1)); snapped = snapped && off < 2
@@ -129,8 +125,10 @@ import PerfLoopProbe
     run.record([Check("reel-scroll-view", true, "the reel's scroll view"), Check("snapped", snapped, "the reel rested on a column edge after every fling (off by \(offs) pt)")])
   }
 
-  /// A recorded gesture (or a synthetic one) replayed into a reel's scroll view at its recorded times, `swipes` times
-  /// from the same column (`from`; the middle by default). `needs`: the Needs you reel (open) instead of the project's.
+  /// A recorded gesture (or a synthetic one) replayed at its recorded times, `swipes` times from the same column
+  /// (`from`; the middle by default), through the window (`delivery: .window`: the app's local event monitors see each
+  /// event, the reel's takes a sideways gesture, as from a hand). `needs`: the Needs you reel (open) instead of the
+  /// project's. Each swipe's notes say how many finger and momentum events reached the reel's scroll view.
   static func swipe(_ run: HostRun, d: Desk? = nil, needs: Bool = false) async throws {
     let d = try d ?? Desk(run)
     if run.window == nil { try await d.show() }
@@ -159,7 +157,13 @@ import PerfLoopProbe
       if needs { d.model.needs.lead(cols[from]) } else { d.model.scroll(to: cols[from], animated: false) }
       _ = await d.nextCommit()
       await d.quiet(quietMs: 150, timeoutMs: 3000)
-      let r = await run.swipe(g, in: sv, name: "swipe#\(i) \(g.name)", timestamps: stamps == "recorded")
+      var fingers = 0, momentum = 0
+      GestureTap.seen = { e in if !e.momentumPhase.isEmpty { momentum += 1 } else if !e.phase.isEmpty { fingers += 1 } }
+      let label = "swipe#\(i) \(g.name)"
+      let r = await run.swipe(g, in: sv, name: label, timestamps: stamps == "recorded", delivery: .window)
+      GestureTap.seen = nil
+      let sentFingers = g.events.filter(\.finger).count, sentMomentum = g.events.filter { $0.momentum != .none }.count
+      run.note("\(label): the reel's scroll view got \(fingers) of \(sentFingers) finger events and \(momentum) of \(sentMomentum) momentum events")
       faithful = faithful && !r.notes.contains { $0.hasPrefix("replay not faithful") }
       await d.quiet(quietMs: 150, timeoutMs: 2000)
       let off = d.restOffset(sv, pitch: pitch)
@@ -190,7 +194,7 @@ import PerfLoopProbe
     for (phase, moving) in [("still", false), ("scrolling", true)] {
       await d.rewind()
       var start = 0.0, end = 0.0, sent = 0
-      await run.work("burst-\(phase) \(rate)/s", ink: [d.reelRegion]) {
+      await run.step("burst-\(phase) \(rate)/s", timeoutMs: 20_000, ink: [d.reelRegion]) {
         start = run.now
         var dir = 1
         var nextScroll = start + 350

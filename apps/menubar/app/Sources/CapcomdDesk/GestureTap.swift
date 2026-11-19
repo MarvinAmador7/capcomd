@@ -11,8 +11,11 @@ import PerfLoopProbe
   package static var recorder: GestureRecorder?
   private static var timer: Timer?
 
+  /// Hears every scroll event the reel's scroll view gets (the bench counts a replayed gesture's: DESKBENCH.md).
+  package static var seen: ((NSEvent) -> Void)?
+
   /// The scroll view's hook (SnapScrollView.scrollWheel).
-  @inline(__always) static func scrollWheel(_ e: NSEvent) { if let r = recorder { record(r, e) } }
+  @inline(__always) static func scrollWheel(_ e: NSEvent) { if let r = recorder { record(r, e) }; seen?(e) }
 
   static func record(_ r: GestureRecorder, _ e: NSEvent) {
     r.record(t: e.timestamp, dx: Double(e.scrollingDeltaX), dy: Double(e.scrollingDeltaY), phase: e.phase.rawValue, momentum: e.momentumPhase.rawValue,

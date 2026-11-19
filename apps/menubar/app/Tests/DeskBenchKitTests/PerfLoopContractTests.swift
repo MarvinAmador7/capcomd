@@ -1,7 +1,7 @@
 #if os(macOS)
 import XCTest
-import DeskBenchKit
-import PerfLoopHost
+@testable import DeskBenchKit
+@testable import PerfLoopHost
 import PerfLoopKit
 @testable import CapcomdDesk
 
@@ -56,16 +56,36 @@ import PerfLoopKit
 
   func testFixtureSchemesAreFileOnlyAndAFileFixtureRunsUnderItsOwnName() throws {
     let (b, read) = try manifests()
-    XCTAssertEqual(read.fixtureSchemes, ["file"])
+    XCTAssertEqual(read.fixtureSchemes, ["file"], "the scheme the bench registered (bench.fixtureScheme)")
     XCTAssertNil(read.unknownFixture("file:/tmp/crew-real.json"))
     XCTAssertNil(read.unknownFixture("crew@agents=24,items=100"))
     XCTAssertNotNil(read.unknownFixture("https://example.com/x.json"))
     XCTAssertNotNil(read.unknownFixture("crew99"))
-    // A listed name or a parametric one needs nothing; a captured one must exist, and is then listed under its name
-    // for this process, so the run's result says the fixture the runner asked for.
-    XCTAssertNil(BenchCatalog.register(fixture: "crew17@agents=24", on: b))
-    XCTAssertNotNil(BenchCatalog.register(fixture: "file:/nonexistent/crew-real.json", on: b))
-    // An existing capture registers (CaptureTests.testTheBenchLoadsACapturedFile).
+    // A listed name or a parametric one resolves as listed; a captured one must exist (an existing capture resolves
+    // under its own name: CaptureTests.testTheBenchLoadsACapturedFile).
+    XCTAssertEqual(try b.resolveFixture("crew17@agents=24").params["agents"], "24")
+    XCTAssertThrowsError(try b.resolveFixture("file:/nonexistent/crew-real.json")) { XCTAssertTrue("\($0)".contains("crew-real.json"), "\($0)") }
+  }
+
+  /// `items` takes `LO-HI` besides a number in range (`bench.fixtureValues`): listed under every fixture's `accepts`,
+  /// checked by the generator's own parser before a rep runs.
+  func testItemsTakeARangeThroughPerfLoopHost() throws {
+    let (b, read) = try manifests()
+    for f in read.fixtures { XCTAssertEqual(f["accepts"]?["items"]?.string, BenchCatalog.itemsAccepts, f["name"]?.string ?? "?") }
+    XCTAssertEqual(try b.resolveFixture("crew@items=40-60").name, "crew@items=40-60")
+    XCTAssertEqual(Fixtures.make("crew@items=40-60")?.spec.itemsPerThread, 40...60)
+    XCTAssertNil(Fixtures.itemsProblem("100"))
+    for bad in ["60-40", "0-9000", "many", "40-"] {
+      XCTAssertNotNil(Fixtures.itemsProblem(bad), bad)
+      XCTAssertThrowsError(try b.resolveFixture("crew@items=\(bad)"), bad)
+    }
+  }
+
+  /// Every scenario runs inside the bench's SwiftUI app (its scene's window and the app's menu bar: BenchApp.swift).
+  func testEveryScenarioRunsInsideTheApp() throws {
+    let (_, read) = try manifests()
+    XCTAssertEqual(Set(read.hosts ?? []), ["window", "app"])
+    for s in read.scenarios { XCTAssertEqual(s.host, "app", s.name) }
   }
 
   func testTheAppDrawsDarkOnly() throws {

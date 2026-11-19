@@ -8,9 +8,8 @@ import PerfLoopKit
 
 /// Splits and expand in the opened window (design/desktop/rex RexSplit, RexExpanded; SPEC §2.1): ⌘D / ⇧⌘D / ⌘W,
 /// focus moving between panes, a thread item arriving in one split, ⇧⌘↩ and Esc, and switching agents while expanded.
-/// The shortcuts are the app's menu items (DeskCommands, a SwiftUI `Commands`), which only a SwiftUI app scene has:
-/// the bench calls what each item calls (DESKBENCH.md, What PerfLoopHost can't host). Clicks are real
-/// (`run.click`). Checks read the real window: the pane views in it (DeskPaneProbe), their frames, their thread's
+/// The shortcuts are the app's menu items (DeskCommands, a SwiftUI `Commands`), pressed through the bench app's real menu
+/// bar (`run.press`, which records the item that fired); clicks are real (`run.click`). Checks read the real window: the pane views in it (DeskPaneProbe), their frames, their thread's
 /// scroll view; each pane's thread is an ink region. Each rep starts from one pane and ends with its scenario's panes
 /// on screen, for the snapshot.
 @MainActor enum DriveSplits {
@@ -44,11 +43,20 @@ import PerfLoopKit
     await d.quiet(timeoutMs: 3000)
   }
 
-  /// One latency step: `act` (a menu item's action, or real input), until `done` holds, to the frame after it; the
-  /// panes' threads judged for ink after it.
-  static func paneStep(_ d: Desk, _ name: String, panes: Int, _ act: @escaping () -> Void, done: @escaping () -> Bool) async -> Bool {
+  /// What a step does: keys pressed through the menu bar (the item they must fire), or a call into the model where no
+  /// key does it (a pick from Search's results).
+  enum Act {
+    case press(String, item: String)
+    case call(() -> Void)
+  }
+
+  /// One latency step: `act`, until `done` holds, to the frame after it; the panes' threads judged for ink after it.
+  static func paneStep(_ d: Desk, _ name: String, panes: Int, _ act: Act, done: @escaping () -> Bool) async -> Bool {
     if !d.window.isKeyWindow { d.window.makeKeyAndOrderFront(nil); _ = await d.nextCommit() }
-    await d.run.step(name, timeoutMs: 3000, until: done) { act() }
+    switch act {
+    case .press(let keys, let item): await d.run.press(keys, expect: item, name: name, timeoutMs: 3000, until: done)
+    case .call(let f): await d.run.step(name, timeoutMs: 3000, until: done) { f() }
+    }
     let ok = done()
     // A pane that now shows an agent whose thread isn't read yet is blank until its first page lands: judge the ink
     // once the threads have rows (or 2 s on).
@@ -74,12 +82,12 @@ import PerfLoopKit
     for c in 0..<run.int("cycles", 2) {
       let base = d.model.panes.agents
       let want = d.model.nextAgentForSplit()
-      var ok = await paneStep(d, "split-right#\(c)", panes: base.count + 1, { d.model.split(down: false) }) { d.panesShown().count == base.count + 1 }
+      var ok = await paneStep(d, "split-right#\(c)", panes: base.count + 1, .press("⌘D", item: "Split Right")) { d.panesShown().count == base.count + 1 }
       let (m1, d1) = panesMatch(d)
       opened = opened && ok && m1 && d.model.panes.columns.count == 2
       nextInTree = nextInTree && d.model.panes.focusedAgent == want
       if !(ok && m1) { notes.append("⌘D#\(c): \(d1)") }
-      ok = await paneStep(d, "split-down#\(c)", panes: base.count + 2, { d.model.split(down: true) }) { d.panesShown().count == base.count + 2 }
+      ok = await paneStep(d, "split-down#\(c)", panes: base.count + 2, .press("⇧⌘D", item: "Split Down")) { d.panesShown().count == base.count + 2 }
       let (m2, d2) = panesMatch(d)
       let shown = d.panesShown()
       let stacked = shown.filter { abs($0.frame.minX - (shown.last?.frame.minX ?? -1)) < 1 }.count == 2
@@ -87,14 +95,14 @@ import PerfLoopKit
       if !(ok && m2 && stacked) { notes.append("⇧⌘D#\(c): \(d2), stacked \(stacked) \(shown.map { "\($0.frame)" })") }
       for k in 0..<2 {
         let n = d.panesShown().count
-        ok = await paneStep(d, "close#\(c).\(k)", panes: n - 1, { d.model.foldShortcut() }) { d.panesShown().count == n - 1 }
+        ok = await paneStep(d, "close#\(c).\(k)", panes: n - 1, .press("⌘W", item: "Fold into the Title Bar")) { d.panesShown().count == n - 1 }
         let (m3, d3) = panesMatch(d)
         closed = closed && ok && m3
         if !(ok && m3) { notes.append("⌘W#\(c).\(k): \(d3)") }
       }
     }
     // The end state for the snapshot: one split right, at rest.
-    _ = await paneStep(d, "rest", panes: 2, { d.model.split(down: false) }) { d.panesShown().count == 2 }
+    _ = await paneStep(d, "rest", panes: 2, .press("⌘D", item: "Split Right")) { d.panesShown().count == 2 }
     run.regions(d.paneRegions(2))
     run.record([
       Check("split-right", opened, notes.filter { $0.hasPrefix("⌘D") }.joined(separator: "; ").ifEmpty("⌘D added a pane beside the focused one, focused, every time")),
@@ -117,7 +125,9 @@ import PerfLoopKit
     for (i, by) in [-1, -1, 1, 1].enumerated() {
       let want = d.model.panes.neighbour(by)?.agent
       let t = run.now
-      let ok = await paneStep(d, "ctrl-\(by > 0 ? "right" : "left")#\(i)", panes: 3, { d.model.moveFocus(by) }) { d.panesShown().first(where: \.focused)?.agent == want }
+      let ok = await paneStep(d, "ctrl-\(by > 0 ? "right" : "left")#\(i)", panes: 3, .press(by > 0 ? "⌃→" : "⌃←", item: by > 0 ? "Next Agent" : "Previous Agent")) {
+        d.panesShown().first(where: \.focused)?.agent == want
+      }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" || $0.view == "PaneEntryRow" }
       let (m, dd) = panesMatch(d)
       moved = moved && ok && m
@@ -159,7 +169,7 @@ import PerfLoopKit
     let rate = max(1, run.int("itemsPerSecond", 20)), secs = max(1, run.int("seconds", 3))
     let assigned = d.model.sidebar.assignments
     var start = 0.0, end = 0.0, sent = 0
-    await run.work("split-burst \(rate)/s", ink: d.paneRegions(3)) {
+    await run.step("split-burst \(rate)/s", timeoutMs: 20_000, ink: d.paneRegions(3)) {
       start = run.now
       while sent < rate * secs {
         let item = Fixtures.liveItem(world: &w, agentId: target, text: "Live item \(sent + 1) in a split pane.")
@@ -214,7 +224,7 @@ import PerfLoopKit
     var threadBodies = 0
     for i in 0..<run.int("toggles", 4) {
       var t = run.now
-      var ok = await paneStep(d, "expand#\(i)", panes: 1, { d.model.toggleExpand() }) { d.panesShown().count == 1 && d.panesShown().first?.frame == full }
+      var ok = await paneStep(d, "expand#\(i)", panes: 1, .press("⇧⌘↩", item: "Expand Pane")) { d.panesShown().count == 1 && d.panesShown().first?.frame == full }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let e = d.panesShown()
       let ex = ok && e.count == 1 && e[0].expanded && e[0].frame == full && d.sidebarScrollView(scrollable: false) == nil
@@ -222,7 +232,7 @@ import PerfLoopKit
       expandedOK = expandedOK && ex
       if !ex { notes.append("expand#\(i): \(e.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), sidebar \(d.sidebarScrollView(scrollable: false) != nil)") }
       t = run.now
-      ok = await paneStep(d, "esc#\(i)", panes: 2, { d.model.collapsePane() }) { d.panesShown().count == 2 }
+      ok = await paneStep(d, "esc#\(i)", panes: 2, .call { d.model.collapsePane() }) { d.panesShown().count == 2 }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let after = d.panesShown()
       let b = ok && after.map(\.agent) == before.map(\.0) && after.map(\.frame) == before.map(\.1) && !d.model.nav.expanded
@@ -235,7 +245,7 @@ import PerfLoopKit
       same = same && after.map { ObjectIdentifier($0.view) } == views
     }
     // The end state for the snapshot: expanded, at rest.
-    _ = await paneStep(d, "rest", panes: 1, { d.model.toggleExpand() }) { d.panesShown().count == 1 }
+    _ = await paneStep(d, "rest", panes: 1, .press("⇧⌘↩", item: "Expand Pane")) { d.panesShown().count == 1 }
     run.regions(d.paneRegions(1))
     run.record([
       Check("thread", true, "the focused pane's thread, \(Stats.round(up, 1)) pt up from its foot"),
@@ -261,14 +271,14 @@ import PerfLoopKit
     for i in 0..<run.int("switches", 4) {
       let target = cols[(i * 3 + 2) % cols.count]
       let runId = d.model.openRunId!
-      let ok = await paneStep(d, "switch#\(i)", panes: 1, { d.model.show(run: runId, agent: target) }) { d.panesShown().first?.agent == target }
+      let ok = await paneStep(d, "switch#\(i)", panes: 1, .call { d.model.show(run: runId, agent: target) }) { d.panesShown().first?.agent == target }
       let p = d.panesShown()
       let good = ok && d.model.nav.expanded && p.count == 1 && p[0].agent == target && p[0].expanded && p[0].frame == full
       stayed = stayed && good
       if !good { notes.append("switch#\(i) to \(target): \(p.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), model expanded \(d.model.nav.expanded)") }
     }
-    // ⌘K over the expanded pane (its menu item's action), and Esc (a real key: the palette's own key handling).
-    let ok1 = await paneStep(d, "palette", panes: 1, { d.model.togglePalette() }) { d.model.paletteOpen }
+    // ⌘K over the expanded pane (through the menu bar), and Esc (a real key: the palette's own key handling).
+    let ok1 = await paneStep(d, "palette", panes: 1, .press("⌘K", item: "Search…")) { d.model.paletteOpen }
     await run.key(.escape, name: "palette-esc", timeoutMs: 3000, until: { !d.model.paletteOpen })
     let ok2 = !d.model.paletteOpen
     run.regions(d.paneRegions(1))
