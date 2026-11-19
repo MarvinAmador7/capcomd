@@ -178,7 +178,7 @@ docs/           - design documents and ADRs
 
 ```bash
 bun run typecheck
-bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages/*
+bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages/*: no engine
 bun run test:apps              # apps/canvas and apps/tui
 bun run test:scenarios         # the regression suite: scenarios, sub-agents, primitives, agent adapters, merges
 bun run test:scenarios:timings # the same, then refresh tests/scenario-timings.json from this machine's times
@@ -198,6 +198,15 @@ What CI runs, and where (`.github/workflows/`):
 | `ci.yml` plugin-package | `@capcomd/plugin` packed (`packages/plugin/scripts/pack.ts`), installed into a fresh project and used from Node 20, typechecked by a TypeScript 5 consumer (`packages/plugin/scripts/smoke.sh`) |
 | `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
+
+Both scripts run their files in parallel: `test:fast` on 8 workers, `test:scenarios` on 4 (most of its files start an
+engine of their own). `CAPCOMD_TEST_JOBS=N` sets the count (CI sets the runner's core count; `CAPCOMD_TEST_JOBS=1` runs
+one file at a time). A test without a timeout of its own gets 20 s, so a CLI- or git-spawning test doesn't time out
+when the machine is busy. `test:scenarios` starts the slowest files first, by `tests/scenario-timings.json`.
+`test:fast` starts no engine: a test that does (`capcomd serve`, `tests/helpers/test-engine.ts`, the scenarios'
+`world()`) goes in a `test:scenarios` directory, and a pure unit test goes in `test:fast` (`tests/unit`) even when
+what it tests lives under sub-agents, primitives, agents or merge. An engine a test helper starts writes its output to
+`serve-<label>.log` in that engine's own data dir.
 
 Every `*.test.ts` in the repository is in one of them. Gated off by default, because they need real accounts or VMs:
 `tests/merge/github-live.test.ts` (`CAPCOMD_GH_LIVE=1`: a throwaway private GitHub repo through `gh`) and

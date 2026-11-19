@@ -57,7 +57,7 @@ jobs:
           fi
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
-        run: bun run test:fast --parallel="$(nproc)"
+        run: CAPCOMD_TEST_JOBS="$(nproc)" bun run test:fast
 
       - name: The canvas and the TUI (apps/canvas, apps/tui)
         run: bun run test:apps
@@ -91,16 +91,14 @@ jobs:
         run: bun run setup
 
       - name: Scenario suite, shard ${{ matrix.shard }} of 7 (regression gate)
-        run: |
-          cp tests/scenario-timings.json "$RUNNER_TEMP/scenario-timings.json"
-          bun run test:scenarios --parallel="$(nproc)" --shard=${{ matrix.shard }}/7 --timings="$RUNNER_TEMP/scenario-timings.json" --update-timings
+        run: CAPCOMD_TEST_JOBS="$(nproc)" bun run test:scenarios --shard=${{ matrix.shard }}/7 --update-timings
 
       - name: Upload the times this shard measured
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scenario-timings-${{ matrix.shard }}
-          path: ${{ runner.temp }}/scenario-timings.json
+          path: tests/scenario-timings.json
           retention-days: 14
 
   # The deterministic evals (fakes: no VMs, no models): the primitives' recipes (correctness; their latency against
