@@ -436,6 +436,12 @@ package enum Theme {
     /// The flag on an older Recent row.
     package static let flagFont = Font.system(size: 10.5, weight: .semibold), flagIcon = Font.system(size: 8.5, weight: .bold)
     package static let flagPadding: CGFloat = 6, flagHeight: CGFloat = 16
+    /// The composer's goal branch name (GoalBranchChip): a quiet line with the name the run will use, a field once
+    /// clicked. Mono like every branch name; dimmed like the setup's labels; a faint fill on hover and while editing.
+    package static let nameFont = Font.system(size: 11.5, design: .monospaced), nameIcon = Font.system(size: 10, weight: .medium)
+    package static let nameText = Setup.labelText, nameHover = Color.white.opacity(0.07)
+    package static let nameHeight: CGFloat = 22, namePadding: CGFloat = 6, nameGap: CGFloat = 5, nameRadius: CGFloat = 6
+    package static let fieldMinWidth: CGFloat = 170, fieldMaxWidth: CGFloat = 300
   }
   /// The composer's inline project setup (design/setup/Inline*.dc.html): a picked folder's next steps in the card.
   package enum Setup {

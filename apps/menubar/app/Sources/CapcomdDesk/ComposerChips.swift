@@ -82,18 +82,14 @@ struct BaseChip: View {
   }
 }
 
-/// The goal branch the reviewed work lands on: the daemon's suggestion for the goal, until it's edited.
+/// The goal branch the reviewed work lands on, after the base chip (dev → feat/csv-export): the daemon's name for the
+/// goal until it's renamed with a click; nothing before a goal.
 struct GoalBranchName: View {
   @Environment(DeskModel.self) private var model
   let form: NewProjectForm
   var body: some View {
     let s = form.goalSetup
-    HStack(spacing: 4) {
-      Image(systemName: "arrow.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.Desk.tertiary).accessibilityHidden(true)
-      GoalBranchField(text: Binding(get: { s.goalBranch }, set: { model.typeBranch($0) }), placeholder: s.placeholder,
-                      error: form.branchLine?.warn == true)
-        .frame(minWidth: 90, maxWidth: .infinity)
-    }
+    GoalBranchChip(name: s.shownBranch, suggestion: s.suggestion, refused: form.branchLine?.warn == true, icon: "arrow.right") { model.typeBranch($0) }
   }
 }
 

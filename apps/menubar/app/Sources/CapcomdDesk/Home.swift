@@ -124,10 +124,10 @@ struct HomeComposer: View {
     return VStack(alignment: .leading, spacing: Theme.Desk.Home.cardGap) {
       HStack(spacing: 4) {
         FolderChip(revision: np.revision)
-        if branches { BaseChip(form: form) }
+        if branches { BaseChip(form: form); GoalBranchName(form: form) }
         Spacer(minLength: 0)
       }
-      if branches { GoalBranchName(form: form); BranchLines(form: form) }
+      if branches { BranchLines(form: form) }
       TextField("", text: $goal, axis: .vertical)
         .textFieldStyle(.plain).font(Theme.Desk.Home.goalFont).tracking(Theme.Desk.Home.goalTracking).foregroundStyle(Theme.Desk.text)
         .lineLimit(2...8).lineSpacing(4)

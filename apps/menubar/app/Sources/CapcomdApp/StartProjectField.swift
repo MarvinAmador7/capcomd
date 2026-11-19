@@ -18,7 +18,7 @@ struct StartProjectField: View {
     // A picked folder that isn't set up yet: its next steps take the tool row's place (design/setup).
     let setup = model.setupScreen(goal: goal).flatMap { $0.phase == .loading ? nil : $0 }
     // Goal branches: under the goal, the branch the work lands on and its base, as soon as a project folder is chosen
-    // (the base menu fills at once; the branch field follows the goal once there is one).
+    // (the base menu fills at once; the branch name follows the goal once there is one).
     let branches = model.goalBranchesOffered && setup == nil && !model.setup.isOpen
     let showBranches = branches
     let ready = !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !starting && (!branches || model.goalSetup.canStart)
