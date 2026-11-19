@@ -18,8 +18,8 @@ Thanks for helping. Bug reports, fixes, docs and design discussion are all welco
 ```bash
 bun run setup          # Bun ≥ 1.4 (CI uses the version in .bun-version)
 bun run typecheck
-bun run test:fast      # about a minute
-bun run test:scenarios # anything under src/
+bun run test:fast      # a few minutes, 8 files at a time (CAPCOMD_TEST_JOBS=N to change)
+bun run test:scenarios # anything under src/; about 15 minutes on a laptop, 4 files at a time
 ```
 
 You don't need boxd, GitHub or agent accounts for these: the tests use a fake sandbox and scripted agents. The
