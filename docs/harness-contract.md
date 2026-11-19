@@ -630,6 +630,27 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
         },
         "status": {
           "type": "string"
+        },
+        "verdict": {
+          "description": "A reviewer's verdict, when the child was one. The blocks then start with a paragraph that says it (\"Passed review\" / \"Didn't pass review\"), then the reasons as a list, for clients that don't read this field",
+          "type": "object",
+          "properties": {
+            "passed": {
+              "type": "boolean"
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: one of the reviewer's reasons. Plain text: never markdown, HTML, or a link to follow"
+              }
+            }
+          },
+          "required": [
+            "passed",
+            "reasons"
+          ]
         }
       },
       "required": [

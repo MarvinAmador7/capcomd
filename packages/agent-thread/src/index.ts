@@ -13,14 +13,19 @@ export { claudeNaming, codexNaming, fxNaming, isClaudeNamingCall, isCodexNamingC
 
 import { classifyLink, mediaOfPath, resolveMedia, type LinkContext } from "./links";
 import { toBlocks } from "./markdown";
+import { capBytes, oneLine, sanitize } from "./sanitize";
 import { THREAD_FORMAT, type BlockNode, type ItemDraft } from "./schema";
 
 /**
  * A child agent handing back (agent.done / agent.failed): its summary as blocks, then its artifacts ({name, ref}) as
  * media blocks (images, video, audio it points at) and a list of links (files, attachments, web pages, agents).
  */
-export function handoffDraft(o: { id: string; at: number; child: { agentId: string; status: string }; summary: string; artifacts?: Array<{ name: string; ref: string }>; link?: LinkContext }): ItemDraft {
-	const p = toBlocks(o.summary, o.link);
+export function handoffDraft(o: { id: string; at: number; child: { agentId: string; status: string }; summary: string; verdict?: HandoffVerdict | null; artifacts?: Array<{ name: string; ref: string }>; link?: LinkContext }): ItemDraft {
+	const v = o.verdict ? { passed: o.verdict.passed, reasons: o.verdict.reasons.map((r) => sanitize(r).trim()).filter(Boolean).slice(0, VERDICT_MAX_REASONS).map((r) => capBytes(r, VERDICT_REASON_MAX_BYTES)) } : null;
+	// A reviewer's verdict leads, in words a client that doesn't read child.verdict still shows; then its summary, if it
+	// wrote one, and its reasons as a list.
+	const said = v ? (v.passed ? "Passed review" : "Didn't pass review") : null;
+	const p = toBlocks([said ? `**${said}**` : "", o.summary, ...(v?.reasons.length ? [v.reasons.map((r) => `- ${oneLine(r, VERDICT_REASON_MAX_BYTES)}`).join("\n")] : [])].filter((x) => x.trim()).join("\n\n"), o.link);
 	const media: BlockNode[] = [], links: BlockNode[] = [];
 	for (const a of o.artifacts ?? []) {
 		// Media only when it evidently is (a media file name, or an attachment the daemon knows is one): else a link chip.
@@ -34,6 +39,11 @@ export function handoffDraft(o: { id: string; at: number; child: { agentId: stri
 	const extra: BlockNode[] = [...media, ...(links.length ? [{ t: "list", ordered: false, start: null, items: links.map((b) => ({ checked: null, blocks: [b] })) } as BlockNode] : [])];
 	return {
 		id: o.id, rev: 1, kind: "handoff", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text: p.text, blocks: [...p.blocks, ...extra], format: THREAD_FORMAT,
-		redacted: false, tool: null, error: null, truncated: p.truncated, child: o.child,
+		redacted: false, tool: null, error: null, truncated: p.truncated, child: v ? { ...o.child, verdict: v } : o.child,
 	};
 }
+
+/** A reviewer's verdict on a hand-back: `{"passed", "reasons"}`, as the review contract has the reviewer answer. */
+export type HandoffVerdict = { passed: boolean; reasons: string[] };
+/** As the reviewer gate keeps them (src/plugins/gate-reviewer/review.ts): at most 20 reasons of about 500 characters. */
+export const VERDICT_MAX_REASONS = 20, VERDICT_REASON_MAX_BYTES = 2000;

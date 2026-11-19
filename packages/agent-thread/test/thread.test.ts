@@ -41,13 +41,36 @@ describe("claude", () => {
 		const { items } = run("claude", [asst("m", { type: "text", text: "Done: fixed it." }), { type: "result", subtype: "success", result: "Done: fixed it." }]);
 		expect(items.map((i) => i.kind)).toEqual(["say"]);
 	});
-	test("background-task notices are bookkeeping, not items; other system events still show", () => {
+	test("system bookkeeping is not an item; the few a reader should see are in plain words", () => {
 		const { items } = run("claude", [
 			{ type: "system", subtype: "task_started", task_id: "b1", description: "capcomd await" },
 			{ type: "system", subtype: "task_notification", task_id: "b1", status: "completed" },
+			{ type: "system", subtype: "thinking_tokens", estimated_tokens: 120, estimated_tokens_delta: 40 },
+			{ type: "system", subtype: "hook_started" },
 			{ type: "system", subtype: "something_new" },
+			{ type: "system", subtype: "compact_boundary" },
+			{ type: "system", subtype: "api_retry", attempt: 2, max_retries: 10, retry_delay_ms: 2000, error_status: 529 },
 		]);
-		expect(items.map((i) => i.text)).toEqual(["System: something_new"]);
+		expect(items.map((i) => i.text)).toEqual(["Compacted the conversation", "Retrying the model request (attempt 2 of 10)"]);
+		expect(items.some((i) => i.text.startsWith("System:"))).toBe(false);
+	});
+	test("a refused call (permission_denied) is folded into its row: closed refused, nothing on its own", () => {
+		const denied = (id: string) => ({ type: "system", subtype: "permission_denied", tool_name: "Bash", tool_use_id: id, decision_reason_type: "rule", message: "needs approval" });
+		const { items, updates } = run("claude", [
+			asst("m", { type: "tool_use", id: "x", name: "Bash", input: { command: "cd a; git log" } }),
+			denied("x"),
+			results({ type: "tool_result", tool_use_id: "x", content: "This command requires approval", is_error: true }),
+			// Denied after its result came back: the closed row is marked.
+			asst("m2", { type: "tool_use", id: "y", name: "Bash", input: { command: "rm -rf x" } }),
+			results({ type: "tool_result", tool_use_id: "y", content: "Not allowed", is_error: true }),
+			denied("y"),
+			// A denial for a call this thread never saw: one quiet line.
+			denied("zz"),
+		]);
+		expect(items.map((i) => [i.kind, i.tool?.isError ?? null, i.error?.code ?? null, i.kind === "other" ? i.text : null])).toEqual([
+			["tool", true, "refused", null], ["tool", true, "refused", null], ["other", null, null, "Not allowed: Bash"],
+		]);
+		expect(updates.filter((u) => u.kind === "other").length).toBe(1);
 	});
 	test("an error result with new text is an error item with the CLI's code", () => {
 		const { items } = run("claude", [{ type: "result", subtype: "error_max_turns", is_error: true }]);
@@ -135,6 +158,21 @@ describe("hand-back", () => {
 		expect(d.blocks[1]).toMatchObject({ kind: "image", source: { type: "workspace", path: "charts/rows.png" }, alt: "chart" });
 		const links = (d.blocks[2] as any).items.map((i: any) => i.blocks[0].children[0]);
 		expect(links.map((l: any) => [l.text, l.target])).toEqual([["report.md", "file"], ["log", "artifact"], ["dash", "web"], ["bucket", "none"]]);
+	});
+	test("a reviewer's hand-back is its verdict: child.verdict, and blocks that say it for clients that don't read it", () => {
+		const d = handoffDraft({
+			id: "itm-p-handoff-r", at: 0, child: { agentId: "agt-r", status: "done" }, summary: "",
+			verdict: { passed: false, reasons: ["`sum()` drops nulls", "  ", "no test covers\nthe empty shard\u202e"] },
+		});
+		expect(ThreadItem.safeParse({ ...d, seq: 1, order: 1, agentId: "agt-p" }).success).toBe(true);
+		expect(d.child).toEqual({ agentId: "agt-r", status: "done", verdict: { passed: false, reasons: ["`sum()` drops nulls", "no test covers\nthe empty shard"] } });
+		expect(d.blocks.map((b) => b.t)).toEqual(["paragraph", "list"]);
+		expect(d.text).toBe("**Didn't pass review**\n\n- `sum()` drops nulls\n- no test covers the empty shard");
+		expect((d.blocks[1] as any).items.map((i: any) => i.blocks[0].children.map((c: any) => c.t))).toEqual([["code", "text"], ["text"]]);
+		// A summary it wrote too goes between the verdict and the reasons; no verdict: as before.
+		const both = handoffDraft({ id: "x", at: 0, child: { agentId: "agt-r", status: "done" }, summary: "Looks right.", verdict: { passed: true, reasons: [] } });
+		expect(both.text).toBe("**Passed review**\n\nLooks right.");
+		expect(handoffDraft({ id: "y", at: 0, child: { agentId: "agt-c", status: "done" }, summary: "Done." }).child).toEqual({ agentId: "agt-c", status: "done" });
 	});
 });
 

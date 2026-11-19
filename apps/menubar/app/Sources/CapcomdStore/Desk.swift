@@ -21,6 +21,8 @@ public struct DeckInfo: Sendable, Hashable, Identifiable {
   public var askingName: String?
   /// Every agent, in tree order (the folded deck stacks these heads).
   public var agentIds: [String]
+  /// The title in full (`Project.fullTitle`: the goal's first line, cleaned, at most 400 characters), for tooltips.
+  public var fullTitle: String? = nil
 }
 
 /// A reel column's header: everything it shows about its agent, nothing about the thread.
@@ -71,7 +73,7 @@ extension CapcomdStore {
       return DeckInfo(id: p.id, runId: run.id, title: p.title, startedAtMs: run.startedAtMs,
                       endedHead: run.endedHead, isRunning: run.isRunning, sandbox: run.sandbox ?? daemonPlace,
                       askingAgentId: asking, askingName: asking.flatMap { columnHeader(runId: run.id, agentId: $0) }.map(\.label),
-                      agentIds: ids)
+                      agentIds: ids, fullTitle: p.fullTitle)
     }
   }
 

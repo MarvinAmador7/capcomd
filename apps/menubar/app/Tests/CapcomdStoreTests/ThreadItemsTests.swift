@@ -87,6 +87,18 @@ final class ThreadItemsTests: XCTestCase {
 
   /// A long thread read over several pages goes into the book once the read ends: a change in between (here a live
   /// frame) doesn't show the thread as read so far, its oldest items first.
+  func testAnOlderDaemonsSystemBookkeepingLinesAreNotShown() async {
+    let other = { (id: String, seq: Int, text: String) in
+      #"{"id":"\#(id)","rev":1,"seq":\#(seq),"order":\#(seq),"agentId":"agt-1","kind":"other","status":"done","at":"2026-10-26T12:00:00.000Z","durationMs":null,"text":"\#(text)","blocks":[],"format":"blocks/1","redacted":false,"tool":null,"error":null,"truncated":null,"child":null}"#
+    }
+    let t = FakeThread()
+    t.pages[0] = page([itemJSON("i1", seq: 1, order: 1), other("o2", 2, "System: thinking_tokens"), other("o3", 3, "System: permission_denied"),
+                       other("o4", 4, "Compacted the conversation"), itemJSON("i5", seq: 5, order: 5)], next: nil)
+    let s = CapcomdStore(thread: t); spawn(s)
+    await s.refreshThread(runId: "run-x", agentId: "agt-1")
+    XCTAssertEqual(s.threadEntries(agentId: "agt-1").map(\.id), ["itm:i1", "itm:o4", "itm:i5"])
+  }
+
   func testAThreadReadOverSeveralPagesShowsWhenItIsAllRead() async {
     final class Paused: ThreadFetching, @unchecked Sendable {
       let base = FakeThread()

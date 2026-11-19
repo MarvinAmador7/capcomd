@@ -1,0 +1,206 @@
+{
+  "session": "claude-2.1.311-system.jsonl",
+  "cli": "claude",
+  "updates": [
+    {
+      "id": "itm-agt-golden-1",
+      "rev": 1,
+      "kind": "thinking",
+      "status": "done",
+      "at": "2026-10-26T12:00:02.000Z",
+      "durationMs": null,
+      "text": "Look at the site first.",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "Look at the site first."
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 1,
+      "kind": "tool",
+      "status": "open",
+      "at": "2026-10-26T12:00:05.000Z",
+      "durationMs": null,
+      "text": "Run sed -n 1,9p DESK.md; ls",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "toolu_cd",
+        "name": "Bash",
+        "kind": "read",
+        "summary": "Run sed -n 1,9p DESK.md; ls",
+        "isError": false,
+        "args": "{\"command\":\"cd ../apps; sed -n 1,9p DESK.md; ls\"}",
+        "output": null,
+        "files": [],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-2",
+      "rev": 2,
+      "kind": "tool",
+      "status": "done",
+      "at": "2026-10-26T12:00:05.000Z",
+      "durationMs": null,
+      "text": "Run sed -n 1,9p DESK.md; ls",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "toolu_cd",
+        "name": "Bash",
+        "kind": "read",
+        "summary": "Run sed -n 1,9p DESK.md; ls",
+        "isError": true,
+        "args": "{\"command\":\"cd ../apps; sed -n 1,9p DESK.md; ls\"}",
+        "output": "This Bash command contains multiple operations. The following part requires approval: cd ../apps; sed -n 1,9p DESK.md",
+        "files": [],
+        "diff": null
+      },
+      "error": {
+        "message": "This Bash command contains multiple operations. The following part requires approval: cd ../apps; sed -n 1,9p DESK.md",
+        "code": "refused"
+      },
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-3",
+      "rev": 1,
+      "kind": "other",
+      "status": "done",
+      "at": "2026-10-26T12:00:09.000Z",
+      "durationMs": null,
+      "text": "Retrying the model request (attempt 1 of 10)",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-4",
+      "rev": 1,
+      "kind": "tool",
+      "status": "open",
+      "at": "2026-10-26T12:00:10.000Z",
+      "durationMs": null,
+      "text": "Find **/*.png in apps",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "toolu_glob",
+        "name": "Glob",
+        "kind": "search",
+        "summary": "Find **/*.png in apps",
+        "isError": false,
+        "args": "{\"pattern\":\"**/*.png\",\"path\":\"/home/user/work/t1-e1/repo/apps\"}",
+        "output": null,
+        "files": [],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-4",
+      "rev": 2,
+      "kind": "tool",
+      "status": "done",
+      "at": "2026-10-26T12:00:10.000Z",
+      "durationMs": null,
+      "text": "Find **/*.png in apps",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": {
+        "callId": "toolu_glob",
+        "name": "Glob",
+        "kind": "search",
+        "summary": "Find **/*.png in apps",
+        "isError": false,
+        "args": "{\"pattern\":\"**/*.png\",\"path\":\"/home/user/work/t1-e1/repo/apps\"}",
+        "output": "apps/menubar/design/home.png",
+        "files": [],
+        "diff": null
+      },
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-5",
+      "rev": 1,
+      "kind": "other",
+      "status": "done",
+      "at": "2026-10-26T12:00:12.000Z",
+      "durationMs": null,
+      "text": "Compacted the conversation",
+      "blocks": [],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    },
+    {
+      "id": "itm-agt-golden-6",
+      "rev": 1,
+      "kind": "say",
+      "status": "done",
+      "at": "2026-10-26T12:00:14.000Z",
+      "durationMs": null,
+      "text": "Found the home design: `apps/menubar/design/home.png`.",
+      "blocks": [
+        {
+          "t": "paragraph",
+          "children": [
+            {
+              "t": "text",
+              "text": "Found the home design: "
+            },
+            {
+              "t": "code",
+              "text": "apps/menubar/design/home.png"
+            },
+            {
+              "t": "text",
+              "text": "."
+            }
+          ]
+        }
+      ],
+      "format": "blocks/1",
+      "redacted": false,
+      "tool": null,
+      "error": null,
+      "truncated": null,
+      "child": null
+    }
+  ],
+  "attachments": []
+}

@@ -95,7 +95,23 @@ public struct Item: Sendable, Hashable, Identifiable, Decodable {
     }
   }
   public struct Truncated: Sendable, Hashable, Decodable { public var blocks: Int; public var bytes: Int }
-  public struct Child: Sendable, Hashable, Decodable { public var agentId: String; public var status: String }
+  public struct Child: Sendable, Hashable, Decodable {
+    public var agentId: String
+    public var status: String
+    /// A reviewer's verdict (the daemon's `child.verdict`); the blocks then start with a paragraph that says it.
+    public var verdict: Verdict?
+    public init(agentId: String, status: String, verdict: Verdict? = nil) { self.agentId = agentId; self.status = status; self.verdict = verdict }
+    struct WireVerdict: Decodable { var passed: Bool; var reasons: [String]? }
+    enum CodingKeys: String, CodingKey { case agentId, status, verdict }
+    public init(from d: Decoder) throws {
+      let c = try d.container(keyedBy: CodingKeys.self)
+      agentId = try c.decode(String.self, forKey: .agentId); status = try c.decode(String.self, forKey: .status)
+      // A verdict this client can't read is no verdict: the blocks still say it.
+      verdict = (try? c.decodeIfPresent(WireVerdict.self, forKey: .verdict))?.flatMap { $0 }.map { v in
+        Verdict(passed: v.passed, reasons: Array((v.reasons ?? []).map { clean($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(50)))
+      }
+    }
+  }
 
   enum CodingKeys: String, CodingKey { case id, rev, seq, order, agentId, kind, status, at, durationMs, text, blocks, format, redacted, tool, error, truncated, child }
   public init(from d: Decoder) throws {
