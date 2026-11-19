@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import Observation
+import CapcomdStore
 import CapcomdUI
 
 /// A column as an AppKit view (`desk.column=native`; design note: LAYOUT.md). Its layer is the column's frame: fill,
@@ -20,10 +21,11 @@ final class NativeColumnView: NSView {
   private let style: ColumnStyle
   private let head: NSHostingView<AnyView>
   private let body: NSHostingView<AnyView>
-  /// The size the head and body were placed for (and whether expanded): placing is skipped until it changes. And the
-  /// agent they showed then ("" once the views start anew: another agent, another run, out of the window).
+  /// The size the head and body were placed for (and whether expanded): placing is skipped until it changes.
   private var placed: (size: CGSize, expanded: Bool)?
-  private var placedAgent = ""
+  /// The thread's rows as laid out (pane style): a new box for each thread the view shows, so a thread made since the
+  /// last resize has none until SwiftUI lays it out.
+  private var rows: ThreadRows
   private var stroke: StrokeKey?
   /// The pane it is (pane style): focus among splits, expanded. Nil in the reel.
   private let pane: PaneState?
@@ -40,9 +42,12 @@ final class NativeColumnView: NSView {
     self.style = style
     self.needs = needs
     self.pane = pane
+    let r = ThreadRows()
+    rows = r
     head = NSHostingView(rootView: Self.head(agentId, model, style, needs, pane))
-    body = NSHostingView(rootView: Self.body(agentId, model, memory, style, needs, pane))
+    body = NSHostingView(rootView: Self.body(agentId, model, memory, style, needs, pane, r))
     super.init(frame: .zero)
+    watch(r)
     wantsLayer = true
     layer?.backgroundColor = NSColor(Theme.Desk.column).cgColor
     layer?.cornerRadius = Theme.Desk.columnRadius
@@ -67,64 +72,87 @@ final class NativeColumnView: NSView {
     super.layout()
     let expanded = pane?.expanded == true
     guard placed.map({ $0.size != bounds.size || $0.expanded != expanded }) ?? true else { return }
-    // Resized while showing the same thread: a thread made since opens at its own foot (ColumnThread), not at the old
-    // one's place.
-    let resized = placed != nil && placedAgent == agentId
+    let resized = placed != nil
     placed = (bounds.size, expanded)
-    placedAgent = agentId
     let h = style == .pane ? (expanded ? PaneMetrics.expandedHeader : Theme.Desk.paneHeader) : Theme.Desk.columnHeader
-    // A pane resized (a split, a close, expand, collapse) keeps its thread where it was, measured from the foot: SwiftUI's
-    // bottom anchor kept the offset from the top instead when the pane got shorter, and the lazy rows of the new place
-    // were never made (a blank thread).
-    let foot = style == .pane && resized ? threadScroll().map(Self.fromFoot) : nil
+    // A pane resized (a split, a close, expand, collapse) keeps the reader's place in its thread: taken before the
+    // re-frame, put back after it. SwiftUI's bottom anchor kept the offset from the top instead when the pane got
+    // shorter, and the lazy rows of the new place were never made (a blank thread).
+    let place = style == .pane && resized ? readerPlace() : nil
     head.frame = CGRect(x: 0, y: 0, width: bounds.width, height: h)
     body.frame = CGRect(x: 0, y: h, width: bounds.width, height: max(0, bounds.height - h))
     edge.frame = bounds
     edge.update()
-    if let foot {
-      body.layoutSubtreeIfNeeded()
-      if foot > Self.nearFoot {
-        hold(foot)
-      } else {
-        // At the foot: put back now and once more after the rows the new place needs are made; SwiftUI's bottom anchor
-        // keeps it there as the rest are measured.
-        release()
-        restore(foot)
-        RunLoop.main.perform { MainActor.assumeIsolated { [weak self] in self?.restore(foot) } }
-      }
+    guard let place else { return }
+    body.layoutSubtreeIfNeeded()
+    switch place {
+    case .foot(let foot):
+      // At the foot: put back now, then once the layout is done the thread scrolls to its foot row itself (SwiftUI's own
+      // scroll, as it opens: ColumnThread), which makes the rows there. Putting the clip view at the foot alone left the
+      // pane blank when the stack's estimated height moved under it (a pane halved by ⇧⌘D: 15,164 pt to 13,953, no row
+      // in view). SwiftUI's bottom anchor keeps it there as the rest are measured.
+      release()
+      restore(place)
+      let r = rows
+      RunLoop.main.perform { MainActor.assumeIsolated { [weak self] in
+        guard let self, self.rows === r else { return }
+        if let toFoot = r.toFoot { toFoot() } else { self.restore(.foot(foot)) }
+      } }
+    case .row:
+      hold(place)
     }
   }
 
-  // MARK: the thread's place across a resize
+  // MARK: the reader's place across a resize
+
+  /// Where the reader is in the thread: at its foot, or a row and how far into it the view's top is (`into` points of
+  /// a row `height` tall then).
+  enum ReaderPlace: Equatable {
+    case foot(CGFloat)
+    case row(id: String, into: CGFloat, height: CGFloat)
+  }
+
+  /// The place now, from the rows as SwiftUI last laid them out. Nil when the thread hasn't been laid out (a thread made
+  /// since the last resize: another agent, another run, the view back in the window), which opens at its own foot
+  /// (ColumnThread, the #277 blank-pane fix), and when there is no thread.
+  private func readerPlace() -> ReaderPlace? {
+    guard let sv = threadScroll(), sv.documentView != nil, !rows.live.isEmpty else { return nil }
+    let foot = Self.fromFoot(sv)
+    if foot <= Self.nearFoot { return .foot(foot) }
+    let top = Self.viewTop(sv)
+    // The row at the view's top (the first that reaches below it).
+    guard let (id, r) = rows.inView(top: top, bottom: top + sv.contentView.bounds.height).first(where: { $0.frame.maxY > top }) else { return nil }
+    return .row(id: id, into: top - r.minY, height: r.height)
+  }
 
   /// After a resize the thread's lazy stack measures its rows again at the new width, over the next layouts: its document
   /// height moves by thousands of points as measured rows replace estimates (collapsing an expanded pane, 16,469 pt to
-  /// 4,142), and SwiftUI's anchor didn't keep the reader's place through that: it ended at the foot, or far above where
-  /// it was. So the distance from the foot is held: put back each time the document or the offset moves, for `holdFor`
-  /// after the resize, until a hand scrolls the thread or the pane shows another thread.
+  /// 4,142), and the rows above and below the view change size by different amounts, so neither the offset from the top
+  /// nor the distance from the foot names the same content. So the row at the view's top is held there, at the same
+  /// share of its height: put back each time the document, the offset or that row moves, for `holdFor` after the
+  /// resize, until a hand scrolls the thread or the pane shows another thread.
   ///
   /// A reader at the foot (within `nearFoot`) isn't held: SwiftUI's bottom anchor keeps it there as the rows are
-  /// measured, as it did before, and a thread opened at its foot (ColumnThread, the #277 blank-pane fix) stays SwiftUI's
-  /// to place.
+  /// measured, as it did before.
   static let nearFoot: CGFloat = 4
-  private var held: (foot: CGFloat, until: CFTimeInterval, agent: String)?
+  private var held: (place: ReaderPlace, until: CFTimeInterval, agent: String)?
   private weak var heldScroll: NSScrollView?
   private var heldObservers: [NSObjectProtocol] = []
   private var heldWheel: Any?
   private var heldPending = false
   static let holdFor: CFTimeInterval = 1.0
 
-  private func hold(_ foot: CGFloat) {
+  private func hold(_ place: ReaderPlace) {
     guard let sv = threadScroll(), let doc = sv.documentView else { return }
     if heldScroll !== sv { release() }
-    held = (foot, CACurrentMediaTime() + Self.holdFor, agentId)
-    restore(foot)
+    held = (place, CACurrentMediaTime() + Self.holdFor, agentId)
+    restore(place)
     if heldObservers.isEmpty {
       heldScroll = sv
       doc.postsFrameChangedNotifications = true
       sv.contentView.postsBoundsChangedNotifications = true
       let nc = NotificationCenter.default
-      // Posted inside SwiftUI's layout: the offset is put back once that layout is done (the run loop's next blocks).
+      // Posted inside SwiftUI's layout: the place is put back once that layout is done (the run loop's next blocks).
       let changed: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.keepHeldSoon() } }
       heldObservers = [
         nc.addObserver(forName: NSView.frameDidChangeNotification, object: doc, queue: nil, using: changed),
@@ -148,6 +176,14 @@ final class NativeColumnView: NSView {
     DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdFor + 0.05) { [weak self] in self?.keepHeld() }
   }
 
+  /// The rows tell the hold when the held row moves in the thread (rows above it measured).
+  private func watch(_ r: ThreadRows) {
+    r.moved = { [weak self] id in
+      guard let self, case .row(let held, _, _)? = self.held?.place, held == id else { return }
+      self.keepHeldSoon()
+    }
+  }
+
   /// Once per turn of the run loop, after the layout that moved the document.
   private func keepHeldSoon() {
     guard held != nil, !heldPending else { return }
@@ -158,7 +194,7 @@ final class NativeColumnView: NSView {
   private func keepHeld() {
     guard let h = held else { return }
     guard h.agent == agentId, CACurrentMediaTime() < h.until, window != nil, let sv = heldScroll, sv === threadScroll() else { return release() }
-    restore(h.foot)
+    restore(h.place)
   }
 
   private func release() {
@@ -187,14 +223,37 @@ final class NativeColumnView: NSView {
     let d = sv.documentView?.frame.height ?? 0, b = sv.contentView.bounds
     return max(0, sv.contentView.isFlipped ? d - b.maxY : b.minY)
   }
-  private func restore(_ foot: CGFloat) {
+  /// The view's top in the thread's content (from the content's top, as the rows' frames are).
+  private static func viewTop(_ sv: NSScrollView) -> CGFloat {
+    let d = sv.documentView?.frame.height ?? 0, b = sv.contentView.bounds
+    return sv.contentView.isFlipped ? b.minY : d - b.maxY
+  }
+  private func restore(_ place: ReaderPlace) {
     guard let sv = threadScroll(), let d = sv.documentView else { return }
     let b = sv.contentView.bounds
-    let top = max(0, d.frame.height - b.height - foot)
-    let y = sv.contentView.isFlipped ? top : min(foot, max(0, d.frame.height - b.height))
+    let top: CGFloat
+    switch place {
+    case .foot(let foot):
+      top = d.frame.height - b.height - foot
+    case .row(let id, let into, let height):
+      // The row isn't built (the re-frame put the view elsewhere): SwiftUI brings it to the top and makes it; once it
+      // reports its frame (`moved`), the place is set exactly.
+      guard rows.live.contains(id), let r = rows.frames[id] else { rows.toRow?(id); return }
+      // Inside the row: the same share of its new height (its text reflowed at the new width); above it, in points.
+      top = r.minY + (into >= 0 && into < height && height > 0 ? into / height * r.height : into)
+    }
+    let t = min(max(0, top), max(0, d.frame.height - b.height))
+    let y = sv.contentView.isFlipped ? t : d.frame.height - b.height - t
     guard abs(b.minY - y) > 0.5 else { return }
     sv.contentView.scroll(to: NSPoint(x: b.minX, y: y))
     sv.reflectScrolledClipView(sv.contentView)
+  }
+
+  /// The rows in view now (at least 2 pt of each), top to bottom, by entry id: what the reader sees.
+  package var rowsInView: [String] {
+    guard style == .pane, let sv = threadScroll(), sv.documentView != nil else { return [] }
+    let top = Self.viewTop(sv), bottom = top + sv.contentView.bounds.height
+    return rows.inView(top: top, bottom: bottom).filter { $0.frame.maxY > top + 2 && $0.frame.minY < bottom - 2 }.map(\.id)
   }
 
   private static func head(_ id: String, _ model: DeskModel, _ style: ColumnStyle, _ needs: Bool = false, _ pane: PaneState? = nil) -> AnyView {
@@ -203,10 +262,11 @@ final class NativeColumnView: NSView {
   }
   /// The body, identified by its agent: a slot configured with another agent starts its views (and their state) anew;
   /// what must follow the agent is in `memory`.
-  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ style: ColumnStyle, _ needs: Bool = false, _ pane: PaneState? = nil) -> AnyView {
+  private static func body(_ id: String, _ model: DeskModel, _ memory: SlotMemory?, _ style: ColumnStyle, _ needs: Bool, _ pane: PaneState?,
+                           _ rows: ThreadRows) -> AnyView {
     AnyView(ColumnBody(agentId: id).id(id).environment(model).environment(\.threadHost, ThreadHostBox(host: model))
       .environment(\.slotMemory, memory).environment(\.deskPane, style == .pane).environment(\.needsReel, needs)
-      .environment(\.paneState, pane).preferredColorScheme(.dark))
+      .environment(\.paneState, pane).environment(\.threadRows, style == .pane ? rows : nil).preferredColorScheme(.dark))
   }
 
   /// A slot shows another agent: its head and body get that agent's views, its stroke that agent's state. Nothing is
@@ -216,8 +276,10 @@ final class NativeColumnView: NSView {
     agentId = id
     thread = nil
     release()
+    rows = ThreadRows()
+    watch(rows)
     head.rootView = Self.head(id, model, style, needs, pane)
-    body.rootView = Self.body(id, model, memory, style, needs, pane)
+    body.rootView = Self.body(id, model, memory, style, needs, pane, rows)
     stroke = nil
     observe()
   }
@@ -230,7 +292,7 @@ final class NativeColumnView: NSView {
     head.rootView = AnyView(EmptyView())
     body.rootView = AnyView(EmptyView())
     agentId = ""
-    placedAgent = ""
+    rows = ThreadRows()
     thread = nil
     release()
   }
@@ -244,7 +306,7 @@ final class NativeColumnView: NSView {
 
   /// The project changed: the model made new slices for its agents, so whatever this slot shows is stale, even an
   /// agent of the same id. The next `configure` rebuilds.
-  func forget() { agentId = ""; placedAgent = "" }
+  func forget() { agentId = "" }
 
   /// Bumped by each `observe`: a callback from an earlier observation (an earlier agent's) is dropped.
   private var generation = 0
@@ -290,6 +352,8 @@ enum ColumnStyle { case reel, pane }
   var paneId: Int { get }
   var paneFocused: Bool { get }
   var paneExpanded: Bool { get }
+  /// The thread's rows in view, top to bottom, by entry id (pane style; empty in the reel).
+  var rowsInView: [String] { get }
 }
 
 extension NativeColumnView: DeskPaneProbe {
@@ -312,7 +376,89 @@ extension EnvironmentValues {
   var drafts: [String: String] = [:]
 }
 
+/// A pane's thread rows as SwiftUI laid them out: each row's frame in the thread's content (`space`), by entry id, and
+/// which rows are built now (`live`; a row out of the lazy stack's reach keeps its last frame, a guess). Written by the
+/// rows (`RowFrame`) as they are laid out, read by the pane to keep the reader's place by row across a resize. One box
+/// per thread a pane shows.
+@MainActor final class ThreadRows {
+  static let space = "capcomd.thread.content"
+  private(set) var frames: [String: CGRect] = [:]
+  private(set) var live: Set<String> = []
+  /// Called with a row's id when its frame changes or it is built.
+  var moved: ((String) -> Void)?
+  /// SwiftUI's own scrolls (set by the thread as it appears): to the foot row, and a row's top to the view's top (it
+  /// makes the row and those around it when the row isn't built).
+  var toFoot: (() -> Void)?
+  var toRow: ((String) -> Void)?
+  func set(_ id: String, _ r: CGRect) {
+    let made = live.insert(id).inserted
+    guard made || frames[id] != r else { return }
+    frames[id] = r
+    moved?(id)
+  }
+  func drop(_ id: String) { live.remove(id) }
+  /// The thread's entries in order (set by the thread as it renders).
+  var entries: [ThreadEntry] = []
+  /// The rows SwiftUI's scroll view says are in view (macOS 15 and later; nil before).
+  var visible: Set<String>?
+
+  /// The rows laid out over `top..<bottom` now, top to bottom. A lazy stack can keep a row it no longer places, with the
+  /// frame it last had, so only the rows the scroll view says are visible count (macOS 15), and of those only a run of
+  /// rows in the thread's order whose frames follow one another (the stack has no spacing): of the runs, the one that
+  /// covers most of the range.
+  func inView(top: CGFloat, bottom: CGFloat) -> [(id: String, frame: CGRect)] {
+    var index: [String: Int] = [:]
+    for (i, e) in entries.enumerated() { index[e.id] = i }
+    let rows = live.intersection(visible ?? live).compactMap { id -> (i: Int, id: String, frame: CGRect)? in
+      guard let i = index[id], let f = frames[id], f.maxY > top, f.minY < bottom else { return nil }
+      return (i, id, f)
+    }.sorted { $0.i < $1.i }
+    var runs: [[(i: Int, id: String, frame: CGRect)]] = []
+    for r in rows {
+      if let last = runs.last?.last, abs(r.frame.minY - last.frame.maxY) < 1 { runs[runs.count - 1].append(r) } else { runs.append([r]) }
+    }
+    func cover(_ run: [(i: Int, id: String, frame: CGRect)]) -> CGFloat {
+      run.reduce(0) { $0 + max(0, min($1.frame.maxY, bottom) - max($1.frame.minY, top)) }
+    }
+    return (runs.max { cover($0) < cover($1) } ?? []).map { ($0.id, $0.frame) }
+  }
+}
+
+/// A thread row's frame, kept in the pane's `ThreadRows` (in the reel, nothing).
+struct RowFrame: ViewModifier {
+  let id: String
+  let rows: ThreadRows?
+  func body(content: Content) -> some View {
+    if let rows {
+      // A geometry reader, not `onGeometryChange`: a row has to report its frame as it is made, too (a row made again
+      // where it was before reports no change).
+      content
+        .background(GeometryReader { g in
+          let f = g.frame(in: .named(ThreadRows.space))
+          Color.clear.onChange(of: f, initial: true) { _, f in rows.set(id, f) }
+        })
+        .onDisappear { rows.drop(id) }
+    } else {
+      content
+    }
+  }
+}
+
+/// The rows in view, as the thread's scroll view says (macOS 15 and later), kept in the pane's `ThreadRows`.
+struct VisibleRows: ViewModifier {
+  let rows: ThreadRows?
+  func body(content: Content) -> some View {
+    if let rows, #available(macOS 15, *) {
+      content.onScrollTargetVisibilityChange(idType: String.self, threshold: 0.001) { rows.visible = Set($0) }
+    } else {
+      content
+    }
+  }
+}
+
 extension EnvironmentValues {
+  /// The pane's thread rows box; nil in the reel.
+  @Entry var threadRows: ThreadRows? = nil
   /// The reel's slot memory when the column is a reused slot; nil otherwise (the box's draft is then its own state).
   @Entry var slotMemory: SlotMemory? = nil
 }

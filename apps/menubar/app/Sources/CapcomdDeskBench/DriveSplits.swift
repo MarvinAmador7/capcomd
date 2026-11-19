@@ -52,11 +52,11 @@ import PerfLoopKit
   }
 
   /// One latency step: `act`, until `done` holds, to the frame after it; the panes' threads judged for ink after it.
-  static func paneStep(_ d: Desk, _ name: String, panes: Int, _ act: Act, done: @escaping () -> Bool) async -> Bool {
+  static func paneStep(_ d: Desk, _ name: String, panes: Int, _ act: Act, focus: FocusTarget? = nil, done: @escaping () -> Bool) async -> Bool {
     if !d.window.isKeyWindow { d.window.makeKeyAndOrderFront(nil); _ = await d.nextCommit() }
     switch act {
-    case .press(let keys, let item): await d.run.press(keys, expect: item, name: name, timeoutMs: 3000, until: done)
-    case .key(let k): await d.run.key(k, name: name, timeoutMs: 3000, until: done)
+    case .press(let keys, let item): await d.run.press(keys, expect: item, expectFocus: focus, name: name, timeoutMs: 3000, until: done)
+    case .key(let k): await d.run.key(k, expectFocus: focus, name: name, timeoutMs: 3000, until: done)
     case .call(let f): await d.run.step(name, timeoutMs: 3000, until: done) { f() }
     }
     let ok = done()
@@ -199,14 +199,22 @@ import PerfLoopKit
 
   // MARK: pane-expand
 
+  /// What has the keyboard in the window: the edited field, else the first responder (nil: nothing).
+  static func keyboardOwner(_ w: NSWindow) -> NSView? {
+    if let t = w.firstResponder as? NSTextView, t.isFieldEditor { return t.delegate as? NSView }
+    return w.firstResponder as? NSView
+  }
+
   /// Two panes, the focused one's thread scrolled up from its foot; ⇧⌘↩ (through the menu bar) gives it the window, Esc
-  /// (a real key: the expanded pane's arrows-in takes it) gives it back, `toggles` times. Expanded: that pane's view fills the window, the sidebar and the other pane hide. Back: the same
-  /// panes in the same frames, the thread at the same distance from its foot, the same views (nothing rebuilt).
+  /// (a real key: the expanded pane's arrows-in takes it) gives it back, `toggles` times. Expanded: that pane's view fills
+  /// the window, the sidebar and the other pane hide, and the keyboard is in that pane. Back: the same panes in the same
+  /// frames, the same rows of the thread in view, the keyboard back where it was before the expand (or still in the
+  /// pane), the same views (nothing rebuilt).
   static func paneExpand(_ run: HostRun) async throws {
     let d = try await onePane(run)
     await split(d, [false])
     let names = ["thread", "expanded", "collapsed-same", "scroll-kept", "no-rebuild"]
-    guard let focused = d.panesShown().first(where: \.focused), let sv = d.threadScroll(in: focused.view) else {
+    guard let focused = d.panesShown().first(where: \.focused), let sv = d.threadScroll(in: focused.view), let probe = focused.view as? DeskPaneProbe else {
       return run.record(names.map { Check($0, false, "no focused pane or no thread scroll view in it") })
     }
     // Up from the foot by a screen or what the thread has.
@@ -219,14 +227,21 @@ import PerfLoopKit
       await d.quiet(quietMs: 150, timeoutMs: 2000)
     }
     let foot = fromFoot(sv)
+    let rows = probe.rowsInView
     let before = d.panesShown().map { ($0.agent, $0.frame) }
     let views = d.panesShown().map { ObjectIdentifier($0.view) }
     let full = d.content.convert(d.content.bounds, to: nil).integral
     var expandedOK = true, back = true, kept = true, same = true, notes: [String] = []
     var threadBodies = 0
     for i in 0..<run.int("toggles", 4) {
+      // The keyboard: into the expanded pane, and back on Esc to what had it before (or the pane, when it was there or
+      // nowhere). `expectFocus` on both steps, written in this PR.
+      let had = keyboardOwner(d.window)
+      let backTo: NSView = had.flatMap { $0.isDescendant(of: focused.view) || $0.isHiddenOrHasHiddenAncestor ? nil : $0 } ?? focused.view
       var t = run.now
-      var ok = await paneStep(d, "expand#\(i)", panes: 1, .press("⇧⌘↩", item: "Expand Pane")) { d.panesShown().count == 1 && d.panesShown().first?.frame == full }
+      var ok = await paneStep(d, "expand#\(i)", panes: 1, .press("⇧⌘↩", item: "Expand Pane"), focus: .view(focused.view)) {
+        d.panesShown().count == 1 && d.panesShown().first?.frame == full
+      }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let e = d.panesShown()
       let ex = ok && e.count == 1 && e[0].expanded && e[0].frame == full && d.sidebarScrollView(scrollable: false) == nil
@@ -234,16 +249,20 @@ import PerfLoopKit
       expandedOK = expandedOK && ex
       if !ex { notes.append("expand#\(i): \(e.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), sidebar \(d.sidebarScrollView(scrollable: false) != nil)") }
       t = run.now
-      ok = await paneStep(d, "esc#\(i)", panes: 2, .key(.escape)) { d.panesShown().count == 2 }
+      ok = await paneStep(d, "esc#\(i)", panes: 2, .key(.escape), focus: .view(backTo)) { d.panesShown().count == 2 }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let after = d.panesShown()
       let b = ok && after.map(\.agent) == before.map(\.0) && after.map(\.frame) == before.map(\.1) && !d.model.nav.expanded
       back = back && b
       if !b { notes.append("esc#\(i): \(after.map { "\($0.agent) \($0.frame)" }) vs \(before.map { "\($0.0) \($0.1)" })") }
+      // The place is the rows in view (written in this PR): points from the foot don't name the same rows in a lazy stack.
       let sv2 = d.threadScroll(in: after.first { $0.agent == focused.agent }?.view ?? focused.view)
-      let k = sv2 === sv && abs(fromFoot(sv) - foot) <= 2
+      let now = probe.rowsInView
+      let k = sv2 === sv && !rows.isEmpty && now == rows
       kept = kept && k
-      if !k { notes.append("scroll#\(i): \(Stats.round(foot, 1)) → \(Stats.round(Double(sv2.map(fromFoot) ?? -1), 1)) pt from the foot; same scroll view \(sv2 === sv)") }
+      if !k {
+        notes.append("scroll#\(i): rows in view \(Self.rowList(rows)) → \(Self.rowList(now)); \(Stats.round(foot, 1)) → \(Stats.round(Double(sv2.map(fromFoot) ?? -1), 1)) pt from the foot; same scroll view \(sv2 === sv)")
+      }
       same = same && after.map { ObjectIdentifier($0.view) } == views
     }
     // The end state for the snapshot: expanded, at rest.
@@ -253,9 +272,16 @@ import PerfLoopKit
       Check("thread", true, "the focused pane's thread, \(Stats.round(up, 1)) pt up from its foot"),
       Check("expanded", expandedOK, notes.filter { $0.hasPrefix("expand") }.joined(separator: "; ").ifEmpty("⇧⌘↩ gave the focused pane the whole window, sidebar and other pane hidden")),
       Check("collapsed-same", back, notes.filter { $0.hasPrefix("esc") }.joined(separator: "; ").ifEmpty("Esc brought back the same panes in the same frames")),
-      Check("scroll-kept", kept && up > 0, notes.filter { $0.hasPrefix("scroll") }.joined(separator: "; ").ifEmpty("the thread kept its place \(Stats.round(foot, 1)) pt from its foot (scrolled up \(Stats.round(up, 1)) pt)")),
+      Check("scroll-kept", kept && up > 0, notes.filter { $0.hasPrefix("scroll") }.joined(separator: "; ")
+        .ifEmpty("the thread kept the same rows in view (\(Self.rowList(rows)); \(Stats.round(foot, 1)) pt from its foot, scrolled up \(Stats.round(up, 1)) pt)")),
       Check("no-rebuild", same, "the pane views stayed the same objects; PaneThread bodies over all toggles: \(threadBodies)"),
     ])
+  }
+
+  /// Rows by the end of their ids, first and last (`7 rows a1b2…c3d4`).
+  static func rowList(_ ids: [String]) -> String {
+    guard let f = ids.first, let l = ids.last else { return "none" }
+    return "\(ids.count) rows \(f.suffix(6))…\(l.suffix(6))"
   }
 
   // MARK: expand-switch

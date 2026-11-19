@@ -1036,6 +1036,8 @@ struct ColumnThread: View {
   /// The pane it is in (nil in the reel): a split's thread has narrower sides; an expanded one is a centred 800 pt
   /// reading column with diffs, code and logs 1060 pt.
   @Environment(\.paneState) private var pane
+  /// The pane's rows box (nil in the reel): each row's frame, so the pane keeps the reader's place by row.
+  @Environment(\.threadRows) private var rows
   /// The row that was first when the page above was asked for: put back at the top once that page is in.
   @State private var keep: String?
   let runId: String
@@ -1044,6 +1046,7 @@ struct ColumnThread: View {
   var body: some View {
     DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
     let entries = thread.entries
+    rows?.entries = entries
     let expanded = inPane && pane?.expanded == true, split = inPane && pane?.split == true
     var inset = inPane ? (expanded ? PaneMetrics.expandedBody : split ? PaneMetrics.splitBody : Theme.Desk.paneBodyPadding) : Theme.Desk.bodyPadding
     // In the pane, the thread's foot (its bottom margin) is a row of the stack, so it can be scrolled to (below) with the
@@ -1065,6 +1068,7 @@ struct ColumnThread: View {
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
           EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane,
                    proseWidth: expanded ? PaneMetrics.reading : nil).equatable()
+            .modifier(RowFrame(id: e.id, rows: rows))
         }
         if case .failed(let why)? = thread.unavailable {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
@@ -1072,18 +1076,26 @@ struct ColumnThread: View {
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
         if let foot { Color.clear.frame(height: foot).id(Self.footId) }
       }
+      .scrollTargetLayout(isEnabled: rows != nil)
       // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt). Expanded
       // (RexExpanded `.xb`): prose in a centred 800 pt column, diffs, code and logs 1060 pt.
       .frame(maxWidth: inPane ? (expanded ? PaneMetrics.wide : Theme.Desk.paneReading) : nil, alignment: .leading)
       .padding(inset)
       .frame(maxWidth: .infinity, alignment: expanded ? .center : .leading)
+      .coordinateSpace(.named(ThreadRows.space))
     }
     .modifier(ThreadAnchor(placesItself: foot != nil))
+    .modifier(VisibleRows(rows: rows))
     .scrollIndicators(.never)
     // The pane opens a thread at its foot by scrolling to the foot row, not with the bottom anchor's initial offset: on a
     // lazy stack that offset left some threads blank (their last rows built, onAppear called, nothing drawn, until
     // another agent was picked). Once as it appears, again after its first layout, and when its first page lands.
-    .onAppear { if foot != nil { scrollToFoot(proxy) } }
+    .onAppear {
+      guard foot != nil else { return }
+      rows?.toFoot = { scrollToFoot(proxy) }
+      rows?.toRow = { id in proxy.scrollTo(id, anchor: .top) }
+      scrollToFoot(proxy)
+    }
     .onChange(of: entries.isEmpty) { _, empty in if foot != nil, !empty { scrollToFoot(proxy) } }
     // The page above is in: the row that was first goes back to the top, once the update that added the page is laid out.
     .onChange(of: entries.first?.id) { _, _ in
