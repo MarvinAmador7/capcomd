@@ -42,6 +42,7 @@ import { handoffDraft, IMAGE_MAX_BYTES, IMAGE_TYPES, type ItemDraft } from "../.
 import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, type TitleState } from "../primitives/agent-title";
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 import { fitJobRecord } from "../jobs/record";
+import { WAKES_SQL, alreadySatisfied, fireWake, matchWakes, parseFilter, wakeRow, type WakeRow } from "./wakes";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
   return {
@@ -263,7 +264,7 @@ async function nthKey(tx: any, base: string): Promise<string> {
   return n ? `${base}-${n + 1}` : base;
 }
 
-async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, data: Record<string, unknown>, idemKey: string) {
+async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, data: Record<string, unknown>, idemKey: string, o: { wakes?: false } = {}) {
   // harness.v1 §6.2: the published payload schemas are open, but the daemon emits only declared fields.
   const chk = strictEventData(dottedType(type), data);
   if (!chk.ok) {
@@ -278,6 +279,8 @@ async function addEvent(tx: any, type: ScopeEventType, agentId: string | null, d
     "INSERT INTO scope_events (seq, at, type, agent_id, data, idem_key) VALUES (?, ?, ?, ?, ?, ?)",
     seq, Date.now(), type, agentId, JSON.stringify(data), idemKey
   );
+  // SPIKE (durable wakes): every armed wake this event satisfies fires in this same transaction (src/actors/wakes.ts).
+  if (o.wakes !== false) await matchWakes(tx, { seq, type, agentId, data: data as Record<string, any> }, addEvent as any);
 }
 
 function findPath(edges: Map<string, string[]>, from: string, to: string, seen = new Set<string>()): string[] | null {
@@ -423,6 +426,8 @@ export const scopeActor = actor({
       // A plugin's own events (plugin.<name>.<event>, recordPluginEvent) carry the plugin's entity and sentence.
       await addColumn(database, "scope_events", "entity", "TEXT");
       await addColumn(database, "scope_events", "text", "TEXT");
+      // SPIKE: durable wake subscriptions (src/actors/wakes.ts).
+      for (const q of WAKES_SQL) await database.execute(q);
     },
   }),
 
@@ -1459,6 +1464,57 @@ export const scopeActor = actor({
 
     async listAgents(c, _p: Record<string, never>) {
       return (await c.db.execute("SELECT * FROM agents_v2 ORDER BY created_at, agent_id")).map(rowToAgent);
+    },
+
+    /**
+     * SPIKE (durable wakes): an agent asks to be woken (a message in its mailbox) when `filter` is satisfied, or at
+     * `at` (a check-in; with a filter, its deadline). Idempotent by `key`. Already satisfied: it fires now, in this
+     * transaction (no lost wakeup between looking and subscribing).
+     */
+    async wakeArm(c, params: { agentId: string; filter: unknown; at?: number | null; note?: string | null; key?: string }) {
+      const filter = (() => { try { return parseFilter(params.filter); } catch (e) { return fail("usage", (e as Error).message); } })();
+      const at = params.at != null && Number.isFinite(Number(params.at)) ? Math.ceil(Number(params.at)) : null;
+      if (filter.kind === "timer" && at === null) fail("usage", "a timer wake needs `at`");
+      const idem = params.key ? `${params.agentId}:${params.key}` : null;
+      if (idem) {
+        const r = (await c.db.execute("SELECT * FROM wakes WHERE idem_key = ?", idem)) as any[];
+        if (r.length) return { wake: wakeRow(r[0]), replayed: true };
+      }
+      const wakeId = stableId("job", `${params.agentId}:wake`, idem ?? undefined).replace(/^job-/, "wk-");
+      let fired: number | null = null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        await tx.execute("INSERT INTO wakes (wake_id, agent_id, idem_key, filter, note, state, at, created_at) VALUES (?, ?, ?, ?, ?, 'armed', ?, ?)",
+          wakeId, params.agentId, idem, JSON.stringify(filter), params.note ? String(params.note).slice(0, 2000) : null, at, Date.now());
+        if (filter.kind === "timer") return;
+        const done = await alreadySatisfied(tx, filter);
+        if (done) {
+          const w = wakeRow((await tx.execute("SELECT * FROM wakes WHERE wake_id = ?", wakeId))[0]);
+          fired = await fireWake(tx, w, done.why, done.seq, addEvent as any);
+        }
+      }, { name: "scopeWakeArm" });
+      // The time (a check-in, or a filter's deadline): a durable alarm; wakeTimer finds a wake that fired already.
+      if (fired === null && at !== null) await c.schedule.at(at, "wakeTimer", { wakeId });
+      return { wake: wakeRow((await c.db.execute("SELECT * FROM wakes WHERE wake_id = ?", wakeId))[0]), ...(fired !== null ? { firedNow: true } : {}) };
+    },
+    /** The alarm behind a wake's time. */
+    async wakeTimer(c, params: { wakeId: string }) {
+      let seq: number | null = null;
+      await c.db.transaction(async (tx: RawAccess) => {
+        const r = (await tx.execute("SELECT * FROM wakes WHERE wake_id = ?", params.wakeId)) as any[];
+        if (!r.length || r[0].state !== "armed") return;
+        const w: WakeRow = wakeRow(r[0]);
+        seq = await fireWake(tx, w, w.filter.kind === "timer" ? "the time you asked to be woken at came" : "the time you gave it ran out before it happened", null, addEvent as any);
+      }, { name: "scopeWakeTimer" });
+      return { fired: seq !== null };
+    },
+    async wakeCancel(c, params: { agentId: string; wakeId: string }) {
+      await c.db.execute("UPDATE wakes SET state = 'cancelled' WHERE wake_id = ? AND agent_id = ? AND state = 'armed'", params.wakeId, params.agentId);
+      const r = (await c.db.execute("SELECT * FROM wakes WHERE wake_id = ?", params.wakeId)) as any[];
+      return r.length ? wakeRow(r[0]) : null;
+    },
+    async wakeList(c, params: { agentId?: string; state?: string }) {
+      const rows = (await c.db.execute("SELECT * FROM wakes ORDER BY created_at, wake_id")) as any[];
+      return rows.map(wakeRow).filter((w) => (!params.agentId || w.agentId === params.agentId) && (!params.state || w.state === params.state));
     },
 
     async getEvents(c, params: { since?: number }) {

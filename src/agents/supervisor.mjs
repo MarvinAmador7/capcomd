@@ -147,6 +147,31 @@ function jobs() {
   return out;
 }
 
+// SPIKE (durable wakes): wakes the agent armed (in-VM `capcomd wake`, `verify --wake`…; markers in `cfg.wakes`) whose
+// message hasn't reached it yet. While one is pending, its input stays open after its turn: the wake-up message (from
+// `wake-<id>`) starts its next turn. One whose time is more than WAKE_WARM_MAX_MS away isn't kept warm (that is the
+// cold wake's job: the CLI ends, and capcomd would start it again on the message).
+const WAKE_WARM_MAX_MS = Number(process.env.CAPCOMD_WAKE_WARM_MAX_MS || 2 * 3600_000);
+const WAKE_GRACE_MS = 60_000;
+const deliveredWakes = new Set();
+function pendingWakes() {
+  if (!cfg.wakes) return 0;
+  let n = 0, ids = [];
+  try { ids = readdirSync(cfg.wakes).filter((f) => /^wk-[A-Za-z0-9_-]+$/.test(f)); } catch { return 0; }
+  for (const id of ids) {
+    if (deliveredWakes.has(id)) continue;
+    let m = {};
+    try { m = JSON.parse(readFileSync(`${cfg.wakes}/${id}`, "utf8")) ?? {}; } catch { /* unreadable: kept warm a while */ }
+    const now = Date.now(), at = typeof m.at === "number" ? m.at : null, armedAt = typeof m.armedAt === "number" ? m.armedAt : now;
+    // Its time is past (its message is on its way, or was lost with capcomd): let go after a grace.
+    if (at !== null && now - at > WAKE_GRACE_MS) continue;
+    // A check-in far ahead, or an event that hasn't come within the warm window: the CLI may end (the cold wake's job).
+    if (m.kind === "timer" ? at !== null && at - now > WAKE_WARM_MAX_MS : now - armedAt > WAKE_WARM_MAX_MS) continue;
+    n++;
+  }
+  return n;
+}
+
 // The baseline, before the agent starts: an unchanged tree isn't a checkpoint.
 checkpoint("start");
 const child = spawn("/bin/sh", [cfg.script], { stdio: [cfg.input ? "pipe" : "inherit", "inherit", "inherit"] });
@@ -186,6 +211,7 @@ if (cfg.input) {
       say(m.text);
       sentAt = Date.now();
       if (typeof m.from === "string" && m.from.startsWith("job-")) deliveredJobs.add(m.from);
+      if (typeof m.from === "string" && m.from.startsWith("wake-wk-")) { const id = m.from.slice(5); deliveredWakes.add(id); try { unlinkSync(`${cfg.wakes}/${id}`); } catch {} }
       report("delivered", { seq: m.seq ?? null });
     }
     [lines, outRead] = tail(cfg.jsonl, outRead);
@@ -195,7 +221,7 @@ if (cfg.input) {
     // the result of one is on its way: that message starts its next turn.
     if (resultAt && sentAt <= resultAt && Date.now() - resultAt >= 1000) {
       const j = jobs();
-      if (!j.running && !j.waiting) { closed = true; try { child.stdin.end(); } catch {} }
+      if (!j.running && !j.waiting && !pendingWakes()) { closed = true; try { child.stdin.end(); } catch {} }
     }
   }, 500);
 }
@@ -203,7 +229,7 @@ if (cfg.input) {
 const beat = setInterval(() => {
   sample();
   const tree = heartbeatTree();
-  report("heartbeat", { events, lastEventAt, ...(tree ? { tree } : {}), ...(cfg.jobs ? { jobs: jobs().running } : {}) });
+  report("heartbeat", { events, lastEventAt, ...(tree ? { tree } : {}), ...(cfg.jobs ? { jobs: jobs().running } : {}), ...(cfg.wakes ? { wakes: pendingWakes() } : {}) });
   // The agent committed (claude and codex may): checkpoint the new HEAD now rather than at the next interval.
   try { const h = git(["rev-parse", "HEAD"]); if (lastHead && h !== lastHead) checkpoint("commit"); } catch {}
   // The engine asks for one (the file says why): the agent looks stuck (ADR-019 §2), so the work is safe before
