@@ -163,7 +163,7 @@ import PerfLoopKit
 
   // MARK: needs-step (⌘J)
 
-  /// ⌘J's action (View › Next Ask, a menu item: the bench calls it) through the asks, in the reel and then outside it.
+  /// ⌘J through the menu bar (View › Next Ask) through the asks, in the reel and then outside it.
   static func needsStep(_ run: HostRun) async throws {
     let d = try await make(run)
     await openSettled(d)
@@ -173,7 +173,7 @@ import PerfLoopKit
     for i in 0..<cols.count {
       let at = d.model.focusedAgent.flatMap { cols.firstIndex(of: $0) } ?? -1
       let expected = cols[(at + 1) % cols.count]
-      await run.step("needs-step reel#\(i)", until: { d.model.focusedAgent == expected }, ink: [d.needsRegion]) { d.model.nextAsk() }
+      await run.press("⌘J", expect: "Next Ask", ink: [d.needsRegion], name: "needs-step reel#\(i)", until: { d.model.focusedAgent == expected })
       if d.model.focusedAgent != expected { inReel = false; notes.append("in the reel: focus \(d.model.focusedAgent ?? "-"), expected \(expected)") }
     }
     // Outside the reel: from nothing in front of you, each ask opens in turn, oldest first, then the oldest again.
@@ -185,7 +185,7 @@ import PerfLoopKit
     let asks = d.store.needsAsks()
     for i in 0..<(asks.count + 1) {
       let a = asks[i % asks.count]
-      await run.step("needs-step open#\(i)", until: { d.model.openRunId == a.runId && d.model.focusedAgent == a.agentId }, ink: [d.reelRegion]) { d.model.nextAsk() }
+      await run.press("⌘J", expect: "Next Ask", ink: [d.reelRegion], name: "needs-step open#\(i)", until: { d.model.openRunId == a.runId && d.model.focusedAgent == a.agentId })
       if d.model.openRunId != a.runId || d.model.focusedAgent != a.agentId {
         oldest = false; notes.append("open#\(i): \(d.model.openRunId ?? "-")/\(d.model.focusedAgent ?? "-"), expected \(a.runId)/\(a.agentId)")
       }

@@ -26,6 +26,14 @@ extension Fixtures {
     return nil
   }
 
+  /// Why `items=value` isn't taken (nil when it is): a whole number, or `LO-HI` with LO ≤ HI, within the range. The
+  /// bench's check for values that aren't a plain number (`bench.fixtureValues`), through the same parser as a name.
+  public static func itemsProblem(_ value: String) -> String? {
+    guard case .failure = parse("\(all[0].name)@items=\(value)") else { return nil }
+    let r = parameterRanges["items"]!
+    return "not N or LO-HI (LO ≤ HI) within \(r[0])…\(r[1])"
+  }
+
   struct ParamError: Error, CustomStringConvertible { var description: String }
 
   static func parse(_ name: String) -> Result<(base: String, spec: FixtureSpec, seed: UInt64?), ParamError> {

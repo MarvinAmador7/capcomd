@@ -151,7 +151,7 @@ import PerfLoopKit
     let rate = max(1, run.int("itemsPerSecond", 20)), secs = max(1, run.int("seconds", 3))
     let assigned = d.model.sidebar.assignments
     var start = 0.0, end = 0.0, sent = 0
-    await run.work("sidebar-burst \(rate)/s", ink: [d.sidebarRegion, d.paneRegion]) {
+    await run.step("sidebar-burst \(rate)/s", timeoutMs: 20_000, ink: [d.sidebarRegion, d.paneRegion]) {
       start = run.now
       while sent < rate * secs {
         let target = sent % 2 == 0 ? pane : other

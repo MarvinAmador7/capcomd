@@ -4,7 +4,8 @@ import AppKit
 import CapcomdUI
 
 /// Everything inside the window: the root view on its model, the thread host, the chrome and the dark scheme. The app
-/// puts it in its `Window`; the bench puts the same view in an NSWindow it makes by hand, so both measure the same thing.
+/// puts it in its `Window`; the bench puts the same view in a `Window` scene of its own with the same commands (and, to
+/// measure a window opening, in an NSWindow it makes), so both measure the same thing.
 package struct DeskWindowContent: View {
   package static let defaultSize = CGSize(width: 1440, height: 900)
   package static let minSize = CGSize(width: 720, height: 480)
@@ -27,50 +28,53 @@ package struct DeskWindowContent: View {
 /// project doesn't have does nothing (⌘W also leaves Home for the open project, and removes a finished project from the
 /// title bar).
 package struct DeskCommands: Commands {
-  let model: DeskModel
-  package init(model: DeskModel) { self.model = model }
+  /// The model an item acts on, looked up when it is chosen: the app's one model, or (the bench, DESKBENCH.md) the
+  /// current rep's, which changes under the same menu bar.
+  let current: @MainActor () -> DeskModel?
+  package init(model: DeskModel) { current = { model } }
+  package init(current: @escaping @MainActor () -> DeskModel?) { self.current = current }
   package var body: some Commands {
     // File: New Project, and ⌘W folds instead of closing the window (the window's own Close is replaced). The items stay
     // enabled with fixed titles: Commands don't follow the model's changes, so an item that does nothing now does nothing.
     CommandGroup(replacing: .newItem) {
-      Button("New Project") { model.openNewProject() }.keyboardShortcut("n", modifiers: [.command, .shift])
+      Button("New Project") { current()?.openNewProject() }.keyboardShortcut("n", modifiers: [.command, .shift])
     }
     CommandGroup(replacing: .saveItem) {
-      Button("Fold into the Title Bar") { model.foldShortcut() }.keyboardShortcut("w", modifiers: .command)
+      Button("Fold into the Title Bar") { current()?.foldShortcut() }.keyboardShortcut("w", modifiers: .command)
     }
     // View: the sidebar (⌃⌘S; ⌘\\ too, from the window). Opened, the window is the sidebar and one agent's pane.
     CommandGroup(replacing: .sidebar) {
-      Button("Toggle Sidebar") { model.toggleSidebar() }.keyboardShortcut("s", modifiers: [.control, .command])
+      Button("Toggle Sidebar") { current()?.toggleSidebar() }.keyboardShortcut("s", modifiers: [.control, .command])
       // Opened (SPEC §2.1): splits bring the reel's columns back as panes; the focused pane can take the window.
-      Button("Split Right") { model.split(down: false) }.keyboardShortcut("d", modifiers: .command)
-      Button("Split Down") { model.split(down: true) }.keyboardShortcut("d", modifiers: [.command, .shift])
-      Button("Expand Pane") { model.toggleExpand() }.keyboardShortcut(.return, modifiers: [.command, .shift])
+      Button("Split Right") { current()?.split(down: false) }.keyboardShortcut("d", modifiers: .command)
+      Button("Split Down") { current()?.split(down: true) }.keyboardShortcut("d", modifiers: [.command, .shift])
+      Button("Expand Pane") { current()?.toggleExpand() }.keyboardShortcut(.return, modifiers: [.command, .shift])
     }
     CommandMenu("Project") {
-      Button("Search…") { model.togglePalette() }.keyboardShortcut("k", modifiers: .command)
+      Button("Search…") { current()?.togglePalette() }.keyboardShortcut("k", modifiers: .command)
       Divider()
-      Button("Message the Planner…") { model.messagePlannerShortcut() }.keyboardShortcut("l", modifiers: .command)
-      Button("Pause or Resume Project") { model.pauseShortcut() }.keyboardShortcut("p", modifiers: [.command, .option])
-      Button("Stop Project…") { if let i = model.menuItem("stop") { model.perform(i) } }
+      Button("Message the Planner…") { current()?.messagePlannerShortcut() }.keyboardShortcut("l", modifiers: .command)
+      Button("Pause or Resume Project") { current()?.pauseShortcut() }.keyboardShortcut("p", modifiers: [.command, .option])
+      Button("Stop Project…") { if let m = current(), let i = m.menuItem("stop") { m.perform(i) } }
       Divider()
-      Button("Copy Run ID") { if let i = model.menuItem("copy") { model.perform(i) } }
+      Button("Copy Run ID") { if let m = current(), let i = m.menuItem("copy") { m.perform(i) } }
     }
-    NeedsYouCommands(model: model)
+    NeedsYouCommands(current: current)
     CommandMenu("Go") {
-      Button("Home") { model.toggleHome() }.keyboardShortcut("0", modifiers: .command)
+      Button("Home") { current()?.toggleHome() }.keyboardShortcut("0", modifiers: .command)
       Divider()
       ForEach(1..<10) { n in
-        Button("Project \(n)") { model.goToProject(n - 1) }.keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
+        Button("Project \(n)") { current()?.goToProject(n - 1) }.keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
       }
       Divider()
       ForEach(1..<10) { n in
-        Button("Agent \(n)") { model.goToAgent(n - 1) }.keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .control)
+        Button("Agent \(n)") { current()?.goToAgent(n - 1) }.keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .control)
       }
       Divider()
-      Button("Previous Agent") { model.moveFocus(-1) }.keyboardShortcut(.leftArrow, modifiers: .control)
-      Button("Next Agent") { model.moveFocus(1) }.keyboardShortcut(.rightArrow, modifiers: .control)
+      Button("Previous Agent") { current()?.moveFocus(-1) }.keyboardShortcut(.leftArrow, modifiers: .control)
+      Button("Next Agent") { current()?.moveFocus(1) }.keyboardShortcut(.rightArrow, modifiers: .control)
       Divider()
-      Button(model.follow ? "Stop Following" : "Follow") { model.follow.toggle() }.keyboardShortcut("f", modifiers: [.command, .shift])
+      Button(current()?.follow == true ? "Stop Following" : "Follow") { current()?.follow.toggle() }.keyboardShortcut("f", modifiers: [.command, .shift])
     }
   }
 }
