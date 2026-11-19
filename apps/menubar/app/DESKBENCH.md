@@ -94,7 +94,8 @@ its run when the median is over it; the frame budgets are information.
   the shortcuts go through the menu bar, and each step names the item that fired):
   `split-open` (⌘D, ⇧⌘D, ⌘W ×2, `cycles` 2), `split-focus` (⌃← ⌃← ⌃→ ⌃→, then real clicks in other panes), `split-burst`,
   `pane-expand` (⇧⌘↩, then Esc as the model's collapse, `toggles` 4), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
-  Esc). Ink: every pane's thread, once its rows are in.
+  Esc, which must give the keyboard back to the pane: `focus palette-esc`). Ink: every pane's thread, once its rows are
+  in.
 - The Needs you reel (`needs-open`, `needs-answer`, `needs-arrive`, `needs-step` (⌘J through the menu bar), `needs-empty` (ends with
   a real Esc), `needs-swipe`), on `needs5` (their default; `needs20` for twenty across eight). Each rep starts with
   every fixture ask asking and the reel closed. Ink: the reel.
