@@ -166,6 +166,10 @@ final class AppModel {
   /// The driver new runs go to: the one last picked while the daemon still offers it, else the project's default.
   var startDriver: DriverInfo? { _ = revision; return store.startDriver }
   func pickDriver(_ provider: String) { store.pickDriver(provider) }
+  /// The driver chip and its menu, as the window's Home shows them: each harness's models, the effort, the chip's face.
+  var modelMenu: ModelMenu { _ = revision; return store.modelMenu }
+  /// A model in the driver menu: its driver drives new runs, on that model (nil: the driver's own).
+  func pickModel(_ o: ModelMenu.Option) { if o.enabled { store.pickModel(o.model, driver: o.provider) } }
 
   func startRun(_ goal: String) async -> Bool {
     // The goal branch rows chose for this checkout: the base and the branch as shown (GoalBranchRows.swift).

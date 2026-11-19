@@ -24,9 +24,9 @@ package struct Chip2<Leading: View>: View {
       leading
       Text(verbatim: text).font(mono ? Theme.Composer2.chipMono : Theme.Composer2.chipFont).lineLimit(1)
       if let trailing { trailing }
-      if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
+      if chevron { Image(systemName: "chevron.down").font(Theme.Composer2.chevronFont).foregroundStyle(Theme.Composer2.chipX) }
       if let onRemove {
-        Button(action: onRemove) { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.Composer2.chipX) }
+        Button(action: onRemove) { Image(systemName: "xmark").font(Theme.Composer2.chevronFont).foregroundStyle(Theme.Composer2.chipX) }
           .buttonStyle(.plain).accessibilityLabel("Remove \(text)")
       }
     }

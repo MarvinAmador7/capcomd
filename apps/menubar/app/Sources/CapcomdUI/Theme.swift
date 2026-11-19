@@ -417,6 +417,10 @@ package enum Theme {
     package static let round: CGFloat = 30, roundFill = Color.white.opacity(0.08), roundStroke = Color.white.opacity(0.16), plusFont = Font.system(size: 14, weight: .regular)
     package static let pillHeight: CGFloat = 26, pillGroupFill = Color.black.opacity(0.22), pillText = Color.white.opacity(0.7), pillFont = Font.system(size: 12.5)
     package static let send: CGFloat = 32, sendIcon = Font.system(size: 13, weight: .bold), sendArrowIdle: CGFloat = 0.3
+    // The tool row (+, the place switch, the driver chip, the mic, send), shared by the menu bar's and the window's composers.
+    package static let segmentGap: CGFloat = 2, pillGroupPadding: CGFloat = 3, segmentShadow = Color.black.opacity(0.25)
+    package static let segmentOffOpacity: CGFloat = 0.4, chevronFont = Font.system(size: 8, weight: .bold)
+    package static let micFont = Font.system(size: 13.5, weight: .regular), micText = Color.white.opacity(0.7)
     package static let effortFont = Font.system(size: 11, weight: .semibold), effortText = Color.white.opacity(0.75)
     package static let keyFont = Font.system(size: 11.5, weight: .medium), keyText = Color.white.opacity(0.7), keyStroke = Color.white.opacity(0.25)
     package static let hintFont = Font.system(size: 11), hintText = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255).opacity(0.4)
