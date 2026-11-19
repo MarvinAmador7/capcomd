@@ -97,7 +97,7 @@ extension CapcomdStore {
     restoreStates[runId] = .restoring; changed()
     do {
       try await archiver.restore(runId: runId, idempotencyKey: makeKey())
-      runs[runId]?.archived = false
+      setArchived(runId: runId, false)
       restoreStates[runId] = nil
     } catch let e as MessageRefused { restoreStates[runId] = .failed(e.message) }
     catch is Unauthorized { unauthorized = true; restoreStates[runId] = .failed("capcomd rejected the token") }

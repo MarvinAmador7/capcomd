@@ -105,7 +105,7 @@ test("a message to a done agent continues it: a new attempt at the same checkout
   expect((await events(run, "AGENT_DONE")).filter((e) => e.agentId === id)).toHaveLength(2);
   // The message isn't handed to it again: its cursor moved past it.
   const a = await (await scope(run)).getAgent({ agentId: id });
-  expect(a.continued).toMatchObject({ epoch: 2, from: "done" });
+  expect(a!.continued).toMatchObject({ epoch: 2, from: "done" });
   expect(((await (await scope(run)).pullMessages({ agentId: id })) as any[])).toEqual([]);
 }, 180_000);
 
@@ -133,7 +133,7 @@ test("an archived run refuses messages until it is restored; archiving waits for
   const refused = await cj(["send", run, id, "hello?"]);
   expect(refused.code).not.toBe(0);
   expect(refused.stdout + refused.stderr).toContain("archived · restore to continue");
-  expect((await (await scope(run)).getAgent({ agentId: id })).status).toBe("done");
+  expect((await (await scope(run)).getAgent({ agentId: id }))!.status).toBe("done");
   expect((await cj(["run", "restore", run])).j).toMatchObject({ runId: run, changed: true });
   expect((await cj(["send", run, id, "hello again"])).j).toMatchObject({ continued: true });
   expect((await awaitOne(run, id))?.status).toBe("done");
@@ -193,7 +193,7 @@ test("a message's model applies to the next turn: at once for an idle agent (its
   expect(argv[argv.indexOf("--effort") + 1]).toBe("high");
   expect((await events(run, "AGENT_MODEL_CHANGED"))[0]).toMatchObject({ agentId: id, data: { model: "claude-opus-5-5", effort: "high", applied: true } });
   expect((await items(run, id)).filter((i) => i.kind === "note").map((i) => i.text)).toContain("model → claude-opus-5-5 · effort high");
-  expect(((await (await scope(run)).getAgent({ agentId: id })).spec as any).model).toBe("claude-opus-5-5");
+  expect(((await (await scope(run)).getAgent({ agentId: id }))!.spec as any).model).toBe("claude-opus-5-5");
 }, 180_000);
 
 test("a model change sent while it works is held: its turn ends, then it continues as a new attempt with it", async () => {

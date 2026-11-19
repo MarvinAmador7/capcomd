@@ -51,6 +51,9 @@ public struct ColumnHeader: Sendable, Hashable, Identifiable {
   public var startedAtMs: Int?
   public var provider: Provider?
   public var depth: Int
+  /// ADR-026 §1: idle (its turn ended; a message continues it), waking (a message woke it, set up for over a second),
+  /// archived (its run is read-only), else active (its status says the rest).
+  public var life: AgentLife = .active
 }
 
 extension ColumnHeader {
@@ -105,6 +108,7 @@ extension CapcomdStore {
   func header(_ n: AgentNode, _ a: Agent, _ runId: String) -> ColumnHeader {
     var h = ColumnHeader(agentId: a.id, runId: runId, name: n.name, title: n.title, suffix: n.suffix, userTitled: a.titleSource == "user", kind: n.kind, status: n.status, waiting: n.waiting,
                          activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
+    h.life = a.life(archived: runs[runId]?.archived ?? false, nowMs: Int(Date().timeIntervalSince1970 * 1000))
     if a.status == .running, let w = a.wake {
       let agents = runs[runId]?.agents ?? [:]
       h.waitLine = w.line { id in agents[id].map { $0.displayName } }

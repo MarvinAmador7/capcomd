@@ -67,6 +67,14 @@ export interface AgentTask {
   continued?: boolean;
   /** `spawn --continue`: start the branch from another agent's stopped work (its branch or checkpoint ref). */
   from?: { agentId: string; ref: string; stopped: string };
+  /**
+   * ADR-026 §5 paths 2 and 3: continue this CLI session (its id, as `restoreSession` returned it, the file already in
+   * the machine) instead of starting a new one: the CLI runs with its provider's `session.resumeArgs(id)` and the
+   * prompt as the session's next user turn (the system prompt is the session's own, frozen at its first run). A CLI
+   * that can't find it fails with SessionMissingError. Unset: a new session (under an id capcomd picks, when the CLI
+   * takes one), saved as it grows when the agent has an id (src/agents/session-sync.ts).
+   */
+  resumeSession?: string;
 }
 
 export interface AgentResult {
@@ -906,6 +914,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // ADR-026 §5: a continued attempt resumes its saved session with the waking message as its first turn (path 3), or
     // starts a fresh one from its thread (path 4). Its setup phase meanwhile: restore ("Restoring the conversation…").
     const cont = task.continued && opts.continuation ? await continuePlan(opts.continuation, { home, cwd: repo }, task, setup, opts.onLog, r) : null;
+    // Path 3 goes through AgentTask.resumeSession (INTERFACE.md, feat/durable-sessions): the runner turns it into the
+    // adapter's `session` ctx (`--resume <id>`); until that lands, restoreSession is a stub and this never fires.
+    if (cont?.mode === "resume") task = { ...task, resumeSession: cont.sessionId };
     let promptText = cont?.mode === "thread" ? cont.prompt : task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : task.consolidate ? buildConsolidatePrompt(task as AgentTask & { consolidate: NonNullable<AgentTask["consolidate"]> }) : task.report ? buildReportPrompt(task) : buildPrompt(task);
     let systemFile: string | undefined, appendSystemFile: string | undefined;
     // ADR-024 `identity.persona` (pinned at spawn, attached at agent.preparing): the first text of its instructions.
@@ -989,7 +1000,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Plugin API §16.1: a planner or lead that sees everything and runs nothing; whatever it writes is never committed.
     const orchestrate = cfg.toolMode === "orchestrate";
     const inboxFile = `${W}/inbox.jsonl`;
-    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(mcpCtx ? { mcp: mcpCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}), ...(cont?.mode === "resume" ? { session: { id: cont.sessionId, resume: true } } : {}) } as AgentCommandCtx, sq)}`;
+    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(mcpCtx ? { mcp: mcpCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}) }, sq)}`;
     if (supervised) {
       await provider.upload(vmId, `${W}/agent.sh`, new TextEncoder().encode(`${agentLine}\n`));
       await provider.upload(vmId, `${W}/supervisor.mjs`, new TextEncoder().encode(SUPERVISOR_SOURCE));

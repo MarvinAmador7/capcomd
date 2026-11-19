@@ -1025,6 +1025,8 @@ struct ColumnHead: View {
     if asks { return "waiting on you" }
     // Between turns, a wake armed (agents.wake): what it waits for, not "working" on a tool call.
     if h.status == .running, let w = h.waitLine { return w }
+    // ADR-026 §1: idle, not done (a message continues it); waking after a second; an archived run says so.
+    if let word = h.life.word { return word }
     switch h.status {
     case .running: return "working"; case .pending: return "queued"; case .done: return "done"
     case .failed: return "failed"; case .paused: return "paused"; case .cancelled: return "stopped"

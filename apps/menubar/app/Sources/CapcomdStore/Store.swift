@@ -120,6 +120,8 @@ public final class CapcomdStore {
   /// Restoring archived runs (capability runs.archive; AgentLife.swift): Restore on its way, or why it failed, per run.
   public internal(set) var restoreStates: [String: RestoreState] = [:]
   var archiver: RunArchiving? { controls as? RunArchiving }
+  /// Marks a run archived or restored from outside the event feed (a Restore that went through, an archived refusal).
+  func setArchived(runId: String, _ archived: Bool) { runs[runId]?.archived = archived }
   var pendingTitleKeys: [String: String] = [:]
   let clientId: String
   var subs: [String: SubscriptionHandle] = [:]

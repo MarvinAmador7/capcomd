@@ -155,6 +155,14 @@ extension DeskModel {
   /// (dim), done / stopped / handed back (grey); running says nothing.
   static func sidebarWord(_ h: ColumnHeader, approval: PendingApproval?, limit: String?) -> (String?, RowTone) {
     if let a = approval { return (a.kind == "question" ? "question" : "asks", .ask) }
+    // ADR-026 §9: waking reads as working now; an archived run's rows say so; a root agent whose turn ended is idle
+    // (a message continues it), while a child keeps its outcome (done, stopped, failed).
+    switch h.life {
+    case .waking: return ("waking", .plain)
+    case .archived: return ("archived", .dim)
+    case .idle where h.depth == 0 && h.status != .failed: return ("idle", .dim)
+    default: break
+    }
     switch h.status {
     case .running, .unknown: return (nil, .plain)
     case .paused: return limit == "quota" ? ("usage limit", .ask) : ("paused", .dim)

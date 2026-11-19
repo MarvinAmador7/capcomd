@@ -87,7 +87,7 @@ extension CapcomdStore {
       state = .sent(seq: sent.seq)
     } catch let e as MessageRefused {
       // The run was archived meanwhile: its composer gives way to Restore (the message wasn't sent).
-      if e.code == "archived" { runs[runId]?.archived = true; state = .failed("This run is archived. Restore it to continue.") }
+      if e.code == "archived" { setArchived(runId: runId, true); state = .failed("This run is archived. Restore it to continue.") }
       else { state = .failed(e.message) }
     }
     catch is Unauthorized { unauthorized = true; state = .failed("capcomd rejected the token") }
