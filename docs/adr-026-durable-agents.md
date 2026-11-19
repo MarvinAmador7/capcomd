@@ -133,10 +133,16 @@ and for recovery.
 
 ### 4. Ask and stop
 
-An agent that needs a decision runs `capcomd ask "<question>" --recommend "<answer>"`: its work is checkpointed and
+An agent that needs a decision runs `capcomd ask "<question>" --recommend "<answer>" [--why "<reason>"] [--holds "<what waits on it>"]`: its work is checkpointed and
 pushed, it becomes **asked**, its slot frees, and the question goes to its parent (or the user at the root) as an
 approval of a new `question` kind. The answer is appended to the thread and wakes the same conversation (§5). A parent's
 `await` returns on asked, as it does on notices.
+
+The card (canvas board DurableAsked-v3): numbered options with keys, "Recommended" on the advised one, and the optional
+reason as one muted line under that option only (about 120 characters, two lines then "more"); no reason sent, no
+empty slot. "Waiting on this" names what the asker can't do until it's answered. Once answered the card becomes one
+line ("Answered · 100 req/min · 11:42"), saying when the answer wasn't the recommendation and keeping the answerer's
+note.
 
 ### 5. Waking: fastest path first, never a dead end
 
