@@ -104,7 +104,9 @@ demand.
 - An agent keeps one checkout path across machines (`${workdir}/<agentId>/repo`, not `${taskId}-e${epoch}`).
 
 **☑ Owner (2026-11-19):** sessions are kept as long as the run and deleted with it. Beyond the host they go through a
-**session store seam** with providers as plugins: **iCloud first**, then R2, S3 and others. iCloud is reached as
+**session store seam** with providers as plugins (put, get, list, delete): **iCloud first**; then **one S3-compatible
+provider** that covers AWS S3, Cloudflare R2, the S3 buckets Vercel's Marketplace provisions in the user's own AWS
+account, and MinIO; then **Vercel Blob** (its own token API) for capcomd cloud's team layer. iCloud is reached as
 **iCloud Drive files** (`~/Library/Mobile Documents/com~apple~CloudDocs/capcomd/sessions/…`), which any process can
 write without entitlements — CloudKit needs the paid Apple Developer Program (Developer ID), which capcomd doesn't have
 yet (an ad hoc build with iCloud entitlements is killed). Files are encrypted client-side before they leave the host
