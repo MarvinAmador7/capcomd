@@ -1,7 +1,7 @@
 // ADR-017 unit tests: tokens, fencing/caps/rollups, in-VM CLI parsing, MCP server, VmSpool. The skill injection into a
 // (fake) Claude Code agent is in tests/subagents/skill-injection.test.ts.
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { mint, verifyToken, opsFor, mayRunCommands, mayRunJobs } from "../../src/subagents/token";
@@ -209,6 +209,9 @@ test("VmSpool: the same CLI round-trips through boxd-style exec/upload (FakeProv
   await provider.waitReady(id, 1000);
   const dir = mkdtempSync(join(tmpdir(), "capcomd-vmspool-"));
   const pump = echoPump(new VmSpool(provider, id, dir));
+  // The pump writes the token first (three "VM" commands); an agent's CLI runs only after that. Under load the CLI
+  // could otherwise read the dir before it is there.
+  for (let i = 0; i < 500 && !existsSync(join(dir, "token")); i++) await Bun.sleep(10);
   const p = Bun.spawn(["node", CLI, "tree", "--root", "agt-x"], { env: { PATH: process.env.PATH!, CAPCOMD_RPC_DIR: dir }, stdout: "pipe" });
   const out = JSON.parse((await new Response(p.stdout).text()).trim());
   expect(out).toMatchObject({ ok: true, echo: "tree", args: { root: "agt-x" }, token: "tok" });
