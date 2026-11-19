@@ -1,14 +1,15 @@
-// Goal branch names (src/merge/goal.ts): the suggested capcomd/<slug>, collisions with the remote's branches, the
+// Goal branch names (src/merge/goal.ts): the suggested name in the repository's own convention (else <type>/<slug>),
+// collisions with the remote's branches, the
 // checks a name must pass, where the branch list and default branch come from (GitHub, else git, else local refs),
 // and how a run's base is decided: given, the project's target, the remote's default branch, else refused (never main).
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collides, goalBranchProblem, goalSlug, isRefSafe, listBranches, resolveGoalBranch, suggestGoalBranch } from "../../src/merge/goal";
+import { branchConvention, collides, goalBranchProblem, goalBranchSlug, goalSlug, goalType, isRefSafe, listBranches, resolveGoalBranch, suggestGoalBranch, type GoalType } from "../../src/merge/goal";
 import { RelayError } from "../../src/core/errors";
 
-describe("goalSlug", () => {
+describe("goalSlug: the whole first line", () => {
 	test("lowercase ASCII words joined by single hyphens, from the first line", () => {
 		expect(goalSlug("Add multiply to src/math.ts")).toBe("add-multiply-to-src-math-ts");
 		expect(goalSlug("  Fix   the --- flaky   TEST!!  \nsecond line")).toBe("fix-the-flaky-test");
@@ -26,27 +27,146 @@ describe("goalSlug", () => {
 	});
 });
 
+describe("goalType: the kind of change a goal reads as", () => {
+	const cases: Array<[string, GoalType]> = [
+		["Add CSV export to the reports page", "feat"],
+		["Support SAML login", "feat"],
+		["Add error handling to the importer", "feat"],
+		["Add an approval workflow for refunds", "feat"],
+		["Fix the crash when the config file is missing", "fix"],
+		["Login is broken on Safari", "fix"],
+		["Checkout throws an error for empty carts", "fix"],
+		["Regression: totals are off by one", "fix"],
+		["Fix the flaky tests in the parser", "fix"],
+		["Update the README with install steps", "docs"],
+		["Document the export API", "docs"],
+		["Refactor the billing module", "refactor"],
+		["Clean up the old feature flags", "refactor"],
+		["Rename Workspace to Project everywhere", "refactor"],
+		["Write tests for the CSV parser", "test"],
+		["Add tests for the crash reporter", "test"],
+		["Run the linter in CI", "ci"],
+		["Cache bun installs in the GitHub Actions workflow", "ci"],
+		["Bump bun to 1.3", "chore"],
+		["Upgrade dependencies", "chore"],
+		["Make the dashboard load faster", "perf"],
+		["Speed up cold start", "perf"],
+		["Optimize the search query", "perf"],
+	];
+	for (const [goal, type] of cases) test(`${goal} → ${type}`, () => expect(goalType(goal)).toBe(type));
+	test("only the first line counts", () => expect(goalType("Add a settings page\nand fix the crash on save")).toBe("feat"));
+});
+
+describe("goalBranchSlug: short and readable", () => {
+	const cases: Array<[string, string]> = [
+		["Add CSV export to the reports page", "csv-export-reports-page"],
+		["Fix the crash when the config file is missing", "crash-config-file-missing"],
+		["Write tests for the CSV parser", "csv-parser"],
+		["Make the dashboard load faster", "dashboard-load-faster"],
+		["Optimize the search query", "search-query"],
+		["Upgrade dependencies", "upgrade-dependencies"],
+		["Speed up cold start", "cold-start"],
+		["Clean up the old feature flags", "old-feature-flags"],
+		["Don't crash when the user's name is empty", "dont-crash-users-name"],
+		["Résumé upload für Café", "resume-upload-fur-cafe"],
+		["Rewrite the authentication middleware so that sessions expire after thirty minutes", "rewrite-authentication-middleware"],
+		// No meaningful word left: the whole line.
+		["Fix it", "fix-it"],
+		["", ""],
+	];
+	for (const [goal, slug] of cases) test(`${JSON.stringify(goal)} → ${slug}`, () => expect(goalBranchSlug(goal)).toBe(slug));
+	test("at most 4 words and 40 characters, ASCII lowercase with single hyphens", () => {
+		const s = goalBranchSlug("Implement incremental synchronisation reconciliation orchestration internationalisation");
+		expect(s.length).toBeLessThanOrEqual(40);
+		expect(s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+		expect(goalBranchSlug("one two three four five six seven").split("-").length).toBe(4);
+	});
+});
+
+describe("branchConvention: learned from the repository's branches", () => {
+	test("bots', agents', capcomd's, release and long-lived branches and the default branch teach nothing", () => {
+		const noise = ["main", "dev", "trunk", "capcomd/add-x", "capcomd/run-k1/agt-1", "dependabot/npm_and_yarn/foo-1.2", "renovate/all", "gh-readonly-queue/main/pr-1",
+			"release/1.2", "copilot/fix-12", "claude/fix-login", "revert-12-feature/x", "integration"];
+		expect(branchConvention(noise, ["integration"]).style).toBe("none");
+	});
+	test("mostly type prefixes: types, in the repository's spelling", () => {
+		const c = branchConvention(["feature/a", "feature/b", "bugfix/c", "hotfix/d", "docs/e", "spike"]);
+		expect(c).toMatchObject({ style: "types", spelling: { feat: "feature", fix: "bugfix", docs: "docs" } });
+		// hotfix only when it's the only spelling of a fix.
+		expect(branchConvention(["feat/a", "feat/b", "hotfix/c"]).spelling.fix).toBe("hotfix");
+	});
+	test("mostly one other first part: that owner, with types after it when they're used", () => {
+		expect(branchConvention(["marvin/a", "marvin/b", "marvin/c", "alice/d"])).toMatchObject({ style: "owner", owner: "marvin", ownerTypes: false });
+		expect(branchConvention(["marvin/feature/a", "marvin/fix/b", "marvin/feature/c"])).toMatchObject({ style: "owner", owner: "marvin", ownerTypes: true, spelling: { feat: "feature" } });
+	});
+	test("too few branches, or mixed: none", () => {
+		expect(branchConvention(["feature/a", "feature/b"]).style).toBe("none");
+		expect(branchConvention(["feature/a", "marvin/b", "alice/c", "x", "y"]).style).toBe("none");
+		// …but the spelling still counts.
+		expect(branchConvention(["feature/a", "feature/b"]).spelling.feat).toBe("feature");
+	});
+	test("ticket ids: their case", () => {
+		expect(branchConvention(["feature/ENG-1-a", "feature/ENG-2-b", "fix/ENG-3-c"]).tickets).toBe("upper");
+		expect(branchConvention(["marvin/eng-1-a", "marvin/eng-2-b", "marvin/eng-3-c"]).tickets).toBe("lower");
+		expect(branchConvention(["feature/a", "feature/b", "fix/c"]).tickets).toBeNull();
+	});
+});
+
 describe("suggestGoalBranch", () => {
-	test("capcomd/<slug>, ref-safe", () => {
-		const b = suggestGoalBranch("Add dark mode to the settings window");
-		expect(b).toBe("capcomd/add-dark-mode-to-the-settings-window");
-		expect(isRefSafe(b)).toBe(true);
+	const none = ["main", "dev", "capcomd/old-run", "dependabot/npm_and_yarn/x-1.2"];
+	const typed = ["main", "feature/login-page", "feature/billing", "bugfix/null-user", "docs/api", "release/1.2", "renovate/all"];
+	const owner = ["main", "marvin/sso", "marvin/csv-import", "marvin/fix-billing", "marvin/onboarding", "alice/old-thing"];
+	const cases: Array<[string, string, string, string]> = [
+		// goal, none, feature/bugfix, marvin/
+		["Add CSV export to the reports page", "feat/csv-export-reports-page", "feature/csv-export-reports-page", "marvin/csv-export-reports-page"],
+		["Fix the crash when the config file is missing", "fix/crash-config-file-missing", "bugfix/crash-config-file-missing", "marvin/crash-config-file-missing"],
+		["Make the dashboard load faster", "perf/dashboard-load-faster", "perf/dashboard-load-faster", "marvin/dashboard-load-faster"],
+		["Update the README with install steps", "docs/readme-install-steps", "docs/readme-install-steps", "marvin/readme-install-steps"],
+		["Write tests for the CSV parser", "test/csv-parser", "test/csv-parser", "marvin/csv-parser"],
+		["Refactor the billing module", "refactor/billing-module", "refactor/billing-module", "marvin/billing-module"],
+		["Upgrade dependencies", "chore/upgrade-dependencies", "chore/upgrade-dependencies", "marvin/upgrade-dependencies"],
+		["Run the linter in CI", "ci/run-linter", "ci/run-linter", "marvin/run-linter"],
+	];
+	for (const [goal, a, b, c] of cases) test(goal, () => {
+		expect(suggestGoalBranch(goal, none, { defaultBranch: "main" })).toBe(a);
+		expect(suggestGoalBranch(goal, typed, { defaultBranch: "main" })).toBe(b);
+		expect(suggestGoalBranch(goal, owner, { defaultBranch: "main" })).toBe(c);
+		for (const n of [a, b, c]) expect(isRefSafe(n)).toBe(true);
+	});
+	test("an owner with types after it", () => {
+		expect(suggestGoalBranch("Fix the login crash", ["marvin/feature/a", "marvin/bugfix/b", "marvin/feature/c"])).toBe("marvin/bugfix/login-crash");
+	});
+	test("a ticket id in the goal leads the slug, in the repository's case; none is made up", () => {
+		expect(suggestGoalBranch("ENG-142: let users invite teammates by email", none)).toBe("feat/eng-142-users-invite-teammates-email");
+		expect(suggestGoalBranch("Fix ENG-7 login crash", ["feature/ENG-1-a", "bugfix/ENG-2-b", "feature/ENG-3-c"])).toBe("bugfix/ENG-7-login-crash");
+		expect(suggestGoalBranch("ENG-9", none)).toBe("feat/eng-9");
+		expect(suggestGoalBranch("Add invites", ["feature/ENG-1-a", "bugfix/ENG-2-b", "feature/ENG-3-c"])).toBe("feature/invites");
+	});
+	test("nothing usable: <type>/goal", () => {
+		expect(suggestGoalBranch("🚀 ✨ !!!")).toBe("feat/goal");
 	});
 	test("never an existing remote branch: -2, -3…", () => {
-		expect(suggestGoalBranch("Add x", ["main", "capcomd/add-x"])).toBe("capcomd/add-x-2");
-		expect(suggestGoalBranch("Add x", ["capcomd/add-x", "capcomd/add-x-2"])).toBe("capcomd/add-x-3");
-		// git can't hold capcomd/add-x next to capcomd/add-x/sub (or next to a branch named capcomd/add-x/…).
-		expect(suggestGoalBranch("Add x", ["capcomd/add-x/sub"])).toBe("capcomd/add-x-2");
-		// Case-insensitive: macOS checkouts can't hold both.
-		expect(suggestGoalBranch("Add x", ["Capcomd/Add-X"])).toBe("capcomd/add-x-2");
+		expect(suggestGoalBranch("Add x", ["main", "feat/x"])).toBe("feat/x-2");
+		expect(suggestGoalBranch("Add x", ["feat/x", "feat/x-2"])).toBe("feat/x-3");
+		// git can't hold feat/x next to feat/x/sub (or next to a branch named feat/x/…).
+		expect(suggestGoalBranch("Add x", ["feat/x/sub"])).toBe("feat/x-2");
+		// Case-insensitive: macOS checkouts can't hold both (and the repository's own spelling, Feat, is kept).
+		expect(suggestGoalBranch("Add x", ["Feat/X"])).toBe("Feat/x-2");
 	});
-	test("a branch named capcomd blocks the whole prefix: a flat name", () => {
-		expect(suggestGoalBranch("Add x", ["capcomd"])).toBe("capcomd-add-x");
+	test("a branch named like the prefix blocks everything under it: a flat name", () => {
+		expect(suggestGoalBranch("Add x", ["feat"])).toBe("feat-x");
+		expect(suggestGoalBranch("Add x", ["marvin", "marvin/a", "marvin/b", "marvin/c"])).toBe("marvin-x");
 	});
 	test("collides", () => {
 		expect(collides("a/b", ["a"])).toBe(true);
 		expect(collides("a", ["a/b"])).toBe(true);
 		expect(collides("a-b", ["a"])).toBe(false);
+	});
+	test("instant on a big listing", () => {
+		const many = Array.from({ length: 500 }, (_, i) => `feature/thing-${i}`);
+		const t = performance.now();
+		expect(suggestGoalBranch("Add thing", many)).toBe("feature/thing");
+		expect(performance.now() - t).toBeLessThan(50);
 	});
 });
 
@@ -107,9 +227,9 @@ describe("listBranches", () => {
 
 describe("resolveGoalBranch: the run's base and goal branch", () => {
 	test("base: given, else the project's target, else the remote's default branch", async () => {
-		const bare = await repoWith(["main", "dev", "capcomd/add-x"], "main");
+		const bare = await repoWith(["main", "dev", "feat/x"], "main");
 		const o = { goal: "Add x", remote: bare, cwd: tmpdir(), env: {} };
-		expect(await resolveGoalBranch({ ...o, base: "dev", projectTarget: "main" })).toMatchObject({ base: "dev", baseSource: "given", goalBranch: "capcomd/add-x-2" });
+		expect(await resolveGoalBranch({ ...o, base: "dev", projectTarget: "main" })).toMatchObject({ base: "dev", baseSource: "given", goalBranch: "feat/x-2" });
 		expect(await resolveGoalBranch({ ...o, projectTarget: "dev" })).toMatchObject({ base: "dev", baseSource: "project" });
 		expect(await resolveGoalBranch(o)).toMatchObject({ base: "main", baseSource: "remote" });
 	});

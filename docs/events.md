@@ -4024,7 +4024,7 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
           "properties": {
             "branch": {
               "type": "string",
-              "description": "The goal branch, e.g. capcomd/add-multiply (ref-safe: letters, digits, . _ - /)"
+              "description": "The goal branch, e.g. feat/multiply (ref-safe: letters, digits, . _ - /)"
             },
             "base": {
               "type": "string",

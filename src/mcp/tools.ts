@@ -165,7 +165,7 @@ export function kernelTools(): KernelTool[] {
       label: z.string().optional().describe("What the run is for, as a short title the way you'd title a pull request (\"Add multiply to src/math.ts\"): the capcomd app names the run by it"),
       target: z.string().optional().describe("A staging branch to land on instead of the project's target (not a protected branch)"),
       targetFrom: z.string().optional().describe("Create target from this branch"),
-      goalBranch: z.string().optional().describe("The run's goal branch, e.g. capcomd/add-multiply: created from base; verified, reviewed merges land on it with no approval, and the user opens a pull request from it at the end (capcomd_pr_open). Omit it with base set to get a suggested name"),
+      goalBranch: z.string().optional().describe("The run's goal branch, e.g. feat/multiply: created from base; verified, reviewed merges land on it with no approval, and the user opens a pull request from it at the end (capcomd_pr_open). Omit it with base set to get a suggested name (in the repository's branch convention, else <type>/<slug>)"),
       base: z.string().optional().describe("The branch the goal branch starts from and the pull request goes into (ask the user; default: the project's target, else the repository's default branch)"),
       sandbox: z.string().optional().describe("Where this run's agents and checks run: docker (containers on this machine) or boxd (cloud VMs). Default: the project's sandbox (capcomd_setup says which, and from where). Given, every agent of the run runs there, whatever its profile's sandbox.provider says. The result's `sandbox` says which one the run uses"),
       key, project,

@@ -191,7 +191,7 @@ test("no base given, no project target, no default branch on the remote: refused
     const y = await capcomd(["run", "new", "--goal-branch", "capcomd/x", "--json"], env);
     expect(JSON.parse(y.stdout.trim().split("\n").pop()!).error).toMatchObject({ code: "usage", reason: "base" });
     // No goal branch was cut from main (or anything) by those calls.
-    expect((await w.repo.seed.ok(["ls-remote", "--heads", "origin"])).split("\n").filter((l) => l.includes("refs/heads/capcomd/do-something"))).toEqual([]);
+    expect((await w.repo.seed.ok(["ls-remote", "--heads", "origin"])).split("\n").filter((l) => l.includes("refs/heads/feat/something"))).toEqual([]);
   } finally { g(["symbolic-ref", "HEAD", "refs/heads/main"]); }
 }, 60_000);
 

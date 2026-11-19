@@ -268,7 +268,8 @@ Use for: high-variance, high-value changes. It costs n times as much: skip it wh
 ### 6. Hierarchical planner (what `capcomd run` does)
 `capcomd run <goal>` with a planner agent (`--planner P`; on boxd the default is the profile named `planner`, which
 `capcomd setup` writes) creates a run with the project's checks and reviewer and a goal branch (`--goal-branch G`,
-default `capcomd/<goal-slug>`, cut from `--base B`, default the project's target, else origin's default branch;
+default a name made from the goal in the repository's own branch convention, else `<type>/<slug>` such as
+`feat/csv-export`, cut from `--base B`, default the project's target, else origin's default branch;
 `--no-goal-branch` merges into the target as before), and spawns that planner with the goal: it splits the work into
 children, verifies and merges them onto the goal branch from its VM, and ends with a summary. Then
 `capcomd goal <runId>` shows the branch against its base and `capcomd pr open <runId>` opens the pull request (a run

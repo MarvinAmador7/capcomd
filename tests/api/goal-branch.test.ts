@@ -193,7 +193,7 @@ describe("POST /v1/runs: base and goalBranch", () => {
 
 describe("GET /v1/projects/branches", () => {
 	const git = (args: string[], cwd: string) => { const r = Bun.spawnSync(["git", ...args], { cwd, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }); if (r.exitCode !== 0) throw new Error(r.stderr.toString()); return r.stdout.toString().trim(); };
-	/** A checkout whose origin has main, dev and capcomd/add-x; origin/HEAD unknown unless `head`. */
+	/** A checkout whose origin has main, dev and feat/x; origin/HEAD unknown unless `head`. */
 	const checkout = (o: { head?: string; target?: string } = {}) => {
 		const root = mkdtempSync(join(tmpdir(), "harness-branches-"));
 		const bare = join(root, "o.git"), co = join(root, "app");
@@ -202,7 +202,7 @@ describe("GET /v1/projects/branches", () => {
 		git(["commit", "-q", "--allow-empty", "-m", "seed"], co);
 		git(["remote", "add", "origin", "https://github.com/acme/app.git"], co);
 		git(["remote", "set-url", "--push", "origin", bare], co);
-		for (const b of ["main", "dev", "capcomd/add-x"]) git(["update-ref", `refs/remotes/origin/${b}`, "HEAD"], co);
+		for (const b of ["main", "dev", "feat/x"]) git(["update-ref", `refs/remotes/origin/${b}`, "HEAD"], co);
 		if (o.head) git(["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${o.head}`], co);
 		if (o.target) { mkdirSync(join(co, ".capcomd")); writeFileSync(join(co, ".capcomd", "config.json"), JSON.stringify({ env: { CAPCOMD_REPO: "https://github.com/acme/app.git", CAPCOMD_MERGE_TARGET: o.target } })); }
 		return co;
@@ -219,7 +219,7 @@ describe("GET /v1/projects/branches", () => {
 		expect(r.status).toBe(200);
 		expect(ProjectBranches.parse(r.body)).toEqual(r.body);
 		expect(r.body).toMatchObject({ root: expect.any(String), github: "acme/app", source: "local", defaultBranch: null, suggestedBase: null, projectTarget: null,
-			branches: ["capcomd/add-x", "dev", "main"], suggestedGoalBranch: "capcomd/add-x-2", goalBranchProblem: null, baseProblem: null });
+			branches: ["dev", "feat/x", "main"], suggestedGoalBranch: "feat/x-2", goalBranchProblem: null, baseProblem: null });
 		// origin/HEAD known: that's the default branch and the preselected base.
 		expect((await get({ path: checkout({ head: "dev" }) })).body).toMatchObject({ defaultBranch: "dev", suggestedBase: "dev", suggestedGoalBranch: null });
 		// The project's target wins as the preselection.
@@ -239,7 +239,7 @@ describe("GET /v1/projects/branches", () => {
 
 	test("not a checkout: 200 with root null; a relative path: 422", async () => {
 		const get = app();
-		expect((await get({ path: dir, goal: "x" })).body).toMatchObject({ root: null, branches: [], defaultBranch: null, suggestedGoalBranch: "capcomd/x" });
+		expect((await get({ path: dir, goal: "x" })).body).toMatchObject({ root: null, branches: [], defaultBranch: null, suggestedGoalBranch: "feat/x" });
 		expect((await get({ path: "rel/path" })).status).toBe(422);
 	});
 });
