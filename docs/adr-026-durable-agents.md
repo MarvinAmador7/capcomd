@@ -1,7 +1,6 @@
 # ADR-026: Durable agents and threads
 
-**Status:** proposed (draft, 2026-11-19). The owner's decisions are marked **☐ Owner** and gate the phases that need
-them. Builds on ADR-016 (primitives), ADR-017 (in-VM capcomd, the spool pump), ADR-019 (liveness, usage-limit pauses),
+**Status:** proposed (draft, 2026-11-19); the owner's decisions were made the same day and are marked **☑ Owner**. Builds on ADR-016 (primitives), ADR-017 (in-VM capcomd, the spool pump), ADR-019 (liveness, usage-limit pauses),
 ADR-021 (sandbox provider surface) and ADR-022 (an agent's lifecycle as a Rivet workflow). Research: four spikes run on
 2026-11-19 (durable CLI sessions, boxd/Docker hibernation, event-driven waits with a working prototype on
 `spike/event-wake`, Vercel Board's source), and the products below.
@@ -90,8 +89,8 @@ A message to any of them except archived is always accepted and starts a turn. T
 this message"; the composer of an idle agent reads "planner is idle. Send to continue." Cancel stays final for what it
 cancels (the turn and its children); the thread can still be continued.
 
-**☐ Owner:** does a finished *run* keep accepting messages forever (until archived), or for a window? Proposal: until
-archived; archived runs restore on demand.
+**☑ Owner (2026-11-19):** a finished run keeps accepting messages until it is archived; an archived run restores on
+demand.
 
 ### 2. The CLI session is durable state
 
@@ -104,8 +103,14 @@ archived; archived runs restore on demand.
   everything the agent read, including a secret it read from a file.
 - An agent keeps one checkout path across machines (`${workdir}/<agentId>/repo`, not `${taskId}-e${epoch}`).
 
-**☐ Owner:** where sessions live beyond the host (object storage for capcomd cloud, the iCloud sync plugin for the
-desktop?) and how long (proposal: as long as the run, deleted with it).
+**☑ Owner (2026-11-19):** sessions are kept as long as the run and deleted with it. Beyond the host they go through a
+**session store seam** with providers as plugins: **iCloud first**, then R2, S3 and others. iCloud is reached as
+**iCloud Drive files** (`~/Library/Mobile Documents/com~apple~CloudDocs/capcomd/sessions/…`), which any process can
+write without entitlements — CloudKit needs the paid Apple Developer Program (Developer ID), which capcomd doesn't have
+yet (an ad hoc build with iCloud entitlements is killed). Files are encrypted client-side before they leave the host
+(iCloud Drive's standard protection lets Apple hold the keys unless Advanced Data Protection is on), and a read of an
+evicted file waits for its download. The host copy stays the source of truth; the store is a replica for other machines
+and for recovery.
 
 ### 3. Waits happen between turns, never inside a tool call
 
@@ -157,8 +162,8 @@ prompt is frozen. The app shows "Waking planner…" with the real phase (the get
 - Seam: `SandboxCaps.hibernate: "memory" | "disk" | "none"`, optional `hibernate(id)`/`wake(id)`; Docker `ensure` also
   unpauses. Machines list shows parked machines; "Delete idle machines" includes them.
 
-**☐ Owner:** retention default (proposal 24 h; choices 4 h / 24 h / 7 days, per place, recorded per run like the idle
-lifetime) and the parked cap (proposal 10 per place). Which roles hibernate (proposal: planner and leads only).
+**☑ Owner (2026-11-19):** retention 24 h by default (choices 4 h / 24 h / 7 days, per place, recorded per run like the
+idle lifetime); at most 10 parked machines per place; planners and leads hibernate, workers don't.
 
 ### 7. Typed hand-backs, internal vs shared items
 
@@ -184,7 +189,7 @@ same files; dependencies stated (`needs`); post milestones, not heartbeats; neve
 | 4 | §4 ask and stop, §7 typed hand-backs, schedules | 1–2 weeks | workers holding VMs while they wait for an answer |
 | later | Board's task board v2 (states, labels, `claim --ready --label --wait`, batch plans, a `task run` wrapper), path-scoped secrets and a Docker egress proxy (own ADR), a harness.v1 conformance suite | — | — |
 
-Phase 1 needs no owner decision. Phase 2 needs the §1 and §2 decisions; phase 3 the §6 one.
+All decisions are made; phase 2 adds the session store seam with its iCloud Drive provider (R2/S3 later).
 
 ## Consequences
 
@@ -192,7 +197,7 @@ Phase 1 needs no owner decision. Phase 2 needs the §1 and §2 decisions; phase 
 - Planners stop burning turns and wall time inside tool calls; a lead's turn ends and the event wakes it.
 - Host state grows by the session files (bounded by run retention); a parked boxd machine costs ~€0.01–0.04 a day.
 - A parent's `await` must treat waiting/asked/idle children correctly, and budgets must not count wall time while an
-  agent sleeps (**☐ Owner:** does a sleeping agent's wall-time budget pause? Proposal: yes; turns and spend still count).
+  agent sleeps (**☑ Owner (2026-11-19):** a sleeping agent's wall-time budget pauses; turns and spend still count).
 - Codex can only be woken cold (it reads nothing after its prompt) until verified against a real backend.
 
 ## Not doing
