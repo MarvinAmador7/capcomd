@@ -96,7 +96,10 @@ describe("with no daemon running", () => {
 describe("against a running daemon", () => {
   beforeAll(start, 180_000);
 
-  test("disable stops the plugin now, the config records it, and it stays off across a restart; enable brings it back", async () => {
+  // That a daemon started on this config holds the plugin at validated (disabled) is the boot's candidates (serve's
+  // host.start(builtinCandidates()), the no-daemon listing above) and the host's: tests/plugins/host.test.ts, lifecycle
+  // states; tests/plugins/config-layers.test.ts, enabled. Here, what the running daemon does with the CLI's call.
+  test("disable stops the plugin now and the config records it; enable brings it back in the same daemon", async () => {
     await listed((p, daemon) => !!daemon && p.state === "active");
     const off = await cli("plugins", "disable", "proc-gate", "--json");
     expect(off.code).toBe(0);
@@ -106,21 +109,13 @@ describe("against a running daemon", () => {
     // The token the CLI made for the call is gone with it.
     expect(loadClients()).toEqual([]);
 
-    await engine!.stop();
-    await start();
-    // The restarted daemon read the config: the plugin is held at validated, never started.
-    expect(await listed((p, daemon) => !!daemon && daemon.pid !== off.j.daemon.pid)).toMatchObject({ state: "validated", enabled: false, cause: "disabled" });
-
     const on = await cli("plugins", "enable", "proc-gate");
     expect(on.code).toBe(0);
     expect(on.stdout).toMatch(/The running daemon \(pid \d+\) enabled it: active\./);
     expect(enabled()).toBe(true);
-    const pid = (await cli("plugins", "list", "--json")).j.daemon.pid;
-    await engine!.stop();
-    await start();
-    expect(await listed((p, daemon) => !!daemon && daemon.pid !== pid && p.state === "active")).toMatchObject({ enabled: true, cause: null });
+    expect(await listed((p, daemon) => !!daemon && daemon.pid === off.j.daemon.pid && p.state === "active")).toMatchObject({ enabled: true, cause: null });
     expect(loadClients()).toEqual([]);
-  }, 300_000);
+  }, 120_000);
 
   test("a plugin the running daemon doesn't have (installed since it started): the config records it, the daemon is left as it is", async () => {
     const late = join(home, "plugins", "late-gate");

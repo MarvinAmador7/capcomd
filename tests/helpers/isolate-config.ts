@@ -26,7 +26,7 @@ delete process.env.RELAY_RPC_KEY_FILE;
 // No endpoint means the default, a developer's daemon on :6420: a test that forgets its own engine gets a closed port
 // instead (the discard port; nothing listens there) and fails as "engine unreachable". And nothing starts an engine for
 // it there: `capcomd mcp` starts one when nothing answers (src/core/engine-start.ts), detached, outliving the test. The
-// test of that autostart (tests/core/engine-start.test.ts) turns it back on for itself.
+// test of that autostart (tests/scenarios/engine-live.test.ts) turns it back on for itself.
 process.env.CAPCOMD_ENDPOINT = "http://127.0.0.1:9";
 process.env.CAPCOMD_NO_ENGINE_AUTOSTART = "1";
 // Nor ask the developer's own GitHub CLI (it reads its login from the keychain): the forges ask gh only through

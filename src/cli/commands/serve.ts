@@ -333,6 +333,8 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
   };
   const t0 = Date.now();
   let up = false, misses = 0, lastTick = Date.now();
+  // Every 2 s; a test knob shortens it (10 misses in a row exit serve, so a hung engine is noticed in ~20 s).
+  const watchdogMs = Number(process.env.CAPCOMD_TEST_WATCHDOG_MS) || 2000;
   setInterval(async () => {
     if (dying || restarting) return;
     // serve itself was suspended (the machine slept): the misses before it say nothing about the engine now.
@@ -357,7 +359,7 @@ export async function serve(opts: { port: number; harnessSocket?: string }) {
     const pid = enginePid();
     if (up && pid && gone(pid)) return restartEngine(pid);
     if (up && ++misses >= 10) return die(`capcomd serve: engine on :${port} stopped answering; exiting`);
-  }, 2000);
+  }, watchdogMs);
 
   // Open the API once capcomd's actors can answer (rivetkit's envoy has registered with the engine; registry.start()
   // doesn't wait for it): a client that connects right after a restart, like the menu bar, would otherwise exhaust the
