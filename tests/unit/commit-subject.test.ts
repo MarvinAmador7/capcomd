@@ -43,6 +43,9 @@ describe("subjectFor: the agent's own words for its change, never the raw brief"
     expect(subjectFor({ summary: "Tests pass: 93 of 93.", title: "cli", goal: brief })).toBe("Cli");
     expect(subjectFor({ summary: "I'm done with the lexer.", title: "lexer", goal: brief })).toBe("Lexer");
     expect(summarySubject("Build is green now.")).toBeNull();
+    // A hand-back's outcome line: what follows its label
+    expect(subjectFor({ summary: "Done: added the Home section to the desktop page.\n- Changed: `site/app/desktop/page.tsx`.", title: "home section", goal: brief })).toBe("Add the Home section to the desktop page");
+    expect(summarySubject("Done.")).toBeNull();
   });
   test("an identifier at the start keeps its case", async () => {
     const { subjectFor } = await import("../../src/agents/runner");

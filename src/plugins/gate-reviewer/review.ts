@@ -36,6 +36,17 @@ export function parseVerdict(data: unknown, text?: string): Verdict | null {
   return null;
 }
 
+/**
+ * A reviewer's hand-back, as its parent reads it (its result's summary, rendered as Markdown): the verdict first, then
+ * its reasons as bullets, in the reviewer's order (most severe first). No verdict says so, as the gate fails it.
+ */
+export function verdictSummary(v: Verdict | null): string {
+  if (!v) return 'No verdict: the reviewer\'s reply had no {"passed": true|false} line, so the change fails review.';
+  const head = v.passed ? "**Approve**" : "**Changes needed**";
+  const bullets = v.reasons.map((r) => `- ${r.replace(/\s+/g, " ").trim()}`).filter((r) => r !== "- ");
+  return [head, ...(bullets.length ? ["", ...bullets] : [])].join("\n");
+}
+
 /** The reviewer's brief: acceptance criteria, plus the task the change was made for. */
 export function reviewBrief(o: { criteria?: unknown; childTask?: string | null }): string {
   const c = o.criteria;

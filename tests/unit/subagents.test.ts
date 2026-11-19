@@ -77,7 +77,9 @@ test("who gets the in-VM capcomd, and what a worker is told", () => {
   // Nothing of the agent's own: every agent of a profile starts with the same instructions (one cached prefix).
   expect(s).not.toMatch(/agt-/);
   expect(s).toContain(`--data '{"context": [{"title": "…", "text": "…"}]}'`);
-  expect(s).toContain('capcomd result --summary "<what you changed');
+  // Its hand-back: the outcome first, then a few bullets (what changed, how it was checked, risks, decisions).
+  expect(s).toContain('capcomd result --summary "<your hand-back>"');
+  expect(s).toMatch(/\n  Done: .+\n  - Changed: .+\n  - Checked: /);
   expect(s).not.toContain("Orchestrating child agents");
   expect(workerSkill({ mcp: false, jobs: false })).not.toContain("job start");
 });
@@ -158,6 +160,11 @@ test("reviewer verdicts fail closed: only an explicit boolean `passed` counts; t
   expect(parseVerdict(null, '{"passed": true}\nno, wait\n{"passed": false, "reasons": ["broke shout"]}')).toEqual({ passed: false, reasons: ["broke shout"] });
   for (const t of ["I think it passes.", '{"passed": "yes"}', '{"verdict": "pass"}', ""]) expect(parseVerdict(null, t)).toBeNull();
   expect(parseVerdict({ summary: "fine" }, undefined)).toBeNull();
+  // Its hand-back: the verdict first, then its reasons as bullets (in its order); no verdict says so.
+  const { verdictSummary } = await import("../../src/primitives/review");
+  expect(verdictSummary({ passed: false, reasons: ["src/add.ts:3 returns a - b", "no test\nfor zero"] })).toBe("**Changes needed**\n\n- src/add.ts:3 returns a - b\n- no test for zero");
+  expect(verdictSummary({ passed: true, reasons: [] })).toBe("**Approve**");
+  expect(verdictSummary(null)).toStartWith("No verdict");
   const brief = reviewBrief({ criteria: ["file exists", "tests pass"], childTask: "Fix src/add.ts" });
   expect(brief).toBe("Acceptance criteria:\n- file exists\n- tests pass\n\nThe change was made for this task:\nFix src/add.ts");
   expect(reviewBrief({})).toContain("does what the task below asks");

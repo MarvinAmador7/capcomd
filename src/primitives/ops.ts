@@ -31,7 +31,7 @@ import { hasVmCapcomd } from "../subagents/skill";
 import { mayRunJobs } from "../subagents/token";
 import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
-import { parseVerdict } from "./review";
+import { parseVerdict, verdictSummary } from "./review";
 import type { AgentPreparing, PreparePatch, ReviewReport } from "../../packages/plugin/src/hooks";
 import type { Principal } from "../../packages/plugin/src/shapes";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
@@ -1153,11 +1153,14 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
     return p.agent;
   }
   const declared = await resultOf(runId, agentId);
-  const verdictOf = review ? { verdict: parseVerdict(declared.data, rec.resultText) } : {};
   // Report mode: the agent's final message is its result (a scripted one declares its summary itself).
   const reportText = report && typeof rec.resultText === "string" ? rec.resultText.slice(0, 8000) : null;
   // Stopped at a limit: the agent failed, but its work so far is on its branch for a continuation (not retried).
   const limit = typeof rec.limit === "string" ? rec.limit : null;
+  // A reviewer's hand-back is its verdict, what its parent's thread shows of it (never a bare "Finished."): the
+  // verdict first, then its reasons. Without one, its own summary, else that it gave none (one stopped at a limit says why).
+  const verdict = review ? parseVerdict(declared.data, rec.resultText) : null;
+  const verdictOf = review ? { verdict, ...(verdict ? { summary: verdictSummary(verdict) } : declared.summary || limit ? {} : { summary: verdictSummary(null) }) } : {};
   const limitOf = limit ? { limit, error: `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
   const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
   // Plugin API §16.1: an orchestrate agent's work is the agents it spawns. One that spawned none (its tools refused,
@@ -1167,7 +1170,7 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const blocked = orchestrate && !limit && !(await s.listAgents({})).some((x: ScopeAgent) => x.parent === agentId)
     ? { error: `${agentId} is an orchestrate agent and spawned no agents, so nothing it did can land${lastWords ? `. It said: ${lastWords.slice(0, 500)}` : ""}`, errorKind: "orchestrate_no_children" } : {};
   // An agent that declared no summary (`capcomd result --summary`) has its final message as one, so its parent reads
-  // what it said it did (a reviewer's final message is its verdict, not a summary).
+  // what it said it did (a reviewer's summary is its verdict: verdictOf).
   const said = !review && !declared.summary && lastWords ? { summary: lastWords } : {};
   // ADR-025 §5.2: a consolidator's answer is staged on its branch by the kernel; that branch is its work.
   const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;

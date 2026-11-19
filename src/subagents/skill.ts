@@ -65,9 +65,24 @@ ${notesAndLessons("<your agent id>")}
 - Never change .capcomd/context/ yourself.
 
 ## Before you finish
-Declare your result: \`capcomd result --summary "<what you changed, what you checked and how, what is left>"\`${tool("result")}.
-Your parent reads it (and only it) to decide what to do with your work.`;
+Declare your result: \`capcomd result --summary "<your hand-back>"\`${tool("result")}, and make your final message
+the same text. Your parent reads it (and only it) to decide what to do with your work.
+${HANDBACK}`;
 }
+
+/**
+ * The shape of a hand-back: what a worker's summary looks like when its parent (and the person, in the app's thread,
+ * where it renders as Markdown) reads it. Short, assertive and scannable: the outcome first, then a few bullets.
+ */
+export const HANDBACK = `Write the hand-back in Markdown, in this shape (about 80 words; newlines inside the quotes are fine):
+  Done: added the Home section to the desktop page.
+  - Changed: \`site/app/desktop/page.tsx\` (new section), \`site/CONTENT.md\` (table row).
+  - Checked: \`bun run typecheck\` passes; the page wasn't opened in a browser.
+  - Risk: the logo isn't dithered (its CSS mask doesn't render headless).
+  - Decide: keep the Google Fonts import, or self-host the fonts?
+The first line is the outcome in one sentence (Done, Partly done or Blocked: what). Then 2-5 bullets: what changed
+(files, briefly), how you checked it (the command and its result), deviations or risks (only if any), and anything
+your parent must decide. No story of how you worked, no restating the task.`;
 
 /** Every agent names its tab, Rex-style: injected into every real agent's instructions, so it stays short. */
 export function namingSkill(o: { mcp: boolean; planner?: boolean }): string {
@@ -139,9 +154,10 @@ Your merges land on ${o.goal.branch}, the run's goal branch, cut from ${o.goal.b
 work is pushed there right away: no pull request per child, no approval, so verify every child before you merge it and
 merge only what passes. Children branch from ${o.goal.branch}, so later children start from what landed.
 ${o.root ? `You are the planner: when you finish, the run is ready and the person reads your \`capcomd result --summary\` before
-deciding whether to open a pull request from ${o.goal.branch} into ${o.goal.base}. Write it for them: what the change does
-and why; per task, what landed (child, verified, reviewed) and what didn't, and why; what is left to do.` : `You are a lead: merge your verified children into ${o.goal.branch}, and end with a summary of what landed and what
-didn't; your parent puts it in front of the person.`}
+deciding whether to open a pull request from ${o.goal.branch} into ${o.goal.base}. Write it for them, in the hand-back's
+shape: what the change does and why first; then per task, what landed (child, verified, reviewed) and what didn't, and why;
+what is left to do.` : `You are a lead: merge your verified children into ${o.goal.branch}, and end with your hand-back (what landed and
+what didn't); your parent puts it in front of the person.`}
 ` : "";
   return `${namingSkill({ mcp: o.mcp, planner: !!o.root })}
 
@@ -163,7 +179,7 @@ Your hard limits (set by your parent/operator; you can only hand children LESS):
   capcomd merge --ref <agt> --require <vfyId> --key m-<child>          # only verified commits land
   capcomd fetch [branch…]                                               # the latest branches as origin/<branch>, to read
   capcomd check [branch|agt]                                            # the checks on that commit as it is (default: your target)
-  capcomd result --summary "<what you did, what landed>"                # last thing before you exit
+  capcomd result --summary "<your hand-back: see below>"                # last thing before you exit
 ${o.orchestrate ? "" : `  capcomd job start -- <command>                                        # a long command (tests, a build) in the background:
                                                                         # "running" at once, its result comes as a message
 `}
@@ -224,6 +240,13 @@ ${o.orchestrate ? "" : `  capcomd job start -- <command>                        
 - Report progress with \`capcomd heartbeat "<note>"\` on long steps; silent agents are flagged stuck.
 - \`capcomd handoff --task …\` passes the rest of your task to a successor; then exit.
 - \`capcomd help\` lists every command.
+
+## Your hand-back
+Your \`capcomd result --summary\` is all your parent (or the person) reads of your work, rendered as Markdown; make
+your final message the same text. The outcome first, in one sentence (Done, Partly done or Blocked: what). Then one
+bullet per child: what landed (verified, reviewed, merged) or what didn't, and why. Then a bullet for whether the
+checks ran on the combined code, and one for what is left or must be decided. No story of how you worked, no restating
+the task; newlines inside the quotes are fine.
 
 ## Notes and lessons
 ${notesAndLessons(o.agentId)}
