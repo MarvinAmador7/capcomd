@@ -19,7 +19,9 @@ import { verifyToken, type Claims, type Op } from "./token";
 import { capText, fence, MESSAGE_MAX_BYTES, normalizeResult, subtree, type Truncation } from "./results";
 import type { JobMachine } from "../jobs/machine";
 
-export interface RpcRequest { id: string; token: string; op: string; args?: Record<string, any> }
+/** `holdMs`: how long the caller still waits for this answer, less a margin for the spool's round trip (the CLI sends it;
+ *  a verify or check is held no longer than that, so a retry with little time left isn't answered after it gave up). */
+export interface RpcRequest { id: string; token: string; op: string; args?: Record<string, any>; holdMs?: number }
 export type RpcResponse = { id: string; ok: true; result: unknown } | { id: string; ok: false; error: { code: string; reason?: string; message: string; hint?: string; retryable?: boolean } };
 
 const RESERVED_KV = ["_", "approval/", "recipe/", "handoff/"];
@@ -39,14 +41,25 @@ export interface RpcContext {
   upload?: (path: string, data: Uint8Array) => Promise<void>;
   /** The caller's machine as its background jobs run in it (plugin API §16.2; src/jobs/service.ts). */
   jobs?: JobMachine;
+  /** How long a verify or check is held before it answers "running": VERIFY_HOLD_MS, or less when the caller says so. */
+  holdMs?: number;
 }
+
+/** The engine call under a long verify gave up waiting (the HTTP request timed out) while the verification goes on in
+ *  the verifier: not an error of the verification, so the poll answers "running" and the next one attaches again. */
+const transportTimeout = (e: unknown): boolean => {
+  const x = e as { name?: string; message?: string } | null;
+  return /HTTP request error/.test(String(x?.message ?? "")) && /TimeoutError|timed out/i.test(String(x?.message ?? ""));
+};
 
 export async function handleRpc(req: RpcRequest, ctx: RpcContext): Promise<RpcResponse> {
   const id = String(req?.id ?? "?");
   try {
     const claims = await authorize(req, ctx);
     // Never store a capability token (or other known secret shapes) an agent pasted into its args.
-    let result = await dispatch(claims, req.op as Op, redactShapes(req.args ?? {}), id, ctx);
+    const asked = typeof req?.holdMs === "number" ? req.holdMs : NaN;
+    const holdMs = Number.isFinite(asked) && asked >= 0 ? Math.min(VERIFY_HOLD_MS, asked) : VERIFY_HOLD_MS;
+    let result = await dispatch(claims, req.op as Op, redactShapes(req.args ?? {}), id, { ...ctx, holdMs });
     const js = JSON.stringify(result ?? null);
     if (Buffer.byteLength(js) > RESPONSE_MAX_BYTES) result = { truncated: [{ field: "response", bytes: Buffer.byteLength(js), kept: 0 }], hint: "Response too large; narrow the query (e.g. --tail, --limit, a subtree root)." };
     ctx.onCall?.(req.op, true);
@@ -292,7 +305,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       // with the same key, and the in-flight verify is shared (never re-run) until it finishes.
       const p = O.verifyRef({ runId: run, ref, ...(pinned ? { check: pinned } : { checks: await operatorChecks(c) }), acceptance: args.acceptance, key, reviewParent: c.sub });
       p.catch(() => {}); // a later poll gets the error
-      const held = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), VERIFY_HOLD_MS))]);
+      const held = await Promise.race([p.catch((e) => { if (transportTimeout(e)) return null; throw e; }), new Promise((r) => setTimeout(() => r(null), ctx.holdMs ?? VERIFY_HOLD_MS))]);
       return held ?? { id: O.verifyIdFor(run, ref, key), kind: "verify", state: "running", ref };
     }
     case "fetch": return fetchInto(ctx, args);
@@ -304,7 +317,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       if (args.checks !== undefined) deny("in-VM check cannot set --checks: check commands come only from the operator", "Name one of the run's operator-named checks with --check NAME (`capcomd kv get _checks` lists them), or none for the run's own checks.");
       if (args.id !== undefined && args.ref === undefined) {
         const { id, done } = await O.startCheck({ runId: run, id: String(args.id) });
-        return holdCheck(id, done);
+        return holdCheck(id, done, ctx.holdMs);
       }
       const ref = args.ref !== undefined && String(args.ref).trim() ? String(args.ref).trim() : undefined;
       let pinned = false;
@@ -314,7 +327,7 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
         runId: run, ...(ref ? { ref } : {}), ...(args.check !== undefined ? { check: String(args.check) } : oc ? { checks: oc } : {}),
         ...(args.key !== undefined ? { key: String(args.key) } : {}), askedBy: c.sub,
       });
-      return holdCheck(id, done);
+      return holdCheck(id, done, ctx.holdMs);
     }
     case "merge": {
       const ref = String(args.ref ?? "");
@@ -389,9 +402,9 @@ function jobView(j: import("../../packages/plugin/src/shapes").Job) {
 }
 
 /** A check takes as long as the checks: answer "running" (with its id, which the CLI polls) after VERIFY_HOLD_MS. */
-async function holdCheck(id: string, done: Promise<any>) {
+async function holdCheck(id: string, done: Promise<any>, holdMs = VERIFY_HOLD_MS) {
   done.catch(() => {}); // a later poll gets the error
-  const held = await Promise.race([done, new Promise((r) => setTimeout(() => r(null), VERIFY_HOLD_MS))]);
+  const held = await Promise.race([done.catch((e) => { if (transportTimeout(e)) return null; throw e; }), new Promise((r) => setTimeout(() => r(null), holdMs))]);
   return held ?? { id, kind: "check", state: "running" };
 }
 
