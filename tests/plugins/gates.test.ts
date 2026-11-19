@@ -2,7 +2,7 @@
 // fire (§6.5) in the registry, the built-in reviewer gate's manifest and its answer with no reviewer, and the gates a
 // process that isn't the daemon starts for its verifies (§6.1), and what it waits for before it exits. The kernel's side
 // end to end: tests/scenarios/gates.test.ts.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginHost, type Candidate } from "../../packages/plugin/src/host/host";
@@ -153,7 +153,9 @@ describe("the reviewer gate (§15.3)", () => {
 describe("the reviewer gate and its machinery failing (not a verdict)", () => {
   const { reviewerKernel, reviewerInfraFailure, errorText } = gateReviewer;
   const saved = { ...reviewerKernel };
-  afterEach(() => { Object.assign(reviewerKernel, saved); delete process.env.CAPCOMD_REVIEW_INFRA_TRIES; });
+  // The pause before a try again is 1 s, doubling; 10 ms here.
+  beforeEach(() => { process.env.CAPCOMD_REVIEW_INFRA_BACKOFF_MS = "10"; });
+  afterEach(() => { Object.assign(reviewerKernel, saved); delete process.env.CAPCOMD_REVIEW_INFRA_TRIES; delete process.env.CAPCOMD_REVIEW_INFRA_BACKOFF_MS; });
   const internal = () => Object.assign(new Error("SQLite transaction coordinator is closed."), { group: "sqlite", code: "transaction_closed" });
   /** A kernel whose await fails `fails` times (as an actor that didn't answer), then gives the reviewer's verdict. */
   function fakeKernel(o: { fails: number; error?: () => unknown; verdict?: { passed: boolean; reasons: string[] } }) {

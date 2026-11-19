@@ -5,11 +5,27 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # A PR that changes only what no job here reads skips this workflow: the macOS app (menubar.yml tests it), design/,
+    # site/ and docs/, except the files a job reads (the app's copy of the contract, the generated contract docs, the
+    # context eval's evidence). Pushes to main always run everything.
+    paths:
+      - "**"
+      - "!apps/menubar/**"
+      - "apps/menubar/client/**/openapi.json"
+      - "!design/**"
+      - "!site/**"
+      - "!docs/**"
+      - "docs/events.md"
+      - "docs/harness-contract.md"
+      - "docs/evidence/context/**"
   workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # The Docker provider's conformance suite (tests/providers) needs a Docker daemon: opt-in, and this runner has one.
+      CAPCOMD_TEST_DOCKER: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,7 +73,7 @@ jobs:
           fi
 
       - name: Unit, CLI, setup and config, state machines, plugins, packages
-        run: bun run test:fast --parallel="$(nproc)"
+        run: CAPCOMD_TEST_JOBS="$(nproc)" bun run test:fast
 
       - name: The canvas and the TUI (apps/canvas, apps/tui)
         run: bun run test:apps
@@ -91,28 +107,25 @@ jobs:
         run: bun run setup
 
       - name: Scenario suite, shard ${{ matrix.shard }} of 7 (regression gate)
-        run: |
-          cp tests/scenario-timings.json "$RUNNER_TEMP/scenario-timings.json"
-          bun run test:scenarios --parallel="$(nproc)" --shard=${{ matrix.shard }}/7 --timings="$RUNNER_TEMP/scenario-timings.json" --update-timings
+        run: CAPCOMD_TEST_JOBS="$(nproc)" bun run test:scenarios --shard=${{ matrix.shard }}/7 --update-timings
 
       - name: Upload the times this shard measured
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scenario-timings-${{ matrix.shard }}
-          path: ${{ runner.temp }}/scenario-timings.json
+          path: tests/scenario-timings.json
           retention-days: 14
 
   # The deterministic evals (fakes: no VMs, no models): the primitives' recipes (correctness; their latency against
   # evals/primitives/baseline.json, a developer machine's, is printed but doesn't fail on a shared runner),
-  # `capcomd run --recipe` against `--legacy` on the same goals, and the context eval's harness.
+  # `capcomd run --recipe` against `--legacy` on the same goals, and the context eval's harness. One job, each eval its
+  # own step (a failing one doesn't skip the others). On a PR they run only when something they run changed: the
+  # daemon (src/, packages/), the evals and their scripts, the test helpers they share, the plugin, the dependencies or
+  # this workflow.
   evals:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [primitives, recipe-parity, context]
+    timeout-minutes: 30
     env:
       CAPCOMD_NO_CONFIG: "1"
     steps:
@@ -121,36 +134,63 @@ jobs:
           filter: blob:none
           fetch-depth: 0
 
+      - name: Did anything the evals run change?
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || git diff --name-only "$BASE" HEAD -- src packages evals 'scripts/eval-*' tests/helpers plugins \
+                 package.json bun.lock .bun-version bunfig.toml tsconfig.json .github/workflows/ci.yml | grep -q .; then
+            echo "evals=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "evals=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing the evals run changed: skipped."
+          fi
+
       - name: Setup Bun
+        if: steps.changes.outputs.evals == 'true'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
 
-      - run: bun install --frozen-lockfile
+      - if: steps.changes.outputs.evals == 'true'
+        run: bun install --frozen-lockfile
 
       - name: Primitives eval
-        if: matrix.suite == 'primitives'
+        if: steps.changes.outputs.evals == 'true'
         run: bun evals/primitives/run.ts --report-latency
 
       - name: Recipe parity eval
-        if: matrix.suite == 'recipe-parity'
+        if: ${{ !cancelled() && steps.changes.outputs.evals == 'true' }}
         run: bun evals/recipe-parity/run.ts
 
       # ADR-025 §12: the context eval's harness on the fake sandbox with its scripted agent (every runnable arm, every
       # task chain, the hidden checkers through `capcomd check`, the metrics); --expect fails on any verdict the fake
       # agent's policy doesn't produce. The live baselines per model are in docs/evidence/context/.
       - name: Context eval (fake sandbox and agent)
-        if: matrix.suite == 'context'
+        if: ${{ !cancelled() && steps.changes.outputs.evals == 'true' }}
         run: bun scripts/eval-context.ts --seed 1 --expect --port 6571 --arms none,agents-md,index,index-paths,index-k1,index-k3,index-triggered,index-noskills
 
-  # @capcomd/plugin as it would be published (packages/plugin/scripts/pack.ts): installed from its tarball into a fresh
-  # project and used from Node 20, the oldest it supports (no Bun at run time: every entry point, the test kit, connect()
-  # over a Unix socket), and its declarations typechecked by a TypeScript 5 consumer under nodenext. The examples are
-  # tested in test:fast (packages/plugin, tests/plugins/host.test.ts) and the Slack example against a real daemon on the
-  # fake sandbox in the scenarios (tests/scenarios/plugin-slack-example.test.ts).
-  plugin-package:
+  # What a user installs, installed and driven as a user would, one step after another (a failing one doesn't skip the
+  # rest):
+  # - the npm package (`bun pm pack`) installed the way a user installs it, `bun add -g` with no lockfile, so its
+  #   dependencies resolve as they would for a user today, and driven with fake agents (scripts/release-smoke.sh): every
+  #   @rivet-dev/services it resolved is the version package.json pins, and its engine starts rivet-services as on a
+  #   user's default port. A dependency release that breaks a fresh install (rivet-services 0.2.5 under rivetkit
+  #   2.3.31, 2026-11-10) fails here;
+  # - @capcomd/plugin as it would be published (packages/plugin/scripts/pack.ts): installed from its tarball into a
+  #   fresh project and used from Node 20, the oldest it supports (no Bun at run time: every entry point, the test kit,
+  #   connect() over a Unix socket), and its declarations typechecked by a TypeScript 5 consumer under nodenext. The
+  #   examples are tested in test:fast (packages/plugin, tests/plugins/host.test.ts) and the Slack example against a
+  #   real daemon on the fake sandbox in the scenarios (tests/scenarios/plugin-slack-example.test.ts);
+  # - the single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
+  #   no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that
+  #   loads something by a computed name) fails here, not at release.
+  install-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -162,63 +202,34 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - run: bun install --frozen-lockfile
-
-      - name: Pack @capcomd/plugin
-        run: bun packages/plugin/scripts/pack.ts --out dist/plugin
-
-      - name: Install it and use it from Node (packages/plugin/scripts/smoke.sh)
-        run: packages/plugin/scripts/smoke.sh dist/plugin/capcomd-plugin-*.tgz
-
-  # The npm package (`bun pm pack`) installed the way a user installs it, `bun add -g` with no lockfile, so its
-  # dependencies resolve as they would for a user today, and driven with fake agents (scripts/release-smoke.sh): every
-  # @rivet-dev/services it resolved is the version package.json pins, and its engine starts rivet-services as on a
-  # user's default port. A dependency release that breaks a fresh install (rivet-services 0.2.5 under rivetkit 2.3.31, 2026-11-10) fails here.
-  package:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          filter: blob:none
-          fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: .bun-version
-
+      # Packed before `bun install`, from the checkout alone.
       - name: bun pm pack
         run: mkdir dist && bun pm pack --destination dist
 
-      - name: Install it with a fresh HOME and drive it (scripts/release-smoke.sh)
+      - name: The npm package, installed with a fresh HOME and driven (scripts/release-smoke.sh)
         run: scripts/release-smoke.sh dist/capcomd-*.tgz "$(bun -e 'console.log(require("./package.json").version)')"
 
-  # The single executable (scripts/build-binary.ts): built for Linux and driven like a user's install (install.sh,
-  # no Bun on the PATH, fake agents), so a change that breaks the binary (a file read at run time, a dependency that
-  # loads something by a computed name) fails here, not at release.
-  binary:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          filter: blob:none
-          fetch-depth: 0
+      - name: Install dependencies
+        if: ${{ !cancelled() }}
+        run: bun install --frozen-lockfile
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        if: ${{ !cancelled() }}
         with:
-          bun-version-file: .bun-version
+          node-version: 20
 
-      - run: bun install
+      - name: Pack @capcomd/plugin
+        if: ${{ !cancelled() }}
+        run: bun packages/plugin/scripts/pack.ts --out dist/plugin
+
+      - name: Install it and use it from Node (packages/plugin/scripts/smoke.sh)
+        if: ${{ !cancelled() }}
+        run: packages/plugin/scripts/smoke.sh dist/plugin/capcomd-plugin-*.tgz
 
       - name: Build capcomd-linux-x64
+        if: ${{ !cancelled() }}
         run: bun scripts/build-binary.ts --target linux-x64 --outdir dist
 
-      - name: Install it and drive it (scripts/release-smoke.sh)
+      - name: The single executable, installed and driven (scripts/release-smoke.sh)
+        if: ${{ !cancelled() }}
         run: scripts/release-smoke.sh dist/capcomd-linux-x64 "$(bun -e 'console.log(require("./package.json").version)')"

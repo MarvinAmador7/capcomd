@@ -138,7 +138,7 @@ test("capcomd_await on a verify the daemon runs waits for the daemon's judges: i
   // Before, the wait found the record running, not this process's, and ran the verify again in capcomd mcp, where only
   // the built-in judges listen: it passed while the plugin was still being asked.
   try {
-    const waited: any = await mcp.callTool({ name: "capcomd_await", arguments: { runId: run, ops: [id], timeoutMs: 15_000 } });
+    const waited: any = await mcp.callTool({ name: "capcomd_await", arguments: { runId: run, ops: [id], timeoutMs: 5_000 } });
     const body = JSON.parse(waited.content[0].text);
     expect(body.pending).toEqual([id]);
     expect(body.ops).toEqual([]);

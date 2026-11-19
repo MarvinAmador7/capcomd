@@ -143,7 +143,7 @@ agent of a profile starts with the same instructions.
 - `tests/scenarios/` (regression gate in CI, `bun run test:scenarios`): scripted fake agents
   (`CAPCOMD_SPAWN_EXEC=script`) drive the real in-VM CLI over a local spool against a real engine
   and git repo. 24 scenarios assert outcome, trajectory (scope event order) and rollups.
-- `tests/subagents/unit.test.ts`: tokens, fencing/caps, rollups/stuck, CLI parsing, the MCP
+- `tests/unit/subagents.test.ts`: tokens, fencing/caps, rollups/stuck, CLI parsing, the MCP
   server, VmSpool over boxd-style exec (FakeProvider hostExec), skill gating via the claude adapter.
 - `tests/subagents/liveness.test.ts`: a real-adapter worker (fake claude) that can't spawn and
   keeps working past the stuck window is not flagged stuck.

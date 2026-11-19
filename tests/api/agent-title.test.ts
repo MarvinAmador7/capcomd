@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addClient, loadClients } from "../../src/api/clients";
-import { Agent, AgentTitleResult, CAPABILITY_NAMES, EventData } from "../../src/api/contract";
+import { Agent, AgentTitleResult, EventData } from "../../src/api/contract";
 import { lifecycleEvents } from "../../src/api/lifecycle";
 import { strictEventData } from "../../src/api/legacy-events";
 import { describeEvent } from "../../src/api/describe";
@@ -48,7 +48,6 @@ function setup() {
 }
 
 describe("Agent.title", () => {
-	test("the capability is listed", () => expect(CAPABILITY_NAMES).toContain("agents.title"));
 	test("nobody named an agent: the daemon's, from its task (null without task text); it matches the contract", async () => {
 		const { get, tree } = setup();
 		expect(await tree()).toEqual({

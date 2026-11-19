@@ -12,7 +12,7 @@ import { decodeAgentRef, readProfiles, resolveAgent, trustProfile } from "../../
 import { addClient, loadClients } from "../../src/api/clients";
 import { CAPABILITY_NAMES, CreateRunBody, RunOptions } from "../../src/api/contract";
 import { launchContext, startDetachedRun } from "../../src/api/create-run";
-import { boxdKeyConfigured, dockerReachable, resetDockerCheck, runOptions, runOptionsFor } from "../../src/api/run-options";
+import { askDocker, boxdKeyConfigured, dockerReachable, resetDockerCheck, runOptions, runOptionsFor } from "../../src/api/run-options";
 import { harnessApp } from "../../src/api/server";
 import { CreateRunError, memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
@@ -196,9 +196,11 @@ describe("GET /v1/run-options", () => {
 		resetDockerCheck();
 	});
 
-	test("the docker CLI answers within its 3 s even when it hangs with a child holding its stdout", async () => {
+	test("the docker CLI answers within its time (3 s; 500 ms here) even when it hangs with a child holding its stdout", async () => {
 		const bins = mkdtempSync(join(dir, "docker-bin-"));
 		const fake = (name: string, body: string) => { const f = join(bins, name); writeFileSync(f, `#!/bin/sh\n${body}\n`); chmodSync(f, 0o755); return f; };
+		const ASK_MS = 500;
+		const ask = (s: Record<string, string | undefined>) => askDocker(s, ASK_MS);
 		resetDockerCheck();
 		expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: fake("up", "echo 27.3.1") })).toEqual({ ok: true, reason: null });
 		resetDockerCheck();
@@ -209,20 +211,20 @@ describe("GET /v1/run-options", () => {
 		resetDockerCheck();
 		const t0 = Date.now();
 		try {
-			expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: hung })).toEqual({ ok: false, reason: "Docker isn't running" });
+			expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: hung }, ask)).toEqual({ ok: false, reason: "Docker isn't running" });
 			const took = Date.now() - t0;
-			expect(took).toBeGreaterThanOrEqual(2_900);
-			expect(took).toBeLessThan(3_500);
+			expect(took).toBeGreaterThanOrEqual(ASK_MS - 20);
+			expect(took).toBeLessThan(ASK_MS + 1_500);
 		} finally {
 			resetDockerCheck();
 			try { process.kill(Number(readFileSync(childPid, "utf8")), "SIGKILL"); } catch { /* gone */ }
 		}
-		// A CLI that answered and exited 0, but left a child holding its stdout: it answered, after the same 3 s.
+		// A CLI that answered and exited 0, but left a child holding its stdout: it answered, after the same wait.
 		const leftPid = join(bins, "left.pid");
 		const answered = fake("answered", `/bin/sleep 600 & echo $! > ${leftPid}; echo 27.3.1; exit 0`);
 		resetDockerCheck();
 		try {
-			expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: answered })).toEqual({ ok: true, reason: null });
+			expect(await dockerReachable({ CAPCOMD_DOCKER_BIN: answered }, ask)).toEqual({ ok: true, reason: null });
 		} finally {
 			resetDockerCheck();
 			try { process.kill(Number(readFileSync(leftPid, "utf8")), "SIGKILL"); } catch { /* gone */ }
@@ -359,20 +361,21 @@ describe("capcomd run --planner-provider / --sandbox (checked before the engine 
 	};
 	test("bad values and combinations are usage errors", async () => {
 		const env = world({ logins: ["claude-code", "codex"] });
-		for (const args of [["--planner-provider", "gemini"], ["--sandbox", "kubernetes"], ["--sandbox", "docker", "--legacy"], ["--planner-provider", "codex", "--recipe"], ["--planner-provider", "codex", "--profile", "worker"]]) {
-			const r = await run(args, env);
-			expect({ args, code: r.code, kind: r.error?.code }).toEqual({ args, code: 2, kind: "usage" });
-		}
-	});
+		const all = [["--planner-provider", "gemini"], ["--sandbox", "kubernetes"], ["--sandbox", "docker", "--legacy"], ["--planner-provider", "codex", "--recipe"], ["--planner-provider", "codex", "--profile", "worker"]];
+		const got = await Promise.all(all.map(async (args) => { const r = await run(args, env); return { args, code: r.code, kind: r.error?.code }; }));
+		expect(got).toEqual(all.map((args) => ({ args, code: 2, kind: "usage" })));
+	}, 30_000);
 	test("a driver that can't run is refused with the reason; one that can goes on to the engine", async () => {
-		const noCodex = await run(["--planner-provider", "codex"], world({ logins: ["claude-code"] }));
+		const [noCodex, noPlanner, noSnapshot, ok] = await Promise.all([
+			run(["--planner-provider", "codex"], world({ logins: ["claude-code"] })),
+			run(["--planner-provider", "claude"], world({ profiles: { schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey" } } } })),
+			// Docker without an env snapshot: the planner's CLI would be missing, so the run is refused before it starts.
+			run(["--planner-provider", "codex", "--sandbox", "docker"], world({ logins: ["codex"] })),
+			run(["--planner-provider", "codex", "--sandbox", "docker"], world({ logins: ["codex"], env: { CAPCOMD_ENV_SNAPSHOT: "capcomd-env-test" } })),
+		]);
 		expect(noCodex.error).toMatchObject({ code: "config", message: "codex can't drive this run: Not logged in to Codex (run capcomd auth login codex)" });
-		const noPlanner = await run(["--planner-provider", "claude"], world({ profiles: { schema: "capcomd.agents/v1", agents: { worker: { provider: "claude", auth: "apikey" } } } }));
 		expect(noPlanner.error).toMatchObject({ code: "config", message: expect.stringContaining("no planner profile") });
-		// Docker without an env snapshot: the planner's CLI would be missing, so the run is refused before it starts.
-		const noSnapshot = await run(["--planner-provider", "codex", "--sandbox", "docker"], world({ logins: ["codex"] }));
 		expect(noSnapshot.error).toMatchObject({ code: "config", message: expect.stringContaining("no capcomd env snapshot") });
-		const ok = await run(["--planner-provider", "codex", "--sandbox", "docker"], world({ logins: ["codex"], env: { CAPCOMD_ENV_SNAPSHOT: "capcomd-env-test" } }));
 		expect(ok.error).toMatchObject({ code: "engine_unreachable" });
 	}, 30_000);
 });
@@ -470,9 +473,10 @@ describe("effort (the driver's reasoning effort)", () => {
 		const { capcomd } = require("../helpers/engine") as typeof import("../helpers/engine");
 		const env = { ...world({ logins: ["claude-code", "codex"] }), CAPCOMD_ENDPOINT: "http://127.0.0.1:6499" };
 		const err = async (args: string[]) => JSON.parse((await capcomd(["run", "fix it", "--json", ...args], env)).stdout.trim().split("\n").pop()!).error;
-		expect(await err(["--planner-provider", "codex", "--planner-effort", "max"])).toMatchObject({ code: "usage", message: expect.stringContaining("use one of minimal, low, medium, high") });
-		expect(await err(["--planner-effort", "high", "--recipe"])).toMatchObject({ code: "usage" });
-		expect(await err(["--planner-effort", "high"])).toMatchObject({ code: "engine_unreachable" }); // the default planner (claude) takes it
+		const [bad, recipe, fine] = await Promise.all([err(["--planner-provider", "codex", "--planner-effort", "max"]), err(["--planner-effort", "high", "--recipe"]), err(["--planner-effort", "high"])]);
+		expect(bad).toMatchObject({ code: "usage", message: expect.stringContaining("use one of minimal, low, medium, high") });
+		expect(recipe).toMatchObject({ code: "usage" });
+		expect(fine).toMatchObject({ code: "engine_unreachable" }); // the default planner (claude) takes it
 	}, 30_000);
 });
 
@@ -855,8 +859,9 @@ describe("the planner's model (capability runs.options.models)", () => {
 		const { capcomd } = require("../helpers/engine") as typeof import("../helpers/engine");
 		const env = { ...world({ logins: ["claude-code", "codex"] }), CAPCOMD_ENDPOINT: "http://127.0.0.1:6499" };
 		const err = async (args: string[]) => JSON.parse((await capcomd(["run", "fix it", "--json", ...args], env)).stdout.trim().split("\n").pop()!).error;
-		expect(await err(["--planner-provider", "codex", "--planner-model", "claude-opus-5-5"])).toMatchObject({ code: "usage", message: expect.stringContaining("isn't a Codex model capcomd offers") });
-		expect(await err(["--planner-model", "claude-opus-5-5", "--recipe"])).toMatchObject({ code: "usage" });
-		expect(await err(["--planner-model", "claude-haiku-5-5"])).toMatchObject({ code: "engine_unreachable" });   // the default planner (claude) takes it
+		const [bad, recipe, fine] = await Promise.all([err(["--planner-provider", "codex", "--planner-model", "claude-opus-5-5"]), err(["--planner-model", "claude-opus-5-5", "--recipe"]), err(["--planner-model", "claude-haiku-5-5"])]);
+		expect(bad).toMatchObject({ code: "usage", message: expect.stringContaining("isn't a Codex model capcomd offers") });
+		expect(recipe).toMatchObject({ code: "usage" });
+		expect(fine).toMatchObject({ code: "engine_unreachable" }); // the default planner (claude) takes it
 	}, 30_000);
 });

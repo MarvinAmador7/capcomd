@@ -7,9 +7,6 @@ public enum ControlState: Sendable, Hashable {
 }
 
 extension CapcomdStore {
-  /// The Log pane keeps the newest lines only.
-  public static let logTail = 200
-
   /// The agent the drill-down follows: the one working now (latest activity first), else the one that changed last.
   public func focusAgent(runId: String) -> Agent? {
     guard let run = runs[runId] else { return nil }
@@ -29,24 +26,6 @@ extension CapcomdStore {
     guard let detail else { return }
     do { files[runId] = .loaded(try await detail.files(runId: runId)) }
     catch { record(error) { files[runId] = .unavailable($0) } }
-    changed()
-  }
-
-  /// Reads the agent's transcript from its cursor to the end (pages of 500), keeping the last `logTail` lines.
-  public func refreshLog(runId: String, agentId: String) async {
-    guard let detail else { return }
-    var after = logCursor[agentId], lines = logs[agentId] ?? []
-    do {
-      for _ in 0..<50 {   // bounded: a huge transcript catches up over a few refreshes
-        let page = try await detail.transcript(runId: runId, agentId: agentId, after: after, limit: 500)
-        for i in page.items { lines.append(LogLine(seq: i.seq, atMs: epochMs(iso: i.at) ?? 0, text: UntrustedText(i.text))) }
-        if lines.count > Self.logTail { lines.removeFirst(lines.count - Self.logTail) }
-        after = page.items.last?.seq ?? after
-        guard let next = page.next else { break }
-        after = next
-      }
-      logs[agentId] = lines; logCursor[agentId] = after; logUnavailable[agentId] = nil
-    } catch { record(error) { logUnavailable[agentId] = $0 } }
     changed()
   }
 

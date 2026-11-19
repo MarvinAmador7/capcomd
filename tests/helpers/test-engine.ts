@@ -1,9 +1,9 @@
 import { env as envVar } from "../../src/utils/env";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { createRequire } from "module";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { tmpdir, userInfo } from "os";
-import { openSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "fs";
 import { privateHarnessSocket } from "./harness-socket";
 
 /**
@@ -223,7 +223,9 @@ export class Engine {
     this.opts = opts;
     this.port = assertPrivate(opts, `engine ${label}`).port;
     this.harnessSocket = opts.env?.CAPCOMD_HARNESS_SOCKET ?? privateHarnessSocket();
-    this.logPath = `/tmp/relay-test-${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 180)}.log`;
+    // serve's output, in this engine's own data dir: never shared with another run of the same test (a parallel
+    // worker, another checkout's suite), whose killpoint lines noteKill would otherwise read. It outlives restarts.
+    this.logPath = join(this.opts.dataDir!, `serve-${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120)}.log`);
   }
 
   /** Every port this engine instance owns (guard, api-peer, metrics). */
@@ -323,6 +325,7 @@ export class Engine {
   }
 
   private async spawnOnce(env: NodeJS.ProcessEnv): Promise<void> {
+    mkdirSync(dirname(this.logPath), { recursive: true });
     const logFd = openSync(this.logPath, "a");
     const child = spawn(process.execPath, ["src/cli/index.ts", "serve", "--port", String(this.port)], {
       cwd: ROOT,
@@ -330,6 +333,7 @@ export class Engine {
       detached: true,
       stdio: ["ignore", logFd, logFd],
     });
+    closeSync(logFd); // the child has its own copy; ours would hold the file open in this process for good
     this.child = child;
     child.on("exit", (code) => this.noteKill(child, code));
     await this.waitReady();
@@ -348,7 +352,7 @@ export class Engine {
     // made stop() SIGKILL every other parallel worker's runner and engine.
     // Trailing slash: "/w1" must not prefix-match "/w10".."/w15" (fast attempt 2, run 1).
     const root = `${this.opts.dataDir!.replace(/\/$/, "")}/`;
-    this.dataFiles = [...files].filter((path) => path.startsWith(root));
+    this.dataFiles = [...files].filter((path) => path.startsWith(root) && path !== this.logPath);
   }
 
   private async waitReady(): Promise<void> {

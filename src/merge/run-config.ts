@@ -9,12 +9,16 @@ export const RUN_REPO_KV = "_repo";
 /** The repo settings recorded for a run ({} when none, or when the engine can't be asked). */
 export async function runRepoEnv(runId: string | undefined): Promise<Record<string, string>> {
   if (!runId) return {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { client } = await import("../core/relay");
+    const { client, endpoint } = await import("../core/relay");
     const look = (async () => (await (client().scope as any).get([runId]).kvGet({ k: RUN_REPO_KV }))?.value)().catch(() => null);
-    const v: any = await Promise.race([look, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    // The client retries a connection that is refused until it gives up: when nothing listens at the endpoint at all,
+    // answer {} at once instead of waiting out the 3 s for it.
+    const down = fetch(endpoint() + "/", { signal: AbortSignal.timeout(3000) }).then(() => new Promise<null>(() => {}), () => null);
+    const v: any = await Promise.race([look, down, new Promise((r) => { timer = setTimeout(() => r(null), 3000); })]);
     return v && typeof v === "object" ? (v as Record<string, string>) : {};
-  } catch { return {}; }
+  } catch { return {}; } finally { clearTimeout(timer); }
 }
 
 /** This process's env with the run's recorded repo settings on top (the run's settings win). */

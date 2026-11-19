@@ -104,7 +104,8 @@ const LC_SNAPSHOT = 1, LC_CUT_SEQ = 4;
 // State at seq s, in the contract's snapshot.* shapes.
 const runBody = { id: RUN, projectId: PRJ, label: "demo", state: "running", goal: GOAL, ...runTitle({ label: "demo", goal: GOAL }), repo: "/tmp/demo-repo", createdAt: iso(T0 + 1000) };
 const agentNode = (e: any, status: string, updatedMs: number) => ({ id: e.agentId, runId: RUN, parent: e.data.parent, depth: e.data.depth,
-  profile: e.data.profile, status, text: `${e.data.profile} is ${status}`, task: e.data.task, taskAttachment: null, result: null, updatedAt: iso(updatedMs) });
+  profile: e.data.profile, status, text: `${e.data.profile} is ${status}`, activity: null, task: e.data.task, taskAttachment: null, result: null,
+  workspace: null, provider: null, model: null, effort: null, updatedAt: iso(updatedMs) });
 const agentsAt = (s: number) => {
   const agents = new Map<string, any>();
   for (const e of fixture.slice(0, s)) {

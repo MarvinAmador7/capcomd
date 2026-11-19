@@ -14,7 +14,7 @@ afterAll(async () => { await w?.stop(); });
 
 test("stuck detection: a silent child is flagged stuck in tree/inspect, then clears on heartbeat", async () => {
   const run = await newRun(w);
-  const child = w.script("silent", `sleep 5; capcomd heartbeat "back" >/dev/null; sleep 3; capcomd result --summary "recovered" >/dev/null`);
+  const child = w.script("silent", `sleep 4; capcomd heartbeat "back" >/dev/null; sleep 2; capcomd result --summary "recovered" >/dev/null`);
   const planner = w.script("watcher", `
 set -e
 id=$(capcomd spawn --profile worker --task silent --key silent --children.maxChildren=0 --contract "$($S/json script='${child}')" | $S/jget agentId)

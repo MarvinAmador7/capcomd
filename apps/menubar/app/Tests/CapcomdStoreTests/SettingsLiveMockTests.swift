@@ -15,7 +15,7 @@ final class SettingsLiveMockTests: XCTestCase {
   func start(_ scene: String, sandboxes: String = "machines", env extra: [String: String] = [:]) async throws -> UnixSocketTransport {
     try? FileManager.default.removeItem(atPath: Self.sock)
     let p = Process()
-    p.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BUN_BIN"] ?? "/usr/local/lib/pnpm/5/.pnpm/bun@1.4.2/node_modules/bun/bin/bun.exe")
+    p.executableURL = BunPath.url
     p.arguments = [URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../client/mock/server.ts").standardized.path, Self.sock]
     p.environment = ProcessInfo.processInfo.environment.merging(["SOCK": Self.sock, "TOKEN": "test-token", "SETTINGS": scene, "SANDBOXES": sandboxes].merging(extra) { $1 }) { $1 }
     p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice

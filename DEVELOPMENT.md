@@ -178,7 +178,7 @@ docs/           - design documents and ADRs
 
 ```bash
 bun run typecheck
-bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages/*
+bun run test:fast              # unit, CLI, setup/config, state machines, tracing, auth, env, MCP, plugins, packages/*: no engine
 bun run test:apps              # apps/canvas and apps/tui
 bun run test:scenarios         # the regression suite: scenarios, sub-agents, primitives, agent adapters, merges
 bun run test:scenarios:timings # the same, then refresh tests/scenario-timings.json from this machine's times
@@ -192,12 +192,21 @@ What CI runs, and where (`.github/workflows/`):
 |---|---|
 | `ci.yml` test | contract and title-shim checks, typecheck, `test:fast`, `test:apps` |
 | `ci.yml` scenarios (7 shards) | `test:scenarios`, balanced by `tests/scenario-timings.json` |
-| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect` with every runnable arm, below) |
-| `ci.yml` package | the npm package (`bun pm pack`), installed with `bun add -g` and no lockfile, as a user installs it, and driven (`scripts/release-smoke.sh`: every `@rivet-dev/services` resolved is the pinned version, and the engine runs rivet-services as on the default port) |
-| `ci.yml` binary | the Linux single executable, installed and driven (`scripts/release-smoke.sh`) |
-| `ci.yml` plugin-package | `@capcomd/plugin` packed (`packages/plugin/scripts/pack.ts`), installed into a fresh project and used from Node 20, typechecked by a TypeScript 5 consumer (`packages/plugin/scripts/smoke.sh`) |
-| `menubar.yml` macos | the Swift client and app tests (`swift test`), when the app, the contract or a file its tests read changes |
+| `ci.yml` evals | both evals above (the primitives eval with `--report-latency`: its baseline is a developer machine's, so on a shared runner a slow case is printed, not failed), and the context eval on the fake sandbox (`--seed 1 --expect` with every runnable arm, below); on a PR, only when something they run changed (src/, packages/, evals/, `scripts/eval-*`, tests/helpers/, plugins/, the dependencies, `ci.yml`) |
+| `ci.yml` install-smoke | what a user installs, installed and driven (`scripts/release-smoke.sh`): the npm package (`bun pm pack`), installed with `bun add -g` and no lockfile, as a user installs it (every `@rivet-dev/services` resolved is the pinned version, and the engine runs rivet-services as on the default port); the Linux single executable; and `@capcomd/plugin` packed (`packages/plugin/scripts/pack.ts`), installed into a fresh project and used from Node 20, typechecked by a TypeScript 5 consumer (`packages/plugin/scripts/smoke.sh`) |
+| `menubar.yml` macos | when the app, the contract or a file its tests read changes: the Swift app tests (`swift test --parallel`); on main, and on a PR that changes the client or the contract, also the client tests (`swift test`) and the mock daemon checked against the contract (`client/mock/validate.ts`) |
 | `release.yml` test | typecheck, `test:fast`, `test:apps` and `test:scenarios` on Linux and macOS, unsharded |
+
+Both scripts run their files in parallel: `test:fast` on 8 workers, `test:scenarios` on 4 (most of its files start an
+engine of their own). `CAPCOMD_TEST_JOBS=N` sets the count (CI sets the runner's core count; `CAPCOMD_TEST_JOBS=1` runs
+one file at a time). A test without a timeout of its own gets 20 s, so a CLI- or git-spawning test doesn't time out
+when the machine is busy. `test:scenarios` starts the slowest files first, by `tests/scenario-timings.json`.
+`test:fast` starts no engine: a test that does (`capcomd serve`, `tests/helpers/test-engine.ts`, the scenarios'
+`world()`) goes in a `test:scenarios` directory, and a pure unit test goes in `test:fast` (`tests/unit`) even when
+what it tests lives under sub-agents, primitives, agents or merge. An engine a test helper starts writes its output to
+`serve-<label>.log` in that engine's own data dir.
+
+A PR that changes only the macOS app, design/, site/ or docs/ (other than the files a job reads) doesn't run `ci.yml`.
 
 Every `*.test.ts` in the repository is in one of them. Gated off by default, because they need real accounts or VMs:
 `tests/merge/github-live.test.ts` (`CAPCOMD_GH_LIVE=1`: a throwaway private GitHub repo through `gh`) and
@@ -231,7 +240,7 @@ from the pinned fx by `scripts/fx-record/record.sh` (needs Docker; fx runs only 
 against a scripted model server): run it after changing `FX_VERSION` or the bridge, and review the diff.
 `packages/plugin` too; its published form is built by `bun packages/plugin/scripts/pack.ts [--out <dir>]` (default
 `packages/plugin/dist`, not committed) and checked by `packages/plugin/test/pack.test.ts` (test:fast) and
-`packages/plugin/scripts/smoke.sh <tgz>` (needs node and npm; CI's plugin-package job). The examples import it by name
+`packages/plugin/scripts/smoke.sh <tgz>` (needs node and npm; CI's install-smoke job). The examples import it by name
 (`@capcomd/plugin`, the package referring to itself), as a plugin author's code does.
 `packages/bot-avatar` works the same way: its `fixtures/catalog.json` and `fixtures/golden/bots.json` refresh with
 `bun packages/bot-avatar/scripts/golden.ts`; a change to any golden bot means existing agents get a new face.

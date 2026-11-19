@@ -88,7 +88,7 @@ The driver code is shared, not copied: `driveOnce` was split into `preflightDriv
 
 ## Results (2026-10-27, 2026-10-28)
 
-- New scenarios (`tests/subagents/workflow.test.ts`, flag on, read only the scope's record until the end, so nothing
+- New scenarios (`tests/subagents/workflow-*.test.ts`, flag on, read only the scope's record until the end, so nothing
   kicks the workflow): a daemon SIGKILL mid-agent → the engine wakes the worker by itself, the workflow re-runs the
   attempt (the run left in the VM is stopped first: `start, stopped, start, finished`), the agent finishes, no
   `DRIVE_FAILED`, never an `agent-drive` process; a usage-limit pause with nobody awaiting → its workflow sleeps to the
@@ -181,7 +181,7 @@ answer is recorded, so a replay gets the same one.
   version check, or nest a loop in a loop (or a try block).
 - **Changing what a step does inside** (its body, not its name or output) needs no bump: completed steps aren't re-run,
   and an interrupted one runs again with the new body. It must stay idempotent.
-- Run `tests/subagents/workflow-upgrade.test.ts` for any change here.
+- Run `tests/subagents/workflow-upgrade.test.ts` and `workflow-upgrade-control.test.ts` for any change here.
 
 The drill (`workflow-upgrade.test.ts`, test-only `CAPCOMD_WORKFLOW_DRILL`): agent A is mid-run under shape 1 when the
 engine host dies; it comes back with shape 2 (a new top-level step, and in every drive-loop iteration a new step plus
@@ -234,8 +234,8 @@ under the one-day pre-gate spike code) resolves to 1 by rivetkit's rule and isn'
   second child, started just as its parent's `capcomd await` killed the host). Every step but the watch's look now
   keeps a no-op wake alarm 10 s ahead while it runs (`STEP_WAKE_MS`: the worker's own `armStepWake` action, at the
   step's start and every 5 s), so after a restart the worker wakes by itself and runs the step again
-  (`tests/subagents/workflow.test.ts` "restart mid-step", killpoint `workflow.start_agent.mid`, and "restart inside a
-  long step", a provider that doesn't answer `ensure`). Cost: one schedule row per step, plus one per 5 s of a long
+  (`tests/subagents/workflow-step.test.ts` "restart mid-step", killpoint `workflow.start_agent.mid`, and
+  `workflow-long-step.test.ts` "restart inside a long step", a provider that doesn't answer `ensure`). Cost: one schedule row per step, plus one per 5 s of a long
   step (provisioning).
 - **One alarm per actor; the schedule overwrites the workflow's** (rivetkit 2.3.31; since rivetkit 3.x the workflow
   keeps its own wake deadline, `setWakeAt`, and the engine fires at the earlier of it and the next scheduled event, so

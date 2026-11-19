@@ -27,6 +27,8 @@ export const SOURCE_DEFAULTS = { sourceRepos: [] as string[], sourceEveryMs: 60_
 export const CAPCOMD_MARK = "<!-- capcomd -->";
 export const SOURCE_TIMER = "github comments";
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/** How often the source polls: `sourceEveryMs`, at least 10 s. Tests only: CAPCOMD_TEST_GITHUB_SOURCE_EVERY_MS sets it. */
+const sourceEvery = (cfg: GitHubSourceConfig) => Number(process.env.CAPCOMD_TEST_GITHUB_SOURCE_EVERY_MS) || Math.max(10_000, cfg.sourceEveryMs);
 /** A thread is `owner/name#number`, the conversation's own name on GitHub. */
 const THREAD = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#\d+$/;
 
@@ -115,7 +117,7 @@ export async function pollGitHub(ctx: PluginContext<unknown>, cfg: GitHubSourceC
           // The intake couldn't act now (the trigger may come again): tried again later, each wait twice the one before.
           const tries = (was?.tries ?? 0) + 1;
           if (tries < RETRY_TRIES) {
-            waiting[c.id] = { tries, next: now + Math.min(RETRY_WAIT_MAX_MS, Math.max(10_000, cfg.sourceEveryMs) * 2 ** (tries - 1)) };
+            waiting[c.id] = { tries, next: now + Math.min(RETRY_WAIT_MAX_MS, sourceEvery(cfg) * 2 ** (tries - 1)) };
             held = true;
             continue;
           }
@@ -182,7 +184,7 @@ export function startGitHubSource(ctx: PluginContext<unknown>, cfg: GitHubSource
 async function armSource(ctx: PluginContext<unknown>, cfg: GitHubSourceConfig): Promise<void> {
   let keep: string | null = null;
   try {
-    keep = (await startSourceTimer(ctx, `github-source-${cfg.sourceEveryMs}`, { kind: "timer", runId: null, owner: { plugin: true }, label: SOURCE_TIMER, everyMs: Math.max(10_000, cfg.sourceEveryMs) })).jobId;
+    keep = (await startSourceTimer(ctx, `github-source-${cfg.sourceEveryMs}`, { kind: "timer", runId: null, owner: { plugin: true }, label: SOURCE_TIMER, everyMs: sourceEvery(cfg) })).jobId;
   } catch (e) {
     if (e instanceof PluginError && e.code === "unsupported") return; // not the daemon
     ctx.log.warn("the github source's timer did not start", { error: String((e as Error)?.message ?? e) });

@@ -155,40 +155,6 @@ final class SearchTests: XCTestCase {
     XCTAssertEqual(home.filter(\.common).map(\.title.text), ["New project", "Settings"])
   }
 
-  // MARK: speed
-
-  /// 300+ items (agents, projects, asks, commands): a keystroke's query stays well under a frame, and a narrowed one
-  /// costs less again. Debug builds are several times slower than release; the bound is for debug.
-  func testAKeystrokeIsFastWithHundredsOfItems() {
-    var i = SearchIndex()
-    let words = ["matchkey", "proration", "invoice", "shards", "backfill", "login", "redirect", "billing", "nightly", "bumps", "parser", "schema"]
-    var runs: [String] = []
-    for p in 0..<12 {
-      let run = "run-\(p)"; runs.append(run)
-      let project = "\(words[p % words.count]) \(words[(p + 5) % words.count])"
-      i.set(agents: (0..<25).map { a in
-        SearchItem(id: "agent.\(run)-\(a)", group: .agents, title: "\(words[(a + p) % words.count]) \(words[(a * 7) % words.count]) \(a)",
-                   subtitle: "\(project) · worker", icon: .bot(runId: run, agentId: "\(a)"), action: .agent(runId: run, agentId: "\(a)"), agentId: "\(run)-\(a)")
-      }, run: run)
-    }
-    i.set(runs: runs)
-    i.set(projects: (0..<12).map { SearchItem(id: "project.\($0)", group: .projects, title: "project \(words[$0])", icon: .place(sandbox: "docker"), action: .project(runId: "run-\($0)")) })
-    i.set(commands: SearchCommands.make(SearchCommandContext(menu: nil, projectTitle: nil, focusedAsk: nil, follow: true, homeShown: false)))
-    XCTAssertGreaterThanOrEqual(i.count, 300)
-    let typed = "match inv"
-    var prefix = "", matched: Set<String>?
-    var worst = 0.0, total = 0.0
-    for c in typed {
-      prefix.append(c)
-      let t = ProcessInfo.processInfo.systemUptime
-      let r = i.search(prefix, among: matched)
-      let ms = (ProcessInfo.processInfo.systemUptime - t) * 1000
-      matched = r.matched; worst = max(worst, ms); total += ms
-    }
-    let t = ProcessInfo.processInfo.systemUptime
-    _ = i.search("m")
-    let first = (ProcessInfo.processInfo.systemUptime - t) * 1000
-    print("search: \(i.count) items; first keystroke \(String(format: "%.3f", first)) ms; worst of \(typed.count) keystrokes \(String(format: "%.3f", worst)) ms, mean \(String(format: "%.3f", total / Double(typed.count))) ms")
-    XCTAssertLessThan(worst, 8)
-  }
+  // A keystroke's cost with hundreds of items is DeskBench's `palette-type` (the `search` fixture, release build, key to
+  // frame ≤ 16.7 ms), not a wall-clock assert here: a debug build under a loaded or parallel run made that one flaky.
 }

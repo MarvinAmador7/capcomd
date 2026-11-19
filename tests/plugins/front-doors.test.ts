@@ -29,10 +29,13 @@ const CLI = join(ROOT, "src", "cli", "index.ts");
 const ECHO = join(import.meta.dir, "fixtures", "front-echo");
 const home = mkdtempSync(join(tmpdir(), "capcomd-front-doors-"));
 const childEnv = (): Record<string, string> => ({ ...(process.env as Record<string, string>), NODE_ENV: "test", CAPCOMD_TEST_PLUGINS: ECHO, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1", CAPCOMD_NO_ENGINE_AUTOSTART: "1", CAPCOMD_ENDPOINT: "http://127.0.0.1:1" });
-const cli = (...args: string[]) => {
-  const p = Bun.spawnSync([process.execPath, CLI, ...args], { cwd: home, env: childEnv(), stdout: "pipe", stderr: "pipe" });
-  return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+/** The CLI with `extra` in its environment (async: a test starts the ones it needs at once). */
+const cliWith = async (extra: Record<string, string>, ...args: string[]) => {
+  const p = Bun.spawn([process.execPath, CLI, ...args], { cwd: home, env: { ...childEnv(), ...extra }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { code, out, err };
 };
+const cli = (...args: string[]) => cliWith({}, ...args);
 const name = (b: { manifest: unknown }) => (b.manifest as PluginManifest).name;
 
 describe("the kernel's front doors", () => {
@@ -106,8 +109,8 @@ describe("the kernel's front doors", () => {
 });
 
 describe("a plugin's command answers with the envelope and the caller's principal (§4.7.1, §11.2)", () => {
-  test("--json: the envelope as it is, run as the operator, with the plugin's own principal apart", () => {
-    const r = cli("echo", "hello", "world", "--channel", "general", "--to", "x", "--json");
+  test("--json: the envelope as it is, run as the operator, with the plugin's own principal apart", async () => {
+    const r = await cli("echo", "hello", "world", "--channel", "general", "--to", "x", "--json");
     expect(r.code).toBe(0);
     expect(JSON.parse(r.out)).toEqual({
       schema: "relay.v1", ok: true, principal: { kind: "operator", clientId: null }, args: ["hello", "world"], flags: { channel: "general", to: "x" }, json: true,
@@ -115,63 +118,61 @@ describe("a plugin's command answers with the envelope and the caller's principa
     });
   });
 
-  test("without --json: its text; a PluginError is the relay.v1 error with the matching exit code", () => {
-    const r = cli("echo", "hi");
+  test("without --json: its text; a PluginError is the relay.v1 error with the matching exit code", async () => {
+    const [r, missing, missingText, bare] = await Promise.all([cli("echo", "hi"), cli("echo", "missing", "thing", "--json"), cli("echo", "missing"), cli("echo", "bare", "--json")]);
     expect(r).toMatchObject({ code: 0, out: "operator said: hi\n" });
-    const missing = cli("echo", "missing", "thing", "--json");
     expect(missing.code).toBe(3);
     expect(JSON.parse(missing.out)).toEqual({ schema: "relay.v1", ok: false, error: { code: "not_found", message: "nothing called thing", hint: "Try `capcomd echo hello`.", reason: "plugin:echo" } });
-    expect(cli("echo", "missing").err).toContain("✗ nothing called that");
-    const bare = cli("echo", "bare", "--json");
+    expect(missingText.err).toContain("✗ nothing called that");
     expect(bare.code).toBe(1);
     expect(JSON.parse(bare.out).error.message).toBe("the echo plugin's echo command didn't answer with a relay.v1 envelope");
   });
 
-  test("--help: its usage; the whole help lists it under the plugins' commands", () => {
-    expect(cli("echo", "--help")).toMatchObject({ code: 0, out: expect.stringContaining("Usage (the echo plugin):\n  capcomd echo [words…] [--flag value]") });
-    const all = cli("--help");
+  test("--help: its usage; the whole help lists it under the plugins' commands", async () => {
+    const [usage, all, kernel] = await Promise.all([cli("echo", "--help"), cli("--help"), cliWith({ CAPCOMD_TEST_PLUGINS: "" }, "--help")]);
+    expect(usage).toMatchObject({ code: 0, out: expect.stringContaining("Usage (the echo plugin):\n  capcomd echo [words…] [--flag value]") });
     expect(all.out).toContain("capcomd serve");
     // After the built-ins' own plugin commands (capcomd context, the context router's).
     expect(all.out).toMatch(/Plugin commands:\n(?: {2}capcomd .+\n)* {2}capcomd echo\s+Say who called and what it was given {2}\(echo\)/);
     expect(all.out).toMatch(/ {2}capcomd context\s+The project's context \(ADR-025\): the brief a profile's agents start with, and lint.* {2}\(context\)/);
     // Without the plugin, the help is the kernel's and the built-ins' alone.
-    const p = Bun.spawnSync([process.execPath, CLI, "--help"], { env: { ...childEnv(), CAPCOMD_TEST_PLUGINS: "" }, stdout: "pipe" });
-    expect(p.stdout.toString()).not.toContain("capcomd echo");
-    expect(p.stdout.toString()).toMatch(/Plugin commands:\n {2}capcomd context .*\(context\)\n\n$/);
+    expect(kernel.out).not.toContain("capcomd echo");
+    expect(kernel.out).toMatch(/Plugin commands:\n {2}capcomd context .*\(context\)\n\n$/);
   });
 
-  test("a kernel command is the kernel's as before: its flags are checked, its output its own", () => {
-    expect(cli("frobnicate")).toMatchObject({ code: 2, err: expect.stringContaining("unknown command: frobnicate") });
-    expect(cli("status", "--bogus")).toMatchObject({ code: 2, err: expect.stringContaining("Unknown option '--bogus'") });
-    const h = cli("hermes", "--json");
+  test("a kernel command is the kernel's as before: its flags are checked, its output its own", async () => {
+    const [unknown, bogus, h] = await Promise.all([cli("frobnicate"), cli("status", "--bogus"), cli("hermes", "--json")]);
+    expect(unknown).toMatchObject({ code: 2, err: expect.stringContaining("unknown command: frobnicate") });
+    expect(bogus).toMatchObject({ code: 2, err: expect.stringContaining("Unknown option '--bogus'") });
     expect(h.code).toBe(0);
     expect(JSON.parse(h.out)).toMatchObject({ schema: "relay.v1", ok: true, hermes: { found: expect.any(Boolean), ok: expect.any(Boolean) } });
   });
 
-  test("a command whose plugin isn't running names the plugin and why, not an unknown command; its listing has its commands", () => {
-    const run = (extra: Record<string, string>, ...args: string[]) => {
-      const p = Bun.spawnSync([process.execPath, CLI, ...args], { cwd: home, env: { ...childEnv(), ...extra }, stdout: "pipe", stderr: "pipe" });
-      return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
-    };
-    expect(JSON.parse(cli("plugins", "list", "--json").out).plugins.find((p: { name: string }) => p.name === "echo")).toMatchObject({ commands: ["echo"] });
-    // Turned off in the user's config: `capcomd plugins enable` turns it on.
+  test("a command whose plugin isn't running names the plugin and why, not an unknown command; its listing has its commands", async () => {
+    // Turned off in the user's config (read only by the first: the others have CAPCOMD_NO_CONFIG): `capcomd plugins enable` turns it on.
     const config = join(home, "config.json");
     writeFileSync(config, JSON.stringify({ plugins: { echo: { enabled: false } } }));
-    let off: ReturnType<typeof run>;
-    try { off = run({ CAPCOMD_NO_CONFIG: "" }, "echo", "hi", "--json"); } finally { rmSync(config, { force: true }); }
+    let all: Awaited<ReturnType<typeof cliWith>>[];
+    try {
+      all = await Promise.all([
+        cliWith({ CAPCOMD_NO_CONFIG: "" }, "echo", "hi", "--json"), cli("plugins", "list", "--json"),
+        cliWith({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "hi", "--json"), cliWith({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "--channel", "x"),
+        cliWith({ CAPCOMD_PLUGIN_ECHO_ENABLED: "maybe" }, "echo", "hi"), cli("frobnicate"),
+      ]);
+    } finally { rmSync(config, { force: true }); }
+    const [off, listed, envOff, flagged, broken, unknown] = all as [typeof all[0], typeof all[0], typeof all[0], typeof all[0], typeof all[0], typeof all[0]];
+    expect(JSON.parse(listed.out).plugins.find((p: { name: string }) => p.name === "echo")).toMatchObject({ commands: ["echo"] });
     expect(off.code).toBe(2);
     expect(JSON.parse(off.out)).toEqual({ schema: "relay.v1", ok: false, error: { code: "config", message: "capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)", hint: "Turn it on: capcomd plugins enable echo", reason: "plugin:echo" } });
     // Turned off in the environment, which wins over the config `enable` writes: the hint names the variable.
-    off = run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "hi", "--json");
-    expect(off.code).toBe(2);
-    expect(JSON.parse(off.out)).toEqual({ schema: "relay.v1", ok: false, error: { code: "config", message: "capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)", hint: "CAPCOMD_PLUGIN_ECHO_ENABLED=false in the environment turns it off, over your config: unset it to turn echo on.", reason: "plugin:echo" } });
+    expect(envOff.code).toBe(2);
+    expect(JSON.parse(envOff.out)).toEqual({ schema: "relay.v1", ok: false, error: { code: "config", message: "capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)", hint: "CAPCOMD_PLUGIN_ECHO_ENABLED=false in the environment turns it off, over your config: unset it to turn echo on.", reason: "plugin:echo" } });
     // With a flag the kernel's table doesn't know, too.
-    expect(run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "false" }, "echo", "--channel", "x").err).toContain("capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)");
-    const broken = run({ CAPCOMD_PLUGIN_ECHO_ENABLED: "maybe" }, "echo", "hi");
+    expect(flagged.err).toContain("capcomd echo is the echo plugin's command, and echo isn't running: validated (disabled)");
     expect(broken.code).toBe(2);
     expect(broken.err).toContain("✗ capcomd echo is the echo plugin's command, and echo isn't running: failed (config_invalid)");
     expect(broken.err).toContain("capcomd plugins show echo says more.");
-    expect(run({}, "frobnicate")).toMatchObject({ code: 2, err: expect.stringContaining("unknown command: frobnicate") });
+    expect(unknown).toMatchObject({ code: 2, err: expect.stringContaining("unknown command: frobnicate") });
   });
 });
 
