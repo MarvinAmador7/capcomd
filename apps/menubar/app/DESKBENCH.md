@@ -90,6 +90,11 @@ its run when the median is over it; the frame budgets are information.
   each key → the frame with its results, one frame); ↓ ↓ ↑, ↩ opens the selection, ⌘↩ opens (folded, as ↩ does), Esc
   closes (`run.key`). Checks read the UI: the empty search's groups, the ranking, the selection, what opened; ink: the
   palette (its own hosting view in the window, drawn alone; its panel with `search.host=panel`).
+- `palette-first`: the first ⌘K after the window opens, once: the desk shown and its warming done (at rest 300 ms), then
+  ⌘K through the menu bar → the frame with the palette and its results (50 ms; one step, so the scenario's latency is
+  that ⌘K's). Checks `shown`, `items`, `empty-search`; ink: the palette. The window builds the palette hidden once it
+  has drawn (`PaletteWarmer`), so this measures what the first ⌘K still pays: AppKit's first key equivalent (the Window
+  menu filled), the first text field to take the keyboard in the process.
 - Splits and expand (SPEC §2.1; each rep starts from one pane with the sidebar open and ends with its panes on screen;
   the shortcuts go through the menu bar, and each step names the item that fired):
   `split-open` (⌘D, ⇧⌘D, ⌘W ×2, `cycles` 2), `split-focus` (⌃← ⌃← ⌃→ ⌃→, then real clicks in other panes), `split-burst`,
