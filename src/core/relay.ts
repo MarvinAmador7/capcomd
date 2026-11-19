@@ -11,13 +11,15 @@ import { env } from "../utils/env";
 import { loadMergeConfig, taskBranch } from "../merge/config";
 import type { MergeOutcome } from "../merge/types";
 import { isoTs } from "../api/envelope";
+import { retryingClient } from "./engine-retry";
 
 export function endpoint(): string {
   return env("ENDPOINT") ?? "http://127.0.0.1:6420";
 }
 
+/** The engine's client. Its actor handles wait out the engine's "overloaded, retry after N ms" (src/core/engine-retry.ts). */
 export function client() {
-  return createClient<Registry>({ endpoint: endpoint() });
+  return retryingClient(createClient<Registry>({ endpoint: endpoint() }));
 }
 
 /** The engine's "no such actor" (a `get` on a key it never had). */
@@ -33,7 +35,8 @@ const actorsSeen = new Set<string>();
  * An actor's handle only when it already exists, else null; it never creates one. Reads go through this: the runs
  * index can list runs this engine never had (another engine's), and a read with getOrCreate left an empty actor behind
  * for each (the menu bar's daemon stream lists every run twice a second). The check is one engine lookup: the calls of
- * a plain `get` handle retry not_found for ~2.4 s, logging every retry. Throws when the engine can't say.
+ * a plain `get` handle retry not_found for ~2.4 s, logging every retry. An overloaded engine is asked again as it says
+ * (client()); throws when the engine still can't say.
  */
 export async function existingActor<K extends ActorKind>(kind: K, key: string[]): Promise<ReturnType<Client[K]["getOrCreate"]> | null> {
   const handle = (client()[kind] as any).get(key);
