@@ -91,6 +91,7 @@ Usage:
                                        for the app to keep (the capcomd app runs it to connect; all four scopes unless
                                        --scopes); revokes the token that app paired before
   capcomd run new [--budget 5|usd=5,turns=200,wallSeconds=3600] [--label L] [--goal G] [--key K] [--checks-set name='cmd']… [--reviewer PROFILE] [--target T [--target-from BASE] | --goal-branch G --base B] [--sandbox docker|boxd]  → runId (a scope; plans nothing; sandbox default: the project's, then your user config's)
+  capcomd run archive|restore <runId>  → an archived run is read-only (its agents take no messages) until restored
   capcomd spawn <runId> --task T [--title "2-4 words"] [--profile P] [--set k=v] [--parent agt] [--key K] [--budget usd=…,turns=…,wallSeconds=…] [--contract JSON|file] [--check NAME] [--report] [--continue agt] [--no-start] [--operator]
   capcomd await <runId> <agt…> [--timeout-ms N] [--notices]  ·  capcomd wait-any <runId> <agt…> [--notices]
   capcomd cancel <runId> [agt] [--reason R]     (propagates to all descendants)  ·  capcomd tree <runId>
@@ -111,7 +112,7 @@ Usage:
   capcomd tree <runId> [--root agt]      subtree with cost/turn rollups and stuck flags
   capcomd tui [runId] [--view live|waterfall|timeline|rollups|events]   the terminal debugger (no runId: the latest run)
   capcomd inspect <runId> <agt> [--tail N]  ·  capcomd logs <runId> <agt> [--tail N] [--follow]  ·  capcomd budget show <runId> [agt]
-  capcomd send <runId> <agt> <text> [--from agt] [--skill NAME]…  ·  capcomd token revoke <runId> <jti> [--reason R]
+  capcomd send <runId> <agt> <text> [--from agt] [--skill NAME]… [--model M] [--effort E]  ·  capcomd token revoke <runId> <jti> [--reason R]
   capcomd title <runId> <agt> <2-4 words>   name an agent's tab (as the driving harness: the agent's own later renames
                                        replace it; a title the user gave in the apps stays until they clear it)
   capcomd skills                         skills send --skill attaches (bundled and ~/.claude/skills): the agent reads each with the message

@@ -287,6 +287,8 @@ async function drainWorkerImpl(c: any, workerId: string, cause: "run_ended" | "i
 
 export type PushBranchParams = {
   workerId: string; taskId: string; epoch: number; branch: string; runId?: string; parentAgentId?: string | null; target?: string; rework?: boolean; resumed?: boolean;
+  /** ADR-026 §1: a message woke this idle agent into this attempt: it continues its conversation (§5). */
+  continued?: boolean;
   /** Legacy runs have no scope actor and use the daemon settings. */
   scopeBacked?: false;
   /** `spawn --continue`: the stopped agent whose work this branch starts from. */
@@ -317,6 +319,22 @@ export type PushBranchParams = {
   /** What its profile pinned for its machine (as provisionWorker got it): the same sandbox, environment and size. */
   machine?: ProfileMachine;
 };
+
+/**
+ * ADR-026 §5: what a continued attempt's runner is given: the scope's record of the agent (its messages after its
+ * cursor, its thread, its last hand-back), its saved session to restore in its machine, and the fallback's thread line.
+ */
+function continueHooks(scope: any, o: { runId: string; agentId: string; provider: unknown; machineId: string }): import("../agents/continue").ContinueHooks {
+  return {
+    load: async () => (await scope.continuation({ agentId: o.agentId })) ?? null,
+    restore: async ({ home, cwd }) => (await import("../agents/continue")).restoreSession({ runId: o.runId, agentId: o.agentId, provider: o.provider, machineId: o.machineId, home, cwd }),
+    pickedUpFromThread: async () => {
+      const { PICKED_UP_TEXT } = await import("../agents/continue");
+      const a = await scope.getAgent({ agentId: o.agentId }).catch(() => null);
+      await scope.threadNote({ agentId: o.agentId, id: `itm-${o.agentId}-picked-up-e${a?.epoch ?? 0}`, text: PICKED_UP_TEXT });
+    },
+  };
+}
 
 /**
  * The agent's run and push (provision is done): the pushBranch action, and (ADR-022) the worker's own workflow, which
@@ -424,6 +442,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   let limit: string | undefined; // stopped at a limit: the branch holds the work so far
   let resetAt: number | undefined; // limit "quota": when the provider said the usage limit resets (ms epoch)
   let orchestrateWrites: import("../agents/runner").OrchestrateWrites | undefined; // §16.1: an orchestrate agent wrote files (it fails)
+  let sleptMs = 0; // ADR-026: time its CLI slept between turns (a wake pending): not wall time
   let adopted = false;
   const agent = setup.kind;
   // Takeover: a push that reached the remote before its holder died is adopted, not redone.
@@ -463,7 +482,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     const items = scope ? itemWriter(scope, workerId) : null;
     const res = await runAgent(adapter, provider, vmId, {
       runId, taskId, epoch, branch: params.review?.branch ?? branch, target: params.review?.target ?? params.target ?? cfg.target, repoUrl: cfg.remote,
-      goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}),
+      goal: params.goal ?? `Task ${taskId}`, ...(params.title ? { title: params.title } : {}), rework: params.rework, ...(params.resumed ? { resumed: true } : {}), ...(params.continued ? { continued: true } : {}), ...(params.from ? { from: params.from } : {}), ...(params.review ? { review: params.review } : {}),
       // A consolidator works as a reporting agent does (a read-only checkout of the target; nothing kept or pushed), with its own prompt.
       ...(params.report || params.consolidate ? { report: true } : {}), ...(params.consolidate ? { consolidate: params.consolidate } : {}),
       ...(workerId.startsWith("agt-") ? { agentId: workerId, parentAgentId: params.parentAgentId ?? null } : {}), conflictFiles: params.conflictFiles,
@@ -475,6 +494,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       // agent (boxd) the same from its project's template, when it booted from one (the runner reads its marker).
       warmTemplate: sandboxCaps(runSource).isolation === "container" ? true : sandboxCaps(runSource).isolation === "vm" ? "vm" : false,
       ...(templates ? { onWorkspace: templates.onWorkspace } : {}),
+      // ADR-026 §5: a continued attempt picks up its conversation: its saved session (path 3), else its thread (path 4).
+      ...(params.continued && scope ? { continuation: continueHooks(scope, { runId, agentId: workerId, provider, machineId: vmId }) } : {}),
       heartbeatMs: beatEvery,
       vmTtlSeconds: lifeSeconds,
       onRenew: (secs) => { renewWorkerLease(c.db, workerId, Date.now() + secs * 1000).catch(() => {}); },
@@ -499,7 +520,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
       // ADR-026 §3: its mailbox, pushed (the scope's messagesChanged), with the durable delivery cursor.
       ...(scope ? { messages: {
-        pull: async (after: number) => (await scope.pullMessages({ agentId: workerId, after })) as { seq: number; from: string; body: string; skills?: AttachedSkill[] }[],
+        pull: async (after: number) => (await scope.pullMessages({ agentId: workerId, after })) as { seq: number; from: string; body: string; skills?: AttachedSkill[]; nextTurn?: boolean }[],
         delivered: (seq: number) => { scope.messagesDelivered({ agentId: workerId, seq }).catch(() => {}); },
         subscribe: (onChange: () => void) => {
           try {
@@ -550,6 +571,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
     limit = res.limit;
     resetAt = res.resetAt;
     orchestrateWrites = res.orchestrateWrites;
+    sleptMs = res.sleptMs ?? 0;
     // The `capcomd run` recipe has no stopped state: its task fails, with the work kept on the branch.
     if (limit && !workerId.startsWith("agt-")) throw new UserError(`agent ${stoppedAt(limit)}; its work so far is on ${branch}`, { code: "limit", metadata: { kind: "limit" } });
   } else if (params.review || params.report || params.consolidate) {
@@ -572,7 +594,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   }
 
   killpoint("push.after.before_event");
-  const wallSeconds = Math.round((Date.now() - pushStarted) / 100) / 10;
+  const wallSeconds = Math.max(0, Math.round((Date.now() - pushStarted - sleptMs) / 100) / 10);
 
   await c.db.transaction(async (tx: RawAccess) => {
     await transitionLifecycle(

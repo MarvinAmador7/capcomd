@@ -239,6 +239,13 @@ hint (`capcomd send <runId> <agt> "…"`, `capcomd_send`: a Claude agent reads i
 Codex agent can't read messages while it runs), cancel it and continue its work in a new child with a better task, or
 await again.
 
+**Idle, not done.** An agent whose turn ended (done, failed or cancelled) in a run that isn't archived is idle: a
+message to it (`capcomd send <runId> <agt> "…"`, `capcomd_send`) continues it as its next turn, with its conversation
+and its branch, on a fresh machine (the answer says so, and `await` returns when that turn ends too). Send a follow-up
+or a fix to the agent that did the work instead of spawning a new one that knows nothing of it. Its turns and spend
+count across its turns (its wall time only while it works), so an agent stopped at a limit is continued with
+`spawn --continue` and a new budget instead. Only an archived run refuses messages (the user restores it).
+
 **Limits, checkpoints, quota.**
 - An agent that reaches a limit is stopped, not retried: it ends `failed` with `result.limit` (timeout, max_turns,
   max_budget_usd, idle, spinning or failing) and its work so far on `result.branch`. Continue it with

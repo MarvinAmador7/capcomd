@@ -198,8 +198,9 @@ public struct LiveStarter: RunStarting {
   }
 }
 
-/// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50). 409 `conflict` (the agent has ended) and 422 carry
-/// the daemon's sentence; a 404 that names the run or agent is a refusal, any other 404 means the route is missing.
+/// `POST /v1/runs/{runId}/agents/{agentId}/messages` (harness #50). Every agent of a run that isn't archived takes
+/// messages (an idle one continues: capability agents.idle); 409 `archived` (the run is archived) and 422 carry the
+/// daemon's sentence; a 404 that names the run or agent is a refusal, any other 404 means the route is missing.
 public struct LiveMessenger: AgentMessaging {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
@@ -217,7 +218,26 @@ public struct LiveMessenger: AgentMessaging {
     case 403: throw MessageRefused("This app's capcomd token can't send messages (needs the steer scope)")
     case 404 where (obj?["code"] as? String) == "not_found" && (message.hasPrefix("run ") || message.hasPrefix("agent ")): throw MessageRefused(message)
     case 404: throw DetailUnavailable.unsupported
-    case 409, 422: throw MessageRefused(message)
+    case 409, 422: throw MessageRefused(message, code: obj?["code"] as? String)
+    default: throw DetailUnavailable.failed("HTTP \(status)")
+    }
+  }
+}
+
+/// `POST /v1/runs/{runId}/archive` and `/restore` (capability runs.archive, the steer scope): the controls' transport.
+extension LiveControls: RunArchiving {
+  public func restore(runId: String, idempotencyKey: String) async throws { try await archivePost(runId, "restore", idempotencyKey) }
+  public func archive(runId: String, idempotencyKey: String) async throws { try await archivePost(runId, "archive", idempotencyKey) }
+  func archivePost(_ runId: String, _ action: String, _ idempotencyKey: String) async throws {
+    let (status, body) = try await transport.post("/v1/runs/\(LiveDetail.seg(runId))/\(action)", headers: [("Idempotency-Key", idempotencyKey)])
+    let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+    switch status {
+    case 200: return
+    case 401: throw Unauthorized()
+    case 403: throw MessageRefused("This app's capcomd token can't \(action) runs (needs the steer scope)")
+    case 404 where (obj?["code"] as? String) == "not_found" && ((obj?["message"] as? String) ?? "").hasPrefix("run "): throw MessageRefused((obj?["message"] as? String) ?? "run not found")
+    case 404: throw DetailUnavailable.unsupported
+    case 409: throw MessageRefused((obj?["message"] as? String) ?? "capcomd refused", code: obj?["code"] as? String)
     default: throw DetailUnavailable.failed("HTTP \(status)")
     }
   }

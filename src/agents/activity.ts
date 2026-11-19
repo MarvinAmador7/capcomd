@@ -19,7 +19,7 @@ export type ActivityStep = { kind: ActivityKind; target: string };
  * its CLI, starting it. Only what the daemon is actually doing: a phase is reported when it starts, and the copy's bytes
  * as they go.
  */
-export const SETUP_PHASES = ["machine", "workspace", "fetch", "copy", "install", "agent"] as const;
+export const SETUP_PHASES = ["machine", "workspace", "fetch", "copy", "install", "restore", "agent"] as const;
 export type SetupPhase = (typeof SETUP_PHASES)[number];
 export type SetupState = { phase: SetupPhase; bytes?: number | null; total?: number | null };
 /** What is stored on the agent: the current kind, how many distinct targets the streak touched, when it last changed;

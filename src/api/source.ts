@@ -57,6 +57,13 @@ export function brainSendOutcome(runId: string, actor: string, sent: O<typeof Br
 /** A project groups runs on one repository: its id is derived from the run's repository (CAPCOMD_REPO). */
 export const projectIdOf = (repo: string | null) => (repo ? `prj-${createHash("sha256").update(repo).digest("hex").slice(0, 12)}` : null);
 
+/** A message the daemon refused for the run's or the request's state (POST …/messages). */
+export class SendRefused extends Error {
+	constructor(readonly status: 409 | 422, readonly code: "archived" | "conflict" | "invalid", message: string, readonly field?: string) { super(message); }
+}
+/** POST /v1/runs/{runId}/archive|restore. */
+export type ArchiveOutcome = { ok: true; changed: boolean } | { ok: false; status: 404 | 409; code: "not_found" | "conflict"; message: string };
+
 export interface HarnessSource {
 	version: string;
 	runs(): Promise<O<typeof Run>[]>;
@@ -127,8 +134,13 @@ export interface HarnessSource {
 	 * `noop` explains why nothing changed (→ 409 conflict).
 	 */
 	control(runId: string, action: RunAction, by: string, agentId?: string): Promise<ControlResult>;
-	/** Send `to` a message from the operator, with skills to read with it; idempotent by `key`. */
-	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[]): Promise<{ seq: number; note: string | null }>;
+	/** Send `to` a message from the operator, with skills to read with it; idempotent by `key`. ADR-026 §1: an idle agent
+	 *  continues with it (`continued`); `turn` (capability agents.messages.model) is the model/effort of its next turn.
+	 *  Throws SendRefused when the run is archived (409 archived) or the scope refuses the change (422 invalid). */
+	send(runId: string, to: string, body: string, key: string, skills?: AttachedSkill[], turn?: { model: string | null; effort: string | null }): Promise<{ seq: number; note: string | null; continued?: boolean }>;
+	/** Capability runs.archive: archive the run (read-only until restored; refused while an agent works) or restore it. */
+	archive(runId: string, by: string): Promise<ArchiveOutcome>;
+	restore(runId: string, by: string): Promise<ArchiveOutcome>;
 	/** GET /v1/projects/inspect (capability projects.setup): a folder's facts and what blocks setting it up. Writes nothing. */
 	inspectProject(path: string): Promise<ProjectInspection>;
 	/** GET /v1/projects/known (capability projects.known): capcomd's projects and their checkouts. */
@@ -260,7 +272,7 @@ export function memorySource(seed: Partial<{
 }> = {}): HarnessSource & {
 	push(runId: string, e: Omit<RawEvent, "seq">): RawEvent; decided: Array<{ approvalId: string; approve: boolean; by: string }>; created: CreateRunInput[];
 	/** Messages as the agent would get them (skills with their content). */
-	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }>;
+	delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[]; turn?: { model: string | null; effort: string | null } }>;
 	/** Machines deleted at a provider (an orphan's Delete), in order. */
 	destroyed: Array<{ sandbox: string; vmId: string }>;
 	/** Brain proposals sent (POST …/brain-proposals/send), in order: each a draft in the brain as `actor`. */
@@ -283,7 +295,10 @@ export function memorySource(seed: Partial<{
 	const decided: Array<{ approvalId: string; approve: boolean; by: string }> = [];
 	const created: CreateRunInput[] = [];
 	const sent = new Map<string, number>(); // message idempotency key → seq
-	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[] }> = [];
+	const delivered: Array<{ runId: string; to: string; seq: number; body: string; skills: AttachedSkill[]; turn?: { model: string | null; effort: string | null } }> = [];
+	// Capability runs.archive (archived runs), and each continued agent's attempt (ADR-026 §1).
+	const archived = new Set<string>();
+	const epochs = new Map<string, number>();
 	const loginsOf = async (only?: O<typeof Login>["provider"]) => (seed.logins ?? (["claude", "codex", "fx"] as const).flatMap((provider) => LISTED_PROVIDERS.map((sandbox) => ({ provider, sandbox, loggedIn: false, how: null, detail: null, hostBound: false, boundTo: null, command: `capcomd auth login ${provider} --sandbox ${sandbox}` }))))
 		.filter((l) => (only ? l.provider === only : l.provider !== "fx"));
 	const driverLoginsOf = async () => (await loginsOf()).filter((l): l is O<typeof Login> & { provider: "claude" | "codex" } => l.provider !== "fx");
@@ -384,14 +399,40 @@ export function memorySource(seed: Partial<{
 			});
 			return brainSendOutcome(runId, actor, out);
 		},
-		send: async (runId, to, body, key, skills = []) => {
+		send: async (runId, to, body, key, skills = [], turn) => {
 			const prior = sent.get(key);
 			if (prior !== undefined) return { seq: prior, note: null };
+			if (archived.has(runId)) throw new SendRefused(409, "archived", `run ${runId} is archived · restore to continue`);
 			const seq = messagesOf(events[runId] ?? []).reduce((m, x) => Math.max(m, x.seq), 0) + 1;
 			push(runId, { at: Date.now(), type: "MESSAGE_SENT", agentId: "operator", data: { to, seq, bytes: Buffer.byteLength(body), text: body, attachment: null, skills: skills.map((x) => x.name) } });
-			delivered.push({ runId, to, seq, body, skills });
+			delivered.push({ runId, to, seq, body, skills, ...(turn ? { turn } : {}) });
 			sent.set(key, seq);
+			// ADR-026 §1, as the scope does it: an idle agent continues with the message as its next turn.
+			const a = (seed.agents?.[runId] ?? []).find((x) => x.id === to);
+			if (a && ["done", "failed", "cancelled"].includes(a.status)) {
+				const from = a.status;
+				a.status = "running";
+				const epoch = (epochs.get(`${runId}\u0000${to}`) ?? 1) + 1;
+				epochs.set(`${runId}\u0000${to}`, epoch);
+				push(runId, { at: Date.now(), type: "AGENT_CONTINUED", agentId: to, data: { epoch, from, by: "operator", messageSeq: seq } });
+				return { seq, note: `${to} was idle: this message is its next turn (it continues the same thread on a fresh machine)`, continued: true };
+			}
 			return { seq, note: null };
+		},
+		archive: async (runId, by) => {
+			if (!runs.some((r) => r.id === runId)) return { ok: false, status: 404, code: "not_found", message: `run ${runId} not found` };
+			if (archived.has(runId)) return { ok: true, changed: false };
+			const live = (seed.agents?.[runId] ?? []).filter((a) => !["done", "failed", "cancelled", "handed-off"].includes(a.status));
+			if (live.length) return { ok: false, status: 409, code: "conflict", message: `${live.length === 1 ? `agent ${live[0]!.id} is` : `${live.length} agents are`} still working: stop the run before archiving it` };
+			archived.add(runId);
+			push(runId, { at: Date.now(), type: "RUN_ARCHIVED", agentId: null, data: { by } });
+			return { ok: true, changed: true };
+		},
+		restore: async (runId, by) => {
+			if (!runs.some((r) => r.id === runId)) return { ok: false, status: 404, code: "not_found", message: `run ${runId} not found` };
+			if (!archived.delete(runId)) return { ok: true, changed: false };
+			push(runId, { at: Date.now(), type: "RUN_RESTORED", agentId: null, data: { by } });
+			return { ok: true, changed: true };
 		},
 		// A seeded run without a title gets the daemon's, from its label, goal and agents as they are now. The list itself is
 		// returned (tests add and remove runs through it).
@@ -399,6 +440,8 @@ export function memorySource(seed: Partial<{
 			for (const r of runs) {
 				if (r.title === undefined) autoTitled.add(r);
 				if (autoTitled.has(r)) Object.assign(r, runTitle({ label: r.label, goal: r.goal, agents: seed.agents?.[r.id] }));
+				// Capability runs.archive: set only on an archived run.
+				if (archived.has(r.id)) (r as O<typeof Run>).archived = true; else delete (r as O<typeof Run>).archived;
 			}
 			return runs as O<typeof Run>[];
 		},

@@ -221,8 +221,11 @@ if (cfg.input) {
     // read is still in the pipe: the CLI reads it, answers, and then sees the end. Not while a job of its runs, or
     // the result of one is on its way: that message starts its next turn.
     if (resultAt && sentAt <= resultAt && Date.now() - resultAt >= 1000) {
-      const j = jobs();
-      if (!j.running && !j.waiting && !pendingWakes()) { closed = true; try { child.stdin.end(); } catch {} }
+      // The engine asked for its input to end at the end of this turn (a message changed its model: ADR-026, its next
+      // attempt runs with it), whatever it waits on.
+      const ask = existsSync(`${cfg.dir}/input.close`);
+      const j = ask ? null : jobs();
+      if (ask || (!j.running && !j.waiting && !pendingWakes())) { closed = true; try { child.stdin.end(); } catch {} }
     }
   }, 500);
 }

@@ -16,15 +16,16 @@ export const LifecycleCause = z.enum([
 	"created", "spawned", "started", "resumed", "paused", "usage_limit", "finished", "error", "cancelled", "parent_ended",
 	"all_agents_done", "agent_failed", "all_agents_cancelled", "all_agents_paused", "approval_needed", "approved", "denied", "deleted",
 	"planner_done", "pull_request_opened", "branch_kept", "titled", "waiting", "woken", "wake_cancelled",
+	"continued", "archived", "restored",
 ]).describe("Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know");
 export type LifecycleCause = z.infer<typeof LifecycleCause>;
 
 /** Every lifecycle type. Agent and approval names reuse the existing harness.v1 names (decision 9). */
 export const LIFECYCLE_TYPES = [
 	"run.created", "run.started", "run.paused", "run.resumed", "run.completed", "run.failed", "run.cancelled", "run.deleted",
-	"run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled",
+	"run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled", "run.archived", "run.restored",
 	"agent.spawned", "agent.titled", "agent.started", "agent.paused", "agent.resumed", "agent.done", "agent.failed", "agent.cancelled", "agent.reaped",
-	"agent.wake_armed", "agent.woken", "agent.wake_cancelled",
+	"agent.wake_armed", "agent.woken", "agent.wake_cancelled", "agent.continued",
 	"approval.requested", "approval.decided",
 ] as const;
 export type LifecycleType = (typeof LIFECYCLE_TYPES)[number];
@@ -40,15 +41,19 @@ export const RunLifecycleData = {
 const AGENT_CAUSE: Record<string, LifecycleCause> = {
 	AGENT_SPAWNED: "spawned", AGENT_STARTED: "started", AGENT_RESUMED: "resumed", AGENT_DONE: "finished",
 	AGENT_FAILED: "error", AGENT_CANCELLED: "cancelled", AGENT_REAPED: "parent_ended",
+	// ADR-026 §1: a message woke an idle agent into its next attempt: it runs again (the run with it).
+	AGENT_CONTINUED: "continued",
 };
-const GOAL_CAUSE: Record<string, LifecycleCause> = { RUN_GOAL_COMPLETED: "planner_done", RUN_PR_OPENED: "pull_request_opened", RUN_BRANCH_KEPT: "branch_kept" };
+const GOAL_CAUSE: Record<string, LifecycleCause> = { RUN_GOAL_COMPLETED: "planner_done", RUN_PR_OPENED: "pull_request_opened", RUN_BRANCH_KEPT: "branch_kept",
+	// Capability runs.archive: read-only until restored. They don't move the run's state.
+	RUN_ARCHIVED: "archived", RUN_RESTORED: "restored" };
 // Titles (capability agents.title): what a tab or a project is called is part of how a client shows the run's state.
 const TITLE_CAUSE: Record<string, LifecycleCause> = { AGENT_TITLED: "titled", RUN_TITLED: "titled" };
 // Capability agents.wake (ADR-026 §3): an agent waiting between turns (a wake armed), woken, or no longer waiting. Its
 // status stays running throughout; these say what it waits for. They don't move the run's state.
 const WAKE_CAUSE: Record<string, LifecycleCause> = { AGENT_WAKE_ARMED: "waiting", AGENT_WOKEN: "woken", AGENT_WAKE_CANCELLED: "wake_cancelled" };
 /** run.* lifecycle events that don't move the run's own state. */
-const GOAL_TYPES = new Set(["run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled"]);
+const GOAL_TYPES = new Set(["run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled", "run.archived", "run.restored"]);
 const TERMINAL = new Set(["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED", "AGENT_REAPED"]);
 
 const RUN_TEXT: Record<string, string> = {
@@ -123,13 +128,13 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 		// fold run state
 		const a = e.agentId;
 		if (t === "AGENT_SPAWNED") status.set(a, "pending");
-		else if (t === "AGENT_STARTED" || t === "AGENT_RESUMED") status.set(a, "running");
+		else if (t === "AGENT_STARTED" || t === "AGENT_RESUMED" || t === "AGENT_CONTINUED") status.set(a, "running");
 		else if (isPause) status.set(a, "paused");
 		else if (t === "AGENT_DONE") { status.set(a, "done"); anyDone = true; }
 		else if (t === "AGENT_FAILED") { status.set(a, "failed"); anyFailed = true; }
 		else if (TERMINAL.has(t)) { status.set(a, "cancelled"); if (t === "AGENT_CANCELLED" && (e.data as any)?.by === "run") runCancel = true; }
 		const live = [...status.values()].filter((s) => s === "pending" || s === "running" || s === "paused");
-		if ((t === "AGENT_STARTED" || t === "AGENT_RESUMED") && (run === "new" || run === "ended")) { runEvt(e, "run.started", "started"); run = "running"; }
+		if ((t === "AGENT_STARTED" || t === "AGENT_RESUMED" || t === "AGENT_CONTINUED") && (run === "new" || run === "ended")) { runEvt(e, "run.started", t === "AGENT_CONTINUED" ? "continued" : "started"); run = "running"; }
 		else if (t === "AGENT_RESUMED" && run === "paused") { runEvt(e, "run.resumed", "resumed"); run = "running"; }
 		else if (isPause && run === "running" && live.length && live.every((s) => s === "paused")) { runEvt(e, "run.paused", "all_agents_paused"); run = "paused"; }
 		else if (TERMINAL.has(t) && run !== "new" && run !== "ended" && live.length === 0) {

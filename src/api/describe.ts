@@ -43,6 +43,11 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		case "agent.wake_armed": return `${a} ended its turn, ${waitLine(d).replace(/^W/, "w")}.`;
 		case "agent.woken": return d.by === "time" ? `${a} was woken: its check-in time came.` : d.by === "deadline" ? `${a} was woken: its wait ran out.` : `${a} was woken: what it waited for happened.`;
 		case "agent.wake_cancelled": return d.reason === "ended" ? `${a} ended while it waited.` : `${a} stopped waiting.`;
+		// ADR-026 §1: a message woke an idle agent into its next attempt; a message changed the model it runs with.
+		case "agent.continued": return `${a} picked up a message and is working again.`;
+		case "agent.model_changed": return d.applied === false ? `${a} switches model after its current turn.` : `${a}'s model changed.`;
+		case "run.archived": return "The run was archived: restore it to continue.";
+		case "run.restored": return "The run was restored.";
 		case "agent.status_changed": return `${a} is now ${d.status}.`;
 		// The server sets this event's text to the activity line itself (built from the stored kind and count).
 		case "agent.activity_changed": return `${a} is ${d.status === "running" ? "working" : `now ${d.status ?? "idle"}`}.`;
@@ -159,6 +164,8 @@ const SETUP_TEXT: Record<string, [string, string]> = {
 	fetch: ["Fetching the repository", "Stopped while fetching the repository"],
 	copy: ["Copying the repository", "Stopped while copying the repository"],
 	install: ["Installing the agent's CLI", "Stopped while installing the agent's CLI"],
+	// ADR-026 §5: a continued attempt restores its conversation (its saved session, or its thread) before its CLI starts.
+	restore: ["Restoring the conversation", "Stopped while restoring the conversation"],
 	agent: ["Starting the agent", "Stopped while starting the agent"],
 };
 

@@ -4,7 +4,7 @@ import Foundation
 /// agents.setup: its machine, its workspace, the repository's copy, its CLI), or, from a daemon that doesn't say, only
 /// that it is starting. Only what the daemon reported: no phase is guessed and no progress made up.
 public struct Preparing: Sendable, Hashable {
-  public enum Phase: String, Sendable, Hashable { case queued, starting, machine, workspace, fetch, copy, install, agent, other }
+  public enum Phase: String, Sendable, Hashable { case queued, starting, machine, workspace, fetch, copy, install, restore, agent, other }
   public var phase: Phase
   /// The line, sentence case, without the trailing ellipsis: "Starting the machine", "Copying the repository",
   /// "Starting planner".
@@ -29,6 +29,8 @@ public struct Preparing: Sendable, Hashable {
       case .workspace: return .init(phase: phase, line: "Preparing the workspace", sinceMs: sinceMs)
       case .fetch: return .init(phase: phase, line: "Fetching the repository", sinceMs: sinceMs)
       case .install: return .init(phase: phase, line: "Installing the agent's CLI", sinceMs: sinceMs)
+      // ADR-026 §5: a woken agent's conversation (its saved session, or one rebuilt from its thread).
+      case .restore: return .init(phase: phase, line: "Restoring the conversation", sinceMs: sinceMs)
       case .agent: return .init(phase: phase, line: "Starting \(name)", sinceMs: sinceMs)
       case .copy:
         let bytes = s.bytes, total = s.totalBytes.flatMap { $0 > 0 ? $0 : nil }
@@ -55,7 +57,54 @@ public struct Preparing: Sendable, Hashable {
   }
 }
 
+/// A setup phase the daemon reported for an agent's current attempt, and when (the waking component's trail: done
+/// steps with their time, the current one, the rest).
+public struct SetupMark: Sendable, Hashable { public var phase: String; public var atMs: Int }
+
+/// The trail of an attempt's setup, for the compact waking/setup component: each phase seen (with how long it took),
+/// the current one, and the phases still expected after it.
+public struct SetupTrail: Sendable, Hashable {
+  public struct Step: Sendable, Hashable { public var phase: Preparing.Phase; public var line: String; public var state: State; public var ms: Int? }
+  public enum State: Sendable, Hashable { case done, now, next }
+  public var steps: [Step]
+  /// From the first phase to now (or to the last step's end): "Set up in 1:15".
+  public var elapsedMs: Int
+  /// The phases an attempt's setup goes through, in order (fetch and install only when the daemon reports them).
+  public static let order: [Preparing.Phase] = [.machine, .workspace, .fetch, .copy, .install, .restore, .agent]
+  static func line(_ p: Preparing.Phase) -> String {
+    switch p {
+    case .machine: "Starting a machine"; case .workspace: "Preparing the workspace"; case .fetch: "Fetching the repository"
+    case .copy: "Copying the repository"; case .install: "Installing the agent's CLI"; case .restore: "Restoring the conversation"
+    case .agent: "Starting the agent"; default: "Getting ready"
+    }
+  }
+  /// `marks` in order; `woken`: a continued attempt (restore is expected); `current`: the phase now, nil once it ended.
+  public static func of(marks: [SetupMark], current: String?, woken: Bool, nowMs: Int) -> SetupTrail? {
+    guard let first = marks.first else { return nil }
+    var steps: [Step] = []
+    for (i, m) in marks.enumerated() {
+      let p = Preparing.Phase(rawValue: m.phase) ?? .other
+      let end = i + 1 < marks.count ? marks[i + 1].atMs : nowMs
+      let isNow = i == marks.count - 1 && current == m.phase
+      steps.append(Step(phase: p, line: line(p), state: isNow ? .now : .done, ms: isNow ? nil : max(0, end - m.atMs)))
+    }
+    let seen = Set(steps.map(\.phase))
+    let last = steps.last.flatMap { s in order.firstIndex(of: s.phase) } ?? -1
+    for p in order.enumerated() where p.offset > last && !seen.contains(p.element) && p.element != .fetch && p.element != .install && (woken || p.element != .restore) {
+      steps.append(Step(phase: p.element, line: line(p.element), state: .next, ms: nil))
+    }
+    return SetupTrail(steps: steps, elapsedMs: max(0, nowMs - first.atMs))
+  }
+}
+
 extension CapcomdStore {
+  /// The setup trail of the agent's current attempt (waking or first start), for the compact setup component; nil
+  /// before the daemon reported a phase.
+  public func setupTrail(runId: String, agentId: String, nowMs: Int = Int(Date().timeIntervalSince1970 * 1000)) -> SetupTrail? {
+    guard let a = runs[runId]?.agents[agentId] else { return nil }
+    return SetupTrail.of(marks: a.setupMarks, current: a.activityKind == "setup" ? a.setup?.phase : nil, woken: a.continuedAtMs != nil, nowMs: nowMs)
+  }
+
   /// The agent's getting-ready state, for its empty thread (`Preparing.of`); `name` is how its column names it.
   public func preparing(runId: String, agentId: String, name: String) -> Preparing? {
     guard let a = runs[runId]?.agents[agentId] else { return nil }

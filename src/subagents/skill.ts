@@ -272,6 +272,10 @@ ${BRIEF_RULES}
   minutes) and a --key (e.g. --key v-<child>), so a retry joins the same verification instead of starting another.
   Pass --acceptance '["criterion", …]' to say what the child had to achieve. A failed review returns
   \`result.review.reasons\`: send them to the child or retry with them.
+- A child that ended (done, failed or cancelled) is idle, not gone: \`capcomd send <agt> "<follow-up>"\` continues
+  it, with its conversation and its branch, as its next turn (a fresh machine; the send says so). Use it for a
+  follow-up or a fix to what it handed back, instead of spawning a new child that knows nothing of it. Its turns and
+  spend count across its turns, so a child stopped at a limit is continued with \`spawn --continue\` (below) instead.
 - A failed child: read \`capcomd inspect <agt>\` / \`capcomd logs <agt>\`, then retry with a clearer task or cancel.
   A child stopped at a limit (\`result.limit\`: timeout, max_turns, max_budget_usd; or idle, spinning or
   failing when it was stuck) kept its work on

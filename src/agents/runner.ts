@@ -21,6 +21,7 @@ import { withSkills, type AttachedSkill } from "./skills";
 import { isTransientSandboxError } from "../providers/boxd-errors";
 import { outageWindowMs, providerLabel, reportOutage, unreachable } from "../providers/resilient";
 import type { SetupState } from "./activity";
+import { PICKED_UP_TEXT, threadPrompt, wakePrompt, type ContinueHooks } from "./continue";
 import { chooseWorkspace, LOCKFILES, parseTemplateMarker, startRef, TEMPLATE_CLAIM, TEMPLATE_LOCKHASH, TEMPLATE_MARKER, type WorkspaceChoice } from "./workspace";
 
 /** Where an agent's checkpoints are pushed (ADR-019 §3); deleted once its work merges. */
@@ -62,6 +63,8 @@ export interface AgentTask {
   consolidate?: { inputs: string; brain?: string };
   /** ADR-019 §6: a paused agent running again; its earlier work (if any) is already on the branch. */
   resumed?: boolean;
+  /** ADR-026 §1: a message woke this idle agent into a new attempt: it continues its conversation (opts.continuation). */
+  continued?: boolean;
   /** `spawn --continue`: start the branch from another agent's stopped work (its branch or checkpoint ref). */
   from?: { agentId: string; ref: string; stopped: string };
 }
@@ -83,6 +86,8 @@ export interface AgentResult {
   resultText?: string;
   /** Stopped at a limit (timeout, max_turns, max_budget_usd, idle, quota): `sha` holds the work so far, with a Capcomd-Stop trailer. */
   limit?: string;
+  /** ADR-026: how long its CLI slept between turns, waiting on a wake it armed (not counted as wall time). */
+  sleptMs?: number;
   /** limit "quota": when the provider's usage limit resets (ms epoch), if it said. */
   resetAt?: number;
   /**
@@ -148,7 +153,9 @@ export interface AgentRunOptions {
    * so a message (a wake-up) reaches it at once, with a slow poll behind it. Without it, onSpend's report carries them.
    */
   messages?: {
-    pull: (after: number) => Promise<{ seq: number; from: string; body: string; skills?: AttachedSkill[] }[]>;
+    /** `nextTurn`: a message that changes its model or effort (capability agents.messages.model): it and what follows
+     *  wait for the agent's next attempt, so its input is ended at the end of this turn. */
+    pull: (after: number) => Promise<{ seq: number; from: string; body: string; skills?: AttachedSkill[]; nextTurn?: boolean }[]>;
     delivered: (seq: number) => void;
     subscribe: (onChange: () => void) => () => void;
   };
@@ -188,6 +195,8 @@ export interface AgentRunOptions {
   /** Which workspace the agent got with a warm template allowed, and the bytes the host sent for it (a delta in place,
    *  the whole repository for a clone): the worker rebuilds a project template from this. */
   onWorkspace?: (w: { path: "in_place" | "clone"; reason?: string; bytes: number; ms: number }) => void;
+  /** ADR-026 §5: a continued attempt (task.continued): its thread and messages, its saved session, the fallback's line. */
+  continuation?: ContinueHooks;
 }
 
 export class AgentError extends Error {
@@ -469,6 +478,36 @@ export function buildConsolidatePrompt(t: AgentTask & { consolidate: NonNullable
   ].join("\n");
 }
 
+/** A file in the attempt's directory that tells the supervisor to end the CLI's input at the end of its current turn,
+ *  waits or jobs notwithstanding (a message changed its model: its next attempt takes it). */
+export const INPUT_CLOSE = "input.close";
+
+/** What a continued attempt starts its CLI with (ADR-026 §5): its resumed session, or a fresh one from its thread. */
+export type ContinuePlan = { mode: "resume"; sessionId: string; prompt: string; lastSeq: number } | { mode: "thread"; prompt: string; lastSeq: number };
+
+/**
+ * ADR-026 §5 paths 3 and 4, in the machine the attempt got: its saved session restored where its CLI looks for its
+ * checkout (`resumeArgs` and the waking message as the first turn), else a fresh session whose prompt is its thread,
+ * and the quiet line saying so. `lastSeq`: the newest message the prompt carries (the delivery cursor moves to it once
+ * the CLI has started).
+ */
+export async function continuePlan(hooks: ContinueHooks, where: { home: string; cwd: string }, task: AgentTask, setup: (s: SetupState) => void, onLog: ((lines: string[]) => void) | undefined, r: Redactor): Promise<ContinuePlan> {
+  setup({ phase: "restore" });
+  const c = await hooks.load();
+  const messages = c?.messages ?? [];
+  const lastSeq = messages.length ? Math.max(...messages.map((m) => m.seq)) : 0;
+  const restored = await hooks.restore(where).catch((e) => { onLog?.([`[capcomd] couldn't restore its session: ${r.text(String((e as Error)?.message ?? e)).slice(0, 300)}`]); return null; });
+  if (restored) {
+    onLog?.([`[capcomd] continuing its ${restored.cli} session ${restored.sessionId} (${messages.length} new message${messages.length === 1 ? "" : "s"})`]);
+    return { mode: "resume", sessionId: restored.sessionId, prompt: wakePrompt(messages), lastSeq };
+  }
+  await hooks.pickedUpFromThread().catch(() => {});
+  onLog?.([`[capcomd] no session to resume: a fresh one, its prompt rebuilt from its thread (${c?.items.length ?? 0} items)`]);
+  const prompt = threadPrompt({ agentId: task.agentId ?? task.taskId, branch: task.branch, target: task.target, ...(task.report ? { report: true } : {}) },
+    c ?? { task: task.goal, result: null, messages, earlier: [], items: [] });
+  return { mode: "thread", prompt, lastSeq };
+}
+
 export const agentHome = (cfg: AgentConfig) => `${cfg.workdir}/home`;
 export const templateDir = (cfg: AgentConfig) => `${cfg.workdir}/template`;
 export const agentPath = (home: string) => `${home}/node/bin:${home}/npm/bin:${home}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`;
@@ -639,7 +678,9 @@ exit $rc`]).catch((e) => ({ code: 1, stdout: "", stderr: String((e as Error)?.me
 export async function runAgent(adapter: AgentAdapter, provider: SandboxProvider, vmId: VmId, task: AgentTask, cfg: AgentConfig, opts: AgentRunOptions): Promise<AgentResult> {
   const r = new Redactor([opts.apiKey, ...(opts.secrets ?? [])]);
   const now = opts.now ?? Date.now;
-  const W = `${cfg.workdir}/${task.taskId}-e${task.epoch}`;
+  // ADR-026 §2: an agent keeps one checkout path across attempts and machines (its CLI session is keyed by it), so a
+  // continued attempt finds its conversation where it left it. A task of the `capcomd run` recipe (no agent) as before.
+  const W = task.agentId ? `${cfg.workdir}/${task.agentId}` : `${cfg.workdir}/${task.taskId}-e${task.epoch}`;
   // The agent's checkout: a fresh clone here, or the env image's warm template used in place (warmWorkspace).
   let repo = `${W}/repo`;
   const home = agentHome(cfg);
@@ -862,7 +903,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
 
     // 4. Run headless in the background; the JSON event stream lands in a file we tail.
     // Profile prompts: claude takes flags; codex has none, so they wrap the prompt text.
-    let promptText = task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : task.consolidate ? buildConsolidatePrompt(task as AgentTask & { consolidate: NonNullable<AgentTask["consolidate"]> }) : task.report ? buildReportPrompt(task) : buildPrompt(task);
+    // ADR-026 §5: a continued attempt resumes its saved session with the waking message as its first turn (path 3), or
+    // starts a fresh one from its thread (path 4). Its setup phase meanwhile: restore ("Restoring the conversation…").
+    const cont = task.continued && opts.continuation ? await continuePlan(opts.continuation, { home, cwd: repo }, task, setup, opts.onLog, r) : null;
+    let promptText = cont?.mode === "thread" ? cont.prompt : task.review ? buildReviewPrompt(task as AgentTask & { review: NonNullable<AgentTask["review"]> }) : task.consolidate ? buildConsolidatePrompt(task as AgentTask & { consolidate: NonNullable<AgentTask["consolidate"]> }) : task.report ? buildReportPrompt(task) : buildPrompt(task);
     let systemFile: string | undefined, appendSystemFile: string | undefined;
     // ADR-024 `identity.persona` (pinned at spawn, attached at agent.preparing): the first text of its instructions.
     // Claude Code's own system prompt stays unless the profile replaces it (`prompt.system`), so the persona leads
@@ -931,6 +975,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       opts.onLog?.([`[capcomd] MCP servers from its profile: ${servers.map((s) => `${s.name}${s.trust === "trusted" ? " (trusted)" : ""}`).join(", ")}`,
         ...(missing.length ? [`[capcomd] not found in its sandbox: ${r.text(missing.join(", "))} (an MCP server's program must be in its environment)`] : [])]);
     }
+    // A resumed session's system prompt is frozen at its first run: its first turn is only what changed.
+    if (cont?.mode === "resume") promptText = cont.prompt;
     await provider.upload(vmId, `${W}/prompt.txt`, new TextEncoder().encode(r.text(promptText)));
     const jsonl = `${W}/agent.jsonl`, errFile = `${W}/agent.err`, exitFile = `${W}/agent.exit`, pidFile = `${W}/agent.pid`, outbox = `${W}/outbox.jsonl`;
     // ADR-019 §1: the supervisor runs the agent and reports up through the outbox. It needs node, which the npm CLIs
@@ -943,7 +989,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // Plugin API §16.1: a planner or lead that sees everything and runs nothing; whatever it writes is never committed.
     const orchestrate = cfg.toolMode === "orchestrate";
     const inboxFile = `${W}/inbox.jsonl`;
-    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(mcpCtx ? { mcp: mcpCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}) }, sq)}`;
+    const agentLine = `${cfg.timeoutMs ? `timeout -k 10 ${Math.ceil(cfg.timeoutMs / 1000)} ` : ""}${adapter.command({ bin: bin!, repo, promptFile: `${W}/prompt.txt`, jsonl, errFile, dir: W, cfg, systemFile, appendSystemFile, ...(capcomdCtx ? { capcomd: capcomdCtx } : {}), ...(mcpCtx ? { mcp: mcpCtx } : {}), ...(streaming ? { stdinPrompt: true } : {}), ...(cont?.mode === "resume" ? { session: { id: cont.sessionId, resume: true } } : {}) } as AgentCommandCtx, sq)}`;
     if (supervised) {
       await provider.upload(vmId, `${W}/agent.sh`, new TextEncoder().encode(`${agentLine}\n`));
       await provider.upload(vmId, `${W}/supervisor.mjs`, new TextEncoder().encode(SUPERVISOR_SOURCE));
@@ -976,7 +1022,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     await provider.upload(vmId, `${W}/run.sh`, new TextEncoder().encode(script + "\n"));
     // The credential exists only in this exec's env (inherited by the agent). Never logged. A plugin's variables
     // (agent.preparing) go in it too, never in place of the runner's, the provider's or the credential's.
-    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)} ${sq(inboxFile)} ${sq(`${W}/checkpoint.request`)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
+    must(await sh(`rm -f ${sq(exitFile)} ${sq(jsonl)} ${sq(outbox)} ${sq(inboxFile)} ${sq(`${W}/checkpoint.request`)} ${sq(`${W}/${INPUT_CLOSE}`)}; chmod +x ${sq(`${W}/run.sh`)}; setsid nohup ${sq(`${W}/run.sh`)} > /dev/null 2>&1 < /dev/null & echo started`,
       { ...(cfg.pluginEnv ?? {}), ...baseEnv, ...adapter.baseEnv(), ...(adapter.kind === "claude-code" && opts.subagents && opts.subagents.maySpawn !== false ? BLOCKING_WAIT_ENV : {}), ...(credential ? adapter.credentialEnv(credential) : {}) }), `start ${name}`, "failed");
 
     const kill = async () => { await sh(`p=$(cat ${sq(pidFile)} 2>/dev/null) && kill -TERM -"$p" 2>/dev/null; sleep 1; [ -n "$p" ] && kill -KILL -"$p" 2>/dev/null; true`).catch(() => {}); };
@@ -998,6 +1044,13 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // ADR-019 §2: stuck signals from what the agent does. Not a time limit: an agent may work for hours.
     const watch = new StuckWatch({ idleAfterMs: cfg.idleAfterMs, repeats: cfg.stuckRepeats, stopIdle: cfg.stopIdle, stopRepeats: cfg.stopStuck, noChangeAfterMs: cfg.noChangeAfterMs }, now());
     let noticed: string | null = null, grantSeen = 0, spendStep = 0, inboxSeq = 0;
+    // ADR-026 §5: the messages a continued attempt's prompt carries were handed to its CLI with it: the durable cursor
+    // moves past them, and the mailbox below hands it only what came after.
+    if (cont?.lastSeq) { inboxSeq = cont.lastSeq; opts.messages?.delivered(cont.lastSeq); }
+    // ADR-026: time its CLI sleeps between turns (its turn ended, a wake it armed pending) isn't wall time.
+    let sleptMs = 0, asleepSince: number | null = null, turnEndedAt: number | null = null;
+    const wallMs = () => now() - startedAt - sleptMs - (asleepSince !== null ? now() - asleepSince : 0);
+    const wake = () => { if (asleepSince !== null) { sleptMs += now() - asleepSince; asleepSince = null; } };
     // Plugin API §16.4: what the agent works on, reported up at most once a heartbeat: its files changing (a new tree in
     // a supervisor's heartbeat; the first is where it started) and the foreground commands it waits on (by call id).
     const workEveryMs = opts.heartbeatMs ?? 30_000;
@@ -1088,8 +1141,11 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         // §16.2 rule 3: an agent waiting on its background job isn't idle: no notice is raised while one runs.
         // ADR-026 §3: an agent waiting on a wake it armed is waiting, not stuck, as one whose job runs.
         if (rep.type === "heartbeat" && (Number(rep.jobs) > 0 || Number(rep.wakes) > 0)) watch.reset(now());
+        // Its turn ended and it waits on a wake it armed: asleep since that turn ended (its wall time pauses).
+        if (rep.type === "heartbeat" && Number(rep.wakes) > 0 && turnEndedAt !== null && asleepSince === null) asleepSince = turnEndedAt;
         if (rep.type === "checkpoint" && typeof rep.sha === "string") ckpt = { sha: rep.sha, reason: String(rep.reason ?? ""), files: Number(rep.files ?? 0) };
         else if (rep.type === "delivered") {
+          wake(); turnEndedAt = null;
           addSpanEvent(span, "agent.message_delivered", { "agent.message_seq": Number(rep.seq ?? 0) });
           // ADR-026 §3: the durable delivery cursor: the CLI took it, so no later attempt is handed it again.
           if (Number(rep.seq) > 0) opts.messages?.delivered(Number(rep.seq));
@@ -1109,7 +1165,8 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         for (const id of ev.commands?.ended ?? []) commands.delete(id);
         for (const id of ev.commands?.started ?? []) if (!commands.has(id)) commands.set(id, now());
         // A turn that ended (or failed) waits on no command of it, whether or not its end was said.
-        if (TURN_ENDS.has(ev.type) || ev.type === "turn_failed") commands.clear();
+        if (TURN_ENDS.has(ev.type) || ev.type === "turn_failed") { commands.clear(); turnEndedAt = now(); }
+        else { wake(); turnEndedAt = null; }
         addSpanEvent(span, `agent.${ev.type}${ev.subtype ? `.${ev.subtype}` : ""}`, {
           ...(ev.tool ? { "agent.tool": ev.tool } : {}), ...(ev.text ? { "agent.text": ev.text } : {}),
         });
@@ -1139,8 +1196,21 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     const unsubscribe = mailbox?.subscribe(() => { msgDirty = true; wakeLoop?.(); }) ?? (() => {});
     // Into the VM, where the supervisor hands them to the CLI. A message means someone looked at the agent: its stuck
     // window starts again (ADR-019 §2).
-    const deliver = async (msgs: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[]) => {
+    let nextTurnAsked = false;
+    const deliver = async (msgs: { seq: number; from: string; body: string; skills?: AttachedSkill[]; nextTurn?: boolean }[]) => {
       msgs = msgs.filter((m) => m.seq > inboxSeq);
+      // Capability agents.messages.model: a message that changes its model waits (with what follows it) for its next
+      // attempt, which the scope starts when this one ends: its input is ended at the end of this turn.
+      const hold = msgs.findIndex((m) => m.nextTurn);
+      if (hold >= 0) {
+        msgs = msgs.slice(0, hold);
+        if (!nextTurnAsked) {
+          nextTurnAsked = true;
+          await sh(`: > ${sq(`${W}/${INPUT_CLOSE}`)}`).catch(() => { nextTurnAsked = false; });
+          addSpanEvent(span, "agent.next_turn_asked", {});
+          opts.onLog?.(["[capcomd] its model or effort changes from its next turn: it continues as a new attempt when this turn ends"]);
+        }
+      }
       if (!msgs.length) return;
       const lines = msgs.map((m) => JSON.stringify({ seq: m.seq, from: m.from, text: messageText(m) })).join("\n") + "\n";
       // A long one (a big body, attached skills) goes up as a file: a shell argument can't hold it (128 KB on Linux).
@@ -1210,7 +1280,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       if (opts.onSpend && now() - spendAt >= (opts.spendEveryMs ?? SPEND_REPORT_MS)) {
         spendAt = now();
         const usd = billing === "subscription" ? 0 : Math.round(state.costUsd * 1e6) / 1e6;
-        const rep = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round((now() - startedAt) / 1000) }, streaming && !mailbox ? inboxSeq : undefined).catch(() => null);
+        const rep = await opts.onSpend({ usd, turns: state.turns, wallSeconds: Math.round(wallMs() / 1000) }, streaming && !mailbox ? inboxSeq : undefined).catch(() => null);
         // Messages sent to it since the last report (no mailbox of its own: the report carries them).
         if (rep?.messages?.length) await deliver(rep.messages);
         // A parent that gives more budget has looked at the agent: its stuck window starts again (ADR-019 §2).
@@ -1299,10 +1369,10 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
 
     // A reviewer or a reporting agent only answers: nothing it changed is committed or pushed.
     if (task.review || task.report) {
-      if (limit === "quota" || limit === "paused") return { sha: "", already: false, costUsd, turns, stopReason: limit, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, limit, ...resetAt };
+      if (limit === "quota" || limit === "paused") return { sha: "", already: false, costUsd, turns, stopReason: limit, events: state.events, ...(sleptMs ? { sleptMs } : {}), credentialMode, agentVersion: version, billing, notionalCostUsd, limit, ...resetAt };
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before answering`);
       setSpanAttributes(span, task.review ? { "agent.review": true } : task.consolidate ? { "agent.consolidate": true } : { "agent.report": true });
-      return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.consolidate ? 64_000 : task.report ? 8000 : 4000)) };
+      return { sha: "", already: false, costUsd, turns, stopReason: out.stopReason, events: state.events, ...(sleptMs ? { sleptMs } : {}), credentialMode, agentVersion: version, billing, notionalCostUsd, resultText: r.text(state.resultText ?? "").slice(-(task.consolidate ? 64_000 : task.report ? 8000 : 4000)) };
     }
 
     // Plugin API §16.1: an orchestrate agent's work is its children's branches; it has none of its own to push.
@@ -1317,9 +1387,9 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
         addSpanEvent(span, "agent.orchestrate_discarded", { "agent.text": r.text(what), "agent.discarded_files": wrote.total, "agent.discarded_commits": wrote.commits, "agent.orchestrate_failed": true, "agent.orchestrate_at": wrote.at });
         setSpanAttributes(span, { "agent.orchestrate_wrote": true });
         opts.onLog?.([`[capcomd] orchestrate: it ${what}${wrote.at === "turn" ? " in a turn, so it was stopped there" : ""}; an orchestrate agent writes nothing, so it fails (its changes are discarded, never committed or pushed)`]);
-        return { sha: "", already: false, costUsd, turns, stopReason: "orchestrate_wrote_files", events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(resultText ? { resultText } : {}), orchestrateWrites: wrote };
+        return { sha: "", already: false, costUsd, turns, stopReason: "orchestrate_wrote_files", events: state.events, ...(sleptMs ? { sleptMs } : {}), credentialMode, agentVersion: version, billing, notionalCostUsd, ...(resultText ? { resultText } : {}), orchestrateWrites: wrote };
       }
-      return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...resetAt };
+      return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, ...(sleptMs ? { sleptMs } : {}), credentialMode, agentVersion: version, billing, notionalCostUsd, ...(resultText ? { resultText } : {}), ...(limit ? { limit } : {}), ...resetAt };
     }
 
     // 5. Commit with capcomd trailers and push the task branch.
@@ -1332,7 +1402,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
       // ADR-017: an orchestrator's work is its children's branches; finishing without edits is fine (not for an agent
       // with capcomd that may not spawn: its work is its own). A paused agent (quota, or the operator's pause) has
       // nothing to keep yet either: it starts over when it resumes.
-      if ((opts.subagents && opts.subagents.maySpawn !== false) || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(finalWords ? { resultText: finalWords } : {}), ...(limit ? { limit } : {}), ...resetAt }; }
+      if ((opts.subagents && opts.subagents.maySpawn !== false) || limit === "quota" || limit === "paused") { setSpanAttributes(span, { "agent.no_changes": true }); return { sha: "", already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, ...(sleptMs ? { sleptMs } : {}), credentialMode, agentVersion: version, billing, notionalCostUsd, ...(finalWords ? { resultText: finalWords } : {}), ...(limit ? { limit } : {}), ...resetAt }; }
       if (limit) throw new AgentError("limit", `${name} ${stoppedAt(limit)} for ${key} before changing anything`);
       throw new AgentError("no_changes", `${name} made no changes for ${key} (${out.stopReason})`, finalWords || undefined);
     }
@@ -1349,7 +1419,7 @@ if [ -n "$L" ] && [ -d ${sq(T)}/node_modules ] && [ "$H" = "$L" ] && [ ! -e ${sq
     // The host pushes it (from its mirror, leased at where the branch was when the agent started: there, or absent).
     await viaHost("git push", () => pushFromSandbox(host, box, repo, { sha, ref: `refs/heads/${task.branch}`, expect: branchExists ? existing : null, near: [task.target, task.branch], timeoutMs: 300_000, spanRef: `HEAD:refs/heads/${task.branch}`, onProgress: progress("git push") }));
     setSpanAttributes(span, { "git.sha": sha });
-    return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, credentialMode, agentVersion: version, billing, notionalCostUsd, ...(finalWords ? { resultText: finalWords } : {}), ...(limit ? { limit } : {}), ...resetAt };
+    return { sha, already: false, costUsd, turns, stopReason: limit ?? out.stopReason, events: state.events, ...(sleptMs ? { sleptMs } : {}), credentialMode, agentVersion: version, billing, notionalCostUsd, ...(finalWords ? { resultText: finalWords } : {}), ...(limit ? { limit } : {}), ...resetAt };
   } catch (err) {
     // An agent cancelled mid-step (its machine destroyed under it, so a command failed before the cancel was seen) was
     // cancelled, not an error: said so in its trace, which the TUI and the apps read.

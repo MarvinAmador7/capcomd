@@ -231,8 +231,9 @@ export async function awaitAgents(a: { runId: string; agents?: string[]; ops?: s
 }
 
 export async function send(a: { runId: string; to: string; body: string; key?: string }) {
-  const r = await client().scope.getOrCreate([a.runId]).sendMessage({ to: a.to, from: DRIVER, body: a.body, ...(a.key ? { key: `${DRIVER}:${a.key}` } : {}) });
-  const note = await O.messageNote(a.runId, a.to);
+  const r = await client().scope.getOrCreate([a.runId]).sendMessage({ to: a.to, from: DRIVER, body: a.body, ...(a.key ? { key: `${DRIVER}:${a.key}` } : {}) }).catch(O.asRelay);
+  // ADR-026 §1: an idle agent continues with the message as its next turn.
+  const note = (r as { continued?: boolean }).continued ? O.continuedNote(a.to) : await O.messageNote(a.runId, a.to);
   return { runId: a.runId, to: a.to, ...r, ...(note ? { note } : {}) };
 }
 

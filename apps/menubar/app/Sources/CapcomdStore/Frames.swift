@@ -62,6 +62,8 @@ public struct SnapshotRun: Codable, Sendable, Hashable {
   public var sandbox: String?
   /// The run's goal branch and where it stands (`runs.goal_branch`); nil for a run without one and from older daemons.
   public var goalBranch: GoalBranchSummary?
+  /// Capability runs.archive: true on an archived run (read-only until restored); absent otherwise.
+  public var archived: Bool? = nil
 }
 public struct SnapshotAgent: Codable, Sendable, Hashable {
   public var id: String; public var runId: String; public var parent: String?; public var depth: Int; public var profile: String?; public var status: String
@@ -86,7 +88,11 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// Its title (`agents.title`; agent-written, untrusted) and where it comes from; older daemons send neither.
   public var title: String?
   public var titleSource: String?
+  /// Capability agents.idle: a message woke this idle agent into its current attempt (when, by whom, how the one
+  /// before had ended); absent for a first attempt and from older daemons.
+  public var continued: SnapshotContinued? = nil
 }
+public struct SnapshotContinued: Codable, Sendable, Hashable { public var at: String?; public var by: String?; public var from: String? }
 public struct SnapshotApproval: Codable, Sendable, Hashable {
   public var approvalId: String; public var kind: String; public var status: String; public var question: String
   public var requestedBy: RequestedBy?; public var subject: [String: JSONValue]?

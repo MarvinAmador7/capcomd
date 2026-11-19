@@ -73,6 +73,11 @@ public struct Agent: Sendable, Hashable, Identifiable {
   /// What it waits for between turns (capability agents.wake), while it does: its pane reads "waiting for …", not
   /// a running tool call.
   public var wake: AgentWake? = nil
+  /// Capability agents.idle (ADR-026 §1): when a message woke this idle agent into its current attempt
+  /// (`Agent.continued.at`, agent.continued). While it is set up again it is waking (`Agent.isWaking`).
+  public var continuedAtMs: Int? = nil
+  /// The setup phases reported for its current attempt, in order (`SetupTrail`); cleared when a message wakes it.
+  public var setupMarks: [SetupMark] = []
   /// Read from `result` (the agent's result bag, field by field; `read(result:)`): what it cost, why it stopped, how its
   /// checks and its merge went.
   public var costUsd: Double? = nil
@@ -245,6 +250,8 @@ public struct Run: Sendable, Hashable, Identifiable {
   /// The run's goal branch (`runs.goal_branch`): from the snapshot, then run.goal_completed / run.pr_opened /
   /// run.branch_kept. Nil for a run without one. `goalBranch.awaitsDecision`: show Open PR / Keep the branch.
   public var goalBranch: GoalBranchSummary? = nil
+  /// Capability runs.archive: read-only until restored; its agents take no messages (the composer gives way to Restore).
+  public var archived: Bool = false
   public var agents: [String: Agent] = [:]
   public var steps: [Step] = []
   /// `run.*` lifecycle transitions applied to this run, in order (lifecycle feed).
