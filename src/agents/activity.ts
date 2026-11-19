@@ -13,8 +13,18 @@ export { ACTIVITY_KINDS, commandKind, opKind, type ActivityKind };
 
 /** One observed step: its kind, and what it acted on (a path, a command), used only to count distinct targets. */
 export type ActivityStep = { kind: ActivityKind; target: string };
-/** What is stored on the agent: the current kind, how many distinct targets the streak touched, when it last changed. */
-export type StoredActivity = { kind: ActivityKind; n: number; at: number };
+/**
+ * Getting an agent ready, before its CLI runs (kind "setup"): starting its machine, preparing its workspace (the host
+ * fetching the repository into its mirror, copying it to the machine, with bytes and the total when known), installing
+ * its CLI, starting it. Only what the daemon is actually doing: a phase is reported when it starts, and the copy's bytes
+ * as they go.
+ */
+export const SETUP_PHASES = ["machine", "workspace", "fetch", "copy", "install", "agent"] as const;
+export type SetupPhase = (typeof SETUP_PHASES)[number];
+export type SetupState = { phase: SetupPhase; bytes?: number | null; total?: number | null };
+/** What is stored on the agent: the current kind, how many distinct targets the streak touched, when it last changed;
+ *  while it is being set up (kind "setup"), which phase. */
+export type StoredActivity = { kind: ActivityKind; n: number; at: number; setup?: SetupState };
 /**
  * A finished streak (harness.v1 `agent.step`): its kind, how many distinct targets it touched, when it began (its first
  * step) and ended (when a step of another kind began, or the agent ended), epoch ms. "think" is never a step.
@@ -167,3 +177,44 @@ export function activityReporter(
 	};
 }
 export type ActivityReporter = ReturnType<typeof activityReporter>;
+
+/**
+ * The agent's setup as its activity (kind "setup"): a new phase is written at once, a phase's progress (the copy's
+ * bytes) at most once per `minMs` (default 1s), the latest when the window ends. Writes go one at a time, in order.
+ * `stop()` once the agent's CLI reports its first event (its own activity takes over) or it ends: nothing is written
+ * after it, a pending progress write is dropped.
+ */
+export function setupReporter(write: (a: StoredActivity) => unknown, o: { minMs?: number; now?: () => number } = {}) {
+	const minMs = o.minMs ?? 1000, now = o.now ?? Date.now;
+	let last: SetupState | null = null, lastWrite = -Infinity, timer: ReturnType<typeof setTimeout> | null = null, pending: SetupState | null = null, stopped = false;
+	let chain: Promise<unknown> = Promise.resolve();
+	const put = (s: SetupState) => {
+		last = s; lastWrite = now();
+		const a: StoredActivity = { kind: "setup", n: 1, at: lastWrite, setup: s };
+		chain = chain.then(() => write(a)).catch(() => { /* best effort */ });
+	};
+	const flush = () => { timer = null; if (pending && !stopped) { const p = pending; pending = null; put(p); } };
+	return {
+		report(s: SetupState) {
+			if (stopped) return;
+			const st: SetupState = { phase: s.phase, ...(s.bytes != null ? { bytes: Math.max(0, Math.floor(s.bytes)) } : {}), ...(s.total != null ? { total: Math.max(0, Math.floor(s.total)) } : {}) };
+			if (last && last.phase === st.phase && last.bytes === st.bytes && last.total === st.total) return;
+			// A new phase goes out now (a progress write still waiting is dropped: it is old news).
+			if (!last || last.phase !== st.phase) { if (timer) clearTimeout(timer); timer = null; pending = null; put(st); return; }
+			pending = st;
+			if (timer) return;
+			const wait = lastWrite + minMs - now();
+			if (wait <= 0) flush(); else timer = setTimeout(flush, wait);
+		},
+		stop() { stopped = true; if (timer) clearTimeout(timer); timer = null; pending = null; },
+		/** The writes made so far have landed (tests). */
+		settled: () => chain,
+	};
+}
+export type SetupReporter = ReturnType<typeof setupReporter>;
+
+/** Whether a setup phase written at `at` may replace the stored activity: never what the agent itself reported after it
+ *  (a progress write that landed late, once its CLI's first step was in); an older one, a setup one, or none, yes. */
+export function setupMayReplace(current: StoredActivity | null, at: number): boolean {
+	return !current || current.kind === "setup" || !(Number(current.at) >= at);
+}

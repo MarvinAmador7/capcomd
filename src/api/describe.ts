@@ -138,6 +138,7 @@ const ACTIVITY_TEXT: Record<string, [string, string, string, string]> = {
 	plan: ["Planning the work", "Planning the work", "Planned the work", "Planned the work"],
 	think: ["Thinking", "Thinking", "Thought it through", "Thought it through"],
 	tool: ["Using a tool", "Using # tools", "Used a tool", "Used # tools"],
+	setup: ["Getting ready", "Getting ready", "Got ready", "Got ready"],
 };
 
 /** The activity line for a kind and count; `done` gives the past tense (the agent is no longer working). */
@@ -147,10 +148,39 @@ export function describeActivity(kind: string, n: number, done: boolean): string
 	return t[(done ? 2 : 0) + (count > 1 ? 1 : 0)]!.replace("#", String(count));
 }
 
-/** Agent.activity from what the scope actor stores ({kind, n, at}) and the agent's status. */
-export function agentActivity(stored: { kind?: unknown; n?: unknown; at?: unknown } | null | undefined, status: string): { text: string; kind: string; at: string } | null {
+// Getting the agent ready (kind "setup", src/agents/activity.ts SETUP_PHASES): [while, once it stopped there].
+const SETUP_TEXT: Record<string, [string, string]> = {
+	machine: ["Starting the machine", "Stopped while starting the machine"],
+	workspace: ["Preparing the workspace", "Stopped while preparing the workspace"],
+	fetch: ["Fetching the repository", "Stopped while fetching the repository"],
+	copy: ["Copying the repository", "Stopped while copying the repository"],
+	install: ["Installing the agent's CLI", "Stopped while installing the agent's CLI"],
+	agent: ["Starting the agent", "Stopped while starting the agent"],
+};
+
+/** Megabytes for a progress line: one decimal under 10 MB, whole above. */
+const mbText = (b: number) => { const m = b / 1024 ** 2; return m < 10 ? m.toFixed(1).replace(/\.0$/, "") : String(Math.round(m)); };
+
+/** The line for a setup phase ("Copying the repository · 53% (56 of 105 MB)"); `done`: the agent stopped there. */
+export function describeSetup(s: { phase?: unknown; bytes?: unknown; total?: unknown }, done: boolean): string {
+	const t = SETUP_TEXT[String(s.phase)] ?? SETUP_TEXT.workspace!;
+	if (done) return t[1];
+	const bytes = typeof s.bytes === "number" ? s.bytes : null, total = typeof s.total === "number" && s.total > 0 ? s.total : null;
+	if (s.phase !== "copy" || bytes === null) return t[0];
+	if (total === null) return `${t[0]} (${mbText(bytes)} MB)`;
+	return `${t[0]} · ${Math.min(100, Math.floor((bytes / total) * 100))}% (${mbText(Math.min(bytes, total))} of ${mbText(total)} MB)`;
+}
+
+/** Agent.activity from what the scope actor stores ({kind, n, at}, and a setup's phase) and the agent's status. */
+export function agentActivity(stored: { kind?: unknown; n?: unknown; at?: unknown; setup?: unknown } | null | undefined, status: string): { text: string; kind: string; at: string; setup?: { phase: string; bytes: number | null; totalBytes: number | null } } | null {
 	if (!stored || typeof stored.kind !== "string") return null;
+	const at = new Date(Number.isFinite(Number(stored.at)) ? Number(stored.at) : 0).toISOString();
+	const done = status !== "running" && status !== "pending";
+	const s = stored.kind === "setup" && stored.setup && typeof stored.setup === "object" ? stored.setup as { phase?: unknown; bytes?: unknown; total?: unknown } : null;
+	if (s && typeof s.phase === "string") {
+		const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+		return { text: describeSetup(s, done), kind: "setup", at, setup: { phase: s.phase, bytes: num(s.bytes), totalBytes: num(s.total) } };
+	}
 	const kind = stored.kind in ACTIVITY_TEXT ? stored.kind : "tool";
-	const at = Number(stored.at);
-	return { text: describeActivity(kind, Number(stored.n), status !== "running" && status !== "pending"), kind, at: new Date(Number.isFinite(at) ? at : 0).toISOString() };
+	return { text: describeActivity(kind, Number(stored.n), done), kind, at };
 }

@@ -26,7 +26,7 @@ import { sandboxCaps, sandboxName } from "../providers/registry";
 import { slotsFor } from "../providers/capacity";
 import { agentFromEnv, isRealAgent, loadAgentConfig } from "../agents/config";
 import { runAgent, stoppedAt } from "../agents/runner";
-import { activityReporter } from "../agents/activity";
+import { activityReporter, setupReporter } from "../agents/activity";
 import { noteStep } from "../jobs/service";
 import { itemWriter } from "../agents/thread-store";
 import { heartbeatEveryMs } from "../subagents/results";
@@ -396,6 +396,11 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   const cfg = await (await import("../merge/run-config")).mergeConfigFor(scopeRunId);
   const setup = agentSetup(params.agent, params.agentSpec, runSource, params.machine, cfg?.remote);
   recordWorkerVm(c, { idemKey: vmKey, sandbox: sandbox ?? (workerContext as { sandbox?: string }).sandbox, runId: params.runId, workerId, ttlSeconds: lifeSeconds });
+  // Getting it ready is its activity (kind setup) until its CLI's first event: its machine, its workspace (the
+  // repository's copy as it goes), its CLI. A spawned agent's only (its row is where the activity lives).
+  const prep = isRealAgent(setup.kind) && params.runId && workerId.startsWith("agt-")
+    ? (() => { const s = (c as any).client().scope.getOrCreate([params.runId]); return setupReporter((a) => s.setActivity({ agentId: workerId, activity: a })); })() : null;
+  prep?.report({ phase: "machine" });
   const { id: vmId } = await provider.ensure({
     idemKey: vmKey,
     isolated: true,
@@ -429,7 +434,8 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
   const pushStarted = Date.now();
   const fakeDelay = Number(process.env.CAPCOMD_FAKE_PUSH_DELAY_MS ?? 0);
   if (adopted) {
-    // nothing to run: the branch is already on the remote
+    // nothing to run: the branch is already on the remote (and nothing was set up: no setup line stays behind)
+    if (prep) { prep.stop(); await (c as any).client().scope.getOrCreate([params.runId]).setActivity({ agentId: workerId, activity: null }).catch(() => {}); }
   } else if (isRealAgent(agent)) {
     // Real worker: the agent edits the repo in the VM, commits with trailers, pushes the task branch.
     if (!cfg) throw new Error(`CAPCOMD_AGENT=${agent} needs a repo: set CAPCOMD_REPO`);
@@ -487,7 +493,9 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
         raised = n?.kind ?? null;
         if (n || only) scope?.notice({ agentId: workerId, notice: n, ...(only ? { only } : {}) }).catch(() => {});
       },
-      ...(activity ? { onEvent: activity.event } : {}),
+      // Its first event ends its setup: its own activity takes over.
+      ...(activity ? { onEvent: (ev: import("../agents/types").AgentEvent) => { prep?.stop(); activity.event(ev); } } : {}),
+      ...(prep ? { onSetup: prep.report } : {}),
       ...(scope ? { onSpend: async (spent: { usd: number; turns: number; wallSeconds: number }, inboxAfter?: number) => (await scope.reportSpend({ agentId: workerId, spent, ...(inboxAfter !== undefined ? { inboxAfter } : {}) })) as { stop: string | null; grantedAt?: number; used?: number | null; messages?: { seq: number; from: string; body: string; skills?: AttachedSkill[] }[] } } : {}),
       // Every agent's tool calls, refusals and words; one with the in-VM capcomd also gets a `[capcomd] <op> → …` line per
       // capcomd call from its spool pump (driver.ts).
@@ -517,7 +525,7 @@ async function pushBranchRun(c: { db: any; key: string[]; client: () => any }, p
       // The operator's pause (scope requestPause): the runner stops the agent and keeps its work; the driver pauses it.
       // Read from the agent row isCancelled just fetched (the runner asks right after it), so no extra actor call per poll.
       ...(scope ? { isPaused: async () => pauseAsked } : {}),
-    }).finally(async () => { if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
+    }).finally(async () => { prep?.stop(); if (cancelSeen) activity?.stop(); else await activity?.finish(); await items?.flush(); });
     sha = res.sha;
     costUsd = res.costUsd;
     turns = res.turns;

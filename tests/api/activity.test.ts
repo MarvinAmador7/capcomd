@@ -4,11 +4,11 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activityOf, activityReporter, commandKind, type FinishedStep, type StoredActivity } from "../../src/agents/activity";
+import { activityOf, activityReporter, commandKind, setupMayReplace, setupReporter, type FinishedStep, type StoredActivity } from "../../src/agents/activity";
 import type { AgentEvent } from "../../src/agents/types";
 import { addClient, loadClients } from "../../src/api/clients";
-import { Agent, EventData } from "../../src/api/contract";
-import { agentActivity, describeActivity } from "../../src/api/describe";
+import { Agent, AgentActivity, EventData } from "../../src/api/contract";
+import { agentActivity, describeActivity, describeSetup } from "../../src/api/describe";
 import { HarnessEvent } from "../../src/api/envelope";
 import { strictEventData } from "../../src/api/legacy-events";
 import { harnessApp } from "../../src/api/server";
@@ -357,5 +357,61 @@ describe("API", () => {
 		expect(t).not.toContain("snapshot.");
 		expect(frames(t, "agent.activity_changed").length).toBe(1);
 		expect(t).toContain('"text":"Reading 2 files"');
+	});
+});
+
+describe("setup (kind setup): getting the agent ready, before its CLI's first step", () => {
+	const MB = 1024 ** 2;
+	test("each phase's line, the copy's progress from the bytes the daemon sent, and where it stopped", () => {
+		expect(describeSetup({ phase: "machine" }, false)).toBe("Starting the machine");
+		expect(describeSetup({ phase: "workspace" }, false)).toBe("Preparing the workspace");
+		expect(describeSetup({ phase: "fetch" }, false)).toBe("Fetching the repository");
+		expect(describeSetup({ phase: "copy", bytes: 56 * MB, total: 105.4 * MB }, false)).toBe("Copying the repository · 53% (56 of 105 MB)");
+		expect(describeSetup({ phase: "copy", bytes: 0, total: 105.4 * MB }, false)).toBe("Copying the repository · 0% (0 of 105 MB)");
+		expect(describeSetup({ phase: "copy", bytes: 2.5 * MB, total: 8 * MB }, false)).toBe("Copying the repository · 31% (2.5 of 8 MB)");
+		expect(describeSetup({ phase: "copy", bytes: 12 * MB }, false)).toBe("Copying the repository (12 MB)");
+		expect(describeSetup({ phase: "copy" }, false)).toBe("Copying the repository");
+		expect(describeSetup({ phase: "install" }, false)).toBe("Installing the agent's CLI");
+		expect(describeSetup({ phase: "agent" }, false)).toBe("Starting the agent");
+		expect(describeSetup({ phase: "copy", bytes: 56 * MB, total: 105 * MB }, true)).toBe("Stopped while copying the repository");
+	});
+	test("Agent.activity carries the phase and bytes, in the contract's shape; other kinds carry none", () => {
+		const at = 1792900500000;
+		const a = agentActivity({ kind: "setup", n: 1, at, setup: { phase: "copy", bytes: 56 * MB, total: 105 * MB } }, "running");
+		expect(a).toEqual({ text: "Copying the repository · 53% (56 of 105 MB)", kind: "setup", at: new Date(at).toISOString(), setup: { phase: "copy", bytes: 56 * MB, totalBytes: 105 * MB } });
+		expect(agentActivity({ kind: "setup", n: 1, at, setup: { phase: "machine" } }, "running")!.setup).toEqual({ phase: "machine", bytes: null, totalBytes: null });
+		expect(agentActivity({ kind: "setup", n: 1, at, setup: { phase: "machine" } }, "failed")!.text).toBe("Stopped while starting the machine");
+		expect(agentActivity({ kind: "read", n: 1, at }, "running")).not.toHaveProperty("setup");
+		expect(AgentActivity.safeParse(a).success).toBe(true);
+		expect(AgentActivity.safeParse(agentActivity({ kind: "read", n: 1, at }, "running")).success).toBe(true);
+	});
+	test("a new phase is written at once; a phase's progress at most once per minMs, the latest; nothing after stop()", async () => {
+		const writes: StoredActivity[] = [];
+		const r = setupReporter((a) => { writes.push(a); }, { minMs: 120 });
+		r.report({ phase: "machine" });
+		r.report({ phase: "machine" }); // the same: no write
+		r.report({ phase: "workspace" });
+		r.report({ phase: "copy", bytes: 0, total: 100 });
+		for (const b of [10, 20, 30]) r.report({ phase: "copy", bytes: b, total: 100 });
+		await r.settled();
+		expect(writes.map((w) => [w.kind, w.setup?.phase, w.setup?.bytes])).toEqual([["setup", "machine", undefined], ["setup", "workspace", undefined], ["setup", "copy", 0]]);
+		await Bun.sleep(200);
+		await r.settled();
+		expect(writes.at(-1)!.setup).toEqual({ phase: "copy", bytes: 30, total: 100 });
+		r.report({ phase: "copy", bytes: 90, total: 100 }); // window open: waits
+		r.report({ phase: "agent" }); // a new phase: at once, the waiting progress dropped
+		await r.settled();
+		expect(writes.at(-1)!.setup).toEqual({ phase: "agent" });
+		r.stop();
+		r.report({ phase: "install" });
+		await Bun.sleep(150);
+		expect(writes.at(-1)!.setup).toEqual({ phase: "agent" });
+		expect(writes.every((w) => w.kind === "setup" && w.n === 1)).toBe(true);
+	});
+	test("a late setup write never replaces the agent's own newer activity", () => {
+		expect(setupMayReplace(null, 10)).toBe(true);
+		expect(setupMayReplace({ kind: "setup", n: 1, at: 50, setup: { phase: "copy" } }, 10)).toBe(true);
+		expect(setupMayReplace({ kind: "think", n: 1, at: 50 }, 10)).toBe(false); // the CLI's first step came after
+		expect(setupMayReplace({ kind: "read", n: 2, at: 5 }, 10)).toBe(true); // a new attempt (a retry) sets up again
 	});
 });

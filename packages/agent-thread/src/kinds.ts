@@ -1,10 +1,11 @@
 // What kind of step a tool call is, from its structured fields only (tool name, command, capcomd op). Shared by the
 // daemon's activity line (src/agents/activity.ts) and the thread's tool items (their icon hint).
 
-/** Icon hint. Clients must treat a kind they don't know as "tool" (more may be added). */
+/** Icon hint. Clients must treat a kind they don't know as "tool" (more may be added). "setup" is the daemon's own
+ *  (getting the agent's machine and workspace ready, before its CLI runs): never a tool call's kind or a step. */
 export const ACTIVITY_KINDS = [
 	"read", "edit", "write", "search", "run", "test", "build", "install", "check", "git", "web",
-	"spawn", "wait", "message", "verify", "merge", "report", "delegate", "plan", "think", "tool",
+	"spawn", "wait", "message", "verify", "merge", "report", "delegate", "plan", "think", "tool", "setup",
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
