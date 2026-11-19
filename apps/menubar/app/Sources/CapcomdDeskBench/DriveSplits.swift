@@ -43,10 +43,11 @@ import PerfLoopKit
     await d.quiet(timeoutMs: 3000)
   }
 
-  /// What a step does: keys pressed through the menu bar (the item they must fire), or a call into the model where no
-  /// key does it (a pick from Search's results).
+  /// What a step does: keys pressed through the menu bar (the item they must fire), a key no menu item has (Esc: the
+  /// window's own key handling), or a call into the model where no key does it (a pick from Search's results).
   enum Act {
     case press(String, item: String)
+    case key(HostRun.Key)
     case call(() -> Void)
   }
 
@@ -55,6 +56,7 @@ import PerfLoopKit
     if !d.window.isKeyWindow { d.window.makeKeyAndOrderFront(nil); _ = await d.nextCommit() }
     switch act {
     case .press(let keys, let item): await d.run.press(keys, expect: item, name: name, timeoutMs: 3000, until: done)
+    case .key(let k): await d.run.key(k, name: name, timeoutMs: 3000, until: done)
     case .call(let f): await d.run.step(name, timeoutMs: 3000, until: done) { f() }
     }
     let ok = done()
@@ -197,8 +199,8 @@ import PerfLoopKit
 
   // MARK: pane-expand
 
-  /// Two panes, the focused one's thread scrolled up from its foot; ⇧⌘↩ gives it the window, Esc gives it back,
-  /// `toggles` times. Expanded: that pane's view fills the window, the sidebar and the other pane hide. Back: the same
+  /// Two panes, the focused one's thread scrolled up from its foot; ⇧⌘↩ (through the menu bar) gives it the window, Esc
+  /// (a real key: the expanded pane's arrows-in takes it) gives it back, `toggles` times. Expanded: that pane's view fills the window, the sidebar and the other pane hide. Back: the same
   /// panes in the same frames, the thread at the same distance from its foot, the same views (nothing rebuilt).
   static func paneExpand(_ run: HostRun) async throws {
     let d = try await onePane(run)
@@ -232,7 +234,7 @@ import PerfLoopKit
       expandedOK = expandedOK && ex
       if !ex { notes.append("expand#\(i): \(e.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), sidebar \(d.sidebarScrollView(scrollable: false) != nil)") }
       t = run.now
-      ok = await paneStep(d, "esc#\(i)", panes: 2, .call { d.model.collapsePane() }) { d.panesShown().count == 2 }
+      ok = await paneStep(d, "esc#\(i)", panes: 2, .key(.escape)) { d.panesShown().count == 2 }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let after = d.panesShown()
       let b = ok && after.map(\.agent) == before.map(\.0) && after.map(\.frame) == before.map(\.1) && !d.model.nav.expanded
