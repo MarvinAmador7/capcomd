@@ -315,7 +315,8 @@ function imperativeLead(s: string): string {
  * doesn't say what was done ("All three fixes are in, and …", "Tinycalc (TypeScript on Bun)", "Done!") gives null.
  */
 export function summarySubject(summary: string): string | null {
-  let s = firstSentence(summary).replace(/^(?:ok(?:ay)?|great|sure|alright|so|now|finally)\b[,!:]?\s+/i, "");
+  // A hand-back's outcome line ("Done: added X") says what was done after its label.
+  let s = firstSentence(summary).replace(/^(?:done|finished|completed)\s*:\s*/i, "").replace(/^(?:ok(?:ay)?|great|sure|alright|so|now|finally)\b[,!:]?\s+/i, "");
   if (!s || /^(?:done|all done|here(?:'s| is)|i have finished|finished|summary)\b/i.test(s)) return null;
   let out: string | null = null;
   const said = /^(?:i|we)(?:'ve|'d| have| had)?\s+(?:now\s+|just\s+|also\s+|then\s+)?(\S+)\s+(.+)$/i.exec(s);
@@ -385,8 +386,11 @@ export function buildReviewPrompt(t: AgentTask & { review: NonNullable<AgentTask
     "- Do not edit files, commit, push, or change git remotes. Nothing you change is kept.",
     "- Do not print environment variables or credentials.",
     "- Judge only against the acceptance criteria and the task above; don't fail it for unrelated style.",
-    '- End your reply with one line of JSON and nothing after it: {"passed": true|false, "reasons": ["..."]}',
-    "  Give concrete reasons either way; on a fail, say what must change.",
+    "- Your final reply is your hand-back, in Markdown, and nothing else (no story of what you read):",
+    "  First line: your verdict, **Approve** or **Changes needed**.",
+    "  Then the findings as bullets, most severe first, one line each, with file:line where it helps; on a fail, say what must change.",
+    '  Last, one line of JSON and nothing after it: {"passed": true|false, "reasons": ["..."]}',
+    "  Its reasons are the same findings, one line each: your parent reads the verdict and these reasons.",
   ].join("\n");
 }
 

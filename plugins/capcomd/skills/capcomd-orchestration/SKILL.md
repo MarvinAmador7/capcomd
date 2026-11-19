@@ -74,8 +74,10 @@ An orchestrate agent that writes a file or commits anyway fails, and its change 
 
 Every agent that does work has `capcomd` in its sandbox, a `worker` too: it runs long commands (the whole test suite,
 a build) as background jobs (`capcomd job start`, the result comes back to it as a message), keeps notes, proposes
-lessons for the project's memory in its result, and ends with a `result.summary` of what it changed and checked. So a
-worker's task can say "run the whole suite and say what passed". It can't spawn, verify or merge.
+lessons for the project's memory in its result, and ends with a short hand-back in `result.summary`: the outcome
+first ("Done: …"), then bullets for what it changed, how it checked it, risks and what you must decide. A reviewer's
+starts with its verdict (**Approve** or **Changes needed**), then its findings. So a worker's task can say "run the
+whole suite and say what passed". It can't spawn, verify or merge.
 
 Shapes combine: contract first, then wide with a lead on each big part, is the usual shape for "build me X".
 
