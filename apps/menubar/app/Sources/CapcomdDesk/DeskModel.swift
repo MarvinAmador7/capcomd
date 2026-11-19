@@ -149,7 +149,7 @@ package final class DeskModel {
   /// The open project's menu (ReelMenu) and the ⌘K palette are open; Stop project… is asking first.
   package internal(set) var menuOpen = false { didSet { Mutations.record("DeskModel.menuOpen") } }
   package internal(set) var paletteOpen = false {
-    didSet { Mutations.record("DeskModel.paletteOpen"); paletteByKey = NSApp.currentEvent?.type == .keyDown }
+    didSet { Mutations.record("DeskModel.paletteOpen"); paletteByKey = NSApp?.currentEvent?.type == .keyDown }
   }
   /// The palette last opened or closed from the keyboard (⌘K, Esc, ↩): it shows and goes at once, never faded (SPEC §4).
   /// Read when the change happens, not when the window updates: by then the event being handled may be another one.
