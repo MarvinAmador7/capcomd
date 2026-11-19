@@ -70,6 +70,9 @@ public struct Agent: Sendable, Hashable, Identifiable {
   public var model: String? = nil
   /// When `activity` last changed (`Agent.activity.at`, or the live event): the card's sentence follows the latest one.
   public var activityAtMs: Int? = nil
+  /// What it waits for between turns (capability agents.wake), while it does: its pane reads "waiting for …", not
+  /// a running tool call.
+  public var wake: AgentWake? = nil
   /// Read from `result` (the agent's result bag, field by field; `read(result:)`): what it cost, why it stopped, how its
   /// checks and its merge went.
   public var costUsd: Double? = nil
@@ -475,6 +478,51 @@ public enum Notice: Sendable, Hashable {
   case runFinished(runId: String, type: String, title: String)
   /// A goal branch run is ready, or stopped with work landed (GoalNotice): once per run.
   case goalReady(GoalNotice)
+}
+
+/// `Agent.activity.wake` (capability agents.wake, ADR-026 §3): what a running agent waits for between turns (its turn
+/// ended with a wake armed), and since when. Daemon-written (trusted). Cleared when it is woken (`agent.woken`), takes
+/// it back (`agent.wake_cancelled`) or ends.
+public struct AgentWake: Sendable, Hashable {
+  public var id: String
+  /// op, agents, events or timer (more may come: read as plain waiting).
+  public var kind: String
+  public var op: String? = nil
+  /// verify, check or merge (kind op).
+  public var opKind: String? = nil
+  public var agents: [String] = []
+  public var mode: String? = nil
+  public var types: [String] = []
+  /// When it started waiting: the pane's clock counts from here.
+  public var sinceMs: Int?
+  public init(id: String, kind: String, op: String? = nil, opKind: String? = nil, agents: [String] = [], mode: String? = nil, types: [String] = [], sinceMs: Int?) {
+    self.id = id; self.kind = kind; self.op = op; self.opKind = opKind; self.agents = agents; self.mode = mode; self.types = types; self.sinceMs = sinceMs
+  }
+  /// From `Agent.activity.wake` (a snapshot, agent.activity_changed).
+  init?(activity v: JSONValue?) {
+    guard let id = v?["id"]?.string, let kind = v?["kind"]?.string else { return nil }
+    self.init(id: id, kind: kind, op: v?["op"]?.string, opKind: v?["opKind"]?.string, agents: (v?["agents"]?.array ?? []).compactMap(\.string),
+              mode: v?["mode"]?.string, types: (v?["types"]?.array ?? []).compactMap(\.string), sinceMs: v?["armedAt"]?.string.flatMap(CapcomdStore.parseISO).map { Int($0.timeIntervalSince1970 * 1000) })
+  }
+  /// From an `agent.wake_armed` event's data, armed at the event's time.
+  init?(armed d: [String: JSONValue], at ms: Int) {
+    guard let id = d["wakeId"]?.string, let kind = d["kind"]?.string else { return nil }
+    self.init(id: id, kind: kind, op: d["op"]?.string, opKind: d["opKind"]?.string, agents: (d["agents"]?.array ?? []).compactMap(\.string),
+              mode: d["mode"]?.string, types: (d["types"]?.array ?? []).compactMap(\.string), sinceMs: ms)
+  }
+  /// "waiting for verify vfy-…", "waiting for 3 agents", "waiting for lead", "waiting for its check-in". `name`: how
+  /// the app names an agent id (its profile and title), when it knows it.
+  public func line(name: (String) -> String? = { _ in nil }) -> String {
+    switch kind {
+    case "op": return "waiting for \(opKind ?? "op") \(op ?? "")".trimmingCharacters(in: .whitespaces)
+    case "agents":
+      if agents.count == 1, let a = agents.first { return "waiting for \(name(a) ?? a)" }
+      return mode == "all" ? "waiting for \(agents.count) agents" : "waiting for one of \(agents.count) agents"
+    case "events": return types.count == 1 ? "waiting for \(types[0])" : "waiting for \(types.count) kinds of event"
+    case "timer": return "waiting for its check-in"
+    default: return "waiting"
+    }
+  }
 }
 
 /// `Agent.activity.setup` (capability agents.setup): what the daemon is doing to get an agent ready, before its CLI's

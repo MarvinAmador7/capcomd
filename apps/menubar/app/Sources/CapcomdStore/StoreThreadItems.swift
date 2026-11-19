@@ -148,7 +148,11 @@ extension CapcomdStore {
     let events = thread(agentId: agentId)
     guard let book = books[agentId], threadSupported(agentId: agentId) == true else { return events.map(ThreadEntry.event) }
     // The agent's own output is in the book; keep only messages from someone else (steers, other agents).
-    let messages = events.filter { if case .message(let from, _, _, _) = $0.kind { return from != agentId }; return false }
+    let messages = events.filter {
+      if case .message(let from, _, _, _) = $0.kind { return from != agentId }
+      if case .woke = $0.kind { return true }   // what woke it (agents.wake): a quiet line between its turns
+      return false
+    }
     // Read newest first, the thread shows from its top down; messages from before its first item wait with it.
     let items = book.shown.filter { !$0.isSystemBookkeeping }
     let from = book.hasEarlier ? items.first?.atMs ?? Int.max : Int.min

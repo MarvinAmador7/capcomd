@@ -41,6 +41,10 @@ public struct ColumnHeader: Sendable, Hashable, Identifiable {
   public var status: AgentStatus
   public var waiting: Bool
   public var activity: String?
+  /// Capability agents.wake: what it waits for between turns ("waiting for verify vfy-…"), and since when; nil while
+  /// it works (or isn't running).
+  public var waitLine: String? = nil
+  public var waitSinceMs: Int? = nil
   public var repo: String?
   public var spawnedAtMs: Int
   /// When it was spawned, when known: the header's elapsed clock (none when the daemon didn't say).
@@ -99,8 +103,14 @@ extension CapcomdStore {
   }
 
   func header(_ n: AgentNode, _ a: Agent, _ runId: String) -> ColumnHeader {
-    ColumnHeader(agentId: a.id, runId: runId, name: n.name, title: n.title, suffix: n.suffix, userTitled: a.titleSource == "user", kind: n.kind, status: n.status, waiting: n.waiting,
-                 activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
+    var h = ColumnHeader(agentId: a.id, runId: runId, name: n.name, title: n.title, suffix: n.suffix, userTitled: a.titleSource == "user", kind: n.kind, status: n.status, waiting: n.waiting,
+                         activity: n.activity, repo: n.repo, spawnedAtMs: a.spawnedAtMs, startedAtMs: a.createdAtMs, provider: a.provider, depth: n.depth)
+    if a.status == .running, let w = a.wake {
+      let agents = runs[runId]?.agents ?? [:]
+      h.waitLine = w.line { id in agents[id].map { $0.displayName } }
+      h.waitSinceMs = w.sinceMs
+    }
+    return h
   }
 }
 

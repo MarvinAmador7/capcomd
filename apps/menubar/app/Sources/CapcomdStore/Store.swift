@@ -380,7 +380,7 @@ public final class CapcomdStore {
                      task: a.task.map(UntrustedText.init), key: old?.key, repo: a.workspace?.label ?? old?.repo, spawnedAtMs: old?.spawnedAtMs ?? created ?? i, activity: a.activity?.text)
       ag.createdAtMs = created
       ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.updatedAtMs = epochMs(iso: a.updatedAt) ?? old?.updatedAtMs
-      ag.activityKind = a.activity?.kind; ag.setup = a.activity?.setup
+      ag.activityKind = a.activity?.kind; ag.setup = a.activity?.setup; ag.wake = AgentWake(activity: a.activity?.wake)
       ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init) ?? old?.resultSummary
       ag.provider = Provider(wire: a.provider) ?? old?.provider; ag.model = a.model ?? old?.model
       ag.activityAtMs = epochMs(iso: a.activity?.at) ?? old?.activityAtMs
@@ -505,9 +505,19 @@ public final class CapcomdStore {
       runs[runId]?.agents[agentId]?.activity = d["activity"]?["text"]?.string
       runs[runId]?.agents[agentId]?.activityKind = d["activity"]?["kind"]?.string
       runs[runId]?.agents[agentId]?.setup = AgentSetup(d["activity"]?["setup"])
+      runs[runId]?.agents[agentId]?.wake = AgentWake(activity: d["activity"]?["wake"])
       runs[runId]?.agents[agentId]?.activityAtMs = epochMs(iso: d["activity"]?["at"]?.string) ?? e.epochMs
       if let st = d["status"]?.string { runs[runId]?.agents[agentId]?.status = AgentStatus(wire: st) }
       mark(.run(runId), .agent(agentId), .thread(agentId))   // live, once a second per agent: narrowed
+    case "agent.wake_armed":
+      // Capability agents.wake: its turn ended with a wake armed: it waits between turns (still running).
+      guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
+      runs[runId]?.agents[agentId]?.wake = AgentWake(armed: d, at: e.epochMs)
+      mark(.run(runId), .agent(agentId), .thread(agentId))
+    case "agent.woken", "agent.wake_cancelled":
+      guard let runId, let agentId, let w = runs[runId]?.agents[agentId]?.wake, w.id == d["wakeId"]?.string else { return }
+      runs[runId]?.agents[agentId]?.wake = nil
+      mark(.run(runId), .agent(agentId), .thread(agentId))
     case "verify.started", "verify.passed", "verify.failed":
       guard let runId else { return }
       let st: StepStatus = e.type == "verify.started" ? .running : e.type == "verify.passed" ? .done : .failed
@@ -604,6 +614,7 @@ public final class CapcomdStore {
     for (i, a) in b.agents.enumerated() where runs[a.runId] != nil {
       if var old = runs[a.runId]?.agents[a.id] {
         old.status = AgentStatus(wire: a.status); old.activity = a.activity?.text; old.activityKind = a.activity?.kind; old.setup = a.activity?.setup
+        old.wake = AgentWake(activity: a.activity?.wake)
         if let sum = a.result?["summary"]?.string { old.resultSummary = UntrustedText(sum) }
         old.updatedAtMs = epochMs(iso: a.updatedAt) ?? old.updatedAtMs; old.repo = a.workspace?.label ?? old.repo
         old.provider = Provider(wire: a.provider) ?? old.provider; old.model = a.model ?? old.model
@@ -617,7 +628,7 @@ public final class CapcomdStore {
                        task: a.task.map(UntrustedText.init), key: nil, repo: a.workspace?.label, spawnedAtMs: epochMs(iso: a.createdAt) ?? i, activity: a.activity?.text)
         ag.createdAtMs = epochMs(iso: a.createdAt)
         ag.taskAttachment = AttachmentRef(a.taskAttachment); ag.resultSummary = (a.result?["summary"]?.string).map(UntrustedText.init)
-        ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind; ag.setup = a.activity?.setup
+        ag.updatedAtMs = epochMs(iso: a.updatedAt); ag.activityKind = a.activity?.kind; ag.setup = a.activity?.setup; ag.wake = AgentWake(activity: a.activity?.wake)
         ag.provider = Provider(wire: a.provider); ag.model = a.model
         ag.activityAtMs = epochMs(iso: a.activity?.at); ag.read(result: a.result)
         ag.title = a.title.map(UntrustedText.init); ag.titleSource = a.titleSource
@@ -635,6 +646,7 @@ public final class CapcomdStore {
   func setStatus(_ runId: String?, _ agentId: String?, _ s: AgentStatus, _ e: Envelope) {
     guard let runId, let agentId, runs[runId]?.agents[agentId] != nil else { return }
     runs[runId]?.agents[agentId]?.status = s; runs[runId]?.agents[agentId]?.updatedAtMs = e.epochMs
+    if s != .running { runs[runId]?.agents[agentId]?.wake = nil }   // only a running agent waits between turns
     settleAgentControl(agentId: agentId, status: s)
     if let i = runs[runId]?.steps.firstIndex(where: { $0.id == "agent:\(agentId)" }) {
       runs[runId]?.steps[i].status = Self.stepStatus(s); runs[runId]?.steps[i].epochMs = e.epochMs
