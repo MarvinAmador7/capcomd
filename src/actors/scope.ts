@@ -21,6 +21,7 @@ import { startDriver } from "../primitives/drivers";
 import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 import { changedHooks, tellCreated, tellWorked } from "../plugins/changes";
 import { hooks, principalOf } from "../plugins/hooks";
+import { verdictSummary } from "../plugins/gate-reviewer/review";
 
 /**
  * ADR-022: tell connected awaiters that agents changed (status, notice), so they look again instead of polling. (With
@@ -93,7 +94,9 @@ export function handoffOf(parent: string, child: string, status: string, result:
     ? { passed: v.passed, reasons: Array.isArray(v.reasons) ? v.reasons.filter((r): r is string => typeof r === "string") : [] } : null;
   // A reviewer that ended without a verdict says so (its gate fails closed on it).
   const fallback = status !== "done" ? "Failed." : "verdict" in result && !verdict ? "Finished without a verdict." : "Finished.";
-  const summary = s(result.summary) || s(result.report) || s(result.error) || (verdict ? "" : fallback);
+  // A reviewer's summary is its verdict restated (verdictSummary): the card shows the verdict itself, not both.
+  const declared = verdict && s(result.summary) === verdictSummary(verdict) ? "" : s(result.summary);
+  const summary = declared || s(result.report) || s(result.error) || (verdict ? "" : fallback);
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts.filter((a: any) => a && typeof a.ref === "string").map((a: any) => ({ name: s(a.name), ref: s(a.ref) })) : [];
   return handoffDraft({ id: `itm-${parent}-handoff-${child}`, at: Date.now(), child: { agentId: child, status }, summary, verdict, artifacts });
 }
