@@ -18,9 +18,6 @@ struct DeskOverlays: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let group: Anchor<CGRect>?
-  /// Search ⌘K in the window stays built once it has shown, hidden while closed (`SearchOverlayHost.show`): opening it
-  /// again shows a view that is already there instead of making a hosting view, its field and its list each time.
-  @State private var paletteBuilt = false
   var body: some View {
     let open = model.menuOpen || model.paletteOpen
     GeometryReader { g in
@@ -41,7 +38,9 @@ struct DeskOverlays: View {
         // Search ⌘K: in the window (SearchView), or its own panel over it (SearchPanel.swift; knob search.host).
         if DeskKnobs.searchHost.value == .panel {
           SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
-        } else if model.paletteOpen || paletteBuilt {
+        } else if model.paletteOpen || model.paletteEverOpened {
+          // Built once it has shown, then hidden while closed (`SearchOverlayHost.show`): ⌘K again shows a view that is
+          // already there instead of making a hosting view, its field and its list each time.
           SearchOverlaySlot(width: SearchMetrics.width(for: g.size.width), open: model.paletteOpen)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, SearchMetrics.top - Theme.Desk.titleBar)
@@ -54,7 +53,6 @@ struct DeskOverlays: View {
     // The scrim under Search ⌘K: at once from the keyboard (SPEC §4), a short fade otherwise.
     .animation(model.paletteByKey ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
     .background(PaletteFocusReturn(model: model, open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true))
-    .onChange(of: model.paletteOpen) { _, o in if o && !paletteBuilt && DeskKnobs.searchHost.value != .panel { paletteBuilt = true } }
   }
 
   /// Transform and opacity only; a crossfade with Reduce Motion.
