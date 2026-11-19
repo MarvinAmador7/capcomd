@@ -14,3 +14,12 @@
   pass review") with its reasons as a list.
 - The pane header's title is no longer bold, the agent's id and clock use even-width figures, and while the agent works
   its bot twinkles and "working" shimmers. With Reduce Motion on, nothing moves.
+- The opened pane's message box is now the same card as Home's: + attaches a skill, the model chip shows the agent's
+  harness and model, then the mic and send. While the agent works and the box is empty, send becomes Stop, which
+  pauses it (its work is committed and pushed; Resume continues it). On a capcomd that can take a model with a message,
+  the chip opens a menu of the harness's models and Effort, for the agent's next turn.
+- An agent getting ready no longer fills its empty pane with a centred block. One quiet line where its turn begins says
+  what the daemon is doing ("Starting planner · Copying the repository 53%") with a clock, and a thin bar under it
+  while the repository copies; a reel column shows a small ring instead.
+- An agent waiting between turns shows one card at the end of its thread, "Waiting for verify vfy-3f9a", with how long
+  it has waited and that its turn has ended: the result wakes it, or a message from you does.

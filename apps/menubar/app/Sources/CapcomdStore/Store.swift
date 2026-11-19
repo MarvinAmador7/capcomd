@@ -56,6 +56,8 @@ public final class CapcomdStore {
   public internal(set) var startRefusedField: String?
   /// Steers typed in a thread, per agent, until confirmed (StoreThread.swift).
   public internal(set) var outbox: [String: [PendingSteer]] = [:]
+  /// The model and effort picked for an agent's next turn (AgentComposer.swift), sent with its next message.
+  public internal(set) var nextTurn: [String: NextTurn] = [:]
   public internal(set) var capabilities: Set<String> = []
   public internal(set) var skills: Fetched<[SkillInfo]>?
   /// The daemon feed can't connect (the daemon is down or restarting); it keeps retrying.

@@ -483,6 +483,38 @@ package enum Theme {
     package static let clock = Font.system(size: 12, design: .monospaced).monospacedDigit(), clockText = Affect.t3
   }
 
+  /// Getting ready and waking, compact (DurableWaking-v3): one quiet 28 pt line where the turn begins, a 3 pt strip of
+  /// the setup's phases under it, the steps in a light card on a click, and "Set up in 1:15 · 4 steps" once it's done.
+  /// Waiting between turns (DurableWaiting-v2): one 44 pt card with a static clock.
+  package enum Ready {
+    package static let line: CGFloat = 28, gap: CGFloat = 8, lineGap: CGFloat = 5, bot: CGFloat = 16
+    package static let font = Affect.body, text = Affect.t2, dim = Affect.t3
+    package static let clock = Font.system(size: 12).monospacedDigit(), clockText = Affect.t3, clockLead: CGFloat = 12
+    package static let chevron = Font.system(size: 9, weight: .semibold), chevronText = Affect.t3
+    package static let hover = Rows.hover, hoverRadius: CGFloat = 7, hoverInset: CGFloat = 6
+    // The strip (.strip): one 3 pt segment per phase, 2 pt apart; done filled, the current one to its share.
+    package static let strip: CGFloat = 3, stripGap: CGFloat = 2, stripTrack = Color.white.opacity(0.08), stripFill = Affect.info
+    // A reel column's segmented ring (16 pt, r 6, 2 pt stroke, a 0.06 turn between segments).
+    package static let ring: CGFloat = 16, ringWidth: CGFloat = 2, ringGap = 0.06
+    // The open card (.wkc): the pane's card, 4/10/8 inside.
+    package static let card = Affect.card, cardStroke = Affect.cardStroke, cardRadius: CGFloat = 10
+    package static let cardPadding = EdgeInsets(top: 4, leading: 10, bottom: 8, trailing: 10)
+    // The steps (.trail .step): 28 pt (24 pt in a column or a record), a 16 pt mark, its time on the right.
+    package static let step: CGFloat = 28, stepSmall: CGFloat = 24, stepGap: CGFloat = 10, mark: CGFloat = 16, markGlyph: CGFloat = 10
+    package static let stepText = Affect.t3, stepDone = Affect.t2, stepNow = Affect.t1, stepSmallFont = Affect.small
+    package static let markDone = Affect.infoTint, markDoneGlyph = Affect.info, markNow = Affect.info, markNext = Color.white.opacity(0.2)
+    package static let markNowWidth: CGFloat = 1.5, markNextWidth: CGFloat = 1, stepTime = Font.system(size: 12).monospacedDigit()
+    /// The bytes under the current step, under its words.
+    package static let detailIndent: CGFloat = 26
+    // The record (.rec): 24 pt, 12/16 at 46 % (62 % hovered).
+    package static let record: CGFloat = 24, recordFont = Affect.small, recordText = Affect.t3, recordHover = Affect.t2
+    /// Waking shows only after its first second (a parked machine is back in about 0.2 s): then it fades in.
+    package static let fadeIn = 0.22
+    // Waiting (.wait): a 44 pt card, a 16 pt clock icon, the line at 62 % (names at 90 %), the clock on the right.
+    package static let wait: CGFloat = 44, waitPadding: CGFloat = 14, waitGap: CGFloat = 10, waitIcon: CGFloat = 16
+    package static let waitSub = Affect.small, waitSubText = Affect.t3, waitSubIndent: CGFloat = 14
+  }
+
   /// Composer v2 (canvas "Composer and container v2", after the owner's reference).
   package enum Composer2 {
     package static let radius: CGFloat = 20, padding = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12), gap: CGFloat = 12
