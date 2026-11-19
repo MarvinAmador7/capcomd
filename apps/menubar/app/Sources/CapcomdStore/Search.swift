@@ -258,12 +258,22 @@ public struct SearchIndex: Sendable {
   /// The query's results by group. `among`: only these items can match (the previous, shorter query's hits: a longer
   /// query never matches more); nil, all of them.
   public func search(_ query: String, among: Set<String>? = nil) -> (sections: [SearchSection], matched: Set<String>) {
+    var work = Work()
+    return search(query, among: among, work: &work)
+  }
+
+  /// What a search did, counted rather than timed (SearchTests guard a keystroke's cost with it: wall-clock time on a
+  /// shared CI Mac measures the Mac as much as the search): `scored`, the items it matched the query against.
+  struct Work { var scored = 0 }
+
+  func search(_ query: String, among: Set<String>?, work: inout Work) -> (sections: [SearchSection], matched: Set<String>) {
     let tokens = SearchText.tokens(query).map { (keys: $0, presence: SearchText.presence(of: $0)) }
     guard !tokens.isEmpty else { return ([], []) }
     var byGroup: [SearchGroup: [(hit: SearchHit, order: Int)]] = [:]
     var matched = Set<String>()
     for (order, item) in all.enumerated() {
       if let among, !among.contains(item.id) { continue }
+      work.scored += 1
       guard let h = Self.match(tokens, item) else { continue }
       matched.insert(item.id)
       byGroup[item.group, default: []].append((h, order))
