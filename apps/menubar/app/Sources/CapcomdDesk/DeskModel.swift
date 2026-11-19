@@ -63,6 +63,9 @@ package final class AgentSlice {
 @Observable @MainActor
 package final class ThreadSlice {
   package private(set) var entries: [ThreadEntry] = [] { didSet { Mutations.record("ThreadSlice.entries") } }
+  /// The entries as the thread draws them (`ThreadRow.rows`: calls in a row folded, thinking merged), made once per
+  /// change of the entries, not per body.
+  package private(set) var rows: [ThreadRow] = [] { didSet { Mutations.record("ThreadSlice.rows") } }
   package private(set) var pending: [PendingSteer] = [] { didSet { Mutations.record("ThreadSlice.pending") } }
   package private(set) var unavailable: DetailUnavailable? { didSet { Mutations.record("ThreadSlice.unavailable") } }
   @ObservationIgnored let agentId: String
@@ -74,7 +77,7 @@ package final class ThreadSlice {
   package private(set) var loadingEarlier = false { didSet { Mutations.record("ThreadSlice.loadingEarlier") } }
   init(agentId: String) { self.agentId = agentId }
   func set(entries e: [ThreadEntry], pending p: [PendingSteer], unavailable u: DetailUnavailable?, top t: Int? = nil, loadingEarlier l: Bool = false) {
-    if entries != e { entries = e; Self.trace?(agentId, e) }
+    if entries != e { rows = ThreadRow.rows(e); entries = e; Self.trace?(agentId, e) }
     if pending != p { pending = p }
     if unavailable != u { unavailable = u }
     if top != t { top = t }

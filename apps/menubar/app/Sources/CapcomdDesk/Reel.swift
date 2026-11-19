@@ -1048,7 +1048,8 @@ struct ColumnThread: View {
   let thread: ThreadSlice
   var body: some View {
     DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
-    let entries = thread.entries
+    // The rows as drawn: calls in a row folded into one line, thinking merged (ThreadRow.rows, made once per change).
+    let entries = thread.rows
     let expanded = inPane && pane?.expanded == true, split = inPane && pane?.split == true
     return ScrollViewReader { proxy in ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
@@ -1089,16 +1090,20 @@ struct ColumnThread: View {
     }
     }
   }
-  static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
-    switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
+  static func bottomMargin(_ r: ThreadRow) -> CGFloat {
+    switch r {
+    case .entry(.item(let i, _)): ThreadItemRow.bottomMargin(i)
+    case .entry(.event): Theme.Content.proseBottom
+    case .tools, .thinking: Theme.Rows.bottom
+    }
   }
 
   private func loadEarlier() {
-    guard keep == nil, !thread.loadingEarlier, let first = thread.entries.first?.id else { return }
+    guard keep == nil, !thread.loadingEarlier, let first = thread.rows.first?.id else { return }
     keep = first
     Task {
       await model.loadEarlier(agentId: agentId)
-      if thread.entries.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
+      if thread.rows.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
     }
   }
 }
@@ -1131,7 +1136,7 @@ struct ColumnSteer: View {
 struct EntryRow: View, Equatable {
   let runId: String
   let agentId: String
-  let entry: ThreadEntry
+  let entry: ThreadRow
   let above: CGFloat
   /// In the opened pane (the bench tells its rows from the reel's by name).
   var inPane = false
@@ -1140,8 +1145,10 @@ struct EntryRow: View, Equatable {
   var body: some View {
     let _ = DeskProbe.body(inPane ? "PaneEntryRow" : "EntryRow", id: agentId)
     switch entry {
-    case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
-    case .event(let ev): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
+    case .entry(.item(let i, let next)): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
+    case .entry(.event(let ev)): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
+    case .tools(let run): ToolGroupRow(run: run, proseWidth: proseWidth)
+    case .thinking(let run): ThinkingRunRow(runId: runId, agentId: agentId, run: run).modifier(ProseColumn(proseWidth))
     }
   }
 }

@@ -165,3 +165,130 @@ extension Item {
     return Verdict.parse(raw).map { (Array(blocks.dropLast()), $0) }
   }
 }
+
+// MARK: - Tool rows, call groups and thinking runs (thread v2: ThreadPolish-v2 on the design canvas)
+
+/// Where a tool call stands, as its row's right edge says it: a running arc, a done tick, "Failed", "Not allowed".
+public enum ToolStatus: Sendable, Hashable {
+  case running, done, failed
+  /// Its permission rules refused it: it never ran.
+  case notAllowed
+}
+
+extension Item {
+  /// The call was refused by its permission rules (`error.code` "refused"): it never ran.
+  public var refused: Bool { kind == "tool" && error?.code == "refused" }
+
+  public var toolStatus: ToolStatus {
+    if open { return .running }
+    if refused { return .notAllowed }
+    return tool?.isError == true || error != nil ? .failed : .done
+  }
+}
+
+extension Item.Tool {
+  /// The tool's short name, in mono on its row: "Bash", "Read", "Glob"; capcomd's own tools by their verb ("spawn",
+  /// "await"); another MCP server's tool by the tool's name; codex's item types as the step they are ("shell", "edit").
+  public var displayName: String {
+    if let m = Self.mcp(name) { return m.server == "capcomd" ? String(m.tool.trimmingPrefix("capcomd_")) : m.tool }
+    switch name {
+    case "command_execution": return "shell"
+    case "file_change": return "edit"
+    case "": return "tool"
+    default: return name
+    }
+  }
+
+  /// What the call was about, after its name: the summary without the verb the name already says ("Run bun test" →
+  /// "bun test", "Search the code for email in src" → "email in src"). capcomd's own calls keep their phrase ("Spawn a
+  /// worker"); another server's tool says the server.
+  public var detail: String {
+    if let m = Self.mcp(name), m.server != "capcomd" {
+      return summary == "\(m.server): \(m.tool)" ? m.server : summary
+    }
+    for verb in Self.verbs where summary.hasPrefix(verb) && summary.count > verb.count {
+      return String(summary.dropFirst(verb.count))
+    }
+    return summary
+  }
+
+  /// The verbs the daemon's summaries start with (packages/agent-thread summary.ts), longest first.
+  static let verbs = ["Search the code for ", "Search the web for ", "Run ", "Read ", "Find ", "Edit ", "Write ", "List ", "Fetch ", "Delete "]
+
+  /// `mcp__server__tool` (Claude Code) or `server.tool` (codex, fx).
+  static func mcp(_ name: String) -> (server: String, tool: String)? {
+    if name.hasPrefix("mcp__") {
+      let rest = name.dropFirst(5)
+      guard let r = rest.range(of: "__") else { return nil }
+      return (String(rest[..<r.lowerBound]), String(rest[r.upperBound...]))
+    }
+    let parts = name.split(separator: ".", maxSplits: 1)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty, !name.contains("/"), !name.contains(" ") else { return nil }
+    return (String(parts[0]), String(parts[1]))
+  }
+}
+
+/// Two or more finished tool calls in a row, as one line: "Used 3 tools · 2 not allowed · 5.0s". A refusal or a
+/// failure is said in words, so folding the calls hides nothing.
+public struct ToolRun: Sendable, Hashable {
+  public var items: [Item]
+  public init(_ items: [Item]) { self.items = items }
+
+  public var count: Int { items.count }
+  public var notAllowed: Int { items.filter { $0.toolStatus == .notAllowed }.count }
+  public var failed: Int { items.filter { $0.toolStatus == .failed }.count }
+  /// The calls' own durations added up (what they took, not the gaps between them); nil when none reported one.
+  public var durationMs: Int? {
+    let ds = items.compactMap(\.durationMs)
+    return ds.isEmpty ? nil : ds.reduce(0, +)
+  }
+  /// The calls whose icons stack on the line: the first three.
+  public var stacked: [Item] { Array(items.prefix(3)) }
+
+  /// The line's words, in order: "Used 3 tools", then each note ("2 not allowed", "1 failed"), then the time.
+  public var title: String { "Used \(count) tools" }
+  public var notes: [String] {
+    var out: [String] = []
+    if notAllowed > 0 { out.append("\(notAllowed) not allowed") }
+    if failed > 0 { out.append("\(failed) failed") }
+    return out
+  }
+  public var duration: String? { durationMs.map { callDuration(ms: $0) } }
+  /// For VoiceOver: the whole line in words.
+  public var spoken: String { ([title] + notes + (duration.map { [$0] } ?? [])).joined(separator: ", ") }
+}
+
+/// Thinking items in a row, as one line: "Thinking · 5s" (their times added up); "Thinking" while the last one runs.
+/// What the CLI hid is said inside, when the line is opened, not on it.
+public struct ThinkingRun: Sendable, Hashable {
+  public var items: [Item]
+  /// The item after the run (the last thought's duration is the gap to it when the CLI reported none).
+  public var next: Item?
+  public init(_ items: [Item], next: Item?) { self.items = items; self.next = next }
+
+  public var open: Bool { items.last?.open == true }
+  /// Every thought in it was hidden by the CLI.
+  public var hidden: Bool { items.allSatisfy(\.redacted) }
+  /// The thoughts' times added up; nil when none can be told.
+  public var seconds: Int? {
+    var total = 0, any = false
+    for (n, i) in items.enumerated() where !i.open {
+      if let s = i.thinkingSeconds(next: n + 1 < items.count ? items[n + 1] : next) { total += s; any = true }
+    }
+    return any ? total : nil
+  }
+  /// While it thinks the line says only that (its clock runs beside it); done, the total.
+  public var label: String {
+    if open { return "Thinking" }
+    return seconds.map { "Thinking · \($0)s" } ?? "Thinking"
+  }
+  public var spoken: String {
+    if open { return "Thinking" }
+    return seconds.map { "Thought for \($0) \($0 == 1 ? "second" : "seconds")" } ?? "Thought"
+  }
+}
+
+extension Verdict {
+  /// The seal's words: "Passed review" / "Didn't pass review".
+  public var title: String { passed ? "Passed review" : "Didn't pass review" }
+}

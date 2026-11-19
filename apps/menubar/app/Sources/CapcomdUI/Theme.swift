@@ -404,6 +404,85 @@ package enum Theme {
     package static let mediaRadius: CGFloat = 8, mediaMaxHeight: CGFloat = 180, mediaStroke = Color.white.opacity(0.08)
     package static let truncatedFont = Font.system(size: 11), truncatedText = label.opacity(0.4)
   }
+  /// Thread v2 (canvas ThreadPolish-v2, its affect.css tokens): neutrals at four strengths, 0.5 pt hairlines, colour only
+  /// on status words and glyphs, a ~14 % tint behind a word or glyph of the same hue; weights 400 and 500 only.
+  package enum Affect {
+    package static let t1 = Color.white.opacity(0.9), t2 = Color.white.opacity(0.62), t3 = Color.white.opacity(0.46), t4 = Color.white.opacity(0.3)
+    package static let info = Color(red: 0x4F / 255, green: 0xB0 / 255, blue: 0xFE / 255), infoTint = info.opacity(0.14)
+    package static let ok = Color(red: 0x7D / 255, green: 0xCF / 255, blue: 0x9F / 255)
+    package static let okTint = ok.opacity(0.14)
+    package static let bad = Color(red: 1, green: 0x8A / 255, blue: 0x7A / 255)                        // danger words and glyphs
+    package static let red = Color(red: 1, green: 0x6B / 255, blue: 0x5F / 255), badTint = red.opacity(0.14)
+    package static let hairline: CGFloat = 0.5
+    /// The pane behind the thread (Theme.Desk.column): the ring that parts stacked icons draws in it.
+    package static let ground = Color(red: 0x15 / 255, green: 0x15 / 255, blue: 0x18 / 255)
+    // Cards (.card): a step above the pane, a 0.5 pt inset hairline and a 1 pt shadow.
+    package static let card = Color.white.opacity(0.035), cardStroke = Color.white.opacity(0.1), cardShadow = Color.black.opacity(0.4)
+    package static let cardRadius: CGFloat = 10, cardPadding = EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16), cardGap: CGFloat = 6
+    // Type: body 13/20, secondary 12/16, mono 12/500 tool names (line spacing is the line height less the font's own).
+    package static let body = Font.system(size: 13), bodySpacing: CGFloat = 4.5
+    package static let bodyMedium = Font.system(size: 13, weight: .medium)
+    package static let small = Font.system(size: 12), smallSpacing: CGFloat = 1.7
+    package static let mono = Font.system(size: 12, weight: .medium, design: .monospaced)
+    package static let monoFigures = Font.system(size: 12, design: .monospaced)
+    /// Motion: one ease (cubic-bezier(.22, 1, .36, 1)) at five lengths; the done tick pops and draws itself.
+    package static func ease(_ seconds: Double) -> Animation { .timingCurve(0.22, 1, 0.36, 1, duration: seconds) }
+    package static let quick = 0.12, short = 0.16, medium = 0.22, long = 0.32, longest = 0.42
+    package static let checkPop = 0.46, tickDraw = 0.36, riseIn: CGFloat = 4
+    package static let shimmer = 1.6, twinkle = 0.6
+    /// The shimmer's base and its sweeping highlight (.shim: .46 → .92 → .46).
+    package static let shimmerBase = t3, shimmerHighlight = Color.white.opacity(0.92)
+    /// The twinkle hides alternate 2 pt cells of a working bot at up to 70 %.
+    package static let twinkleCell: CGFloat = 2, twinkleMax = 0.7
+  }
+
+  /// Thread v2 rows: tool calls, call groups, thinking, the waiting line (ThreadPolish-v2, DurableWaiting-v2).
+  package enum Rows {
+    // A tool call (.tr): 16 pt muted icon, mono name, summary at 62 %, status on the right.
+    package static let height: CGFloat = 28, gap: CGFloat = 8, bottom: CGFloat = 8
+    package static let icon: CGFloat = 16, iconFont = Font.system(size: 12.5), iconText = Affect.t3
+    package static let name = Affect.mono, nameText = Affect.t1, nameRefusedText = Affect.t2
+    package static let detail = Affect.body, detailText = Affect.t2
+    package static let status = Font.system(size: 12).monospacedDigit(), statusText = Affect.t3, statusGap: CGFloat = 6, statusLead: CGFloat = 12
+    package static let statusWord = Font.system(size: 12), statusWordGap: CGFloat = 5
+    package static let hover = Color.white.opacity(0.04), hoverRadius: CGFloat = 7, hoverInset: CGFloat = 6
+    // Status glyphs: a 14 pt blue disc with a white tick (done), a 14 pt arc (running), 12 pt × (failed), 13 pt ⊘.
+    package static let done: CGFloat = 14, running: CGFloat = 14, failed: CGFloat = 12, refused: CGFloat = 13
+    package static let tick = Color.white, tickWidth: CGFloat = 1.6, arcTrack = Color.white.opacity(0.14), arcWidth: CGFloat = 1.6
+    package static let crossWidth: CGFloat = 1.8, refusedWidth: CGFloat = 1.5, spin = 0.9
+    // A call group (.tg): stacked 20 pt tiles (6 pt corners, 4 pt overlap, 1.5 pt ring), "Used 3 tools", notes, time.
+    package static let tile: CGFloat = 20, tileRadius: CGFloat = 6, tileOverlap: CGFloat = 4, tileRing: CGFloat = 1.5
+    package static let tileFill = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1F / 255), tileStroke = Color.white.opacity(0.14)
+    package static let tileIcon = Font.system(size: 9.5), tileText = Affect.t3
+    package static let groupText = Affect.t2, groupNote = Affect.t3, groupChevron = Affect.t4, chevron = Font.system(size: 9, weight: .semibold)
+    /// The calls inside an open group sit under the line's words.
+    package static let groupIndent: CGFloat = 28
+    // Thinking (.think): 24 pt, 12/16 at 46 %; open, the thoughts under a hairline.
+    package static let thinkHeight: CGFloat = 24, thinkGap: CGFloat = 6, thinkFont = Affect.small, thinkText = Affect.t3
+    package static let thinkBot: CGFloat = 16
+    package static let hiddenNote = "Hidden by the CLI: it doesn't share this reasoning."
+    // Hand-back and verdict cards (.card .who, .clamp, .more, .verdict, .seal).
+    package static let whoFont = Affect.small, whoText = Affect.t3, whoName = Affect.bodyMedium, whoNameText = Affect.t1
+    package static let whoGap: CGFloat = 8, whoBot: CGFloat = 16, whoChevron = Affect.t4
+    package static let cardText = Affect.t1, cardFont = Affect.body
+    /// A long hand-back shows about three lines and fades out over the last (mask: opaque to 62 %, then clear).
+    package static let clamp: CGFloat = 64, clampSlack: CGFloat = 16, clampFadeFrom = 0.62
+    package static let more = Affect.small, moreText = Affect.t2
+    package static let seal: CGFloat = 16, sealGlyph: CGFloat = 10, sealTickWidth: CGFloat = 2.2, sealCrossWidth: CGFloat = 2
+    package static let verdictFont = Affect.bodyMedium, verdictText = Affect.t1, verdictGap: CGFloat = 8
+    package static let bulletIndent: CGFloat = 18, bulletGap: CGFloat = 2
+  }
+
+  /// The pane's header (.ph): title 13/500, role at 62 %, short id and clock at 46 % in tabular mono figures; while the
+  /// agent works its bot twinkles and "working" shimmers, nothing else moves.
+  package enum PaneHead {
+    package static let title = Affect.bodyMedium, titleText = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
+    package static let role = Affect.body, roleText = Affect.t2
+    package static let id = Font.system(size: 12, design: .monospaced).monospacedDigit(), idText = Affect.t3
+    package static let state = Affect.body, stateText = Affect.t3
+    package static let clock = Font.system(size: 12, design: .monospaced).monospacedDigit(), clockText = Affect.t3
+  }
+
   /// Composer v2 (canvas "Composer and container v2", after the owner's reference).
   package enum Composer2 {
     package static let radius: CGFloat = 20, padding = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12), gap: CGFloat = 12
