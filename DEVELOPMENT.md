@@ -51,6 +51,7 @@ Design documents live in `docs/`. Start with:
 - `adr-019-agents-report-up.md` - (proposed) agents report up to their parents; turn, time and money limits are optional
 - `adr-022-agent-lifecycle-workflow.md` - an agent's lifecycle as a Rivet workflow in its worker actor (the default; `CAPCOMD_AGENT_WORKFLOW=0` on the engine brings back `agent-drive` processes for one release), and the rule for changing the workflow
 - `adr-026-durable-agents.md` - durable agents and threads (proposed): an agent is never done, its CLI session is kept, waits happen between turns (wake on events), waking falls back from a parked machine to a fresh one, planners hibernate
+- `adr-027-open-core-and-cloud.md` - what's open source (everything one person runs on their own machine and accounts) and what's capcomd cloud (always on, managed machines, anywhere, teams), and the rule for deciding a new feature
 - `adr-015-agent-envs-secrets-codex.md` - agent profiles, credentials, env snapshots
 - `actors-v1.md`, `adr-008-lifecycle-state-machines.md`, `durability.md` - actors, state machines, failure handling
 - `output-contract.md` - the JSON, events and spans that callers can rely on
