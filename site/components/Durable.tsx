@@ -2,14 +2,14 @@
 
 // "Pull the plug": a run of three workers on one goal, and a fuse box of four real failures the visitor can cause at
 // any moment, as often as they like. Each ending is what a test checks today:
-//   Pull the plug   tests/subagents/restart.test.ts, workflow.test.ts (restart mid-agent, mid-step, mid-watch): the
+//   Pull the plug   tests/subagents/workflow-restart.test.ts (mid-agent, mid-watch), workflow-step.test.ts (mid-step): the
 //                   agents finish, the attempt the restart broke runs again, and it isn't counted as a failure;
 //                   tests/merge/*.test.ts (the seven kill points): a change already on main is never merged twice.
 //   Crash a worker  tests/scenarios/coordination.test.ts ("lease takeover from a crashed worker, fenced epochs"): the
 //                   lease expires, the task is claimed again at the next epoch and finished; the old epoch is fenced.
 //   Cloud outage    tests/agents/outage.test.ts: shorter than the window (CAPCOMD_SANDBOX_OUTAGE_MS, 10 min by default)
 //                   capcomd waits, the agent keeps working and its work is pushed; longer, it fails and says why.
-//   Out of quota    workflow.test.ts ("quota wake"): paused at the limit, it sleeps to the reset and runs the next
+//   Out of quota    workflow-restart.test.ts ("quota wake"): paused at the limit, it sleeps to the reset and runs the next
 //                   epoch, with nobody awaiting.
 // Without the page script, or with reduced motion, the run is shown finished and starts only when asked.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -34,10 +34,10 @@ const FUSES: Array<{ id: Fuse; name: string; sub: string }> = [
 ];
 
 const TESTS: Array<[string, string[]]> = [
-  ["Pull the plug", ["tests/subagents/restart.test.ts", "tests/subagents/workflow.test.ts (restart mid-agent, mid-step, mid-watch)", "tests/merge/direct.test.ts, pr.test.ts: SIGKILL at merge.lock.acquired, merge.after_fetch.before_integrate, merge.before_cas, merge.after_cas.before_event, merge.pr.before_merge, merge.after_pr_merge.before_event"]],
+  ["Pull the plug", ["tests/subagents/workflow-restart.test.ts (restart mid-agent, mid-watch)", "tests/subagents/workflow-step.test.ts (restart mid-step)", "tests/merge/direct.test.ts, pr.test.ts: SIGKILL at merge.lock.acquired, merge.after_fetch.before_integrate, merge.before_cas, merge.after_cas.before_event, merge.pr.before_merge, merge.after_pr_merge.before_event"]],
   ["Crash a worker", ["tests/scenarios/coordination.test.ts: lease takeover from a crashed worker, fenced epochs"]],
   ["Cloud outage", ["tests/agents/outage.test.ts: shorter than the window the agent finishes and its work is pushed; longer, it fails with sandbox_unreachable, naming the provider"]],
-  ["Out of quota", ["tests/subagents/workflow.test.ts: quota wake"]],
+  ["Out of quota", ["tests/subagents/workflow-restart.test.ts: quota wake"]],
 ];
 
 const fresh = (): Model => ({ phase: "idle", ws: SPEEDS.map((speed, i) => ({ bot: i + 1, prog: 0, speed, state: "work", epoch: 1, late: false })), fuse: null, beat: "", power: "on", flipped: 0, spare: 0 });

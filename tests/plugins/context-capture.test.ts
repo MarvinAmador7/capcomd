@@ -3,7 +3,7 @@
 // provenance from the kernel's records, never from the payload; refused for a secret, a bad shape, the size and the
 // run's limit), and the context plugin's agent.changed listener that collects them once, from the record the agent's
 // token wrote, with plugin.context.proposed and plugin.context.refused on the run. Engine-free; the end to end run is
-// tests/scenarios/context-capture.test.ts.
+// tests/scenarios/context-consolidate.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
