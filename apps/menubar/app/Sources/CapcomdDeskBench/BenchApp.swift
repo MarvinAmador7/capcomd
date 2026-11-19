@@ -8,6 +8,7 @@ import CapcomdDesk
 /// (`Desk.show`) and puts its own desk in it (`DeskStage`); the commands act on that desk's model. `main.swift` answers
 /// the verbs that open no window before this starts.
 struct DeskBenchApp: App {
+  @NSApplicationDelegateAdaptor private var delegate: BenchAppDelegate
   static let windowID = "bench"
   /// The command line as `prepare()` made it (main.swift), for `bench.attach`.
   static var argv: [String] = []
@@ -26,6 +27,13 @@ struct DeskBenchApp: App {
     let id = w.identifier?.rawValue ?? ""
     return id == windowID || id.hasPrefix("\(windowID)-")
   }
+}
+
+/// As the app's delegate does: the app keeps running when its last window closes. `open` orders the scene's window out
+/// and measures a window of its own, which closes with the rep; SwiftUI would otherwise quit the app there, before the
+/// run's result is written.
+final class BenchAppDelegate: NSObject, NSApplicationDelegate {
+  func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
 }
 
 /// What the scene's window shows: the current rep's desk (nothing before the first rep puts one there). A new rep's desk
