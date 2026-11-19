@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApiError, ApprovalId, CAPABILITY_NAMES, contract, EventData, Scope, StreamFrames } from "../../src/api/contract";
+import { ApiError, ApprovalId, CAPABILITY_NAMES, contract, EventData, Scope, StreamFrames, TRANSCRIPT_PAGE_MAX } from "../../src/api/contract";
 import { HarnessEvent } from "../../src/api/envelope";
 import { isEventType } from "../../packages/plugin/src/event-type";
 import { bodyHash, resolveDecide } from "../../src/api/idempotency";
@@ -23,8 +23,10 @@ describe("harness.v1 contract", () => {
 	test("committed OpenAPI covers every route, with a scoped stream and no global one", () => {
 		for (const p of ["/v1/health", "/v1/runs", "/v1/runs/{runId}", "/v1/runs/{runId}/agents", "/v1/runs/{runId}/files", "/v1/events", "/v1/streams/{scope}/events", "/v1/approvals/{approvalId}/decision",
 			"/v1/runs/{runId}/pause", "/v1/runs/{runId}/resume", "/v1/runs/{runId}/cancel", "/v1/runs/{runId}/agents/{agentId}/messages",
-			"/v1/runs/{runId}/agents/{agentId}/pause", "/v1/runs/{runId}/agents/{agentId}/resume", "/v1/profiles"])
+			"/v1/runs/{runId}/agents/{agentId}/pause", "/v1/runs/{runId}/agents/{agentId}/resume", "/v1/profiles",
+			"/v1/projects", "/v1/runs/{runId}/trace", "/v1/runs/{runId}/messages", "/v1/runs/{runId}/agents/{agentId}/transcript", "/v1/runs/{runId}/attachments/{attachmentId}", "/v1/skills"])
 			expect(Object.keys(paths)).toContain(p);
+		expect(TRANSCRIPT_PAGE_MAX).toBe(500);
 		expect(Object.keys(paths)).not.toContain("/v1/events/stream");
 		expect(paths["/v1/streams/{scope}/events"].get.responses["200"].content).toHaveProperty("text/event-stream");
 	});
@@ -50,6 +52,10 @@ describe("harness.v1 contract", () => {
 		expect(row.properties.cost).toMatchObject({ type: ["string", "null"], enum: ["low", "medium", "high", null] });
 		expect(row.properties.skills.items.required).toEqual(["name", "source", "hash", "trusted", "changed"]);
 		expect(row.properties.skills.items.properties).not.toHaveProperty("text");
+	});
+	test("capabilities a client checks for are listed in /v1/health", () => {
+		// The ones whose own tests have nothing else to say about health (tests/api/agent-title, brain-proposals, goal-branch).
+		expect(CAPABILITY_NAMES).toEqual(expect.arrayContaining(["agents.title", "context.brain_proposals", "runs.goal_branch"]));
 	});
 	test("scope is daemon, prj-… or run-…", () => {
 		for (const s of ["daemon", "prj-a1", "run-mvhd"]) expect(Scope.safeParse(s).success).toBe(true);

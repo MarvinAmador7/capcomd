@@ -158,21 +158,23 @@ describe("the boxd API key is a secret reference (§10.3)", () => {
 
 describe("capcomd plugins validate (§4.9, §14)", () => {
   const home = mkdtempSync(join(tmpdir(), "capcomd-plugins-validate-"));
-  const cli = (...args: string[]) => {
-    const p = Bun.spawnSync([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", "validate", ...args], { env: { ...process.env, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, stdout: "pipe", stderr: "pipe" });
-    return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+  /** Async: a test starts the ones it needs at once. */
+  const cli = async (...args: string[]) => {
+    const p = Bun.spawn([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", "validate", ...args], { env: { ...process.env, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { code, out, err };
   };
-  test("every built-in's manifest is valid", () => {
-    const r = cli("--json");
+  test("every built-in's manifest is valid", async () => {
+    const [r, text] = await Promise.all([cli("--json"), cli()]);
     expect(r.code).toBe(0);
     const body = JSON.parse(r.out);
     expect(body.ok).toBe(true);
     expect(body.plugins.filter((p: { name: string }) => p.name.startsWith("sandbox-")).map((p: { name: string; ok: boolean; source: string }) => [p.name, p.ok, p.source]))
       .toEqual([["sandbox-docker", true, "builtin"], ["sandbox-boxd", true, "builtin"], ["sandbox-fake", true, "builtin"], ["sandbox-fake-host", true, "builtin"]]);
-    expect(cli().out).toMatch(/✓ sandbox-boxd \S+ \(built-in\)/);
+    expect(text.out).toMatch(/✓ sandbox-boxd \S+ \(built-in\)/);
   });
-  test("--conformance on a built-in runs the load/dispose check and the seam suite", () => {
-    const r = cli("sandbox-fake", "--conformance", "--json");
+  test("--conformance on a built-in runs the load/dispose check and the seam suite", async () => {
+    const r = await cli("sandbox-fake", "--conformance", "--json");
     expect(r.code).toBe(0);
     const [p] = JSON.parse(r.out).plugins;
     expect(p.conformance[0]).toMatchObject({ name: "load, dispose and load again (§14.1)", ok: true });
@@ -180,7 +182,7 @@ describe("capcomd plugins validate (§4.9, §14)", () => {
     expect(p.conformance.every((c: { ok: boolean }) => c.ok)).toBe(true);
     expect(p.conformance.filter((c: { skipped: boolean }) => c.skipped).map((c: { name: string }) => c.name)).toEqual([expect.stringContaining("exec:"), expect.stringContaining("deadline")]);
   }, 60_000);
-  test("a plugin directory: its module imported, the full suite run against its seam; a bad manifest and an unknown name refused", () => {
+  test("a plugin directory: its module imported, the full suite run against its seam; a bad manifest and an unknown name refused", async () => {
     const dir = mkdtempSync(join(tmpdir(), "capcomd-plugin-dir-"));
     writeFileSync(join(dir, "plugin.json"), JSON.stringify({
       schema: "capcomd.plugin/v1", name: "host-sandbox", version: "1.0.0", description: "The fake-host sandbox, from a directory", apiVersion: 1,
@@ -188,31 +190,27 @@ describe("capcomd plugins validate (§4.9, §14)", () => {
       contributes: { seams: [{ kind: "sandbox", name: "fake-host" }] },
     }));
     writeFileSync(join(dir, "index.ts"), `import { sandboxFakeHost } from ${JSON.stringify(join(ROOT, "src", "plugins", "builtin", "sandbox-fake.ts"))};\nexport const plugin = sandboxFakeHost.module;\n`);
-    const r = cli(dir, "--conformance");
-    expect(r.code).toBe(0);
-    expect(r.out).toContain(`✓ host-sandbox 1.0.0 (${dir})`);
-    expect(r.out).toContain("✓ a deadline or an abort during exec rejects timeout within 5 s");
     const bad = join(dir, "bad");
     mkdirSync(bad);
     writeFileSync(join(bad, "plugin.json"), JSON.stringify({ schema: "capcomd.plugin/v1", name: "Bad!", version: "1", description: "", apiVersion: 1, engines: { capcomd: "*" }, entry: { runtime: "in-process", module: "./x.ts" } }));
-    const b = cli(bad, "--json");
+    const [r, b, unknown] = await Promise.all([cli(dir, "--conformance"), cli(bad, "--json"), cli("no-such-plugin")]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`✓ host-sandbox 1.0.0 (${dir})`);
+    expect(r.out).toContain("✓ a deadline or an abort during exec rejects timeout within 5 s");
     expect(b.code).toBe(1);
     expect(JSON.parse(b.out)).toMatchObject({ ok: false, plugins: [{ ok: false, source: "dir", issues: expect.arrayContaining([expect.objectContaining({ path: "name" })]) }] });
-    expect(cli("no-such-plugin").code).toBe(3);
+    expect(unknown.code).toBe(3);
   }, 60_000);
-  test("a plugin directory whose default secret names one of the kernel's own variables is refused (§10.3)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "capcomd-plugin-dir-"));
-    const write = (ref: string) => writeFileSync(join(dir, "plugin.json"), JSON.stringify({
+  test("a plugin directory whose default secret names one of the kernel's own variables is refused (§10.3)", async () => {
+    const write = (ref: string) => { const dir = mkdtempSync(join(tmpdir(), "capcomd-plugin-dir-")); writeFileSync(join(dir, "plugin.json"), JSON.stringify({
       schema: "capcomd.plugin/v1", name: "gh-notify", version: "1.0.0", description: "Posts to GitHub", apiVersion: 1,
       engines: { capcomd: ">=0.0.0" }, entry: { runtime: "process", command: ["./run.sh"] }, contributes: { hooks: { "run.changed": {} } },
       config: { type: "object", additionalProperties: false, properties: { token: { type: "object", "x-secret": true, default: { $secret: ref } } } },
     }));
-    writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
-    write("env:GITHUB_TOKEN");
-    const r = cli(dir);
+    writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n", { mode: 0o755 }); return dir; };
+    const [r, fine] = await Promise.all([cli(write("env:GITHUB_TOKEN")), cli(write("env:GH_NOTIFY_TOKEN"))]);
     expect(r.code).toBe(1);
     expect(r.out).toContain("✗ config.properties.token.default: names env:GITHUB_TOKEN, one of capcomd's own variables");
-    write("env:GH_NOTIFY_TOKEN");
-    expect(cli(dir).code).toBe(0);
+    expect(fine.code).toBe(0);
   });
 });

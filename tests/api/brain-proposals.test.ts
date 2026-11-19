@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addClient, loadClients, mintPluginClient } from "../../src/api/clients";
-import { BrainProposals, BrainProposalsSent, CAPABILITY_NAMES } from "../../src/api/contract";
+import { BrainProposals, BrainProposalsSent } from "../../src/api/contract";
 import { harnessApp } from "../../src/api/server";
 import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
@@ -40,8 +40,6 @@ function setup(o: { fails?: Record<string, string> } = {}) {
 }
 
 describe("capability context.brain_proposals", () => {
-  test("health lists it", () => { expect(CAPABILITY_NAMES).toContain("context.brain_proposals"); });
-
   test("GET …/brain-proposals: the run's proposals and whether each was sent; 404 for an unknown run", async () => {
     const { get } = setup();
     const r = await get("/v1/runs/run-b/brain-proposals");

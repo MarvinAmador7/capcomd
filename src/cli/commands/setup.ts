@@ -622,19 +622,23 @@ export async function checkSetup(cwd = process.cwd(), o: { mcpClient?: boolean }
   const { localPort } = await import("../../core/engine-start");
   const st: any = await S.serviceStatus({ port: localPort() ?? undefined });
   out.push({ step: "engine", ok: st.running, detail: st.running ? `running on :${st.port}${st.installed ? " (service)" : ""}` : `not running${st.installed ? " (service installed)" : ""}`, ...(st.running ? {} : { hint: "`capcomd service install`, or `capcomd serve`." }) });
-  // The watchdog (plugin API §16.4) as the engine loads it: the user's, the project's and the environment's settings.
+  out.push(await watchdogCheck(cwd));
+  return out;
+}
+
+/** The watchdog (plugin API §16.4) as the engine loads it: the user's, the project's and the environment's settings. */
+export async function watchdogCheck(cwd = process.cwd(), env: Record<string, string | undefined> = process.env): Promise<Step> {
   const W = await import("../../plugins/watchdog");
-  const wd = (await import("../../plugins/config")).pluginSettings(W.manifest, { cwd });
+  const wd = (await import("../../plugins/config")).pluginSettings(W.manifest, { cwd, env });
   // What the schema accepts but activation refuses (a stop before the notice), over the schema's defaults.
   const defaults = Object.fromEntries(Object.entries((W.manifest.config as { properties: Record<string, { default: number }> }).properties).map(([k, p]) => [k, p.default]));
   const settings = { ...defaults, ...wd.config } as unknown as import("../../plugins/watchdog").WatchdogConfig;
   const problem = wd.enabled && !wd.errors.length ? W.configProblem(settings) : null;
   const warning = wd.enabled && !wd.errors.length ? W.configWarning(settings) : null;
-  if (wd.enabled && wd.errors.length) out.push({ step: "watchdog", ok: false, detail: `its settings are refused, so it won't load: ${wd.errors.map((e) => `${e.layer}: plugins.watchdog.${e.path} ${e.message}`).join("; ")}`, hint: "Fix plugins.watchdog in your config, then restart the engine." });
-  else if (problem) out.push({ step: "watchdog", ok: false, detail: `it won't load: ${problem}`, hint: "Fix plugins.watchdog in your config, then restart the engine." });
-  else if (warning) out.push({ step: "watchdog", ok: true, advice: true, detail: `on, but ${warning}`, hint: `Set plugins.watchdog.stalledAfterMs to ${W.PROGRESS_SIGNAL_MS} or more in your config, then restart the engine.` });
-  else out.push({ step: "watchdog", ok: true, detail: wd.enabled ? "on" : "off (`capcomd setup service` turns it on)" });
-  return out;
+  if (wd.enabled && wd.errors.length) return { step: "watchdog", ok: false, detail: `its settings are refused, so it won't load: ${wd.errors.map((e) => `${e.layer}: plugins.watchdog.${e.path} ${e.message}`).join("; ")}`, hint: "Fix plugins.watchdog in your config, then restart the engine." };
+  if (problem) return { step: "watchdog", ok: false, detail: `it won't load: ${problem}`, hint: "Fix plugins.watchdog in your config, then restart the engine." };
+  if (warning) return { step: "watchdog", ok: true, advice: true, detail: `on, but ${warning}`, hint: `Set plugins.watchdog.stalledAfterMs to ${W.PROGRESS_SIGNAL_MS} or more in your config, then restart the engine.` };
+  return { step: "watchdog", ok: true, detail: wd.enabled ? "on" : "off (`capcomd setup service` turns it on)" };
 }
 
 export function formatSteps(steps: Step[]): string {

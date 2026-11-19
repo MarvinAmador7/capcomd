@@ -72,6 +72,8 @@ const RUN_ENDED = "its run ended";
 /** A foreground wait is never longer than an in-VM call may be held (as a verify's, src/subagents/rpc.ts). */
 export const FOREGROUND_MAX_MS = 90_000;
 const pollMs = () => Number(env("JOBS_POLL_MS") ?? 1000);
+/** At most one `output` frame per job this often (tests shorten it). */
+const frameMs = () => Number(env("JOBS_FRAME_MS") ?? 1000);
 const usage = (m: string, hint: string): never => { throw new RelayError("usage", m, hint); };
 
 // ---- records ---------------------------------------------------------------------------------------------------------
@@ -334,7 +336,7 @@ async function tick(at: Attached) {
     if (s.state === "gone") { void settleExec(at, w, "lost", null, s.why); continue; }
     // Its new output is read (one more exec) only while a plugin wants `output` frames: one that keeps a timer declares
     // `changes: ["fired"]` (§4.7), and its listening costs a running job nothing.
-    if ((s.out > w.out || s.err > w.err) && now - w.frameAt >= 1000 && hooks.listening("job.changed", "output")) {
+    if ((s.out > w.out || s.err > w.err) && now - w.frameAt >= frameMs() && hooks.listening("job.changed", "output")) {
       w.frameAt = now;
       const f = await readFrom(at.m, w.rec.jobId, { out: w.out, err: w.err }, FRAME_MAX).catch(() => null);
       if (f) { w.out += Buffer.byteLength(f.stdout); w.err += Buffer.byteLength(f.stderr); tell(w.rec, { kind: "output", stdout: f.stdout, stderr: f.stderr }); }
