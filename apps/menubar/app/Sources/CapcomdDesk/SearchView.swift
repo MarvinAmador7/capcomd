@@ -104,7 +104,8 @@ struct SearchView: View {
     .modifier(SearchWindowChrome(on: inWindow))
     .environment(\.colorScheme, .dark)
     .onChange(of: height, initial: true) { _, h in onHeight(h) }
-    .onAppear { focused = true }
+    // Built ahead and hidden (`PaletteWarmer`), it leaves the keyboard where it is until it opens.
+    .onAppear { if model.paletteOpen { focused = true } }
     .onChange(of: model.paletteOpen) { _, open in if open { focused = true } }
     .accessibilityElement(children: .contain).accessibilityLabel("Search")
   }

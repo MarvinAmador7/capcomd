@@ -1,6 +1,7 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 import AppKit
+import QuartzCore
 import CapcomdStore
 import CapcomdUI
 
@@ -18,6 +19,8 @@ struct DeskOverlays: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let group: Anchor<CGRect>?
+  /// Search ⌘K built ahead of the first ⌘K, hidden (`PaletteWarmer`): the first ⌘K shows a view that is already there.
+  @State private var warmed = false
   var body: some View {
     let open = model.menuOpen || model.paletteOpen
     GeometryReader { g in
@@ -38,9 +41,10 @@ struct DeskOverlays: View {
         // Search ⌘K: in the window (SearchView), or its own panel over it (SearchPanel.swift; knob search.host).
         if DeskKnobs.searchHost.value == .panel {
           SearchPanelHost(open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true)
-        } else if model.paletteOpen || model.paletteEverOpened {
-          // Built once it has shown, then hidden while closed (`SearchOverlayHost.show`): ⌘K again shows a view that is
-          // already there instead of making a hosting view, its field and its list each time.
+        } else if model.paletteOpen || model.paletteEverOpened || warmed {
+          // Built once the window has drawn (`PaletteWarmer`, below) or it has shown, then hidden while closed
+          // (`SearchOverlayHost.show`): ⌘K, the first one too, shows a view that is already there instead of making a
+          // hosting view, its field and its list.
           SearchOverlaySlot(width: SearchMetrics.width(for: g.size.width), open: model.paletteOpen)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, SearchMetrics.top - Theme.Desk.titleBar)
@@ -53,6 +57,16 @@ struct DeskOverlays: View {
     // The scrim under Search ⌘K: at once from the keyboard (SPEC §4), a short fade otherwise.
     .animation(model.paletteByKey ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
     .background(PaletteFocusReturn(model: model, open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true))
+    .background {
+      if !warmed && DeskKnobs.searchHost.value != .panel {
+        PaletteWarmer { [model] in
+          guard !model.paletteEverOpened else { return }
+          model.warmPalette()
+          warmed = true
+        }
+        .frame(width: 0, height: 0).accessibilityHidden(true)
+      }
+    }
   }
 
   /// Transform and opacity only; a crossfade with Reduce Motion.
@@ -114,6 +128,44 @@ package final class SearchOverlayHost: NSHostingView<SearchOverlayRoot> {
     let work = DispatchWorkItem { [weak self] in self?.isHidden = true }
     hiding = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+  }
+}
+
+/// Builds Search ⌘K ahead of the first ⌘K without slowing the window's opening: `ready` runs once, on the main queue's
+/// next turn after the window has drawn its second frame with this view in it (the first frame, and whatever waits on
+/// it, go first). A window that never draws (hidden, minimised) builds nothing ahead: its first ⌘K builds the palette.
+struct PaletteWarmer: NSViewRepresentable {
+  let ready: () -> Void
+  func makeNSView(context: Context) -> Link { Link(ready: ready) }
+  func updateNSView(_ v: Link, context: Context) {}
+
+  final class Link: NSView {
+    private var ready: (() -> Void)?
+    private var link: CADisplayLink?
+    private var frames = 0
+    init(ready: @escaping () -> Void) { self.ready = ready; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      link?.invalidate(); link = nil; frames = 0
+      guard window != nil, ready != nil else { return }
+      let l = displayLink(target: self, selector: #selector(frame(_:)))
+      l.add(to: .main, forMode: .common)
+      link = l
+    }
+
+    @objc private func frame(_ l: CADisplayLink) {
+      frames += 1
+      guard frames >= 2 else { return }
+      l.invalidate(); link = nil
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.window != nil, let f = self.ready else { return }
+        self.ready = nil
+        f()
+      }
+    }
   }
 }
 
