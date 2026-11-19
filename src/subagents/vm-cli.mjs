@@ -77,8 +77,11 @@ async function awaitLoop(op, args) {
  * its next turn instead of finding it gone.
  */
 function noteWake(r) {
+  // A wake taken back (`wake --cancel`): nothing to keep the CLI warm for.
+  const gone = r?.ok && r.result?.wake && typeof r.result.wake === "object" ? r.result.wake : null;
+  if (gone && gone.state !== "armed" && /^wk-[A-Za-z0-9_-]+$/.test(String(gone.wake))) { try { rmSync(join(DIR, "wakes", gone.wake), { force: true }); } catch {} return r; }
   const id = r?.ok ? r.result?.wake : null;
-  if (!id || r.result.wakeState !== "armed" || !/^wk-[A-Za-z0-9_-]+$/.test(id)) return r;
+  if (typeof id !== "string" || r.result.wakeState !== "armed" || !/^wk-[A-Za-z0-9_-]+$/.test(id)) return r;
   try {
     mkdirSync(join(DIR, "wakes"), { recursive: true });
     writeFileSync(join(DIR, "wakes", id), JSON.stringify({ at: r.result.wakeAt ?? null, kind: r.result.wakeKind ?? null, armedAt: Date.now() }));
