@@ -274,8 +274,11 @@ struct ColumnBody: View {
         if a.warm || inPane {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
+            .overlay { GettingReadyOverlay(agentId: agentId, thread: model.thread(agentId)) }
         } else {
+          // A cold column reads no thread: what it knows (the agent getting ready) it still shows.
           Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay { GettingReadyOverlay(agentId: agentId, thread: model.peekThread(agentId)) }
         }
         if let ap = a.approval { DecisionBar(approval: ap, focused: a.focused) }
         else if let l = a.limit { LimitBar(limit: l, focused: a.focused) }
