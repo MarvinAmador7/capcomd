@@ -402,11 +402,12 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
     };
     return { m, execs, count: (k: string) => execs.filter((e) => e.kind === k).length };
   }
-  async function withRun(decl: Record<string, unknown>, f: (o: { told: HookCall<"job.changed">[]; run: ReturnType<typeof fakeRun> }) => Promise<void>) {
+  async function withRun(decl: Record<string, unknown>, f: (o: { told: HookCall<"job.changed">[]; run: ReturnType<typeof fakeRun> }) => Promise<void>, o: { pollMs?: number; frameMs?: number } = {}) {
     const run = fakeRun();
     const spy = spyOn(relay, "client").mockImplementation(() => run.client as never);
-    const poll = process.env.CAPCOMD_JOBS_POLL_MS;
-    process.env.CAPCOMD_JOBS_POLL_MS = "100"; // looked at ten times a second: a read per look would show
+    const poll = process.env.CAPCOMD_JOBS_POLL_MS, frame = process.env.CAPCOMD_JOBS_FRAME_MS;
+    process.env.CAPCOMD_JOBS_POLL_MS = String(o.pollMs ?? 100); // looked at ten times a second: a read per look would show
+    if (o.frameMs) process.env.CAPCOMD_JOBS_FRAME_MS = String(o.frameMs);
     const told: HookCall<"job.changed">[] = [];
     const host = kernelHost({ log: false, jobs: true });
     useHooks(host.hooks);
@@ -419,6 +420,7 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
       await host.stop();
       spy.mockRestore();
       if (poll === undefined) delete process.env.CAPCOMD_JOBS_POLL_MS; else process.env.CAPCOMD_JOBS_POLL_MS = poll;
+      if (frame === undefined) delete process.env.CAPCOMD_JOBS_FRAME_MS; else process.env.CAPCOMD_JOBS_FRAME_MS = frame;
     }
   }
   const exec = (cmd: string) => ({ kind: "exec" as const, runId: "run-t", owner: { agentId: "agt-t" }, cmd: [cmd], label: "build", foregroundMs: 0 });
@@ -426,23 +428,24 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
   test("with only a timer's listener (changes: [fired]) a job printing all along costs one look a tick, no read", async () => {
     await withRun({ changes: ["fired"] }, async ({ told, run }) => {
       const { m, count } = countingMachine();
-      const job = await startJob(exec("for i in $(seq 1 25); do echo line-$i; sleep 0.1; done"), { by: "operator", machine: m });
+      const job = await startJob(exec("for i in $(seq 1 15); do echo line-$i; sleep 0.05; done"), { by: "operator", machine: m });
       expect(job.state).toBe("running");
       await until(async () => run.records.get(job.jobId)?.state === "done", 20_000);
       expect(count("look")).toBeGreaterThanOrEqual(10);
       expect(count("readFrom")).toBe(0);
       // Its settled record still has all of its output (read once, when it ended).
-      expect(run.records.get(job.jobId)!.result).toMatchObject({ code: 0, stdout: expect.stringContaining("line-25\n") });
+      expect(run.records.get(job.jobId)!.result).toMatchObject({ code: 0, stdout: expect.stringContaining("line-15\n") });
       await hooks.idle();
       expect(told).toEqual([]);
-    });
+    }, { pollMs: 25 });
   }, 30_000);
 
-  test("with an output listener, frames arrive at most once a second, each at most 16 KB, and together are all of it", async () => {
+  test("with an output listener, frames arrive at most once a second (here 0.4 s), each at most 16 KB, and together are all of it", async () => {
+    const FRAME_MS = 400;
     await withRun({}, async ({ told, run }) => {
       const { m, execs, count } = countingMachine();
-      // 40 KB at once, then a line every 0.1 s for 3 s.
-      const job = await startJob(exec(`head -c 40960 /dev/zero | tr '\\0' x; for i in $(seq 1 30); do echo l$i; sleep 0.1; done`), { by: "operator", machine: m });
+      // 40 KB at once, then a line every 0.05 s for 1.5 s.
+      const job = await startJob(exec(`head -c 40960 /dev/zero | tr '\\0' x; for i in $(seq 1 30); do echo l$i; sleep 0.05; done`), { by: "operator", machine: m });
       await until(async () => run.records.get(job.jobId)?.state === "done", 20_000);
       await hooks.idle();
       const frames = told.filter((c) => c.payload.change.kind === "output").map((c) => c.payload.change as { stdout: string; stderr: string });
@@ -452,12 +455,12 @@ describe("a running job's output is read only for a plugin that wants it (§6.6.
       expect(Math.max(...frames.map((f) => Buffer.byteLength(f.stdout)))).toBe(16 * 1024);
       const reads = execs.filter((e) => e.kind === "readFrom").map((e) => e.at);
       expect(reads.length).toBe(frames.length);
-      for (let i = 1; i < reads.length; i++) expect(reads[i]! - reads[i - 1]!).toBeGreaterThanOrEqual(950);
+      for (let i = 1; i < reads.length; i++) expect(reads[i]! - reads[i - 1]!).toBeGreaterThanOrEqual(FRAME_MS - 50);
       expect(count("look")).toBeGreaterThan(reads.length * 3);
       // Nothing lost or repeated: the frames are its output from the start, in order.
       expect(`${"x".repeat(40960)}${Array.from({ length: 30 }, (_, i) => `l${i + 1}\n`).join("")}`.startsWith(frames.map((f) => f.stdout).join(""))).toBe(true);
       expect(told.map((c): string => c.payload.change.kind)).toEqual(["started", ...frames.map(() => "output"), "ended"]);
-    });
+    }, { pollMs: 25, frameMs: FRAME_MS });
   }, 30_000);
   test("an agent's job killed as the agent ends sends it no message, even when a look under way sees it exit", async () => {
     await withRun({ changes: ["fired"] }, async ({ run }) => {

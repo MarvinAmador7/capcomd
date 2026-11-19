@@ -91,7 +91,7 @@ const reviewFailed = (o: ReviewTarget, reviewer: string | null, e: unknown): Rev
 
 /** How many times the gate tries a reviewer whose machinery failed, and the pause before each try again. */
 const INFRA_TRIES = () => Math.max(1, Number(env("REVIEW_INFRA_TRIES") ?? 4));
-const INFRA_BACKOFF_MS = (n: number) => Math.min(8000, 1000 * 2 ** (n - 1));
+const INFRA_BACKOFF_MS = (n: number) => { const base = Math.max(0, Number(env("REVIEW_INFRA_BACKOFF_MS") ?? 1000)); return Math.min(8 * base, base * 2 ** (n - 1)); };
 
 /** Spawn the reviewer for this verification (keyed: a retry reuses it). */
 async function startReview(o: ReviewTarget): Promise<Reviewing> {

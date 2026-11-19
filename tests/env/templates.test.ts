@@ -99,7 +99,7 @@ describe("the build", () => {
     // A host-bound secret: its placeholder is in every VM's env; it is bound to github.com.
     await b.p.secretSet("ANTHROPIC_API_KEY", "sk-ant-api03-REALVALUE-0123456789abcdef", { domains: ["github.com"], scope: "org" });
     const lines: string[] = [];
-    const res = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, setup: `mkdir -p node_modules/warm && echo ok > node_modules/warm/index.js && printenv ANTHROPIC_API_KEY > "$HOME/seen.txt"; true`, log: (l) => lines.push(l) });
+    const res = await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, setup: `mkdir -p node_modules/warm && echo ok > node_modules/warm/index.js && printenv ANTHROPIC_API_KEY > "$HOME/seen.txt"; true`, log: (l) => lines.push(l) });
     expect(isTemplateName(res.name)).toBe(true);
     // The VM's egress left out the secret's domain; the setup step didn't see the placeholder.
     expect([...b.p.egress.values()][0]).not.toContain("github.com");
@@ -123,7 +123,7 @@ describe("the build", () => {
     const brain = await bareRepo();
     await brain.pushToMain("knowledge.md", "a file beside the bundle, not in it\n");
     const b = await buildBox();
-    const plain = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } });
+    const plain = await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } });
     // A bundle of the brain's root files: a directory of it (bareRepo seeds README.md and shared.txt at the root).
     mkdirSync(join(brain.root, "seed", "kb"), { recursive: true });
     await brain.pushToMain("kb/fact.md", "---\ntype: concept\n---\nA fact.\n");
@@ -131,7 +131,7 @@ describe("the build", () => {
     const dir = join(b.workdir, "context", "groundray", "acme");
     const bundles = [{ provider: "groundray", name: "acme", remote: brain.bare, branch: "main", commit, path: "kb", dir }];
     const lines: string[] = [];
-    const res = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, bundles, log: (l) => lines.push(l) });
+    const res = await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, bundles, log: (l) => lines.push(l) });
     expect(res.cached).toBe(false);
     expect(res.name).not.toBe(plain.name);
     expect(res.record.manifest.bundles).toEqual([{ provider: "groundray", name: "acme", commit, path: "kb" }]);
@@ -145,7 +145,7 @@ describe("the build", () => {
   test("a rebuild keeps the one before as `previous` and deletes the one before that, never a snapshot it didn't make", async () => {
     const r = await bareRepo();
     const b = await buildBox();
-    const build = () => buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } });
+    const build = () => buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } });
     const one = (await build()).name;
     expect((await build()).cached).toBe(true);
     await r.pushToMain("two.txt", "2\n");
@@ -168,10 +168,10 @@ describe("the build", () => {
   test("a snapshot of that name that capcomd didn't make is not overwritten", async () => {
     const r = await bareRepo();
     const b = await buildBox();
-    const first = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } });
+    const first = await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } });
     writeTemplates({ templates: {}, created: [] });
     b.p.snapshots.set(first.name, { name: first.name, status: "pending", fromVm: "someone", polls: -1000 });
-    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } })).rejects.toThrow(/capcomd didn't make it; not overwriting it/);
+    await expect(buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } })).rejects.toThrow(/capcomd didn't make it; not overwriting it/);
     expect(b.p.snapshots.get(first.name)?.fromVm).toBe("someone");
   }, 60_000);
 
@@ -179,7 +179,7 @@ describe("the build", () => {
     process.env.CAPCOMD_TEMPLATE_MAX_GB = String(1 / 1024 ** 3); // 1 byte
     const r = await bareRepo();
     const b = await buildBox();
-    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } })).rejects.toThrow(/over the 0 GB cap \(CAPCOMD_TEMPLATE_MAX_GB\)/);
+    await expect(buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } })).rejects.toThrow(/over the 0 GB cap \(CAPCOMD_TEMPLATE_MAX_GB\)/);
     expect(b.p.snapshots.size).toBe(0);
     expect(readTemplates().templates).toEqual({});
   }, 60_000);
@@ -188,8 +188,8 @@ describe("the build", () => {
     const r = await bareRepo();
     const b = await buildBox();
     const hostGit = { workdir: join(state, "host-git") };
-    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, setup: "exit 3" })).rejects.toThrow(/setup step failed \(exit 3\)/);
-    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, setup: "echo x > tracked-by-mistake.txt" })).rejects.toThrow(/setup step changed the checkout/);
+    await expect(buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, setup: "exit 3" })).rejects.toThrow(/setup step failed \(exit 3\)/);
+    await expect(buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, setup: "echo x > tracked-by-mistake.txt" })).rejects.toThrow(/setup step changed the checkout/);
     expect(readTemplates().templates).toEqual({});
   }, 60_000);
 });
@@ -206,7 +206,7 @@ describe("when a template is rebuilt", () => {
   test("in the background, once at a time, not again for an hour after a failure, never when manual or off", async () => {
     const r = await bareRepo();
     const b = await buildBox();
-    const req = { provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, reason: "it has no template yet", log: () => {} };
+    const req = { pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, reason: "it has no template yet", log: () => {} };
     process.env.CAPCOMD_PROJECT_TEMPLATES = "off";
     expect(scheduleTemplateBuild(req)).toBe("off");
     process.env.CAPCOMD_PROJECT_TEMPLATES = "manual";
@@ -231,8 +231,8 @@ describe("the scheduled refresh", () => {
     const b = await buildBox();
     const hostGit = { workdir: join(state, "host-git") };
     const setup = "mkdir -p node_modules/x";
-    const first = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, setup });
-    const refresh = () => refreshTemplates({ provider: () => b.p, cfg: () => b.cfg, log: () => {} });
+    const first = await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, setup });
+    const refresh = () => refreshTemplates({ pollMs: 1, provider: () => b.p, cfg: () => b.cfg, log: () => {} });
     expect(await refresh()).toEqual([{ repo: r.bare, result: "current" }]);
     await r.pushToMain("later.txt", "moved\n");
     expect(await refresh()).toEqual([{ repo: r.bare, result: "started" }]);
@@ -250,7 +250,7 @@ describe("seeing them", () => {
     const r = await bareRepo();
     const b = await buildBox();
     const hostGit = { workdir: join(state, "host-git") };
-    const res = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit });
+    const res = await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit });
     let [v] = await templateViews(b.p, { workdir: () => hostGit.workdir });
     expect(v).toMatchObject({ repo: r.bare, name: res.name, status: "ready", behind: 0, deltaBytes: 0, building: false });
     expect(v!.sizeBytes).toBeGreaterThan(0);
@@ -301,7 +301,7 @@ describe("what the build VM may reach (review)", () => {
     const b = await buildBox();
     await b.p.secretSet("ANTHROPIC_API_KEY", "sk-ant-api03-REALVALUE-0123456789abcdef", { domains: ["api.anthropic.com"], scope: "org" });
     const lines: string[] = [];
-    await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, egress: ["*", "proxy.golang.org"], log: (l) => lines.push(l) });
+    await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, egress: ["*", "proxy.golang.org"], log: (l) => lines.push(l) });
     const allowed = [...b.p.egress.values()][0]!;
     expect(allowed).not.toContain("*");
     expect(allowed).toContain("proxy.golang.org");
@@ -315,7 +315,7 @@ describe("one build per project, and no local key in it (review)", () => {
     const b = await buildBox();
     // The parent process is alive, and isn't this one.
     writeBuildMarker(templateMarkerPath(r.bare), { state: "building", pid: process.ppid, startedAt: new Date().toISOString() });
-    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } })).rejects.toThrow(/already running \(pid \d+/);
+    await expect(buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") } })).rejects.toThrow(/already running \(pid \d+/);
     expect(b.p.snapshots.size).toBe(0);
   }, 60_000);
 
@@ -324,7 +324,7 @@ describe("one build per project, and no local key in it (review)", () => {
     const b = await buildBox();
     const value = "local-key-value-0123456789";
     const source = { ...process.env, ANTHROPIC_API_KEY: value };
-    await expect(buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, source, setup: `printf %s ${value} > "$HOME/leak.txt"` })).rejects.toThrow(/a local API key value is present in the VM/);
+    await expect(buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit: { workdir: join(state, "host-git") }, source, setup: `printf %s ${value} > "$HOME/leak.txt"` })).rejects.toThrow(/a local API key value is present in the VM/);
     expect(b.p.snapshots.size).toBe(0);
   }, 60_000);
 });
@@ -334,13 +334,13 @@ describe("a rebuild that would make the same template (review)", () => {
     const r = await bareRepo();
     const b = await buildBox();
     const hostGit = { workdir: join(state, "host-git") };
-    const first = await buildProjectTemplate({ provider: b.p, repo: r.bare, cfg: b.cfg, hostGit });
+    const first = await buildProjectTemplate({ pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit });
     const at = templateTarget(r.bare)!;
     expect(at).toEqual({ target: "main", commit: (await r.sha("main"))! });
     // Another branch moved (an agent's push), not main: an agent on another target would clone again either way.
     await r.seed.ok(["push", "-q", "origin", "main:refs/heads/release"]);
     const said: string[] = [];
-    const req = { provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, reason: "an agent couldn't use it (another target)", log: (l: string) => said.push(l), unlessTargetAt: at };
+    const req = { pollMs: 1, provider: b.p, repo: r.bare, cfg: b.cfg, hostGit, reason: "an agent couldn't use it (another target)", log: (l: string) => said.push(l), unlessTargetAt: at };
     expect(scheduleTemplateBuild(req)).toBe("started");
     await templateBuildsSettled();
     expect(said.some((l) => /main is still at [0-9a-f]{12}, as its template was built: .*not rebuilding/.test(l))).toBe(true);

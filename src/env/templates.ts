@@ -97,6 +97,8 @@ export interface TemplateBuildRequest {
   source?: Source;
   force?: boolean;
   log?: (line: string) => void;
+  /** How often the snapshot is looked at until it is ready (BuildOptions.pollMs; tests). */
+  pollMs?: number;
 }
 
 /**
@@ -113,7 +115,7 @@ export async function buildProjectTemplate(r: TemplateBuildRequest) {
   const { activeAdapters } = await import("../agents/adapters");
   const forbidden = activeAdapters().map((a) => source[a.secretName]).filter((v): v is string => !!v);
   return envBuild(r.provider, {
-    repoUrl: r.repo, cfg: r.cfg, force: !!r.force, ...(r.log ? { log: r.log } : {}), ...(r.hostGit ? { hostGit: r.hostGit } : {}), warm: true, forbidden, ...(r.bundles?.length ? { bundles: r.bundles } : {}),
+    repoUrl: r.repo, cfg: r.cfg, force: !!r.force, ...(r.log ? { log: r.log } : {}), ...(r.pollMs !== undefined ? { pollMs: r.pollMs } : {}), ...(r.hostGit ? { hostGit: r.hostGit } : {}), warm: true, forbidden, ...(r.bundles?.length ? { bundles: r.bundles } : {}),
     project: { setup: r.setup ?? null, egress: r.egress ?? [], maxBytes: maxTemplateBytes(source), marker: templateMarkerPath(r.repo, source), ledger: templateLedgerPath(source) },
   });
 }
@@ -221,7 +223,7 @@ export async function templateViews(p: SnapshotPlatform, o: { source?: Source; n
  * agents get a small delta. One that is current is left alone; a failure is its build's own (retried no sooner than
  * RETRY_AFTER_MS).
  */
-export async function refreshTemplates(o: { provider: () => SandboxProvider & SnapshotPlatform; cfg: () => AgentConfig; source?: Source; log?: (l: string) => void; workdir?: string }): Promise<Array<{ repo: string; result: ScheduleResult | "current" | "unknown" }>> {
+export async function refreshTemplates(o: { provider: () => SandboxProvider & SnapshotPlatform; cfg: () => AgentConfig; source?: Source; log?: (l: string) => void; workdir?: string; pollMs?: number }): Promise<Array<{ repo: string; result: ScheduleResult | "current" | "unknown" }>> {
   const source = o.source ?? process.env;
   const out: Array<{ repo: string; result: ScheduleResult | "current" | "unknown" }> = [];
   const templates = Object.values(readTemplates(templateLedgerPath(source)).templates);
@@ -232,7 +234,7 @@ export async function refreshTemplates(o: { provider: () => SandboxProvider & Sn
     const d = await T_.deltaSince({ remote: t.repo, workdir }, Object.values(t.heads), t.target).catch(() => null);
     if (!d) { out.push({ repo: t.repo, result: "unknown" }); continue; }
     if (d.bytes === 0) { out.push({ repo: t.repo, result: "current" }); continue; }
-    out.push({ repo: t.repo, result: scheduleTemplateBuild({ provider: o.provider(), repo: t.repo, cfg: o.cfg(), hostGit: { workdir }, ...(t.setup ? { setup: t.setup } : {}), egress: t.egress ?? [], source, ...(o.log ? { log: o.log } : {}), reason: `the scheduled refresh: ${d.behind ?? "?"} new commit(s) on ${t.target}, a ${(d.bytes / 1024 ** 2).toFixed(1)} MB delta` }) });
+    out.push({ repo: t.repo, result: scheduleTemplateBuild({ provider: o.provider(), repo: t.repo, cfg: o.cfg(), hostGit: { workdir }, ...(t.setup ? { setup: t.setup } : {}), egress: t.egress ?? [], source, ...(o.log ? { log: o.log } : {}), ...(o.pollMs !== undefined ? { pollMs: o.pollMs } : {}), reason: `the scheduled refresh: ${d.behind ?? "?"} new commit(s) on ${t.target}, a ${(d.bytes / 1024 ** 2).toFixed(1)} MB delta` }) });
   }
   return out;
 }

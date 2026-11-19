@@ -59,8 +59,8 @@ export class HarnessSocketInUseError extends Error {
 }
 
 /** Refuse when a live server holds `path`; remove a stale socket (only the very file that was probed). */
-async function claim(path: string): Promise<void> {
-	const s = await probeHarnessSocket(path);
+async function claim(path: string, probeMs?: number): Promise<void> {
+	const s = await probeHarnessSocket(path, probeMs);
 	if (s.state === "live") throw new HarnessSocketInUseError(path, s.version, s.detail);
 	if (s.state === "stale") {
 		const now = fileId(path);
@@ -89,13 +89,13 @@ export interface HarnessSocket {
  * Bun unlinks the bound name on stop, so it never deletes whatever later sits at `path`; release() does that, and
  * only when the file there is still ours.
  */
-export async function serveHarnessSocket(path: string, fetch: (req: Request) => Response | Promise<Response>): Promise<HarnessSocket> {
+export async function serveHarnessSocket(path: string, fetch: (req: Request) => Response | Promise<Response>, o: { probeMs?: number } = {}): Promise<HarnessSocket> {
 	const dir = dirname(path);
 	const fresh = !existsSync(dir);
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	if (fresh) chmodSync(dir, 0o700);
 	for (let attempt = 0; ; attempt++) {
-		await claim(path);
+		await claim(path, o.probeMs);
 		const tmp = join(dir, `.hs-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
 		// Create the socket already 0600: no window where another local user could connect. chmod stays as belt-and-braces.
 		const prev = process.umask(0o177);

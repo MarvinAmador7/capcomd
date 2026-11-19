@@ -30,6 +30,12 @@ import { memorySource } from "../../src/api/source";
 import { harnessState } from "../../src/api/state";
 
 const ROOT = join(import.meta.dir, "..", "..");
+/** `capcomd plugins …` with its own home (async: a test starts the ones it needs at once). */
+async function plugins(home: string, ...args: string[]) {
+  const p = Bun.spawn([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", ...args], { env: { ...process.env, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { code, out, err };
+}
 const OPERATOR = { kind: "operator" as const, clientId: null };
 const at = (entity = "vfy-1") => ({ principal: OPERATOR, entity, runId: "run-1" });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -607,29 +613,25 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
 
   test("capcomd plugins list: the running daemon's listing, else what one would load (the built-ins)", async () => {
     const home = mkdtempSync(join(tmpdir(), "capcomd-plugins-cli-"));
-    const cli = (...args: string[]) => {
-      const p = Bun.spawnSync([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", ...args], { env: { ...process.env, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, stdout: "pipe", stderr: "pipe" });
-      return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
-    };
-    const none = cli("list", "--json");
+    const [none, noneText] = await Promise.all([plugins(home, "list", "--json"), plugins(home, "list")]);
     expect(none.code).toBe(0);
     // No daemon: the built-ins, resolved, never run (§17.2 step 3 ships the sandbox providers; later steps add more).
     const would = JSON.parse(none.out) as { schema: string; ok: boolean; daemon: null; plugins: Array<{ name: string; state: string }> };
     expect(would).toMatchObject({ schema: "relay.v1", ok: true, daemon: null });
     expect(would.plugins.filter((p) => p.name.startsWith("sandbox-")).map((p) => [p.name, p.state])).toEqual([["sandbox-docker", "resolved"], ["sandbox-boxd", "resolved"], ["sandbox-fake", "resolved"], ["sandbox-fake-host", "resolved"]]);
-    expect(cli("list").out).toMatch(/^Plugins \(no daemon is running; this is what one would load\):\n(.|\n)*sandbox-boxd\s+\S+\s+builtin\s+resolved\s+1 hook, sandbox boxd/);
+    expect(noneText.out).toMatch(/^Plugins \(no daemon is running; this is what one would load\):\n(.|\n)*sandbox-boxd\s+\S+\s+builtin\s+resolved\s+1 hook, sandbox boxd/);
     // Step 5 adds the reviewer gate.
     expect(would.plugins.find((p) => p.name === "gate-reviewer")).toMatchObject({ source: "builtin", state: "resolved", hooks: ["verify.starting", "verify.judging"] });
-    expect(cli("list").out).toMatch(/no daemon is running; this is what one would load[\s\S]*gate-reviewer/);
+    expect(noneText.out).toMatch(/no daemon is running; this is what one would load[\s\S]*gate-reviewer/);
     // A daemon's listing (this process stands in for the daemon: its pid is alive).
     const { host } = makeHost();
     await host.start([builtin(manifest("shown"), (ctx) => { ctx.hooks.on("run.changed", () => {}); })]);
     mkdirSync(join(home, "state"), { recursive: true });
     writeFileSync(join(home, "state", "plugins.json"), JSON.stringify({ pid: process.pid, at: "2026-11-05T00:00:00.000Z", plugins: host.list() }));
-    const live = JSON.parse(cli("list", "--json").out);
-    expect(live).toMatchObject({ ok: true, daemon: { pid: process.pid }, plugins: [{ name: "shown", state: "active" }] });
-    expect(cli("list").out).toMatch(/shown\s+1\.0\.0\s+builtin\s+active\s+1 hook/);
-    expect(cli("frobnicate").code).toBe(2);
+    const [liveJson, liveText, unknown] = await Promise.all([plugins(home, "list", "--json"), plugins(home, "list"), plugins(home, "frobnicate")]);
+    expect(JSON.parse(liveJson.out)).toMatchObject({ ok: true, daemon: { pid: process.pid }, plugins: [{ name: "shown", state: "active" }] });
+    expect(liveText.out).toMatch(/shown\s+1\.0\.0\s+builtin\s+active\s+1 hook/);
+    expect(unknown.code).toBe(2);
   });
 
   test("a plugin's MCP tools, as the server names them: declared before it runs, registered while active, in the contract's shape", async () => {
@@ -650,35 +652,28 @@ describe("GET /v1/plugins and capcomd plugins list (§13.2)", () => {
     await running.stop();
   });
 
-  test("capcomd plugins show front-mcp and list: its command and its tools, by the names capcomd mcp serves them", () => {
+  test("capcomd plugins show front-mcp and list: its command and its tools, by the names capcomd mcp serves them", async () => {
     const home = mkdtempSync(join(tmpdir(), "capcomd-plugins-cli-"));
-    const cli = (...args: string[]) => {
-      const p = Bun.spawnSync([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", ...args], { env: { ...process.env, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, stdout: "pipe", stderr: "pipe" });
-      return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
-    };
-    const show = cli("show", "front-mcp", "--json");
+    const [show, showText, listJson, listText] = await Promise.all([plugins(home, "show", "front-mcp", "--json"), plugins(home, "show", "front-mcp"), plugins(home, "list", "--json"), plugins(home, "list")]);
     expect(show.code).toBe(0);
     const { plugin } = JSON.parse(show.out) as { plugin: { commands: string[]; tools: string[]; manifest: { contributes: { mcp: Array<{ name: string }> } } } };
     expect(plugin.commands).toEqual(["mcp"]);
     // A kernel front door's tools are capcomd_<tool> (§4.7.2), one per tool its manifest declares.
     expect(plugin.tools).toEqual(plugin.manifest.contributes.mcp.map((t) => `capcomd_${t.name}`));
     expect(plugin.tools).toContain("capcomd_spawn");
-    expect(cli("show", "front-mcp").out).toMatch(/\n {2}commands: capcomd mcp\n {2}MCP tools: capcomd_\w+, [^\n]*capcomd_spawn/);
-    const listed = (JSON.parse(cli("list", "--json").out) as { plugins: Array<{ name: string; commands?: string[]; tools?: string[] }> }).plugins;
+    expect(showText.out).toMatch(/\n {2}commands: capcomd mcp\n {2}MCP tools: capcomd_\w+, [^\n]*capcomd_spawn/);
+    const listed = (JSON.parse(listJson.out) as { plugins: Array<{ name: string; commands?: string[]; tools?: string[] }> }).plugins;
     expect(listed.find((p) => p.name === "front-mcp")).toMatchObject({ commands: ["mcp"], tools: plugin.tools });
     expect(listed.find((p) => p.name === "sandbox-docker")).not.toHaveProperty("tools");
-    expect(cli("list").out).toMatch(new RegExp(`front-mcp\\s+\\S+\\s+builtin\\s+resolved\\s+1 command, ${plugin.tools.length} MCP tools`));
+    expect(listText.out).toMatch(new RegExp(`front-mcp\\s+\\S+\\s+builtin\\s+resolved\\s+1 command, ${plugin.tools.length} MCP tools`));
   });
 });
 
 describe("capcomd plugins validate --strict: the attention budget (§16.5)", () => {
   const home = mkdtempSync(join(tmpdir(), "capcomd-plugins-strict-"));
-  const validate = (...args: string[]) => {
-    const p = Bun.spawnSync([process.execPath, join(ROOT, "src", "cli", "index.ts"), "plugins", "validate", ...args], { env: { ...process.env, CAPCOMD_HOME: home, CAPCOMD_NO_CONFIG: "1" }, stdout: "pipe", stderr: "pipe" });
-    return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
-  };
+  const validate = (...args: string[]) => plugins(home, "validate", ...args);
   type V = { ok: boolean; plugins: Array<{ name: string; ok: boolean; warnings: Array<{ path: string; message: string }> }> };
-  const json = (...args: string[]) => { const r = validate(...args, "--json"); return { code: r.code, body: JSON.parse(r.out) as V }; };
+  const json = async (...args: string[]) => { const r = await validate(...args, "--json"); return { code: r.code, body: JSON.parse(r.out) as V }; };
   const example = join(ROOT, "packages", "plugin", "examples", "slack-notifier");
   /** The Slack example's manifest in a directory of its own, changed by `edit`. */
   const slackCopy = (edit: (m: any) => void) => {
@@ -691,33 +686,28 @@ describe("capcomd plugins validate --strict: the attention budget (§16.5)", () 
   };
   const quietWarning = expect.objectContaining({ path: "config.properties.quiet", message: expect.stringContaining("no quiet option") });
 
-  test("the Slack example has its quiet option: no warning", () => {
-    const r = json(example, "--strict");
+  test("the Slack example has its quiet option: no warning", async () => {
+    const r = await json(example, "--strict");
     expect(r.code).toBe(0);
     expect(r.body.plugins[0]).toMatchObject({ name: "slack-notifier", ok: true, warnings: [] });
   });
 
-  test("without its quiet property it warns under --strict (and still passes), and says nothing without --strict", () => {
+  test("without its quiet property it warns under --strict (and still passes), and says nothing without --strict", async () => {
     const dir = slackCopy((m) => { delete m.config.properties.quiet; });
-    const strict = json(dir, "--strict");
+    // No config at all is the same: nothing to turn it down with.
+    const [strict, text, plain, plainText, noConfig] = await Promise.all([json(dir, "--strict"), validate(dir, "--strict"), json(dir), validate(dir), json(slackCopy((m) => { delete m.config; }), "--strict")]);
     expect(strict.code).toBe(0);
     expect(strict.body).toMatchObject({ ok: true, plugins: [{ name: "slack-notifier", ok: true, warnings: [quietWarning] }] });
-    const text = validate(dir, "--strict");
     expect(text.code).toBe(0);
     expect(text.out).toContain("✓ slack-notifier 1.0.0");
     expect(text.out).toContain("    ! config.properties.quiet: it observes run.changed and agent.changed");
-    const plain = json(dir);
     expect(plain.code).toBe(0);
     expect(plain.body.plugins[0]!.warnings).toEqual([]);
-    expect(validate(dir).out).not.toContain("quiet");
-    // No config at all is the same: nothing to turn it down with.
-    expect(json(slackCopy((m) => { delete m.config; }), "--strict").body.plugins[0]!.warnings).toEqual([quietWarning]);
+    expect(plainText.out).not.toContain("quiet");
+    expect(noConfig.body.plugins[0]!.warnings).toEqual([quietWarning]);
   });
 
-  test("only a notifier's shape warns: run.changed and agent.changed both observed; a quiet option in a $ref schema counts", () => {
-    // Observes run.changed alone (and merge.changed): not notifier-shaped.
-    expect(json(slackCopy((m) => { delete m.config.properties.quiet; delete m.contributes.hooks["agent.changed"]; }), "--strict").body.plugins[0]!.warnings).toEqual([]);
-    expect(json(slackCopy((m) => { delete m.config.properties.quiet; delete m.contributes.hooks["run.changed"]; }), "--strict").body.plugins[0]!.warnings).toEqual([]);
+  test("only a notifier's shape warns: run.changed and agent.changed both observed; a quiet option in a $ref schema counts", async () => {
     // Its config schema in a file of its own, quiet in it: no warning; without it, the warning.
     const ref = (withQuiet: boolean) => {
       let schema: any;
@@ -726,12 +716,20 @@ describe("capcomd plugins validate --strict: the attention budget (§16.5)", () 
       writeFileSync(join(dir, "config.schema.json"), JSON.stringify(schema));
       return dir;
     };
-    expect(json(ref(true), "--strict").body.plugins[0]).toMatchObject({ ok: true, warnings: [] });
-    expect(json(ref(false), "--strict").body.plugins[0]).toMatchObject({ ok: true, warnings: [quietWarning] });
+    const [runOnly, agentOnly, refQuiet, refNoQuiet] = await Promise.all([
+      // Observes run.changed alone (and merge.changed): not notifier-shaped.
+      json(slackCopy((m) => { delete m.config.properties.quiet; delete m.contributes.hooks["agent.changed"]; }), "--strict"),
+      json(slackCopy((m) => { delete m.config.properties.quiet; delete m.contributes.hooks["run.changed"]; }), "--strict"),
+      json(ref(true), "--strict"), json(ref(false), "--strict"),
+    ]);
+    expect(runOnly.body.plugins[0]!.warnings).toEqual([]);
+    expect(agentOnly.body.plugins[0]!.warnings).toEqual([]);
+    expect(refQuiet.body.plugins[0]).toMatchObject({ ok: true, warnings: [] });
+    expect(refNoQuiet.body.plugins[0]).toMatchObject({ ok: true, warnings: [quietWarning] });
   });
 
-  test("every built-in passes --strict with no attention warning (none is a notifier)", () => {
-    const r = json("--strict");
+  test("every built-in passes --strict with no attention warning (none is a notifier)", async () => {
+    const r = await json("--strict");
     expect(r.code).toBe(0);
     expect(r.body.ok).toBe(true);
     expect(r.body.plugins.flatMap((p) => p.warnings.filter((w) => w.path === "config.properties.quiet").map(() => p.name))).toEqual([]);

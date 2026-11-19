@@ -2,7 +2,7 @@
 // Terminal. Real folders (local git checkouts cloned from local bare repositories, origin then pointed at a GitHub URL
 // that is never contacted), a scratch CAPCOMD_HOME, `gh` stubbed; engine-free (the memory source).
 import { beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addClient, loadClients } from "../../src/api/clients";
@@ -40,22 +40,29 @@ beforeAll(() => {
 });
 
 /** A checkout cloned from a local bare repo with main and capcomd/staging (so origin/HEAD and the remote branches are
- *  real local refs), with origin then pointed at `origin` (never fetched). */
-function checkout(o: { origin?: string | null; packageJson?: boolean } = {}): string {
+ *  real local refs), with origin then pointed at `origin` (never fetched). The clone is made once; each test gets a copy. */
+let made: string | null = null;
+function template(): string {
+	if (made) return made;
 	const bare = mkdtempSync(join(dir, "bare-"));
 	sh(["git", "init", "-q", "--bare", "-b", "main", bare], dir);
 	const seed = mkdtempSync(join(dir, "seed-"));
 	sh(["git", "clone", "-q", bare, seed], dir);
-	if (o.packageJson !== false) { writeFileSync(join(seed, "package.json"), JSON.stringify({ scripts: { test: "bun test" } })); writeFileSync(join(seed, "bun.lock"), ""); }
-	else writeFileSync(join(seed, "README.md"), "hi\n");
+	writeFileSync(join(seed, "package.json"), JSON.stringify({ scripts: { test: "bun test" } })); writeFileSync(join(seed, "bun.lock"), "");
 	sh(["git", "add", "-A"], seed); sh(["git", "commit", "-qm", "init"], seed);
 	sh(["git", "push", "-q", "origin", "main"], seed);
 	sh(["git", "push", "-q", "origin", "main:capcomd/staging"], seed);
-	const co = join(mkdtempSync(join(dir, "co-")), "app");
+	const co = join(mkdtempSync(join(dir, "template-")), "app");
 	sh(["git", "clone", "-q", bare, co], dir);
+	sh(["git", "remote", "set-url", "origin", "git@github.com:acme/app.git"], co);
+	return (made = co);
+}
+function checkout(o: { origin?: string | null } = {}): string {
+	const co = join(mkdtempSync(join(dir, "co-")), "app");
+	cpSync(template(), co, { recursive: true });
 	mkdirSync(join(co, "src"));
 	if (o.origin === null) sh(["git", "remote", "remove", "origin"], co);
-	else sh(["git", "remote", "set-url", "origin", o.origin ?? "git@github.com:acme/app.git"], co);
+	else if (o.origin !== undefined) sh(["git", "remote", "set-url", "origin", o.origin], co);
 	return realpathSync(co);
 }
 
