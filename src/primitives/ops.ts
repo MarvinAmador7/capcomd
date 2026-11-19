@@ -975,7 +975,7 @@ export async function driveAgent(runId: string, agentId: string): Promise<ScopeA
       }
     }
     const res = await resultOf(runId, agentId);
-    const fin = await s.finish({ agentId, status: "failed", result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
+    const fin = await s.finish({ agentId, status: "failed", ...(me && !execOf(me) ? { readsMessages: false } : {}), result: { ...res, error: (last as Error)?.message?.slice(0, 500) ?? String(last), ...(last instanceof ScriptFailed ? { exitCode: last.exitCode } : {}), ...outageResult(last) } });
     // A failed agent's jobs settle and its machine goes too (its worker retries a destroy the provider didn't answer).
     await endJobs(runId, agentId, "its agent failed");
     await workerOf(runId, agentId, fin.agent.epoch).drainWorker({ workerId: agentId }).catch(() => {});
@@ -1083,7 +1083,7 @@ export async function runAttempt(runId: string, a: ScopeAgent, w: any, push: (pa
     const [succ] = (await awaitAgents(runId, [to])).agents as any[];
     await w.drainWorker({ workerId: agentId }).catch(() => {});
     const st = succ.status === "done" ? "done" : "failed";
-    await s.finish({ agentId, status: st, spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
+    await s.finish({ agentId, status: st, ...(execOf(a) ? {} : { readsMessages: false }), spent: { usd: 0, turns: 0, wallSeconds: 0 }, result: { ...(succ.result ?? {}), handoffTo: to } });
     return { kind: "ended" };
   }
   const vmRpc = exec && hasVmCapcomd(a) ? await vmRpcFor(runId, a, w, agentId, prepared) : null;
@@ -1150,7 +1150,7 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
     const declared = await resultOf(runId, agentId);
     const said = typeof rec.resultText === "string" && rec.resultText.trim() ? rec.resultText.trim().slice(0, 2000) : null;
     const error = `${agentId} is an orchestrate agent and it ${orchestrateWritesText(ow)} in its checkout${ow.at === "turn" ? " (stopped at the end of that turn)" : ""}. An orchestrate agent writes nothing, so it failed; its changes were discarded, never committed or pushed. Give that work to a worker it spawns.`;
-    const fin = await s.finish({ agentId, status: "failed", spent, result: { ...declared, ...(!declared.summary && said ? { summary: said } : {}), error, errorKind: "orchestrate_wrote_files", wrote: { files: ow.files, total: ow.total, commits: ow.commits, at: ow.at }, verification: null, branch: null, commit: null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}) } });
+    const fin = await s.finish({ agentId, status: "failed", ...(exec ? {} : { readsMessages: false }), spent, result: { ...declared, ...(!declared.summary && said ? { summary: said } : {}), error, errorKind: "orchestrate_wrote_files", wrote: { files: ow.files, total: ow.total, commits: ow.commits, at: ow.at }, verification: null, branch: null, commit: null, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}) } });
     return fin.agent;
   }
   // ADR-019 §6: the provider's usage limit is a pause, not a failure. Its login waits for the reset too.
@@ -1190,7 +1190,7 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const consolidated = !limit && !review && !report ? await consolidatedOf(runId, a, declared, rec) : null;
   // A consolidator's work is only what was staged: no list, nothing to stage or a staging that failed is no branch.
   const work = consolidated ? { branch: consolidated.staged?.sha ? branch : null, commit: consolidated.staged?.sha ?? null } : { branch: review || report || (!pushed.sha && out.vmRpc) ? null : branch, commit: pushed.sha || null };
-  const fin = await s.finish({ agentId, status: limit || "error" in blocked || consolidated?.error ? "failed" : "done", spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, ...consolidated?.result, verification: null, ...work, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
+  const fin = await s.finish({ agentId, status: limit || "error" in blocked || consolidated?.error ? "failed" : "done", ...(exec ? {} : { readsMessages: false }), spent, result: { ...declared, ...said, ...blocked, ...verdictOf, ...reportOf, ...limitOf, ...consolidated?.result, verification: null, ...work, costUsd, turns: spent.turns, wallSeconds: spent.wallSeconds, billing: rec.billing ?? (costUsd ? "api" : "subscription-or-fake"), ...(Number(rec.notionalCostUsd) > 0 ? { notionalCostUsd: Number(rec.notionalCostUsd) } : {}), ...(pushed.adopted ? { adopted: true } : {}) } });
   return fin.agent;
 }
 

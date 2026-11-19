@@ -20,7 +20,7 @@ test("upgrade drill: an agent in flight on shape 1 finishes after the engine com
   const run = (await w.cj(["run", "new"])).j?.runId;
   expect(run).toMatch(/^run-/);
   const a = (await w.cj(["spawn", run, "--profile", "worker", "--task", "[hold:90] make the failing test pass", "--key", "a"])).j?.agentId;
-  const hold = join(w.vm, `${a}-e1`, "hold.log");
+  const hold = join(w.vm, a, "hold.log");
   for (let i = 0; i < 150 && !existsSync(hold); i++) await sleep(200);
   expect(existsSync(hold)).toBe(true); // A is mid-workflow (its run is in flight, the workflow in its watch phase)
 

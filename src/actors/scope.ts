@@ -895,7 +895,9 @@ export const scopeActor = actor({
       return { ok: true, agent: rowToAgent((await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId))[0]), instance: ENGINE_INSTANCE };
     },
 
-    async finish(c, params: { agentId: string; status: "done" | "failed"; result: Record<string, unknown>; spent?: Budget }) {
+    /** `readsMessages: false`: an agent with no CLI of its own (a scripted or fake one): it takes no message, so one
+     *  left unread doesn't continue it (its script would only run again). */
+    async finish(c, params: { agentId: string; status: "done" | "failed"; result: Record<string, unknown>; spent?: Budget; readsMessages?: boolean }) {
       const r = await c.db.execute("SELECT * FROM agents_v2 WHERE agent_id = ?", params.agentId);
       if (!r.length) fail("not_found", `agent ${params.agentId} not found`);
       const a = rowToAgent(r[0]);
@@ -923,7 +925,7 @@ export const scopeActor = actor({
         if (a.parent) await putItemTx(tx, a.parent, handoffOf(a.parent, params.agentId, params.status, params.result, a.epoch));
         // ADR-026 §1: a message its CLI never took (sent while this attempt was ending, or held back for a model change)
         // starts its next attempt now: nothing sent to an agent of a run that isn't archived goes unread.
-        continued = await continueIfUnread(tx, params.agentId);
+        if (params.readsMessages !== false) continued = await continueIfUnread(tx, params.agentId);
       }, { name: "scopeFinish" });
       const orphans = await reapOrphans(c, { ...a, status: params.status });
       agentsChanged(c);

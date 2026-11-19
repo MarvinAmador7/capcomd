@@ -198,5 +198,6 @@ test("send says when the agent can't read the message now: a Codex worker, a fin
   const claude = (await cj(["spawn", run, "--profile", "listener", "--task", "y", "--key", "cl", "--no-start"])).j?.agentId;
   expect((await cj(["send", run, claude, "hello"])).j?.note).toBeUndefined();
   await cj(["cancel", run, claude]);
-  expect((await cj(["send", run, claude, "late"])).j?.note).toBe(`${claude} is cancelled: nothing will read this message`);
+  // ADR-026 §1: a cancelled agent is idle: the message is its next turn.
+  expect((await cj(["send", run, claude, "late"])).j).toMatchObject({ continued: true, note: expect.stringContaining(`${claude} was idle`) });
 }, 60_000);

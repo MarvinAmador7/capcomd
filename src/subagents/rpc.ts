@@ -204,6 +204,10 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
     }
     case "inbox": {
       const msgs = await s.inbox({ agentId: c.sub, after: Number(args.after ?? 0) });
+      // ADR-026 §1: what it read itself is read: the durable cursor moves past it, so its end doesn't continue it with
+      // the same messages again (a CLI that only reads its inbox, Codex, would otherwise be continued without end).
+      const last = Math.max(0, ...msgs.map((m: any) => Number(m.seq)));
+      if (last) await s.messagesDelivered({ agentId: c.sub, seq: last });
       // Skills the sender attached come with the body, as a running agent gets them (runner messageText).
       return { messages: msgs.map((m: any) => ({ seq: m.seq, from: m.from, at: m.at, body: fence(m.from, withSkills(m.body, m.skills)), ...(m.skills?.length ? { skills: m.skills.map((x: AttachedSkill) => x.name) } : {}) })) };
     }
