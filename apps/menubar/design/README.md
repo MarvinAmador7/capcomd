@@ -84,3 +84,11 @@ budgets every desktop PR has to meet.
 |---|---|---|
 | Home: the window's first screen (the mark, "What are we building?", the composer with its model menu, the Running cards with their asks); it replaced the new project column | `desktop/Home.dc.html` (the approved clickable prototype; it renders only inside the design canvas runtime, so read it as source: its `<style>` holds every token, its script the copy and states) | `CapcomdDesk/Home.swift`, `ComposerChips.swift`, `TitleBar.swift` (`HomeButton`); state in `DeskModel` (`homeShown`, `HomeSlice`) and `CapcomdStore/Home.swift` (`HomeRun`, `ModelMenu`); the mark in `CapcomdOnboarding/Sprite.swift` (`Sprite.mark`, checked against the prototype by `HomeMarkTests`) |
 | The reel, the title bar, the project menu, ⌘K | `desktop/Reel*.dc.html` | `CapcomdDesk/` |
+
+## Drafts awaiting approval
+
+Proposals for the owner's review. **Build nothing from them** until they move up into an approved table above.
+
+| Draft | Boards | Status |
+|---|---|---|
+| Left side navigation for the desktop window: A, a full sidebar that replaces the title bar's decks; B, a 60 pt rail of places (Home, Crew, History, Settings) beside the approved decks; C, B's rail opening into a sidebar the decks fold into (recommended, shipped as B first). Each with its collapsed and expanded states, hover, selected and ask states, keyboard, + new project and 20 projects, then one board comparing them with the open choices | `desktop/leftnav/NavCompare.png` (start here), `desktop/leftnav/Nav{A,B,C}.png` (the window, Reel.png's size) and `Nav{A,B,C}-states.png`, from `Nav*.dc.html`; extra catalog bots in `desktop/leftnav/bots/`. Regenerate with `tools/renderleftnav.sh` (writes the HTML with `tools/genleftnav.py`, renders with render.sh's headless Chrome flags) | **DRAFT — proposal, not approved** |

@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Left navigation: compare</title>
+<meta name="description" content="DRAFT: three left navigation variants for the desktop window compared, with a recommendation.">
+<script src="../support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0b0b0c}
+a{color:#F2F2F7;text-decoration:none}
+.win,.board{--ground:#0e0e10;--col:#151518;--line:rgba(255,255,255,.08);--text:#F2F2F7;--sec:#A9A9B1;--ter:#8E8E96;--blue:#0A84FF;--amber:#FFB020;--red:#FF6961;--green:#30D158;font-family:-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.win *,.board *{box-sizing:border-box}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+.lights{display:flex;gap:8px}
+.lights span{width:12px;height:12px;border-radius:6px;background:#3a3a3e}
+.ib{all:unset;box-sizing:border-box;position:relative;width:30px;height:30px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;color:var(--ter);cursor:pointer;flex:0 0 auto}
+.ib.hov{background:rgba(255,255,255,.06);color:var(--text)}
+.ib.on{background:rgba(255,255,255,.10);color:var(--text)}
+.follow{all:unset;display:flex;align-items:center;gap:7px;height:30px;padding:0 10px;border-radius:8px;background:rgba(10,132,255,.16);color:#6CB4FF;font-size:12px;font-weight:500;cursor:pointer}
+.badge{position:absolute;top:1px;right:0;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--amber);color:#1D1D1F;font-size:10px;font-weight:700;line-height:15px;text-align:center;box-shadow:0 0 0 2px #0e0e10}
+.tp{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 4px;border-radius:9px;color:var(--sec);font-size:12.5px;white-space:nowrap}
+.tp img{width:22px;height:22px;image-rendering:pixelated}
+.tp.ask{color:var(--text);background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55)}
+.grp{display:flex;align-items:center;gap:4px;height:44px;padding:0 4px 0 12px;border-radius:13px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.inview{display:inline-flex;gap:2px;padding:2px;border-radius:10px;background:rgba(255,255,255,.07)}
+.deck{display:inline-flex;align-items:center;gap:9px;height:40px;padding:0 10px 0 9px;border-radius:12px;background:rgba(255,255,255,.05);color:var(--sec);font-size:12.5px;white-space:nowrap}
+.deck.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6);color:var(--text)}
+.dk{display:inline-flex;align-items:center;flex:0 0 auto}
+.dk span{width:22px;height:22px;border-radius:6px;background:#26262a;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #0e0e10}
+.dk span+span{margin-left:-14px}
+.dk img{width:16px;height:16px;image-rendering:pixelated}
+.dk.sm span{width:20px;height:20px;border-radius:6px}
+.dk.sm span+span{margin-left:-13px}
+.dk.sm img{width:14px;height:14px}
+.dim{opacity:.55}
+/* reel */
+.reel{flex:1;min-height:0;display:flex;gap:10px;padding:0 0 10px;overflow:hidden}
+.col{min-width:0;background:var(--col);border-radius:11px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.09);display:flex;flex-direction:column;overflow:hidden}
+.c3 .col{flex:0 0 calc((100% - 88px - 40px) / 3)}
+.c2 .col{flex:0 0 calc((100% - 88px - 30px) / 2)}
+.ch{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;font-size:12.5px;white-space:nowrap}
+.ch img{width:20px;height:20px;image-rendering:pixelated}
+.cb{flex:1;min-height:0;padding:6px 16px 12px;display:flex;flex-direction:column;gap:12px;overflow:hidden;color:#E6E6EC;line-height:1.55}
+.tool{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--sec);height:22px}
+.tool .d{margin-left:auto;font-size:11px;color:var(--ter)}
+.comp{margin:0 12px 12px;display:flex;align-items:center;height:40px;padding:0 12px;border-radius:10px;background:rgba(255,255,255,.06);color:#6f6f77;font-size:13px}
+.peek{flex:0 0 44px;background:var(--col);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.07);display:flex;flex-direction:column;align-items:center;padding-top:10px;gap:10px;opacity:.7}
+.peek img{width:20px;height:20px;image-rendering:pixelated}
+.btn{height:28px;padding:0 12px;border-radius:7px;font:500 12.5px/1 inherit;font-family:inherit;color:var(--text);background:transparent;border:.5px solid rgba(255,255,255,.2);display:inline-flex;align-items:center;gap:6px}
+.btn.inv{background:#F2F2F7;color:#1D1D1F;border:0;font-weight:600;min-width:104px;justify-content:center}
+.btn.text{border:0;color:var(--sec);padding:0 6px;font-size:12px}
+.key{font:600 10.5px/1 inherit;font-family:inherit;padding:2px 4px;border-radius:4px;background:rgba(0,0,0,.14)}
+.ln{display:flex;gap:10px;font-size:11.5px;line-height:20px;color:var(--sec)}
+.ln .t{color:#6f6f77;width:52px;flex:0 0 52px}
+.code{font-size:12px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,.07)}
+/* the nav */
+.side{flex:0 0 auto;display:flex;flex-direction:column;padding:0 10px 10px;min-height:0}
+.stop{height:58px;flex:0 0 58px;display:flex;align-items:center;padding:0 0 0 6px}
+.place{display:flex;align-items:center;gap:9px;height:30px;padding:0 8px 0 9px;border-radius:8px;color:var(--sec);font-size:13px;white-space:nowrap}
+.place svg{color:var(--ter);flex:0 0 auto}
+.place.on{background:rgba(255,255,255,.08);color:var(--text)}
+.place.on svg{color:var(--text)}
+.place.hov{background:rgba(255,255,255,.04);color:var(--text)}
+.place .k{margin-left:auto;font-size:11.5px;color:var(--ter)}
+.sh{display:flex;align-items:center;gap:6px;height:28px;padding:0 8px 0 9px;margin-top:14px;font-size:11.5px;font-weight:600;color:var(--ter)}
+.sh .n{font-weight:400}
+.pr{display:flex;align-items:center;gap:10px;height:46px;padding:0 9px 0 10px;border-radius:10px;color:var(--sec);margin-top:2px}
+.pr .gl{color:#C7C7CE;flex:0 0 auto;display:inline-flex}
+.pr .tx{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.28}
+.pr .nm{color:var(--text);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pr .st{font-size:11.5px;color:var(--ter);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pr .st.a{color:var(--amber)}
+.pr.open{background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12)}
+.pr.open .nm{font-weight:600}
+.pr.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6)}
+.pr.hov{background:rgba(255,255,255,.04)}
+.pr.done .nm{color:var(--sec)}
+.pr.draft{box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);background:transparent;border:0}
+.pr.one{height:32px}
+.pr .kh{font-size:11.5px;color:var(--ter);margin-right:2px}
+.mark{display:inline-flex;color:var(--ter);flex:0 0 auto}
+/* C: decks stacked in the sidebar, the open one fanned into its crew */
+.sdeck{display:flex;align-items:center;gap:9px;height:38px;padding:0 9px 0 10px;border-radius:11px;background:rgba(255,255,255,.05);color:var(--sec);margin-top:6px;font-size:12.5px}
+.sdeck .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.sdeck .gl{color:#C7C7CE;display:inline-flex}
+.sdeck.ask{box-shadow:inset 0 0 0 1px rgba(255,176,32,.6);height:46px}
+.sdeck.hov{background:rgba(255,255,255,.08)}
+.sdeck.done .nm{color:var(--sec)}
+.fan{margin-top:6px;border-radius:13px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);padding:4px}
+.fanh{display:flex;align-items:center;gap:9px;height:36px;padding:0 6px 0 8px;font-size:13px}
+.fanh .gl{color:#C7C7CE;display:inline-flex}
+.crow{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px 0 6px;border-radius:8px;font-size:12.5px;color:var(--sec);white-space:nowrap}
+.crow img{width:18px;height:18px;image-rendering:pixelated;flex:0 0 auto}
+.crow .s{margin-left:auto;font-size:11px;color:var(--ter)}
+.crow.ask{color:var(--text);background:rgba(255,176,32,.14);box-shadow:inset 0 0 0 1px rgba(255,176,32,.55)}
+.crow.ask .s{color:var(--amber)}
+.crow.in{color:var(--text)}
+.bracket{margin:1px 0;padding:2px;border-radius:10px;background:rgba(255,255,255,.06)}
+/* the rail */
+.rail{flex:0 0 60px;display:flex;flex-direction:column;align-items:center;gap:6px;padding:2px 0 12px}
+/* the board around the window */
+.board{background:#0b0b0c;color:var(--text);box-sizing:border-box}
+.frame{background:#0e0e10;border-radius:12px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);overflow:hidden;position:relative}
+.cap{margin:14px 0 0;font-size:13px;line-height:1.55;color:var(--sec)}
+.cap b{color:var(--text);font-weight:600}
+.h1{font-family:-apple-system,"SF Pro Display",Inter,system-ui,sans-serif;font-size:30px;font-weight:600;letter-spacing:-.022em;margin:0}
+.h2{font-size:13px;font-weight:600;margin:0 0 10px;color:var(--text)}
+.draft-tag{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:11px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.3);font-size:11.5px;font-weight:600;color:var(--sec);letter-spacing:.02em}
+.lbl{position:absolute;font-size:11.5px;color:var(--ter);white-space:nowrap;display:flex;align-items:center;gap:6px}
+.lbl::before{content:"";width:18px;height:.5px;background:rgba(255,255,255,.28)}
+.kbd{display:grid;grid-template-columns:96px 1fr;row-gap:6px;font-size:12.5px;color:var(--sec)}
+.kbd span:nth-child(odd){color:var(--text);font-family:-apple-system,"SF Pro Text",Inter,sans-serif}
+.menu{background:#232326;border-radius:13px;padding:6px;box-shadow:0 0 0 .5px rgba(255,255,255,.14),0 18px 40px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.mi{display:flex;align-items:center;gap:10px;height:30px;padding:0 10px;border-radius:7px;font-size:13px;color:var(--text);white-space:nowrap}
+.mi .k{margin-left:auto;font-size:12px;color:var(--ter)}
+.mi .gl{color:#C7C7CE;display:inline-flex}
+.sep{height:.5px;background:rgba(255,255,255,.1);margin:5px 6px}
+.glass{background:rgba(36,36,40,.72);-webkit-backdrop-filter:blur(24px) saturate(1.4);backdrop-filter:blur(24px) saturate(1.4);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.18),0 18px 40px rgba(0,0,0,.45)}
+table.cmp{width:100%;border-collapse:collapse;font-size:12.5px;line-height:1.5}
+table.cmp th{text-align:left;font-weight:600;color:var(--ter);font-size:11.5px;padding:10px 14px 10px 0;vertical-align:top;width:150px}
+table.cmp td{padding:10px 16px 10px 0;color:var(--sec);vertical-align:top;border-top:.5px solid rgba(255,255,255,.08)}
+table.cmp tr:first-child td,table.cmp tr:first-child th{border-top:0}
+table.cmp th{border-top:.5px solid rgba(255,255,255,.08)}
+table.cmp td b{color:var(--text);font-weight:500}
+.good{color:var(--text)}
+/* one file, two renders: the window, or (#states) its states */
+html.st #window{display:none !important}
+</style>
+</helmet>
+<!-- DRAFT: a proposal for the owner's review, not approved. -->
+<div class="board" style="width:1440px;padding:56px 64px 64px">
+  <div style="display:flex;align-items:baseline;gap:14px"><h1 class="h1">Left navigation · three ways</h1><span class="draft-tag">DRAFT — proposal, not approved</span></div>
+  <p class="cap" style="max-width:1000px;margin-top:10px">Today the window has no sidebar: one project open, the others folded into decks in the title bar. Each variant below gives the app's places (Home, Crew, History, Settings) a home, and says what happens to the decks. Same window as Reel.png, same five projects: two asking, one running in the cloud, one paused at a usage limit, one finished.</p>
+  <div style="display:grid;grid-template-columns:150px repeat(3,1fr);gap:0 24px;margin-top:32px">
+    <div></div><div><img src="NavA.png" alt="A · Sidebar" style="width:100%;border-radius:10px;box-shadow:0 0 0 .5px rgba(255,255,255,.14);display:block"><div style="margin-top:12px;font-size:15px;font-weight:600;letter-spacing:-.01em">A · Sidebar</div><div style="margin-top:2px;font-size:12.5px;color:var(--sec)">A full sidebar replaces the decks.</div></div><div><img src="NavB.png" alt="B · Rail" style="width:100%;border-radius:10px;box-shadow:0 0 0 .5px rgba(255,255,255,.14);display:block"><div style="margin-top:12px;font-size:15px;font-weight:600;letter-spacing:-.01em">B · Rail</div><div style="margin-top:2px;font-size:12.5px;color:var(--sec)">A 60 pt rail of places; the decks stay.</div></div><div><img src="NavC.png" alt="C · Folding sidebar" style="width:100%;border-radius:10px;box-shadow:0 0 0 .5px rgba(255,255,255,.14);display:block"><div style="margin-top:12px;font-size:15px;font-weight:600;letter-spacing:-.01em">C · Folding sidebar</div><div style="margin-top:2px;font-size:12.5px;color:var(--sec)">B's rail opens into a sidebar the decks fold into.</div></div>
+  </div>
+  <table class="cmp" style="margin-top:20px"><colgroup><col style="width:174px"><col><col><col></colgroup><tr><th>Projects live in</th><td><b>The sidebar</b>, two lines each, always</td><td><b>The title bar</b>, as decks (approved)</td><td><b>Decks</b> folded; <b>the sidebar</b> open, as stacked decks</td></tr><tr><th>Leaves the title bar</th><td>Every deck and Home</td><td>Home only</td><td>Folded: Home. Open: the decks and the crew tabs</td></tr><tr><th>Reel at 1440 pt</th><td>2 columns (sidebar shown) · 3 hidden</td><td><b class=good>3 columns</b> (417 pt each, −20)</td><td><b class=good>3 columns</b> folded · 2 open</td></tr><tr><th>Layout cost</th><td>One reel relayout per toggle, at rest</td><td><b class=good>None</b>: fixed rail, labels are an overlay</td><td>Folded none; one relayout per fold, at rest</td></tr><tr><th>Asks you can see</th><td>In the sidebar; hidden → a count on its toggle</td><td>Decks (amber ring) + a count on Home</td><td>Decks or rows, always; crew asks in the list</td></tr><tr><th>Discoverability</th><td><b class=good>Best</b>: every place named</td><td>Weakest: icons, tooltips, hover labels</td><td>Good: named when open, icons when folded</td></tr><tr><th>20 projects</th><td><b class=good>Scrolls, filters</b>, finished fold</td><td>Approved overflow: names drop, then +n</td><td><b class=good>Opens into the list</b>; +n opens it</td></tr><tr><th>Crew (profiles) gets</th><td>A named place in the list</td><td>A rail button</td><td>A rail button, a named place when open</td></tr><tr><th>Against approved decisions</th><td><b>Reverses the decks</b> (flagged)</td><td><b class=good>Nothing reversed</b></td><td>Folded nothing; open, crew tabs move</td></tr><tr><th>Build</th><td>Medium: new list, drop decks</td><td><b class=good>Small</b>: rail + overlay</td><td>Largest: B + list + the fold motion</td></tr></table>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:40px">
+    <div class="frame" style="padding:20px 22px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)">
+      <h2 class="h2" style="font-size:15px">Recommendation: C, folded by default</h2>
+      <p class="cap" style="margin:0">Folded, C is B: the approved Reel mode untouched, three columns, and one 60 pt rail that finally gives Crew, History and Settings a place. Opened (⌃⌘S), it becomes the list the decks can't be: twenty projects with live state, the open crew as a tree that scales to a swarm. The reel never reflows while scrolling; a fold costs one layout at rest. The price is two renderings of the projects (decks and rows) and of the crew (tabs and tree) to keep in step, so ship it in two steps: <b>B first</b> (small, reverses nothing), then the sidebar when people keep more projects than the title bar holds.</p>
+    </div>
+    <div class="frame" style="padding:20px 22px">
+      <h2 class="h2" style="font-size:15px">Open choices for the owner</h2>
+      <ol class="cap" style="margin:0;padding-left:18px">
+        <li><b>Which variant</b> (A, B, C), and whether to ship C as B first.</li>
+        <li><b>C open: crew in the sidebar or in the title bar?</b> Drawn: the crew tabs move into the tree. Alternative: they stay up top and the sidebar lists only projects.</li>
+        <li><b>Two wide columns or three narrow</b> while a sidebar shows at 1440 (537 pt vs 355 pt).</li>
+        <li><b>The toggle key:</b> ⌃⌘S (the macOS standard) with ⌘\ as an alias, or ⌘\ only.</li>
+        <li><b>The sidebar's surface:</b> the window's ground (drawn, quiet) or Liquid Glass (it's control layer, so allowed).</li>
+        <li><b>Places:</b> Home, Crew, History now; do Memory, Triggers and Plugins join when they have screens? History has no design yet.</li>
+        <li><b>The amber count</b> on Home (B, C folded) and on A's hidden toggle: yes or no.</li>
+      </ol>
+    </div>
+  </div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1290}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
