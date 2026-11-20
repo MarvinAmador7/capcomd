@@ -16,7 +16,8 @@ export interface WorkerContext {
 
 export type WorkerEvent =
   | { type: "VM_READY"; vmId: string }
-  | { type: "VM_FAILED"; error: string }
+  /** `vmId`: the machine was made but didn't become ready in time; kept so a drain can still delete it. */
+  | { type: "VM_FAILED"; error: string; vmId?: string }
   | { type: "ASSIGN"; taskId: string; epoch: number }
   | { type: "TASK_DONE" }
   | { type: "DRAIN" }
@@ -34,7 +35,7 @@ export const workerMachine = setup({
   actions: {
     storeVm: assign({
       vmId: ({ event }) => {
-        if (event.type === "VM_READY") {
+        if (event.type === "VM_READY" || event.type === "VM_FAILED") {
           return event.vmId;
         }
         return undefined;
@@ -75,7 +76,7 @@ export const workerMachine = setup({
           target: "idle",
           actions: ["storeVm"],
         },
-        VM_FAILED: "failed",
+        VM_FAILED: { target: "failed", actions: ["storeVm"] },
       },
     },
     idle: {
@@ -115,8 +116,15 @@ export const workerMachine = setup({
         VM_DESTROYED: "destroyed",
       },
     },
+    // A provisioning attempt failed. The next attempt may still get the same machine ready (VM_READY), and a drain
+    // deletes the machine it left, if any.
     failed: {
       on: {
+        VM_READY: {
+          target: "idle",
+          actions: ["storeVm"],
+        },
+        DRAIN: "draining",
         VM_DESTROYED: "destroyed",
       },
     },
