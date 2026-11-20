@@ -104,8 +104,9 @@ export interface PinnedSpec {
   cliVersion?: string;
 }
 
-export type ApprovalKind = "merge" | "budget" | "egress" | "secret" | "spawn_widen" | "custom";
-export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "withdrawn";
+/** `question`: an agent asked and stopped until it is answered (capability agents.ask); its status becomes `answered`. */
+export type ApprovalKind = "merge" | "budget" | "egress" | "secret" | "spawn_widen" | "custom" | "question";
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired" | "withdrawn" | "answered";
 
 export interface Approval {
   approvalId: string;
@@ -126,6 +127,9 @@ export interface Decision {
   decidedBy: { clientId: string; principal: string } | null;
   decidedAt: Timestamp | null;
   reason: string | null;
+  /** A question's (capability agents.ask): the answer given, and whether it was the one the asker recommended. */
+  answer?: string;
+  recommended?: boolean;
 }
 
 /** A verification record (`vfy-…`; `src/primitives/ops.ts` VerifyOpts, finishedVerify). */

@@ -129,7 +129,14 @@ override an explicit request for parallel work.
   `capcomd_wake` as MCP tools there) and the event comes to them as a message that starts their next turn. Their skill
   teaches it; don't brief them to poll. A waiting agent shows as `waiting for verify vfy-…` in the apps
   (`agent.wake_armed`, Agent.activity kind `wait`) and stays `running`; `agent.woken` says what woke it. (A Codex agent
-  can't be woken: it waits inside the call.)
+  can't be woken: it waits inside the call.) For a regular look, an agent books a schedule (`capcomd wake --every 30m`):
+  it outlives the agent's turn, and a check-in that comes while it is idle starts its next one.
+- Agents ask instead of waiting for a decision (ADR-026 §4): `capcomd ask "<question>" --recommend "<answer>" --why
+  "<one line>" --holds "<what waits on it>"` in its VM, then it ends its turn (it holds no machine while it waits). The
+  question goes to its parent (`capcomd answer <qst> "<answer>"`, `--recommended`, or `--up` to pass it on), and a root
+  agent's to you: `capcomd_await` returns `asked`, and `capcomd_status` shows the agent's `asked` (options, recommendation,
+  reason). Answer with `capcomd_send {to: agent, body: answer}`: a message to an agent that asked is its answer, and it
+  continues. Ask the user when it's theirs to decide; they can also answer in the app, and their answer wins.
 - Wait on everything you have running at once: `capcomd_await {runId, agents: [...], ops: [vfy-…, mrg-…], mode: "any"}`
   returns as soon as one agent, verify or merge finishes.
 - Verify several in parallel, then await any: start each `capcomd_verify` with `timeoutMs: 0`, put its id in `ops`,

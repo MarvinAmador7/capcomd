@@ -81,6 +81,8 @@ export function asRelay(e: unknown): never {
   if (code === "finished") throw new RelayError("conflict", msg, "A finished agent can't be given more: spawn one that continues from its branch (result.branch).");
   if (code === "archived") throw new RelayError("conflict", msg, "Restore the run first (`capcomd run restore <runId>`, or Restore in the app); its agents take messages again.", { code: "archived" });
   if (code === "rate_limited") throw new RelayError("conflict", msg, "Keep the title you have; rename only when the focus really changes.", { code: "rate_limited" });
+  if (code === "already_answered") throw new RelayError("conflict", msg, "Nothing to do: the asker has its answer (a person's answer wins).", { code: "already_answered" });
+  if (code === "forbidden") throw new RelayError("conflict", msg, "Answer it instead, or leave it to whoever it was asked of.", { code: "forbidden" });
   if (code === "usage") throw new RelayError("usage", msg, /title/.test(msg) ? TITLE_HINT : "Check the command's arguments.");
   throw e;
 }
@@ -760,6 +762,8 @@ export function view(a: ScopeAgent) {
     ...(a.heartbeatAt ? { heartbeatAt: a.heartbeatAt } : {}), ...noticeView(a),
     ...(a.status === "paused" && a.pausedUntil ? { pausedUntil: new Date(a.pausedUntil).toISOString() } : {}), ...(a.epoch > 1 ? { epoch: a.epoch } : {}),
     ...(a.checkpoint ? { checkpoint: a.checkpoint } : {}),
+    // ADR-026 §4: the question it asked and stopped on, until it is answered (its answer continues it).
+    ...(a.asked ? { asked: { ...a.asked, to: a.asked.to ?? "user", at: new Date(a.asked.at).toISOString() } } : {}),
   };
 }
 
@@ -1497,6 +1501,12 @@ export async function finishFailed(runId: string, agentId: string, epoch: number
   // A worker that changed no files: its final message is its summary when it declared none, so its parent reads what
   // it found (as a finished agent's is).
   const words = typeof err.resultText === "string" && err.resultText.trim() ? err.resultText.trim().slice(0, 2000) : null;
+  // ADR-026 §4: a worker that asked a question before changing anything didn't fail: it stopped to ask.
+  if (err.kind === "no_changes" && a.asked) {
+    const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "done", result: { ...res, ...(!res.summary && words ? { summary: words } : {}), asked: a.asked.questionId } });
+    await drain();
+    return fin.agent;
+  }
   const noChanges = err.kind === "no_changes" ? { errorKind: "no_changes", ...(!res.summary && words ? { summary: words } : {}) } : {};
   const fin = await client().scope.getOrCreate([runId]).finish({ agentId, status: "failed", result: { ...res, ...noChanges, error: String(err.message ?? "").slice(0, 500), ...(err.exitCode !== undefined ? { exitCode: err.exitCode } : {}), ...outageResult(err) } });
   await drain();
@@ -1568,6 +1578,8 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
   const done = new Map<string, ScopeAgent>();
   const latest = new Map<string, ScopeAgent>();
   const noticeAt = new Map<string, number>();
+  // ADR-026 §4: a question one of them asks while this waits ends the wait, as a notice does (it stopped to ask).
+  const askedSeen = new Map<string, string | null>();
   const opIds = [...new Set(opts.ops ?? [])];
   const opsDone = new Map<string, ReturnType<typeof opView>>();
   const opsLatest = new Map<string, ReturnType<typeof opView>>();
@@ -1580,11 +1592,14 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
   const opsView = () => opIds.map((i) => opsDone.get(i) ?? opsLatest.get(i)!);
   try {
   for (let poll = 0; ; poll++) {
-    const noticed: ScopeAgent[] = [];
+    const noticed: ScopeAgent[] = [], asked: ScopeAgent[] = [];
     for (const id of ids) {
       if (done.has(id)) continue;
       const a = await getAgentOrThrow(runId, id);
       latest.set(id, a);
+      const q = a.asked?.questionId ?? null;
+      if (opts.notices && q && poll > 0 && askedSeen.get(id) !== q) asked.push(a);
+      askedSeen.set(id, q);
       if (TERMINAL_AGENT.has(a.status)) { done.set(id, a); continue; }
       // A paused agent wakes at its reset time; until then nothing drives it.
       if (a.status === "paused") { if (await wakeIfDue(runId, a)) kicked.set(id, Date.now()); continue; }
@@ -1625,6 +1640,7 @@ export async function awaitAgents(runId: string, ids: string[], opts: { timeoutM
     }
     if (done.size === ids.length && opsDone.size === opIds.length) return { agents: ids.map((i) => view(done.get(i)!)), ...withOps };
     if (noticed.length) return { notices: noticed.map((a) => ({ agentId: a.agentId, ...a.notice! })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)), ...withOps };
+    if (asked.length) return { asked: asked.map((a) => ({ agentId: a.agentId, questionId: a.asked!.questionId, question: a.asked!.question })), agents: ids.map((i) => view(done.get(i) ?? latest.get(i)!)), ...withOps };
     if (Date.now() > deadline) return { timeout: true, agents: ids.map((i) => (done.has(i) ? view(done.get(i)!) : { agentId: i, status: "timeout" })), ...withOps };
     if (feed) await feed.wait(Math.min(eventFallbackMs(), Math.max(0, deadline - Date.now()) + 1)); else await sleep(pollMs());
   }

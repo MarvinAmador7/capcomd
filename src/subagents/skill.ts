@@ -49,6 +49,11 @@ Never wait inside a tool call (no sleep, no polling loop). To look again at some
 your turn: \`capcomd wake --in 10m --note "<what you'll do then>"\`${tool("wake")}; it comes to you as a message that
 starts your next turn.${o.jobs ? " A job's result comes to you as a message by itself: you don't need one for that." : ""}
 `;
+  // ADR-026 §4: a decision that isn't the worker's to make: ask and stop, never guess and never wait for it.
+  const asking = `
+## When you need a decision
+${askRule(tool("ask"))}
+`;
   return `${namingSkill({ mcp: o.mcp })}
 
 # Your capcomd
@@ -66,7 +71,7 @@ when the command ends within a minute; otherwise with state "running" and a job 
 comes to you as a message from the job when it ends. \`capcomd job output <job>\` shows its output so far (and its
 result once it ended, if no message reached you), \`capcomd job list\` your jobs, \`capcomd job kill <job>\` stops one.
 Your jobs end when you do: wait for the results you need before you finish.
-` : ""}${waiting}
+` : ""}${waiting}${asking}
 ## Notes and lessons
 ${notesAndLessons("<your agent id>")}
 - Never change .capcomd/context/ yourself.
@@ -168,6 +173,16 @@ export const BRIEF_RULES = `- Write each child's task for a stranger: it knows n
  * ADR-026 §3: how an agent that can be woken waits (not a Codex agent: it reads no message after its prompt). Its turn
  * ends with a wake armed; what it waited for comes to it as a message that starts its next turn.
  */
+/** ADR-026 §4: how an agent asks for a decision it shouldn't guess: ask and stop. `tool` names the MCP tool, if any. */
+export function askRule(tool: string): string {
+  return `If you need a decision that isn't yours to make (a product choice, a limit the docs don't settle, two designs
+with real trade-offs), don't guess and don't wait for it: ask and stop. \`capcomd ask "<question>" --recommend "<the
+answer you would pick>" [--option "<another>"]… --why "<one line: why you recommend it>" --holds "<what waits on it>"\`${tool},
+then end your turn at once. It goes to your parent (the user, if you have none); your work is saved as your turn ends,
+and the answer comes to you as a message that starts your next turn, in this same conversation. Ask one clear question
+with a recommendation, never a list of open questions, and first do everything that doesn't depend on the answer.`;
+}
+
 export function wakeRules(mcp: boolean): string {
   const t = (name: string) => (mcp ? ` (${name})` : "");
   return `
@@ -184,6 +199,15 @@ starts your next turn. Several wakes at once are fine: each comes in the order i
 hours, then wakes you saying so. \`capcomd wake --list\` shows yours, \`capcomd wake --cancel <wk>\` takes one back.
 Never sleep, poll in a loop, or run a blocking \`await\`, \`verify\` or \`check\` without --wake: it holds your turn
 and your machine for nothing, and your shell may cut it off.
+For a regular look (CI, a deploy), book a schedule: \`capcomd wake --every 30m [--times N] --note "<what to look at>"\`.
+It outlives your turn (if you are idle when it comes, it starts your next one); a missed check-in is skipped.
+
+## Questions: yours and your children's
+A child that needs a decision asks and stops: \`await … --wake\` wakes you with its question (a blocking await returns
+with \`asked\`), or it reaches you as a message. Answer it with \`capcomd answer <qst> "<answer>" [--note "why"]\`${t("capcomd_answer")}, or
+\`--recommended\` to take its recommendation; the child continues by itself (then wait on it again). When it isn't
+yours to decide (it changes what the user asked for), \`capcomd answer <qst> --up\` passes it to your parent, or the user.
+A person may answer it too, and their answer wins. ${askRule(t("capcomd_ask"))}
 `;
 }
 

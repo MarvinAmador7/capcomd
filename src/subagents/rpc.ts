@@ -131,7 +131,7 @@ function ids(args: Record<string, any>, key = "agents"): string[] {
 async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: string, ctx: RpcContext): Promise<unknown> {
   const run = c.run;
   // Writes are idempotent per request: the CLI retries a transient failure with the same id.
-  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title", "job.start", "wake"].includes(op)) args = { ...args, key: `r:${reqId}` };
+  if (args.key === undefined && ["spawn", "send", "verify", "merge", "task", "grant", "title", "job.start", "wake", "ask", "answer"].includes(op)) args = { ...args, key: `r:${reqId}` };
   const s = client().scope.getOrCreate([run]);
   switch (op) {
     case "spawn": {
@@ -178,7 +178,9 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       else await s.awaitBegin({ waiter: c.sub, targets: live }).catch(O.asRelay);
       // ADR-019 §2: stuck notices on what's still running; the in-VM client returns on one raised while it waits.
       const notices = agents.filter((a) => a.status === "running" && a.notice).map((a) => ({ agentId: a.agentId, ...a.notice!, detail: fence(a.agentId, a.notice!.detail) }));
-      return { done: doneNow, agents: agents.map((a) => agentFor(c, a)), ...(notices.length ? { notices } : {}) };
+      // ADR-026 §4: and the questions they asked: the in-VM client returns on one asked while it waits.
+      const asked = agents.filter((a) => a.asked).map((a) => askedView(a));
+      return { done: doneNow, agents: agents.map((a) => agentFor(c, a)), ...(notices.length ? { notices } : {}), ...(asked.length ? { asked } : {}) };
     }
     case "tree": {
       const root = args.root ? String(args.root) : c.sub;
@@ -384,7 +386,40 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
         if (args.agent !== undefined) await assertReadable(c, [String(args.agent)]);
         return armWake(c, reqId, { kind: "events", types: list(args.events), ...(args.agent !== undefined ? { agent: String(args.agent) } : {}), after: Number(args.after ?? 0) || 0, within: me.parent ?? c.sub }, args, {});
       }
+      // ADR-026 §3 schedules: `--every 30m [--times N]`: a recurring check-in (its first at --in/--at, else one interval out).
+      if (args.every !== undefined) {
+        const every = parseDuration(args.every);
+        if (every === null) throw new RelayError("usage", `--every ${String(args.every).slice(0, 40)}: not a duration`, "e.g. --every 30m, --every 2h.");
+        const first = args.in === undefined && args.inMs === undefined && args.at === undefined ? { inMs: every } : {};
+        return armWake(c, reqId, { kind: "timer", every, times: args.times !== undefined ? Number(args.times) : null }, { ...args, ...first }, {});
+      }
       return armWake(c, reqId, { kind: "timer" }, args, {});
+    }
+    case "ask": {
+      // ADR-026 §4: `capcomd ask "<question>" --recommend "<answer>" [--option …] [--why …] [--holds …]`: recorded and sent
+      // to the parent (the user at the root); the agent ends its turn and its answer continues it.
+      const r: any = await s.ask({ agentId: c.sub, question: String(args.question ?? ""), recommend: String(args.recommend ?? ""),
+        options: [].concat(args.options ?? args.option ?? []).map(String), why: args.why !== undefined ? String(args.why) : null, holds: args.holds !== undefined ? String(args.holds) : null,
+        key: `ask:${args.key}` }).catch(O.asRelay);
+      const q = r.question;
+      return {
+        asked: q.questionId, to: q.to ?? "user", state: q.state,
+        hint: q.state === "open"
+          ? `Asked ${q.to ? `your parent ${q.to}` : "the user"}. End your turn now (don't wait, poll or sleep): your work is saved as your turn ends, and the answer comes to you as a message that starts your next turn.`
+          : `Already answered: ${q.answer}`,
+      };
+    }
+    case "answer": {
+      // ADR-026 §4, §9.1: answer a question one of your descendants asked (`capcomd answer <qst|agt> "<answer>" [--note …]`,
+      // `--recommended`), or pass it up when you can't decide (`--up`): to your parent, or the user at the root.
+      const q = await questionFor(c, args);
+      if (args.up === true || args.up === "true") return { ...(await s.passQuestion({ questionId: q.questionId, by: c.sub }).catch(O.asRelay)), hint: "Passed up. End your turn unless you have other work: the asker continues once it's answered." };
+      const recommended = args.recommended === true || args.recommended === "true";
+      const tr: Truncation[] = [];
+      const answer = recommended ? null : capText(String(args.answer ?? ""), 2000, "answer", tr);
+      if (!recommended && !answer?.trim()) throw new RelayError("usage", "answer needs the answer (or --recommended)", `capcomd answer ${q.questionId} "<your answer>" [--note "why"], --recommended, or --up to pass it up.`);
+      const r: any = await s.answerQuestion({ questionId: q.questionId, by: c.sub, answer, recommended, note: args.note !== undefined ? String(args.note).slice(0, 2000) : null, key: `${c.sub}:answer:${args.key}` }).catch(O.asRelay);
+      return { answered: q.questionId, agentId: q.agentId, answer: r.question?.answer, recommended: r.question ? r.question.answer === q.recommend : recommended, ...(r.continued ? { continued: true } : {}), ...(tr.length ? { truncated: tr } : {}) };
     }
     case "merge": {
       const ref = String(args.ref ?? "");
@@ -483,6 +518,24 @@ async function assertOpVisible(c: Claims, op: { id: string; data: Record<string,
   if (!about || !ids.has(about)) deny(`${op.id} is not visible to ${c.sub}: it is about an agent outside your subtree and your siblings'`, "Wait on the verify, check or merge ids your own calls returned.");
 }
 
+/** A question an agent asked, as its waiter reads it: the asker's words fenced (they are another agent's). */
+function askedView(a: ScopeAgent) {
+  return { agentId: a.agentId, questionId: a.asked!.questionId, question: fence(a.agentId, a.asked!.question), at: a.asked!.at,
+    hint: `capcomd answer ${a.asked!.questionId} "<answer>" (or --recommended, or --up to pass it up); \`capcomd status ${a.agentId}\` shows it.` };
+}
+
+/** The question `capcomd answer` names (a qst- id, or the agent that asked it), which must be one a descendant asked. */
+async function questionFor(c: Claims, args: Record<string, any>) {
+  const s = client().scope.getOrCreate([c.run]);
+  const ref = String(args.question ?? args.agent ?? "").trim();
+  if (!ref) throw new RelayError("usage", "answer needs the question (qst-…) or the agent that asked it", "capcomd answer <qst|agt> \"<your answer>\"");
+  const q: any = ref.startsWith("qst-") ? await s.getQuestion({ questionId: ref })
+    : ((await s.listQuestions({ agentId: ref })) as any[]).find((x) => x.state === "open") ?? ((await s.listQuestions({ agentId: ref })) as any[])[0] ?? null;
+  if (!q) throw new RelayError("not_found", `no question ${ref.slice(0, 80)} in this run`, "capcomd status <agt> shows what an agent asked (its asked field).");
+  await assertWritable(c, q.agentId, true);
+  return q as import("../actors/questions").QuestionRow;
+}
+
 /** A wake as the agent that armed it reads it (its note is its own). */
 function wakeView(w: import("../actors/wakes").WakeRow) {
   return { wake: w.wakeId, state: w.state, kind: w.filter.kind, filter: w.filter.kind === "events" ? { ...w.filter, within: undefined } : w.filter, at: w.at, note: w.note, createdAt: w.createdAt, firedAt: w.firedAt, reason: w.reason };
@@ -504,6 +557,8 @@ async function armWake(c: Claims, reqId: string, filter: Record<string, any>, ar
   const max = WAKE_MAX_MS();
   if (asked !== undefined && asked > Date.now() + max + 1000) throw new RelayError("usage", `a wake can be set at most ${Math.round(max / 3600_000)} hours ahead`, "Wake sooner and arm another one then if you still need to wait.");
   const at = Math.min(asked ?? Date.now() + max, Date.now() + max);
+  // A schedule's slot 0 is its first time.
+  if (filter.kind === "timer" && filter.every !== undefined) filter = { ...filter, from: at };
   // Idempotent: a retried call (the CLI retries a transient failure with the same request id) arms one wake; the same
   // wait armed again while it still waits is that wake (scope wakeArm).
   const key = args.key !== undefined ? `wake:${String(args.key)}` : `req:${reqId}`;

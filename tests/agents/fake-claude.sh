@@ -30,6 +30,13 @@
 #   [peek:REF] fetch REF (a ref outside refs/heads, e.g. a helper's checkpoint) and check it out detached, to read it
 #   [session-folder] (with --session-id) also write a subagent's file in the session's <id>/ folder, as long sessions have
 #   [session-secret] (with --session-id) its session file holds its API key in a tool result, and a "token" field
+#   [ask] (ADR-026 §4) a Bash call `capcomd ask "…" --recommend "100 req/min" --option "500 req/min" --why … --holds …`
+#           (its answer in ../ask-out.txt), then its turn ends at once, changing nothing; a resumed or continued run (the
+#           answer is its prompt) works normally
+#   [ask-parent] (a lead) spawn a child "[ask] …" and `capcomd await <child> --wake`; then each message on stdin that
+#           names a question (qst-…) is answered: `capcomd answer <qst> --recommended` (../answer-out.txt), or with
+#           [pass-up] `capcomd answer <qst> --up`; after an answer it waits on the child again (`await --wake`)
+#   [wake-every:N] a Bash call `capcomd wake --every Ns --times 2` (a recurring check-in), then its turn ends
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
 # result it answers further messages until stdin closes, as claude does.
 # Sessions (ADR-026 §2), as claude 2.1.303 keeps them: --session-id ID writes $HOME/.claude/projects/<slug of $PWD>/ID.jsonl
@@ -108,6 +115,30 @@ case "$prompt" in *"[wake-in:"*|*"[wake-check]"*|*"[wake-await]"*)
   t1=$(node -e 'process.stdout.write(String(Date.now()))')
   echo "took-ms $((t1 - t0))" >> wake-start.txt
   emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"armed"}]}}';;
+esac
+# [ask]: ask and stop (ADR-026 §4): its turn ends right after the ask, with nothing changed
+case "$prompt" in *"[ask]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"capcomd ask"}}]}}'
+  capcomd ask "Ship the limiter at 100 or 500 req/min?" --recommend "100 req/min" --option "500 req/min" --why "The docs set the free tier at 100." --holds "write tests" > ../ask-out.txt 2>&1
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"asked"}]}}'
+  emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0.01,"result":"Asked the planner which limit to ship."}'
+  # The answer reached it while its CLI was still open (warm): it does the work in this same turn.
+  if [ "$stream" = 1 ]; then while IFS= read -r line; do printf '%s\n' "$line" | text_of >> ../messages.txt; printf '\n' >> ../messages.txt
+    mkdir -p src && printf 'export const sum = (a: number, b: number) => a + b;\n' > src/sum.ts
+    emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0,"result":"fixed sum"}'; done; fi
+  exit 0;;
+esac
+case "$prompt" in *"[ask-parent]"*)
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q2","name":"Bash","input":{"command":"capcomd spawn"}}]}}'
+  kid=$(capcomd spawn --profile lead --task "[ask] the request limiter" --key kid | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>process.stdout.write(JSON.parse(s).agentId||""))')
+  capcomd await "$kid" --wake --note "answer its question" > wake-start.txt 2>&1
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q2","content":"armed"}]}}';;
+esac
+case "$prompt" in *"[wake-every:"*)
+  n=$(printf '%s' "$prompt" | sed -n 's/.*\[wake-every:\([0-9]*\)\].*/\1/p')
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w2","name":"Bash","input":{"command":"capcomd wake --every"}}]}}'
+  capcomd wake --every "${n}s" --times 2 --note "look at CI" > ../every-start.txt 2>&1
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w2","content":"booked"}]}}';;
 esac
 # [title-chained:WORDS]: a Bash call that names the tab and does something else too (never run): not a rename
 case "$prompt" in *"[title-chained:"*)
@@ -248,6 +279,12 @@ case "$prompt" in *"[linger]"*) sleep 6;; esac
 if [ "$stream" = 1 ]; then
   while IFS= read -r line; do
     printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
+    # [ask-parent]: a message naming a child's question is answered (or passed up)
+    case "$prompt" in *"[ask-parent]"*)
+      qid=$(printf '%s' "$line" | grep -o 'qst-[A-Za-z0-9_-]*' | head -1)
+      if [ -n "$qid" ]; then case "$prompt" in *"[pass-up]"*) capcomd answer "$qid" --up >> ../answer-out.txt 2>&1;;
+        *) capcomd answer "$qid" --recommended --note "the docs win" >> ../answer-out.txt 2>&1; capcomd await "$kid" --wake --note "verify it" > ../rewait.txt 2>&1;; esac; fi;;
+    esac
     [ -n "$sfile" ] && printf '%s\n' "$line" >> "$sfile"
     emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0,"result":"answered"}'
   done

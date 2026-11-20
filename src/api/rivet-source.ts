@@ -12,7 +12,7 @@ import { isoTs } from "./envelope";
 import { agentActivity, describeEvent, waitActivity } from "./describe";
 import { armedData } from "../actors/wakes";
 import { inlineOrAttach, INLINE_TEXT_MAX_BYTES } from "./inline-cap";
-import { approvalIdFor, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, SendRefused, type ArchiveOutcome, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
+import { approvalIdFor, isQuestionApproval, questionApproval, brainSendOutcome, CreateRunError, mergeApprovalText, parseApprovalId, projectIdOf, SendRefused, type ArchiveOutcome, type CreateRunInput, type GoalOutcome, type HarnessSource, type PendingApproval } from "./source";
 import { applyRunPatch, hooks, principalOf, untrusted } from "../plugins/hooks";
 import { PluginError } from "../../packages/plugin/src/errors";
 import type { Principal } from "../../packages/plugin/src/shapes";
@@ -354,6 +354,9 @@ export function rivetSource(): HarnessSource {
 					...shownTitle(a.titleState, inl.text ?? redactShapes(String(a.task ?? ""))),
 					// Capability agents.idle: a message woke its current attempt (while it is set up, it is waking).
 					...(a.continued ? { continued: { at: isoTs(a.continued.at), by: String(a.continued.by), from: a.continued.from } } : {}),
+					// Capability agents.ask: the question it asked and stopped on, until it is answered.
+					asked: a.asked ? { questionId: a.asked.questionId, approvalId: approvalIdFor(runId, a.asked.questionId), question: a.asked.question, recommend: a.asked.recommend,
+						options: a.asked.options, why: a.asked.why ?? null, holds: a.asked.holds ?? null, to: a.asked.to ?? null, at: isoTs(a.asked.at) } : null,
 				};
 			});
 		},
@@ -422,24 +425,43 @@ export function rivetSource(): HarnessSource {
 		environments: async () => (await import("./settings")).environments(),
 		service: async () => (await import("./settings")).serviceState(),
 		approvals: async (runId) => {
-			const ops = (await existingScope(runId).then((s) => s?.listOps({ state: "awaiting_approval", kind: "merge" }) ?? []).catch(() => [])) as any[];
-			return ops.map((op): PendingApproval => {
+			const s = await existingScope(runId).catch(() => null);
+			const ops = (await (s?.listOps({ state: "awaiting_approval", kind: "merge" }) ?? Promise.resolve([])).catch(() => [])) as any[];
+			const merges = ops.map((op): PendingApproval => {
 				const text = mergeApprovalText(op.data);
 				return { approvalId: approvalIdFor(runId, op.id), kind: "merge", status: "pending", question: text.question,
 					requestedBy: { agentId: (op.data.agentId as string) ?? null, runId }, subject: text.subject, expiresAt: null, requestedAt: isoTs(op.updatedAt) };
 			});
+			// Capability agents.ask: every open question, whoever it is asked of (the user can always answer), oldest first.
+			const qs = (await (s?.listQuestions({ state: "open" }) ?? Promise.resolve([])).catch(() => [])) as any[];
+			return [...merges, ...qs.reverse().map((q) => questionApproval(runId, q))];
 		},
 		approval: async (approvalId) => {
 			const id = parseApprovalId(approvalId);
 			if (!id) return null;
+			if (isQuestionApproval(approvalId)) {
+				const q = (await existingScope(id.runId).then((s) => s?.getQuestion({ questionId: id.opId }) ?? null).catch(() => null)) as any;
+				if (!q) return null;
+				// Open, or answered by an agent: a person can still answer it (their answer replaces the agent's).
+				const pending = q.state === "open" || (q.state === "answered" && /^agt-/.test(String(q.answeredBy)));
+				const by = q.answeredBy as string | null;
+				return { runId: id.runId, pending, decision: pending ? null : { approvalId, status: q.state === "withdrawn" ? "withdrawn" : "answered", decidedBy: by ? { clientId: by, principal: by } : null,
+					decidedAt: q.answeredAt ? isoTs(q.answeredAt) : null, reason: q.note ?? null, ...(q.answer ? { answer: q.answer } : {}) } };
+			}
 			const op = (await existingScope(id.runId).then((s) => s?.getOp({ opId: id.opId }) ?? null).catch(() => null)) as any;
 			if (!op || op.kind !== "merge") return null;
 			const pending = op.state === "awaiting_approval";
 			const by = (op.data?.by ?? op.result?.by) as string | undefined;
 			return { runId: id.runId, pending, decision: pending ? null : { approvalId, status: op.state === "denied" || op.data?.denied ? "denied" : "approved", decidedBy: by ? { clientId: by, principal: by } : null, decidedAt: op.updatedAt ? isoTs(op.updatedAt) : null, reason: null } };
 		},
-		decide: async (approvalId, approve, by, reason) => {
+		decide: async (approvalId, approve, by, reason, answer) => {
 			const id = parseApprovalId(approvalId)!;
+			if (isQuestionApproval(approvalId)) {
+				const s = await existingScope(id.runId);
+				if (!s) throw new RelayError("not_found", `run ${id.runId} not found`, "Check the approval id.");
+				const r: any = await s.answerQuestion({ questionId: id.opId, by, ...(answer !== undefined ? { answer } : { recommended: approve }), note: reason ?? null });
+				return { answer: String(r.question?.answer ?? answer ?? ""), recommended: r.question ? String(r.question.answer).trim().toLowerCase() === String(r.question.recommend).trim().toLowerCase() : answer === undefined };
+			}
 			await decideMerge(id.runId, id.opId, { approve, by, ...(reason ? { reason } : {}) });
 		},
 		createRun: (input) => createRunAs(input),

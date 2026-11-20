@@ -16,12 +16,20 @@
 // Each change is an event of the agent's: agent.wake_armed, agent.woken, agent.wake_cancelled (an agent that ends has
 // its armed wakes cancelled in the transaction that ends it: nothing would read their message).
 //
+// Schedules (ADR-026 §3, Vercel Board's rules): a timer wake is the agent's own check-in, and it outlives the agent's
+// turn. When the agent's attempt ends (done or failed: idle), its timers stay armed, and one that fires continues the
+// idle agent as a message to it would (scope.ts txn). A recurring one (`capcomd wake --every 30m [--times N]`) fires once
+// per slot: slot n is due at from + n·every, its message's id is derived from (schedule, n) (`wake-<id>-<n>`), and a
+// slot that came and went while nothing ran (the engine was down) is skipped, not delivered late in a burst: only the
+// latest due slot fires. A schedule ends when its agent is cancelled or reaped, or its run archived.
+//
 // Delivery from the mailbox into the agent: the runner hands new messages to its CLI (the supervisor's stdin, a new
 // user turn), pushed by the scope's `messagesChanged` broadcast. The supervisor keeps a waiting CLI's input open (warm).
 // What isn't here yet (ADR-026 phase 2, the "cold" wake): an agent whose CLI has exited, started again on the message.
 import type { RawAccess } from "rivetkit/db";
 import { dottedType } from "../api/envelope";
 import { SCOPE_EVENT_TYPES } from "../api/legacy-events";
+import { questionHint } from "./questions";
 
 export type WakeFilter =
   /** A verify, check or merge settles (or a merge parks for approval). */
@@ -31,12 +39,15 @@ export type WakeFilter =
   /** Any of these event types (optionally about one agent) appended after the cursor `after` (a scope event seq), about
    *  an agent in the subtree of `within` (what the arming agent may see: its parent's subtree, else its own). */
   | { kind: "events"; types: string[]; agent?: string; after: number; within?: string }
-  /** Only the time: a check-in the agent scheduled for itself. */
-  | { kind: "timer" };
+  /** Only the time: a check-in the agent scheduled for itself. With `every` (ms), a recurring schedule whose slot 0 is due
+   *  at `from` (epoch ms), at most `times` slots (null: until it ends). */
+  | { kind: "timer"; every?: number; times?: number | null; from?: number };
 
 export interface WakeRow {
   wakeId: string; agentId: string; filter: WakeFilter; note: string | null; state: "armed" | "fired" | "cancelled";
   at: number | null; createdAt: number; firedAt: number | null; firedSeq: number | null; messageSeq: number | null; reason: string | null;
+  /** A recurring schedule's next slot (0 first), and how many slots it skipped (due while nothing ran). */
+  slot: number; skipped: number;
 }
 
 export const WAKES_SQL = [
@@ -63,7 +74,15 @@ export const wakeRow = (r: any): WakeRow => ({
   wakeId: r.wake_id, agentId: r.agent_id, filter: JSON.parse(r.filter), note: r.note ?? null, state: r.state,
   at: r.at == null ? null : Number(r.at), createdAt: Number(r.created_at), firedAt: r.fired_at == null ? null : Number(r.fired_at),
   firedSeq: r.fired_seq == null ? null : Number(r.fired_seq), messageSeq: r.message_seq == null ? null : Number(r.message_seq), reason: r.reason ?? null,
+  slot: Number(r.slot ?? 0), skipped: Number(r.skipped ?? 0),
 });
+
+/** Is this wake a recurring schedule (`--every`)? */
+export const recurring = (f: WakeFilter): f is Extract<WakeFilter, { kind: "timer" }> & { every: number; from: number } => f.kind === "timer" && typeof f.every === "number" && f.every > 0 && typeof f.from === "number";
+/** Shortest interval of a recurring schedule (CAPCOMD_SCHEDULE_MIN_MS; 1 minute). */
+export const SCHEDULE_MIN_MS = () => Number(process.env.CAPCOMD_SCHEDULE_MIN_MS ?? 60_000);
+/** Most slots a schedule may book. */
+export const SCHEDULE_MAX_TIMES = 1000;
 
 export const opKindOf = (op: string): "verify" | "check" | "merge" => (op.startsWith("vfy-") ? "verify" : op.startsWith("chk-") ? "check" : "merge");
 
@@ -102,6 +121,8 @@ async function satisfies(tx: RawAccess, f: WakeFilter, ev: { seq: number; type: 
       const kind = typeof ev.data?.kind === "string" && /^[a-z_]{1,20}$/.test(ev.data.kind) ? ev.data.kind : "stuck";
       return { text: `${ev.agentId} looks stuck (${kind})`, by: "event", hint: `It still runs: \`capcomd inspect ${ev.agentId}\` shows why. Send it a hint, cancel it, or wait on it again (\`capcomd await ${f.agents.join(" ")} --wake\`).` };
     }
+    // ADR-026 §4: as a blocking await returns on it: one of them asked a question and stopped until it is answered.
+    if (ev.type === "AGENT_ASKED") return askedWhy(tx, ev.agentId, ev.data);
     if (!AGENT_END.has(ev.type)) return null;
     const rows = (await tx.execute(`SELECT agent_id, status FROM agents_v2 WHERE agent_id IN (${f.agents.map(() => "?").join(",")})`, ...f.agents)) as any[];
     return agentsWhy(f, rows, ev.agentId);
@@ -113,6 +134,19 @@ async function satisfies(tx: RawAccess, f: WakeFilter, ev: { seq: number; type: 
     return { text: `${dottedType(ev.type)}${ev.agentId ? ` from ${ev.agentId}` : ""}`, by: "event" };
   }
   return null;
+}
+
+/** A question one of them asked (agent.asked's data): the daemon's line, the question in the asker's words as the detail,
+ *  and how to answer it as the hint. */
+async function askedWhy(tx: RawAccess, agentId: string, d: Record<string, any>): Promise<Why> {
+  const qid = typeof d?.questionId === "string" ? d.questionId : "";
+  const s = (v: unknown) => (typeof v === "string" ? v : "");
+  const others = Array.isArray(d?.options) ? d.options.slice(1).map(s).filter(Boolean) : [];
+  const detail = [s(d?.question), `Recommended: ${s(d?.recommend)}${s(d?.why) ? ` (${s(d.why)})` : ""}.`, others.length ? `Other options: ${others.join("; ")}.` : "", s(d?.holds) ? `Waiting on this: ${s(d.holds)}.` : ""].filter(Boolean).join(" ");
+  const to = typeof d?.to === "string" ? d.to : null;
+  const up = to ? (((await tx.execute("SELECT parent FROM agents_v2 WHERE agent_id = ?", to)) as any[])[0]?.parent ?? null) : null;
+  return { text: `${agentId} asked a question (${qid}) and stopped until it is answered`, detail: detail.slice(0, 1500).replace(/\.$/, ""), by: "event",
+    hint: `${questionHint({ questionId: qid } as never, up)} Then wait on it again (\`capcomd await ${agentId} --wake\`).` };
 }
 
 /** The agents' end as a reason, or null while it isn't one (all: one still runs). `ended`: the agent that just ended. */
@@ -157,6 +191,7 @@ export function armedData(w: WakeRow): Record<string, unknown> {
     ...(f.kind === "op" ? { op: f.op, opKind: opKindOf(f.op) } : {}),
     ...(f.kind === "agents" ? { agents: f.agents, mode: f.mode } : {}),
     ...(f.kind === "events" ? { types: f.types.map(dottedType), ...(f.agent ? { agent: f.agent } : {}) } : {}),
+    ...(recurring(f) ? { every: f.every, times: f.times ?? null } : {}),
     at: w.at, note: w.note,
   };
 }
@@ -185,8 +220,58 @@ export async function fireWake(tx: RawAccess, w: WakeRow, why: Why, seq: number 
   return m;
 }
 
-/** Cancel one armed wake (its agent asked, or ended), with its event. False when it wasn't armed. */
-export async function cancelWake(tx: RawAccess, w: WakeRow, reason: "agent" | "ended", addEvent: AddEvent): Promise<boolean> {
+/**
+ * A recurring schedule's alarm, in the caller's transaction: fire the latest slot that is due (the ones before it that
+ * never fired are skipped), with its message keyed by (schedule, n), and book the next. Returns the next slot's time, or
+ * null when the schedule is over (its last slot fired or was missed) or wasn't armed.
+ */
+export async function fireSlot(tx: RawAccess, w: WakeRow, addEvent: AddEvent, now = Date.now()): Promise<number | null> {
+  const f = w.filter;
+  if (!recurring(f)) return null;
+  const cur = ((await tx.execute("SELECT state, slot, skipped FROM wakes WHERE wake_id = ?", w.wakeId)) as any[])[0];
+  if (!cur || cur.state !== "armed") return null;
+  const next = Number(cur.slot ?? 0);
+  // The latest slot due by now; a slot is due for one interval, then it was missed.
+  const due = Math.floor((now - f.from) / f.every);
+  // Not due yet: an alarm left over from a slot that already fired (the one booked when it fired comes at its time).
+  if (due < next) return null;
+  const times = f.times ?? null;
+  const skipped = Number(cur.skipped ?? 0) + (Math.min(due, times ?? due) - next);
+  if (times !== null && due >= times) {
+    // Its last slot came and went while nothing ran: the schedule is over, nothing delivered late.
+    await tx.execute("UPDATE wakes SET state = 'fired', fired_at = ?, slot = ?, skipped = ?, reason = ? WHERE wake_id = ? AND state = 'armed'", now, times, skipped, "its last check-in was missed", w.wakeId);
+    return null;
+  }
+  const n = due, now2 = now;
+  const key = `wake-${w.wakeId}-${n}`;
+  const dup = (await tx.execute("SELECT seq FROM messages WHERE idem_key = ?", key)) as any[];
+  let m = dup.length ? Number(dup[0].seq) : 0;
+  const text = `its check-in time came (${n + 1}${times !== null ? ` of ${times}` : ""}, every ${everyText(f.every)})`;
+  if (!m) {
+    m = Number(((await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM messages")) as any[])[0]?.m ?? 0) + 1;
+    const missed = skipped - Number(cur.skipped ?? 0);
+    const body = [`Wake-up ${w.wakeId}: ${text}.`, missed > 0 ? `${missed} earlier check-in${missed === 1 ? " was" : "s were"} missed while nothing ran, and skipped.` : "",
+      w.note ? `Your note when you asked for it: ${w.note}` : "", `\`capcomd wake --cancel ${w.wakeId}\` ends the schedule.`].filter(Boolean).join("\n");
+    await tx.execute("INSERT INTO messages (seq, to_agent, from_agent, body, at, idem_key, skills) VALUES (?, ?, ?, ?, ?, ?, NULL)", m, w.agentId, `wake-${w.wakeId}`, body, now2, key);
+  }
+  const last = times !== null && n + 1 >= times;
+  const at = last ? null : f.from + (n + 1) * f.every;
+  await tx.execute(`UPDATE wakes SET slot = ?, skipped = ?, message_seq = ?, fired_at = ?, at = ?, state = ?, reason = ? WHERE wake_id = ?`,
+    n + 1, skipped, m, now2, at ?? w.at, last ? "fired" : "armed", last ? text : null, w.wakeId);
+  await addEvent(tx, "AGENT_WOKEN", w.agentId, { wakeId: w.wakeId, kind: "timer", by: "time", text, causeSeq: null, messageSeq: m, armedAt: w.createdAt, slot: n, skipped: skipped - Number(cur.skipped ?? 0) }, `woken-${w.wakeId}-${n}`);
+  noteWoken(tx, w.agentId);
+  return at;
+}
+
+/** An interval in a few words: "30 s", "5 min", "2 h". */
+export function everyText(ms: number): string {
+  if (ms % 3600_000 === 0) return `${ms / 3600_000} h`;
+  if (ms % 60_000 === 0) return `${ms / 60_000} min`;
+  return `${Math.round(ms / 1000)} s`;
+}
+
+/** Cancel one armed wake (its agent asked, or ended; its run was archived), with its event. False when it wasn't armed. */
+export async function cancelWake(tx: RawAccess, w: WakeRow, reason: "agent" | "ended" | "archived", addEvent: AddEvent): Promise<boolean> {
   const cur = ((await tx.execute("SELECT state FROM wakes WHERE wake_id = ?", w.wakeId)) as any[])[0];
   if (!cur || cur.state !== "armed") return false;
   await tx.execute("UPDATE wakes SET state = 'cancelled', reason = ? WHERE wake_id = ? AND state = 'armed'", reason, w.wakeId);
@@ -208,7 +293,10 @@ export async function matchWakes(tx: RawAccess, ev: { seq: number; type: string;
     const why = await satisfies(tx, w.filter, ev);
     if (why && (await fireWake(tx, w, why, ev.seq, addEvent)) !== null) n++;
   }
-  if (AGENT_END.has(ev.type) && ev.agentId) for (const w of armed) if (w.agentId === ev.agentId) await cancelWake(tx, w, "ended", addEvent);
+  // An agent's end cancels what it waited on (nothing would read it), but not its check-ins (schedules): a turn that ended
+  // idle keeps them, and one that fires continues it. Cancelled or reaped, it keeps nothing.
+  const gone = ev.type === "AGENT_CANCELLED" || ev.type === "AGENT_REAPED";
+  if (AGENT_END.has(ev.type) && ev.agentId) for (const w of armed) if (w.agentId === ev.agentId && (gone || w.filter.kind !== "timer")) await cancelWake(tx, w, "ended", addEvent);
   return n;
 }
 
@@ -253,6 +341,15 @@ export function parseFilter(v: any): WakeFilter {
     if (types.some((t: string | undefined) => !t)) throw new Error(`not an event type a wake can wait for: ${v.types.filter((t: unknown) => !WAKEABLE.has(String(t))).map(String).join(", ").slice(0, 200)} (use the event's name, e.g. agent.done)`);
     return { kind: "events", types: [...new Set<string>(types)], ...(typeof v.agent === "string" && /^agt-/.test(v.agent) ? { agent: v.agent } : {}), after: Math.max(0, Number(v.after ?? 0) || 0), ...(typeof v.within === "string" ? { within: v.within } : {}) };
   }
-  if (v.kind === "timer") return { kind: "timer" };
+  if (v.kind === "timer") {
+    if (v.every === undefined || v.every === null) return { kind: "timer" };
+    const every = Math.round(Number(v.every)), from = Math.round(Number(v.from));
+    if (!(Number.isFinite(every) && every >= SCHEDULE_MIN_MS())) throw new Error(`a schedule repeats at most once every ${everyText(SCHEDULE_MIN_MS())}`);
+    if (every > WAKE_MAX_MS()) throw new Error(`a schedule repeats at least every ${everyText(WAKE_MAX_MS())}`);
+    if (!Number.isFinite(from)) throw new Error("a schedule needs its first time");
+    const times = v.times === undefined || v.times === null ? null : Math.round(Number(v.times));
+    if (times !== null && !(times >= 1 && times <= SCHEDULE_MAX_TIMES)) throw new Error(`--times is 1 to ${SCHEDULE_MAX_TIMES}`);
+    return { kind: "timer", every, times, from };
+  }
   throw new Error(`not a wake filter: ${JSON.stringify(v).slice(0, 200)}`);
 }

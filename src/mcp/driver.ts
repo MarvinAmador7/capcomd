@@ -45,6 +45,8 @@ export function agentView(a: any) {
   }
   // A failing notice quotes the agent's own error output.
   if (v.notice) { v.notice = { ...v.notice, detail: fence(v.agentId, String(v.notice.detail)) }; v.stuck = v.notice.detail; }
+  // ADR-026 §4: the question it asked is its own words.
+  if (v.asked) v.asked = { ...v.asked, question: fence(v.agentId, String(v.asked.question)) };
   return v;
 }
 
@@ -220,10 +222,14 @@ export async function awaitAgents(a: { runId: string; agents?: string[]; ops?: s
   const opsDone = opRows.filter((o) => o.state !== "running").map((o) => ({ ...o, next: opNext(a.runId, o) }));
   const pending = [...pendingAgents, ...opRows.filter((o) => o.state === "running").map((o) => o.id)];
   const notices = ((r.notices ?? []) as Array<{ agentId: string; kind: string; detail: string }>).map((n) => ({ ...n, detail: fence(n.agentId, n.detail) }));
+  // ADR-026 §4: questions asked while it waited (an agent that asks stops until it is answered).
+  const asked = ((r.asked ?? []) as Array<{ agentId: string; questionId: string; question: string }>).map((q) => ({ ...q, question: fence(q.agentId, q.question) }));
   const anyDone = done.length + opsDone.length > 0;
   return {
-    done, ...(ops.length ? { ops: opsDone } : {}), pending, ...(r.first ? { first: agentView(r.first) } : {}), ...(notices.length ? { notices } : {}),
-    next: notices.length
+    done, ...(ops.length ? { ops: opsDone } : {}), pending, ...(r.first ? { first: agentView(r.first) } : {}), ...(notices.length ? { notices } : {}), ...(asked.length ? { asked } : {}),
+    next: asked.length
+      ? `${asked.map((q) => `${q.agentId} asked ${q.questionId}`).join("; ")} and stopped until it is answered (capcomd_status shows its options and recommendation). Answer it with capcomd_send {to: the agent, body: your answer}: a message to an agent that asked is its answer, and it continues. Ask the user first when it's theirs to decide. Then call capcomd_await again.`
+      : notices.length
       ? `${notices.map((n) => `${n.agentId} looks ${n.kind}: ${n.detail}`).join("; ")}. It keeps running (it is stopped, work kept, only if its profile sets a stuck window). Look with capcomd_inspect, cancel it with capcomd_cancel, or call capcomd_await again.`
       : pending.length && !(a.mode === "any" && anyDone) ? `Still running; call capcomd_await again for ${pending.join(", ")} (they keep working between calls).`
       : [...(done.length ? ["Verify finished work with capcomd_verify (several at once: then await their ids in ops)."] : []), ...opsDone.map((o) => `${o.id}: ${o.next}`), ...(pending.length ? [`Still pending: ${pending.join(", ")}.`] : [])].join(" "),

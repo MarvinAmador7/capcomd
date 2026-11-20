@@ -7,7 +7,7 @@
 // is paused, run.resumed when one resumes, and run.completed / run.failed / run.cancelled when the last live agent ends
 // (always run.cancelled when a run-wide cancel ended it).
 import { z } from "zod";
-import { approvalIdFor, mergeApprovalText, toEnvelope, type RawEvent } from "./source";
+import { approvalIdFor, mergeApprovalText, questionSubject, toEnvelope, type RawEvent } from "./source";
 import { dottedType, type HarnessEvent } from "./envelope";
 import { UntrustedText } from "./legacy-events";
 
@@ -16,7 +16,7 @@ export const LifecycleCause = z.enum([
 	"created", "spawned", "started", "resumed", "paused", "usage_limit", "finished", "error", "cancelled", "parent_ended",
 	"all_agents_done", "agent_failed", "all_agents_cancelled", "all_agents_paused", "approval_needed", "approved", "denied", "deleted",
 	"planner_done", "pull_request_opened", "branch_kept", "titled", "waiting", "woken", "wake_cancelled",
-	"continued", "archived", "restored",
+	"continued", "archived", "restored", "asked", "answered", "passed_up", "withdrawn",
 ]).describe("Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know");
 export type LifecycleCause = z.infer<typeof LifecycleCause>;
 
@@ -26,6 +26,7 @@ export const LIFECYCLE_TYPES = [
 	"run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled", "run.archived", "run.restored",
 	"agent.spawned", "agent.titled", "agent.started", "agent.paused", "agent.resumed", "agent.done", "agent.failed", "agent.cancelled", "agent.reaped",
 	"agent.wake_armed", "agent.woken", "agent.wake_cancelled", "agent.continued",
+	"agent.asked", "agent.answered", "agent.question_passed", "agent.question_withdrawn",
 	"approval.requested", "approval.decided",
 ] as const;
 export type LifecycleType = (typeof LIFECYCLE_TYPES)[number];
@@ -52,6 +53,10 @@ const TITLE_CAUSE: Record<string, LifecycleCause> = { AGENT_TITLED: "titled", RU
 // Capability agents.wake (ADR-026 §3): an agent waiting between turns (a wake armed), woken, or no longer waiting. Its
 // status stays running throughout; these say what it waits for. They don't move the run's state.
 const WAKE_CAUSE: Record<string, LifecycleCause> = { AGENT_WAKE_ARMED: "waiting", AGENT_WOKEN: "woken", AGENT_WAKE_CANCELLED: "wake_cancelled" };
+// Capability agents.ask (ADR-026 §4): an agent asked and stopped, was answered, its question passed up or withdrawn. Each
+// also moves its approval (kind question): requested, then decided (answered, or withdrawn). They don't move the run's
+// state (the asker's attempt ending does).
+const ASK_CAUSE: Record<string, LifecycleCause> = { AGENT_ASKED: "asked", AGENT_ANSWERED: "answered", AGENT_QUESTION_PASSED: "passed_up", AGENT_QUESTION_WITHDRAWN: "withdrawn" };
 /** run.* lifecycle events that don't move the run's own state. */
 const GOAL_TYPES = new Set(["run.goal_completed", "run.pr_opened", "run.branch_kept", "run.titled", "run.archived", "run.restored"]);
 const TERMINAL = new Set(["AGENT_DONE", "AGENT_FAILED", "AGENT_CANCELLED", "AGENT_REAPED"]);
@@ -101,6 +106,22 @@ export function lifecycleEvents(runId: string, evs: RawEvent[], projectId: strin
 		if (t in GOAL_CAUSE) { out.push(toEnvelope(runId, { ...e, data: { ...e.data, cause: GOAL_CAUSE[t]! } }, next(k), projectId)); continue; }
 		if (t in TITLE_CAUSE) { out.push(toEnvelope(runId, { ...e, data: { ...e.data, cause: TITLE_CAUSE[t]! } }, next(k), projectId)); continue; }
 		if (t in WAKE_CAUSE) { if (e.agentId) out.push(toEnvelope(runId, { ...e, data: { ...e.data, cause: WAKE_CAUSE[t]! } }, next(k), projectId)); continue; }
+		if (t in ASK_CAUSE) {
+			if (!e.agentId) continue;
+			out.push(toEnvelope(runId, { ...e, data: { ...e.data, cause: ASK_CAUSE[t]! } }, next(k), projectId));
+			const d = e.data as any, approvalId = approvalIdFor(runId, String(d.questionId));
+			const also = (type: "approval.requested" | "approval.decided", data: Record<string, unknown>) => {
+				const env = toEnvelope(runId, { ...e, type, data }, next(k), projectId);
+				env.id = `evt_${runId}_${e.seq}_${type}`;
+				out.push(env);
+			};
+			if (t === "AGENT_ASKED") also("approval.requested", { approvalId, kind: "question", question: String(d.question ?? ""), requestedBy: { agentId: e.agentId, runId },
+				subject: questionSubject({ questionId: String(d.questionId), to: d.to ?? null, recommend: String(d.recommend ?? ""), options: Array.isArray(d.options) ? d.options : [], why: d.why ?? null, holds: d.holds ?? null }), expiresAt: null, cause: "approval_needed" });
+			else if (t === "AGENT_ANSWERED") also("approval.decided", { approvalId, status: "answered", decidedBy: { clientId: String(d.by), principal: String(d.by) }, decidedAt: new Date(e.at).toISOString(),
+				reason: typeof d.note === "string" ? d.note : null, answer: String(d.answer ?? ""), recommended: d.recommended === true, cause: "answered" });
+			else if (t === "AGENT_QUESTION_WITHDRAWN") also("approval.decided", { approvalId, status: "withdrawn", decidedBy: null, decidedAt: new Date(e.at).toISOString(), reason: null, cause: "withdrawn" });
+			continue;
+		}
 		if (t === "MERGE_AWAITING_APPROVAL") {
 			const d = e.data as any, text = mergeApprovalText(d);
 			const env = toEnvelope(runId, { ...e, type: "approval.requested", data: {

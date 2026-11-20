@@ -22,8 +22,8 @@ import { CODE_MAX_LINES, DIFF_LINE_MAX_CHARS, DIFF_MAX_LINES, ITEM_MAX_BYTES, TA
 export { ThreadItem };
 
 export const ApprovalId = z.string().regex(/^apr-[A-Za-z0-9]+$/).describe("Stable approval id, carried on approval events; decide with it directly");
-export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom"]);
-export const ApprovalStatus = z.enum(["pending", "approved", "denied", "expired", "withdrawn"]);
+export const ApprovalKind = z.enum(["merge", "budget", "egress", "secret", "spawn_widen", "custom", "question"]).describe("question: capability agents.ask, an agent asked and stopped until it is answered");
+export const ApprovalStatus = z.enum(["pending", "approved", "denied", "expired", "withdrawn", "answered"]).describe("answered: capability agents.ask, a question's answer was given");
 export const AgentStatus = z.enum(["pending", "running", "paused", "done", "failed", "cancelled", "handed-off"]);
 
 /** Stream/replay scope: the daemon, a project or a run. */
@@ -140,6 +140,17 @@ export const Agent = z.object({
 		by: z.string().describe("Who sent it: operator, client:<id>, an agent id (its parent or an ancestor), or a wake (wake-wk-…)"),
 		from: z.enum(["done", "failed", "cancelled"]).describe("How its attempt before this one had ended"),
 	}).nullable().optional().describe("Capability agents.idle (ADR-026 §1). A message woke this idle agent into its current attempt (agent.continued); null when its current attempt is its first (or a resume). While its status is running and its activity is of kind setup, it is waking (a client shows \"Waking <name>…\" with the setup phase, including `restore`, after a second). Older daemons don't send it"),
+	asked: z.object({
+		questionId: z.string().describe("The question (qst-…)"),
+		approvalId: ApprovalId.describe("Its approval (kind question): answer it there, or with a message to the agent"),
+		question: UntrustedText,
+		recommend: UntrustedText.describe("The answer it recommends (options[0])"),
+		options: z.array(UntrustedText).describe("The answers it offers, the recommended one first"),
+		why: UntrustedText.nullable().describe("Why it recommends that answer; null when it gave no reason"),
+		holds: UntrustedText.nullable().describe("What waits on the answer; null when it didn't say"),
+		to: z.string().nullable().describe("Who it is asked of: an agent (its parent, or an ancestor it was passed up to), or null for the user"),
+		at: Timestamp.describe("When it asked"),
+	}).nullable().optional().describe("Capability agents.ask (ADR-026 §4). The question it asked and stopped on, until it is answered: it is **asked** (show it so wherever its status shows, as a quiet state when it is asked of an agent, as needing you when asked of the user). Its turn ended (its status is done once its attempt ended, which a client shows as asked, not idle), so it holds no machine; a message to it is its answer and continues it. null when it has no open question. Older daemons don't send it"),
 });
 /** One thread message. Body inline when ≤ 64 KB (UTF-8), else `attachment`. */
 export const Message = z.object({
@@ -250,6 +261,8 @@ export const Decision = z.looseObject({
 	decidedBy: z.looseObject({ clientId: z.string(), principal: z.string() }).nullable(),
 	decidedAt: Timestamp.nullable(),
 	reason: z.string().meta({ "x-untrusted": true, description: "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)." }).nullable(),
+	answer: UntrustedText.optional().describe("Capability agents.ask, a question's: the answer given (`reason` is then the answerer's note)"),
+	recommended: z.boolean().optional().describe("Capability agents.ask, a question's: whether the answer was the one the asker recommended"),
 });
 
 const RequestedBy = z.object({ agentId: z.string().nullable(), runId: z.string() }).describe("Who asked; ancestors of agentId may decide within their budget cap");
@@ -270,7 +283,14 @@ const ApprovalSubject = z.looseObject({
 	removed: z.number().int().nonnegative().optional().describe("merge: lines removed across all its files (binary files not counted)"),
 	askedBy: z.string().optional().describe("merge: the agent that asked for it and waits on the decision (requestedBy.agentId is the agent whose work merges). Absent for an operator's merge and on older daemons"),
 	heldBy: HeldBy.optional().describe("merge: a plugin held it for this approval (merge.landing): the plugin and its reason, which the question repeats. Approving satisfies only this hold: a merge another plugin then holds asks again. Absent when only the target's protection asks, and on older daemons"),
-}).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}");
+	questionId: z.string().optional().describe("question: the question (qst-…), as agent.asked carries it"),
+	options: z.array(z.object({ label: UntrustedText, recommended: z.boolean() })).optional().describe("question: the answers it offers, the recommended one first (a client numbers them 1…n with keys, tags the recommended one, and adds its own \"Something else…\" for a free answer)"),
+	recommend: UntrustedText.optional().describe("question: the answer it recommends (options[0])"),
+	why: UntrustedText.nullable().optional().describe("question: why it recommends that answer (one or two lines; shown under the recommended option only); null when it gave no reason"),
+	holds: UntrustedText.nullable().optional().describe("question: what waits on the answer (\"Waiting on this\"); null when it didn't say"),
+	to: z.string().nullable().optional().describe("question: who it is asked of: an agent (its parent, or an ancestor it was passed up to) or null for the user. The user can answer it either way, and a person's answer wins"),
+	passedBy: z.array(z.string()).optional().describe("question: the agents that passed it up because they couldn't decide, in order"),
+}).describe("Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}, question {questionId, options, recommend, why, holds, to, passedBy}");
 
 /** Frames on GET /v1/streams/{scope}/events besides ordinary events (SSE `event:` names). */
 export const StreamFrames = {
@@ -486,7 +506,11 @@ export const EventData = {
 } as const;
 export type EventType = keyof typeof EventData;
 
-const DecideBody = z.object({ decision: z.enum(["approve", "deny"]), reason: UntrustedText.optional() });
+const DecideBody = z.object({
+	decision: z.enum(["approve", "deny", "answer"]).describe("approve or deny a merge (any kind but question). A question (capability agents.ask): answer with `answer`, or approve to take its recommendation; deny is 422"),
+	reason: UntrustedText.optional().describe("Why; for a question, the answerer's note (the asker reads it with the answer)"),
+	answer: UntrustedText.optional().describe("Capability agents.ask. decision answer: the question's answer, one of its options or any other text. 422 `invalid` (field answer) when missing"),
+});
 
 /** Capability ops.front_door (plugin API §6.1): how long a front door's operation is waited for before the answer says it
  *  still runs (202). Below the harness socket's idle timeout (60 s), so a call never outlives its connection. */
@@ -638,6 +662,7 @@ export const CAPABILITIES = {
 	"runs.archive": "POST /v1/runs/{runId}/archive and /restore (the steer scope, an Idempotency-Key): an archived run is read-only, a message to its agents is 409 `archived` until it is restored; Run.archived; run.archived and run.restored on run streams and the lifecycle feed. Archiving is refused (409 conflict) while an agent of it works",
 	"agents.wake": "Waits between turns (ADR-026 §3): an agent ends its turn with a wake armed instead of waiting inside a tool call. agent.wake_armed, agent.woken and agent.wake_cancelled on run streams and the lifecycle feed (causes waiting, woken, wake_cancelled), and Agent.activity of kind wait with `wake` (what it waits for, since when) while it waits",
 	"agents.park": "Parked machines (ADR-026 §6): when a planner or lead (an orchestrate profile, or a root agent) ends its turn idle, its machine is parked (hibernated: boxd hibernate, Docker stop) instead of deleted, and a message to it wakes that machine and resumes its conversation there in a moment (Agent.activity setup shows no restore phase). A worker's machine is deleted when it ends, as before. Parked machines aren't shown with agents: GET /v1/sandboxes/{name}/resources lists them with state `parked`, their agent as owner and `deleteAfter` (when they are deleted), and Delete (capability sandboxes.actions) deletes only the machine (its agent stays idle; sandbox.resource_action `parked: true`). They are deleted when the place's `parkedRetention` setting (4 h, 24 h or 7 days; 24 h by default; recorded with each run) runs out, when more than 10 are parked at the place (the oldest first), when the run is archived or the agent cancelled. Descriptors' caps carry `hibernate` (memory, disk or none). A parked machine holds no memory slot",
+	"agents.ask": "Ask and stop (ADR-026 §4): an agent asks a question (`capcomd ask`, `capcomd_ask` in its VM) and its turn ends: Agent.asked carries the question while it is open, agent.asked / agent.answered / agent.question_passed / agent.question_withdrawn on run streams and the lifecycle feed (causes asked, answered, passed_up, withdrawn), and an approval of kind question (subject: questionId, options with the recommended one first, why, holds, to) for every open question. Answer it with POST /v1/approvals/{approvalId}/decision (decision answer with `answer`, or approve for its recommendation), or with a plain message to the agent (POST …/agents/{agentId}/messages): either continues its conversation. A person's answer replaces an agent's. Schedules (ADR-026 §3): agent.wake_armed `every`/`times` for a recurring check-in, agent.woken `slot`/`skipped`, agent.wake_cancelled reason `archived`; a check-in outlives the agent's turn and continues it when it is idle",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -1536,7 +1561,8 @@ export const contract = {
 			.route({
 				method: "POST", path: "/v1/approvals/{approvalId}/decision", inputStructure: "detailed",
 				description: "No prior read needed. `Idempotency-Key` is scoped to the calling client. Same key + same body: 200 with the first result (replay). " +
-					"Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when).",
+					"Same key + different body: 409 `idempotency_conflict`. New key on an approval already decided: 409 `already_decided` with the existing `decision` (who, when). " +
+					"Capability agents.ask: a question (kind question) is answered: decision answer with `answer` (and `reason`, the answerer's note), or approve to take its recommendation; the answer is a message to the asker, which continues its conversation, and the decision's status is `answered`. A question an agent already answered can still be answered here, and this answer replaces the agent's (a person's answer wins); one a person answered is 409 `already_decided`.",
 			})
 			.input(z.object({ params: z.object({ approvalId: ApprovalId }), headers: IdempotencyHeaders, body: DecideBody }))
 			.output(Decision),

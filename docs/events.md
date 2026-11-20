@@ -1692,6 +1692,17 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "description": "kind events: only events about this agent",
       "type": "string"
     },
+    "every": {
+      "description": "kind timer, a recurring schedule (`capcomd wake --every`): its interval in ms; at is its first check-in",
+      "type": "number"
+    },
+    "times": {
+      "description": "kind timer with every: how many check-ins it books; null until it is cancelled (its agent cancelled, its run archived)",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "at": {
       "description": "When it fires at the latest (epoch ms): a timer's time, else its deadline (by default 6 hours ahead, at most that); null when it has none",
       "type": [
@@ -1766,6 +1777,14 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "armedAt": {
       "type": "number",
       "description": "When it was armed (epoch ms)"
+    },
+    "slot": {
+      "description": "A recurring schedule's check-in that fired (0 first): its message's id is derived from (schedule, slot). Absent for a one-time wake",
+      "type": "number"
+    },
+    "skipped": {
+      "description": "A recurring schedule: earlier check-ins that came and went while nothing ran (the daemon was down), skipped rather than delivered late",
+      "type": "number"
     }
   },
   "required": [
@@ -1953,13 +1972,198 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "type": "string",
       "enum": [
         "agent",
-        "ended"
+        "ended",
+        "archived"
       ],
-      "description": "agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up)"
+      "description": "agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up; a check-in only when the agent was cancelled); archived: its run was archived (a schedule of an idle agent). More may be added"
     }
   },
   "required": [
     "wakeId",
+    "reason"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.asked`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…). Its approval (kind question) carries it as subject.questionId"
+    },
+    "to": {
+      "description": "Who it is asked of: its parent agent, or null for the user (a root agent's)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "question": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text. The question"
+    },
+    "recommend": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text: render as plain text. The answer it recommends (options[0])"
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "x-untrusted": true,
+        "description": "Agent-written text: render as plain text, never markdown, links or actions"
+      },
+      "description": "Agent-written text: render as plain text. The answers it offers, the recommended one first",
+      "x-untrusted": true
+    },
+    "why": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "x-untrusted": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "holds": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "x-untrusted": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "questionId",
+    "to",
+    "question",
+    "recommend",
+    "options",
+    "why",
+    "holds"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.answered`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…)"
+    },
+    "by": {
+      "type": "string",
+      "description": "Who answered: an agent id (its parent or an ancestor), operator, client:<id> or driver (a person)"
+    },
+    "answer": {
+      "type": "string",
+      "x-untrusted": true,
+      "description": "Agent-written text (or a person's): render as plain text. The answer, as given"
+    },
+    "recommended": {
+      "type": "boolean",
+      "description": "Whether the answer was the one it recommended"
+    },
+    "note": {
+      "description": "Agent-written text: render as plain text, never markdown, links or actions",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "messageSeq": {
+      "type": "number",
+      "description": "The message (Message.seq) that carried the answer to the asker: it continues the same conversation"
+    },
+    "replaces": {
+      "description": "A person's answer replacing an agent's (the user's answer wins): who answered before; null otherwise",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "questionId",
+    "by",
+    "answer",
+    "recommended",
+    "note",
+    "messageSeq",
+    "replaces"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.question_passed`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…)"
+    },
+    "from": {
+      "type": "string",
+      "description": "The agent it was asked of, which couldn't decide (`capcomd answer --up`)"
+    },
+    "to": {
+      "description": "Who it is asked of now: that agent's parent, or null for the user",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "questionId",
+    "from",
+    "to"
+  ],
+  "additionalProperties": {}
+}
+```
+
+## `agent.question_withdrawn`
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "questionId": {
+      "type": "string",
+      "description": "The question (qst-…)"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "cancelled"
+      ],
+      "description": "cancelled: the agent that asked was cancelled. More may be added"
+    }
+  },
+  "required": [
+    "questionId",
     "reason"
   ],
   "additionalProperties": {}
@@ -2623,8 +2827,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "egress",
         "secret",
         "spawn_widen",
-        "custom"
-      ]
+        "custom",
+        "question"
+      ],
+      "description": "question: capability agents.ask, an agent asked and stopped until it is answered"
     },
     "question": {
       "type": "string",
@@ -2763,10 +2969,70 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
             "plugin",
             "reason"
           ]
+        },
+        "questionId": {
+          "description": "question: the question (qst-…), as agent.asked carries it",
+          "type": "string"
+        },
+        "options": {
+          "description": "question: the answers it offers, the recommended one first (a client numbers them 1…n with keys, tags the recommended one, and adds its own \"Something else…\" for a free answer)",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "recommended": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "label",
+              "recommended"
+            ]
+          }
+        },
+        "recommend": {
+          "description": "question: the answer it recommends (options[0])",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "why": {
+          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "holds": {
+          "description": "Agent-written text: render as plain text, never markdown, links or actions",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "to": {
+          "description": "question: who it is asked of: an agent (its parent, or an ancestor it was passed up to) or null for the user. The user can answer it either way, and a person's answer wins",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "passedBy": {
+          "description": "question: the agents that passed it up because they couldn't decide, in order",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": {},
-      "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+      "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}, question {questionId, options, recommend, why, holds, to, passedBy}"
     },
     "expiresAt": {
       "type": [
@@ -2812,7 +3078,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2848,8 +3118,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "approved",
         "denied",
         "expired",
-        "withdrawn"
-      ]
+        "withdrawn",
+        "answered"
+      ],
+      "description": "answered: capability agents.ask, a question's answer was given"
     },
     "decidedBy": {
       "type": [
@@ -2892,6 +3164,15 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
       "x-untrusted": true,
       "description": "Agent-written text: render as plain text, never markdown, links or actions. Untrusted because an ancestor agent may decide approvals within its budget cap (decision 7)."
     },
+    "answer": {
+      "description": "Capability agents.ask, a question's: the answer given (`reason` is then the answerer's note)",
+      "type": "string",
+      "x-untrusted": true
+    },
+    "recommended": {
+      "description": "Capability agents.ask, a question's: whether the answer was the one the asker recommended",
+      "type": "boolean"
+    },
     "cause": {
       "type": "string",
       "enum": [
@@ -2922,7 +3203,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     }
@@ -2975,7 +3260,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3040,7 +3329,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3105,7 +3398,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3170,7 +3467,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3235,7 +3536,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3300,7 +3605,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -3365,7 +3674,11 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         "wake_cancelled",
         "continued",
         "archived",
-        "restored"
+        "restored",
+        "asked",
+        "answered",
+        "passed_up",
+        "withdrawn"
       ],
       "description": "Why the state changed (trusted, machine-readable). Treat a cause you don't know as a change for a reason you don't know"
     },
@@ -4382,7 +4695,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
 
 # Lifecycle feed
 
-Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, run.archived, run.restored, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, agent.wake_armed, agent.woken, agent.wake_cancelled, agent.continued, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
+Lifecycle feed: only run and agent state changes, and what the run and its agents are called (run.created, run.started, run.paused, run.resumed, run.completed, run.failed, run.cancelled, run.deleted, run.goal_completed, run.pr_opened, run.branch_kept, run.titled, run.archived, run.restored, agent.spawned, agent.titled, agent.started, agent.paused, agent.resumed, agent.done, agent.failed, agent.cancelled, agent.reaped, agent.wake_armed, agent.woken, agent.wake_cancelled, agent.continued, agent.asked, agent.answered, agent.question_passed, agent.question_withdrawn, approval.requested, approval.decided). Tool calls and messages are not here; they stay in step and thread events.
 Each event carries a trusted `data.cause` code and the envelope's trusted `text`; `seq` is the source event's seq (a run.* event shares the seq of the agent event that caused it, sent right after it), so Last-Event-ID resume works the same.
 Activity is not a state change, so it is not in this feed by default: a stream client opts in with `?activity=1` (Agent activity, below).
 
@@ -5171,6 +5484,89 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "by",
               "from"
             ]
+          },
+          "asked": {
+            "description": "Capability agents.ask (ADR-026 §4). The question it asked and stopped on, until it is answered: it is **asked** (show it so wherever its status shows, as a quiet state when it is asked of an agent, as needing you when asked of the user). Its turn ended (its status is done once its attempt ended, which a client shows as asked, not idle), so it holds no machine; a message to it is its answer and continues it. null when it has no open question. Older daemons don't send it",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "questionId": {
+                "type": "string",
+                "description": "The question (qst-…)"
+              },
+              "approvalId": {
+                "type": "string",
+                "pattern": "^apr-[A-Za-z0-9]+$",
+                "description": "Its approval (kind question): answer it there, or with a message to the agent"
+              },
+              "question": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: render as plain text, never markdown, links or actions"
+              },
+              "recommend": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "The answer it recommends (options[0])"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-untrusted": true,
+                  "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                },
+                "description": "The answers it offers, the recommended one first"
+              },
+              "why": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "holds": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "to": {
+                "description": "Who it is asked of: an agent (its parent, or an ancestor it was passed up to), or null for the user",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+                  },
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                  }
+                ],
+                "description": "When it asked"
+              }
+            },
+            "required": [
+              "questionId",
+              "approvalId",
+              "question",
+              "recommend",
+              "options",
+              "why",
+              "holds",
+              "to",
+              "at"
+            ]
           }
         },
         "required": [
@@ -5226,8 +5622,10 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "egress",
               "secret",
               "spawn_widen",
-              "custom"
-            ]
+              "custom",
+              "question"
+            ],
+            "description": "question: capability agents.ask, an agent asked and stopped until it is answered"
           },
           "status": {
             "type": "string",
@@ -5236,8 +5634,10 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               "approved",
               "denied",
               "expired",
-              "withdrawn"
-            ]
+              "withdrawn",
+              "answered"
+            ],
+            "description": "answered: capability agents.ask, a question's answer was given"
           },
           "question": {
             "type": "string",
@@ -5376,10 +5776,70 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
                   "plugin",
                   "reason"
                 ]
+              },
+              "questionId": {
+                "description": "question: the question (qst-…), as agent.asked carries it",
+                "type": "string"
+              },
+              "options": {
+                "description": "question: the answers it offers, the recommended one first (a client numbers them 1…n with keys, tags the recommended one, and adds its own \"Something else…\" for a free answer)",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "x-untrusted": true,
+                      "description": "Agent-written text: render as plain text, never markdown, links or actions"
+                    },
+                    "recommended": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "recommended"
+                  ]
+                }
+              },
+              "recommend": {
+                "description": "question: the answer it recommends (options[0])",
+                "type": "string",
+                "x-untrusted": true
+              },
+              "why": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "holds": {
+                "description": "Agent-written text: render as plain text, never markdown, links or actions",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-untrusted": true
+              },
+              "to": {
+                "description": "question: who it is asked of: an agent (its parent, or an ancestor it was passed up to) or null for the user. The user can answer it either way, and a person's answer wins",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "passedBy": {
+                "description": "question: the agents that passed it up because they couldn't decide, in order",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "additionalProperties": {},
-            "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}"
+            "description": "Kind-specific detail: merge {target, ref, files, filesTotal, added, removed}, budget {add}, egress {host}, secret {name}, spawn_widen {limits}, question {questionId, options, recommend, why, holds, to, passedBy}"
           },
           "requestedAt": {
             "description": "When it was asked (a merge: when it was parked); absent on daemons that predate it",
