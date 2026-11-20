@@ -2,7 +2,7 @@
 // run saves its CLI session into the daemon's state (`<CAPCOMD_HOME>/state/sessions/<run>/<agent>/`, gzipped, 0600)
 // as it runs, and restoreSession puts it back on a fresh machine where Claude Code looks for it from the new checkout.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Engine } from "../helpers/test-engine";
@@ -80,7 +80,7 @@ test("an agent's session is saved into the daemon's state as it runs, and restor
   expect(statSync(host).mode & 0o777).toBe(0o700);
   expect(statSync(join(host, "ref.json")).mode & 0o777).toBe(0o600);
   const ref = await latestSession(run, id);
-  const vm = join(dir, "vm", readdirSync(join(dir, "vm")).find((d) => d.includes("e1"))!);
+  const vm = join(dir, "vm", id);
   const argv = readFileSync(join(vm, "argv.txt"), "utf8").split("\n");
   expect(ref).toMatchObject({ cli: "claude", sessionId: argv[argv.indexOf("--session-id") + 1], file: `${argv[argv.indexOf("--session-id") + 1]}.jsonl` });
   const text = new TextDecoder().decode((await readSession(run, id))!.file);

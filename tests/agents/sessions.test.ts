@@ -57,7 +57,7 @@ describe("durable sessions (fake CLIs, fake-host)", () => {
     const task = { runId: "run-sess1", agentId: "agt-sess1", taskId: "task-1", epoch: 1, branch: taskBranch("run-sess1", "task-1"), target: "main", repoUrl: r.bare, goal: "fix it [session-folder] [session-secret]" };
     const res = await runAgent(claudeAdapter, a.provider, a.id, task, a.cfg, { apiKey: KEY });
     expect(res.stopReason).toBe("success");
-    const argv = readFileSync(join(a.workdir, "task-1-e1", "argv.txt"), "utf8").split("\n");
+    const argv = readFileSync(join(a.workdir, "agt-sess1", "argv.txt"), "utf8").split("\n");
     const sid = argv[argv.indexOf("--session-id") + 1]!;
     expect(sid).toMatch(/^[0-9a-f-]{36}$/);
 
@@ -77,7 +77,7 @@ describe("durable sessions (fake CLIs, fake-host)", () => {
     expect(text).not.toContain("plain-token-value");
     expect(saved.folder.map((f) => f.path)).toEqual(["subagents/agent-a1.jsonl"]);
     // The VM's own file kept the secret (the agent read it); only the saved copy is redacted.
-    const vmFile = join(a.home, ".claude", "projects", claudeProjectSlug(join(a.workdir, "task-1-e1", "repo")), `${sid}.jsonl`);
+    const vmFile = join(a.home, ".claude", "projects", claudeProjectSlug(join(a.workdir, "agt-sess1", "repo")), `${sid}.jsonl`);
     expect(readFileSync(vmFile, "utf8")).toContain(KEY);
     // And the replica got everything, sealed.
     await replicaIdle();
@@ -85,7 +85,7 @@ describe("durable sessions (fake CLIs, fake-host)", () => {
 
     // A fresh machine, another work folder: restored where Claude Code looks for it from the new checkout.
     const b = await machine("claude");
-    const cwd = join(b.workdir, "task-1-e2", "repo");
+    const cwd = join(b.workdir, "agt-sess1", "repo");
     const back = await restoreSession({ runId: "run-sess1", agentId: "agt-sess1", provider: b.provider, machineId: b.id, home: b.home, cwd });
     expect(back).toEqual({ sessionId: sid, cli: "claude" });
     const placed = join(b.home, ".claude", "projects", claudeProjectSlug(cwd), `${sid}.jsonl`);
@@ -95,10 +95,10 @@ describe("durable sessions (fake CLIs, fake-host)", () => {
     // The next attempt continues it: --resume, the history there, and what it adds saved after what was.
     const res2 = await runAgent(claudeAdapter, b.provider, b.id, { ...task, epoch: 2, goal: "carry on", resumeSession: sid }, b.cfg, { apiKey: KEY });
     expect(res2.stopReason).toBe("success");
-    const argv2 = readFileSync(join(b.workdir, "task-1-e2", "argv.txt"), "utf8").split("\n");
+    const argv2 = readFileSync(join(b.workdir, "agt-sess1", "argv.txt"), "utf8").split("\n");
     expect(argv2[argv2.indexOf("--resume") + 1]).toBe(sid);
     expect(argv2).not.toContain("--session-id");
-    const resumed = readFileSync(join(b.workdir, "task-1-e2", "resumed.txt"), "utf8");
+    const resumed = readFileSync(join(b.workdir, "agt-sess1", "resumed.txt"), "utf8");
     expect(resumed).toContain(`lines=${text.split("\n").filter(Boolean).length}`);
     expect(resumed).toContain("fix it [session-folder]");
     const after = (await readSession("run-sess1", "agt-sess1"))!;
@@ -135,16 +135,16 @@ describe("durable sessions (fake CLIs, fake-host)", () => {
     expect(ref.file).toMatch(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T[\\d-]+-${ref.sessionId}\\.jsonl$`));
 
     const b = await machine("codex");
-    const back = await restoreSession({ runId: "run-sess3", agentId: "agt-sess3", provider: b.provider, machineId: b.id, home: b.home, cwd: join(b.workdir, "task-1-e2", "repo") });
+    const back = await restoreSession({ runId: "run-sess3", agentId: "agt-sess3", provider: b.provider, machineId: b.id, home: b.home, cwd: join(b.workdir, "agt-sess3", "repo") });
     expect(back).toEqual({ sessionId: ref.sessionId, cli: "codex" });
     expect(existsSync(join(b.home, ".codex", "sessions", codexRolloutDay(ref.file), ref.file))).toBe(true);
 
     await runAgent(codexAdapter, b.provider, b.id, { ...task, epoch: 2, goal: "carry on", resumeSession: ref.sessionId }, b.cfg, { apiKey: "sk-proj-SESSIONKEY-0123456789abcdefghijklmnop" });
-    const argv = readFileSync(join(b.workdir, "task-1-e2", "argv.txt"), "utf8").split("\n");
+    const argv = readFileSync(join(b.workdir, "agt-sess3", "argv.txt"), "utf8").split("\n");
     expect(argv[argv.indexOf("resume") + 1]).toBe(ref.sessionId);
     expect(argv[argv.indexOf("resume") + 2]).toStartWith("You are working");
     expect(argv.join("\n")).toContain("Task: carry on");
-    expect(readFileSync(join(b.workdir, "task-1-e2", "resumed.txt"), "utf8")).toContain("lines=3");
+    expect(readFileSync(join(b.workdir, "agt-sess3", "resumed.txt"), "utf8")).toContain("lines=3");
     const all = new TextDecoder().decode((await readSession("run-sess3", "agt-sess3"))!.file);
     expect(all).toContain("make the failing test pass");
     expect(all).toContain("carry on");
