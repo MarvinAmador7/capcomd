@@ -98,7 +98,9 @@ its run when the median is over it; the frame budgets are information.
 - Splits and expand (SPEC §2.1; each rep starts from one pane with the sidebar open and ends with its panes on screen;
   the shortcuts go through the menu bar, and each step names the item that fired):
   `split-open` (⌘D, ⇧⌘D, ⌘W ×2, `cycles` 2), `split-focus` (⌃← ⌃← ⌃→ ⌃→, then real clicks in other panes), `split-burst`,
-  `pane-expand` (⇧⌘↩, then a real Esc, which the expanded pane's arrows-in takes, `toggles` 4), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
+  `pane-expand` (⇧⌘↩, then a real Esc, which the expanded pane's arrows-in takes, `toggles` 4; `scroll-kept` compares the
+  thread's rows in view, by entry id, before and after; each step expects the keyboard: in the expanded pane, then back
+  where it was before the expand), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
   Esc, which must give the keyboard back to the pane: `focus palette-esc`). Ink: every pane's thread, once its rows are
   in.
 - The Needs you reel (`needs-open`, `needs-answer`, `needs-arrive`, `needs-step` (⌘J through the menu bar), `needs-empty` (ends with
