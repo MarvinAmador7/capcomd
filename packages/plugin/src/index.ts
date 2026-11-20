@@ -5,6 +5,7 @@ export * from "./errors";
 export * from "./hooks";
 export * from "./context";
 export * from "./seams";
+export * from "./session-store";
 export * from "./context-layer";
 export * from "./protocol";
 export { connect, manifestHash, sessionOpen, type ConnectOptions } from "./client";

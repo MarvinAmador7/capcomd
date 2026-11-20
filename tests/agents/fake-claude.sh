@@ -28,15 +28,39 @@
 #   [linger] after its result (its turn ended), keep running ~6s before it exits, as a CLI still open for a next turn
 #   [commit] commit its edit locally (git commit), as an agent that commits its own work does
 #   [peek:REF] fetch REF (a ref outside refs/heads, e.g. a helper's checkpoint) and check it out detached, to read it
+#   [session-folder] (with --session-id) also write a subagent's file in the session's <id>/ folder, as long sessions have
+#   [session-secret] (with --session-id) its session file holds its API key in a tool result, and a "token" field
 # With --input-format stream-json (the supervisor feeds it), the prompt is the first stdin message, and after its
 # result it answers further messages until stdin closes, as claude does.
-prompt=""; stream=0; args=("$@")
+# Sessions (ADR-026 §2), as claude 2.1.303 keeps them: --session-id ID writes $HOME/.claude/projects/<slug of $PWD>/ID.jsonl
+# (a line per message); --resume ID appends to that file in this directory's project folder, after writing how many
+# lines it found and its first user message to ../resumed.txt, or fails (exit 1, "No conversation found …") without it.
+prompt=""; stream=0; args=("$@"); sid=""; resume=""
 while [ $# -gt 0 ]; do case "$1" in
   -p) case "${2:-}" in -*|"") shift;; *) prompt="$2"; shift 2;; esac;;
   --input-format) [ "${2:-}" = stream-json ] && stream=1; shift 2;;
+  --session-id) sid="$2"; shift 2;;
+  --resume) resume="$2"; sid="$2"; shift 2;;
   *) shift;; esac; done
 text_of() { node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).message.content))}catch{}})'; }
+sfile=""
+if [ -n "$sid" ]; then
+  sdir="$HOME/.claude/projects/$(printf '%s' "$PWD" | sed 's/[^a-zA-Z0-9]/-/g')"; sfile="$sdir/$sid.jsonl"
+  if [ -n "$resume" ]; then
+    if [ ! -f "$sfile" ]; then echo "No conversation found with session ID: $resume" >&2; exit 1; fi
+    { echo "lines=$(wc -l < "$sfile" | tr -d ' ')"; head -1 "$sfile"; } > ../resumed.txt
+  else mkdir -p "$sdir"; : > "$sfile"; fi
+fi
 if [ "$stream" = 1 ]; then IFS= read -r first; prompt=$(printf '%s' "$first" | text_of); fi
+if [ -n "$sfile" ]; then
+  printf '{"type":"user","sessionId":"%s","cwd":"%s","message":{"role":"user","content":%s}}\n' "$sid" "$PWD" "$(printf '%s' "$prompt" | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>process.stdout.write(JSON.stringify(s)))')" >> "$sfile"
+  case "$prompt" in *"[session-secret]"*)
+    printf '{"type":"user","sessionId":"%s","toolUseResult":{"stdout":"the key is %s"},"auth":{"token":"plain-token-value"}}\n' "$sid" "$ANTHROPIC_API_KEY" >> "$sfile";;
+  esac
+  case "$prompt" in *"[session-folder]"*)
+    mkdir -p "$sdir/$sid/subagents" && printf '{"type":"assistant","message":{"content":"a subagent"}}\n' > "$sdir/$sid/subagents/agent-a1.jsonl";;
+  esac
+fi
 printf '%s' "$prompt" > ../prompt-seen.txt
 { printf '%s\n' "${args[@]}"; [ -n "$ANTHROPIC_API_KEY" ] && echo "KEY_PRESENT"; } > ../argv.txt
 printf '%s' "$ANTHROPIC_API_KEY" > ../keyseen.txt
@@ -44,7 +68,7 @@ printf '%s' "$ANTHROPIC_API_KEY" > ../keyseen.txt
 env | grep '^PLUGIN_' | sort > ../plugin-env.txt
 echo "oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} apikey=${ANTHROPIC_API_KEY:+set}" > ../authseen.txt
 emit() { printf '%s\n' "$1"; }
-emit '{"type":"system","subtype":"init","session_id":"s1","tools":["Read","Edit"],"model":"fake"}'
+emit "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"${sid:-s1}\",\"tools\":[\"Read\",\"Edit\"],\"model\":\"fake\"}"
 case "$prompt" in *"[leak]"*)
   emit "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"my key is $ANTHROPIC_API_KEY\"}]}}"
   echo "stderr leak $ANTHROPIC_API_KEY" >&2;;
@@ -214,6 +238,7 @@ case "$prompt" in *"[peek:"*)
   git fetch -q origin "$ref" >/dev/null 2>&1 && git checkout -q --detach FETCH_HEAD >/dev/null 2>&1;;
 esac
 case "$prompt" in *"[commit]"*) git add -A >/dev/null 2>&1 && git -c user.name=fake -c user.email=fake@x commit -qm "fake commit" >/dev/null 2>&1;; esac
+[ -n "$sfile" ] && printf '{"type":"assistant","sessionId":"%s","message":{"role":"assistant","content":"%s"}}\n' "$sid" "$result" >> "$sfile"
 emit "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":3,\"total_cost_usd\":0.123,\"result\":\"$result\"}"
 case "$prompt" in *"[hold:"*) echo finished >> ../hold.log;; esac
 case "$prompt" in *"[linger]"*) sleep 6;; esac
@@ -221,6 +246,7 @@ case "$prompt" in *"[linger]"*) sleep 6;; esac
 if [ "$stream" = 1 ]; then
   while IFS= read -r line; do
     printf '%s\n' "$line" | text_of >> messages.txt; printf '\n' >> messages.txt
+    [ -n "$sfile" ] && printf '%s\n' "$line" >> "$sfile"
     emit '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0,"result":"answered"}'
   done
 fi

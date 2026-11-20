@@ -1227,6 +1227,23 @@ when the operator set them (`CAPCOMD_<PROVIDER>_USD_PER_MTOK_IN` and `_OUT`, bot
 ADR-024's `harness.provider` becomes "an active agent seam's name"; `claude`, `codex` and `fx` are the built-ins
 (`agent-claude`, `agent-codex`, `agent-fx`: `src/plugins/agent-claude.ts`, `agent-codex.ts`, `agent-fx.ts`).
 
+**Sessions** (ADR-026 §2, additive): a provider whose CLI's sessions can be continued on another machine has
+`session` (`AgentSession`, `packages/plugin/src/seams.ts`; every method pure): `firstRunArgs(id)` (Claude Code
+`--session-id <id>`; `[]` for a CLI that names its own, which then sets `AgentRunState.sessionId` from `parse`, as codex
+does from `thread.started`), `resumeArgs(id)` (`--resume <id>`; codex's `resume <id>` subcommand), `detectMissing(output)`
+(the CLI couldn't find the session it was to continue), `locate({home, cwd, id}, q)` (a shell line printing the session
+file's path in the machine) and `place({home, cwd, id, file})` (where a saved file goes for a new working directory, and
+its companion folder). `command`'s `AgentCommandCtx.session` (additive) is `{id, resume}`: a new session under `id`, or
+`id` continued with the prompt as its next user turn; a provider puts its own args in its command line. The kernel's
+runner keeps the file as it grows (`src/agents/session-sync.ts`: by byte offset, every string through the redactor,
+gzipped, into the session stores) for an agent of a run (not a reviewer), and a resumed run whose CLI reports the session
+missing fails as `SessionMissingError` (kind `failed`). A provider without `session` keeps none: a woken agent on it
+starts a fresh session from its thread (fx's ACP bridge: `session/load` isn't used yet). The session stores are a seam
+of their own, `SessionStore` (`packages/plugin/src/session-store.ts`: `describe`, `available`, `put`, `get`, `list`,
+`delete` by `<run>/<agent>/…` key): the built-in `host` store is the source of truth, and one replica at most
+(`sessions.replica` in the user config: `icloud-drive`, encrypting before it writes) gets a copy of every object.
+Plugins can't register a store yet (`ctx.sessions` comes with the next store, an S3-compatible one).
+
 **Variable families** (the owner's decision of 2026-11-10): every agent provider declares its own environment variable
 families, so capcomd no longer keeps a hand-written list of them. `describe().envPrefixes` (optional, additive; absent:
 none) lists the name prefixes where the provider's CLI reads its credential, its login and its settings, each once and

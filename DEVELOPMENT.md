@@ -36,6 +36,16 @@ before, `rivet-v2/` (what it left, set aside on the first 3.x start: docs/durabi
 Nothing reads or writes `~/.rivetkit`. When you run a daemon by hand, give it `CAPCOMD_ENGINE_DATA` and its own
 `--port`/`CAPCOMD_ENDPOINT`; `capcomd serve` on 6420 with no override is the user's real data.
 
+Agents' CLI sessions (ADR-026 §2, `src/sessions/`) are kept in the state folder (`.relay/` in a checkout,
+`~/.capcomd/state/` otherwise), never in the engine's data or in git: `sessions/<run>/<agent>/ref.json` (the latest
+saved session: its CLI, id, file name and size) and `<session id>/file/000001.gz …` (the session file, redacted, a gzip
+member per segment) with `<session id>/folder/…` (Claude Code's `<id>/` folder), folders 0700 and files 0600. They
+go with the run (`deleteRunSessions`). With `sessions.replica: "icloud-drive"` in the user config (or
+`CAPCOMD_SESSIONS_REPLICA`; `none` turns it off), every object is also written, sealed with AES-256-GCM, to
+`~/Library/Mobile Documents/com~apple~CloudDocs/capcomd/sessions/<key>.ccs`, under the key in
+`session-replica.key` (0600, beside `sessions/`): copy that file to read the replica on another Mac. Tests use their
+own folders through `useSessionStores` and never the real iCloud Drive.
+
 Persisted settings (`capcomd setup` writes them): `~/.capcomd/config.json` and the nearest `.capcomd/config.json` from
 the current directory are environment defaults, applied by `src/cli/apply-config.ts` before anything else loads
 (a real env var wins; the boxd key comes from the OS keychain). `bun test` preloads `tests/helpers/isolate-config.ts`

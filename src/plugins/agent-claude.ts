@@ -2,7 +2,7 @@
 // src/agents/adapters.ts claudeAdapter and the claude rows of the PROVIDER_* tables; the kernel's runner reads it
 // through the seam (src/plugins/agents.ts).
 import { definePlugin } from "../../packages/plugin/src/context";
-import type { AgentEvent, AgentProvider, AgentRunState } from "../../packages/plugin/src/seams";
+import type { AgentEvent, AgentProvider, AgentRunState, AgentSession } from "../../packages/plugin/src/seams";
 import { agentManifest, classifyAgentError, contentText, ORCHESTRATE_DENIED_COMMANDS, ORCHESTRATE_READ_COMMANDS, ORCHESTRATE_READ_EXACT, parseJson, toolCall } from "./agent-common";
 
 /** Pinned version, installed only when the VM image/snapshot does not already have the CLI. */
@@ -75,6 +75,32 @@ const DESCRIPTION = {
   toolPolicies: { orchestrate: { allowed: ORCHESTRATE_ALLOWED, disallowed: ORCHESTRATE_DISALLOWED } },
 };
 
+/**
+ * Claude Code's folder under `~/.claude/projects/` for a working directory (2.1.303): every character but a letter or a
+ * digit as "-" (`/vm/agt-1/repo` → `-vm-agt-1-repo`). Claude Code cuts a name over 200 characters and adds a hash of the
+ * path; capcomd's checkout paths are far shorter.
+ */
+export const claudeProjectSlug = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
+
+/**
+ * ADR-026 §2: Claude Code keeps a session as `<home>/.claude/projects/<slug of cwd>/<id>.jsonl`, with a folder `<id>/`
+ * beside it once it has subagents or large tool results. `--session-id <uuid>` makes a new one under capcomd's id;
+ * `--resume <id>` continues it (also with `--input-format stream-json`, from another working directory, on another
+ * machine: proven with 2.1.303 on 2026-11-19), its system prompt as it was at the first run. An id it can't find:
+ * exit 1, "No conversation found with session ID: <id>".
+ */
+export const CLAUDE_SESSION: AgentSession = {
+  firstRunArgs: (id) => ["--session-id", id],
+  resumeArgs: (id) => ["--resume", id],
+  detectMissing: (out) => /No conversation found/i.test(out),
+  // By its id (a uuid), wherever its project folder is: the slug rule is Claude Code's to change.
+  locate: ({ home, id }, q) => `find ${q(`${home}/.claude/projects`)} -maxdepth 2 -type f -name ${q(`${id}.jsonl`)} 2>/dev/null | head -n 1`,
+  place: ({ home, cwd, id, file }) => {
+    const dir = `${home}/.claude/projects/${claudeProjectSlug(cwd)}`;
+    return { path: `${dir}/${file}`, folder: `${dir}/${id}` };
+  },
+};
+
 /** Claude Code `--output-format stream-json`: system/assistant/user/result events. */
 export const claude: AgentProvider = {
   describe: () => ({ ...DESCRIPTION, envPrefixes: [...DESCRIPTION.envPrefixes], efforts: [...DESCRIPTION.efforts], loginEgress: [...DESCRIPTION.loginEgress], toolPolicies: { orchestrate: { allowed: [...DESCRIPTION.toolPolicies.orchestrate.allowed], disallowed: [...DESCRIPTION.toolPolicies.orchestrate.disallowed] } } }),
@@ -100,6 +126,8 @@ export const claude: AgentProvider = {
     (ctx.appendSystemFile ? ` --append-system-prompt "$(cat ${q(ctx.appendSystemFile)})"` : "") +
     // The profile's MCP servers' file holds capcomd's own too (ctx.mcp.config); else capcomd's alone.
     (ctx.mcp || ctx.capcomd ? ` --mcp-config ${q(ctx.mcp?.config ?? ctx.capcomd!.mcpConfig)}` : "") +
+    // ADR-026 §2: a new session under capcomd's id, or the saved one continued.
+    (ctx.session ? ` ${(ctx.session.resume ? CLAUDE_SESSION.resumeArgs : CLAUDE_SESSION.firstRunArgs)(ctx.session.id).map(q).join(" ")}` : "") +
     ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)}${ctx.stdinPrompt ? "" : " < /dev/null"}`,
   parse(line, redact, run) {
     const state = run as ClaudeState;
@@ -108,6 +136,7 @@ export const claude: AgentProvider = {
     const ev: AgentEvent = { type: String(raw.type ?? "unknown"), raw };
     if (raw.subtype) ev.subtype = String(raw.subtype);
     if (ev.type === "system" && raw.subtype === "init" && typeof raw.model === "string") state.model = raw.model;
+    if (ev.type === "system" && raw.subtype === "init" && typeof raw.session_id === "string") state.sessionId = raw.session_id;
     const content = raw.message?.content;
     if (Array.isArray(content)) {
       const tool = content.find((c: any) => c?.type === "tool_use");
@@ -180,6 +209,7 @@ export const claude: AgentProvider = {
     if (exitCode !== 0 || !state.done || state.error) return { ok: false, stopReason: state.stopReason ?? `exit_${exitCode}` };
     return { ok: true, stopReason: state.stopReason ?? "success" };
   },
+  session: CLAUDE_SESSION,
 };
 
 export const manifest = agentManifest("agent-claude", "claude", "Claude Code as an agent provider: runs the claude CLI headless in the agent's sandbox and reads its stream-json events.");

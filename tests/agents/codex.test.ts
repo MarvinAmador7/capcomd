@@ -35,7 +35,10 @@ describe("codex adapter (fake codex exec --json)", () => {
     const argv = readFileSync(join(s.W, "argv.txt"), "utf8").split("\n");
     expect(argv.slice(0, 2)).toEqual(["exec", "--json"]);
     // No restrictions by default: the VM is the boundary.
-    for (const f of ["--color", "never", "--ephemeral", "--sandbox", "danger-full-access", "-C", "-o"]) expect(argv).toContain(f);
+    for (const f of ["--color", "never", "--sandbox", "danger-full-access", "-C", "-o"]) expect(argv).toContain(f);
+    // ADR-026 §2: its session file is kept (what a woken agent continues from), and nothing to resume here.
+    expect(argv).not.toContain("--ephemeral");
+    expect(argv).not.toContain("resume");
     expect(argv).not.toContain("--full-auto");
     expect(argv).toContain("KEY_PRESENT");
     expect(res.turns).toBe(2); // command_execution + file_change

@@ -2,7 +2,7 @@
 // src/agents/adapters.ts codexAdapter and the codex rows of the PROVIDER_* tables; the kernel's runner reads it through
 // the seam (src/plugins/agents.ts).
 import { definePlugin } from "../../packages/plugin/src/context";
-import type { AgentEvent, AgentProvider, AgentRunState } from "../../packages/plugin/src/seams";
+import type { AgentEvent, AgentProvider, AgentRunState, AgentSession } from "../../packages/plugin/src/seams";
 import { agentManifest, classifyAgentError, ORCHESTRATE_DENIED_COMMANDS, parseJson, toolCall } from "./agent-common";
 
 /** Pinned version, installed only when the VM image/snapshot does not already have the CLI. */
@@ -62,6 +62,29 @@ export function codexDenyRules(denyCommands: readonly string[]): string {
 }
 const CODEX_RULES = '"${CODEX_HOME:-$HOME/.codex}/rules"';
 
+/** `rollout-2026-11-19T10-13-00-<id>.jsonl` → `2026/11/19`, the folder codex keeps it in; else today's (UTC). */
+export function codexRolloutDay(file: string, now = Date.now()): string {
+  const m = /^rollout-(\d{4})-(\d{2})-(\d{2})T/.exec(file);
+  if (m) return `${m[1]}/${m[2]}/${m[3]}`;
+  return new Date(now).toISOString().slice(0, 10).replace(/-/g, "/");
+}
+
+/**
+ * ADR-026 §2: codex keeps a session (a thread) as `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl` unless it
+ * runs `--ephemeral`, and names it itself: its id is `thread.started`'s `thread_id`. `codex exec … resume <id>
+ * "<prompt>"` continues it from that file alone, in a fresh CODEX_HOME and another working directory (0.169, against a
+ * mock model, 2026-11-19), as long as the file keeps its name. An id it can't find: exit 1, "no rollout found for
+ * thread id <id>".
+ */
+export const CODEX_SESSION: AgentSession = {
+  firstRunArgs: () => [],
+  resumeArgs: (id) => ["resume", id],
+  detectMissing: (out) => /no rollout found|thread\/resume failed/i.test(out),
+  // CODEX_HOME is <home>/.codex either way: the plan login's prelude sets it so, and it is codex's default under HOME.
+  locate: ({ home, id }, q) => `find ${q(`${home}/.codex/sessions`)} -type f -name ${q(`rollout-*-${id}.jsonl`)} 2>/dev/null | head -n 1`,
+  place: ({ home, file }) => ({ path: `${home}/.codex/sessions/${codexRolloutDay(file)}/${file}` }),
+};
+
 /**
  * Codex `codex exec --json` (JSONL: thread.started, turn.started, turn.completed{usage}, turn.failed,
  * item.started/updated/completed, error). Source: https://developers.openai.com/codex/noninteractive
@@ -86,7 +109,8 @@ export const codex: AgentProvider = {
     (ctx.cfg.denyCommands?.length ? `mkdir -p ${CODEX_RULES} && printf '%s' ${q(codexDenyRules(ctx.cfg.denyCommands))} > ${CODEX_RULES}/capcomd-orchestrate.rules && ` : "") +
     // allow_login_shell=false: codex runs its commands as `bash -c`, not `bash -lc`, whose /etc/profile (Debian's, in the
     // Docker env image) resets PATH, so the agent's own tools (node, bun, capcomd) were "command not found".
-    `${q(ctx.bin)} exec --json --color never --ephemeral --sandbox ${ctx.cfg.sandbox ?? "danger-full-access"} -C ${q(ctx.repo)} -c allow_login_shell=false` +
+    // Not --ephemeral (ADR-026 §2): its session file is what a woken agent continues from.
+    `${q(ctx.bin)} exec --json --color never --sandbox ${ctx.cfg.sandbox ?? "danger-full-access"} -C ${q(ctx.repo)} -c allow_login_shell=false` +
     (ctx.cfg.model ? ` -m ${q(ctx.cfg.model)}` : "") +
     (ctx.cfg.effort ? ` -c ${q(`model_reasoning_effort="${ctx.cfg.effort}"`)}` : "") +
     // capcomd's tools are approved up front: `codex exec` asks for nothing (its approval policy is never), so a tool
@@ -96,13 +120,17 @@ export const codex: AgentProvider = {
     // approved up front like capcomd's, an untrusted one's left to codex's own approval rules.
     (ctx.mcp?.servers ?? []).map((s) => ` -c ${q(`mcp_servers.${s.name}.command=${JSON.stringify(s.command[0])}`)} -c ${q(`mcp_servers.${s.name}.args=${JSON.stringify(s.command.slice(1))}`)}` +
       (s.trust === "trusted" ? ` -c ${q(`mcp_servers.${s.name}.default_tools_approval_mode="approve"`)}` : "")).join("") +
-    ` -o ${q(`${ctx.dir}/last-message.txt`)} "$(cat ${q(ctx.promptFile)})"` +
+    ` -o ${q(`${ctx.dir}/last-message.txt`)}` +
+    // The saved session continued (`exec … resume <id> "<prompt>"`): the prompt is its next user turn.
+    (ctx.session?.resume ? ` ${CODEX_SESSION.resumeArgs(ctx.session.id).map(q).join(" ")}` : "") +
+    ` "$(cat ${q(ctx.promptFile)})"` +
     ` > ${q(ctx.jsonl)} 2> ${q(ctx.errFile)} < /dev/null`,
   parse(line, redact, state, cfg) {
     const raw = parseJson(line, redact);
     if (!raw) return null;
     const type = String(raw.type ?? "unknown");
     const ev: AgentEvent = { type: type.replace(/\./g, "_"), raw };
+    if (type === "thread.started" && typeof raw.thread_id === "string") state.sessionId = raw.thread_id;
     const item = raw.item;
     if (item && typeof item === "object") {
       ev.subtype = String(item.type ?? "");
@@ -176,6 +204,7 @@ export const codex: AgentProvider = {
     const cmd = (shell ? shell[1]!.replace(/'\\''/g, "'") : m[1]!).replace(/\\"/g, '"');
     return { call: toolCall("command", redact(cmd)), reason: redact(m[2]!.replace(/\\"/g, '"')).slice(0, 500) };
   },
+  session: CODEX_SESSION,
 };
 
 export const manifest = agentManifest("agent-codex", "codex", "Codex as an agent provider: runs codex exec headless in the agent's sandbox and reads its JSON events.");
