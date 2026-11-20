@@ -117,6 +117,11 @@ export function builtinSandbox(o: BuiltinSandboxOptions): BuiltinSandboxSeam {
     probe: (id, c) => run("probe", c, (x) => x.probe ? x.probe(id) : unsupported("probe")),
   };
   if (o.sweep && d.caps.idleLifetime === "sweep") seam.sweep = (c) => run("sweep", c, async (x) => ({ deleted: await o.sweep!(x) }));
+  // ADR-026 §6: a place that parks machines (caps.hibernate memory or disk) has hibernate and wake on its seam.
+  if (d.caps.hibernate === "memory" || d.caps.hibernate === "disk") {
+    seam.hibernate = (id, c) => run("hibernate", c, (x) => x.hibernate ? x.hibernate(id) : unsupported("hibernate"));
+    seam.wake = (id, c) => run("wake", c, (x) => x.wake ? x.wake(id) : unsupported("wake"));
+  }
   return seam;
 }
 
@@ -192,5 +197,9 @@ export function kernelSandbox(seam: SandboxSeam, env: Env = process.env, secret?
   };
   if (seam.extendTtl) p.extendTtl = (id, seconds) => go("extendTtl", CALL_MS, (c) => seam.extendTtl!(id, seconds, c), id);
   if (seam.probe) p.probe = (id) => go("probe", 90_000, (c) => seam.probe!(id, c), id);
+  if (seam.hibernate && seam.wake) {
+    p.hibernate = (id) => go("hibernate", CALL_MS, (c) => seam.hibernate!(id, c), id);
+    p.wake = (id) => go("wake", CALL_MS, (c) => seam.wake!(id, c), id);
+  }
   return p;
 }

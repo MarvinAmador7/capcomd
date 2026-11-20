@@ -557,7 +557,7 @@ function sandboxFor(name: string, seam: SandboxSeam): SandboxSeam {
     });
     try { return await Promise.race([f(kernel), stopped]); } catch (e) { return sandboxError(e); } finally { off(); }
   };
-  const extra = <K extends "extendTtl" | "probe">(p: SandboxProvider, what: K): NonNullable<SandboxProvider[K]> => {
+  const extra = <K extends "extendTtl" | "probe" | "hibernate" | "wake">(p: SandboxProvider, what: K): NonNullable<SandboxProvider[K]> => {
     const f = p[what];
     if (!f) throw new PluginError("unsupported", `the ${name} sandbox has no ${what}`);
     return f.bind(p) as NonNullable<SandboxProvider[K]>;
@@ -581,6 +581,8 @@ function sandboxFor(name: string, seam: SandboxSeam): SandboxSeam {
     list: (prefix, c) => go(c, (p) => p.list(prefix)),
     ...(seam.extendTtl ? { extendTtl: (id: string, seconds: number, c: SeamCall) => go(c, (p) => extra(p, "extendTtl")(id, seconds)) } : {}),
     ...(seam.probe ? { probe: (id: string | undefined, c: SeamCall) => go(c, (p) => extra(p, "probe")(id)) } : {}),
+    ...(seam.hibernate ? { hibernate: (id: string, c: SeamCall) => go(c, (p) => extra(p, "hibernate")(id)) } : {}),
+    ...(seam.wake ? { wake: (id: string, c: SeamCall) => go(c, (p) => extra(p, "wake")(id)) } : {}),
   };
   return Object.freeze(wrapped);
 }

@@ -27,11 +27,14 @@ export interface ProviderCaps {
   idleLifetime: "platform" | "sweep" | "none";
   /** An interactive shell into a live machine (`capcomd sandbox shell`). */
   shell: boolean;
+  /** ADR-026 §6: what a parked (hibernated) machine keeps (memory, disk), or none (absent: none). */
+  hibernate?: "memory" | "disk" | "none";
 }
 
 /** Setting rows a provider's details screen can show (GET /v1/sandboxes/{name} `settings`). agentMemory: a place
- *  whose agents share one machine's memory (with agentSlots; src/providers/capacity.ts). */
-export const SETTING_IDS = ["idleLifetime", "agentMemory"] as const;
+ *  whose agents share one machine's memory (with agentSlots; src/providers/capacity.ts). parkedRetention: a place that
+ *  parks machines (`caps.hibernate`), how long a parked planner's machine is kept (ADR-026 §6). */
+export const SETTING_IDS = ["idleLifetime", "agentMemory", "parkedRetention"] as const;
 export type SettingId = (typeof SETTING_IDS)[number];
 /** Read-only info rows (GET /v1/sandboxes/{name} `info`). */
 export const INFO_IDS = ["logins", "checkpoints", "agentSlots"] as const;
@@ -106,6 +109,13 @@ export function sandboxName(source: Record<string, string | undefined> = process
 
 export function sandboxCaps(source: Record<string, string | undefined> = process.env): ProviderCaps {
   return PROVIDERS[sandboxName(source)].caps;
+}
+
+/** What a place keeps of a parked machine (ADR-026 §6): its descriptor's `caps.hibernate`, none when it doesn't say or
+ *  isn't known. */
+export function hibernateCap(name: string | null | undefined): "memory" | "disk" | "none" {
+  const d = name ? descriptorOf(name) : null;
+  return (d?.caps as ProviderCaps | undefined)?.hibernate ?? "none";
 }
 
 /**

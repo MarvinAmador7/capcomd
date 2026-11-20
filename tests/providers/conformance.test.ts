@@ -46,6 +46,23 @@ for (const s of subjects) {
       await expect(p.exec(a.id, ["true"])).rejects.toBeInstanceOf(SandboxNotFoundError);
     }, 180_000);
 
+    test("ADR-026 §6: hibernate parks it (files kept, nothing running); wake, or ensure with its key, brings it back", async () => {
+      if (!p.hibernate || !p.wake) return;
+      const id = await box("park");
+      expect((await p.exec(id, ["sh", "-c", "echo kept > /tmp/park.txt"])).code).toBe(0);
+      await p.hibernate(id);
+      expect((await p.list("capcomd-conf-")).find((v) => v.id === id)?.state).not.toBe("running");
+      await p.wake(id);
+      await p.waitReady(id, 120_000);
+      expect((await p.exec(id, ["cat", "/tmp/park.txt"])).stdout).toBe("kept\n");
+      await p.hibernate(id);
+      expect(await p.ensure(spec("park"))).toEqual({ id, created: false });
+      await p.waitReady(id, 120_000);
+      expect((await p.exec(id, ["cat", "/tmp/park.txt"])).stdout).toBe("kept\n");
+      await p.destroy(id);
+      await expect(p.wake(id)).rejects.toBeInstanceOf(SandboxNotFoundError);
+    }, 180_000);
+
     test("exec: argv, exit code, stdout and stderr, env, cwd, and a timeout that kills the command", async () => {
       const id = await box("exec");
       expect(await p.exec(id, ["sh", "-c", "echo out; echo err >&2; exit 3"])).toEqual({ code: 3, stdout: "out\n", stderr: "err\n" });

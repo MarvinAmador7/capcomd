@@ -1161,6 +1161,7 @@ progress is cancelled (an `exec` is killed inside the machine), and the method r
 | `destroy(id, c)` | | idempotent: a gone machine resolves | |
 | `list(prefix, c)` | | machines whose name starts with `prefix` (`MACHINE_PREFIX`) | |
 | `extendTtl?`, `probe?` | | as today's optional methods | |
+| `hibernate?(id, c)`, `wake?(id, c)` | `caps.hibernate` is `memory` or `disk` | park a machine (it keeps its disk, and with `memory` its processes) and wake it again; the kernel parks a planner's machine when its turn ends (ADR-026 §6) | `not_found` (a gone machine can't be woken) |
 | `sweep?(c)` | `caps.idleLifetime === "sweep"` | deletes machines past their deadline; the kernel calls it every 5 min | |
 
 Conformance: the cases of `tests/providers/conformance.test.ts` (ADR-020 §3) on the seam, with `describe`,

@@ -45,6 +45,8 @@ export interface BoxdLike {
     setDeleteAfter?(id: string, seconds: number): Promise<unknown>;
     pause(id: string): Promise<unknown>;
     resume(id: string): Promise<unknown>;
+    /** Suspend to disk (memory written out, billed for disk only); `wake` restores it. Never `pause` for parking. */
+    hibernate(id: string): Promise<void>;
     wake(id: string): Promise<void>;
     files: {
       upload(id: string, path: string, data: Uint8Array): Promise<number>;
@@ -367,6 +369,32 @@ export class BoxdProvider implements SandboxProvider {
 
   async resume(id: VmId): Promise<void> {
     await this.client.machines.resume(id).catch((e) => { throw mapBoxdError(e, id, "resume"); });
+    this.startKeepalive(id);
+  }
+
+  /**
+   * ADR-026 §6: park the machine. boxd's `hibernate` writes its memory to disk and bills disk only (about 1/20 of
+   * `pause`, which keeps memory and bills like running: never used for this). The keepalive stops first, so nothing
+   * wakes it; its delete deadline is the caller's (extendTtl, boxd's setDeleteAfter fires while it is hibernated).
+   */
+  async hibernate(id: VmId): Promise<void> {
+    this.stopKeepalive(id);
+    const m = await this.tryGet(id);
+    if (!m || DEAD.has(m.status)) throw new SandboxNotFoundError(`VM ${id} not found`, id);
+    if (m.status === "hibernated") return;
+    await this.client.machines.hibernate(id).catch((e) => { throw mapBoxdError(e, id, "hibernate"); });
+  }
+
+  /** ADR-026 §5 path 2: wake a parked machine (a hibernated one; a suspended one is resumed), then keep it awake again. */
+  async wake(id: VmId): Promise<void> {
+    const m = await this.tryGet(id);
+    if (!m || DEAD.has(m.status)) throw new SandboxNotFoundError(`VM ${id} not found`, id);
+    if (ASLEEP.has(m.status)) {
+      try {
+        if (m.status === "hibernated") await this.client.machines.wake(id);
+        else await this.client.machines.resume(id);
+      } catch (err) { throw mapBoxdError(err, id, m.status === "hibernated" ? "wake" : "resume"); }
+    }
     this.startKeepalive(id);
   }
 

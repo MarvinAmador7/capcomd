@@ -34,6 +34,10 @@ export interface VmInfo {
   deleteAt?: number | null;
 }
 
+/** What a provider keeps of a machine it hibernates (ADR-026 §6, `caps.hibernate`): its memory too (`memory`), only its
+ *  disk (`disk`: files survive, processes don't), or it can't hibernate (`none`). */
+export type HibernateCap = "memory" | "disk" | "none";
+
 export interface SandboxProvider {
   ensure(spec: VmSpec): Promise<{ id: VmId; created: boolean }>;
   waitReady(id: VmId, timeoutMs: number): Promise<void>;
@@ -58,6 +62,11 @@ export interface SandboxProvider {
   list(prefix: string): Promise<VmInfo[]>;
   /** Move the VM's delete deadline to `seconds` from now (a lease the running work keeps renewing). */
   extendTtl?(id: VmId, seconds: number): Promise<void>;
+  /** ADR-026 §6: park the machine (boxd `hibernate`, never `pause`; Docker `docker stop`): it stops billing for its
+   *  compute and keeps its disk (`caps.hibernate`). Only a provider that can has it. */
+  hibernate?(id: VmId): Promise<void>;
+  /** ADR-026 §5 path 2: wake a parked machine. Rejects not_found when it is gone. */
+  wake?(id: VmId): Promise<void>;
   /** Resolves when the provider answers (about `id`, if given; "not found" is an answer too); rejects when it doesn't.
    *  Asked after an exec failed transiently, to tell an outage from a command that ran out of time. */
   probe?(id?: VmId): Promise<void>;

@@ -52,7 +52,7 @@ function withHostShims(env: Record<string, string>): Record<string, string> {
 interface FakeVm {
   id: VmId;
   name: string;
-  state: "creating" | "ready" | "suspended" | "destroyed";
+  state: "creating" | "ready" | "suspended" | "hibernated" | "destroyed";
   spec: VmSpec;
   files: Map<string, Uint8Array>;
   checkpoints: Map<string, any>;
@@ -84,6 +84,9 @@ export interface FakeProviderOptions {
   failEnsure?: "auth";
   /** Machine env every VM sees (exec env overrides it), e.g. simulated boxd secret placeholders. */
   vmEnv?: Record<string, string>;
+  /** ADR-026 §6: model a provider that parks machines (`hibernate`/`wake`, as boxd and Docker have). Off by default, so
+   *  agents on the fakes are destroyed when they end, as before (`CAPCOMD_FAKE_HIBERNATE=1` turns it on). */
+  hibernate?: boolean;
 }
 
 export class FakeProvider implements SandboxProvider {
@@ -100,7 +103,30 @@ export class FakeProvider implements SandboxProvider {
   public faults: FakeFault | null = null;
   /** Calls that failed by injection, by method. */
   public faulted: Record<string, number> = {};
-  constructor(readonly opts: FakeProviderOptions = {}) {}
+  /** Hibernate and wake calls made, in order (tests). */
+  public parkLog: Array<{ op: "hibernate" | "wake"; id: VmId }> = [];
+  /** ADR-026 §6: present only with `opts.hibernate` (the kernel parks machines only on a provider that has them). */
+  hibernate?: (id: VmId) => Promise<void>;
+  wake?: (id: VmId) => Promise<void>;
+  constructor(readonly opts: FakeProviderOptions = {}) {
+    if (opts.hibernate) {
+      // Like boxd's hibernate: the machine keeps its files, runs nothing (exec refuses) until woken.
+      this.hibernate = async (id) => {
+        this.fault("hibernate", id);
+        const vm = this.vms.get(id);
+        if (!vm || vm.state === "destroyed") throw new SandboxNotFoundError(`VM ${id} not found`, id);
+        this.parkLog.push({ op: "hibernate", id });
+        vm.state = "hibernated";
+      };
+      this.wake = async (id) => {
+        this.fault("wake", id);
+        const vm = this.vms.get(id);
+        if (!vm || vm.state === "destroyed") throw new SandboxNotFoundError(`VM ${id} not found`, id);
+        this.parkLog.push({ op: "wake", id });
+        if (vm.state === "hibernated" || vm.state === "suspended") vm.state = "ready";
+      };
+    }
+  }
 
   private fault(op: string, id?: VmId): void {
     let f = this.faults;
@@ -180,6 +206,8 @@ export class FakeProvider implements SandboxProvider {
     );
 
     if (existing) {
+      // A parked machine is woken by an ensure with its key, as boxd's and Docker's are.
+      if (existing.state === "hibernated") existing.state = "ready";
       return { id: existing.id, created: false };
     }
 

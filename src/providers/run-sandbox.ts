@@ -7,7 +7,7 @@
 // `capcomd_run_new`'s, a plugin's `runs.new` or `run.creating`), not taken from the project's or the user's config: an
 // explicit place beats every agent's profile `sandbox.provider` (ADR-024 §9, the owner's decision of 2026-11-08).
 import { isProviderName, sandboxName, type ProviderName } from "./registry";
-import { currentIdleLifetime, validLifetime } from "./settings";
+import { currentIdleLifetime, currentParkedRetention, validLifetime, validRetention } from "./settings";
 
 export const RUN_SANDBOX_KV = "_sandbox";
 type Env = Record<string, string | undefined>;
@@ -24,13 +24,13 @@ export function withSandbox(base: Env, name: string | null | undefined): Env {
 
 /** What `run new` records under `_sandbox`: the run's own place (when it has one) and its provider's settings as they
  *  were when the run started (ADR-021 §2: a run keeps the policy it started with). Old readers only look at `.name`. */
-export interface RunSandboxRecord { name: ProviderName | null; settings: { idleLifetime?: number }; explicit: boolean }
+export interface RunSandboxRecord { name: ProviderName | null; settings: { idleLifetime?: number; parkedRetention?: number }; explicit: boolean }
 
 // A run's sandbox never changes once recorded (before its first agent), so a read is cached; a failed read isn't.
 const known = new Map<string, RunSandboxRecord | null>();
 
 /** The `_sandbox` value `run new` writes: `{name?, explicit?, settings: {idleLifetime}}` (`explicit` only with a name). */
-export function runSandboxValue(name: string | null | undefined, settings: { idleLifetime: number }, explicit = false): Record<string, unknown> {
+export function runSandboxValue(name: string | null | undefined, settings: { idleLifetime?: number; parkedRetention?: number }, explicit = false): Record<string, unknown> {
   return { ...(name ? { name, ...(explicit ? { explicit: true } : {}) } : {}), settings: { ...settings } };
 }
 
@@ -41,7 +41,8 @@ export function parseRunSandbox(value: unknown): RunSandboxRecord | null {
   const name = typeof v.name === "string" && isProviderName(v.name) ? v.name : null;
   const s = v.settings && typeof v.settings === "object" ? (v.settings as Record<string, unknown>) : {};
   const life = validLifetime(s.idleLifetime);
-  return { name, settings: life !== null ? { idleLifetime: life } : {}, explicit: name !== null && v.explicit === true };
+  const retention = validRetention(s.parkedRetention);
+  return { name, settings: { ...(life !== null ? { idleLifetime: life } : {}), ...(retention !== null ? { parkedRetention: retention } : {}) }, explicit: name !== null && v.explicit === true };
 }
 
 /** The run's `_sandbox` record; null when it has none, undefined when the engine didn't answer (not cached). */
@@ -103,4 +104,18 @@ export async function agentSandboxEnv(runId: string | null | undefined, own: str
  *  (the run recorded only its own place's); else the run's (runIdleLifetime). */
 export async function agentIdleLifetime(runId: string | null | undefined, own: string | null | undefined, sandbox: string | null | undefined, env: Env = process.env): Promise<number> {
   return own ? currentIdleLifetime(own, { env }).seconds : runIdleLifetime(runId, sandbox, env);
+}
+
+/**
+ * ADR-026 §6: how long a parked machine of this agent is kept (seconds): on a sandbox of its profile's own, that place's
+ * current setting; else what `run new` recorded with its run, else (a run from before the setting) its place's current
+ * setting.
+ */
+export async function agentParkedRetention(runId: string | null | undefined, own: string | null | undefined, sandbox: string | null | undefined, env: Env = process.env): Promise<number> {
+  if (own) return currentParkedRetention(own, { env }).seconds;
+  const rec = await runSandboxRecord(runId);
+  if (rec?.settings.parkedRetention !== undefined) return rec.settings.parkedRetention;
+  let name = sandbox ?? null;
+  if (!name) { try { name = sandboxName(env); } catch { name = "fake"; } }
+  return currentParkedRetention(name, { env }).seconds;
 }

@@ -14,10 +14,11 @@ import { contributeRows, rowContributions } from "./sandbox-rows";
 
 export const DESCRIPTOR = {
   name: "docker", descriptorVersion: 1, label: "Local", kind: "local", vendor: "Docker", title: "Local · Docker", mark: "docker", listed: true,
-  caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true },
+  // hibernate disk: a parked container is stopped (`docker stop`), its files kept (ADR-026 §6).
+  caps: { isolation: "container", snapshots: true, hostBoundSecrets: false, egressAllowlist: false, interactive: true, idleLifetime: "sweep", shell: true, hibernate: "disk" },
   // agentMemory: how much of Docker's memory each agent gets; agentSlots: so how many run at once
-  // (src/providers/capacity.ts).
-  settings: ["idleLifetime", "agentMemory"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
+  // (src/providers/capacity.ts). parkedRetention: how long a parked planner's container is kept.
+  settings: ["idleLifetime", "agentMemory", "parkedRetention"], info: ["logins", "checkpoints", "agentSlots"], resourceKinds: ["machine"], actions: ["open_terminal", "delete"],
 } as const satisfies SandboxDescriptor;
 
 export const manifest = {

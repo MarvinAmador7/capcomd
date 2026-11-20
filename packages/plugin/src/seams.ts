@@ -26,6 +26,9 @@ export interface SandboxCaps {
   interactive: boolean;
   idleLifetime: "platform" | "sweep" | "none";
   shell: boolean;
+  /** ADR-026 §6 (additive): what a parked (hibernated) machine keeps: memory, disk (files, not processes), or none (the
+   *  provider can't park machines; absent means none). With memory or disk the seam has `hibernate` and `wake`. */
+  hibernate?: "memory" | "disk" | "none";
 }
 
 /** ADR-021's ProviderDescriptor (`src/providers/registry.ts`), served to clients as data. */
@@ -39,7 +42,7 @@ export interface SandboxDescriptor {
   mark: string;
   listed: boolean;
   caps: SandboxCaps;
-  settings: readonly ("idleLifetime" | "agentMemory")[];
+  settings: readonly ("idleLifetime" | "agentMemory" | "parkedRetention")[];
   info: readonly ("logins" | "checkpoints" | "agentSlots")[];
   resourceKinds: readonly "machine"[];
   actions: readonly ("open_terminal" | "delete")[];
@@ -77,6 +80,10 @@ export interface SandboxProvider {
   list(prefix: string, c: SeamCall): Promise<MachineInfo[]>;
   /** Move the delete deadline to `seconds` from now (a lease the running work renews). */
   extendTtl?(id: string, seconds: number, c: SeamCall): Promise<void>;
+  /** `caps.hibernate` memory or disk: park the machine (it stops costing compute; its disk stays). */
+  hibernate?(id: string, c: SeamCall): Promise<void>;
+  /** Wake a parked machine; rejects `not_found` when it is gone. */
+  wake?(id: string, c: SeamCall): Promise<void>;
   /** Resolves when the provider answers at all (about `id` when given; not-found is an answer), rejects when it does not. */
   probe?(id: string | undefined, c: SeamCall): Promise<void>;
   /** `caps.idleLifetime === "sweep"`: delete machines past their deadline; the kernel calls it every few minutes. */
