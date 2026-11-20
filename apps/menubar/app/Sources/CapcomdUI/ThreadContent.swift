@@ -624,7 +624,8 @@ package struct VerdictCard: View {
         if let face { BotAvatar(traits: face, size: .xs).frame(width: Theme.Rows.whoBot, height: Theme.Rows.whoBot).accessibilityHidden(true) }
         VerdictLine(verdict: verdict)
       }
-      if !verdict.reasons.isEmpty { ReasonsList(reasons: verdict.reasons) }
+      if !verdict.findings.isEmpty { FindingsList(findings: verdict.findings) }
+      else if !verdict.reasons.isEmpty { ReasonsList(reasons: verdict.reasons) }
     }
     .modifier(ThreadCard())
     .padding(.bottom, Theme.Content.handoffBottom)
@@ -640,7 +641,8 @@ package struct HandoffCard: View {
   @Environment(\.threadHost) private var host
   package let runId: String
   package let item: CapcomdThread.Item
-  package init(runId: String, item: CapcomdThread.Item) { self.runId = runId; self.item = item }
+  /// `expanded`: open past its clamp from the start (a capture of the whole card).
+  package init(runId: String, item: CapcomdThread.Item, expanded: Bool = false) { self.runId = runId; self.item = item; _more = State(initialValue: expanded) }
   @State private var more = false
   /// The body's own height, measured unclamped: Show more only when it runs past the clamp.
   @State private var fullHeight: CGFloat = 0
@@ -672,8 +674,12 @@ package struct HandoffCard: View {
       .help(childId == nil ? "" : "Open its thread")
       if let v = verdict?.verdict { VerdictLine(verdict: v) }
       VStack(alignment: .leading, spacing: 0) {
-        if let v = verdict?.verdict, !v.reasons.isEmpty, Self.reasonsOnly(summary, v) {
-          ReasonsList(reasons: v.reasons)
+        // ADR-026 §7: a typed hand-back is drawn from its fields (its blocks say the same in prose); a reviewer's
+        // findings with their severity and place.
+        if let hb = item.typedHandback {
+          HandbackBody(handback: hb)
+        } else if let v = verdict?.verdict, !v.reasons.isEmpty, Self.reasonsOnly(summary, v) {
+          if v.findings.isEmpty { ReasonsList(reasons: v.reasons) } else { FindingsList(findings: v.findings) }
         } else if !summary.isEmpty {
           BlocksView(runId: runId, agentId: childId ?? "", blocks: summary, font: Theme.Rows.cardFont,
                      color: Theme.Rows.cardText, spacing: Theme.Affect.bodySpacing)

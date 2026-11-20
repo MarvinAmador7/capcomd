@@ -62,6 +62,9 @@ public enum Capability {
   public static let agentsMessagesModel = "agents.messages.model"
   /// `POST /v1/runs/{runId}/archive` and `/restore`; `Run.archived`: an archived run's composer gives way to Restore.
   public static let runsArchive = "runs.archive"
+  /// Thread items carry `internal` for an agent's bookkeeping (ADR-026 §7), left out unless asked: the agent's menu
+  /// offers Show Bookkeeping.
+  public static let agentsThreadInternal = "agents.thread_internal"
 }
 
 extension CapcomdStore {

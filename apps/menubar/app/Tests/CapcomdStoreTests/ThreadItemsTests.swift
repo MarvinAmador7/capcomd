@@ -87,6 +87,26 @@ final class ThreadItemsTests: XCTestCase {
 
   /// A long thread read over several pages goes into the book once the read ends: a change in between (here a live
   /// frame) doesn't show the thread as read so far, its oldest items first.
+  /// ADR-026 §7: the agent's bookkeeping (items marked `internal`) is hidden, and shown when its menu asks.
+  func testBookkeepingIsHiddenUntilAskedFor() async {
+    let tool = { (id: String, seq: Int, cmd: String, bookkeeping: Bool) in
+      #"{"id":"\#(id)","rev":1,"seq":\#(seq),"order":\#(seq),"agentId":"agt-1","kind":"tool","status":"done","at":"2026-10-26T12:00:00.000Z","durationMs":null,"text":"Run \#(cmd)","blocks":[],"format":"blocks/1","redacted":false,"tool":{"callId":"\#(id)","name":"Bash","kind":"run","summary":"Run \#(cmd)","isError":false,"args":null,"output":null,"files":[]},"error":null,"truncated":null,"child":null,"internal":\#(bookkeeping)}"#
+    }
+    let t = FakeThread()
+    t.pages[0] = page([itemJSON("i1", seq: 1, order: 1), tool("w2", 2, "capcomd wake --in 5m", true), tool("t3", 3, "bun test", false),
+                       tool("s4", 4, "capcomd status", true), itemJSON("i5", seq: 5, order: 5)], next: nil)
+    let s = CapcomdStore(thread: t); spawn(s)
+    await s.refreshThread(runId: "run-x", agentId: "agt-1")
+    XCTAssertEqual(s.books["agt-1"]?.items.filter(\.internal).map(\.id), ["w2", "s4"])
+    XCTAssertEqual(s.threadEntries(agentId: "agt-1").map(\.id), ["itm:i1", "itm:t3", "itm:i5"])
+    s.setBookkeepingShown(true, agentId: "agt-1")
+    XCTAssertEqual(s.threadEntries(agentId: "agt-1").map(\.id), ["itm:i1", "itm:w2", "itm:t3", "itm:s4", "itm:i5"])
+    s.setBookkeepingShown(false, agentId: "agt-1")
+    XCTAssertEqual(s.threadEntries(agentId: "agt-1").count, 3)
+    // An item from a daemon that doesn't mark bookkeeping is shown.
+    XCTAssertFalse(s.books["agt-1"]!.items.first { $0.id == "i1" }!.internal)
+  }
+
   func testAnOlderDaemonsSystemBookkeepingLinesAreNotShown() async {
     let other = { (id: String, seq: Int, text: String) in
       #"{"id":"\#(id)","rev":1,"seq":\#(seq),"order":\#(seq),"agentId":"agt-1","kind":"other","status":"done","at":"2026-10-26T12:00:00.000Z","durationMs":null,"text":"\#(text)","blocks":[],"format":"blocks/1","redacted":false,"tool":null,"error":null,"truncated":null,"child":null}"#

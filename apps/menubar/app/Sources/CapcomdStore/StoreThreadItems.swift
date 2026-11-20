@@ -153,8 +153,10 @@ extension CapcomdStore {
       if case .woke = $0.kind { return true }   // what woke it (agents.wake): a quiet line between its turns
       return false
     }
-    // Read newest first, the thread shows from its top down; messages from before its first item wait with it.
-    let items = book.shown.filter { !$0.isSystemBookkeeping }
+    // Read newest first, the thread shows from its top down; messages from before its first item wait with it. The
+    // agent's bookkeeping (ADR-026 §7) only when asked for.
+    let internals = bookkeepingShown.contains(agentId)
+    let items = book.shown.filter { !$0.isSystemBookkeeping && (internals || !$0.internal) }
     let from = book.hasEarlier ? items.first?.atMs ?? Int.max : Int.min
     var out: [ThreadEntry] = []; out.reserveCapacity(items.count + messages.count)
     var m = messages.filter { $0.epochMs >= from }.sorted { ($0.epochMs, $0.seq) < ($1.epochMs, $1.seq) }[...]
@@ -164,6 +166,13 @@ extension CapcomdStore {
     }
     out += m.map(ThreadEntry.event)
     return out
+  }
+
+  /// Shows or hides the agent's bookkeeping in its thread (its menu's Show Bookkeeping).
+  public func setBookkeepingShown(_ shown: Bool, agentId: String) {
+    guard bookkeepingShown.contains(agentId) != shown else { return }
+    if shown { bookkeepingShown.insert(agentId) } else { bookkeepingShown.remove(agentId) }
+    mark(.thread(agentId)); changed()
   }
 
   /// Loads a media block's bytes once (a failed load can be retried). Only png, jpeg, gif and webp are kept: what the

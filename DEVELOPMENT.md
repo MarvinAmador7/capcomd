@@ -158,6 +158,10 @@ src/
                   `capcomd setup project` writes are ../config/project-setup.ts
   providers/    - sandbox providers (docker, boxd, fake) behind their plugins; seam.ts, the seam and kernel shapes
   recipes/      - `capcomd run` composed from the primitives
+  schemas/      - typed payloads (ADR-026 §7): registry.ts, the schema registry (`name@version`, immutable once
+                  registered, a bounded JSON Schema subset, checked on write); builtin.ts, the schemas capcomd ships
+                  (handback@1, review-verdict@1) and a hand-back's prose form. What counts as an agent's bookkeeping in
+                  its thread (internal items) is packages/agent-thread's bookkeeping.ts
   subagents/    - ADR-017 RPC, tokens, in-VM CLI, driver, results
   triggers/     - the trigger intake (plugin API §16.3): intake.ts, what the daemon does with a source's trigger (dedupe,
                   a followed thread, the operator's gate, trigger.admitting, the accept mode, a run), subscriptions,

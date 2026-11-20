@@ -473,6 +473,16 @@ package enum Theme {
     package static let bulletIndent: CGFloat = 18, bulletGap: CGFloat = 2
   }
 
+  /// A typed hand-back's card body (.hb, ADR-026 §7): the outcome line, then labelled sections 8 pt apart (Changed,
+  /// Checked, Risks, Decide), their rows 2 pt apart; paths in mono, notes and severities at 46 %.
+  package enum Handback {
+    package static let sectionGap: CGFloat = 8, rowGap: CGFloat = 2, pathGap: CGFloat = 8
+    package static let label = Font.system(size: 10, weight: .semibold), labelText = Affect.t3
+    package static let path = Affect.monoFigures, pathText = Affect.t1
+    package static let note = Affect.small, noteText = Affect.t3, markText = Affect.t3
+    package static let severity = Font.system(size: 12, weight: .medium)
+  }
+
   /// The pane's header (.ph): title 13/500, role at 62 %, short id and clock at 46 % in tabular mono figures; while the
   /// agent works its bot twinkles and "working" shimmers, nothing else moves.
   package enum PaneHead {

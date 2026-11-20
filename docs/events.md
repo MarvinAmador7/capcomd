@@ -584,6 +584,26 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         },
         "data": {},
         "verdict": {},
+        "typed": {
+          "description": "Capability agents.handback_typed: its typed hand-back, checked against its schema (GET /v1/schemas) when it was recorded: handback@1 {status, outcome, changed, checked, risks, decide}, or a reviewer's review-verdict@1 {passed, findings}. Every string in value is agent-written",
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "schema",
+            "value"
+          ]
+        },
         "branch": {
           "type": [
             "string",
@@ -684,6 +704,26 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
         },
         "data": {},
         "verdict": {},
+        "typed": {
+          "description": "Capability agents.handback_typed: its typed hand-back, checked against its schema (GET /v1/schemas) when it was recorded: handback@1 {status, outcome, changed, checked, risks, decide}, or a reviewer's review-verdict@1 {passed, findings}. Every string in value is agent-written",
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string"
+            },
+            "value": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "schema",
+            "value"
+          ]
+        },
         "branch": {
           "type": [
             "string",
@@ -4975,6 +5015,26 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
               },
               "data": {},
               "verdict": {},
+              "typed": {
+                "description": "Capability agents.handback_typed: its typed hand-back, checked against its schema (GET /v1/schemas) when it was recorded: handback@1 {status, outcome, changed, checked, risks, decide}, or a reviewer's review-verdict@1 {passed, findings}. Every string in value is agent-written",
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "schema",
+                  "value"
+                ]
+              },
               "branch": {
                 "type": [
                   "string",
