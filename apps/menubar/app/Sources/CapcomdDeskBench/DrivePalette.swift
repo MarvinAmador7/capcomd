@@ -5,7 +5,7 @@ import DeskBenchKit
 import PerfLoopHost
 import PerfLoopKit
 
-/// Search ⌘K's scenarios (`palette-open`, `palette-type`, `palette-keys`), on a fixture with hundreds of searchable items
+/// Search ⌘K's scenarios (`palette-first`, `palette-open`, `palette-type`, `palette-keys`), on a fixture with hundreds of searchable items
 /// (`search`: 60 projects, ~200 agents, asks, the commands). ⌘K is pressed through the app's menu bar (`run.press`:
 /// Project › Search…); every key after that is real input on the app's own event queue (`run.type`, `run.key`), to
 /// whatever has the keyboard: the palette's field editor, its key handling. Each step's latency is to the first frame
@@ -103,6 +103,30 @@ import PerfLoopKit
     // Snapshots end with the palette up: a child panel is drawn into them; the overlay is in the window anyway.
     run.atClose { d.model.closePalette() }
     return Palette(d: d)
+  }
+
+  // MARK: palette-first
+
+  /// The first ⌘K after the window opens: the rep's desk shown and its warming done (the threads of the columns on
+  /// screen and next to them: no main-thread stretch over 2 ms for 300 ms), then ⌘K is the first thing pressed, once.
+  /// The palette has never shown in this window, so this is the open that pays for whatever the palette hasn't built
+  /// yet. One measured step: the scenario's latency is that ⌘K's. The palette stays up for the snapshot.
+  static func paletteFirst(_ run: HostRun) async throws {
+    let d = try Desk(run)
+    try await d.show()
+    await d.quiet()
+    run.atClose { d.model.closePalette() }
+    let p = Palette(d: d)
+    await p.open("first")
+    let groups = p.model.search.sections.map(\.group)
+    let asks = p.model.search.index.asks.count
+    run.regions([p.region()])
+    run.record([
+      Check("shown", p.model.paletteOpen && p.shown, "palette open \(p.model.paletteOpen), shown \(p.shown)"),
+      Check("items", p.model.search.index.count >= 200, "\(p.model.search.index.count) searchable items (agents, projects, asks, commands)"),
+      Check("empty-search", groups.first == (asks > 0 ? .needsYou : .recent) && groups.last == .commands && groups == groups.sorted(),
+            "groups \(groups.map(\.title)); \(asks) asks"),
+    ])
   }
 
   // MARK: palette-open

@@ -82,6 +82,14 @@ extension DeskModel {
     paletteOpen = true
   }
 
+  /// Before the first ⌘K, once the window has drawn (`PaletteWarmer`): the index and the empty search made while the
+  /// palette is built hidden, so it has its rows, and the first ⌘K only refreshes what changed since.
+  package func warmPalette() {
+    guard !paletteOpen else { return }
+    refreshSearchIndex()
+    if search.query.isEmpty { runSearch() }
+  }
+
   /// Esc, a click outside, the window losing the keyboard, or a result opened.
   package func closePalette() {
     guard paletteOpen else { return }
