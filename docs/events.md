@@ -3496,6 +3496,10 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     "clientId": {
       "type": "string",
       "description": "The API client that acted (cli-…)"
+    },
+    "parked": {
+      "description": "Capability agents.park: the machine was parked, so only the machine was deleted and its agent (owner) stays idle; absent otherwise",
+      "type": "boolean"
     }
   },
   "required": [
@@ -3768,7 +3772,7 @@ Payloads are open: clients must ignore unknown fields (§6.2, new fields don't b
     },
     "cause": {
       "type": "string",
-      "description": "Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"
+      "description": "Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it; capability agents.park: a parked machine whose run was archived or whose agent was cancelled), retention (capability agents.park: a parked machine kept for its place's parkedRetention), parked_limit (capability agents.park: more than 10 parked at its place, the oldest deleted first). Treat an unknown cause as a deletion for a reason you don't know"
     }
   },
   "required": [

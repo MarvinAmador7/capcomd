@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { UiDescriptor, UiRowValue } from "../../packages/plugin/src/context";
 import { ContributionStore } from "../../packages/plugin/src/host/context";
-import { agentMemoryField, agentSlotsField, checkpointsField, idleLifetimeField, loginsField, sandboxDetail } from "../../src/api/sandboxes";
+import { agentMemoryField, agentSlotsField, checkpointsField, idleLifetimeField, loginsField, parkedRetentionField, sandboxDetail } from "../../src/api/sandboxes";
 import { SANDBOX_BUILTINS } from "../../src/plugins/builtin/sandboxes";
 import { rowContributions } from "../../src/plugins/builtin/sandbox-rows";
 import { sandboxSeam, sandboxUi, useSandboxHost } from "../../src/plugins/sandboxes";
@@ -30,9 +30,9 @@ describe("each sandbox plugin contributes its rows", () => {
       expect(ui.builtin).toBe(true);
       expect(ui.descriptors.map((x) => [x.kind, x.id])).toEqual(declared.map((x) => [x.kind, x.id]));
     }
-    // Docker's five rows, boxd's three; the fakes have none.
-    expect(sandboxUi("docker").descriptors.map((x) => x.id)).toEqual(["idleLifetime", "agentMemory", "logins", "checkpoints", "agentSlots"]);
-    expect(sandboxUi("boxd").descriptors.map((x) => x.id)).toEqual(["idleLifetime", "logins", "checkpoints"]);
+    // Docker's six rows, boxd's four; the fakes have none.
+    expect(sandboxUi("docker").descriptors.map((x) => x.id)).toEqual(["idleLifetime", "agentMemory", "parkedRetention", "logins", "checkpoints", "agentSlots"]);
+    expect(sandboxUi("boxd").descriptors.map((x) => x.id)).toEqual(["idleLifetime", "parkedRetention", "logins", "checkpoints"]);
     expect(sandboxUi("nope")).toEqual({ builtin: false, descriptors: [] });
   });
 
@@ -52,10 +52,11 @@ describe("GET /v1/sandboxes/{name} serves the plugin's rows", () => {
     const f = facts({ env: { CAPCOMD_AGENT_CHECKPOINT_MS: "300000" } });
     const docker = (await sandboxDetail("docker", f))!;
     const memory = { mb: 2048, source: "config" as const };
-    expect(JSON.stringify(docker.settings)).toBe(JSON.stringify([idleLifetimeField(PROVIDERS.docker, f.idleLifetime, true), agentMemoryField(memory, true)]));
+    const retention = { seconds: 86_400, source: "default" as const };
+    expect(JSON.stringify(docker.settings)).toBe(JSON.stringify([idleLifetimeField(PROVIDERS.docker, f.idleLifetime, true), agentMemoryField(memory, true), parkedRetentionField(retention, true)]));
     expect(JSON.stringify(docker.info)).toBe(JSON.stringify([loginsField("docker", LOGINS), checkpointsField(f.env), agentSlotsField({ memTotal: f.slots.memTotal, memory })]));
     const boxd = (await sandboxDetail("boxd", f))!;
-    expect(JSON.stringify(boxd.settings)).toBe(JSON.stringify([idleLifetimeField(PROVIDERS.boxd, f.idleLifetime, true)]));
+    expect(JSON.stringify(boxd.settings)).toBe(JSON.stringify([idleLifetimeField(PROVIDERS.boxd, f.idleLifetime, true), parkedRetentionField(retention, true)]));
     expect(JSON.stringify(boxd.info)).toBe(JSON.stringify([loginsField("boxd", LOGINS), checkpointsField(f.env)]));
     expect(await sandboxDetail("fake", f)).toBeNull();
   });

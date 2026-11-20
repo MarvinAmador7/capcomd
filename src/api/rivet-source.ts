@@ -137,6 +137,24 @@ async function recordedAgentOwner(rec: AgentMachine, sandbox: string | null): Pr
 }
 
 /**
+ * ADR-026 §6: a parked machine's owner, from its record in the machines ledger: its agent (whatever its status: an idle
+ * agent's machine is parked), with the worker state `parked` and its delete deadline (its retention). null when its
+ * worker doesn't hold it parked any more (woken by its next attempt, or deleted meanwhile). Throws when the engine
+ * can't say.
+ */
+async function parkedOwner(rec: AgentMachine & { parked: NonNullable<AgentMachine["parked"]> }): Promise<MachineOwner | null> {
+	const worker = await existingActor("worker", rec.workerKey);
+	if (!worker) throw new Error(`no worker ${rec.workerKey.join("/")} on this engine`);
+	const wk = await (worker as any).getWorker({ workerId: rec.agentId });
+	if (wk?.state !== "parked") return null;
+	const a = ((await (await existingScope(rec.runId))?.listAgents({})) ?? [] as any[]).find((x: any) => x.agentId === rec.agentId);
+	return {
+		sandbox: rec.sandbox, vmId: rec.parked.vmId, name: rec.name, runId: rec.runId, agentId: rec.agentId, role: lower(a?.profile ?? null), task: taskLine(a?.task),
+		workerState: "parked", createdAt: rec.createdAt, deleteAt: rec.parked.deleteAt, descendants: 0,
+	};
+}
+
+/**
  * Who uses capcomd's machines now (ADR-021 §3), from capcomd's own records, never from provider labels: each pending,
  * running or paused agent of the recent runs whose worker actor holds a VM that isn't destroyed; capcomd's own jobs
  * (the machines ledger); and, for a machine in this capcomd's ledger that none of those claims, that machine's own
@@ -165,7 +183,9 @@ export async function machineOwners(limit = 500, env: Record<string, string | un
 		const m: RecordedMachine = { sandbox: rec.sandbox, name: rec.name };
 		if (rec.kind !== "agent" || claimed.has(`${rec.sandbox}\u0000${rec.name}`)) return m;
 		try {
-			const held = await within((o.recordedOwner ?? recordedAgentOwner)(rec, daemon), o.checkMs ?? RECORD_CHECK_MS);
+			// ADR-026 §6: a parked machine is its idle agent's, parked (listed with its retention, deleted on its own).
+			const held = rec.parked && !o.recordedOwner ? await within(parkedOwner(rec as AgentMachine & { parked: NonNullable<AgentMachine["parked"]> }), o.checkMs ?? RECORD_CHECK_MS)
+				: await within((o.recordedOwner ?? recordedAgentOwner)(rec, daemon), o.checkMs ?? RECORD_CHECK_MS);
 			if (held) owners.push(held);
 			return m;
 		} catch { return { ...m, unsure: true }; }
@@ -283,6 +303,8 @@ export function rivetSource(): HarnessSource {
 		// the agent the way `capcomd cancel <run> <agt>` does (its worker then destroys the machine).
 		destroy: async (name, vmId) => (await lister(name)).destroy(vmId),
 		forget: (_name, machine) => forgetMachine(machine),
+		// ADR-026 §6: a parked machine's Delete deletes only the machine (its worker destroys it); its agent stays idle.
+		deleteParked: async (name, machine) => (await import("../primitives/park")).deleteParked(name, machine),
 		cancelAgent: async (runId, agentId, by) => {
 			const r = await cancelAny(runId, agentId, `cancelled by ${by}`, by);
 			return { changed: r.kind === "agents" ? r.agents.cancelled.includes(agentId) : !!r.agents?.cancelled.includes(agentId) };

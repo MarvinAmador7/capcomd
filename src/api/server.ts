@@ -772,7 +772,7 @@ export function harnessApp(o: ServerOptions) {
 			const r = await src.sandboxAction(name, id, action, `client:${client.clientId}`);
 			if (!r.ok) return { status: r.status, body: { code: r.code, message: r.message } };
 			if (r.changed) {
-				state.recordDaemonEvent(resourceActionEvent(name, id, action, r.owner, client.clientId));
+				state.recordDaemonEvent(resourceActionEvent(name, id, action, r.owner, client.clientId, { parked: !!r.parked }));
 				state.recordDaemonEvent(resourceDeletedEvent(name, id, "action"));
 			}
 			return { status: 200, body: { resource: r.resource, changed: r.changed } };

@@ -12,7 +12,7 @@ import { AgentWorkspace } from "./workspace";
 import { TITLE_MAX, TITLE_SOURCES } from "./run-title";
 import { SKILL_MAX_BYTES, SKILLS_PER_MESSAGE_MAX } from "../agents/skills";
 import { isListedProvider, LISTED_PROVIDERS, PROVIDER_LABEL } from "../providers/registry";
-import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES } from "./sandboxes";
+import { AGENT_MEMORY_CHOICES, IDLE_LIFETIME_CHOICES, PARKED_RETENTION_CHOICES } from "./sandboxes";
 import { PLUGIN_NAME_PATTERN } from "../../packages/plugin/src/manifest";
 import { PLUGIN_STATES } from "../../packages/plugin/src/host/host";
 import { HOOK_NAMES, type HookName } from "../../packages/plugin/src/hooks";
@@ -438,6 +438,7 @@ export const EventData = {
 			role: z.string().nullable(),
 		}).nullable().describe("Who used the machine when the action ran: the agent that was cancelled (ids and role only, never its task); null for a machine left behind"),
 		clientId: z.string().describe("The API client that acted (cli-…)"),
+		parked: z.boolean().optional().describe("Capability agents.park: the machine was parked, so only the machine was deleted and its agent (owner) stays idle; absent otherwise"),
 	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a client's action on a machine (POST /v1/sandboxes/{name}/resources/{id}/actions/{action}) changed something. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Cloud: Delete on machine relay-…: cancelled worker agt-41 of run-8kq2.\"). A Delete is followed by sandbox.resource_deleted with cause action"),
 	"project.configured": z.looseObject({
 		path: z.string().describe("The checkout's root (absolute)"),
@@ -478,7 +479,7 @@ export const EventData = {
 	"sandbox.resource_deleted": z.looseObject({
 		sandbox: z.string().describe("The place (a listed provider's name)"),
 		resourceId: z.string().describe("The machine's id"),
-		cause: z.string().describe("Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it). Treat an unknown cause as a deletion for a reason you don't know"),
+		cause: z.string().describe("Why capcomd deleted it: action (a client's Delete), idle_lifetime (its idle lifetime ran out: Docker's sweep, or its worker's own lifetime), run_ended (its agent ended and its worker destroyed it; capability agents.park: a parked machine whose run was archived or whose agent was cancelled), retention (capability agents.park: a parked machine kept for its place's parkedRetention), parked_limit (capability agents.park: more than 10 parked at its place, the oldest deleted first). Treat an unknown cause as a deletion for a reason you don't know"),
 	}).describe("Capability sandboxes.actions. Durable, on the `daemon` stream only (and GET /v1/events?scope=daemon): a machine capcomd deleted. Only deletes capcomd makes and sees: a provider deleting a machine on its own (boxd's delete-after) isn't reported. `entity` is sandbox:<name>; the envelope text is daemon-written (\"Local: machine relay-… was deleted after its idle lifetime ran out.\")"),
 	...TriggerEventData,
 	...PluginEventData,
@@ -636,6 +637,7 @@ export const CAPABILITIES = {
 	"agents.messages.model": "POST …/agents/{agentId}/messages takes `model` and `effort` (from GET /v1/run-options drivers[].models / efforts for the agent's provider): its next turns run with them, at once for an idle agent, after its current turn for a working one; agent.model_changed and a `note` thread item record it",
 	"runs.archive": "POST /v1/runs/{runId}/archive and /restore (the steer scope, an Idempotency-Key): an archived run is read-only, a message to its agents is 409 `archived` until it is restored; Run.archived; run.archived and run.restored on run streams and the lifecycle feed. Archiving is refused (409 conflict) while an agent of it works",
 	"agents.wake": "Waits between turns (ADR-026 §3): an agent ends its turn with a wake armed instead of waiting inside a tool call. agent.wake_armed, agent.woken and agent.wake_cancelled on run streams and the lifecycle feed (causes waiting, woken, wake_cancelled), and Agent.activity of kind wait with `wake` (what it waits for, since when) while it waits",
+	"agents.park": "Parked machines (ADR-026 §6): when a planner or lead (an orchestrate profile, or a root agent) ends its turn idle, its machine is parked (hibernated: boxd hibernate, Docker stop) instead of deleted, and a message to it wakes that machine and resumes its conversation there in a moment (Agent.activity setup shows no restore phase). A worker's machine is deleted when it ends, as before. Parked machines aren't shown with agents: GET /v1/sandboxes/{name}/resources lists them with state `parked`, their agent as owner and `deleteAfter` (when they are deleted), and Delete (capability sandboxes.actions) deletes only the machine (its agent stays idle; sandbox.resource_action `parked: true`). They are deleted when the place's `parkedRetention` setting (4 h, 24 h or 7 days; 24 h by default; recorded with each run) runs out, when more than 10 are parked at the place (the oldest first), when the run is archived or the agent cancelled. Descriptors' caps carry `hibernate` (memory, disk or none). A parked machine holds no memory slot",
 } as const;
 export const CAPABILITY_NAMES = Object.keys(CAPABILITIES) as (keyof typeof CAPABILITIES)[];
 export const CAPABILITIES_DOC = "a list of names, one per feature added after harness.v1 first shipped; a client checks for the name before offering the feature, and ignores names it doesn't know. " +
@@ -977,6 +979,7 @@ export const SandboxCaps = z.object({
 	interactive: z.boolean().describe("A command with a terminal (interactive logins)"),
 	idleLifetime: z.string().describe("Who deletes a machine left behind: platform (the provider itself), sweep (capcomd, every 5 minutes), none. More may be added"),
 	shell: z.boolean().describe("A shell into a live machine (`capcomd sandbox shell`)"),
+	hibernate: z.string().optional().describe("Capability agents.park. What a parked machine keeps: memory (boxd's hibernate: memory written to disk, restored on wake), disk (Docker's stop: files, not processes) or none (it parks no machines). Absent: none. More may be added"),
 });
 export const SandboxDescriptor = z.object({
 	name: z.string().describe("What the API and CAPCOMD_SANDBOX call it"),
@@ -988,7 +991,7 @@ export const SandboxDescriptor = z.object({
 	mark: z.string().describe("Id of a mark the app bundles (docker, boxd); fall back to the kind's glyph for an id you don't have. Never an image"),
 	listed: z.boolean().describe("Always true here (unlisted test providers are never served)"),
 	caps: SandboxCaps.describe("What it can do. Ignore caps you don't know"),
-	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime; agentMemory on a place with a memory cap, today docker). Ignore ids you don't know"),
+	settings: z.array(z.string()).describe("Setting ids its details show (idleLifetime; agentMemory on a place with a memory cap, today docker; parkedRetention on a place that parks machines, capability agents.park). Ignore ids you don't know"),
 	info: z.array(z.string()).describe("Info row ids its details show (logins, checkpoints; agentSlots on a place with a memory cap, today docker). Ignore ids you don't know"),
 	resourceKinds: z.array(z.string()).describe("Kinds of resource it lists (machine)"),
 	actions: z.array(z.string()).describe("Resource actions this daemon serves for it, from a closed list: open_terminal, delete (capability sandboxes.actions; more come with later capabilities). Ignore actions you don't know"),
@@ -1000,28 +1003,28 @@ export const SandboxSummary = SandboxDescriptor.extend({
 });
 export const Sandboxes = z.object({ sandboxes: z.array(SandboxSummary).describe("Every listed place, in order: today docker, then boxd") });
 export const SandboxField = z.object({
-	id: z.string().describe("Stable id: idleLifetime, agentMemory (settings); logins, checkpoints, agentSlots (info). More may be added"),
+	id: z.string().describe("Stable id: idleLifetime, agentMemory, parkedRetention (settings); logins, checkpoints, agentSlots (info). More may be added"),
 	type: z.string().describe("choice (a Picker of `choices`), toggle, info or status (read-only rows). Render a type you don't know as a read-only row of `label` and `display`"),
 	label: z.string().describe("Row title (daemon-written)"),
 	help: z.string().nullable().describe("A footnote under the row (daemon-written, trusted); null when none"),
-	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime in seconds, agentMemory in MB; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)"),
+	value: z.string().nullable().describe("The current value as a string (a choice's `value`: idleLifetime and parkedRetention in seconds, agentMemory in MB; a toggle's \"true\"/\"false\"; an info row's machine-readable value, e.g. logins: bound, partial, unbound, none; checkpoints: the interval in ms; agentSlots: how many agents run at once, null while Docker's memory isn't known)"),
 	display: z.string().describe("The value as a sentence the daemon writes (\"1 hour\", \"Bound\", \"After each commit and every 10 minutes\"): what a row shows"),
 	default: z.string().nullable().describe("A setting's default value; null for info rows"),
-	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}; agentMemory: ${AGENT_MEMORY_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
+	choices: z.array(FieldChoice).describe(`A choice's options, in order (idleLifetime: ${IDLE_LIFETIME_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}; agentMemory: ${AGENT_MEMORY_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}; parkedRetention: ${PARKED_RETENTION_CHOICES.map((c) => `${c.value} "${c.label}"`).join(", ")}); empty for other types`),
 	source: z.string().describe("Where the value comes from: default (the place's default), env (an environment variable wins: editable is false and display says which, e.g. \"Set by CAPCOMD_SANDBOX_IDLE_SECONDS in capcomd's environment\"), config (capcomd's user config: the user chose it), daemon (an info row the daemon works out)"),
 	editable: z.boolean().describe("Capability sandboxes.settings: the user can change it here with PATCH /v1/sandboxes/{name}/settings (needs the configure scope). false for info rows, a setting an environment variable sets, and every row of a daemon without sandboxes.settings"),
-	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it (idleLifetime); new_agents: to agents that start after it, those waiting for a slot included (agentMemory); null for info rows. More may be added"),
+	appliesTo: z.string().nullable().describe("new_runs: a change applies to runs started after it (idleLifetime, parkedRetention); new_agents: to agents that start after it, those waiting for a slot included (agentMemory); null for info rows. More may be added"),
 	needsRestart: z.boolean().describe("A change needs the daemon restarted"),
 	state: z.string().nullable().describe("A status row's dot: ok, warn, bad or none (render an unknown value as none); null on every other type"),
 });
 export const SandboxDetail = z.object({
 	descriptor: SandboxDescriptor,
-	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900. agentMemory: how much of Docker's memory each agent gets, in MB, which sets agentSlots; CAPCOMD_DOCKER_AGENT_MEMORY_MB wins)"),
+	settings: z.array(SandboxField).describe("Its settings, in the descriptor's order (idleLifetime: how long a machine left behind lives, in seconds; at least 900. agentMemory: how much of Docker's memory each agent gets, in MB, which sets agentSlots; CAPCOMD_DOCKER_AGENT_MEMORY_MB wins. parkedRetention, capability agents.park: how long a parked planner's or lead's machine is kept, in seconds; CAPCOMD_PARKED_RETENTION_SECONDS wins)"),
 	info: z.array(SandboxField).describe("Read-only rows: logins (a summary of GET /v1/logins?sandbox=name: \"Bound\" only when every logged-in login here is bound to its AI's API host, else which aren't), checkpoints (when agents save their work), agentSlots (how many agents run at once here: Docker's memory over the agentMemory setting, 1 GB by default; more wait as pending and start as others finish)"),
 	rev: z.string().describe("Changes whenever a setting's value, source or editability does; PATCH …/settings sends it back (a stale one is 409 conflict)"),
 });
 export const SettingsBody = z.object({
-	values: z.record(z.string(), z.string()).describe("Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds; agentMemory: \"512\", \"1024\", \"2048\" or \"4096\", MB)"),
+	values: z.record(z.string(), z.string()).describe("Setting id → the new value, one of the field's `choices` values (idleLifetime: \"900\", \"3600\", \"14400\" or \"43200\", seconds; agentMemory: \"512\", \"1024\", \"2048\" or \"4096\", MB; parkedRetention: \"14400\", \"86400\" or \"604800\", seconds)"),
 	rev: z.string().min(1).max(200).describe("The `rev` of the GET /v1/sandboxes/{name} the change was made from"),
 });
 export const SETTINGS_DOC = "Capability sandboxes.settings. Change a place's settings: the body names each setting by id with a value from its `choices`, and the `rev` it was read with. Needs the `configure` scope (403 `forbidden` without it: settings change what future runs do, like how long their machines and billing live). " +
@@ -1042,10 +1045,10 @@ export const ResourceOwner = z.object({
 export const SandboxResource = z.object({
 	id: z.string().describe("The machine's name at the provider: capcomd's prefix (relay-) and letters, digits, `.`, `_`, `-` (at most 128). Stable for the machine's life"),
 	kind: z.string().describe("machine. More may be added"),
-	state: z.string().describe("starting, running, orphaned (this capcomd made it, by its machines ledger, and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer, or who uses it can't be told); asleep is reserved (no machine sleeps today). Treat an unknown state as unknown"),
+	state: z.string().describe("starting, running, parked (capability agents.park: an idle planner's or lead's machine, hibernated for a message to wake; its owner is that agent, `deleteAfter` when it is deleted, and its only action delete, which deletes the machine and leaves the agent idle), orphaned (this capcomd made it, by its machines ledger, and nothing in capcomd uses it now: no live agent and none of capcomd's own jobs; a machine left behind, deleted when its idle lifetime is up), stopping, unknown (the provider or capcomd's records didn't answer, or who uses it can't be told); asleep is reserved. Treat an unknown state as unknown"),
 	owner: ResourceOwner.nullable().describe("Who uses it, from capcomd's own records (never from provider labels): an agent (its worker), or one of capcomd's own jobs (a ledger capcomd writes when it makes the machine); null when orphaned or unknown"),
 	createdAt: Timestamp.nullable().describe("When it was created; null when unknown"),
-	deleteAfter: Timestamp.nullable().describe("When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes"),
+	deleteAfter: Timestamp.nullable().describe("When it will be deleted if nothing renews it (the provider's delete-after time; Docker: capcomd's sweep, up to 5 minutes later); null when unknown. A running agent renews it every 10 minutes. A parked machine's (capability agents.park): when its retention runs out"),
 	actions: z.array(z.string()).describe("Actions this daemon serves on it now: open_terminal (GET …/resources/{id} `terminalCommand`); delete (capability sandboxes.actions: POST …/resources/{id}/actions/delete; an agent's machine while it isn't starting or stopping, and one left behind). Machines of capcomd's own jobs have none. Ignore actions you don't know"),
 	destructive: z.boolean().optional().describe("Capability sandboxes.actions. An action here can't be undone (delete): ask first, with `confirm`, and a destructive button. Absent from older daemons: false"),
 	confirm: z.string().nullable().optional().describe("Capability sandboxes.actions. The question to ask before deleting it, written by the daemon: for an agent's machine it names the agent and says its work since the last checkpoint is lost (\"Delete worker's machine? This stops the worker on “Add an abs(a) function…”. Work since its last checkpoint is lost.\"); for one left behind, \"Delete this machine? No agent is using it.\" The quoted task is the agent's (untrusted): show it as plain text. null without a destructive action"),
