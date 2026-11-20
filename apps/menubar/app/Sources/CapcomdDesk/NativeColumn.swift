@@ -96,7 +96,8 @@ final class NativeColumnView: NSView {
       let r = rows
       RunLoop.main.perform { MainActor.assumeIsolated { [weak self] in
         guard let self, self.rows === r else { return }
-        if let toFoot = r.toFoot { toFoot() } else { self.restore(.foot(foot)) }
+        self.restore(.foot(foot))
+        if !self.rowsLaidOutInView(), let toFoot = r.toFoot { toFoot() }
       } }
     case .row:
       hold(place)
@@ -106,10 +107,10 @@ final class NativeColumnView: NSView {
   // MARK: the reader's place across a resize
 
   /// Where the reader is in the thread: at its foot, or a row and how far into it the view's top is (`into` points of
-  /// a row `height` tall then).
+  /// a row `height` tall then), and how far from the foot the view was (the first guess after a resize).
   enum ReaderPlace: Equatable {
     case foot(CGFloat)
-    case row(id: String, into: CGFloat, height: CGFloat)
+    case row(id: String, into: CGFloat, height: CGFloat, foot: CGFloat)
   }
 
   /// The place now, from the rows as SwiftUI last laid them out. Nil when the thread hasn't been laid out (a thread made
@@ -122,7 +123,7 @@ final class NativeColumnView: NSView {
     let top = Self.viewTop(sv)
     // The row at the view's top (the first that reaches below it).
     guard let (id, r) = rows.inView(top: top, bottom: top + sv.contentView.bounds.height).first(where: { $0.frame.maxY > top }) else { return nil }
-    return .row(id: id, into: top - r.minY, height: r.height)
+    return .row(id: id, into: top - r.minY, height: r.height, foot: foot)
   }
 
   /// After a resize the thread's lazy stack measures its rows again at the new width, over the next layouts: its document
@@ -146,7 +147,9 @@ final class NativeColumnView: NSView {
     guard let sv = threadScroll(), let doc = sv.documentView else { return }
     if heldScroll !== sv { release() }
     held = (place, CACurrentMediaTime() + Self.holdFor, agentId)
-    restore(place)
+    // First the distance from the foot, a close guess: the rows' frames are reported after this layout, and the stack
+    // then makes the rows near the place. The row is put back exactly once it reports where it is now (`moved`).
+    if case .row(_, _, _, let foot) = place { restore(.foot(foot)) } else { restore(place) }
     if heldObservers.isEmpty {
       heldScroll = sv
       doc.postsFrameChangedNotifications = true
@@ -179,7 +182,7 @@ final class NativeColumnView: NSView {
   /// The rows tell the hold when the held row moves in the thread (rows above it measured).
   private func watch(_ r: ThreadRows) {
     r.moved = { [weak self] id in
-      guard let self, case .row(let held, _, _)? = self.held?.place, held == id else { return }
+      guard let self, case .row(let held, _, _, _)? = self.held?.place, held == id else { return }
       self.keepHeldSoon()
     }
   }
@@ -235,7 +238,7 @@ final class NativeColumnView: NSView {
     switch place {
     case .foot(let foot):
       top = d.frame.height - b.height - foot
-    case .row(let id, let into, let height):
+    case .row(let id, let into, let height, _):
       // The row isn't built (the re-frame put the view elsewhere): SwiftUI brings it to the top and makes it; once it
       // reports its frame (`moved`), the place is set exactly.
       guard rows.live.contains(id), let r = rows.frames[id] else { rows.toRow?(id); return }
@@ -247,6 +250,14 @@ final class NativeColumnView: NSView {
     guard abs(b.minY - y) > 0.5 else { return }
     sv.contentView.scroll(to: NSPoint(x: b.minX, y: y))
     sv.reflectScrolledClipView(sv.contentView)
+  }
+
+  /// Whether rows of the thread are laid out over the view (any row's frame, not only the visible ones'): none after a
+  /// resize means the lazy stack made no row for the new place.
+  private func rowsLaidOutInView() -> Bool {
+    guard let sv = threadScroll() else { return false }
+    let top = Self.viewTop(sv)
+    return !rows.inView(top: top, bottom: top + sv.contentView.bounds.height, visibleOnly: false).isEmpty
   }
 
   /// The rows in view now (at least 2 pt of each), top to bottom, by entry id: what the reader sees.
@@ -406,10 +417,10 @@ extension EnvironmentValues {
   /// frame it last had, so only the rows the scroll view says are visible count (macOS 15), and of those only a run of
   /// rows in the thread's order whose frames follow one another (the stack has no spacing): of the runs, the one that
   /// covers most of the range.
-  func inView(top: CGFloat, bottom: CGFloat) -> [(id: String, frame: CGRect)] {
+  func inView(top: CGFloat, bottom: CGFloat, visibleOnly: Bool = true) -> [(id: String, frame: CGRect)] {
     var index: [String: Int] = [:]
     for (i, e) in entries.enumerated() { index[e.id] = i }
-    let rows = live.intersection(visible ?? live).compactMap { id -> (i: Int, id: String, frame: CGRect)? in
+    let rows = (visibleOnly ? live.intersection(visible ?? live) : live).compactMap { id -> (i: Int, id: String, frame: CGRect)? in
       guard let i = index[id], let f = frames[id], f.maxY > top, f.minY < bottom else { return nil }
       return (i, id, f)
     }.sorted { $0.i < $1.i }
