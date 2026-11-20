@@ -22,6 +22,7 @@ import { agentWorkflowOn } from "../utils/agent-workflow-flag";
 import { changedHooks, tellCreated, tellWorked } from "../plugins/changes";
 import { hooks, principalOf } from "../plugins/hooks";
 import { verdictSummary } from "../plugins/gate-reviewer/review";
+import { HANDBACK, REVIEW_VERDICT } from "../schemas/builtin";
 
 /**
  * ADR-022: tell connected awaiters that agents changed (status, notice), so they look again instead of polling. (With
@@ -76,8 +77,8 @@ async function putItemTx(tx: RawAccess, agentId: string, it: ItemDraft): Promise
   if (prev.length && (Number(prev[0].rev) >= it.rev || prev[0].agent_id !== agentId)) return null;
   const seq = Number(((await tx.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM agent_items")) as any[])[0].m) + 1;
   const body = JSON.stringify(redactShapes(it));
-  await tx.execute("INSERT OR REPLACE INTO agent_items (id, agent_id, seq, ord, rev, at, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    it.id, agentId, seq, prev.length ? Number(prev[0].ord) : seq, it.rev, Date.parse(it.at) || Date.now(), body);
+  await tx.execute("INSERT OR REPLACE INTO agent_items (id, agent_id, seq, ord, rev, at, body, internal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    it.id, agentId, seq, prev.length ? Number(prev[0].ord) : seq, it.rev, Date.parse(it.at) || Date.now(), body, it.internal ? 1 : 0);
   return seq;
 }
 
@@ -86,25 +87,31 @@ function itemRow(r: any) {
   const it = JSON.parse(r.body as string);
   // tool.diff came later: a row written before it reads as no diff.
   if (it.tool && !("diff" in it.tool)) it.tool.diff = null;
-  return { ...it, seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string };
+  // internal came later too: a row written before it is no bookkeeping.
+  return { ...it, seq: Number(r.seq), order: Number(r.ord), agentId: r.agent_id as string, internal: Number(r.internal ?? 0) === 1 };
 }
 
 /**
  * A finished child's hand-back card for its parent's thread. A reviewer declares no summary (its final message is its
- * verdict): its card is the verdict, `{"passed", "reasons"}` on its result, never a bare "Finished.".
+ * verdict): its card is the verdict, `{"passed", "reasons"}` on its result, never a bare "Finished.". A typed hand-back
+ * (ADR-026 §7, `result.typed`) goes on the card as its fields: handback@1 as `child.handback`, review-verdict@1's
+ * findings on the verdict.
  */
 export function handoffOf(parent: string, child: string, status: string, result: Record<string, unknown>, epoch = 1): ItemDraft {
   const s = (x: unknown) => (typeof x === "string" ? x : "");
+  const typed = result.typed && typeof result.typed === "object" ? (result.typed as { schema?: unknown; value?: any }) : null;
   const v = result.verdict as { passed?: unknown; reasons?: unknown } | null | undefined;
+  const findings = typed?.schema === REVIEW_VERDICT && Array.isArray(typed.value?.findings) ? { findings: typed.value.findings as unknown[] } : {};
   const verdict = v && typeof v === "object" && typeof v.passed === "boolean"
-    ? { passed: v.passed, reasons: Array.isArray(v.reasons) ? v.reasons.filter((r): r is string => typeof r === "string") : [] } : null;
+    ? { passed: v.passed, reasons: Array.isArray(v.reasons) ? v.reasons.filter((r): r is string => typeof r === "string") : [], ...findings } : null;
   // A reviewer that ended without a verdict says so (its gate fails closed on it).
   const fallback = status !== "done" ? "Failed." : "verdict" in result && !verdict ? "Finished without a verdict." : "Finished.";
   // A reviewer's summary is its verdict restated (verdictSummary): the card shows the verdict itself, not both.
   const declared = verdict && s(result.summary) === verdictSummary(verdict) ? "" : s(result.summary);
   const summary = declared || s(result.report) || s(result.error) || (verdict ? "" : fallback);
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts.filter((a: any) => a && typeof a.ref === "string").map((a: any) => ({ name: s(a.name), ref: s(a.ref) })) : [];
-  return handoffDraft({ id: perEpoch(`itm-${parent}-handoff-${child}`, epoch), at: Date.now(), child: { agentId: child, status }, summary, verdict, artifacts });
+  const handback = typed?.schema === HANDBACK ? typed.value : null;
+  return handoffDraft({ id: perEpoch(`itm-${parent}-handoff-${child}`, epoch), at: Date.now(), child: { agentId: child, status }, summary, verdict, handback, artifacts });
 }
 
 export type KvEntry = ReturnType<typeof kvRow>;
@@ -506,6 +513,8 @@ export const scopeActor = actor({
       await database.execute(`CREATE INDEX IF NOT EXISTS agent_items_agent_seq ON agent_items (agent_id, seq)`);
       // The thread's newest items first (GET …/thread/tail): by position, not by write.
       await database.execute(`CREATE INDEX IF NOT EXISTS agent_items_agent_ord ON agent_items (agent_id, ord)`);
+      // ADR-026 §7: 1 for an agent's bookkeeping (the item's `internal`), which the thread routes leave out unless asked.
+      await addColumn(database, "agent_items", "internal", "INTEGER NOT NULL DEFAULT 0");
       await database.execute(`CREATE TABLE IF NOT EXISTS idem (idem_key TEXT PRIMARY KEY, kind TEXT NOT NULL, params_hash TEXT NOT NULL, result TEXT NOT NULL, at INTEGER NOT NULL)`);
       await database.execute(`
         CREATE TABLE IF NOT EXISTS scope_events (
@@ -1309,18 +1318,21 @@ export const scopeActor = actor({
       }
       return { seq: last };
     },
-    /** Thread items after `after` (seq), oldest write first; one agent's, or the whole run's. */
-    async getItems(c, params: { agentId?: string; after?: number; limit?: number }) {
+    /** Thread items after `after` (seq), oldest write first; one agent's, or the whole run's. `shared`: only items that
+     *  aren't bookkeeping (ADR-026 §7). */
+    async getItems(c, params: { agentId?: string; after?: number; limit?: number; shared?: boolean }) {
+      const only = params.shared ? " AND internal = 0" : "";
       const rows = (params.agentId
-        ? await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?", params.agentId, params.after ?? 0, params.limit ?? 200)
-        : await c.db.execute("SELECT * FROM agent_items WHERE seq > ? ORDER BY seq LIMIT ?", params.after ?? 0, params.limit ?? 200)) as any[];
+        ? await c.db.execute(`SELECT * FROM agent_items WHERE agent_id = ? AND seq > ?${only} ORDER BY seq LIMIT ?`, params.agentId, params.after ?? 0, params.limit ?? 200)
+        : await c.db.execute(`SELECT * FROM agent_items WHERE seq > ?${only} ORDER BY seq LIMIT ?`, params.after ?? 0, params.limit ?? 200)) as any[];
       return rows.map(itemRow);
     },
     /** One agent's items by position, newest first: those placed before `before` (an `order`), else the newest. */
-    async getItemsBefore(c, params: { agentId: string; before?: number; limit?: number }) {
+    async getItemsBefore(c, params: { agentId: string; before?: number; limit?: number; shared?: boolean }) {
+      const only = params.shared ? " AND internal = 0" : "";
       const rows = (params.before !== undefined
-        ? await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? AND ord < ? ORDER BY ord DESC LIMIT ?", params.agentId, params.before, params.limit ?? 200)
-        : await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? ORDER BY ord DESC LIMIT ?", params.agentId, params.limit ?? 200)) as any[];
+        ? await c.db.execute(`SELECT * FROM agent_items WHERE agent_id = ? AND ord < ?${only} ORDER BY ord DESC LIMIT ?`, params.agentId, params.before, params.limit ?? 200)
+        : await c.db.execute(`SELECT * FROM agent_items WHERE agent_id = ?${only} ORDER BY ord DESC LIMIT ?`, params.agentId, params.limit ?? 200)) as any[];
       return rows.map(itemRow);
     },
     /** The run's newest thread write (a live-frame cursor). */
@@ -1739,12 +1751,13 @@ export const scopeActor = actor({
         .map((m) => ({ seq: Number(m.seq), from: m.from_agent as string, body: m.body as string, skills: skillsOf(m.skills), at: Number(m.at) }));
       const earlier = ((await c.db.execute("SELECT seq, from_agent, body, at FROM messages WHERE to_agent = ? AND seq <= ? ORDER BY seq DESC LIMIT 50", params.agentId, after)) as any[])
         .map((m) => ({ seq: Number(m.seq), from: m.from_agent as string, body: m.body as string, at: Number(m.at) }));
-      const items = ((await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? ORDER BY ord DESC LIMIT ?", params.agentId, Math.min(500, Math.max(1, params.items ?? 200)))) as any[]).map(itemRow);
+      // Its bookkeeping (ADR-026 §7) is left out of a rebuilt conversation: what it did and said, not how it waited.
+      const items = ((await c.db.execute("SELECT * FROM agent_items WHERE agent_id = ? AND internal = 0 ORDER BY ord DESC LIMIT ?", params.agentId, Math.min(500, Math.max(1, params.items ?? 200)))) as any[]).map(itemRow);
       return { continued: a.continued, task: a.task, result: lastResultOf(await c.db.execute("SELECT data FROM scope_events WHERE agent_id = ? AND type IN ('AGENT_DONE','AGENT_FAILED') ORDER BY seq DESC LIMIT 1", params.agentId)), messages, earlier, items };
     },
     /** ADR-026 §5 path 4: one quiet line in the agent's own thread (the fallback to a session rebuilt from its thread). */
-    async threadNote(c, params: { agentId: string; id: string; text: string }) {
-      await txn(c, async (tx: RawAccess) => { await putItemTx(tx, params.agentId, noteDraft(params.id, params.text)); }, { name: "scopeNote" });
+    async threadNote(c, params: { agentId: string; id: string; text: string; internal?: boolean }) {
+      await txn(c, async (tx: RawAccess) => { await putItemTx(tx, params.agentId, threadNote({ id: params.id, at: Date.now(), text: params.text, internal: params.internal })); }, { name: "scopeNote" });
       return { ok: true };
     },
     /** Its CLI took the message `seq` (the supervisor said so): the durable delivery cursor moves up to it, never back. */

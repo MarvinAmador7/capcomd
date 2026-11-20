@@ -35,6 +35,7 @@ export const AgentResult = z.looseObject({
 	error: nT.optional(),
 	data: U.optional(),
 	verdict: U.optional(),
+	typed: z.object({ schema: S, value: z.record(z.string(), z.unknown()) }).optional().describe("Capability agents.handback_typed: its typed hand-back, checked against its schema (GET /v1/schemas) when it was recorded: handback@1 {status, outcome, changed, checked, risks, decide}, or a reviewer's review-verdict@1 {passed, findings}. Every string in value is agent-written"),
 	branch: nS.optional(),
 	commit: nS.optional(),
 	costUsd: N.optional(),

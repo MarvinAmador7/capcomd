@@ -27,6 +27,8 @@ public final class CapcomdStore {
   /// Agents whose thread is being read, and those to read again once that read ends (StoreThreadItems.swift).
   var threadReads: Set<String> = []
   var threadRereads: Set<String> = []
+  /// Agents whose thread shows their bookkeeping (items marked `internal`: waits, polls, CLI system events), by request.
+  public internal(set) var bookkeepingShown: Set<String> = []
   /// Agents whose page above the shown thread (`agents.thread_tail`) is on its way.
   public internal(set) var threadLoadingEarlier: Set<String> = []
   public internal(set) var media: [MediaKey: Fetched<Data>] = [:]

@@ -33,7 +33,8 @@ import { hasVmCapcomd } from "../subagents/skill";
 import { mayRunJobs } from "../subagents/token";
 import { killpoint } from "../utils/killpoint";
 import { captureDriveEnv, env } from "../utils/env";
-import { parseVerdict, verdictSummary } from "./review";
+import { parseReview, verdictSummary } from "./review";
+import { checkPayload, REVIEW_VERDICT } from "../schemas";
 import type { AgentPreparing, PreparePatch, ReviewReport } from "../../packages/plugin/src/hooks";
 import type { Principal } from "../../packages/plugin/src/shapes";
 import { agentSpanId, discardSpan, rootSpanIdForRun, withSpan } from "../utils/tracing-simple";
@@ -994,7 +995,7 @@ function reviewOf(a: ScopeAgent): { sha: string; branch: string; target: string;
 async function resultOf(runId: string, agentId: string): Promise<Record<string, unknown>> {
   const r = await client().scope.getOrCreate([runId]).kvGet({ k: `_result/${agentId}` }).catch(() => null);
   const v = r && !r.deleted ? (r.value as any) : null;
-  return v ? { summary: v.summary, artifacts: v.artifacts, ...(v.data !== undefined ? { data: v.data } : {}), ...(v.truncated ? { truncated: v.truncated } : {}) } : {};
+  return v ? { summary: v.summary, artifacts: v.artifacts, ...(v.data !== undefined ? { data: v.data } : {}), ...(v.typed ? { typed: v.typed } : {}), ...(v.truncated ? { truncated: v.truncated } : {}) } : {};
 }
 
 /** "paused by the operator", naming the API client when one asked (client:<id>). */
@@ -1180,8 +1181,11 @@ async function settlePushed(runId: string, a: ScopeAgent, w: any, out: Extract<A
   const limit = typeof rec.limit === "string" ? rec.limit : null;
   // A reviewer's hand-back is its verdict, what its parent's thread shows of it (never a bare "Finished."): the
   // verdict first, then its reasons. Without one, its own summary, else that it gave none (one stopped at a limit says why).
-  const verdict = review ? parseVerdict(declared.data, rec.resultText) : null;
-  const verdictOf = review ? { verdict, ...(verdict ? { summary: verdictSummary(verdict) } : declared.summary || limit ? {} : { summary: verdictSummary(null) }) } : {};
+  // ADR-026 §7: its verdict is also typed, review-verdict@1 (passed, findings), checked like any typed hand-back.
+  const reviewed = review ? parseReview(declared.data, rec.resultText) : null;
+  const verdict = reviewed?.verdict ?? null;
+  const typedVerdict = reviewed ? checkPayload(REVIEW_VERDICT, { passed: reviewed.verdict.passed, findings: reviewed.findings }) : null;
+  const verdictOf = review ? { verdict, ...(typedVerdict?.ok ? { typed: { schema: REVIEW_VERDICT, value: typedVerdict.value } } : {}), ...(verdict ? { summary: verdictSummary(verdict) } : declared.summary || limit ? {} : { summary: verdictSummary(null) }) } : {};
   const limitOf = limit ? { limit, error: `${stoppedAt(limit)}; its work so far is on ${branch}${pushed.sha ? ` (${String(pushed.sha).slice(0, 12)})` : ""}` } : {};
   const reportOf = report ? { ...(reportText ? { report: reportText } : {}), ...(!declared.summary && reportText ? { summary: reportText.slice(0, 2000) } : {}) } : {};
   // Plugin API §16.1: an orchestrate agent's work is the agents it spawns. One that spawned none (its tools refused,

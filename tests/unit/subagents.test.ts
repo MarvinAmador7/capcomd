@@ -61,7 +61,7 @@ test("an agent that may not spawn: jobs, notes, result, title and reads; nothing
   expect(mayRunJobs({ provider: "claude", toolMode: "orchestrate" }, { ...open, allowedTools: ["Read"] })).toBe(true);
 });
 
-test("who gets the in-VM capcomd, and what a worker is told", () => {
+test("who gets the in-VM capcomd, and what a worker is told", async () => {
   const leaf = { allowSpawn: false };
   expect(hasVmCapcomd({ limits: { allowSpawn: true } })).toBe(true);
   expect(hasVmCapcomd({ limits: leaf, contract: null, profile: "worker" })).toBe(true);
@@ -77,9 +77,11 @@ test("who gets the in-VM capcomd, and what a worker is told", () => {
   // Nothing of the agent's own: every agent of a profile starts with the same instructions (one cached prefix).
   expect(s).not.toMatch(/agt-/);
   expect(s).toContain(`--data '{"context": [{"title": "…", "text": "…"}]}'`);
-  // Its hand-back: the outcome first, then a few bullets (what changed, how it was checked, risks, decisions).
-  expect(s).toContain('capcomd result --summary "<your hand-back>"');
-  expect(s).toMatch(/\n  Done: .+\n  - Changed: .+\n  - Checked: /);
+  // Its hand-back is typed (ADR-026 §7): handback@1, and the example it is shown fits it.
+  expect(s).toContain("Hand back: `capcomd result --handback '<JSON>'` (capcomd_result)");
+  const example = /capcomd result --handback '(\{[\s\S]+?\})'\n/.exec(s)?.[1];
+  const { checkPayload } = await import("../../src/schemas");
+  expect(checkPayload("handback@1", JSON.parse(example!))).toMatchObject({ ok: true });
   expect(s).not.toContain("Orchestrating child agents");
   expect(workerSkill({ mcp: false, jobs: false })).not.toContain("job start");
 });

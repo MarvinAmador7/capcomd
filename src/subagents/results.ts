@@ -24,11 +24,13 @@ export function capText(s: string, maxBytes: number, field: string, out: Truncat
   return cut;
 }
 
-/** The structured result a child declares (`capcomd result`), normalized and capped. */
+/** The structured result a child declares (`capcomd result`), normalized and capped. `typed`: a typed hand-back
+ *  (ADR-026 §7), already checked against its schema by the caller (the payload is bounded by its schema's size). */
 export interface ChildResult {
   summary: string;
   artifacts: Array<{ name: string; ref: string }>;
   data?: unknown;
+  typed?: { schema: string; value: Record<string, unknown> };
   truncated?: Truncation[];
 }
 export function normalizeResult(raw: any): ChildResult {
@@ -41,7 +43,8 @@ export function normalizeResult(raw: any): ChildResult {
     const js = JSON.stringify(data);
     if (Buffer.byteLength(js, "utf8") > RESULT_MAX_BYTES) { tr.push({ field: "data", bytes: Buffer.byteLength(js, "utf8"), kept: 0 }); data = undefined; }
   }
-  return { summary, artifacts, ...(data !== undefined ? { data } : {}), ...(tr.length ? { truncated: tr } : {}) };
+  const typed = raw?.typed && typeof raw.typed.schema === "string" && raw.typed.value && typeof raw.typed.value === "object" ? { schema: raw.typed.schema, value: raw.typed.value } : undefined;
+  return { summary, artifacts, ...(data !== undefined ? { data } : {}), ...(typed ? { typed } : {}), ...(tr.length ? { truncated: tr } : {}) };
 }
 
 /**
@@ -58,6 +61,19 @@ const MARKER = /<<<[^\n]*?>>>|<<<\s*(?:end|untrusted)[^>]*>>>/gi;
 export const unmark = (text: string): string => String(text ?? "").replace(MARKER, "[fence-marker removed]");
 export function fence(from: string, text: string): { untrusted: true; from: string; note: string; text: string } {
   return { untrusted: true, from, note: FENCE_NOTE, text: `<<<untrusted:${from}>>>\n${unmark(text)}\n<<<end:${from}>>>` };
+}
+
+/**
+ * A typed payload another agent wrote (a result's `typed`): its fields stay fields, so a parent reads them as such,
+ * with every string's marker look-alikes neutralized, and the whole marked untrusted with its author, like a fence.
+ */
+export function fenceTyped(from: string, t: unknown): unknown {
+  if (!t || typeof t !== "object") return t;
+  const clean = (x: unknown, depth = 0): unknown => typeof x === "string" ? unmark(x)
+    : depth > 8 ? null : Array.isArray(x) ? x.map((y) => clean(y, depth + 1))
+    : x && typeof x === "object" ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, clean(v, depth + 1)])) : x;
+  const o = t as { schema?: unknown; value?: unknown };
+  return { schema: String(o.schema ?? ""), value: clean(o.value), untrusted: true, from, note: FENCE_NOTE };
 }
 
 export interface TreeAgent {

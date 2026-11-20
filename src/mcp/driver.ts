@@ -7,7 +7,7 @@ import { client, existingActor } from "../core/relay";
 import * as O from "../primitives/ops";
 import * as S from "../primitives/state";
 import { parseBudget, TERMINAL_AGENT, type Budget } from "../primitives/policy";
-import { fence } from "../subagents/results";
+import { fence, fenceTyped } from "../subagents/results";
 import { WAIT_DEFAULT_MS, WAIT_MAX_MS } from "./session";
 
 /** The driver's name in records it writes (kv writer, task holder, message sender, approver). */
@@ -41,6 +41,7 @@ export function agentView(a: any) {
   if (v.result) {
     const r = { ...v.result };
     for (const k of ["summary", "error", "claim"]) if (typeof r[k] === "string") r[k] = fence(v.agentId, r[k]);
+    if (r.typed) r.typed = fenceTyped(v.agentId, r.typed);
     v.result = r;
   }
   // A failing notice quotes the agent's own error output.

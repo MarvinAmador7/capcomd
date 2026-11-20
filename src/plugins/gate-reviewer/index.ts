@@ -125,7 +125,7 @@ async function finishReview(o: ReviewTarget, started: Reviewing, waitMs: number)
       dropReview(o.runId, started, "the verify's deadline passed");
       return { profile: o.profile, agentId, passed: false, reasons: [], error: "the reviewer gave no verdict before the verify's deadline" };
     }
-    return { profile: o.profile, agentId, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "reasons": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
+    return { profile: o.profile, agentId, passed: false, reasons: [], error: a?.status === "done" ? 'the reviewer gave no verdict (expected a final line {"passed": true|false, "findings": [...]})' : `the reviewer ended ${a?.status ?? "unknown"}${a?.result?.error ? `: ${String(a.result.error).slice(0, 300)}` : ""}` };
   } catch (e) { return reviewFailed(o, started.agentId, e); }
 }
 

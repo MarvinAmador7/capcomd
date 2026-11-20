@@ -448,8 +448,9 @@ export function buildReviewPrompt(t: AgentTask & { review: NonNullable<AgentTask
     "- Your final reply is your hand-back, in Markdown, and nothing else (no story of what you read):",
     "  First line: your verdict, **Approve** or **Changes needed**.",
     "  Then the findings as bullets, most severe first, one line each, with file:line where it helps; on a fail, say what must change.",
-    '  Last, one line of JSON and nothing after it: {"passed": true|false, "reasons": ["..."]}',
-    "  Its reasons are the same findings, one line each: your parent reads the verdict and these reasons.",
+    "  Last, your verdict as one line of JSON (review-verdict@1) and nothing after it:",
+    '  {"passed": true|false, "findings": [{"severity": "blocker|major|minor|nit", "file": "src/a.ts", "line": 3, "text": "..."}]}',
+    "  Its findings are the same as your bullets, in the same order; file and line only where they help. Your parent reads the verdict and these findings.",
   ].join("\n");
 }
 

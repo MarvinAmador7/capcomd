@@ -50,6 +50,42 @@ final class VerdictTests: XCTestCase {
     XCTAssertNil(try item(#"{"passed": true}"#, kind: "tool").verdictTail?.verdict)
   }
 
+  /// review-verdict@1: findings (lines, or {text, severity, file, line}) are the verdict's reasons, with their place.
+  func testAReviewVerdictV1MessageHasFindings() throws {
+    let v = try item(#"{"passed": false, "findings": [{"severity": "blocker", "file": "src/b.txt", "line": 1, "text": "writes the wrong content"}, "no test", {"text": "x", "severity": "loud", "line": 4}, {"text": ""}]}"#).verdictTail?.verdict
+    XCTAssertEqual(v?.passed, false)
+    XCTAssertEqual(v?.findings, [Finding(text: "writes the wrong content", severity: .blocker, file: "src/b.txt", line: 1), Finding(text: "no test"), Finding(text: "x")])
+    XCTAssertEqual(v?.reasons, ["src/b.txt:1: writes the wrong content", "no test", "x"])
+  }
+
+  /// A typed hand-back (handback@1, `child.handback`) and a reviewer's findings (`child.verdict.findings`) on a handoff;
+  /// a status or a result this client doesn't know never reads as passed.
+  func testAHandoffCarriesATypedHandbackAndFindings() throws {
+    let o: [String: Any] = ["id": "itm-t", "rev": 1, "seq": 4, "order": 3, "agentId": "agt-p", "kind": "handoff", "status": "done",
+                            "at": "2026-10-27T00:00:00Z", "text": "Done: added the parser.", "blocks": [], "format": "blocks/1", "redacted": false,
+                            "child": ["agentId": "agt-c", "status": "done", "handback": [
+                              "status": "done", "outcome": "added the parser\u{202E}", "changed": [["path": "src/parse.ts", "what": "new"], ["path": " "]],
+                              "checked": [["check": "bun test", "result": "passed", "note": "12 pass"], ["check": "the CLI", "result": "not run", "note": NSNull()], ["check": "lint", "result": "maybe"]],
+                              "risks": ["dates before 1970"], "decide": ["keep the old parser?"]] as [String: Any],
+                              "verdict": ["passed": false, "reasons": ["src/b.txt:1: wrong"], "findings": [["text": "wrong", "severity": "blocker", "file": "src/b.txt", "line": 1]]] as [String: Any]] as [String: Any],
+                            "internal": false]
+    let item = try JSONDecoder().decode(Item.self, from: JSONSerialization.data(withJSONObject: o))
+    let hb = try XCTUnwrap(item.typedHandback)
+    XCTAssertEqual(hb.status, .done); XCTAssertEqual(hb.statusWord, "Done"); XCTAssertEqual(hb.outcome, "added the parser")
+    XCTAssertEqual(hb.changed, [Handback.Change(path: "src/parse.ts", what: "new")])
+    XCTAssertEqual(hb.checked.map(\.result), [.passed, .notRun, .notRun])
+    XCTAssertEqual(hb.checked.first?.note, "12 pass")
+    XCTAssertEqual(hb.risks, ["dates before 1970"]); XCTAssertEqual(hb.decide, ["keep the old parser?"])
+    XCTAssertEqual(item.child?.verdict?.findings, [Finding(text: "wrong", severity: .blocker, file: "src/b.txt", line: 1)])
+    XCTAssertFalse(item.internal)
+    // A hand-back this client can't read is none (its blocks still say it); no `internal` is not bookkeeping.
+    var bad = o; bad["child"] = ["agentId": "agt-c", "status": "done", "handback": ["status": "done"]]; bad.removeValue(forKey: "internal")
+    let plain = try JSONDecoder().decode(Item.self, from: JSONSerialization.data(withJSONObject: bad))
+    XCTAssertNil(plain.typedHandback); XCTAssertFalse(plain.internal)
+    var odd = o; odd["child"] = ["agentId": "agt-c", "status": "done", "handback": ["status": "someday", "outcome": "x"]]
+    XCTAssertEqual(try JSONDecoder().decode(Item.self, from: JSONSerialization.data(withJSONObject: odd)).typedHandback?.status, .done)
+  }
+
   func testEscapedBidiCharactersAreCleaned() throws {
     let v = try item(#"{"passed": true, "reasons": ["ok\u202Egnp.exe"]}"#).verdictTail?.verdict
     XCTAssertEqual(v?.reasons, ["okgnp.exe"])

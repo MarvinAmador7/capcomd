@@ -16,7 +16,8 @@ import * as S from "../primitives/state";
 import { TERMINAL_AGENT, parseBudget } from "../primitives/policy";
 import type { ScopeAgent } from "../actors/scope";
 import { verifyToken, type Claims, type Op } from "./token";
-import { capText, fence, MESSAGE_MAX_BYTES, normalizeResult, subtree, type Truncation } from "./results";
+import { capText, fence, fenceTyped, MESSAGE_MAX_BYTES, normalizeResult, subtree, type Truncation } from "./results";
+import { checkPayload, HANDBACK, handbackMarkdown, type Typed } from "../schemas";
 import type { JobMachine } from "../jobs/machine";
 import { WAKE_MAX_MS } from "../actors/wakes";
 import { noteOpWake } from "../primitives/wake-sweep";
@@ -113,6 +114,7 @@ function agentFor(c: Claims, a: ScopeAgent) {
   if (a.agentId !== c.sub && v.result) {
     const r = { ...v.result };
     for (const k of ["summary", "error", "claim"]) if (typeof r[k] === "string") r[k] = fence(a.agentId, r[k]);
+    if (r.typed) r.typed = fenceTyped(a.agentId, r.typed);
     v.result = r;
   }
   // A failing notice quotes the agent's own error output.
@@ -263,9 +265,13 @@ async function dispatch(c: Claims, op: Op, args: Record<string, any>, reqId: str
       return O.setAgentTitle(run, t, title, { by: t === c.sub ? "self" : "parent", setBy: c.sub, key });
     }
     case "result": {
-      const r = normalizeResult(args);
+      // ADR-026 §7: a typed hand-back is checked against its schema before anything is recorded; without a summary of
+      // its own, its prose form is the summary (what older readers, and the commit subject, read).
+      const typed = typedOf(args);
+      const said = typeof args.summary === "string" && args.summary.trim() ? args.summary : typed?.schema === HANDBACK ? handbackMarkdown(typed.value) : args.summary;
+      const r = normalizeResult({ ...args, summary: said, ...(typed ? { typed } : {}) });
       // An empty call (a tool called before its schema was read gives `{}`) would record nothing, or erase a result.
-      if (!r.summary.trim() && !r.artifacts.length && r.data === undefined) throw new RelayError("usage", "result needs a summary (or artifacts or data): nothing was recorded", "capcomd result --summary \"<what you did, what you checked, what is left>\" [--data JSON]");
+      if (!r.summary.trim() && !r.artifacts.length && r.data === undefined && !r.typed) throw new RelayError("usage", "result needs a summary (or a hand-back, artifacts or data): nothing was recorded", "capcomd result --handback '{\"status\": \"done\", \"outcome\": \"…\"}' or capcomd result --summary \"<what you did, what you checked, what is left>\"");
       await S.kvWrite(run, { k: `_result/${c.sub}`, value: r, writer: c.sub });
       return { recorded: true, ...(r.truncated ? { truncated: r.truncated } : {}) };
     }
@@ -559,6 +565,29 @@ async function fetchInto(ctx: RpcContext, args: Record<string, any>) {
   return { fetched: true, branches, hint: "Read a branch without changing anything: git log origin/<branch>, git show origin/<branch>:<path>, git diff <a> <b>; or git switch --detach origin/<branch> to read it with the file tools." };
 }
 
+/** handback@1 as an agent can copy it, for a refused payload's hint. */
+const HANDBACK_EXAMPLE = `{"status": "done", "outcome": "added the Home section to the desktop page", "changed": [{"path": "site/app/page.tsx", "what": "new section"}], "checked": [{"check": "bun run typecheck", "result": "passed"}], "risks": [], "decide": []}`;
+
+/**
+ * A result's typed hand-back (ADR-026 §7): \`handback\` (JSON text or an object) under \`schema\` (default handback@1),
+ * checked against the registry. A payload that doesn't fit is refused, nothing recorded, with each field to fix.
+ */
+function typedOf(args: Record<string, any>): Typed | undefined {
+  if (args.handback === undefined && args.schema === undefined) return undefined;
+  const schema = String(args.schema ?? HANDBACK);
+  let value = args.handback;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { throw new RelayError("usage", "the hand-back isn't JSON: nothing was recorded", `capcomd result --handback '${HANDBACK_EXAMPLE}'`, { code: "invalid_payload" }); }
+  }
+  if (value === undefined) throw new RelayError("usage", `--schema ${schema} needs the payload in --handback: nothing was recorded`, `capcomd result --handback '<JSON>' --schema ${schema}`, { code: "invalid_payload" });
+  const c = checkPayload(schema, value);
+  if (!c.ok) {
+    throw new RelayError("usage", `the hand-back doesn't fit ${schema}, so nothing was recorded: ${c.errors.join("; ")}`,
+      `Fix those fields and run \`capcomd result\` again${schema === HANDBACK ? `, e.g. --handback '${HANDBACK_EXAMPLE}'` : ""}. Or hand back in prose: --summary "<your hand-back>".`, { code: "invalid_payload" });
+  }
+  return { schema, value: c.value };
+}
+
 /** The checks command an operator set on the caller's top-level ancestor (RPC spawns strip it). */
 async function operatorChecks(c: Claims): Promise<string | undefined> {
   const all = await scopeAgents(c.run);
@@ -574,6 +603,7 @@ function redactEvent(e: any) {
   if (d.result && typeof d.result === "object") {
     const r = { ...d.result };
     for (const k of ["summary", "error", "claim"]) if (typeof r[k] === "string") r[k] = fence(e.agentId, r[k]);
+    if (r.typed) r.typed = fenceTyped(e.agentId, r.typed);
     d.result = r;
   }
   if (typeof d.task === "string") d.task = fence("operator-or-parent", d.task).text;

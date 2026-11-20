@@ -263,6 +263,12 @@ final class SidebarModelTests: XCTestCase {
     XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Copy Agent ID"])
     s.capabilities.insert(Capability.agentPause)
     XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Pause", "Copy Agent ID"])
+    // agents.thread_internal: the agent's bookkeeping is hidden in its thread; the menu shows and hides it.
+    s.capabilities.insert(Capability.agentsThreadInternal)
+    XCTAssertEqual(m.agentMenu(row).map(\.title), ["Message \(row.title)…", "Pause", "Show Bookkeeping", "Copy Agent ID"])
+    m.perform(.bookkeeping(shown: false), on: row)
+    XCTAssertTrue(s.bookkeepingShown.contains(row.id))
+    XCTAssertEqual(m.agentMenu(row).map(\.title)[2], "Hide Bookkeeping")
   }
   #endif
 }

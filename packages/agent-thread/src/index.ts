@@ -9,19 +9,22 @@ export { claudeInputDiff, claudeResultDiff, lineDiff } from "./diff";
 export { threadBuilder, ARGS_MAX_BYTES, OUTPUT_MAX_BYTES, type ThreadOptions, type ThreadBuilder, type Cli } from "./thread";
 export { ACTIVITY_KINDS, commandKind, opKind, claudeToolKind, codexItemKind, fxToolKind, type ActivityKind } from "./kinds";
 export { claudeSummary, codexSummary, fxSummary, shellCommand } from "./summary";
+export { BOOKKEEPING_CALLS, BOOKKEEPING_SYSTEM, isBookkeepingCommand, isBookkeepingTool } from "./bookkeeping";
 export { claudeNaming, codexNaming, fxNaming, isClaudeNamingCall, isCodexNamingCall, isFxNamingCall, namingCalls, namingCommand, shellWords } from "./naming";
 
 import { classifyLink, mediaOfPath, resolveMedia, type LinkContext } from "./links";
 import { plainBlocks, toBlocks } from "./markdown";
 import { capBytes, oneLine, sanitize } from "./sanitize";
-import { THREAD_FORMAT, type BlockNode, type ItemDraft } from "./schema";
+import { CHECK_RESULTS, FINDING_SEVERITIES, HANDBACK_STATUSES, THREAD_FORMAT, type BlockNode, type FindingT, type HandbackT, type ItemDraft } from "./schema";
 
 /**
  * A child agent handing back (agent.done / agent.failed): its summary as blocks, then its artifacts ({name, ref}) as
  * media blocks (images, video, audio it points at) and a list of links (files, attachments, web pages, agents).
  */
-export function handoffDraft(o: { id: string; at: number; child: { agentId: string; status: string }; summary: string; verdict?: HandoffVerdict | null; artifacts?: Array<{ name: string; ref: string }>; link?: LinkContext }): ItemDraft {
-	const v = o.verdict ? { passed: o.verdict.passed, reasons: o.verdict.reasons.map((r) => sanitize(r).trim()).filter(Boolean).slice(0, VERDICT_MAX_REASONS).map((r) => capBytes(r, VERDICT_REASON_MAX_BYTES)) } : null;
+export function handoffDraft(o: { id: string; at: number; child: { agentId: string; status: string }; summary: string; verdict?: HandoffVerdict | null; handback?: unknown; artifacts?: Array<{ name: string; ref: string }>; link?: LinkContext }): ItemDraft {
+	const findings = o.verdict?.findings ? cleanFindings(o.verdict.findings) : null;
+	const v = o.verdict ? { passed: o.verdict.passed, reasons: o.verdict.reasons.map((r) => sanitize(r).trim()).filter(Boolean).slice(0, VERDICT_MAX_REASONS).map((r) => capBytes(r, VERDICT_REASON_MAX_BYTES)), ...(findings ? { findings } : {}) } : null;
+	const handback = o.handback === undefined || o.handback === null ? null : cleanHandback(o.handback);
 	// A reviewer's verdict leads, in words a client that doesn't read child.verdict still shows; then its summary, if it
 	// wrote one, and its reasons as a list.
 	const said = v ? (v.passed ? "Passed review" : "Didn't pass review") : null;
@@ -39,8 +42,40 @@ export function handoffDraft(o: { id: string; at: number; child: { agentId: stri
 	const extra: BlockNode[] = [...media, ...(links.length ? [{ t: "list", ordered: false, start: null, items: links.map((b) => ({ checked: null, blocks: [b] })) } as BlockNode] : [])];
 	return {
 		id: o.id, rev: 1, kind: "handoff", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text: p.text, blocks: [...p.blocks, ...extra], format: THREAD_FORMAT,
-		redacted: false, tool: null, error: null, truncated: p.truncated, child: v ? { ...o.child, verdict: v } : o.child,
+		redacted: false, tool: null, error: null, truncated: p.truncated, child: { ...o.child, ...(v ? { verdict: v } : {}), ...(handback ? { handback } : {}) },
 	};
+}
+
+const text = (x: unknown, max: number): string => capBytes(sanitize(typeof x === "string" ? x : "").trim(), max);
+const textOrNull = (x: unknown, max: number): string | null => { const t = text(x, max); return t ? t : null; };
+const listOf = (x: unknown, max: number): unknown[] => (Array.isArray(x) ? x.slice(0, max) : []);
+const oneOf = <T extends string>(x: unknown, all: readonly T[]): T | null => (all.includes(x as T) ? (x as T) : null);
+
+/**
+ * A typed hand-back (handback@1, validated by the daemon's registry when the child sent it) in the thread item's shape:
+ * every field present (absent lists empty, absent notes null), strings sanitized and capped. null when it isn't one.
+ */
+export function cleanHandback(h: unknown): HandbackT | null {
+	const o = h && typeof h === "object" ? (h as Record<string, unknown>) : null;
+	const status = oneOf(o?.status, HANDBACK_STATUSES), outcome = text(o?.outcome, 1000);
+	if (!o || !status || !outcome) return null;
+	return {
+		status, outcome,
+		changed: listOf(o.changed, 50).flatMap((c: any) => { const path = text(c?.path, 1000); return path ? [{ path, what: textOrNull(c?.what, 1000) }] : []; }),
+		checked: listOf(o.checked, 20).flatMap((c: any) => { const check = text(c?.check, 1000), result = oneOf(c?.result, CHECK_RESULTS); return check && result ? [{ check, result, note: textOrNull(c?.note, 1000) }] : []; }),
+		risks: listOf(o.risks, 10).map((r) => text(r, 1000)).filter(Boolean),
+		decide: listOf(o.decide, 10).map((r) => text(r, 1000)).filter(Boolean),
+	};
+}
+
+/** review-verdict@1's findings in the thread item's shape (VERDICT_MAX_REASONS at most). */
+export function cleanFindings(fs: unknown): FindingT[] {
+	return listOf(fs, VERDICT_MAX_REASONS).flatMap((f: any) => {
+		const t = text(typeof f === "string" ? f : f?.text, VERDICT_REASON_MAX_BYTES);
+		if (!t) return [];
+		const line = Number(f?.line);
+		return [{ text: t, severity: oneOf(f?.severity, FINDING_SEVERITIES), file: textOrNull(f?.file, 1000), line: Number.isInteger(line) && line > 0 ? line : null }];
+	});
 }
 
 /**
@@ -48,13 +83,14 @@ export function handoffDraft(o: { id: string; at: number; child: { agentId: stri
  * the thread: the earlier session couldn't be resumed." Plain text the daemon wrote (trusted), one line; a client shows
  * it as a muted divider, and one that doesn't know the kind as a plain line.
  */
-export function threadNote(o: { id: string; at: number; text: string }): ItemDraft {
+export function threadNote(o: { id: string; at: number; text: string; internal?: boolean }): ItemDraft {
 	const text = oneLine(o.text, 500);
+	// `internal`: a line about the daemon's own bookkeeping (src/bookkeeping.ts): recorded, hidden by default.
 	return { id: o.id, rev: 1, kind: "note", status: "done", at: new Date(o.at).toISOString(), durationMs: null, text, blocks: plainBlocks(text), format: THREAD_FORMAT,
-		redacted: false, tool: null, error: null, truncated: null, child: null } as ItemDraft;
+		redacted: false, tool: null, error: null, truncated: null, child: null, ...(o.internal ? { internal: true } : {}) } as ItemDraft;
 }
 
 /** A reviewer's verdict on a hand-back: `{"passed", "reasons"}`, as the review contract has the reviewer answer. */
-export type HandoffVerdict = { passed: boolean; reasons: string[] };
+export type HandoffVerdict = { passed: boolean; reasons: string[]; findings?: unknown[] };
 /** As the reviewer gate keeps them (src/plugins/gate-reviewer/review.ts): at most 20 reasons of about 500 characters. */
 export const VERDICT_MAX_REASONS = 20, VERDICT_REASON_MAX_BYTES = 2000;

@@ -158,6 +158,8 @@ extension DeskModel {
     if store.capabilities.contains(Capability.agentPause), let st = store.runs[row.runId]?.agents[row.id]?.status, !st.isTerminal {
       items.append(st == .paused ? .resume : .pause)
     }
+    // ADR-026 §7: its bookkeeping (waits, polls, CLI system events) is hidden; this shows it in its thread.
+    if store.capabilities.contains(Capability.agentsThreadInternal) { items.append(.bookkeeping(shown: store.bookkeepingShown.contains(row.id))) }
     items.append(.copyId(String(row.id.suffix(4))))
     return items
   }
@@ -169,6 +171,7 @@ extension DeskModel {
       focusBox(row.id)
     case .pause: Task { await store.controlAgent(runId: row.runId, agentId: row.id, .pause) }
     case .resume: Task { await store.controlAgent(runId: row.runId, agentId: row.id, .resume) }
+    case .bookkeeping(let shown): store.setBookkeepingShown(!shown, agentId: row.id)
     case .copyId: copyText(row.id)
     }
   }
@@ -182,11 +185,14 @@ extension DeskModel {
 
 package enum AgentMenuItem: Hashable, Sendable {
   case message(String), pause, resume, copyId(String)
+  /// Show (or hide) the agent's bookkeeping in its thread.
+  case bookkeeping(shown: Bool)
   package var title: String {
     switch self {
     case .message(let t): "Message \(t)…"
     case .pause: "Pause"
     case .resume: "Resume"
+    case .bookkeeping(let shown): shown ? "Hide Bookkeeping" : "Show Bookkeeping"
     case .copyId: "Copy Agent ID"
     }
   }

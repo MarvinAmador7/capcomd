@@ -29,7 +29,9 @@ public final class LiveSubscriber: StreamSubscribing, @unchecked Sendable {
   }
 
   public func subscribe(scope: String, feed: String?, thread: Bool, after: Int, onFrame: @escaping @Sendable (StreamFrame) async -> Void) -> SubscriptionHandle {
-    let query = (feed.map { ["feed=\($0)", "activity=1"] } ?? []) + (thread ? ["thread=1"] : [])
+    // internal=1: the agents' bookkeeping too (agents.thread_internal), which the app shows only on request; a daemon
+    // without the capability ignores it.
+    let query = (feed.map { ["feed=\($0)", "activity=1"] } ?? []) + (thread ? ["thread=1", "internal=1"] : [])
     let path = "/v1/streams/\(scope)/events" + (query.isEmpty ? "" : "?" + query.joined(separator: "&"))
     let h = Handle(); let t = transport, bo = backoff, cap = maxBackoff, idle = idleTimeout
     h.task = Task {
@@ -118,7 +120,7 @@ public struct LiveThread: ThreadFetching {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
   public func thread(runId: String, agentId: String, after: Int, limit: Int) async throws -> CapcomdThread.Page {
-    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread?after=\(after)&limit=\(limit)"
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread?after=\(after)&limit=\(limit)&internal=1"
     do { return try await transport.getJSON(path, as: CapcomdThread.Page.self, maxBytes: 16 << 20) }
     catch let e as HTTPStatusError {
       switch e.status { case 401: throw Unauthorized(); case 404: throw DetailUnavailable.unsupported; default: throw DetailUnavailable.failed("HTTP \(e.status)") }
@@ -126,7 +128,7 @@ public struct LiveThread: ThreadFetching {
     catch is DecodingError { throw DetailUnavailable.failed("unexpected response") }
   }
   public func threadTail(runId: String, agentId: String, before: Int?, limit: Int) async throws -> CapcomdThread.Tail {
-    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread/tail?limit=\(limit)" + (before.map { "&before=\($0)" } ?? "")
+    let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/thread/tail?limit=\(limit)&internal=1" + (before.map { "&before=\($0)" } ?? "")
     do { return try await transport.getJSON(path, as: CapcomdThread.Tail.self, maxBytes: 16 << 20) }
     catch let e as HTTPStatusError {
       switch e.status { case 401: throw Unauthorized(); case 404: throw DetailUnavailable.unsupported; default: throw DetailUnavailable.failed("HTTP \(e.status)") }

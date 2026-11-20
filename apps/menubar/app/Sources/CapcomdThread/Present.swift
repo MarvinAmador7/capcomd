@@ -112,12 +112,16 @@ public enum Highlight {
   }
 }
 
-/// A reviewer's verdict: capcomd's review contract has the reviewer answer `{"passed": true|false, "reasons": [...]}`,
-/// as its whole message or as the last paragraph (or code block) after its prose. Every string in it is agent text.
+/// A reviewer's verdict: capcomd's review contract has the reviewer answer `{"passed": true|false, "findings": [...]}`
+/// (review-verdict@1; older reviewers `"reasons"`), as its whole message or as the last paragraph (or code block) after
+/// its prose. Every string in it is agent text.
 public struct Verdict: Sendable, Hashable {
   public var passed: Bool
   public var reasons: [String]
-  public init(passed: Bool, reasons: [String]) { self.passed = passed; self.reasons = reasons }
+  /// review-verdict@1's findings (the daemon's `child.verdict.findings`): the same reasons with their severity, file and
+  /// line; empty when the reviewer gave only reasons.
+  public var findings: [Finding]
+  public init(passed: Bool, reasons: [String], findings: [Finding] = []) { self.passed = passed; self.reasons = reasons; self.findings = findings }
 
   /// The verdict in `raw` when it is that JSON and nothing else (a ```json fence around it is fine).
   public static func parse(_ raw: String) -> Verdict? {
@@ -129,8 +133,19 @@ public struct Verdict: Sendable, Hashable {
           let o = (try? JSONSerialization.jsonObject(with: Data(t.utf8))) as? [String: Any],
           let passed = o["passed"] as? Bool else { return nil }
     // JSON escapes can bring back what decoding stripped (\u202e): clean each reason again.
-    let reasons = ((o["reasons"] as? [Any]) ?? []).compactMap { $0 as? String }.map(clean)
-      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    let line = { (s: String) in clean(s).trimmingCharacters(in: .whitespacesAndNewlines) }
+    // review-verdict@1 says findings (a line each, or {text, severity, file, line}); older reviewers say reasons.
+    if let raw = o["findings"] as? [Any] {
+      let findings = raw.prefix(50).compactMap { f -> Finding? in
+        if let t = f as? String { let t = line(t); return t.isEmpty ? nil : Finding(text: t) }
+        guard let f = f as? [String: Any], let t = (f["text"] as? String).map(line), !t.isEmpty else { return nil }
+        let file = (f["file"] as? String).map(line).flatMap { $0.isEmpty ? nil : $0 }
+        return Finding(text: t, severity: (f["severity"] as? String).flatMap(Finding.Severity.init(rawValue:)), file: file,
+                       line: file == nil ? nil : (f["line"] as? Int).flatMap { $0 > 0 ? $0 : nil })
+      }
+      return Verdict(passed: passed, reasons: findings.map(\.reason), findings: findings)
+    }
+    let reasons = ((o["reasons"] as? [Any]) ?? []).compactMap { $0 as? String }.map(line).filter { !$0.isEmpty }
     return Verdict(passed: passed, reasons: Array(reasons.prefix(50)))
   }
 }
@@ -291,4 +306,36 @@ public struct ThinkingRun: Sendable, Hashable {
 extension Verdict {
   /// The seal's words: "Passed review" / "Didn't pass review".
   public var title: String { passed ? "Passed review" : "Didn't pass review" }
+}
+
+/// One of a reviewer's findings (review-verdict@1). Agent text.
+public struct Finding: Sendable, Hashable {
+  public enum Severity: String, Sendable, Hashable, CaseIterable { case blocker, major, minor, nit }
+  public var text: String
+  public var severity: Severity?
+  public var file: String?
+  public var line: Int?
+  public init(text: String, severity: Severity? = nil, file: String? = nil, line: Int? = nil) { self.text = text; self.severity = severity; self.file = file; self.line = line }
+  /// "src/add.ts:3", or nil without a file.
+  public var place: String? { file.map { f in line.map { "\(f):\($0)" } ?? f } }
+  /// As one of the verdict's reasons (the daemon's form): "src/add.ts:3: returns a - b".
+  public var reason: String { place.map { "\($0): \(text)" } ?? text }
+}
+
+extension Handback {
+  /// The outcome line's lead word: "Done", "Partly done", "Blocked".
+  public var statusWord: String {
+    switch status { case .done: "Done"; case .partly: "Partly done"; case .blocked: "Blocked" }
+  }
+}
+
+extension Handback.Result {
+  /// As the card says it: "passed", "failed", "not run".
+  public var word: String { rawValue }
+}
+
+extension Item {
+  /// A handoff's typed hand-back (handback@1), when the child gave one: its card is drawn from it, not from the blocks
+  /// (which say the same in prose for clients that don't read `child.handback`, then its artifacts).
+  public var typedHandback: Handback? { kind == "handoff" ? child?.handback : nil }
 }

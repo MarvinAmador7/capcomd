@@ -306,3 +306,51 @@ describe("thread writes", () => {
 		for (const c of calls.slice(1)) expect(c.items.length === 1 || Buffer.byteLength(JSON.stringify(c.items)) <= CALL_MAX_BYTES).toBe(true);
 	});
 });
+
+describe("bookkeeping is internal (ADR-026 §7, agents.thread_internal)", () => {
+	const bookkeeping = (f: (ev: unknown) => unknown) => {
+		f(say("Spawned the parser; waiting for it."));
+		f(toolUse("w", "Bash", { command: "capcomd await agt-2 --wake" })); f(toolResult("w"));
+		f(toolUse("s", "mcp__capcomd__capcomd_status", {})); f(toolResult("s"));
+		f(toolUse("t", "Bash", { command: "bun test" })); f(toolResult("t"));
+		f({ type: "system", subtype: "api_retry", attempt: 1, max_retries: 10 });
+		f(say("The parser landed."));
+	};
+	test("the thread routes leave it out unless asked; asked, each item says it", async () => {
+		const { req, feed } = app();
+		bookkeeping(feed);
+		const shown = ThreadPage.parse(await (await req("/v1/runs/run-1/agents/a1/thread?after=0")).json());
+		expect(shown.items.map((i) => i.text)).toEqual(["Spawned the parser; waiting for it.", "Run bun test", "The parser landed."]);
+		const all = ThreadPage.parse(await (await req("/v1/runs/run-1/agents/a1/thread?after=0&internal=true")).json());
+		expect(all.items.filter((i) => i.internal).map((i) => [i.kind, i.status])).toEqual([["tool", "done"], ["tool", "done"], ["other", "done"]]);
+		expect(all.items.filter((i) => !i.internal).map((i) => i.text)).toEqual(shown.items.map((i) => i.text));
+		// The tail too, and its `before` pages over what it leaves out.
+		const tail = ThreadTail.parse(await (await req("/v1/runs/run-1/agents/a1/thread/tail?limit=2")).json());
+		expect(tail.items.map((i) => i.text)).toEqual(["Run bun test", "The parser landed."]);
+		const above = ThreadTail.parse(await (await req(`/v1/runs/run-1/agents/a1/thread/tail?limit=5&before=${tail.before}`)).json());
+		expect(above.items.map((i) => i.text)).toEqual(["Spawned the parser; waiting for it."]);
+		expect(above.before).toBeNull();
+		expect(ThreadTail.parse(await (await req("/v1/runs/run-1/agents/a1/thread/tail?limit=50&internal=1")).json()).items.length).toBe(6);
+		expect((await req("/v1/runs/run-1/agents/a1/thread?internal=yes")).status).toBe(422);
+	});
+	test("live frames leave it out unless the stream asks with internal=1", async () => {
+		for (const [path, want] of [["/v1/streams/run-1/events?thread=1", 3], ["/v1/streams/run-1/events?thread=1&internal=1", 6]] as const) {
+			const { req, feed } = app();
+			const res = await req(path);
+			setTimeout(() => bookkeeping(feed), 40);
+			const t = await read(res, 1500, /The parser landed/);
+			const items = new Map(frames(t).map((f) => [env(f).data.item.id, env(f).data.item]));
+			expect(items.size).toBe(want);
+			expect([...items.values()].some((i: any) => i.internal)).toBe(want === 6);
+		}
+	});
+	test("advertised in /v1/health, with GET /v1/schemas for typed hand-backs", async () => {
+		const { req } = app();
+		const caps = ((await (await req("/v1/health")).json()) as any).capabilities;
+		expect(caps).toContain("agents.thread_internal");
+		expect(caps).toContain("agents.handback_typed");
+		const s = (await (await req("/v1/schemas")).json()) as any;
+		expect(s.schemas.map((x: any) => x.id)).toEqual(["handback@1", "review-verdict@1"]);
+		expect(s.schemas[0]).toMatchObject({ name: "handback", version: 1, schema: { type: "object", required: ["status", "outcome"] } });
+	});
+});

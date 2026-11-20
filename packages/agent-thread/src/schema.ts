@@ -115,6 +115,28 @@ export const ToolInfo = z.object({
 });
 export type ToolInfoT = z.infer<typeof ToolInfo>;
 
+/** handback@1 (the daemon's schema registry: GET /v1/schemas): a child's typed hand-back, as its parent's thread shows it. */
+export const HANDBACK_STATUSES = ["done", "partly", "blocked"] as const;
+export const CHECK_RESULTS = ["passed", "failed", "not run"] as const;
+export const FINDING_SEVERITIES = ["blocker", "major", "minor", "nit"] as const;
+export const Handback = z.object({
+	status: z.enum(HANDBACK_STATUSES).describe("done: the task is done; partly: some of it is; blocked: it can't go on without something or someone"),
+	outcome: agentText("the outcome in one sentence"),
+	changed: z.array(z.object({ path: agentText("a file or folder it changed, relative to the repository"), what: agentText("what changed in it, briefly").nullable() })),
+	checked: z.array(z.object({ check: agentText("what was checked: a command, or how"), result: z.enum(CHECK_RESULTS), note: agentText("what it showed").nullable() })),
+	risks: z.array(agentText("a deviation from the task or a risk")),
+	decide: z.array(agentText("something the parent (or the person) must decide")),
+});
+export type HandbackT = z.infer<typeof Handback>;
+/** review-verdict@1's findings: what a reviewer found, most severe first. */
+export const Finding = z.object({
+	text: agentText("the finding, one line"),
+	severity: z.enum(FINDING_SEVERITIES).nullable(),
+	file: agentText("the file it is about, relative to the repository").nullable(),
+	line: z.number().int().positive().nullable(),
+});
+export type FindingT = z.infer<typeof Finding>;
+
 export const ThreadItem = z.object({
 	id: z.string().describe("Stable: an update has the same id and a higher rev"),
 	rev: z.number().int().positive(),
@@ -136,9 +158,14 @@ export const ThreadItem = z.object({
 	child: z.object({
 		agentId: z.string(),
 		status: z.string(),
-		verdict: z.object({ passed: z.boolean(), reasons: z.array(agentText("one of the reviewer's reasons")) }).optional()
+		verdict: z.object({
+			passed: z.boolean(), reasons: z.array(agentText("one of the reviewer's reasons")),
+			findings: z.array(Finding).optional().describe("Capability agents.handback_typed: the verdict as review-verdict@1 gave it, each reason with its severity, file and line when the reviewer said them (`reasons` are the same findings as lines)"),
+		}).optional()
 			.describe("A reviewer's verdict, when the child was one. The blocks then start with a paragraph that says it (\"Passed review\" / \"Didn't pass review\"), then the reasons as a list, for clients that don't read this field"),
+		handback: Handback.optional().describe("Capability agents.handback_typed: the child's typed hand-back (handback@1), when it gave one. The blocks still say it in Markdown (the outcome line, then a bullet per changed file, check, risk and decision), for clients that don't read this field"),
 	}).nullable().describe("handoff: the child agent that handed back (its summary is the blocks; artifacts are links and media)"),
+	internal: z.boolean().optional().describe("Capability agents.thread_internal: the item is bookkeeping (a wake armed, a check-in booked, a wait on other agents, a poll of the agent's own state, a CLI system event such as a retried model request): recorded, and left out of GET …/thread, …/thread/tail and live frames unless asked for with `internal=true`. Absent: not bookkeeping"),
 });
 export type ThreadItemT = z.infer<typeof ThreadItem>;
 /** What an adapter produces: everything but the storage cursor fields (seq, order) and agentId, which the daemon sets. */

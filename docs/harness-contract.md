@@ -74,6 +74,7 @@ Refetch when the run stream shows agent.checkpointed, agent.done, agent.failed, 
 | `profiles.get` | GET | `/v1/profiles/{name}` | Capability profiles.edit. One agent profile as the rows a client renders and edits (typed like a place's settings, GET /v1/sandboxes/{name}): each value with the file that sets it and whether PUT can change it, and the `rev` to send back. Needs the `read` scope. Local files only. Never contains a credential or a prompt's text. `repo` as GET /v1/profiles (422 `invalid` when it isn't a project checkout). 404 `not_found` for a name that isn't a profile; 422 `invalid` when the profiles can't be read (`message` says why, as `capcomd profiles validate`). |
 | `profiles.update` | PUT | `/v1/profiles/{name}` | Capability profiles.edit. Change a profile: each field by id with its new value (or null to remove it), and the `rev` it was read with. Needs the `configure` scope (403 `forbidden` without it: a profile is what every later agent of it runs with) and an `Idempotency-Key` (the same key with the same request replays the first 200; with another, 409 `idempotency_conflict`). Written to the profile's own file (`writesTo`), atomically, keeping a YAML file's comments; a profile file's `version` goes up by one (an agents.json entry has none and stays 1). Agents already spawned keep the spec and version they started with; the next spawn uses the new one. Every write that changed something is audited: a durable profile.changed event on the `daemon` stream. Answers like GET /v1/profiles/{name}, with `changed` and `changes`. 409 `conflict` when `rev` isn't the current one (the body carries the current `rev`: read the profile again, then retry). 422 `invalid` with `field` for a field it doesn't have or that isn't `editable`, or a value not of its type; 422 `invalid` when the profiles the change would leave can't be read (a value out of range, a widening child, a missing parent: `message` says which, as `capcomd profiles validate`), which writes nothing. 404 `not_found` for a name that isn't a profile. |
 | `skills.list` | GET | `/v1/skills` | Skills for the picker: bundled capcomd skills and the user's ~/.claude/skills. |
+| `schemas.list` | GET | `/v1/schemas` | Capability agents.handback_typed. The registered payload schemas (ADR-026 §7), by id. |
 | `events.replay` | GET | `/v1/events` | Durable events of one scope after `after` (resume cursor = seq), same envelope as the stream. |
 | `events.stream` | GET | `/v1/streams/{scope}/events` | SSE. Each event frame: `id: <seq>`, `event: <type>`, `data: <envelope JSON>`. Resume by sending `Last-Event-ID: <seq>`.
 If that seq was compacted away, or this client's buffer overflowed (slow reader), the server sends `event: stream.reset` with {snapshotSeq, reason},
@@ -134,6 +135,8 @@ Timestamps (ts, decidedAt, expiresAt): RFC 3339 UTC with exactly 3 millisecond d
 | `runs.archive` | POST /v1/runs/{runId}/archive and /restore (the steer scope, an Idempotency-Key): an archived run is read-only, a message to its agents is 409 `archived` until it is restored; Run.archived; run.archived and run.restored on run streams and the lifecycle feed. Archiving is refused (409 conflict) while an agent of it works |
 | `agents.wake` | Waits between turns (ADR-026 §3): an agent ends its turn with a wake armed instead of waiting inside a tool call. agent.wake_armed, agent.woken and agent.wake_cancelled on run streams and the lifecycle feed (causes waiting, woken, wake_cancelled), and Agent.activity of kind wait with `wake` (what it waits for, since when) while it waits |
 | `agents.park` | Parked machines (ADR-026 §6): when a planner or lead (an orchestrate profile, or a root agent) ends its turn idle, its machine is parked (hibernated: boxd hibernate, Docker stop) instead of deleted, and a message to it wakes that machine and resumes its conversation there in a moment (Agent.activity setup shows no restore phase). A worker's machine is deleted when it ends, as before. Parked machines aren't shown with agents: GET /v1/sandboxes/{name}/resources lists them with state `parked`, their agent as owner and `deleteAfter` (when they are deleted), and Delete (capability sandboxes.actions) deletes only the machine (its agent stays idle; sandbox.resource_action `parked: true`). They are deleted when the place's `parkedRetention` setting (4 h, 24 h or 7 days; 24 h by default; recorded with each run) runs out, when more than 10 are parked at the place (the oldest first), when the run is archived or the agent cancelled. Descriptors' caps carry `hibernate` (memory, disk or none). A parked machine holds no memory slot |
+| `agents.thread_internal` | Thread items carry `internal: true` for an agent's bookkeeping (ADR-026 §7: a wake armed or a check-in booked, a wait on other agents, a poll of its own state, a CLI system event). GET …/thread and …/thread/tail leave them out unless asked for with `internal=true`, and `?thread=1` frames unless the stream asks with `internal=1` |
+| `agents.handback_typed` | Typed hand-backs (ADR-026 §7): GET /v1/schemas lists the registered payload schemas (handback@1, review-verdict@1; `name@version`, never changed once registered). An agent hands back with `capcomd result --handback JSON`, checked against handback@1 before it is recorded (a payload that doesn't fit is refused, field by field); a reviewer's verdict is recorded as review-verdict@1. Agent.result.typed is `{schema, value}`; a handoff thread item carries `child.handback` and `child.verdict.findings` |
 
 ## Event envelope
 
@@ -272,6 +275,8 @@ An agent's thread: typed items with stable ids, each message parsed once by the 
 Kinds: say, thinking (`redacted` when the CLI withheld it), tool (`tool.summary` is one daemon-built line), error, result (omitted when it only repeats the last say), plan (the agent's todo list as a task list), handoff (a child that finished: its summary, artifacts as links and media), other (an event the daemon doesn't know, as one plain line). Render an unknown kind as a plain line of `text`.
 Every string in an item is agent-written plain text (x-untrusted): never HTML, never a link followed or media loaded without the user's click. Links carry the daemon's `target` (web: show `host`, and the full URL when `mismatch`; file, artifact, agent, run; none: plain text). Media: `remote` never loads by itself; `attachment` and `inline` come from GET /v1/runs/{runId}/attachments/{id}/content, `workspace` from GET /v1/runs/{runId}/agents/{agentId}/workspace?path=.
 Caps (block boundaries only): 65536 bytes of blocks and of `text` per item (whole trailing blocks dropped, `truncated` says how many); code blocks keep their first 400 lines (`truncatedLines`); tables 50 rows × 8 columns (`truncatedRows`/`truncatedCols`); a tool's `diff` its first 40 lines of 240 characters at most (`truncatedLines`; `added`/`removed` count the whole change).
+Bookkeeping (capability agents.thread_internal): an agent's waits and polls (a wake armed or a check-in booked, a wait on other agents, a read of its own state, its inbox or the run's events) and its CLI's system events (a retried or fallen-back model request, a compacted conversation) are recorded with `internal: true` and left out of GET …/thread, …/thread/tail and `?thread=1` frames unless asked for with `internal=true` (`internal=1` on the stream); a client that asks shows them only on request.
+Typed hand-backs (capability agents.handback_typed): a handoff's `child.handback` is the child's handback@1 (status, outcome, changed, checked, risks, decide) when it gave one, and a reviewer's `child.verdict.findings` its review-verdict@1 findings; the blocks still say both in Markdown. GET /v1/schemas lists the schemas.
 Reserved for token streaming (not emitted yet): a say or thinking item may be `open` with its last block `{t:"open", text}` (the unfinished block as plain text) and `rev` rising as it grows. Live updates: `?thread=1` on a run stream (agent.thread_item_changed frames).
 
 ### Newest first
@@ -655,11 +660,163 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
                 "x-untrusted": true,
                 "description": "Agent-written text: one of the reviewer's reasons. Plain text: never markdown, HTML, or a link to follow"
               }
+            },
+            "findings": {
+              "description": "Capability agents.handback_typed: the verdict as review-verdict@1 gave it, each reason with its severity, file and line when the reviewer said them (`reasons` are the same findings as lines)",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "x-untrusted": true,
+                    "description": "Agent-written text: the finding, one line. Plain text: never markdown, HTML, or a link to follow"
+                  },
+                  "severity": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "blocker",
+                      "major",
+                      "minor",
+                      "nit",
+                      null
+                    ]
+                  },
+                  "file": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "x-untrusted": true,
+                    "description": "Agent-written text: the file it is about, relative to the repository. Plain text: never markdown, HTML, or a link to follow"
+                  },
+                  "line": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "text",
+                  "severity",
+                  "file",
+                  "line"
+                ]
+              }
             }
           },
           "required": [
             "passed",
             "reasons"
+          ]
+        },
+        "handback": {
+          "description": "Capability agents.handback_typed: the child's typed hand-back (handback@1), when it gave one. The blocks still say it in Markdown (the outcome line, then a bullet per changed file, check, risk and decision), for clients that don't read this field",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "done",
+                "partly",
+                "blocked"
+              ],
+              "description": "done: the task is done; partly: some of it is; blocked: it can't go on without something or someone"
+            },
+            "outcome": {
+              "type": "string",
+              "x-untrusted": true,
+              "description": "Agent-written text: the outcome in one sentence. Plain text: never markdown, HTML, or a link to follow"
+            },
+            "changed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "x-untrusted": true,
+                    "description": "Agent-written text: a file or folder it changed, relative to the repository. Plain text: never markdown, HTML, or a link to follow"
+                  },
+                  "what": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "x-untrusted": true,
+                    "description": "Agent-written text: what changed in it, briefly. Plain text: never markdown, HTML, or a link to follow"
+                  }
+                },
+                "required": [
+                  "path",
+                  "what"
+                ]
+              }
+            },
+            "checked": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "check": {
+                    "type": "string",
+                    "x-untrusted": true,
+                    "description": "Agent-written text: what was checked: a command, or how. Plain text: never markdown, HTML, or a link to follow"
+                  },
+                  "result": {
+                    "type": "string",
+                    "enum": [
+                      "passed",
+                      "failed",
+                      "not run"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "x-untrusted": true,
+                    "description": "Agent-written text: what it showed. Plain text: never markdown, HTML, or a link to follow"
+                  }
+                },
+                "required": [
+                  "check",
+                  "result",
+                  "note"
+                ]
+              }
+            },
+            "risks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: a deviation from the task or a risk. Plain text: never markdown, HTML, or a link to follow"
+              }
+            },
+            "decide": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "x-untrusted": true,
+                "description": "Agent-written text: something the parent (or the person) must decide. Plain text: never markdown, HTML, or a link to follow"
+              }
+            }
+          },
+          "required": [
+            "status",
+            "outcome",
+            "changed",
+            "checked",
+            "risks",
+            "decide"
           ]
         }
       },
@@ -667,6 +824,10 @@ Also exported by packages/agent-thread (`threadItemJsonSchema()`); golden sessio
         "agentId",
         "status"
       ]
+    },
+    "internal": {
+      "description": "Capability agents.thread_internal: the item is bookkeeping (a wake armed, a check-in booked, a wait on other agents, a poll of the agent's own state, a CLI system event such as a retried model request): recorded, and left out of GET …/thread, …/thread/tail and live frames unless asked for with `internal=true`. Absent: not bookkeeping",
+      "type": "boolean"
     }
   },
   "required": [
