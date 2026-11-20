@@ -289,7 +289,8 @@ import PerfLoopKit
   // MARK: expand-switch
 
   /// Expanded, other agents picked as the palette's ↩ picks them (`show(run:agent:)`): it stays expanded and the pane
-  /// shows each one; ⌘K opens over it and closes; Esc collapses it with the keyboard still in the pane.
+  /// shows each one; ⌘K opens over it and closes; Esc collapses it with the keyboard still in the pane; ⇧⌘↩ expands it
+  /// again, with its thread's rows in view.
   static func expandSwitch(_ run: HostRun) async throws {
     let d = try await onePane(run)
     d.model.expandPane()
@@ -316,14 +317,21 @@ import PerfLoopKit
     let ok2 = !d.model.paletteOpen
     let over = ok1 && ok2 && d.model.nav.expanded
     // Esc again collapses the pane, showing the last pick; the keyboard stays in it (`focus collapse`), not back in the
-    // sidebar's list, which had it before the expand. The rep ends collapsed, for the snapshot.
+    // sidebar's list, which had it before the expand. Then ⇧⌘↩ expands it again: its thread must show rows (the ink of
+    // `pane-1` after `re-expand`, and the check `re-expanded`); this left the pane blank in a third of the reps before
+    // 2026-11-20. The rep ends expanded, for the snapshot.
     let pane = paneView.map { FocusTarget.view($0) } ?? .identifier("the expanded pane")
     let collapsed = await paneStep(d, "collapse", panes: 1, .key(.escape), focus: pane) { !d.model.nav.expanded }
+    let again = await paneStep(d, "re-expand", panes: 1, .press("⇧⌘↩", item: "Expand Pane"), focus: pane) {
+      d.model.nav.expanded && d.panesShown().first?.expanded == true
+    }
+    let rowsBack = (d.paneView()?.view as? DeskPaneProbe)?.rowsInView ?? []
     run.regions(d.paneRegions(1))
     run.record([
       Check("stays-expanded", stayed, notes.joined(separator: "; ").ifEmpty("every pick showed in the expanded pane, still expanded")),
       Check("palette-over", over, "⌘K opened \(ok1) and Esc closed \(ok2) over the expanded pane; still expanded \(over)"),
       Check("collapsed", collapsed, "Esc collapsed the pane after the picks: \(collapsed)"),
+      Check("re-expanded", again && !rowsBack.isEmpty, "⇧⌘↩ expanded it again: \(again); its thread shows \(Self.rowList(rowsBack))"),
     ])
   }
 }
