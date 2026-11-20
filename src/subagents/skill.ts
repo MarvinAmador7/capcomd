@@ -87,11 +87,12 @@ field by field, and nothing is recorded; fix it and run it again.
   capcomd result --handback '{"status": "done", "outcome": "added the Home section to the desktop page",
     "changed": [{"path": "site/app/desktop/page.tsx", "what": "new section"}, {"path": "site/CONTENT.md", "what": "table row"}],
     "checked": [{"check": "bun run typecheck", "result": "passed"}, {"check": "the page in a browser", "result": "not run"}],
-    "risks": ["the logo isn't dithered: its CSS mask doesn't render headless"],
+    "risks": ["the logo is not dithered: its CSS mask does not render headless"],
     "decide": ["keep the Google Fonts import, or self-host the fonts?"]}'
 status: done, partly or blocked. outcome: one sentence, what you did (or what blocks you). changed: the files, briefly.
 checked: each command (or how you checked) and its result: passed, failed or not run. risks and decide: only if
-any. No story of how you worked, no restating the task. Only when it can't be said that way, hand back in prose:
+any. Inside the single quotes, write no ' (say "does not", or use ’). No story of how you worked, no restating the
+task. Only when it can't be said that way, hand back in prose:
 \`--summary "<the outcome in one sentence, then a few bullets>"\`.`;
 
 /** Every agent names its tab, Rex-style: injected into every real agent's instructions, so it stays short. */
