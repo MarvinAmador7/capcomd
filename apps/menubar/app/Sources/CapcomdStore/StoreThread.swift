@@ -8,6 +8,9 @@ public struct PendingSteer: Sendable, Hashable, Identifiable {
   public var skills: [String]
   public var state: State
   var key: String
+  /// The model and effort it carries for the agent's next turn (sent only where the daemon takes them).
+  public var model: String? = nil
+  public var effort: String? = nil
 }
 
 /// Capabilities the thread input checks before offering a feature.
@@ -71,12 +74,18 @@ extension CapcomdStore {
     var list = outbox[agentId] ?? []
     let entry: PendingSteer
     if let id, let i = list.firstIndex(where: { $0.id == id }) { list[i].state = .sending; entry = list[i] }
-    else { entry = PendingSteer(id: UUID().uuidString, body: body, skills: skills, state: .sending, key: makeKey()); list.append(entry) }
+    else {
+      let next = capabilities.contains(Capability.agentsMessagesModel) ? nextTurn[agentId] : nil
+      entry = PendingSteer(id: UUID().uuidString, body: body, skills: skills, state: .sending, key: makeKey(), model: next?.model, effort: next?.effort)
+      list.append(entry)
+    }
     outbox[agentId] = list; changed()
     let state: PendingSteer.State
     do {
-      let sent = try await messenger.send(runId: runId, agentId: agentId, body: entry.body,
-                                          skills: capabilities.contains(Capability.steerSkills) ? entry.skills : [], idempotencyKey: entry.key)
+      let skills = capabilities.contains(Capability.steerSkills) ? entry.skills : []
+      let sent = entry.model == nil && entry.effort == nil
+        ? try await messenger.send(runId: runId, agentId: agentId, body: entry.body, skills: skills, idempotencyKey: entry.key)
+        : try await messenger.send(runId: runId, agentId: agentId, body: entry.body, skills: skills, model: entry.model, effort: entry.effort, idempotencyKey: entry.key)
       state = .sent(seq: sent.seq)
     } catch let e as MessageRefused { state = .failed(e.message) }
     catch is Unauthorized { unauthorized = true; state = .failed("capcomd rejected the token") }

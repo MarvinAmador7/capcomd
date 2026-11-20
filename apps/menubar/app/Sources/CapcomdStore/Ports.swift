@@ -281,6 +281,14 @@ public struct SentMessage: Sendable, Hashable { public var seq: Int; public var 
 public struct MessageRefused: Error, Sendable, Hashable { public var message: String; public init(_ m: String) { message = m } }
 public protocol AgentMessaging: Sendable {
   func send(runId: String, agentId: String, body: String, skills: [String], idempotencyKey: String) async throws -> SentMessage
+  /// The same, with the model and effort for the agent's next turn (capability `agents.messages.model`); a messenger
+  /// that can't carry them sends the message alone.
+  func send(runId: String, agentId: String, body: String, skills: [String], model: String?, effort: String?, idempotencyKey: String) async throws -> SentMessage
+}
+extension AgentMessaging {
+  public func send(runId: String, agentId: String, body: String, skills: [String], model: String?, effort: String?, idempotencyKey: String) async throws -> SentMessage {
+    try await send(runId: runId, agentId: agentId, body: body, skills: skills, idempotencyKey: idempotencyKey)
+  }
 }
 
 /// `GET /v1/skills` entry: name and description from SKILL.md frontmatter, `source` bundled or user.

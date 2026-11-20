@@ -56,11 +56,6 @@ extension Theme {
     static let mono = Font.system(size: 11, design: .monospaced)
     static let question = Font.system(size: 15, weight: .semibold)
     static let goalTitle = Font.system(size: 13, weight: .semibold, design: .monospaced)
-    /// An empty thread while its agent gets ready (GettingReady): its line, the copy's bar (a hairline track and its
-    /// fill), the meta line under it.
-    static let readyWidth: CGFloat = 260, readyBar: CGFloat = 3, readyGap: CGFloat = 8
-    static let readyTrack = Color.white.opacity(0.08), readyFill = Theme.accent.opacity(0.75)
-    static let readyRowHeight: CGFloat = 28
 
     // Home (Home.dc.html): the mark, the title, the composer with its lift, the model menu, the Running cards.
     enum Home {

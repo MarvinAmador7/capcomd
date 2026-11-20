@@ -950,10 +950,8 @@ struct Column: View {
         if a.warm {
           ColumnThread(runId: a.header.runId, agentId: agentId, thread: model.thread(agentId))
             .task(id: agentId) { await model.keepThreadFresh(agentId: agentId) }
-            .overlay { GettingReadyOverlay(agentId: agentId, thread: model.thread(agentId)) }
         } else {
-          Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay { GettingReadyOverlay(agentId: agentId, thread: model.peekThread(agentId)) }
+          ColdTail(agentId: agentId)
         }
         if let ap = a.approval { DecisionBar(approval: ap, focused: focused) }
         else if let l = a.limit { LimitBar(limit: l, focused: focused) }
@@ -1038,6 +1036,7 @@ struct ColumnHead: View {
 struct ColumnThread: View {
   @Environment(DeskModel.self) private var model
   @Environment(\.deskPane) private var inPane
+  @Environment(\.needsReel) private var inNeeds
   /// The pane it is in (nil in the reel): a split's thread has narrower sides; an expanded one is a centred 800 pt
   /// reading column with diffs, code and logs 1060 pt.
   @Environment(\.paneState) private var pane
@@ -1048,7 +1047,9 @@ struct ColumnThread: View {
   let thread: ThreadSlice
   var body: some View {
     DeskProbe.body(inPane ? "PaneThread" : "ColumnThread", id: agentId)
-    let entries = thread.entries
+    // The rows as drawn: calls in a row folded into one line, thinking merged (ThreadRow.rows, made once per change).
+    let entries = thread.rows
+    let setupRecord = model.agent(agentId, inNeeds: inNeeds)?.setupRecord
     let expanded = inPane && pane?.expanded == true, split = inPane && pane?.split == true
     return ScrollViewReader { proxy in ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
@@ -1062,7 +1063,10 @@ struct ColumnThread: View {
             .onAppear(perform: loadEarlier)
             .onTapGesture(perform: loadEarlier)
         }
+        // A first start's setup, done: its record heads the thread (a wake's goes above its turn's first row).
+        if let r = setupRecord, r.beforeRow == nil, thread.top == nil { SetupRecordRow(record: r) }
         ForEach(Array(entries.enumerated()), id: \.element.id) { n, e in
+          if let r = setupRecord, let b = r.beforeRow, b == e.id { SetupRecordRow(record: r) }
           EntryRow(runId: runId, agentId: agentId, entry: e, above: n == 0 ? 0 : Self.bottomMargin(entries[n - 1]), inPane: inPane,
                    proseWidth: expanded ? PaneMetrics.reading : nil).equatable()
         }
@@ -1070,6 +1074,8 @@ struct ColumnThread: View {
           Text(verbatim: "Couldn't load the thread (\(why))").font(Theme.Desk.meta).foregroundStyle(Theme.Desk.tertiary)
         }
         ForEach(thread.pending) { p in ColumnSteer(runId: runId, agentId: agentId, steer: p) }
+        // Getting ready, waking, or waiting between turns: where its next turn will begin.
+        ThreadTail(agentId: agentId, compact: !inPane)
       }
       // The opened pane reads as one column of text (RexMain `.pbd`: 720 pt, 24 pt sides; a split's 18 pt), centred in a
       // wider pane, with its message box under it at the same width. Expanded (RexExpanded `.xb`): prose in a centred
@@ -1089,17 +1095,35 @@ struct ColumnThread: View {
     }
     }
   }
-  static func bottomMargin(_ e: ThreadEntry) -> CGFloat {
-    switch e { case .item(let i, _): ThreadItemRow.bottomMargin(i); case .event: Theme.Content.proseBottom }
+  static func bottomMargin(_ r: ThreadRow) -> CGFloat {
+    switch r {
+    case .entry(.item(let i, _)): ThreadItemRow.bottomMargin(i)
+    case .entry(.event): Theme.Content.proseBottom
+    case .tools, .thinking: Theme.Rows.bottom
+    }
   }
 
   private func loadEarlier() {
-    guard keep == nil, !thread.loadingEarlier, let first = thread.entries.first?.id else { return }
+    guard keep == nil, !thread.loadingEarlier, let first = thread.rows.first?.id else { return }
     keep = first
     Task {
       await model.loadEarlier(agentId: agentId)
-      if thread.entries.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
+      if thread.rows.first?.id == first { keep = nil }   // nothing came (it failed): nothing to put back
     }
+  }
+}
+
+/// A cold reel column reads no thread: what it knows of its agent (getting ready, waking, waiting) it still shows, at
+/// its top.
+struct ColdTail: View {
+  let agentId: String
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ThreadTail(agentId: agentId, compact: true)
+      Spacer(minLength: 0)
+    }
+    .padding(Theme.Desk.bodyPadding)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 }
 
@@ -1131,7 +1155,7 @@ struct ColumnSteer: View {
 struct EntryRow: View, Equatable {
   let runId: String
   let agentId: String
-  let entry: ThreadEntry
+  let entry: ThreadRow
   let above: CGFloat
   /// In the opened pane (the bench tells its rows from the reel's by name).
   var inPane = false
@@ -1140,8 +1164,10 @@ struct EntryRow: View, Equatable {
   var body: some View {
     let _ = DeskProbe.body(inPane ? "PaneEntryRow" : "EntryRow", id: agentId)
     switch entry {
-    case .item(let i, let next): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
-    case .event(let ev): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
+    case .entry(.item(let i, let next)): ThreadItemRow(runId: runId, agentId: agentId, item: i, next: next, above: above, proseWidth: proseWidth)
+    case .entry(.event(let ev)): EventEntry(runId: runId, agentId: agentId, item: ev, proseWidth: proseWidth)
+    case .tools(let run): ToolGroupRow(run: run, proseWidth: proseWidth)
+    case .thinking(let run): ThinkingRunRow(runId: runId, agentId: agentId, run: run).modifier(ProseColumn(proseWidth))
     }
   }
 }
@@ -1170,8 +1196,12 @@ struct ColumnComposer: View {
   let name: String
   @State private var draft = ""
   @FocusState private var focused: Bool
-  var body: some View {
-    DeskProbe.body(inPane ? "PaneComposer" : "ColumnComposer", id: agentId)
+  /// The opened pane has Home's composer card (PaneComposer); a reel column keeps its one-line box.
+  @ViewBuilder var body: some View {
+    if inPane { PaneComposer(agentId: agentId, name: name) } else { compact }
+  }
+  private var compact: some View {
+    DeskProbe.body("ColumnComposer", id: agentId)
     return HStack(spacing: 8) {
       TextField("Tell \(name)…", text: $draft, axis: .vertical)
         .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(1...5)

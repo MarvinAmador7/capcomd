@@ -204,7 +204,14 @@ public struct LiveMessenger: AgentMessaging {
   let transport: UnixSocketTransport
   public init(transport: UnixSocketTransport) { self.transport = transport }
   public func send(runId: String, agentId: String, body: String, skills: [String], idempotencyKey: String) async throws -> SentMessage {
+    try await send(runId: runId, agentId: agentId, body: body, skills: skills, model: nil, effort: nil, idempotencyKey: idempotencyKey)
+  }
+  /// `model` / `effort` ride along only when set: the store sends them only where the daemon advertises
+  /// `agents.messages.model`.
+  public func send(runId: String, agentId: String, body: String, skills: [String], model: String?, effort: String?, idempotencyKey: String) async throws -> SentMessage {
     var payload: [String: Any] = ["body": body]; if !skills.isEmpty { payload["skills"] = skills }
+    if let model { payload["model"] = model }
+    if let effort { payload["effort"] = effort }
     let path = "/v1/runs/\(LiveDetail.seg(runId))/agents/\(LiveDetail.seg(agentId))/messages"
     let (status, data) = try await transport.post(path, headers: [("Idempotency-Key", idempotencyKey)], json: try JSONSerialization.data(withJSONObject: payload))
     let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]

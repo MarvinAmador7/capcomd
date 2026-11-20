@@ -354,21 +354,28 @@ struct PaneHead: View {
     let expanded = pane?.expanded == true, split = pane?.split == true && !expanded
     let deck = model.decks.first { $0.runId == h.runId }
     let place = Place(sandbox: deck?.sandbox).map { $0 == .local ? "This Mac" : "boxd" }
+    let state = ColumnHead.state(h, asks: asks)
+    // Working on a turn (not waiting on you, not between turns on a wake): the bot twinkles, "working" shimmers.
+    let working = state == "working"
     return HStack(spacing: 8) {
-      BotAvatar(traits: slice.bot, size: .small, cell: 1).frame(width: 24, height: 24)
+      BotAvatar(traits: slice.bot, size: .small, cell: 1).frame(width: 24, height: 24).modifier(Twinkle(working))
       if slice.renaming == .header {
-        InlineTitleField(agentId: slice.id, font: .system(size: 13, weight: .semibold), width: Theme.Desk.headerField)
+        InlineTitleField(agentId: slice.id, font: Theme.PaneHead.title, width: Theme.Desk.headerField)
       } else {
-        Text(verbatim: h.tabLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.Desk.text)
+        Text(verbatim: h.tabLabel).font(Theme.PaneHead.title).foregroundStyle(Theme.PaneHead.titleText)
           .lineLimit(1).truncationMode(.tail).layoutPriority(1)
           .contentShape(Rectangle())
           .onTapGesture(count: 2) { if model.store.titlesSupported { model.beginRename(slice.id, at: .header) } }
           .help(slice.renameFailure.map { "Couldn't rename it: \($0)" } ?? Self.titleHelp(deck?.fullTitle ?? deck?.title))
       }
-      Text(verbatim: h.name).font(.system(size: 13)).foregroundStyle(Theme.Desk.secondary).fixedSize()
-      Text(verbatim: String(h.agentId.suffix(4))).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.Desk.tertiary).fixedSize()
-      Text(verbatim: "· " + ColumnHead.state(h, asks: asks)).font(.system(size: 13))
-        .foregroundStyle(asks ? Theme.amber : h.status == .failed ? Theme.red : Theme.Desk.tertiary).fixedSize()
+      Text(verbatim: h.name).font(Theme.PaneHead.role).foregroundStyle(Theme.PaneHead.roleText).fixedSize()
+      Text(verbatim: String(h.agentId.suffix(4))).font(Theme.PaneHead.id).foregroundStyle(Theme.PaneHead.idText).fixedSize()
+      HStack(spacing: 0) {
+        Text(verbatim: "· ")
+        Text(verbatim: state).modifier(Shimmer(working))
+      }
+      .font(Theme.PaneHead.state)
+      .foregroundStyle(asks ? Theme.amber : h.status == .failed ? Theme.red : Theme.PaneHead.stateText).fixedSize()
       Spacer(minLength: 8)
       HStack(spacing: 0) {
         if !split {
@@ -380,7 +387,7 @@ struct PaneHead: View {
           Text(Date(timeIntervalSince1970: Double(start) / 1000), style: .timer).monospacedDigit()
         }
       }
-      .font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.Desk.tertiary)
+      .font(Theme.PaneHead.clock).foregroundStyle(Theme.PaneHead.clockText)
       .fixedSize(horizontal: split, vertical: false)   // a split's clock never truncates: the title gives way
       .padding(.trailing, expanded ? 8 : 6)
       PaneControls(slice: slice)
