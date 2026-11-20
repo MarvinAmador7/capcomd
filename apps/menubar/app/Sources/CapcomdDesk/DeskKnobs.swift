@@ -115,8 +115,26 @@ package enum DeskKnobs {
                                        summary: "panel = Search ⌘K in its own key panel over the window; overlay = the same view inside the window, which keeps the keyboard",
                                        since: "0.12")
 
+  package enum Prewarm: String, KnobValue, CaseIterable {
+    /// Both, each on its own turn of the main queue.
+    case all
+    /// The menu bar's first key equivalent only.
+    case menu
+    /// The first text field to take the keyboard only.
+    case field
+    /// Neither: the first shortcut and the first field pay for them (before 2026-11-19).
+    case none
+    package var menu: Bool { self == .all || self == .menu }
+    package var field: Bool { self == .all || self == .field }
+  }
+
+  /// AppKit's one-time work the window does ahead, at rest after its first frames (AppKitWarmup.swift).
+  package static let prewarm = Knob("desk.prewarm", default: Prewarm.all, choices: Prewarm.allCases,
+                                    summary: "AppKit's one-time work done ahead once the window has drawn: menu = the menu bar's first key equivalent, field = the first text field taking the keyboard, all = both, none = neither (the first shortcut pays)",
+                                    since: "0.12")
+
   /// Every knob of the window. A new knob goes here too, or `describe` won't list it.
-  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns, reelCache, reelRelease, searchHost] }
+  package static var knobs: [any AnyKnob] { [reelSlide, buildPerFrame, deskLayout, deskColumn, reelColumns, reelCache, reelRelease, searchHost, prewarm] }
   /// What `describe` lists, by name.
   package static var all: [KnobInfo] { knobs.map(\.info).sorted { $0.name < $1.name } }
   /// The full knob vector this process runs with, defaults included (a result's `knobs`).

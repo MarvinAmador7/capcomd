@@ -21,7 +21,9 @@ final class KnobsManifestTests: XCTestCase {
     XCTAssertEqual(DeskKnobs.reelRelease.defaultValue, .land)
     // Search ⌘K is drawn inside the window; its own key panel stays a knob (it measured slower in every pair).
     XCTAssertEqual(DeskKnobs.searchHost.defaultValue, .overlay)
-    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "reel.cache", "reel.columns", "reel.release", "reel.slide", "search.host"])
+    // AppKit's first-shortcut and first-field work is done ahead (2026-11-19); `none` is the window before.
+    XCTAssertEqual(DeskKnobs.prewarm.defaultValue, .all)
+    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "desk.prewarm", "reel.cache", "reel.columns", "reel.release", "reel.slide", "search.host"])
     try XCTSkipIf(ProcessInfo.processInfo.environment[Knobs.variable] != nil, "PERFLOOP_KNOBS is set for this test run")
     XCTAssertEqual(DeskKnobs.reelSlide.value, .ca)
     XCTAssertEqual(DeskKnobs.buildPerFrame.value, 1)
@@ -31,8 +33,9 @@ final class KnobsManifestTests: XCTestCase {
     XCTAssertEqual(DeskKnobs.reelCache.value, .off)
     XCTAssertEqual(DeskKnobs.reelRelease.value, .land)
     XCTAssertEqual(DeskKnobs.searchHost.value, .overlay)
+    XCTAssertEqual(DeskKnobs.prewarm.value, .all)
     XCTAssertEqual(DeskKnobs.vector, ["reel.slide": "ca", "build.perFrame": "1", "desk.layout": "auto", "desk.column": "swiftui", "reel.columns": "keep", "reel.cache": "off", "reel.release": "land",
-                                      "search.host": "overlay"])
+                                      "search.host": "overlay", "desk.prewarm": "all"])
     XCTAssertEqual(DeskKnobs.problems.filter { !$0.contains("t.") }, [])
   }
 

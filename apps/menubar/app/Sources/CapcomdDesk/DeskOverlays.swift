@@ -57,15 +57,15 @@ struct DeskOverlays: View {
     // The scrim under Search ⌘K: at once from the keyboard (SPEC §4), a short fade otherwise.
     .animation(model.paletteByKey ? nil : reduceMotion ? Theme.Motion.reduced : .easeOut(duration: 0.18), value: model.paletteOpen)
     .background(PaletteFocusReturn(model: model, open: model.paletteOpen).frame(width: 0, height: 0).accessibilityHidden(true))
+    // Once the window has drawn: the palette built ahead (in the window only), then AppKit's first-shortcut and
+    // first-field work (AppKitWarmup), each on a turn of its own.
     .background {
-      if !warmed && DeskKnobs.searchHost.value != .panel {
-        PaletteWarmer { [model] in
-          guard !model.paletteEverOpened else { return }
-          model.warmPalette()
-          warmed = true
-        }
-        .frame(width: 0, height: 0).accessibilityHidden(true)
+      PaletteWarmer { [model] in
+        guard DeskKnobs.searchHost.value != .panel, !model.paletteEverOpened else { return }
+        model.warmPalette()
+        warmed = true
       }
+      .frame(width: 0, height: 0).accessibilityHidden(true)
     }
   }
 
@@ -133,7 +133,9 @@ package final class SearchOverlayHost: NSHostingView<SearchOverlayRoot> {
 
 /// Builds Search ⌘K ahead of the first ⌘K without slowing the window's opening: `ready` runs once, on the main queue's
 /// next turn after the window has drawn its second frame with this view in it (the first frame, and whatever waits on
-/// it, go first). A window that never draws (hidden, minimised) builds nothing ahead: its first ⌘K builds the palette.
+/// it, go first), and AppKit's own first-use work follows it (`AppKitWarmup`, a turn each; it needs this view in the
+/// window, so the view stays). A window that never draws (hidden, minimised) builds nothing ahead: its first ⌘K builds
+/// the palette.
 struct PaletteWarmer: NSViewRepresentable {
   let ready: () -> Void
   func makeNSView(context: Context) -> Link { Link(ready: ready) }
@@ -164,6 +166,7 @@ struct PaletteWarmer: NSViewRepresentable {
         guard let self, self.window != nil, let f = self.ready else { return }
         self.ready = nil
         f()
+        AppKitWarmup.start(in: self)
       }
     }
   }

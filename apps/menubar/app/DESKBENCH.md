@@ -92,16 +92,19 @@ its run when the median is over it; the frame budgets are information.
   palette (its own hosting view in the window, drawn alone; its panel with `search.host=panel`).
 - `palette-first`: the first ⌘K after the window opens, once: the desk shown and its warming done (at rest 300 ms), then
   ⌘K through the menu bar → the frame with the palette and its results (50 ms; one step, so the scenario's latency is
-  that ⌘K's). Checks `shown`, `items`, `empty-search`; ink: the palette. The window builds the palette hidden once it
-  has drawn (`PaletteWarmer`), so this measures what the first ⌘K still pays: AppKit's first key equivalent (the Window
-  menu filled), the first text field to take the keyboard in the process.
+  that ⌘K's). Checks `warmed-ahead` (what `AppKitWarmup` did before the ⌘K and how long each took, per `desk.prewarm`),
+  `shown`, `items`, `empty-search`; ink: the palette. The window builds the palette hidden once it has drawn
+  (`PaletteWarmer`), then does AppKit's first key equivalent (the Window menu's items made) and the first text field
+  taking the keyboard ahead (`AppKitWarmup`), so this measures what the first ⌘K still pays: the palette's first layout
+  on screen. `--knobs desk.prewarm=none` measures it without the AppKit warm-up.
 - Splits and expand (SPEC §2.1; each rep starts from one pane with the sidebar open and ends with its panes on screen;
   the shortcuts go through the menu bar, and each step names the item that fired):
   `split-open` (⌘D, ⇧⌘D, ⌘W ×2, `cycles` 2), `split-focus` (⌃← ⌃← ⌃→ ⌃→, then real clicks in other panes), `split-burst`,
   `pane-expand` (⇧⌘↩, then a real Esc, which the expanded pane's arrows-in takes, `toggles` 4; `scroll-kept` compares the
-  thread's rows in view, by entry id, before and after; each step expects the keyboard: in the expanded pane, then back
-  where it was before the expand), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
-  Esc, which must give the keyboard back to the pane: `focus palette-esc`). Ink: every pane's thread, once its rows are
+  thread's rows in view, by entry id, before and after; the keyboard starts in the sidebar's list (`keyboard-outside`)
+  and each step expects it in the pane: expanded, and still there after Esc), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
+  Esc, which must give the keyboard back to the pane: `focus palette-esc`; then Esc collapses the pane with the keyboard
+  still in it, `focus collapse`; the rep ends collapsed). Ink: every pane's thread, once its rows are
   in.
 - The Needs you reel (`needs-open`, `needs-answer`, `needs-arrive`, `needs-step` (⌘J through the menu bar), `needs-empty` (ends with
   a real Esc), `needs-swipe`), on `needs5` (their default; `needs20` for twenty across eight). Each rep starts with
@@ -229,6 +232,7 @@ can measure it again without a rebuild. The window's knobs are in `CapcomdDesk/D
 | `reel.cache` | `off`, `bitmap` | `off` | the live columns slide, or cached bitmaps of them slide in an overlay and the reel moves under it at rest |
 | `reel.release` | `land`, `appkit` | `land` | when a swipe's fingers lift, the reel ends AppKit's own deceleration (`ReelRelease`) and rests on the column it chose; `appkit` leaves it running, as before 2026-11-04 (it carried the reel off the column edge: see *History*) |
 | `search.host` | `overlay`, `panel` | `overlay` | Search ⌘K drawn inside the window (it keeps the keyboard), or in its own key panel over it (a child window: snapshots draw it in) |
+| `desk.prewarm` | `all`, `menu`, `field`, `none` | `all` | AppKit's one-time work done once the window has drawn (`AppKitWarmup`): `menu` the menu bar's first key equivalent (a ⌃⌥⇧⌘F20 no item has), `field` the first text field taking the keyboard (a transparent field, for one turn, only when nothing has the keyboard); `none`: the first shortcut and the first field pay, as before 2026-11-19 |
 
 ```sh
 perfloop run $B --scenario step --knobs reel.slide=clip          # one build, one setting (or: $B run step --knob reel.slide=clip)

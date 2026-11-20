@@ -205,15 +205,15 @@ import PerfLoopKit
     return w.firstResponder as? NSView
   }
 
-  /// Two panes, the focused one's thread scrolled up from its foot; ⇧⌘↩ (through the menu bar) gives it the window, Esc
-  /// (a real key: the expanded pane's arrows-in takes it) gives it back, `toggles` times. Expanded: that pane's view fills
-  /// the window, the sidebar and the other pane hide, and the keyboard is in that pane. Back: the same panes in the same
-  /// frames, the same rows of the thread in view, the keyboard back where it was before the expand (or still in the
-  /// pane), the same views (nothing rebuilt).
+  /// Two panes, the focused one's thread scrolled up from its foot, the keyboard in the sidebar's list; ⇧⌘↩ (through the
+  /// menu bar) gives the pane the window, Esc (a real key: the expanded pane's arrows-in takes it) gives it back,
+  /// `toggles` times. Expanded: that pane's view fills the window, the sidebar and the other pane hide, and the keyboard
+  /// is in that pane. Back: the same panes in the same frames, the same rows of the thread in view, the keyboard still in
+  /// the pane (not back in the list), the same views (nothing rebuilt).
   static func paneExpand(_ run: HostRun) async throws {
     let d = try await onePane(run)
     await split(d, [false])
-    let names = ["thread", "expanded", "collapsed-same", "scroll-kept", "no-rebuild"]
+    let names = ["thread", "keyboard-outside", "expanded", "collapsed-same", "scroll-kept", "no-rebuild"]
     guard let focused = d.panesShown().first(where: \.focused), let sv = d.threadScroll(in: focused.view), let probe = focused.view as? DeskPaneProbe else {
       return run.record(names.map { Check($0, false, "no focused pane or no thread scroll view in it") })
     }
@@ -233,11 +233,12 @@ import PerfLoopKit
     let full = d.content.convert(d.content.bounds, to: nil).integral
     var expandedOK = true, back = true, kept = true, same = true, notes: [String] = []
     var threadBodies = 0
+    // The keyboard starts outside the pane (the sidebar's list), so each Esc's `focus` says it stayed in the pane.
+    let start = keyboardOwner(d.window)
+    let outside = start.map { !$0.isDescendant(of: focused.view) } ?? false
     for i in 0..<run.int("toggles", 4) {
-      // The keyboard: into the expanded pane, and back on Esc to what had it before (or the pane, when it was there or
-      // nowhere). `expectFocus` on both steps, written in this PR.
-      let had = keyboardOwner(d.window)
-      let backTo: NSView = had.flatMap { $0.isDescendant(of: focused.view) || $0.isHiddenOrHasHiddenAncestor ? nil : $0 } ?? focused.view
+      // The keyboard: into the expanded pane, and on Esc it stays in that pane (the owner's call, 19 November 2026; it
+      // used to go back to the sidebar's list). `expectFocus` on both steps.
       var t = run.now
       var ok = await paneStep(d, "expand#\(i)", panes: 1, .press("⇧⌘↩", item: "Expand Pane"), focus: .view(focused.view)) {
         d.panesShown().count == 1 && d.panesShown().first?.frame == full
@@ -249,7 +250,7 @@ import PerfLoopKit
       expandedOK = expandedOK && ex
       if !ex { notes.append("expand#\(i): \(e.map { "\($0.agent) \($0.frame) expanded \($0.expanded)" }), sidebar \(d.sidebarScrollView(scrollable: false) != nil)") }
       t = run.now
-      ok = await paneStep(d, "esc#\(i)", panes: 2, .key(.escape), focus: .view(backTo)) { d.panesShown().count == 2 }
+      ok = await paneStep(d, "esc#\(i)", panes: 2, .key(.escape), focus: .view(focused.view)) { d.panesShown().count == 2 }
       threadBodies += d.bodies(in: t...run.now).filter { $0.view == "PaneThread" }.count
       let after = d.panesShown()
       let b = ok && after.map(\.agent) == before.map(\.0) && after.map(\.frame) == before.map(\.1) && !d.model.nav.expanded
@@ -270,6 +271,7 @@ import PerfLoopKit
     run.regions(d.paneRegions(1))
     run.record([
       Check("thread", true, "the focused pane's thread, \(Stats.round(up, 1)) pt up from its foot"),
+      Check("keyboard-outside", outside, "before the first expand the keyboard was in \(start.map { String(describing: type(of: $0)) } ?? "nothing")\(outside ? ", outside the pane" : "")"),
       Check("expanded", expandedOK, notes.filter { $0.hasPrefix("expand") }.joined(separator: "; ").ifEmpty("⇧⌘↩ gave the focused pane the whole window, sidebar and other pane hidden")),
       Check("collapsed-same", back, notes.filter { $0.hasPrefix("esc") }.joined(separator: "; ").ifEmpty("Esc brought back the same panes in the same frames")),
       Check("scroll-kept", kept && up > 0, notes.filter { $0.hasPrefix("scroll") }.joined(separator: "; ")
@@ -287,7 +289,7 @@ import PerfLoopKit
   // MARK: expand-switch
 
   /// Expanded, other agents picked as the palette's ↩ picks them (`show(run:agent:)`): it stays expanded and the pane
-  /// shows each one; ⌘K opens over it and closes.
+  /// shows each one; ⌘K opens over it and closes; Esc collapses it with the keyboard still in the pane.
   static func expandSwitch(_ run: HostRun) async throws {
     let d = try await onePane(run)
     d.model.expandPane()
@@ -312,10 +314,16 @@ import PerfLoopKit
     await run.key(.escape, expectFocus: paneView.map { FocusTarget.view($0) } ?? .identifier("the expanded pane"), name: "palette-esc", timeoutMs: 3000,
                   until: { !d.model.paletteOpen })
     let ok2 = !d.model.paletteOpen
+    let over = ok1 && ok2 && d.model.nav.expanded
+    // Esc again collapses the pane, showing the last pick; the keyboard stays in it (`focus collapse`), not back in the
+    // sidebar's list, which had it before the expand. The rep ends collapsed, for the snapshot.
+    let pane = paneView.map { FocusTarget.view($0) } ?? .identifier("the expanded pane")
+    let collapsed = await paneStep(d, "collapse", panes: 1, .key(.escape), focus: pane) { !d.model.nav.expanded }
     run.regions(d.paneRegions(1))
     run.record([
       Check("stays-expanded", stayed, notes.joined(separator: "; ").ifEmpty("every pick showed in the expanded pane, still expanded")),
-      Check("palette-over", ok1 && ok2 && d.model.nav.expanded, "⌘K opened \(ok1) and Esc closed \(ok2) over the expanded pane; still expanded \(d.model.nav.expanded)"),
+      Check("palette-over", over, "⌘K opened \(ok1) and Esc closed \(ok2) over the expanded pane; still expanded \(over)"),
+      Check("collapsed", collapsed, "Esc collapsed the pane after the picks: \(collapsed)"),
     ])
   }
 }
