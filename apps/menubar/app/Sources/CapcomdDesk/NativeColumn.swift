@@ -87,22 +87,50 @@ final class NativeColumnView: NSView {
     body.layoutSubtreeIfNeeded()
     switch place {
     case .foot(let foot):
-      // At the foot: put back now, then once the layout is done the thread scrolls to its foot row itself (SwiftUI's own
-      // scroll, as it opens: ColumnThread), which makes the rows there. Putting the clip view at the foot alone left the
-      // pane blank when the stack's estimated height moved under it (a pane halved by ⇧⌘D: 15,164 pt to 13,953, no row
-      // in view). SwiftUI's bottom anchor keeps it there as the rest are measured.
+      // At the foot: put back now, then once the layout is done, while no row is laid out over the view, the thread
+      // scrolls to its foot row itself (SwiftUI's own scroll, as it opens: ColumnThread), and if that leaves it blank the
+      // view goes to the last row laid out (`keepRowsAtFoot`). Putting the clip view at the foot alone left the pane
+      // blank when the stack's estimated height moved under it (a pane halved by ⇧⌘D: 15,164 pt to 13,953, no row in
+      // view). SwiftUI's bottom anchor keeps it there as the rest are measured.
       release()
       restore(place)
       let r = rows
       RunLoop.main.perform { MainActor.assumeIsolated { [weak self] in
         guard let self, self.rows === r else { return }
         self.restore(.foot(foot))
-        if !self.rowsLaidOutInView(), let toFoot = r.toFoot { toFoot() }
+        self.keepRowsAtFoot(r, tries: 0)
       } }
     case .row:
       hold(place)
     }
   }
+
+  /// After a resize at the foot, the thread's lazy stack sometimes keeps its document taller than the rows it has laid
+  /// out (collapse, then ⇧⌘↩ again: a 10,837 pt document whose last row ends at 10,102), and the bottom anchor holds the
+  /// view at the document's foot, below every row: a blank pane, with no row visible to the scroll view. SwiftUI's own
+  /// scroll to the foot row doesn't help then: by the stack's estimate the foot is already in view, so nothing moves and
+  /// nothing is laid out. So each turn, while no row is laid out over the view: first that scroll; then the view is put
+  /// on the last row the stack laid out, which makes it lay out the rows there and correct its height, and once rows are
+  /// in view SwiftUI's scroll to the foot settles it at the real foot.
+  private func keepRowsAtFoot(_ r: ThreadRows, tries: Int) {
+    guard rows === r, window != nil, let sv = threadScroll(), let d = sv.documentView else { return }
+    if rowsLaidOutInView() {
+      if tries > 0 { r.toFoot?() }
+      return
+    }
+    guard tries < 6 else { return }
+    if tries == 0 {
+      r.toFoot?()
+    } else if let last = r.entries.last(where: { r.live.contains($0.id) && r.frames[$0.id] != nil }), let f = r.frames[last.id] {
+      let h = sv.contentView.bounds.height
+      let t = min(max(0, f.maxY + Self.lastRowRoom - h), max(0, d.frame.height - h))
+      sv.contentView.scroll(to: NSPoint(x: sv.contentView.bounds.minX, y: sv.contentView.isFlipped ? t : d.frame.height - h - t))
+      sv.reflectScrolledClipView(sv.contentView)
+    }
+    DispatchQueue.main.async { [weak self] in self?.keepRowsAtFoot(r, tries: tries + 1) }
+  }
+  /// Below the last row when the view is put on it: about the thread's foot margin.
+  static let lastRowRoom: CGFloat = 40
 
   // MARK: the reader's place across a resize
 

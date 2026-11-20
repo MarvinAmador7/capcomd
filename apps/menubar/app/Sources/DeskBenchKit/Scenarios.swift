@@ -92,8 +92,8 @@ public enum Scenarios {
     ScenarioSpec(name: "pane-expand", summary: "Two panes, the focused thread scrolled up, the keyboard in the sidebar: ⇧⌘↩ expands it to the window, Esc brings back the same panes with the keyboard still in the pane.",
                  budget: "Expand or collapse a pane: first frame ≤ 50 ms, no thread rebuilt", rule: "median latency from the key to the frame that shows it ≤ 50 ms; expanded fills the window; back: same panes, frames, scroll position and views; the keyboard in the pane, expanded and back",
                  kind: .latency, latencyBudgetMs: 50, params: ["toggles": "4"]),
-    ScenarioSpec(name: "expand-switch", summary: "A pane expanded: other agents picked as the palette's ↩ picks them, then ⌘K over it and Esc, then Esc collapses it.",
-                 budget: "Switch agent: first frame ≤ 50 ms (expanded stays expanded)", rule: "median latency from the pick to the frame that shows the agent ≤ 50 ms; still expanded, full window, every pick shown; Esc after ⌘K gives the keyboard back to the pane (focus palette-esc), and it stays there when Esc collapses the pane (focus collapse)",
+    ScenarioSpec(name: "expand-switch", summary: "A pane expanded: other agents picked as the palette's ↩ picks them, then ⌘K over it and Esc, then Esc collapses it and ⇧⌘↩ expands it again.",
+                 budget: "Switch agent: first frame ≤ 50 ms (expanded stays expanded)", rule: "median latency from the pick to the frame that shows the agent ≤ 50 ms; still expanded, full window, every pick shown; Esc after ⌘K gives the keyboard back to the pane (focus palette-esc), and it stays there when Esc collapses the pane (focus collapse); expanded again, its thread shows rows (re-expanded, ink)",
                  kind: .latency, latencyBudgetMs: 50, params: ["switches": "4"]),
     // The Needs you reel (SPEC, Needs you reel), on `needs5` (their own fixture) or `needs20` (asks across projects).
     ScenarioSpec(name: "needs-open", summary: "Open the Needs you reel (the hand): every ask across projects as a column, oldest first.",

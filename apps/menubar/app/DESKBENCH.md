@@ -104,7 +104,8 @@ its run when the median is over it; the frame budgets are information.
   thread's rows in view, by entry id, before and after; the keyboard starts in the sidebar's list (`keyboard-outside`)
   and each step expects it in the pane: expanded, and still there after Esc), `expand-switch` (picks as Search's ↩ makes them, then ⌘K over it and a real
   Esc, which must give the keyboard back to the pane: `focus palette-esc`; then Esc collapses the pane with the keyboard
-  still in it, `focus collapse`; the rep ends collapsed). Ink: every pane's thread, once its rows are
+  still in it, `focus collapse`; then ⇧⌘↩ expands it again, and its thread must show rows: `re-expanded` and the ink of
+  `pane-1` after `re-expand`). Ink: every pane's thread, once its rows are
   in.
 - The Needs you reel (`needs-open`, `needs-answer`, `needs-arrive`, `needs-step` (⌘J through the menu bar), `needs-empty` (ends with
   a real Esc), `needs-swipe`), on `needs5` (their default; `needs20` for twenty across eight). Each rep starts with
