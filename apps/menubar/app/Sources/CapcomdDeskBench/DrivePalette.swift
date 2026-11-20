@@ -117,11 +117,18 @@ import PerfLoopKit
     await d.quiet()
     run.atClose { d.model.closePalette() }
     let p = Palette(d: d)
+    // AppKit's first-use work done ahead, at rest (AppKitWarmup; knob desk.prewarm): what each took, before the ⌘K.
+    let warm = { (name: String) in d.events.last { $0.name == name }?.value }
+    let k = DeskKnobs.prewarm.value
+    let menuUs = warm("warm.menu.us"), fieldUs = warm("warm.field.us")
+    let warmed = (!k.menu || menuUs != nil) && (!k.field || fieldUs != nil) && warm("warm.menu.fired") == nil && warm("warm.field.refused") == nil
+    let took = { (us: Int?) in us.map { "\(Stats.round(Double($0) / 1000, 2)) ms" } ?? "not done" }
     await p.open("first")
     let groups = p.model.search.sections.map(\.group)
     let asks = p.model.search.index.asks.count
     run.regions([p.region()])
     run.record([
+      Check("warmed-ahead", warmed, "desk.prewarm=\(k.rawValue): the menu's first key equivalent \(took(menuUs))\(warm("warm.menu.fired") != nil ? " (an item fired)" : "")\(warm("warm.menu.skipped").map { " (skipped: \($0 == 2 ? "an item has the key" : "no event"))" } ?? ""), the first field focus \(took(fieldUs))\(warm("warm.field.refused") != nil ? " (refused)" : ""), before ⌘K"),
       Check("shown", p.model.paletteOpen && p.shown, "palette open \(p.model.paletteOpen), shown \(p.shown)"),
       Check("items", p.model.search.index.count >= 200, "\(p.model.search.index.count) searchable items (agents, projects, asks, commands)"),
       Check("empty-search", groups.first == (asks > 0 ? .needsYou : .recent) && groups.last == .commands && groups == groups.sorted(),

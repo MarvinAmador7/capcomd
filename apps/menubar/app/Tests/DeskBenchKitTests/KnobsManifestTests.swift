@@ -21,7 +21,7 @@ final class KnobsManifestTests: XCTestCase {
     XCTAssertEqual(DeskKnobs.reelRelease.defaultValue, .land)
     // Search ⌘K is drawn inside the window; its own key panel stays a knob (it measured slower in every pair).
     XCTAssertEqual(DeskKnobs.searchHost.defaultValue, .overlay)
-    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "reel.cache", "reel.columns", "reel.release", "reel.slide", "search.host"])
+    XCTAssertEqual(DeskKnobs.all.map(\.name), ["build.perFrame", "desk.column", "desk.layout", "desk.prewarm", "reel.cache", "reel.columns", "reel.release", "reel.slide", "search.host"])
     try XCTSkipIf(ProcessInfo.processInfo.environment[Knobs.variable] != nil, "PERFLOOP_KNOBS is set for this test run")
     XCTAssertEqual(DeskKnobs.reelSlide.value, .ca)
     XCTAssertEqual(DeskKnobs.buildPerFrame.value, 1)
