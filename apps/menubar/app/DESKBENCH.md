@@ -32,7 +32,7 @@ by PerfLoop's `PerfLoopStamp` plugin, so a copied binary run from anywhere still
 
 ## What comes from PerfLoopHost, what is deskbench's
 
-| | PerfLoopHost (perfloop 87a79db) | deskbench |
+| | PerfLoopHost (perfloop 305bd63) | deskbench |
 |---|---|---|
 | The contract | `list`, `describe`, `run`, `snapdiff`, `knobs`, `profile`, `diff`, `gestures`, `record-gesture`, the window lock, exit codes | `describe` adds `appearances: ["dark"]` (`DeskBenchKit/BenchCatalog.swift`); `main.swift` answers the windowless verbs, `run` and `record-gesture` start the app |
 | The app | `bench.attach()` from a SwiftUI `App`'s `init` (the verb starts once the app has launched), `run.appWindow()`, `run.show(window:)`, `host: app` | `BenchApp.swift`: a `Window` scene in the app's style with `DeskCommands`; each rep's desk shown in it (`DeskStage`), the commands acting on that desk's model |
