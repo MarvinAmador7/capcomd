@@ -48,7 +48,7 @@ import { applyTitle, normalizeTitle, renameRefusal, shownTitle, type TitleBy, ty
 import { blockers, casOk, claimable, DEFAULT_KV_MAX_BYTES, fence, findCycle, pickNext, valueBytes, type BoardTask } from "../primitives/board";
 import { fitJobRecord } from "../jobs/record";
 import { WAKES_SQL, alreadySatisfied, armedData, cancelWake, fireSlot, fireWake, matchWakes, parseFilter, recurring, wakeRow, wokenIn, type AddEvent, type WakeRow } from "./wakes";
-import { QUESTIONS_SQL, answerMessage, askedState, askedData, isPerson, openQuestion, parseAsk, questionMessage, questionRow, recordAnswer, replacedNote, withdrawQuestions, type AddEvent as QuestionEvent, type AskedState, type QuestionRow } from "./questions";
+import { QUESTIONS_SQL, answerMessage, askedState, askedData, isPerson, openQuestion, parseAsk, questionMessage, questionRow, recordAnswer, withdrawQuestions, type AddEvent as QuestionEvent, type AskedState, type QuestionRow } from "./questions";
 
 function rowToTask(r: any): BoardTask & { key: string | null; createdAt: number; updatedAt: number } {
   return {

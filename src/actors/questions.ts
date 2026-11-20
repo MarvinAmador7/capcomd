@@ -92,11 +92,6 @@ export function answerMessage(q: QuestionRow, o: { by: string; answer: string; n
   ].filter(Boolean).join("\n");
 }
 
-/** What the asker reads when a person's plain message replaces an agent's answer: the message, said to be the answer. */
-export function replacedNote(q: QuestionRow, replaces: string): string {
-  return `The user answered your question ${q.questionId} (this replaces ${whoSaid(replaces)}'s answer: go by this one):`;
-}
-
 /**
  * The question as its addressee (a parent agent) reads it: in its mailbox, or in the wake-up of an `await --wake` on the
  * asker. Agent-written parts are the asker's own words; the commands are capcomd's.
