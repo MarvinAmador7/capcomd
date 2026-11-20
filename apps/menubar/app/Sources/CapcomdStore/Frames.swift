@@ -91,6 +91,8 @@ public struct SnapshotAgent: Codable, Sendable, Hashable {
   /// Capability agents.idle: a message woke this idle agent into its current attempt (when, by whom, how the one
   /// before had ended); absent for a first attempt and from older daemons.
   public var continued: SnapshotContinued? = nil
+  /// Capability agents.ask: the question it asked and stopped on, while it is open (`Agent.asked`); absent otherwise.
+  public var asked: JSONValue? = nil
 }
 public struct SnapshotContinued: Codable, Sendable, Hashable { public var at: String?; public var by: String?; public var from: String? }
 public struct SnapshotApproval: Codable, Sendable, Hashable {

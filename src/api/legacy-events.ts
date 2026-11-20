@@ -85,6 +85,7 @@ export const SCOPE_EVENT_TYPES = [
 	"AGENT_SPAWNED", "AGENT_STARTED", "AGENT_TITLED", "AGENT_DONE", "AGENT_FAILED", "AGENT_CHECKPOINT", "AGENT_NOTICE", "AGENT_NOTICE_CLEARED", "AGENT_STEP",
 	"AGENT_PAUSED", "AGENT_RESUMED", "AGENT_GRANTED", "AGENT_ADOPTED", "AGENT_REAPED", "AGENT_CANCELLED",
 	"AGENT_WAKE_ARMED", "AGENT_WOKEN", "AGENT_WAKE_CANCELLED", "AGENT_CONTINUED", "AGENT_MODEL_CHANGED",
+	"AGENT_ASKED", "AGENT_ANSWERED", "AGENT_QUESTION_PASSED", "AGENT_QUESTION_WITHDRAWN",
 	"DEADLOCK_DETECTED", "DRIVE_FAILED", "TOKEN_REVOKED", "MESSAGE_SENT",
 	"VERIFY_STARTED", "VERIFY_PASSED", "VERIFY_FAILED", "MERGE_STARTED", "MERGED", "MERGE_FAILED",
 	"MERGE_AWAITING_APPROVAL", "MERGE_APPROVED", "MERGE_DENIED",
@@ -187,6 +188,8 @@ export const LegacyEventShapes = {
 		mode: z.enum(["any", "all"]).optional().describe("kind agents: woken when any of them ends, or when all have"),
 		types: z.array(S).optional().describe("kind events: the event types (dotted names) it waits for"),
 		agent: S.optional().describe("kind events: only events about this agent"),
+		every: N.optional().describe("kind timer, a recurring schedule (`capcomd wake --every`): its interval in ms; at is its first check-in"),
+		times: N.nullable().optional().describe("kind timer with every: how many check-ins it books; null until it is cancelled (its agent cancelled, its run archived)"),
 		at: N.nullable().describe("When it fires at the latest (epoch ms): a timer's time, else its deadline (by default 6 hours ahead, at most that); null when it has none"),
 		note: nT.describe("Agent-written text: render as plain text. What the agent will do when woken, in its own words; null when it gave none"),
 	},
@@ -198,6 +201,8 @@ export const LegacyEventShapes = {
 		causeSeq: N.nullable().describe("The seq of the event that fired it, on this run's stream; null when its time did, or it had happened before it was armed and the event isn't known"),
 		messageSeq: N.describe("The message it put in the agent's mailbox (Message.seq): the agent reads it as its next turn"),
 		armedAt: N.describe("When it was armed (epoch ms)"),
+		slot: N.optional().describe("A recurring schedule's check-in that fired (0 first): its message's id is derived from (schedule, slot). Absent for a one-time wake"),
+		skipped: N.optional().describe("A recurring schedule: earlier check-ins that came and went while nothing ran (the daemon was down), skipped rather than delivered late"),
 	},
 	// Capability agents.idle (ADR-026 §1): an agent whose turn ended (done, failed, cancelled) is idle, not gone: a message
 	// to it starts its next attempt (epoch), on a fresh machine, continuing its conversation.
@@ -222,7 +227,36 @@ export const LegacyEventShapes = {
 	"run.restored": { by: S.describe("Who restored it: operator or client:<id>"), ...cause },
 	"agent.wake_cancelled": {
 		wakeId: S.describe("The wake (wk-…)"),
-		reason: z.enum(["agent", "ended"]).describe("agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up)"),
+		reason: z.enum(["agent", "ended", "archived"]).describe("agent: the agent took it back (`capcomd wake --cancel`); ended: the agent ended before it fired (nothing would read its wake-up; a check-in only when the agent was cancelled); archived: its run was archived (a schedule of an idle agent). More may be added"),
+	},
+	// ADR-026 §4 (capability agents.ask): an agent asked a question and stopped until it is answered. Agent-written:
+	// question, recommend, options, why, holds, answer, note.
+	"agent.asked": {
+		questionId: S.describe("The question (qst-…). Its approval (kind question) carries it as subject.questionId"),
+		to: nS.describe("Who it is asked of: its parent agent, or null for the user (a root agent's)"),
+		question: T.describe("Agent-written text: render as plain text. The question"),
+		recommend: T.describe("Agent-written text: render as plain text. The answer it recommends (options[0])"),
+		options: z.array(T).describe("Agent-written text: render as plain text. The answers it offers, the recommended one first"),
+		why: nT.describe("Agent-written text: render as plain text. Why it recommends that answer, in one or two lines; null when it gave no reason"),
+		holds: nT.describe("Agent-written text: render as plain text. What waits on the answer (what it can't do until then); null when it didn't say"),
+	},
+	"agent.answered": {
+		questionId: S.describe("The question (qst-…)"),
+		by: S.describe("Who answered: an agent id (its parent or an ancestor), operator, client:<id> or driver (a person)"),
+		answer: T.describe("Agent-written text (or a person's): render as plain text. The answer, as given"),
+		recommended: z.boolean().describe("Whether the answer was the one it recommended"),
+		note: nT.describe("Render as plain text. The answerer's note (why), when they gave one"),
+		messageSeq: N.describe("The message (Message.seq) that carried the answer to the asker: it continues the same conversation"),
+		replaces: nS.describe("A person's answer replacing an agent's (the user's answer wins): who answered before; null otherwise"),
+	},
+	"agent.question_passed": {
+		questionId: S.describe("The question (qst-…)"),
+		from: S.describe("The agent it was asked of, which couldn't decide (`capcomd answer --up`)"),
+		to: nS.describe("Who it is asked of now: that agent's parent, or null for the user"),
+	},
+	"agent.question_withdrawn": {
+		questionId: S.describe("The question (qst-…)"),
+		reason: z.enum(["cancelled"]).describe("cancelled: the agent that asked was cancelled. More may be added"),
 	},
 	"job.started": {
 		jobId: S.describe("The job (job-…): background work an agent or a plugin started (`capcomd job start`, plugin API §16.2)"),

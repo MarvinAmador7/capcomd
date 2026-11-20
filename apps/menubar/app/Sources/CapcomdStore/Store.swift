@@ -135,6 +135,8 @@ public final class CapcomdStore {
   /// Events at or below the last snapshot's seq are already folded into it.
   var floor: [String: Int] = [:]
   var approvalSeq: [String: Int] = [:]
+  /// Questions answered from their card whose agent.answered hasn't come yet (capability agents.ask; Asked.swift).
+  var answering: Set<String> = []
   var keyCounter = 0
   let makeKey: () -> String
 
@@ -189,11 +191,12 @@ public final class CapcomdStore {
     return String(h, radix: 36)
   }
   /// Undecided approvals in request order.
+  /// A question asked of an agent isn't one (`needsPerson`): its card shows in the asker's column (questionCard).
   public var pendingApprovals: [PendingApproval] {
-    approvals.values.sorted { (approvalSeq[$0.id] ?? 0, $0.id) < (approvalSeq[$1.id] ?? 0, $1.id) }
+    approvals.values.filter(\.needsPerson).sorted { (approvalSeq[$0.id] ?? 0, $0.id) < (approvalSeq[$1.id] ?? 0, $1.id) }
   }
   /// The one allowed number: the menu bar badge.
-  public var badgeCount: Int { approvals.values.filter { if case .decided = $0.decision { return false }; return true }.count }
+  public var badgeCount: Int { approvals.values.filter { if case .decided = $0.decision { return false }; return $0.needsPerson }.count }
   public func approvals(forRun id: String) -> [PendingApproval] { pendingApprovals.filter { $0.runId == id } }
   /// Activity rows. An agent's row reads as its activity line ("Read 4 files", "Writing parquet shards to R2") with the
   /// activity's icon when the daemon reports one; otherwise its task's first line, else its profile.
@@ -221,7 +224,7 @@ public final class CapcomdStore {
   /// Outline tree for a run, orchestrator first. Approvals bubble to ancestors.
   public func agentTree(runId: String) -> [AgentNode] {
     guard let run = runs[runId] else { return [] }
-    let waiting = Set(approvals.values.compactMap { $0.runId == runId || $0.runId == nil ? $0.agentId : nil })
+    let waiting = Set(approvals.values.compactMap { ($0.runId == runId || $0.runId == nil) && $0.needsPerson ? $0.agentId : nil })
     let byParent = Dictionary(grouping: run.agents.values) { a -> String in
       if let p = a.parent, run.agents[p] != nil { return p }; return ""
     }
@@ -234,6 +237,7 @@ public final class CapcomdStore {
         var node = AgentNode(id: a.id, name: a.displayName, title: a.titleText, suffix: suffixes[a.id], kind: a.kind, status: a.status, activity: a.activity, depth: depth,
                              waiting: w, descendantWaiting: children.contains { $0.waiting || $0.descendantWaiting }, children: children)
         node.repo = a.repo
+        node.asked = a.asked != nil
         return node
       }
     }
@@ -397,6 +401,7 @@ public final class CapcomdStore {
       ag.read(result: a.result)
       ag.title = a.title.map(UntrustedText.init) ?? old?.title; ag.titleSource = a.titleSource ?? old?.titleSource
       ag.continuedAtMs = epochMs(iso: a.continued?.at) ?? old?.continuedAtMs
+      ag.asked = AskedQuestion(a.asked)
       runs[a.runId]?.agents[a.id] = ag
       if let j = runs[a.runId]?.steps.firstIndex(where: { $0.id == "agent:\(a.id)" }) { runs[a.runId]?.steps[j].status = Self.stepStatus(ag.status) }
     }
@@ -416,6 +421,12 @@ public final class CapcomdStore {
   func updateAgent(_ runId: String, _ agentId: String, _ f: (inout Agent) -> Void) {
     guard runs[runId]?.agents[agentId] != nil else { return }
     f(&runs[runId]!.agents[agentId]!)
+  }
+
+  /// Changes one approval (Asked.swift: who a question is asked of): `approvals` is set here only.
+  func updateApproval(_ id: String, _ f: (inout PendingApproval) -> Void) {
+    guard approvals[id] != nil else { return }
+    f(&approvals[id]!)
   }
 
   /// Changes one run's goal branch (GoalBranch.swift): `runs` is set here only.
@@ -509,6 +520,9 @@ public final class CapcomdStore {
     case "run.archived", "run.restored":
       guard let runId else { return }
       runs[runId]?.archived = e.type == "run.archived"
+    case "agent.asked", "agent.answered", "agent.question_passed", "agent.question_withdrawn":
+      // Capability agents.ask: the question an agent asked and stopped on (Asked.swift).
+      applyAsk(e, runId: runId, agentId: agentId)
     case "agent.resumed", "agent.started":
       setStatus(runId, agentId, .running, e)
       if let runId, let agentId { runs[runId]?.agents[agentId]?.limit = nil; runs[runId]?.agents[agentId]?.resetAtMs = nil }
@@ -652,6 +666,7 @@ public final class CapcomdStore {
         old.read(result: a.result)
         if let t = a.title { old.title = UntrustedText(t); old.titleSource = a.titleSource }
         old.continuedAtMs = epochMs(iso: a.continued?.at) ?? old.continuedAtMs
+        old.asked = AskedQuestion(a.asked)
         runs[a.runId]?.agents[a.id] = old
       } else {
         var ag = Agent(id: a.id, runId: a.runId, parent: a.parent, depth: a.depth, profile: a.profile, status: AgentStatus(wire: a.status),
@@ -663,6 +678,7 @@ public final class CapcomdStore {
         ag.activityAtMs = epochMs(iso: a.activity?.at); ag.read(result: a.result)
         ag.title = a.title.map(UntrustedText.init); ag.titleSource = a.titleSource
         ag.continuedAtMs = epochMs(iso: a.continued?.at)
+        ag.asked = AskedQuestion(a.asked)
         runs[a.runId]?.agents[a.id] = ag
       }
     }

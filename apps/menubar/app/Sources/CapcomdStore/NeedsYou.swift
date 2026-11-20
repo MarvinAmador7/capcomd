@@ -45,7 +45,7 @@ extension CapcomdStore {
   /// sorted; nothing here builds a tree.
   public func needsAsks() -> [NeedsAsk] {
     var out: [NeedsAsk] = []
-    for a in approvals.values {
+    for a in approvals.values where a.needsPerson {
       if case .decided = a.decision { continue }
       guard let agent = waitingAgent(a) else { continue }
       let runId = a.runId ?? runs.values.first { $0.agents[agent] != nil }?.id

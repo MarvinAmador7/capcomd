@@ -24,7 +24,7 @@ import { applyTitle, normalizeTitle, shownTitle, type TitleState } from "../prim
 export type RawEvent = { seq: number; at: number; type: string; agentId: string | null; data: Record<string, unknown>;
 	/** A plugin's own event (plugin.<name>.<event>) only: the entity it named and its own sentence. */
 	entity?: string; text?: string };
-export type PendingApproval = { approvalId: string; kind: "merge"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
+export type PendingApproval = { approvalId: string; kind: "merge" | "question"; status: "pending"; question: string; requestedBy: { agentId: string | null; runId: string }; subject: Record<string, unknown>; expiresAt: null; requestedAt?: string | null };
 type O<T extends z.ZodType> = z.infer<T>;
 
 /** runs.create input after validation (goal trimmed). */
@@ -123,7 +123,9 @@ export interface HarnessSource {
 	approvals(runId: string): Promise<PendingApproval[]>;
 	/** Locate an approval: its run, and the decision when already decided. */
 	approval(approvalId: string): Promise<{ runId: string; pending: boolean; decision?: Record<string, unknown> | null } | null>;
-	decide(approvalId: string, approve: boolean, by: string, reason?: string): Promise<void>;
+	/** Capability agents.ask: a question's approval is answered (`answer`, or with approve its recommendation; `reason` is the
+	 *  answerer's note), and resolves with the answer as recorded. */
+	decide(approvalId: string, approve: boolean, by: string, reason?: string, answer?: string): Promise<{ answer: string; recommended: boolean } | void>;
 	/** Start a run, detached; resolves once it is started (not finished). Throws CreateRunError for a 422. */
 	createRun(input: CreateRunInput): Promise<O<typeof Run>>;
 	/** The run's repository and target branch (GET /v1/runs/{runId}/files); null when the run has none. */
@@ -218,6 +220,21 @@ export function mergeApprovalText(d: { ref?: unknown; branch?: unknown; agentId?
 }
 
 export const approvalIdFor = (runId: string, opId: string) => `apr-${Buffer.from(`${runId}\u0000${opId}`).toString("hex")}`;
+/** Capability agents.ask: an approval of kind question (its id names a qst- question, not an op). */
+export const isQuestionApproval = (id: string) => parseApprovalId(id)?.opId.startsWith("qst-") ?? false;
+/**
+ * A question as an approval of kind question (ADR-026 §4): the question is the asker's words; `subject` carries the
+ * card: the options with the recommended one first, the reason for it, what waits on it, and who it is asked of.
+ */
+export function questionApproval(runId: string, q: { questionId: string; agentId: string; to: string | null; question: string; recommend: string; options: string[]; why: string | null; holds: string | null; askedAt: number; passed?: string[] }): PendingApproval {
+	return {
+		approvalId: approvalIdFor(runId, q.questionId), kind: "question", status: "pending", question: q.question,
+		requestedBy: { agentId: q.agentId, runId }, subject: questionSubject(q), expiresAt: null, requestedAt: new Date(q.askedAt).toISOString(),
+	};
+}
+export function questionSubject(q: { questionId: string; to: string | null; recommend: string; options: string[]; why: string | null; holds: string | null; passed?: string[] }): Record<string, unknown> {
+	return { questionId: q.questionId, options: q.options.map((label, i) => ({ label, recommended: i === 0 })), recommend: q.recommend, why: q.why, holds: q.holds, to: q.to, ...(q.passed?.length ? { passedBy: q.passed } : {}) };
+}
 export function parseApprovalId(id: string): { runId: string; opId: string } | null {
 	const m = /^apr-([0-9a-f]+)$/.exec(id);
 	if (!m) return null;

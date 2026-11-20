@@ -54,17 +54,22 @@ async function callOnce(id, op, args, timeoutMs) {
 
 /**
  * Block until the agents finish (or any, for wait-any), or one of them looks stuck: a notice raised while waiting
- * (ADR-019 §2) returns early, as `notices`. Polls; the orchestrator refuses deadlocks.
+ * (ADR-019 §2) returns early, as `notices`; so does a question one of them asked (ADR-026 §4), as `asked`. Polls; the
+ * orchestrator refuses deadlocks.
  */
 async function awaitLoop(op, args) {
   const deadline = Date.now() + Number(args.timeoutMs ?? 30 * 60000);
-  let seen = null;
+  let seen = null, seenAsked = null;
   for (;;) {
     const r = await call(op, args);
     if (!r.ok || r.result.done) return r;
     const now = new Map((r.result.notices ?? []).map((n) => [n.agentId, n.at]));
     const fresh = seen ? (r.result.notices ?? []).filter((n) => seen.get(n.agentId) !== n.at) : [];
     seen = now;
+    const asked = r.result.asked ?? [];
+    const freshAsked = seenAsked ? asked.filter((q) => !seenAsked.has(q.questionId)) : asked;
+    seenAsked = new Set(asked.map((q) => q.questionId));
+    if (freshAsked.length) { await call(op, { ...args, end: true }); return { ok: true, result: { ...r.result, asked: freshAsked } }; }
     if (fresh.length) { await call(op, { ...args, end: true }); return { ok: true, result: { ...r.result, notices: fresh } }; }
     if (Date.now() > deadline) { await call(op, { ...args, end: true }); return { ok: true, result: { ...r.result, timeout: true } }; }
     await sleep(AWAIT_POLL);
@@ -172,6 +177,13 @@ export const HELP = `capcomd (in-VM) — orchestrate child agents. All output is
         as a message that starts your next one (at the latest 6 h out).   wake --list   wake --cancel <wk>
   verify|check|await|wait-any … --wake [--note "…"]   the same, for what they would wait on: they answer at once with
         the op or agents; then end your turn. Never wait inside a tool call (no sleep loops, no blocking await).
+  wake --every 30m [--times N] [--in 5m] [--note "…"]   a recurring check-in (first at --in/--at, else one interval out);
+        a missed one is skipped. It outlives your turn: if you are idle when it comes, it starts your next turn.
+  ask "<question>" --recommend "<answer>" [--option "<other>"]… [--why "<one line: why that answer>"] [--holds "<what
+        waits on it>"]   need a decision? Ask and stop: it goes to your parent (the user, at the root); end your turn
+        right after. Your work is saved; the answer comes as a message that starts your next turn.
+  answer <qst|agt> "<answer>" [--note "why"] | --recommended | --up   answer a question one of your agents asked (it
+        continues), take its recommendation, or pass it up to your parent (the user, at the root) when you can't decide
   mcp   (serve these as MCP tools over stdio)`;
 
 export function toCall(argv) {
@@ -200,8 +212,25 @@ export function toCall(argv) {
       if (fl.list !== undefined) return { op: "wake", args: { list: true } };
       const a = { ...(fl.op ? { op: fl.op } : {}), ...(fl.agents ? { agents: arr(fl.agents).join(",").split(",").filter(Boolean) } : pos.length ? { agents: pos } : {}), ...(fl.all !== undefined ? { all: true } : {}),
         ...(fl.events ? { events: arr(fl.events).join(",").split(",").filter(Boolean), ...(fl.agent ? { agent: fl.agent } : {}), after: Number(fl.after ?? fl["since-seq"] ?? 0) } : {}), ...wakeArgs(fl), ...(key !== undefined ? { key } : {}) };
-      if (!a.op && !a.agents && !a.events && a.in === undefined && a.inMs === undefined && a.at === undefined) usage("wake needs --op ID, --agents a,b, --events TYPE,… or a time (--in 10m, --at ISO)");
+      if (fl.every !== undefined) { a.every = String(fl.every); if (fl.times !== undefined) a.times = Number(fl.times); }
+      if (!a.op && !a.agents && !a.events && a.in === undefined && a.inMs === undefined && a.at === undefined && a.every === undefined) usage("wake needs --op ID, --agents a,b, --events TYPE,…, a time (--in 10m, --at ISO) or a schedule (--every 30m)");
       return { op: "wake", args: a, wake: true };
+    }
+    case "ask": {
+      const question = pos.join(" ").trim() || (typeof fl.question === "string" ? fl.question : "");
+      if (!question) usage('ask "<question>" --recommend "<answer>" [--option "<other>"]… [--why "…"] [--holds "…"]');
+      if (!fl.recommend || fl.recommend === "true") usage('ask needs --recommend "<the answer you would pick>"');
+      return { op: "ask", args: { question, recommend: String(fl.recommend), options: arr(fl.option).map(String), ...(fl.why !== undefined ? { why: String(fl.why) } : {}), ...(fl.holds !== undefined ? { holds: String(fl.holds) } : {}), ...(key !== undefined ? { key } : {}) } };
+    }
+    case "answer": {
+      const q = pos.shift();
+      if (!q) usage('answer <qst|agt> "<answer>" [--note "…"] | --recommended | --up');
+      const ref = q.startsWith("agt-") ? { agent: q } : { question: q };
+      if (fl.up !== undefined) return { op: "answer", args: { ...ref, up: true } };
+      if (fl.recommended !== undefined) return { op: "answer", args: { ...ref, recommended: true, ...(fl.note !== undefined ? { note: String(fl.note) } : {}), ...(key !== undefined ? { key } : {}) } };
+      const answer = pos.join(" ").trim();
+      if (!answer) usage(`answer ${q} "<your answer>" (or --recommended, or --up to pass it up)`);
+      return { op: "answer", args: { ...ref, answer, ...(fl.note !== undefined ? { note: String(fl.note) } : {}), ...(key !== undefined ? { key } : {}) } };
     }
     case "status": return { op: "status", args: pos.length ? { agents: pos } : {} };
     case "tree": return { op: "tree", args: { root: fl.root ?? pos[0] } };
@@ -342,7 +371,9 @@ export const TOOLS = [
   ["fetch", "Fetch the latest branches (all, or `branches`) into your checkout as origin/<branch>, e.g. the target after a merge; read them with git log/show/diff, or `git switch --detach origin/<branch>` and the file tools. Changes no code.", S({ branches: ids })],
   ["check", "Run the run's checks on a branch's commit as it is (ref: a branch or a child's agent id; default: the run's target, i.e. the combined code after the merges), in a sandbox: the full output and pass/fail (result.pass, result.text, result.checks.output). Merges and reviews nothing; how you know the combined code works without running it yourself. Identical checks of one commit are shared. wake: true answers at once with its id and wakes you with a message when it ends: end your turn after it.", S({ ref: str, check: str, key: str, wake: { type: "boolean" }, note: str })],
   ["job_start", "Run a long command (tests, a build, a server) in the background in your machine. It answers with the result when the command ends within `foregroundMs` (default: your profile's, 60 s), else state \"running\" and a job id: the result then comes to you as a message. `cmd`: a shell line, or argv. `run: true`: the run's job instead, for one that must outlive you (a server kept for review): it runs in a machine of the run's own (the run's environment image, without your checkout or credentials) until the run ends or its `timeoutMs`.", S({ cmd: { anyOf: [str, ids] }, label: str, foregroundMs: num, timeoutMs: num, run: { type: "boolean" }, key: str }, ["cmd"])],
-  ["wake", "Don't wait: be woken instead. Arms a durable wake for you: when the op settles (op: a vfy-/chk-/mrg- id), the agents end (agents; all: every one), events of these types happen (events: e.g. [\"agent.done\"], agent, after: an event seq), or at a time (in: \"10m\", or at: ISO; at most 6 h out), a message reaches you as your next turn. note: what you'll do then. End your turn after it; never poll, sleep or wait in a tool call. list: true lists yours; cancel: a wk- id takes one back.", S({ op: str, agents: ids, all: { type: "boolean" }, events: ids, agent: str, after: num, in: str, at: str, note: str, key: str, list: { type: "boolean" }, cancel: str })],
+  ["wake", "Don't wait: be woken instead. Arms a durable wake for you: when the op settles (op: a vfy-/chk-/mrg- id), the agents end (agents; all: every one), events of these types happen (events: e.g. [\"agent.done\"], agent, after: an event seq), or at a time (in: \"10m\", or at: ISO; at most 6 h out), a message reaches you as your next turn. every: \"30m\" (times: N) books a recurring check-in instead; a missed one is skipped, and one that comes while you are idle starts your next turn. note: what you'll do then. End your turn after it; never poll, sleep or wait in a tool call. list: true lists yours; cancel: a wk- id takes one back.", S({ op: str, agents: ids, all: { type: "boolean" }, events: ids, agent: str, after: num, in: str, at: str, every: str, times: num, note: str, key: str, list: { type: "boolean" }, cancel: str })],
+  ["ask", "Need a decision you shouldn't guess (a product choice, a limit the docs don't settle)? Ask and stop: the question goes to your parent (the user, at the root) with the answer you recommend (recommend), other options, why you recommend it (why: one line) and what waits on it (holds). End your turn right after: your work is saved, and the answer comes to you as a message that starts your next turn. Never wait for it inside a tool call.", S({ question: str, recommend: str, options: ids, why: str, holds: str, key: str }, ["question", "recommend"])],
+  ["answer", "Answer a question one of your agents asked (question: its qst- id, or agent: the agent that asked): answer in your words (with note: why), recommended: true takes its recommendation, up: true passes it to your parent (the user, at the root) when it isn't yours to decide. The asker continues with the answer. A person's answer wins over yours.", S({ question: str, agent: str, answer: str, recommended: { type: "boolean" }, note: str, up: { type: "boolean" }, key: str })],
   ["job_output", "The output of one of your background jobs so far (or its result once it ended).", S({ job: str, tail: num }, ["job"])],
   ["job_list", "Your background jobs, newest first, with their state.", S({})],
   ["job_kill", "Stop one of your background jobs (SIGTERM, then SIGKILL after 5 s).", S({ job: str, reason: str }, ["job"])],

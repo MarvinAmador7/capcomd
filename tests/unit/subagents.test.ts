@@ -194,6 +194,17 @@ test("in-VM CLI argv → op mapping (incl. parent-set children grants)", async (
   expect(toCall(["wake", "--events", "agent.done,check.passed", "--agent", "agt-1", "--after", "12"])).toMatchObject({ op: "wake", args: { events: ["agent.done", "check.passed"], agent: "agt-1", after: 12 } });
   expect(toCall(["wake", "--cancel", "wk-1"])).toMatchObject({ op: "wake", args: { cancel: "wk-1" } });
   expect(() => toCall(["wake"])).toThrow(/wake needs/);
+  // ADR-026 §3 schedules: a recurring check-in.
+  expect(toCall(["wake", "--every", "30m", "--times", "4", "--note", "look at CI"])).toMatchObject({ op: "wake", args: { every: "30m", times: 4, note: "look at CI" }, wake: true });
+  // ADR-026 §4: ask and stop; answer, take the recommendation, or pass it up.
+  expect(toCall(["ask", "Ship", "at", "100?", "--recommend", "100 req/min", "--option", "500 req/min", "--option", "1000 req/min", "--why", "the docs", "--holds", "tests"]))
+    .toEqual({ op: "ask", args: { question: "Ship at 100?", recommend: "100 req/min", options: ["500 req/min", "1000 req/min"], why: "the docs", holds: "tests" } });
+  expect(() => toCall(["ask", "Which?"])).toThrow(/--recommend/);
+  expect(() => toCall(["ask", "--recommend", "x"])).toThrow(/ask "<question>"/);
+  expect(toCall(["answer", "qst-1", "500", "req/min", "--note", "big client"])).toEqual({ op: "answer", args: { question: "qst-1", answer: "500 req/min", note: "big client" } });
+  expect(toCall(["answer", "agt-1", "--recommended"])).toEqual({ op: "answer", args: { agent: "agt-1", recommended: true } });
+  expect(toCall(["answer", "qst-1", "--up"])).toEqual({ op: "answer", args: { question: "qst-1", up: true } });
+  expect(() => toCall(["answer", "qst-1"])).toThrow(/--recommended/);
   const { parseDuration } = await import("../../src/subagents/rpc");
   expect([parseDuration("10m"), parseDuration("90s"), parseDuration("2h"), parseDuration("1500ms"), parseDuration("30"), parseDuration("soon")]).toEqual([600_000, 90_000, 7_200_000, 1500, 30_000, null]);
 });

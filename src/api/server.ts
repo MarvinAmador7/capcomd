@@ -19,7 +19,7 @@ import { ProtocolError, type FrameSink } from "../../packages/plugin/src/host/pr
 import { PluginError, type PluginErrorCode } from "../../packages/plugin/src/errors";
 import type { PluginStore } from "../plugins/storage";
 import { bodyHash, resolveDecide, type DecideBody } from "./idempotency";
-import { CreateRunError, entityOf, envelopes, messagesOf, SendRefused, type CreateRunInput, type HarnessSource } from "./source";
+import { CreateRunError, entityOf, envelopes, isQuestionApproval, messagesOf, SendRefused, type CreateRunInput, type HarnessSource } from "./source";
 import { isoTs } from "./envelope";
 import { lifecycleEvents } from "./lifecycle";
 import { daemonEnvelope, harnessState, type HarnessState } from "./state";
@@ -362,8 +362,14 @@ export function harnessApp(o: ServerOptions) {
 		const key = c.req.header("idempotency-key");
 		if (!key || key.length < 8 || key.length > 200) return err(c, 422, "invalid", "Idempotency-Key header (8-200 chars) is required");
 		const raw = await c.req.json().catch(() => null) as DecideBody | null;
-		if (!raw || (raw.decision !== "approve" && raw.decision !== "deny") || (raw.reason !== undefined && typeof raw.reason !== "string")) return err(c, 422, "invalid", "body must be {decision: approve|deny, reason?}");
-		const body: DecideBody = { decision: raw.decision, ...(raw.reason !== undefined ? { reason: raw.reason } : {}) };
+		if (!raw || (raw.decision !== "approve" && raw.decision !== "deny" && raw.decision !== "answer") || (raw.reason !== undefined && typeof raw.reason !== "string") || (raw.answer !== undefined && typeof raw.answer !== "string")) return err(c, 422, "invalid", "body must be {decision: approve|deny|answer, reason?, answer?}");
+		// Capability agents.ask: a question is answered (decision answer with `answer`, or approve: its recommendation); a
+		// merge is approved or denied.
+		const question = isQuestionApproval(approvalId);
+		if (raw.decision === "answer" && !question) return err(c, 422, "invalid", "only a question takes an answer: approve or deny this approval", { field: "decision" });
+		if (question && raw.decision === "deny") return err(c, 422, "invalid", "a question takes an answer (decision answer with `answer`), or approve to take its recommendation", { field: "decision" });
+		if (raw.decision === "answer" && !raw.answer?.trim()) return err(c, 422, "invalid", "decision answer needs `answer`", { field: "answer" });
+		const body: DecideBody = { decision: raw.decision, ...(raw.reason !== undefined ? { reason: raw.reason } : {}), ...(raw.decision === "answer" ? { answer: raw.answer } : {}) };
 		const client = c.get("client");
 		const kid = `${client.clientId}\u0000${key}`;
 		const hash = bodyHash(approvalId, body);
@@ -385,8 +391,14 @@ export function harnessApp(o: ServerOptions) {
 				const where = await src.approval(approvalId);
 				if (!where) { resolve(null); return err(c, 404, "not_found", `approval ${approvalId} not found`); }
 				if (!where.pending) { resolve(null); return conflict(where.decision ?? { approvalId, status: "approved", decidedBy: null, decidedAt: null, reason: null }); }
-				await src.decide(approvalId, body.decision === "approve", `client:${client.clientId}`, body.reason);
-				const decision = { approvalId, status: body.decision === "approve" ? "approved" : "denied", decidedBy: { clientId: client.clientId, principal: client.name }, decidedAt: isoTs(Date.now()), reason: body.reason ?? null };
+				const answered = await src.decide(approvalId, body.decision !== "deny", `client:${client.clientId}`, body.reason, body.decision === "answer" ? body.answer : undefined).catch((e) => {
+					// A question someone answered meanwhile (a person, or it was withdrawn): already decided.
+					if (["already_answered", "conflict"].includes(String((e as { code?: string }).code))) return "taken" as const;
+					throw e;
+				});
+				if (answered === "taken") { resolve(null); return conflict((await src.approval(approvalId))?.decision ?? undefined); }
+				const decision = { approvalId, status: question ? "answered" : body.decision === "approve" ? "approved" : "denied", decidedBy: { clientId: client.clientId, principal: client.name }, decidedAt: isoTs(Date.now()), reason: body.reason ?? null,
+					...(answered ? { answer: answered.answer, recommended: answered.recommended } : {}) };
 				state.recordDecision(kid, { approvalId, bodyHash: hash, status: 200, result: decision }, decision);
 				resolve(decision);
 				return c.json(decision, 200);

@@ -17,6 +17,9 @@ public struct ThreadItem: Sendable, Hashable, Identifiable {
     /// `agent.woken` (capability agents.wake): what woke it, as a quiet line ("verify passed · woke planner").
     /// Client-composed from daemon-written fields.
     case woke(String)
+    /// `agent.answered` (capability agents.ask): the question its card asked, answered, as one line ("Answered ·
+    /// 100 req/min · 11:42"), in the asker's thread and the answering agent's. `byName` names an agent that answered.
+    case answered(AnsweredQuestion, byName: String?)
     /// Child handed back: `agent.done.result` (ChildResult {summary, artifacts[{name,ref}]}).
     case handoff(childId: String, childName: String, summary: UntrustedText?, artifacts: [UntrustedText])
   }
@@ -56,6 +59,13 @@ extension CapcomdStore {
         let item = ThreadItem(id: mid, seq: e.seq, epochMs: e.epochMs, kind: .message(from: from, to: to, text: text, attachment: att))
         appendThread(runId, to, item); if from != to { appendThread(runId, from, item) }
       }
+    case "agent.answered":
+      guard let qid = d["questionId"]?.string, let by = d["by"]?.string else { return }
+      let rec = AnsweredQuestion(questionId: qid, answer: d["answer"]?.string ?? "", recommended: d["recommended"]?.bool ?? false, by: by,
+                                 note: d["note"]?.string, atMs: e.epochMs)
+      let item = ThreadItem(id: "answered:\(qid):\(e.seq)", seq: e.seq, epochMs: e.epochMs, kind: .answered(rec, byName: runs[runId]?.agents[by]?.displayName))
+      appendThread(runId, agentId, item)
+      if by != agentId { appendThread(runId, by, item) }
     case "agent.woken":
       let name = runs[runId]?.agents[agentId]?.displayName ?? agentId
       appendThread(runId, agentId, .init(id: id, seq: e.seq, epochMs: e.epochMs, kind: .woke(Self.wokeLine(d, name: name))))

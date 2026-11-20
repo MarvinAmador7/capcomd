@@ -42,7 +42,12 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		// Capability agents.wake: ids, kinds and the daemon's own sentence only (the agent's note stays in data).
 		case "agent.wake_armed": return `${a} ended its turn, ${waitLine(d).replace(/^W/, "w")}.`;
 		case "agent.woken": return d.by === "time" ? `${a} was woken: its check-in time came.` : d.by === "deadline" ? `${a} was woken: its wait ran out.` : `${a} was woken: what it waited for happened.`;
-		case "agent.wake_cancelled": return d.reason === "ended" ? `${a} ended while it waited.` : `${a} stopped waiting.`;
+		case "agent.wake_cancelled": return d.reason === "ended" ? `${a} ended while it waited.` : d.reason === "archived" ? `${a}'s check-ins ended with the run.` : `${a} stopped waiting.`;
+		// Capability agents.ask: ids only (the question and the answer are agent-written: they stay in data).
+		case "agent.asked": return `${a} asked ${typeof d.to === "string" ? d.to : "you"} a question and stopped until it is answered.`;
+		case "agent.answered": return `${a}'s question was answered${typeof d.by === "string" ? ` by ${/^agt-/.test(d.by) ? d.by : "a person"}` : ""}.`;
+		case "agent.question_passed": return `${a}'s question went up to ${typeof d.to === "string" ? d.to : "you"}.`;
+		case "agent.question_withdrawn": return `${a}'s question was withdrawn.`;
 		// ADR-026 §1: a message woke an idle agent into its next attempt; a message changed the model it runs with.
 		case "agent.continued": return `${a} picked up a message and is working again.`;
 		case "agent.model_changed": return d.applied === false ? `${a} switches model after its current turn.` : `${a}'s model changed.`;
@@ -72,8 +77,8 @@ export function describeEvent(type: string, data: Record<string, unknown>, agent
 		// The label is the starter's words (untrusted): the text names the job by its id only.
 		case "job.started": return d.kind === "timer" ? `A timer (${d.jobId}) was set.` : `${d.plugin || !agentId ? `The ${d.plugin ?? "capcomd"} plugin` : a} started a background job (${d.jobId}).`;
 		case "job.ended": return d.state === "done" ? `Background job ${d.jobId} finished.` : d.state === "failed" ? `Background job ${d.jobId} failed (exit ${d.code ?? "?"}).` : d.state === "killed" ? `Background job ${d.jobId} was stopped.` : `Background job ${d.jobId} was lost.`;
-		case "approval.requested": return `Waiting for your approval (${d.kind ?? "request"}).`;
-		case "approval.decided": return `Approval ${d.status ?? "decided"}.`;
+		case "approval.requested": return d.kind === "question" ? `${a} asked a question.` : `Waiting for your approval (${d.kind ?? "request"}).`;
+		case "approval.decided": return d.status === "answered" ? "Question answered." : `Approval ${d.status ?? "decided"}.`;
 		case "task.added": return "A task was added.";
 		case "task.claimed": return "A task was picked up.";
 		case "task.lease_expired": return "A task timed out and is free again.";

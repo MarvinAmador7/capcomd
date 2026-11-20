@@ -160,6 +160,8 @@ extension DeskModel {
     switch h.life {
     case .waking: return ("waking", .plain)
     case .archived: return ("archived", .dim)
+    // ADR-026 §4: asked of an agent, a quiet word (asked of you, the approval above made it "question", amber).
+    case .asked: return ("asked", .dim)
     case .idle where h.depth == 0 && h.status != .failed: return ("idle", .dim)
     default: break
     }
