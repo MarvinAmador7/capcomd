@@ -23,16 +23,16 @@ test("each run's workers get the idle lifetime recorded when it started; a run w
 	process.env.CAPCOMD_SANDBOX_IDLE_SECONDS = "14400";
 	let own: string;
 	try { own = (await runNew({ budget: {}, label: "own place", sandbox: "fake-host", key: `life-own-${Date.now()}` })).runId as string; } finally { process.env.CAPCOMD_SANDBOX_IDLE_SECONDS = "1800"; }
-	expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", explicit: true, settings: { idleLifetime: 14400 } });
+	expect((await w.cj(["kv", "get", own, RUN_SANDBOX_KV])).j.value).toEqual({ name: "fake-host", explicit: true, settings: { idleLifetime: 14400, parkedRetention: 86400 } });
 	// A run on the daemon's place, started from the CLI while the setting was 15 minutes: only settings, no name.
 	const r = await capcomd(["run", "new", "--budget", "usd=10,turns=400", "--key", `life-plain-${Date.now()}`, "--json"], { ...w.env, PWD: w.dir, CAPCOMD_SANDBOX_IDLE_SECONDS: "900" });
 	expect(r.code).toBe(0);
 	const plain = JSON.parse(r.stdout.trim().split("\n").pop()!).runId as string;
-	expect((await w.cj(["kv", "get", plain, RUN_SANDBOX_KV])).j.value).toEqual({ settings: { idleLifetime: 900 } });
+	expect((await w.cj(["kv", "get", plain, RUN_SANDBOX_KV])).j.value).toEqual({ settings: { idleLifetime: 900, parkedRetention: 86400 } });
 	// `run new` again (idempotent): the run keeps what it started with, even though the setting changed since.
 	const again = await capcomd(["run", "new", "--budget", "usd=10,turns=400", "--run-id", plain, "--json"], { ...w.env, PWD: w.dir, CAPCOMD_SANDBOX_IDLE_SECONDS: "43200" });
 	expect(again.code).toBe(0);
-	expect((await w.cj(["kv", "get", plain, RUN_SANDBOX_KV])).j.value).toEqual({ settings: { idleLifetime: 900 } });
+	expect((await w.cj(["kv", "get", plain, RUN_SANDBOX_KV])).j.value).toEqual({ settings: { idleLifetime: 900, parkedRetention: 86400 } });
 	// A run from before settings (nothing recorded): the daemon's current setting when its worker starts.
 	const legacy = (await runNew({ budget: {}, label: "legacy", key: `life-legacy-${Date.now()}` })).runId as string;
 	await kvWrite(legacy, { k: RUN_SANDBOX_KV, value: null, del: true, writer: "operator" });
