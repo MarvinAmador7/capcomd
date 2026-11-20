@@ -482,6 +482,45 @@ final class SandboxesTests: XCTestCase {
 
   // MARK: machine owners (phase 2)
 
+  func testAParkedMachineIsItsAgentsWithItsDeleteTimeOnlyDeleteAndTheRetentionSitsUnderTheMachines() throws {
+    let page = try SandboxWire.resources(Data(#"""
+      {"resources":[
+        {"id":"relay-parked","kind":"machine","state":"parked","owner":{"kind":"agent","runId":"run-8kq2","agentId":"agt-50","role":"planner","task":"Plan the release","label":null},
+         "createdAt":"2026-10-27T09:00:00.000Z","deleteAfter":"2026-10-28T09:00:00.000Z","actions":["delete"],"destructive":true,
+         "confirm":"Delete planner's parked machine? Its conversation is kept: a message to it starts on a fresh machine, a little slower."},
+        {"id":"relay-agent","kind":"machine","state":"running","owner":{"kind":"agent","runId":"run-8kq2","agentId":"agt-41","role":"worker","task":"Add abs","label":null},
+         "createdAt":"2026-10-27T09:56:00.000Z","actions":["open_terminal","delete"]}
+      ],"asOf":"2026-10-27T09:59:20.000Z","stale":false,"error":null,"next":null}
+      """#.utf8))
+    XCTAssertEqual(page.resources.map(\.parked), [true, false])
+    XCTAssertFalse(page.resources[0].orphaned)
+    let rows = SandboxRows.machines(page, descriptor: nil, now: now)
+    let parked = try XCTUnwrap(rows.first { $0.id == "relay-parked" })
+    XCTAssertTrue(parked.parked)
+    XCTAssertFalse(parked.orphaned)
+    XCTAssertEqual(parked.title, "planner · Plan the release")
+    XCTAssertEqual(parked.tone, .empty)
+    XCTAssertFalse(parked.canOpenTerminal)
+    XCTAssertTrue(parked.canDelete)
+    XCTAssertEqual(parked.deleteAfter, SettingsRows.parseISO("2026-10-28T09:00:00.000Z"))
+    XCTAssertEqual(DeleteQuestion.from(parked.confirm).title, "Delete planner's parked machine?")
+    XCTAssertFalse(try XCTUnwrap(rows.first { $0.id == "relay-agent" }).parked)
+
+    // The retention setting goes under the machines, after the idle lifetime.
+    let d = try SandboxWire.detail(Data(#"""
+      {"descriptor":{"name":"boxd","label":"Cloud","kind":"cloud","vendor":"boxd","caps":{"shell":true,"hibernate":"memory"}},
+       "settings":[
+         {"id":"idleLifetime","type":"choice","label":"Delete idle machines after","value":"3600","display":"1 hour","choices":[{"value":"3600","label":"1 hour"}],"editable":true},
+         {"id":"parkedRetention","type":"choice","label":"Keep parked machines for","value":"86400","display":"24 hours",
+          "choices":[{"value":"14400","label":"4 hours"},{"value":"86400","label":"24 hours"},{"value":"604800","label":"7 days"}],"editable":true}
+       ],
+       "info":[],"rev":"r1"}
+      """#.utf8))
+    XCTAssertEqual(SandboxRows.sections(d).machines.map(\.id), ["idleLifetime", "parkedRetention"])
+    XCTAssertEqual(d.settings[1].choices.map(\.label), ["4 hours", "24 hours", "7 days"])
+    XCTAssertEqual(d.settings[1].shown, "24 hours")
+  }
+
   func testCapcomdsOwnMachinesAreNeverLeftBehindAndOfferNothing() throws {
     let page = try SandboxWire.resources(Data(#"""
       {"resources":[
