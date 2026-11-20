@@ -178,6 +178,21 @@ describe("Worker Machine - Transition Table", () => {
       const [next] = transition(workerMachine, snapshot, event);
       expect(next.value).toBe("destroyed");
     });
+
+    test("keeps the machine a timed-out attempt made, and a drain deletes it", () => {
+      const [snapshot] = initialTransition(workerMachine, createContext());
+      const [failed] = transition(workerMachine, snapshot, { type: "VM_FAILED" as const, error: "not ready within 90000ms", vmId: "vm-slow" });
+      expect(failed.context.vmId).toBe("vm-slow");
+      expect(failed.can({ type: "DRAIN" })).toBe(true);
+      expect(transition(workerMachine, failed, { type: "DRAIN" as const })[0].value).toBe("draining");
+    });
+
+    test("a retry that gets the machine ready makes it idle (then it can park or drain)", () => {
+      const [next] = transition(workerMachine, getFailedSnapshot(), { type: "VM_READY" as const, vmId: "vm-123" });
+      expect(next.value).toBe("idle");
+      expect(next.context.vmId).toBe("vm-123");
+      expect(next.can({ type: "DRAIN" })).toBe(true);
+    });
   });
 
   describe("destroyed state", () => {

@@ -131,3 +131,17 @@ test("a parked machine that won't wake: one line in its log, a fresh machine, it
   const ev = (await (await (await import("../../src/core/relay")).client().scope.getOrCreate([run])).getEvents({})) as any[];
   expect(ev.filter((e) => e.type === "AGENT_FAILED")).toEqual([]);
 }, 180_000);
+
+test("a machine that is slow to get ready the first time is still parked when the turn ends (not left running)", async () => {
+  const run = await newRun();
+  // The first readiness wait times out (boxd: "not ready within 90000ms"); the retry finds the same machine ready.
+  writeFileSync(faults, JSON.stringify({ until: Date.now() + 1_500, error: "not_ready", ops: ["waitReady"] }));
+  let id: string;
+  try {
+    id = (await cj(["spawn", run, "--profile", "lead", "--task", "add the sum helper", "--key", "first"])).j?.agentId;
+    expect((await awaitOne(run, id))?.status).toBe("done");
+  } finally { rmSync(faults, { force: true }); }
+  const w = await worker(run, id!);
+  expect(w?.state).toBe("parked");
+  expect(w?.context.vmId).toBeTruthy();
+}, 180_000);

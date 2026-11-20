@@ -6,7 +6,7 @@ import type {
   VmInfo,
 } from "./sandbox";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
-import { SandboxAuthError, SandboxNotFoundError, SandboxTimeoutError, SandboxUnavailableError } from "./boxd-errors";
+import { SandboxAuthError, SandboxNotFoundError, SandboxNotReadyError, SandboxTimeoutError, SandboxUnavailableError } from "./boxd-errors";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 
@@ -64,9 +64,10 @@ interface FakeVm {
 /**
  * Test hook: the provider fails like a real one in an outage. Until `until` (ms epoch), every call (or only `ops`:
  * ensure, waitReady, exec, upload, download, setEgress, destroy, list, extendTtl, probe) throws `error`: "timeout" (boxd's
- * "Deadline exceeded", the default), "unavailable" (connection refused), "not_found" or "auth" (permanent).
+ * "Deadline exceeded", the default), "unavailable" (connection refused), "not_found" or "auth" (permanent), or
+ * "not_ready" (a machine slow to boot: boxd's waitReady giving up).
  */
-export interface FakeFault { until: number; error?: "timeout" | "unavailable" | "not_found" | "auth"; ops?: string[] }
+export interface FakeFault { until: number; error?: "timeout" | "unavailable" | "not_found" | "auth" | "not_ready"; ops?: string[] }
 
 export interface FakeProviderOptions {
   /** A JSON file holding a FakeFault, read at every call (engine-process tests: CAPCOMD_FAKE_OUTAGE_FILE). */
@@ -138,6 +139,7 @@ export class FakeProvider implements SandboxProvider {
       case "unavailable": throw new SandboxUnavailableError(`${where}: connect ECONNREFUSED 127.0.0.1:9443`, id);
       case "not_found": throw new SandboxNotFoundError(`${where}: machine not found`, id);
       case "auth": throw new SandboxAuthError(`${where}: BOXD_API_KEY was rejected by boxd (AuthenticationError: invalid or expired api key)`, id);
+      case "not_ready": throw new SandboxNotReadyError(`VM ${id} not ready within 90000ms`, id);
       default: throw new SandboxTimeoutError(`${where}: Deadline exceeded after 60.000s,remote_addr=127.0.0.1:9443`, id);
     }
   }

@@ -807,6 +807,7 @@ export const workerActor = actor({
         }, { name: "provisionWorker" });
       }
 
+      let madeVm: string | undefined;
       try {
         recordWorkerVm(c, { idemKey, sandbox, runId, workerId, ttlSeconds: lifeSeconds });
         killpoint("vm.create.after_request.before_record");
@@ -825,6 +826,7 @@ export const workerActor = actor({
           },
         });
 
+        madeVm = vmId;
         await provider.waitReady(vmId, 90_000);
 
         // TTL sweep: the actor reaps its own sandbox at createdAt+ttl even if no client ever returns.
@@ -875,6 +877,7 @@ export const workerActor = actor({
         const event = {
           type: "VM_FAILED" as const,
           error: error instanceof Error ? error.message : String(error),
+          ...(madeVm ? { vmId: madeVm } : {}),
         };
 
         const [newSnapshot] = transition(workerMachine, workerSnapshot, event);
